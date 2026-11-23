@@ -111,6 +111,8 @@ use mcp::{
 };
 // Live MCP's references between array entries (mitcad#1897).
 use mcp::{mcp_check_refs, mcp_resolve_entry};
+// Live MCP's print libraries with the user's preference (mitcad#2224).
+use mcp::mcp_uses_print_library;
 // The rolled-back features evaluated in the background (mitcad#1267).
 mod background;
 use background::BackgroundRun;
@@ -179,14 +181,28 @@ mod ffi {
         fn finish_mcp(self: &mut LiveMcpSession, value: &str, is_error: bool) -> Result<String>;
         fn validate_mcp_command(request: &str) -> Result<()>;
         fn validate_mcp_features(self: &Document) -> Result<()>;
-        fn validate_mcp_document_command(self: &Document, request: &str) -> Result<()>;
+        /// With `print_libraries` (Preferences › AI Assistants, mitcad#2224)
+        /// the print libraries' commands too, bound to `project` (the
+        /// design's project folder, empty for none); the command to run.
+        fn validate_mcp_document_command(
+            self: &Document,
+            request: &str,
+            print_libraries: bool,
+            project: &str,
+        ) -> Result<String>;
         /// An MCP command with its selections by geometry turned into
         /// names (mitcad#1587), right before it runs.
         fn mcp_resolve_command(self: &Document, request: &str) -> Result<String>;
         /// An MCP command result with which edges of its failed fillets
         /// or chamfers fail alone (mitcad#1587).
         fn mcp_diagnose_dressups(self: &mut Document, result: &str) -> Result<String>;
-        fn validate_mcp_query(request: &str) -> Result<()>;
+        /// The query to run; with `print_libraries` (mitcad#2224) the print
+        /// libraries' queries too, bound to `project`.
+        fn validate_mcp_query(
+            request: &str,
+            print_libraries: bool,
+            project: &str,
+        ) -> Result<String>;
         /// Live MCP's command results, arrays and export (mitcad#689).
         fn mcp_snapshot_queries(after: bool, before: &str) -> String;
         fn mcp_command_document(
@@ -231,6 +247,11 @@ mod ffi {
         /// (the notification to send, or empty) and the resolve policy.
         fn set_mcp_comments(self: &mut LiveMcpSession, comments: &str) -> Result<String>;
         fn set_mcp_comment_policy(self: &mut LiveMcpSession, may_resolve: bool);
+        /// Preferences › AI Assistants › Agents may use my print libraries
+        /// (mitcad#2224): off, their queries and commands are refused.
+        fn set_mcp_print_library_policy(self: &mut LiveMcpSession, allowed: bool);
+        /// Whether a command uses the print libraries (mitcad#2224).
+        fn mcp_uses_print_library(request: &str) -> bool;
         /// Guided tutorials (mitcad#2012): the live guide step resource (the
         /// notification to send, or empty).
         fn set_mcp_guide(self: &mut LiveMcpSession, state: &str) -> Result<String>;
@@ -282,6 +303,19 @@ mod ffi {
         /// took, a line "Timing steps[i] <name>: <ms> ms" per step
         /// (mitcad-cli run --timings), then run_script's lines.
         fn run_script_timings(self: &mut Document, json: &str) -> Result<String>;
+        /// The design's timeline as a script (mitcad-cli export-script,
+        /// mitcad#2245), up to `upto` ("marker", a feature's uid or name;
+        /// empty: every feature). Without `path` the script itself; with
+        /// it the script is written there and the text says how many
+        /// features it has, with an "Omitted: ..." line for each kind of
+        /// thing a replay does not make again.
+        fn export_script(self: &Document, upto: &str, path: &str) -> Result<String>;
+        /// Exports the timeline as a script, replays it on a new document
+        /// and compares the two (mitcad-cli export-script --check):
+        /// "Round trip: ..." when they are the same, "Skipped: ..." when
+        /// the script leaves features out; an error at the first
+        /// difference.
+        fn script_round_trip(self: &Document) -> Result<String>;
         /// The timeline and the bodies with their measurements, as text or
         /// JSON.
         fn report(self: &Document, json: bool) -> Result<String>;
@@ -1188,6 +1222,35 @@ impl Document {
         let results = self.0.run_script_timed(json, Some(&mut times))?;
         times.push_str(&mitcad_model_api::script_notes(&results));
         Ok(times)
+    }
+
+    fn export_script(&self, upto: &str, path: &str) -> Result<String, ApiError> {
+        use mitcad_model_api::script_export::{export_script, script_text};
+        let upto = (!upto.is_empty()).then_some(upto);
+        let exported = export_script(&self.0, upto)?;
+        let text = script_text(&exported.script);
+        if path.is_empty() {
+            return Ok(text);
+        }
+        std::fs::write(path, &text).map_err(|e| ApiError(format!("cannot write {path}: {e}")))?;
+        let mut out = format!(
+            "Exported {} features ({} steps) to {path}\n",
+            exported.features,
+            exported.script.len()
+        );
+        for line in &exported.omitted {
+            out.push_str(&format!("Omitted: {line}\n"));
+        }
+        Ok(out)
+    }
+
+    fn script_round_trip(&self) -> Result<String, ApiError> {
+        let mut replay = mitcad_model::Document::new(OcctKernel);
+        let found = mitcad_model_api::script_export::round_trip(&self.0, &mut replay)?;
+        Ok(match found.skipped {
+            Some(why) => format!("Skipped: {why}"),
+            None => found.report,
+        })
     }
 
     fn report(&self, json: bool) -> Result<String, ApiError> {

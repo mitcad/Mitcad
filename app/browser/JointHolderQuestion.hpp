@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Joint, As-Built Joint, Rigid Group and Assembly Constraint on picks that
+// Joint, As-Built Joint, Rigid Group and Constraint Set on picks that
 // lie under another component than the active one (mitcad#1856,
 // app/COMMANDS.md "The component that holds the picks"): the feature
 // belongs in the lowest component that holds every pick (the model's

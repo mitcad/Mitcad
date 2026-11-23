@@ -11,6 +11,8 @@ pub mod ffi {
         Variable,
         Asymmetric,
         Spline,
+        /// The radius worked out from the faces (mitcad#2279): no values.
+        FullRound,
     }
 
     /// One edge set: `value` is the radius, the chord length, the start

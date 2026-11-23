@@ -95,6 +95,10 @@ bool MainWindow::readOnlyCommand(const CommandDef& def) {
       QStringLiteral("file.open_from_project"),
       // Printing changes no design (mitcad#1089).
       QStringLiteral("file.print"),
+      // A script of the timeline, and the macro recorder, which records
+      // what this window sends (mitcad#2245); Run Script changes the design.
+      QStringLiteral("file.export_script"), QStringLiteral("tools.macro_record"),
+      QStringLiteral("tools.macro_save"),
   };
   return allowed.contains(def.id) || def.id.startsWith(QLatin1String("view.")) ||
          def.id.startsWith(QLatin1String("inspect.")) || def.id.startsWith(QLatin1String("help."));
@@ -129,6 +133,8 @@ bool MainWindow::readOnlyModelCommand(const QString& name) {
       QStringLiteral("set_folder_visible"),
       // Show Dimensions of a sketch's row (mitcad#1772): display state.
       QStringLiteral("set_sketch_dimensions_shown"),
+      // The timeline written as a script (mitcad#2245): read only.
+      QStringLiteral("export_script"),
   };
   return allowed.contains(name);
 }

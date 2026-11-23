@@ -154,8 +154,9 @@ fn decode(data: &str) -> Result<Vec<u8>, ApiError> {
         .map_err(|e| ApiError(format!("the image's data is no base64: {e}")))
 }
 
-/// The image of a command: read from `path`, or decoded from `data`.
-fn source(
+/// The image of a command: read from `path`, or decoded from `data` (a
+/// decal's too, `decals.rs`).
+pub(super) fn source(
     path: Option<String>,
     data: Option<String>,
     file_name: Option<String>,

@@ -970,6 +970,7 @@ fn a_seeded_offset_corner_of_a_line_and_an_arc_lies_on_both() {
         helpers: Vec::new(),
         derived: false,
         round: false,
+        shifts: Vec::new(),
     }];
     let at = |entities: &[Entity], id: EntityUid| match entities
         .iter()
@@ -989,7 +990,9 @@ fn a_seeded_offset_corner_of_a_line_and_an_arc_lies_on_both() {
         _ => panic!("no curve {id:?}"),
     };
     let mut entities = b.def.entities.clone();
-    seed(&offsets, &mut entities, &mut |_| Ok(1.0));
+    seed(&offsets, &mut entities, &Default::default(), &mut |_| {
+        Ok(1.0)
+    });
     let (a, corner) = ends(&entities, result_line);
     let (arc_start, arc_end) = ends(&entities, result_arc);
     assert_eq!(corner, arc_end);
@@ -1005,7 +1008,9 @@ fn a_seeded_offset_corner_of_a_line_and_an_arc_lies_on_both() {
     let free = at(&entities, arc_start);
     assert!((free[0] - center[0]).abs() < 1e-12 && (free[1] - center[1] - radius).abs() < 1e-12);
     let once = entities.clone();
-    seed(&offsets, &mut entities, &mut |_| Ok(1.0));
+    seed(&offsets, &mut entities, &Default::default(), &mut |_| {
+        Ok(1.0)
+    });
     for (e, f) in once.iter().zip(&entities) {
         if let (EntityKind::Point { at: p }, EntityKind::Point { at: q }) = (&e.kind, &f.kind) {
             assert!(
@@ -1047,6 +1052,7 @@ fn a_seeded_tangent_offset_corner_lies_where_the_line_touches_the_arc() {
         helpers: Vec::new(),
         derived: false,
         round: false,
+        shifts: Vec::new(),
     }];
     let point = |entities: &[Entity], id: EntityUid| match entities
         .iter()
@@ -1065,7 +1071,9 @@ fn a_seeded_tangent_offset_corner_lies_where_the_line_touches_the_arc() {
         _ => panic!("no line"),
     };
     let mut entities = b.def.entities.clone();
-    seed(&offsets, &mut entities, &mut |_| Ok(2.0));
+    seed(&offsets, &mut entities, &Default::default(), &mut |_| {
+        Ok(2.0)
+    });
     let at = corner(&entities);
     assert_eq!(at[0], 0.0, "{at:?}");
     assert!((at[1].abs() - 2.0).abs() < 1e-12, "{at:?}");
@@ -1139,6 +1147,7 @@ fn a_seeded_corner_of_two_arcs_of_one_circle_stays_on_the_circle() {
         helpers,
         derived: false,
         round: false,
+        shifts: Vec::new(),
     }];
     let point = |entities: &[Entity], id: EntityUid| match entities
         .iter()
@@ -1159,7 +1168,9 @@ fn a_seeded_corner_of_two_arcs_of_one_circle_stays_on_the_circle() {
         _ => panic!("no curve {id:?}"),
     };
     let mut entities = b.def.entities.clone();
-    seed(&offsets, &mut entities, &mut |_| Ok(3.0));
+    seed(&offsets, &mut entities, &Default::default(), &mut |_| {
+        Ok(3.0)
+    });
     // Each corner where the offset curves meet: the results' starts in
     // chain order, the first the two arcs' corner on the split circle.
     let corners = [
@@ -1215,6 +1226,7 @@ fn tangent_corners_of_offsets_are_those_whose_sources_touch_by_definition() {
         helpers: Vec::new(),
         derived: false,
         round: false,
+        shifts: Vec::new(),
     };
     let held = |b: &[Binding]| -> Vec<(u32, u32, u32, u32)> {
         b.iter()

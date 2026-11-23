@@ -253,6 +253,38 @@ fn a_container_reads_with_its_blobs() {
     assert!(container::decode_mesh(&mesh[..30]).is_err());
 }
 
+/// A point cloud's blob put back as the plain JSON's base64 `points` and
+/// `colors` (mitcad#2240).
+#[test]
+fn a_container_puts_a_point_clouds_points_back() {
+    let mut blob = b"SCPNTS01".to_vec();
+    blob.extend(2u64.to_le_bytes());
+    blob.extend(1u64.to_le_bytes());
+    for x in [1.0f32, 2.0, 3.0, -1.0, 0.0, 0.5] {
+        blob.extend(x.to_le_bytes());
+    }
+    blob.extend([255u8, 0, 0, 0, 0, 255]);
+    let hash = "b".repeat(64);
+    let doc = json!({"format": "solidcraft/45", "name": "A", "params": [], "features": [],
+        "point_clouds": [{"id": 3, "name": "Scan", "origin": [0.0, 0.0, 0.0], "points": "", "colors": "",
+                          "points_blob": format!("blobs/{hash}.points")}]});
+    let bytes = mitcad_zip::stored_zip(&[
+        ("container.json", br#"{"format":"solidcraft-container/1"}"#),
+        ("document.json", doc.to_string().as_bytes()),
+        (&format!("blobs/{hash}.points"), &blob),
+    ]);
+    let file = SolidcraftFile::from_bytes(&bytes).unwrap();
+    let cloud = &file.design.point_clouds[0];
+    assert!(cloud.get("points_blob").is_none());
+    // 24 bytes of points and 6 of colours, as base64.
+    assert_eq!(cloud["points"].as_str().unwrap().len(), 32);
+    assert_eq!(cloud["colors"], "/wAAAAD/");
+    let (points, colors) = container::decode_points(&blob).unwrap();
+    assert_eq!((points.len(), colors.len()), (24, 6));
+    // A blob whose counts do not match its bytes is refused.
+    assert!(container::decode_points(&blob[..blob.len() - 1]).is_err());
+}
+
 #[test]
 fn sketches_read_typed() {
     let file = design("box-fillet-hole.solidcraft.json");

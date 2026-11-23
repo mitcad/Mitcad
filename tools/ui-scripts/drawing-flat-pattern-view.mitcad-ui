@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: MIT
+# A base view of a sheet-metal body's Flat Pattern (mitcad#2280) on
+# drawing-flat-pattern-view.json: Plate, an L bent once, and an empty
+# Drawing1.
+#   1. Base View with Shows "Plate Flat Pattern" (the Shows list's entry for
+#      the sheet-metal body) at 1:1, placed with its middle at sheet
+#      (150, 150): add_drawing_view with the flat_pattern subject; the bend
+#      line then runs at x 157.5.
+#   2. Dimension on the bend line (picked as a line of its own), placed
+#      right of the blank: its length, 20.
+#   3. The view selected: its panel names what it shows and has Bend Notes
+#      (no Orientation, no Shows list); Bend Notes cleared sends bend_notes
+#      false.
+# Run by tools/ui-drawing-flat-pattern-view-test.sh (Linux),
+# tools/ui-windows-drawing-flat-pattern-view-test.ps1 (Windows) and
+# tools/ui-macos-drawing-flat-pattern-view-test.sh (macOS).
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-idle
+
+# 1. The Flat Pattern placed from the Shows list.
+mark
+command drawing.base_view
+wait-log '^Drawing tool: Base View'
+wait-idle
+qt-choice drawingOption_subject 'Plate Flat Pattern'
+wait-log '^Drawing option subject: flat:F3[.]b0$'
+qt-choice drawingOption_scale '1:1'
+wait-log '^Drawing option scale: 1:1$'
+wait-idle
+mark
+drawing-sheet-click 150 150
+wait-log '^Drawing command: (?=.*"cmd":"add_drawing_view")(?=.*"type":"flat_pattern")(?=.*"body":"F3[.]b0")'
+wait-log '^Drawing view 1 at '
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-log '^Drawing tool: selection'
+wait-idle
+
+# 2. A dimension on the bend line.
+mark
+command drawing.dimension
+wait-log '^Drawing tool: Dimension'
+wait-idle
+drawing-sheet-click 157.5 150
+wait-log '^Drawing picked .* [(]1[)]: .*"bend"'
+wait-log '^Drawing placing view'
+wait-idle
+drawing-sheet-click 200 150
+wait-log '^Drawing command: (?=.*"cmd":"add_drawing_annotation")(?=.*"bend")'
+wait-log '^Drawing annotations drawn: 1 = 20([.]0+)?$'
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-log '^Drawing tool: selection'
+wait-idle
+
+# 3. Its panel: what it shows and its bend notes.
+mark
+drawing-sheet-click 130 150
+wait-log '^Drawing view 1 selected'
+wait-log '^Drawing panel drawingViewBendNotes at '
+expect-log '^Drawing panel drawingViewShowsFlat at '
+expect-no-log '^Drawing panel drawingViewOrientation at '
+expect-no-log '^Drawing panel drawingViewShows at '
+wait-idle
+mark
+click-logged '^Drawing panel drawingViewBendNotes at '
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_view")(?=.*"bend_notes":false)'
+expect-no-log '^Drawing command refused'
+wait-idle
+expect-never 'TestDriver: FAIL'

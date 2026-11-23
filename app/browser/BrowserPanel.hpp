@@ -18,6 +18,7 @@
 #include <QWidget>
 
 #include "../framework/Selection.hpp"
+#include "BrowserPreferences.hpp"
 #include "DocumentSnapshot.hpp"
 #include "SketchCurveRows.hpp"
 
@@ -120,6 +121,14 @@ struct BrowserNode {
     // names the set: it links to the item and leaves it in place.
     SelectionSets,
     SelectionSet,
+    // Point clouds (mitcad#2240): the root's Point Clouds folder and its
+    // rows (uid: the name), each with its light bulb.
+    PointClouds,
+    PointCloud,
+    // Decals (mitcad#2244): the root's Decals folder and its rows (uid: the
+    // name), each with its light bulb.
+    Decals,
+    Decal,
   };
 
   Type type = Type::None;
@@ -174,7 +183,7 @@ struct BrowserNode {
            type == Type::MotionLinks || type == Type::Measurements || type == Type::Drawings ||
            type == Type::ImageReferences || type == Type::Features || type == Type::CamFolder ||
            type == Type::BodyFolder || type == Type::SketchBlocks || type == Type::ComponentFolder ||
-           type == Type::SelectionSets;
+           type == Type::SelectionSets || type == Type::PointClouds || type == Type::Decals;
   }
   // The selection item the row stands for; invalid for folders and settings.
   SelectionItem item() const;
@@ -186,7 +195,9 @@ struct BrowserNode {
 // construction geometry and joints, and the analyses kept in the document.
 // A row reads: its component's colour bar (mitcad#1876, as the timeline's
 // band), expand arrow, light bulb (an eye; shows and hides), icon,
-// name and, for a component, the radio button that activates it. Selecting
+// name and, for a component, the radio button that activates it (the light
+// bulb and the radio button may be in a column at the right edge instead,
+// setControlPlaces, mitcad#2223). Selecting
 // rows selects in the view and the timeline, and the other way round; a
 // slow second click on a selected row renames it in place, as F2 does.
 // Ctrl+F (Cmd+F) opens the timeline's search (mitcad#179). What the rows
@@ -313,6 +324,13 @@ public:
   // A selection set's member rows (mitcad#2192), in the set's order; none
   // when the set has no row.
   QVector<BrowserNode> setMemberNodes(const QString& set) const;
+  // The selected rows Delete acts on when asked on `asked` (mitcad#2219):
+  // those of its selection set, when it is a set's member row (their links
+  // go, as Remove from Set), else those of no set (the items go, and with
+  // them their links). A click on an item's row selects its rows in the
+  // sets too, and one on a member row the item's own rows (showSelection),
+  // so the row Delete was asked on tells which the user meant.
+  static QVector<BrowserNode> rowsToDelete(const QVector<BrowserNode>& selected, const BrowserNode& asked);
   // Expands to, selects and scrolls to the rows of a feature, its rows under
   // its sketches too; false when it has none (Find in Browser).
   bool reveal(const QString& feature);
@@ -374,6 +392,33 @@ public:
   // x,y", logLayout).
   void setRowsBackground(bool rows);
   bool rowsBackground() const { return m_rows; }
+  // Where the rows' Activate radio button and Show eye are (mitcad#2223,
+  // Preferences > Display, BrowserPreferences.hpp), in every layout and
+  // background: Classic (the default) as described above; Right puts it in
+  // one column at the right edge of the visible row (the viewport's, also
+  // with a horizontal scroll bar), the same x on every row whatever its
+  // depth or name, the eye left of the radio button when both are there
+  // (the radio button's place kept on rows without one, so that the eyes
+  // line up). The name is elided before the column; the fx badge and the
+  // Make marker stay after it. With the Rows background every row's box
+  // reaches the column at the card's right, and the widest row counts the
+  // column in (rowsWidth). Applied at once; logged with the rows ("Browser
+  // controls: activate right, eye classic", and while a control is on the
+  // right "Browser right edge at x,y": the viewport's last column).
+  void setControlPlaces(BrowserControlPlace activate, BrowserControlPlace eye);
+  BrowserControlPlace activatePlace() const { return m_activatePlace; }
+  BrowserControlPlace eyePlace() const { return m_eyePlace; }
+  // Where a row's parts are in the tree's viewport (for tests): its name,
+  // light bulb and radio button (empty without one), whether the name is
+  // cut short; all empty for a row not laid out or no row at `path`
+  // (BrowserNode::path, "Root/Bodies/Body1").
+  struct RowPlaces {
+    QRect name;
+    QRect eye;
+    QRect radio;
+    bool elided = false;
+  };
+  RowPlaces rowPlaces(const QString& path) const;
   // With the Rows background, where the panel takes the mouse, in its own
   // coordinates: the rows' boxes in sight, the scroll bars shown and an
   // open rename editor.
@@ -434,6 +479,8 @@ signals:
   // A slow second click on a selected row that can be renamed (mitcad#177).
   void renameClicked(const mitcad::BrowserNode& node);
   void doubleClicked(const mitcad::BrowserNode& node);
+  // The Delete key: the selected rows rowsToDelete gives for the current
+  // row (a selection set's member rows alone on a member row, mitcad#2219).
   void deleteRequested(const QVector<mitcad::BrowserNode>& nodes);
   void contextMenuRequested(const mitcad::BrowserNode& node, const QPoint& globalPosition);
   // Ctrl+F (Cmd+F on macOS) in the rows: the timeline's search (mitcad#179).
@@ -617,6 +664,9 @@ private:
   QString m_loggedSelection;
   bool m_rows = false; // the Rows background (mitcad#419)
   bool m_rowsQueued = false;
+  // setControlPlaces (mitcad#2223).
+  BrowserControlPlace m_activatePlace = BrowserControlPlace::Classic;
+  BrowserControlPlace m_eyePlace = BrowserControlPlace::Classic;
   // setScrollBarOnLeft (mitcad#425): the bar at the left, and its place.
   void placeLeftScrollBar();
   bool m_scrollBarLeft = false;

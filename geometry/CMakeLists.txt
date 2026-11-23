@@ -428,6 +428,12 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/loft_merge.cpp
   src/loft_merge.hpp)
+
+# Fillet's Full Round: the radius that rounds a face away between its two
+# edges, worked out on the body on every build (mitcad#2279).
+target_sources(mitcad_geometry PRIVATE
+  src/full_round.cpp
+  src/full_round.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1624,10 +1630,10 @@ if(BUILD_TESTING)
   # `test_y_tube_crotch --probe` prints the kernel's reports instead.
   add_executable(test_y_tube_crotch tests/test_y_tube_crotch.cpp)
   target_link_libraries(test_y_tube_crotch PRIVATE mitcad_geometry mitcad_warnings)
-  # Not registered on Windows until mitcad#2247: there the kernel offset of
-  # the two rounding faces is invalid and the shell after the rounding fails
-  # (the executable is still built for its probes).
-  if(NOT WIN32)
+  # Registered on Linux only until mitcad#2247: on Windows and macOS the
+  # kernel offset of the two rounding faces is invalid and the shell after
+  # the rounding fails (the executable is still built for its probes).
+  if(NOT WIN32 AND NOT APPLE)
     add_test(NAME geometry.y_tube_crotch COMMAND test_y_tube_crotch)
     set_tests_properties(geometry.y_tube_crotch PROPERTIES TIMEOUT 600)
   endif()
@@ -1676,4 +1682,73 @@ if(BUILD_TESTING)
   target_link_libraries(test_fillet_narrow_face_tangent_beyond PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_narrow_face_tangent_beyond COMMAND test_fillet_narrow_face_tangent_beyond)
   set_tests_properties(geometry.fillet_narrow_face_tangent_beyond PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # An overhang's bottom edge rounded from where an earlier rounding of the
+  # ledge's edge on the same line ends (GitHub #572, mitcad#2276): ended flat
+  # on the lower block's end plane at 3, 5, 8 and 12, one valid closed solid,
+  # the earlier rounding's faces unchanged; a radius too large fails in
+  # words or builds, never that the result is not a closed solid.
+  add_executable(test_fillet_overhang_end_plane tests/test_fillet_overhang_end_plane.cpp)
+  target_link_libraries(test_fillet_overhang_end_plane PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_overhang_end_plane COMMAND test_fillet_overhang_end_plane)
+  set_tests_properties(geometry.fillet_overhang_end_plane PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # Nine fillet and chamfer cases of the public B-rep benchmark brep-bench
+  # that stock OCCT 8.0.1 refuses (consumed faces, full rounds, a hole's
+  # waist, a boss's S-curve, a ridge at 179 degrees, an octahedron's
+  # corners), modelled in code, each built by OCCT's dressup alone and by
+  # MitCad's Fillet or Chamfer and checked against its exact volume and
+  # area; known failures with why, in one line (mitcad#2273).
+  add_executable(test_fillet_bench_cases tests/test_fillet_bench_cases.cpp)
+  target_link_libraries(test_fillet_bench_cases PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_bench_cases COMMAND test_fillet_bench_cases)
+  set_tests_properties(geometry.fillet_bench_cases PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # Lofts through two smooth closed sections, Tangent Edges Keep and Merge
+  # (mitcad#2271): circles to slots of several proportions (the owner's R111
+  # to 520 x 80 among them), an ellipse to a rounded rectangle, a circle to
+  # a spline outline, shelled Inside, Outside and Both, Sharp and Rounded,
+  # walls at the thickness within 1e-6 mm; the owner's surface loft
+  # thickened. One ctest per loft and Keep or Merge.
+  add_executable(test_loft_smooth_sections_shell tests/test_loft_smooth_sections_shell.cpp)
+  target_link_libraries(test_loft_smooth_sections_shell PRIVATE mitcad_geometry mitcad_warnings)
+  set(loft_smooth_sections_shell_parts
+    circle_slot_r30_keep
+    circle_slot_r30_merge
+    circle_slot_r50_keep
+    circle_slot_r50_merge
+    circle_slot_owner_keep
+    circle_slot_owner_merge
+    circle_slot_long_keep
+    circle_slot_long_merge
+    ellipse_rounded_rectangle_keep
+    ellipse_rounded_rectangle_merge
+    circle_spline_keep
+    circle_spline_merge
+    thicken_owner_keep
+    thicken_owner_merge)
+  foreach(part IN LISTS loft_smooth_sections_shell_parts)
+    add_test(NAME geometry.loft_smooth_sections_shell.${part} COMMAND test_loft_smooth_sections_shell ${part})
+    set_tests_properties(geometry.loft_smooth_sections_shell.${part} PROPERTIES TIMEOUT 600)
+  endforeach()
+  add_test(NAME geometry.loft_smooth_sections_shell_parts
+    COMMAND test_loft_smooth_sections_shell --check-parts ${loft_smooth_sections_shell_parts})
+endif()
+
+if(BUILD_TESTING)
+  # Fillet's Full Round (mitcad#2279): a block's top between a vertical side
+  # and a bevel rounded away, the radius worked out from the three faces;
+  # with the bevel's size changed the radius follows; a tapered top, edges
+  # sharing no face, edges meeting at a corner and a face named instead of
+  # its edges refused in words.
+  add_executable(test_fillet_full_round tests/test_fillet_full_round.cpp)
+  target_link_libraries(test_fillet_full_round PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_full_round COMMAND test_fillet_full_round)
+  set_tests_properties(geometry.fillet_full_round PROPERTIES TIMEOUT 300)
 endif()

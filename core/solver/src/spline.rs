@@ -5,7 +5,7 @@
 //! coordinates ([`Coords`]: the planar sketch's two, the spatial system's
 //! three; the basis does not depend on them).
 
-use crate::scalar::{Coords, Scalar, V2};
+use crate::scalar::{Coords, Scalar};
 
 /// Degree, knots and weights of a spline; fixed while solving.
 #[derive(Clone, Debug, PartialEq)]
@@ -15,7 +15,7 @@ pub(crate) struct SplineBasis {
     pub weights: Vec<f64>,
 }
 
-/// Curve point and derivatives at a parameter (`P` is [`V2`] or
+/// Curve point and derivatives at a parameter (`P` is [`crate::scalar::V2`] or
 /// [`crate::scalar::V3`]).
 pub(crate) struct CurveEval<P> {
     pub p: P,
@@ -170,6 +170,38 @@ impl SplineBasis {
         CurveEval { p: pt, d1, d2 }
     }
 
+    /// The basis functions of every control point at `t` (`der` 0), or
+    /// their first or second derivatives (`der` 1 or 2), for a
+    /// non-rational basis: zero but on the span's `degree + 1` control
+    /// points. The curve with control points `ctrl` is then the sum of
+    /// `row[i] * ctrl[i]` (mitcad#2237: an interpolation's rows from one
+    /// evaluation each instead of one per control point, which made a
+    /// spline through a few hundred fit points take seconds).
+    pub fn basis_row(&self, t: f64, der: usize) -> Vec<f64> {
+        let p = self.degree;
+        let s = self.span(t);
+        let mut tables: Vec<Vec<f64>> = Vec::with_capacity(p + 1);
+        tables.push(vec![1.0]);
+        for k in 1..=p {
+            let next = self.raise(s, k, t, &tables[k - 1]);
+            tables.push(next);
+        }
+        let values = match der {
+            0 => tables[p].clone(),
+            1 if p >= 1 => self.derive(s, p, &tables[p - 1]),
+            2 if p >= 2 => {
+                let lower = self.derive(s, p - 1, &tables[p - 2]);
+                self.derive(s, p, &lower)
+            }
+            _ => vec![0.0; p + 1],
+        };
+        let mut row = vec![0.0; self.n_ctrl()];
+        for (r, v) in values.into_iter().enumerate() {
+            row[s - p + r] = v;
+        }
+        row
+    }
+
     /// Index range of the control points that influence the curve at `t`.
     pub fn support(&self, t: f64) -> std::ops::RangeInclusive<usize> {
         let s = self.span(t);
@@ -261,21 +293,9 @@ pub(crate) fn interpolate<const N: usize>(
     };
     rows.push((unit(0), fit[0]));
     rows.push((unit(n_ctrl - 1), fit[k]));
-    let basis_row = |t: f64, der: usize| {
-        let mut row = vec![0.0; n_ctrl];
-        for (i, r) in row.iter_mut().enumerate() {
-            let ctrl: Vec<V2<f64>> = (0..n_ctrl)
-                .map(|j| V2::new(if j == i { 1.0 } else { 0.0 }, 0.0))
-                .collect();
-            let e = basis.eval(&ctrl, t, der);
-            *r = match der {
-                0 => e.p.x,
-                1 => e.d1.x,
-                _ => e.d2.x,
-            };
-        }
-        row
-    };
+    // The basis is non-rational (all weights 1): a row is the basis
+    // functions (or their derivatives) themselves.
+    let basis_row = |t: f64, der: usize| basis.basis_row(t, der);
     for (j, &t) in params.iter().enumerate().take(k).skip(1) {
         rows.push((basis_row(t, 0), fit[j]));
     }
@@ -346,7 +366,7 @@ fn solve_dense<const N: usize>(a: &mut [Vec<f64>], b: &mut [[f64; N]]) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scalar::{Dual, V3};
+    use crate::scalar::{Dual, V2, V3};
 
     fn pts(c: &[[f64; 2]]) -> Vec<V2<f64>> {
         c.iter().map(|p| V2::new(p[0], p[1])).collect()
@@ -490,6 +510,43 @@ mod tests {
         assert_eq!(a.basis, b.basis);
         for (p, q) in a.ctrl.iter().zip(&b.ctrl) {
             assert_eq!([p[0], p[1], 0.0], *q);
+        }
+    }
+
+    /// A basis row is what the curve gives with one control point at 1
+    /// and the others at 0 (mitcad#2237), and a long interpolation passes
+    /// through its points.
+    #[test]
+    fn basis_rows_are_unit_curves() {
+        let b = SplineBasis {
+            degree: 3,
+            knots: vec![0.0, 0.0, 0.0, 0.0, 0.2, 0.45, 0.7, 1.0, 1.0, 1.0, 1.0],
+            weights: vec![1.0; 7],
+        };
+        for &t in &[0.0, 0.1, 0.2, 0.33, 0.69, 0.95, 1.0] {
+            for der in 0..=2 {
+                let row = b.basis_row(t, der);
+                for (i, value) in row.iter().enumerate() {
+                    let ctrl: Vec<V2<f64>> = (0..7)
+                        .map(|j| V2::new(if j == i { 1.0 } else { 0.0 }, 0.0))
+                        .collect();
+                    let e = b.eval(&ctrl, t, der);
+                    let want = [e.p.x, e.d1.x, e.d2.x][der];
+                    assert!((value - want).abs() < 1e-9, "t {t} der {der} i {i}");
+                }
+            }
+        }
+        let fit: Vec<[f64; 2]> = (0..200)
+            .map(|i| {
+                let t = f64::from(i) * 0.05;
+                [10.0 * t.cos() + t, 10.0 * t.sin()]
+            })
+            .collect();
+        let it = interpolate(&fit, false).expect("interpolates");
+        let cp = pts(&it.ctrl);
+        for (j, &t) in it.params.iter().enumerate() {
+            let e = it.basis.eval(&cp, t, 0);
+            assert!((e.p.x - fit[j][0]).abs() < 1e-7 && (e.p.y - fit[j][1]).abs() < 1e-7);
         }
     }
 }

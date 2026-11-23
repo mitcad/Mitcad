@@ -1,0 +1,176 @@
+# SPDX-License-Identifier: MIT
+# Favorite Parameters (mitcad#2203, GitHub mitcad/Mitcad#547), the shared
+# input script of tools/ui-favorite-parameters-test.sh (Linux),
+# tools/ui-windows-favorite-parameters-test.ps1 (Windows) and
+# tools/ui-macos-favorite-parameters-test.sh (macOS), run in the Floating
+# and in the Docked layout (FAVORITES_LAYOUT: floating or docked, in the
+# pictures' names) on favorite-parameters.json saved as
+# favorite-parameters.mitcad in the work folder: width = 1200 mm (600 mm
+# to 2400 mm in 10 mm steps, strict), depth = width / 20 and shelves = 4,
+# none starred. ASCII only: the Windows runner copies it as ASCII.
+#   1. MANAGE > Favorite Parameters with nothing starred: the empty card,
+#      its Open Parameters... opens the Parameters window, where width and
+#      depth are starred: their rows come, width with its slider, depth
+#      with its value under the formula. Pictures, light and dark.
+#   2. 900 typed into width's field and Enter: 900 mm (the unit added),
+#      one undo step; depth follows.
+#   3. Width's slider dragged: the field shows the value at the handle;
+#      released, the model takes it, one undo step.
+#   4. 2600 typed: above the strict maximum, refused: the field keeps it
+#      with the reason, width keeps its value, no undo step; Esc restores.
+#   5. Undo (a change made elsewhere): the field follows.
+#   6. Depth unstarred in the Parameters window: its row goes; width
+#      unstarred by a model command: the empty card again.
+#   7. MANAGE > Favorite Parameters hides the card and shows it again; the
+#      choice is saved (the runner's next start finds it shown).
+expect-ever 'View area' 600
+wait-idle 600
+set-setting parameters/sort none
+expect-ever '^Favorite parameters panel at the start: hidden'
+expect-command-enabled manage.favorite_parameters true
+
+# --- 1. The empty card, Open Parameters..., two favorites starred.
+mark
+command manage.favorite_parameters
+wait-log '^Favorite parameters panel: shown$' 20
+wait-log '^Favorite parameters card: none$' 20
+wait-log '^Favorite parameters open at ' 20
+expect-setting favoriteParameters/shown true
+wait-idle
+screenshot-widget favoriteParametersDock '${MITCAD_TEST_WORK}/favorite-parameters-empty-${FAVORITES_LAYOUT}.png'
+mark
+click-logged '^Favorite parameters open at '
+wait-log '^Favorite parameters: Open Parameters$' 20
+wait-log '^Parameters dialog opened$' 20
+focus-dialog '^Parameters$'
+expect-ever '^Parameters width favorite at ' 20
+wait-idle
+mark
+dialog-click-logged '^Parameters width favorite at '
+wait-log '^Parameter width favorite: on' 20
+wait-log '^Favorite parameters card: width = 1200 mm [(]600 mm . 2400 mm, step 10 mm[)]$' 20
+wait-log '^Parameters depth favorite at ' 20
+wait-idle
+mark
+dialog-click-logged '^Parameters depth favorite at '
+wait-log '^Parameter depth favorite: on' 20
+wait-log '^Favorite parameters card: width = 1200 mm [(]600 mm . 2400 mm, step 10 mm[)]; depth = width / 20 [(]= 60 mm[)]$' 20
+wait-idle
+mark
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+expect-ever '^Favorite parameters width slider handle at ' 20
+expect-ever '^Favorite parameters depth at ' 20
+expect-never '^Favorite parameters depth slider at '
+wait-idle
+screenshot-widget favoriteParametersDock '${MITCAD_TEST_WORK}/favorite-parameters-light-${FAVORITES_LAYOUT}.png'
+# The card must really be in that theme before its picture: a platform
+# that ignores the request fails here (the Linux wrapper uses Qt's GTK
+# platform theme, the generic one has no dark scheme).
+color-scheme dark
+wait-idle
+sleep 500
+expect-widget-theme favoriteParametersDock dark
+screenshot-widget favoriteParametersDock '${MITCAD_TEST_WORK}/favorite-parameters-dark-${FAVORITES_LAYOUT}.png'
+color-scheme light
+wait-idle
+sleep 500
+expect-widget-theme favoriteParametersDock light
+wait-idle
+
+# --- 2. Typed: a bare number gets the unit; one undo step.
+capture-undo-depth typed
+mark
+focus-widget favoriteParameterField_width
+key ctrl+a
+type 900
+key Return
+wait-log '^Favorite parameter width typed: 900$' 20
+wait-log '^Favorite parameter width set: 900 mm = 900 mm$' 30
+wait-log '^Favorite parameters card: width = 900 mm [(]600 mm . 2400 mm, step 10 mm[)]; depth = width / 20 [(]= 45 mm[)]$' 30
+wait-idle
+expect-model-parameter width 900
+expect-undo-depth ${typed} 1
+
+# --- 3. The slider: the value at the handle while dragged, sent on release.
+expect-ever '^Favorite parameters width slider handle at ' 20
+wait-idle
+capture-undo-depth slid
+mark
+pointer-logged press '^Favorite parameters width slider handle at ' left
+pointer-logged move '^Favorite parameters width slider handle at ' left 20 0
+pointer-logged move '^Favorite parameters width slider handle at ' left 40 0
+wait-log '^Favorite parameters width at the handle: [0-9]+ mm$' 20
+screenshot-widget favoriteParametersDock '${MITCAD_TEST_WORK}/favorite-parameters-drag-${FAVORITES_LAYOUT}.png'
+capture handle '^Favorite parameters width at the handle: ([0-9]+) mm$'
+expect-no-log '^Favorite parameter width set: '
+pointer-logged release '^Favorite parameters width slider handle at ' left 40 0
+wait-log '^Favorite parameter width set: ${handle} mm = ${handle} mm$' 30
+wait-log '^Favorite parameters card: width = ${handle} mm ' 30
+wait-idle
+expect-less 900 ${handle}
+expect-model-parameter width ${handle}
+expect-undo-depth ${slid} 1
+
+# --- 4. Refused above the strict maximum; Esc restores.
+capture-undo-depth refused
+mark
+focus-widget favoriteParameterField_width
+key ctrl+a
+type 2600
+key Return
+wait-log '^Favorite parameter width refused: 2600: .*above the maximum' 30
+wait-log '^Favorite parameters card: width = ${handle} mm [(]600 mm . 2400 mm, step 10 mm[)] [[]typed 2600, refused: .*above the maximum.*[]]; depth = ' 30
+wait-idle
+expect-model-parameter width ${handle}
+expect-undo-depth ${refused} 0
+mark
+focus-widget favoriteParameterField_width
+key Escape
+wait-log '^Favorite parameter width restored: ${handle} mm$' 20
+wait-log '^Favorite parameters card: width = ${handle} mm [(]600 mm . 2400 mm, step 10 mm[)]; depth = ' 20
+wait-idle
+
+# --- 5. Undo, a change made elsewhere: the card follows.
+mark
+command edit.undo
+wait-log '^Favorite parameters card: width = 900 mm [(]600 mm . 2400 mm, step 10 mm[)]; depth = width / 20 [(]= 45 mm[)]$' 30
+wait-idle
+expect-model-parameter width 900
+
+# --- 6. Unstarred: in the Parameters window, then by a model command.
+mark
+command solid.parameters
+wait-log '^Parameters dialog opened$' 20
+focus-dialog '^Parameters$'
+expect-ever '^Parameters depth favorite at ' 20
+wait-idle
+mark
+dialog-click-logged '^Parameters depth favorite at '
+wait-log '^Parameter depth favorite: off' 20
+wait-log '^Favorite parameters card: width = 900 mm [(]600 mm . 2400 mm, step 10 mm[)]$' 20
+wait-idle
+mark
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+wait-idle
+mark
+model-command '{"cmd": "set_parameter", "name": "width", "favorite": false}'
+wait-log '^Favorite parameters card: none$' 20
+wait-log '^Favorite parameters open at ' 20
+wait-idle
+
+# --- 7. MANAGE's toggle hides and shows it; the choice is saved.
+mark
+command manage.favorite_parameters
+wait-log '^Favorite parameters panel: hidden$' 20
+expect-setting favoriteParameters/shown false
+wait-idle
+mark
+command manage.favorite_parameters
+wait-log '^Favorite parameters panel: shown$' 20
+expect-setting favoriteParameters/shown true
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

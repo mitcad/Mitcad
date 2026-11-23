@@ -198,6 +198,25 @@ impl<K: Kernel> ScriptApi<K> for Document<K> {
     }
 }
 
+/// Runs one step of a script as [`ScriptApi::run_script`] does: a
+/// command's result, None for a comment or an expectation that holds
+/// (the `run_script` command, mitcad#2245).
+pub(crate) fn run_step<K: Kernel>(
+    doc: &mut Document<K>,
+    step: Value,
+) -> Result<Option<Value>, ApiError> {
+    if let Some(expect) = step.get("expect") {
+        let expectation: Expectation = serde_json::from_value(expect.clone())
+            .map_err(|e| ApiError(format!("invalid expectation: {e}")))?;
+        doc.check(&expectation)?;
+        return Ok(None);
+    }
+    if step.get("comment").is_some() && step.as_object().is_some_and(|o| o.len() == 1) {
+        return Ok(None);
+    }
+    doc.run_command(step).map(Some)
+}
+
 /// The document's methods used only in this module, as an
 /// extension trait (mitcad#777): the api can then live in a crate above
 /// the model.

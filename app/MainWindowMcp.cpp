@@ -184,9 +184,12 @@ QJsonObject MainWindow::mcpQuery(const QJsonObject& request) const {
   // Read-only: also with a sketch or command open, during drags and
   // dialogs; refused only while the model computes (mitcad#265).
   mcpRefuseBusy();
-  // The shared MCP validator excludes disk reads and external workflows.
-  validate_mcp_query(rustStr(compactJson(request)));
-  return {{QStringLiteral("document"), m_mcpDocumentId}, {QStringLiteral("result"), query(request)}};
+  // The shared MCP validator excludes disk reads and external workflows;
+  // the print libraries' queries run when the user allows it, with this
+  // design's project (mitcad#2224).
+  const QJsonObject checked = parseObject(validate_mcp_query(
+      rustStr(compactJson(request)), mcp::agentsMayUsePrintLibraries(), rustStr(projectFolder().toUtf8())));
+  return {{QStringLiteral("document"), m_mcpDocumentId}, {QStringLiteral("result"), query(checked)}};
 }
 
 QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
@@ -217,14 +220,21 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
     const QString kind = entry.value(QStringLiteral("cmd")).toString();
     return kind == QStringLiteral("undo") || kind == QStringLiteral("redo");
   };
+  // The print libraries when the user allows it, with this design's
+  // project (mitcad#2224).
+  const bool printLibraries = mcp::agentsMayUsePrintLibraries();
+  const QByteArray project = projectFolder().toUtf8();
   for (qsizetype i = 0; i < entries.size(); ++i) {
     if (entries.size() > 1 && isStep(entries[i])) {
       refuse(QStringLiteral("%1undo and redo run alone, not in a command array.").arg(entryName(i)));
     }
     // By class: file IO, remote and internal checkpoint commands stay
-    // unavailable (mitcad#265, core/model-api/src/classes.rs).
+    // unavailable (mitcad#265, core/model-api/src/classes.rs), but for the
+    // print libraries' forms with the preference (mitcad#2224), which come
+    // back bound to the design's project.
     try {
-      idleDocument().validate_mcp_document_command(rustStr(compactJson(entries[i])));
+      entries[i] = parseObject(idleDocument().validate_mcp_document_command(rustStr(compactJson(entries[i])),
+                                                                          printLibraries, rustStr(project)));
     } catch (const std::exception& error) {
       if (!array) {
         refuse(modelText(error));
@@ -290,7 +300,8 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
       QJsonObject plain = entries[i];
       plain.remove(QStringLiteral("as"));
       if (entry != plain) {
-        idleDocument().validate_mcp_document_command(rustStr(compactJson(entry)));
+        entry = parseObject(
+            idleDocument().validate_mcp_document_command(rustStr(compactJson(entry)), printLibraries, rustStr(project)));
       }
       ran = true;
     } catch (const std::exception& error) {
@@ -328,6 +339,16 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
     }
     // The agent's steps as one, labelled (agent).
     mcpLabelAgentChange(depth);
+  }
+  // A library the agent wrote (mitcad#2224): the open managers read the
+  // libraries again, as after a manager's own change.
+  if (printLibraries && m_controller != nullptr) {
+    for (const QJsonObject& entry : std::as_const(resolved)) {
+      if (mcp_uses_print_library(rustStr(compactJson(entry)))) {
+        m_controller->librariesChanged();
+        break;
+      }
+    }
   }
   const QByteArray timesText = QJsonDocument(times).toJson(QJsonDocument::Compact);
   const QByteArray after = compactJson(mcpSnapshot(true, before));

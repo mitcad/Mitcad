@@ -501,6 +501,11 @@ void MainWindow::openFromProject() {
     }
     return;
   }
+  if (chosen->file) {
+    // Another file of the project (mitcad#2204): the system's app opens it.
+    openProjectFile(chosen->path);
+    return;
+  }
   if (chosen->readOnly) {
     if (m_windowManager == nullptr && !maybeSave()) {
       return;

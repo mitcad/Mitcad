@@ -329,7 +329,9 @@ void spaceMouseButtonChanges(std::uint32_t before, std::uint32_t after, Changed&
 
 // A platform's way to a 3D mouse. It runs on the GUI thread and reports
 // through the callbacks; a backend that found nothing at start() keeps
-// listening for a device (or the daemon) that comes later.
+// listening for a device (or the daemon) that comes later. The process has
+// one (SpaceMouseConnection, mitcad#2297), shared by every design: its
+// hooks are the active design's.
 class SpaceMouseBackend {
 public:
   virtual ~SpaceMouseBackend() = default;
@@ -339,9 +341,12 @@ public:
   // its name in `device`.
   virtual bool start(QString& device) = 0;
   virtual QString unavailableStatus() const { return {}; }
-  // The design's window is shown in its frame now (mitcad#2152): a native
-  // window that `nativeWindow` gave as 0 at start may be there now. A
-  // backend whose driver needs it (Windows' 3DxWare) tries again.
+  // A design's window is shown in its frame now (mitcad#2152), or the
+  // active design changed or moved to another frame (mitcad#2297): a
+  // native window that `nativeWindow` gave as 0 at start may be there now,
+  // or be another one. A backend whose driver needs it tries again
+  // (Windows' 3DxWare) or follows the new window (Windows' 3DxWare,
+  // Linux's X11 Magellan).
   virtual void windowPlaced() {}
 
   // The active view and native window used by application-aware drivers.

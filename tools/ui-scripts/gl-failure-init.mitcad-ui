@@ -5,7 +5,8 @@
 # (gl-failure.json).
 #   1. MitCad does not end: the message once, the reason in the log once,
 #      no attach.
-#   2. Frames meanwhile try again without telling it again.
+#   2. Frames meanwhile try again without telling it again; clicks into
+#      the view without graphics do nothing (mitcad#2295).
 #   3. The switch cleared (unset-env): the next frame attaches, the view
 #      draws again, and the message is not repeated.
 #   4. The design still saves; the harness checks the clean exit and that
@@ -31,6 +32,23 @@ sleep 300
 expect-no-log '^3D view: no graphics: '
 expect-no-log '^Status error: The 3D view lost'
 expect-no-log '^3D view: attached to the graphics card again$'
+
+# 2b. Clicks into the view without graphics (mitcad#2295): a left click,
+#     a double click and a right click do nothing (no selection, no
+#     context menu) and MitCad does not crash in OCCT's picking.
+mark
+click 50 50
+wait-log '^3D view: no graphics, the left press is ignored$' 30
+wait-log '^3D view: no graphics, the left release is ignored$' 30
+dblclick 45 55
+click 55 45 right
+wait-log '^3D view: no graphics, the right press is ignored$' 30
+wait-log '^3D view: no graphics, the right release is ignored$' 30
+wait-idle
+expect-selection 0 0
+expect-no-log '^Context menu: '
+expect-no-log '^3D view: no graphics: '
+expect-no-log '^Status error: The 3D view lost'
 
 # 3. The switch cleared: attached and drawn again.
 unset-env MITCAD_TEST_GL_FAILURE

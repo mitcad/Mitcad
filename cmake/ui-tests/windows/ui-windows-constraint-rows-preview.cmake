@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Assembly Constraint's preview with more than one row (mitcad#1813):
+# Constraint Set's preview with more than one row (mitcad#1813):
 # an incomplete row left out of the preview, which still places the
 # part by the complete rows; the part drawn once where the preview puts
 # it. The Linux test's shared input script

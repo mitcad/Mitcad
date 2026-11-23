@@ -7,7 +7,15 @@
 //!   offset's parameter (`modify.rs`), so they can be constrained further.
 //! - A chain with an ellipse, an elliptical arc or a spline is *derived*:
 //!   its curves are computed from the solved source after every solve and
-//!   are not solver unknowns (constraints cannot refer to them). Lines and
+//!   are not solver unknowns. Of the constraints only a Coincident of a
+//!   point of the sketch with one of their curves, with an end where nothing
+//!   follows, a round corner's end or a smooth join, with a round corner arc
+//!   or with an arc's centre refers to them: it holds the point on the
+//!   exact offset of the source curve in the same solve, the distance a
+//!   known value (mitcad#2278, [`crate::offset_hold`]); a drawing tool
+//!   started or ended at one of their points gets a point of its own held
+//!   there. A trimmed inner corner, an inner control point of a result
+//!   spline and every other constraint or dimension stay refused. Lines and
 //!   arcs offset exactly; an ellipse or a spline has no exact offset of its
 //!   kind, so it becomes a C1 cubic B-spline through Hermite pieces of the
 //!   exact offset curve, within [`TOLERANCE`]. Corners where the chain
@@ -68,6 +76,19 @@
 //!   offsets cross, as whole curves do. What is left of the curve is its
 //!   one result, a spline with a corner (a triple knot, [`Made::Spline`])
 //!   where its parts meet.
+//! - Free ends (mitcad#2277): the ends of an exact offset's results that
+//!   no corner of the offset, no constraint and no dimension holds (an
+//!   open chain's first and last result ends) are free to the solve and
+//!   can be dragged; a dragged one stays where it is dragged. Every solve
+//!   starts the results where the offset of the source is ([`seed`],
+//!   mitcad#641), each free end where its source's end is and then by the
+//!   shift a drag stored for it ([`OffsetShift`], [`record_shifts`]): an
+//!   arc's end by an angle from its source end's angle, a line's end by a
+//!   distance along the line. An end nobody dragged has none and follows
+//!   its source's end, also when the source's span changes: a source the
+//!   solve itself moves (a parameter) left a free end behind, so after the
+//!   solve the ends are placed again from the solved source and the
+//!   sketch solved once more when one lagged ([`place_free_ends`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -121,6 +142,21 @@ pub struct OffsetMerge {
     pub curve: EntityUid,
     #[serde(with = "curve_serde")]
     pub into: EntityUid,
+}
+
+/// How far a free end of an exact offset's result lies from where the
+/// offset of its source's end is (mitcad#2277): an arc's end by an angle
+/// (radians, counter-clockwise) from its source end's angle, a line's end
+/// by a distance along the source line's direction (millimetres). Only a
+/// drag of the end sets it; [`seed`] applies it after moving the result
+/// with its source, so that a dragged end stays where it was dragged and
+/// an end nobody dragged (none listed, 0) follows its source's end.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OffsetShift {
+    #[serde(with = "super::point_serde")]
+    pub point: EntityUid,
+    pub by: f64,
 }
 
 /// Outlines as lists of curve names (`[["c20", "c21"], ["c22", "c23"]]`).
@@ -238,9 +274,25 @@ pub struct SketchOffset<P> {
     /// A derived offset rounds its outer corners whatever this says.
     #[serde(default, skip_serializing_if = "is_false")]
     pub round: bool,
+    /// The free ends of the results (of an offset made by constraints) a
+    /// drag put off their source's ends, with how far (mitcad#2277,
+    /// [`OffsetShift`]). A free end is one no corner of the offset, no
+    /// constraint and no dimension holds: an open chain's first and last
+    /// result ends.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shifts: Vec<OffsetShift>,
 }
 
 impl<P> SketchOffset<P> {
+    /// How far a drag put the free end `point` off its source's end
+    /// ([`OffsetShift`]); 0 when it was not dragged.
+    pub fn shift(&self, point: EntityUid) -> f64 {
+        self.shifts
+            .iter()
+            .find(|s| s.point == point)
+            .map_or(0.0, |s| s.by)
+    }
+
     pub fn slot(&self) -> String {
         format!("offsets[{}].distance", self.id)
     }
@@ -263,6 +315,7 @@ impl<P> SketchOffset<P> {
             helpers: self.helpers.clone(),
             derived: self.derived,
             round: self.round,
+            shifts: self.shifts.clone(),
         })
     }
 
@@ -747,6 +800,12 @@ pub struct Computed {
     pub dropped: Vec<usize>,
     pub merged: Vec<(usize, usize)>,
     pub left: Vec<usize>,
+    /// The source parameters each curve's offset runs over (mitcad#2278):
+    /// per curve, each part of it in chain order as the index of its source
+    /// curve and the source parameters at the part's start and end in chain
+    /// direction (the curve's whole domain, or what is left of it where it
+    /// is cut, or between the stretches that fold over).
+    pub spans: Vec<Vec<(usize, f64, f64)>>,
 }
 
 /// Each position of a curve that has one after it along its outline, with
@@ -1756,6 +1815,65 @@ fn newton_from(a: &Piece, b: &Piece, u: f64, v: f64) -> Option<(f64, f64)> {
     (u.is_finite() && v.is_finite() && dist(qa, qb) <= 1e-9 * size).then_some((u, v))
 }
 
+/// An intersection of the inward offsets of two open curves leaving their
+/// shared corner, parameterized from 0 at the corner to 1 at the far end.
+/// The polyline only seeds Newton; the returned points are on the exact
+/// curves. Used by Sketch Fillet when at least one leg is a conic.
+pub(crate) fn fillet_crossing(
+    a: (Curve2, bool),
+    b: (Curve2, bool),
+    turn: f64,
+    radius: f64,
+) -> Option<(P2, [P2; 2], [f64; 2])> {
+    let offset = |(curve, forward): (Curve2, bool), side: f64| Piece {
+        span: curve.domain(),
+        curve,
+        forward,
+        left: if forward {
+            side * radius
+        } else {
+            -side * radius
+        },
+        part: false,
+        folded: false,
+    };
+    let a = offset(a, turn.signum());
+    let b = offset(b, -turn.signum());
+    if [&a, &b]
+        .iter()
+        .any(|leg| leg.offset_radius().is_some_and(|r| r <= 0.0))
+    {
+        return None;
+    }
+    let sample = |leg: &Piece| -> Vec<_> {
+        let steps = if leg.is_line() { 1 } else { 96 };
+        (0..=steps)
+            .map(|i| {
+                let t = f64::from(i) / f64::from(steps);
+                (t, leg.eval(t).0)
+            })
+            .collect()
+    };
+    let seeds = crossings(&sample(&a), &sample(&b));
+    std::iter::once((0.0, 0.0))
+        .chain(seeds)
+        .filter_map(|(u, v)| {
+            let (u, v) = newton_from(&a, &b, u, v)?;
+            if !(0.0 < u && u < 1.0 && 0.0 < v && v < 1.0) {
+                return None;
+            }
+            let (ca, cb) = (a.eval(u).0, b.eval(v).0);
+            if dist(ca, cb) > 1e-9 * radius.max(1.0) {
+                return None;
+            }
+            let touch = [a.source(u).0, b.source(v).0];
+            let setback = dist(a.source(0.0).0, touch[0]) + dist(b.source(0.0).0, touch[1]);
+            Some((setback, (scale(add(ca, cb), 0.5), touch, [u, v])))
+        })
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(_, fillet)| fillet)
+}
+
 /// The arc about `corner` from `from` to `to`, the short way.
 fn round_corner(corner: P2, from: P2, to: P2) -> Made {
     let a0 = sub(from, corner);
@@ -2366,6 +2484,19 @@ pub fn compute(
             }
         });
     }
+    // What of its sources each curve runs over (mitcad#2278).
+    let spans = results
+        .iter()
+        .map(|parts| {
+            parts
+                .iter()
+                .map(|p| {
+                    let (u0, u1) = range[*p];
+                    (owner[*p], pieces[*p].t(u0), pieces[*p].t(u1))
+                })
+                .collect()
+        })
+        .collect();
     Ok(Computed {
         made,
         ends,
@@ -2376,6 +2507,7 @@ pub fn compute(
         dropped,
         merged,
         left,
+        spans,
     })
 }
 
@@ -2493,6 +2625,37 @@ fn sources(
     Ok((out, closed))
 }
 
+/// A derived offset computed from its sources' geometry `curves` at the
+/// signed distance `d` (to the right of the chain), with the structure it
+/// has stored: its results' knots, its corners' kinds, what vanishes and
+/// what follows what.
+pub(crate) fn compute_stored(
+    offset: &SketchOffset<ParamId>,
+    index: &EntityIndex<'_>,
+    curves: &BTreeMap<EntityUid, Curve2>,
+    d: f64,
+) -> Result<Computed, String> {
+    let (chain, closed) = sources(offset, index, curves)?;
+    let kinds: Vec<EntityKind> = offset
+        .results
+        .iter()
+        .map(|r| {
+            index
+                .get(*r)
+                .map(|e| e.kind.clone())
+                .ok_or("an offset curve is gone")
+        })
+        .collect::<Result<_, _>>()?;
+    let structure = Structure {
+        knots: kinds.iter().map(stored_knots).collect(),
+        joins: stored_joins(offset, &chain, closed, d),
+        dropped: offset.dropped_indices(),
+        next: offset.links(closed),
+    };
+    compute(&chain, d, closed, Some(&structure), &offset.namer())
+        .map_err(|e| format!("offset {}: {e}", offset.id))
+}
+
 /// Computes every derived offset from the solved geometry and puts its
 /// curves and points into `solved`. `value` gives a parameter's value.
 pub fn regenerate(
@@ -2505,25 +2668,7 @@ pub fn regenerate(
     for offset in offsets.iter().filter(|o| o.derived) {
         let d = value(offset.distance)?;
         let d = if offset.left { -d } else { d };
-        let (chain, closed) = sources(offset, &index, &solved.curves)?;
-        let kinds: Vec<EntityKind> = offset
-            .results
-            .iter()
-            .map(|r| {
-                index
-                    .get(*r)
-                    .map(|e| e.kind.clone())
-                    .ok_or("an offset curve is gone")
-            })
-            .collect::<Result<_, _>>()?;
-        let structure = Structure {
-            knots: kinds.iter().map(stored_knots).collect(),
-            joins: stored_joins(offset, &chain, closed, d),
-            dropped: offset.dropped_indices(),
-            next: offset.links(closed),
-        };
-        let computed = compute(&chain, d, closed, Some(&structure), &offset.namer())
-            .map_err(|e| format!("offset {}: {e}", offset.id))?;
+        let computed = compute_stored(offset, &index, &solved.curves, d)?;
         let mut write = |made: &Made, curve: EntityUid| -> Result<(), String> {
             let kind = &index.get(curve).ok_or("an offset curve is gone")?.kind;
             let (points, radius) =
@@ -2572,396 +2717,43 @@ type Round = (P2, f64, f64, Option<(f64, f64)>);
 /// constraints join the results. An offset whose results are not of their sources' kinds keeps
 /// its stored positions. Offsets in order, so that an offset of an offset starts from
 /// its source's new place.
+///
+/// A free end of a result (mitcad#2277: no corner of the offset, nothing
+/// in `held` and no fixing holds it; [`held_points`]) goes where the
+/// offset of its source's end is, then by the shift a drag stored for it
+/// ([`OffsetShift`]): an end nobody dragged follows its source's end, also
+/// when the source's span changes with a parameter, and a dragged one
+/// keeps its place relative to it. Without the shift the next solve put a
+/// dragged end back on its source's end, so that the end the solve counts
+/// free could not be dragged.
 pub fn seed(
     offsets: &[SketchOffset<ParamId>],
     entities: &mut [Entity],
+    held: &BTreeSet<EntityUid>,
     value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
 ) {
-    // The curves through each point (mitcad#1774).
-    let mut users: BTreeMap<EntityUid, Vec<EntityUid>> = BTreeMap::new();
-    for e in entities.iter().filter(|e| !e.is_point()) {
-        for p in e.kind.points() {
-            users.entry(p).or_default().push(e.id);
-        }
-    }
+    let users = users_of(entities);
     for offset in offsets.iter().filter(|o| !o.derived) {
-        let Ok(d) = value(offset.distance) else {
+        let Some(d) = signed_distance(offset, value) else {
             continue;
         };
-        if !(d.is_finite() && d > 0.0) {
+        let Some(Placement {
+            mut points,
+            radii,
+            free,
+        }) = placement(offset, entities, &users, held, d)
+        else {
             continue;
-        }
-        let d = if offset.left { -d } else { d };
-        // Whether a curve the offset did not make goes through a point.
-        let made: BTreeSet<EntityUid> = made_and_helpers(offset).into_iter().collect();
-        let joined_elsewhere = |p: EntityUid| {
-            users
-                .get(&p)
-                .is_some_and(|curves| curves.iter().any(|c| !made.contains(c)))
         };
-        let updates = {
-            let index = EntityIndex::new(entities);
-            let at = |p: EntityUid| match index.get(p).map(|e| &e.kind) {
-                Some(EntityKind::Point { at }) => Some(*at),
-                _ => None,
-            };
-            let mut curves = std::collections::BTreeMap::new();
-            for id in &offset.curves {
-                let curve = match index.get(*id).map(|e| &e.kind) {
-                    Some(EntityKind::Line { start, end, .. }) => {
-                        let (Some(a), Some(b)) = (at(*start), at(*end)) else {
-                            continue;
-                        };
-                        Curve2::Line { a, b }
-                    }
-                    Some(EntityKind::Arc { center, start, end }) => {
-                        let (Some(c), Some(a), Some(b)) = (at(*center), at(*start), at(*end))
-                        else {
-                            continue;
-                        };
-                        let (va, vb) = (sub(a, c), sub(b, c));
-                        let start = va[1].atan2(va[0]);
-                        Curve2::Arc {
-                            center: c,
-                            radius: norm(va),
-                            start,
-                            end: angle_after(start, vb[1].atan2(vb[0])),
-                        }
-                    }
-                    Some(EntityKind::Circle {
-                        center,
-                        radius,
-                        start,
-                    }) => {
-                        let Some(c) = at(*center) else { continue };
-                        Curve2::Circle {
-                            center: c,
-                            radius: *radius,
-                            start: *start,
-                        }
-                    }
-                    _ => continue,
-                };
-                curves.insert(*id, curve);
-            }
-            // Each source curve with the direction it runs along the chain:
-            // by its shared points, else (a chain joined at coincident ends,
-            // as an import's offset of an offset is) where its ends meet.
-            let chain = match sources(offset, &index, &curves) {
-                Ok((chain, _)) => chain,
-                Err(_) => {
-                    let listed: Option<Vec<(Curve2, bool)>> = offset
-                        .curves
-                        .iter()
-                        .map(|id| curves.get(id).map(|c| (c.clone(), true)))
-                        .collect();
-                    let Some(listed) = listed else {
-                        continue;
-                    };
-                    joined_by_ends(&listed).0
-                }
-            };
-            // The curves that have a result (mitcad#1234: the results on
-            // either side of one that vanished share their corner, which is
-            // placed below where their offset curves cross).
-            let chain: Vec<(Curve2, bool)> = chain
-                .into_iter()
-                .zip(&offset.curves)
-                .filter(|(_, c)| !offset.dropped.contains(c))
-                .map(|(piece, _)| piece)
-                .collect();
-            if chain.len() != offset.results.len() {
-                continue;
-            }
-            // Each result where the offset of its own source curve is: the
-            // offset's joins are its constraints', which the solve keeps. A
-            // point two results share (a corner) takes where their offset
-            // lines meet, else the middle of their ends.
-            let mut points: Vec<(EntityUid, P2)> = Vec::new();
-            let mut lines: Vec<(EntityUid, P2, P2)> = Vec::new();
-            let mut radii: Vec<(EntityUid, f64)> = Vec::new();
-            let mut circles: Vec<(EntityUid, P2, f64)> = Vec::new();
-            // The arcs and circles in chain order: centre, the source's
-            // radius and the result's, and an arc's range of angles.
-            let mut rounds: Vec<Round> = Vec::new();
-            let mut fits = true;
-            let kept = offset.kept();
-            for (((curve, forward), result), source) in chain.iter().zip(&offset.results).zip(&kept)
+        // The free ends a drag put off their source's ends (mitcad#2277).
+        for (id, end) in &free {
+            let by = offset.shift(*id);
+            if by != 0.0
+                && let Some(p) = points.iter_mut().find(|(q, _)| q == id)
             {
-                // Along the left normal of the curve's own direction, as
-                // `compute` offsets a piece.
-                let left = if *forward { -d } else { d };
-                match (curve, index.get(*result).map(|e| &e.kind)) {
-                    (Curve2::Line { a, b }, Some(EntityKind::Line { start, end, .. })) => {
-                        let length = norm(sub(*b, *a));
-                        if !(length.is_finite() && length > 0.0) {
-                            fits = false;
-                            continue;
-                        }
-                        let along = unit(sub(*b, *a));
-                        let n = perp(along);
-                        let (a, b) = (add(*a, scale(n, left)), add(*b, scale(n, left)));
-                        // Over the lines that run on along it too
-                        // (mitcad#1244): an open chain's end is free.
-                        let (a, b) = offset
-                            .merged
-                            .iter()
-                            .filter(|m| m.into == *source)
-                            .filter_map(|m| match curves.get(&m.curve) {
-                                Some(Curve2::Line { a, b }) => Some([*a, *b]),
-                                _ => None,
-                            })
-                            .flatten()
-                            .map(|q| add(q, scale(n, left)))
-                            .fold((a, b), |(a, b), q| {
-                                let t = dot(sub(q, a), along);
-                                if t < 0.0 {
-                                    (q, b)
-                                } else if t > dot(sub(b, a), along) {
-                                    (a, q)
-                                } else {
-                                    (a, b)
-                                }
-                            });
-                        // The result keeps its own direction.
-                        let stored = at(*start).zip(at(*end)).map(|(s, e)| sub(e, s));
-                        let (a, b) = match stored {
-                            Some(v) if dot(v, along) < 0.0 => (b, a),
-                            _ => (a, b),
-                        };
-                        // An end the user joined a curve of their own to
-                        // (an arc that rounds a corner, mitcad#1774) starts
-                        // where it is along the line, so that a drag that
-                        // moved it along there (the arc's radius) stays.
-                        let on_line = |p: EntityUid, end: P2| match at(p) {
-                            Some(q) if joined_elsewhere(p) => {
-                                add(a, scale(along, dot(sub(q, a), along)))
-                            }
-                            _ => end,
-                        };
-                        let (pa, pb) = (on_line(*start, a), on_line(*end, b));
-                        points.extend([(*start, pa), (*end, pb)]);
-                        lines.extend([(*start, a, b), (*end, a, b)]);
-                    }
-                    (
-                        Curve2::Arc {
-                            center,
-                            radius,
-                            start: s,
-                            end: e,
-                        },
-                        Some(EntityKind::Arc {
-                            center: c,
-                            start,
-                            end,
-                        }),
-                    ) => {
-                        let r = radius - left;
-                        if !(r.is_finite() && r > 0.0) {
-                            fits = false;
-                            continue;
-                        }
-                        // The ends at the source's angles (a free end where
-                        // the source's is, even where the source turned, or
-                        // where the arcs that run on along it end,
-                        // mitcad#1246); a corner is placed below, where the
-                        // curves cross.
-                        let run_on = offset
-                            .merged
-                            .iter()
-                            .rev()
-                            .filter(|m| m.into == *source)
-                            .find_map(|m| match curves.get(&m.curve) {
-                                Some(Curve2::Arc { start, end, .. }) => Some((*start, *end)),
-                                _ => None,
-                            });
-                        let (s0, e0) = match run_on {
-                            Some((ms, _)) if !*forward => (ms, *e),
-                            Some((_, me)) => (*s, me),
-                            None => (*s, *e),
-                        };
-                        let on = |t: f64| add(*center, [r * t.cos(), r * t.sin()]);
-                        points.extend([(*c, *center), (*start, on(s0)), (*end, on(e0))]);
-                        circles.extend([(*start, *center, r), (*end, *center, r)]);
-                        rounds.push((*center, *radius, r, Some((*s, *e))));
-                    }
-                    // An arc whose offset runs round its whole circle
-                    // (mitcad#1246): its helper across the arc's middle.
-                    (
-                        Curve2::Arc {
-                            center,
-                            radius,
-                            start: s,
-                            end: e,
-                        },
-                        Some(EntityKind::Circle { center: c, .. }),
-                    ) => {
-                        let r = radius - left;
-                        if !(r.is_finite() && r > 0.0) {
-                            fits = false;
-                            continue;
-                        }
-                        points.push((*c, *center));
-                        radii.push((*result, r));
-                        rounds.push((*center, *radius, r, Some((*s, *e))));
-                    }
-                    (
-                        Curve2::Circle { center, radius, .. },
-                        Some(EntityKind::Circle { center: c, .. }),
-                    ) => {
-                        let r = radius - left;
-                        if !(r.is_finite() && r > 0.0) {
-                            fits = false;
-                            continue;
-                        }
-                        points.push((*c, *center));
-                        radii.push((*result, r));
-                        rounds.push((*center, *radius, r, None));
-                    }
-                    _ => fits = false,
-                }
+                p.1 = end.at(by);
             }
-            if !fits {
-                continue;
-            }
-            // The construction line each arc or circle holds its distance
-            // with (one per arc, in chain order, from a point on the source
-            // to one on the result through the centre) goes along with it:
-            // left where it was when its arc had moved, it started a solve of
-            // its own once the corners were held where the curves touch
-            // (mitcad#890), and that solve did not find the arc again from
-            // 17 mm away. It goes where the solve holds it (mitcad#1171,
-            // [`independent`]): across an arc's middle, level with a
-            // circle's centre on the side it is on.
-            if offset.helpers.len() == rounds.len() {
-                for (helper, (center, from, to, range)) in offset.helpers.iter().zip(&rounds) {
-                    let Some(EntityKind::Line { start, end, .. }) =
-                        index.get(*helper).map(|e| &e.kind)
-                    else {
-                        continue;
-                    };
-                    let (Some(p0), Some(p1)) = (at(*start), at(*end)) else {
-                        continue;
-                    };
-                    // Out from the centre along the helper, the way the
-                    // result lies from the source.
-                    let along = sub(p1, p0);
-                    let length = norm(along);
-                    let mut radial = if length > 0.0 {
-                        scale(along, if to > from { 1.0 } else { -1.0 } / length)
-                    } else {
-                        [1.0, 0.0]
-                    };
-                    match range {
-                        Some((s, e)) => {
-                            let middle = (s + e) / 2.0;
-                            radial = [middle.cos(), middle.sin()];
-                        }
-                        None => radial = [radial[0].signum(), 0.0],
-                    }
-                    points.push((*start, add(*center, scale(radial, *from))));
-                    points.push((*end, add(*center, scale(radial, *to))));
-                }
-            }
-            // Corners: each point once.
-            let mut placed: Vec<(EntityUid, P2)> = Vec::new();
-            for (id, p) in &points {
-                if placed.iter().any(|(q, _)| q == id) {
-                    continue;
-                }
-                let all: Vec<P2> = points
-                    .iter()
-                    .filter(|(q, _)| q == id)
-                    .map(|(_, p)| *p)
-                    .collect();
-                if all.len() == 1 {
-                    placed.push((*id, *p));
-                    continue;
-                }
-                let through: Vec<(P2, P2)> = lines
-                    .iter()
-                    .filter(|(q, _, _)| q == id)
-                    .map(|(_, a, b)| (*a, *b))
-                    .collect();
-                let round: Vec<(P2, f64)> = circles
-                    .iter()
-                    .filter(|(q, _, _)| q == id)
-                    .map(|(_, c, r)| (*c, *r))
-                    .collect();
-                let middle = scale(
-                    all.iter().fold([0.0, 0.0], |s, p| add(s, *p)),
-                    1.0 / all.len() as f64,
-                );
-                let meet = match (through.as_slice(), round.as_slice()) {
-                    ([(a1, b1), (a2, b2)], []) => {
-                        let (u, v) = (sub(*b1, *a1), sub(*b2, *a2));
-                        let den = cross(u, v);
-                        (den.abs() > 1e-9 * norm(u) * norm(v))
-                            .then(|| add(*a1, scale(u, cross(sub(*a2, *a1), v) / den)))
-                    }
-                    // A line meeting an arc: their crossing nearest the
-                    // middle of the two ends; a line touching the circle
-                    // (within rounding, a tangent corner) at the point it
-                    // touches, as the two crossings' distance from it is the
-                    // square root of the rounding and would move the corner.
-                    ([(a, b)], [(c, r)]) => {
-                        let u = unit(sub(*b, *a));
-                        let foot = add(*a, scale(u, dot(sub(*c, *a), u)));
-                        let h = norm(sub(foot, *c));
-                        if (r - h).abs() <= TOUCH * r.max(1.0) {
-                            Some(foot)
-                        } else {
-                            (h < *r).then(|| {
-                                let s = (r * r - h * h).sqrt();
-                                let (p, q) = (add(foot, scale(u, s)), add(foot, scale(u, -s)));
-                                if norm(sub(p, middle)) <= norm(sub(q, middle)) {
-                                    p
-                                } else {
-                                    q
-                                }
-                            })
-                        }
-                    }
-                    // Two arcs: their circles' crossing nearest the middle
-                    // of the two ends; circles touching (within rounding) at
-                    // the point they touch. Circles whose centres lie within
-                    // rounding of each other (one circle split into two arcs
-                    // with a centre point each, as a projection makes them)
-                    // neither cross nor touch at a point: their "touching
-                    // point" fell near the centre, far off the circle, and
-                    // the solve started from there lost the profile
-                    // (mitcad#709). Their corner is the middle of the ends.
-                    ([], [(c1, r1), (c2, r2)]) => {
-                        let d = norm(sub(*c2, *c1));
-                        let touch = TOUCH * (r1 + r2).max(1.0);
-                        (d > touch && d <= r1 + r2 + touch && d >= (r1 - r2).abs() - touch).then(
-                            || {
-                                let u = scale(sub(*c2, *c1), 1.0 / d);
-                                let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
-                                let foot = add(*c1, scale(u, a));
-                                if (d - (r1 + r2)).abs() <= touch
-                                    || (d - (r1 - r2).abs()).abs() <= touch
-                                {
-                                    return foot;
-                                }
-                                let h = (r1 * r1 - a * a).max(0.0).sqrt();
-                                let (p, q) =
-                                    (add(foot, scale(perp(u), h)), add(foot, scale(perp(u), -h)));
-                                if norm(sub(p, middle)) <= norm(sub(q, middle)) {
-                                    p
-                                } else {
-                                    q
-                                }
-                            },
-                        )
-                    }
-                    _ => None,
-                };
-                placed.push((*id, meet.unwrap_or(middle)));
-            }
-            (placed, radii)
-        };
-        let (points, radii) = updates;
+        }
         for entity in entities.iter_mut() {
             match &mut entity.kind {
                 EntityKind::Point { at } => {
@@ -2978,6 +2770,614 @@ pub fn seed(
             }
         }
     }
+}
+
+/// The points an active constraint or driving dimension names (mitcad#2277:
+/// a result's end among them is not free; [`seed`] leaves it to them).
+pub fn held_points<P>(
+    constraints: &[super::Constraint],
+    dimensions: &[super::Dimension<P>],
+) -> BTreeSet<EntityUid> {
+    constraints
+        .iter()
+        .filter(|c| c.active)
+        .flat_map(|c| c.kind.refs())
+        .chain(
+            dimensions
+                .iter()
+                .filter(|d| d.active && d.value.is_some())
+                .flat_map(|d| d.kind.refs()),
+        )
+        .filter_map(|r| match r {
+            Ref::Point(p) => Some(p),
+            Ref::Curve(_) => None,
+        })
+        .collect()
+}
+
+/// After a drag (mitcad#2277): each free end of an offset's results among
+/// `dragged` keeps how far it now lies from where the offset of its
+/// source's end is ([`OffsetShift`]); an end back within rounding of it
+/// loses its shift. `entities` are as the drag solved them. Shifts of
+/// points that are no longer ends of the offset's results go. Nothing
+/// else changes: an end that was not dragged keeps its shift, so that it
+/// follows its source as before.
+pub fn record_shifts(
+    offsets: &mut [SketchOffset<ParamId>],
+    entities: &[Entity],
+    held: &BTreeSet<EntityUid>,
+    dragged: &BTreeSet<EntityUid>,
+    value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+) {
+    let users = users_of(entities);
+    let index = EntityIndex::new(entities);
+    let at = |p: EntityUid| match index.get(p).map(|e| &e.kind) {
+        Some(EntityKind::Point { at }) => Some(*at),
+        _ => None,
+    };
+    for offset in offsets.iter_mut().filter(|o| !o.derived) {
+        let ends: BTreeSet<EntityUid> = offset
+            .results
+            .iter()
+            .filter_map(|r| index.get(*r))
+            .flat_map(|e| e.kind.points())
+            .collect();
+        offset.shifts.retain(|s| ends.contains(&s.point));
+        if !ends.iter().any(|p| dragged.contains(p)) {
+            continue;
+        }
+        let Some(d) = signed_distance(offset, value) else {
+            continue;
+        };
+        let Some(placed) = placement(offset, entities, &users, held, d) else {
+            continue;
+        };
+        for (id, end) in placed.free.iter().filter(|(id, _)| dragged.contains(id)) {
+            let Some(by) = at(*id).and_then(|p| end.shift_to(p)) else {
+                continue;
+            };
+            offset.shifts.retain(|s| s.point != *id);
+            if by.abs() > SHIFT_ROUNDING {
+                offset.shifts.push(OffsetShift { point: *id, by });
+            }
+        }
+        offset.shifts.sort_by_key(|s| s.point);
+    }
+}
+
+/// A shift this small (radians or millimetres) is the solve's rounding: the
+/// end is on its source's end (mitcad#2277).
+const SHIFT_ROUNDING: f64 = 1e-10;
+
+/// A free end this far (millimetres) from where its solved source puts it
+/// lags behind the source (mitcad#2277, [`place_free_ends`]).
+const LAGGING: f64 = 1e-7;
+
+/// After a solve (mitcad#2277): each free end of an offset's results that
+/// no curve of the user's joins, where its solved source's end puts it, by
+/// its shift. [`seed`] placed it by the source as stored before the solve;
+/// a source the solve moved (a parameter changed its span) left the end
+/// behind, as nothing in the solve ties a free end to it. `entities` are
+/// as solved; whether an end moved by more than [`LAGGING`], so that the
+/// caller solves again from here. Offsets in order, so that an offset of an
+/// offset's results follows them.
+pub fn place_free_ends(
+    offsets: &[SketchOffset<ParamId>],
+    entities: &mut [Entity],
+    held: &BTreeSet<EntityUid>,
+    value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+) -> bool {
+    let users = users_of(entities);
+    let mut moved = false;
+    for offset in offsets.iter().filter(|o| !o.derived) {
+        let Some(d) = signed_distance(offset, value) else {
+            continue;
+        };
+        let Some(placed) = placement(offset, entities, &users, held, d) else {
+            continue;
+        };
+        let made: BTreeSet<EntityUid> = made_and_helpers(offset).into_iter().collect();
+        for (id, end) in placed.free {
+            if users
+                .get(&id)
+                .is_some_and(|curves| curves.iter().any(|c| !made.contains(c)))
+            {
+                continue;
+            }
+            let to = end.at(offset.shift(id));
+            if let Some(e) = entities.iter_mut().find(|e| e.id == id)
+                && let EntityKind::Point { at } = &mut e.kind
+                && dist(*at, to) > LAGGING
+            {
+                *at = to;
+                moved = true;
+            }
+        }
+    }
+    moved
+}
+
+/// The curves through each point (mitcad#1774).
+fn users_of(entities: &[Entity]) -> BTreeMap<EntityUid, Vec<EntityUid>> {
+    let mut users: BTreeMap<EntityUid, Vec<EntityUid>> = BTreeMap::new();
+    for e in entities.iter().filter(|e| !e.is_point()) {
+        for p in e.kind.points() {
+            users.entry(p).or_default().push(e.id);
+        }
+    }
+    users
+}
+
+/// An offset's distance signed by its side (negative to the left), when
+/// its parameter has a value above zero.
+fn signed_distance(
+    offset: &SketchOffset<ParamId>,
+    value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+) -> Option<f64> {
+    let d = value(offset.distance).ok()?;
+    if !(d.is_finite() && d > 0.0) {
+        return None;
+    }
+    Some(if offset.left { -d } else { d })
+}
+
+/// Where the offset of its source's end puts a free end of a result
+/// (mitcad#2277), and how a shift moves it from there.
+#[derive(Debug, Clone, Copy)]
+enum FreeEnd {
+    /// On the result's circle, at the source end's angle.
+    Arc { center: P2, radius: f64, angle: f64 },
+    /// At the offset of the source line's end, shifted along the source
+    /// line's direction (`along`, a unit vector).
+    Line { at: P2, along: P2 },
+}
+
+impl FreeEnd {
+    /// The end shifted by `by` (radians on an arc, millimetres on a line).
+    fn at(&self, by: f64) -> P2 {
+        match *self {
+            Self::Arc {
+                center,
+                radius,
+                angle,
+            } => {
+                let t = angle + by;
+                add(center, [radius * t.cos(), radius * t.sin()])
+            }
+            Self::Line { at, along } => add(at, scale(along, by)),
+        }
+    }
+
+    /// The shift that puts the end at `p`: an arc's angle within half a
+    /// turn either way; None for a point on an arc's centre.
+    fn shift_to(&self, p: P2) -> Option<f64> {
+        match *self {
+            Self::Arc { center, angle, .. } => {
+                let v = sub(p, center);
+                if norm(v) == 0.0 {
+                    return None;
+                }
+                let turn = std::f64::consts::TAU;
+                let mut by = (v[1].atan2(v[0]) - angle).rem_euclid(turn);
+                if by > turn / 2.0 {
+                    by -= turn;
+                }
+                Some(by)
+            }
+            Self::Line { at, along } => Some(dot(sub(p, at), along)),
+        }
+    }
+}
+
+/// Where [`seed`] starts an offset's points and its results' circles, and
+/// its results' free ends without their shifts.
+struct Placement {
+    points: Vec<(EntityUid, P2)>,
+    radii: Vec<(EntityUid, f64)>,
+    free: Vec<(EntityUid, FreeEnd)>,
+}
+
+/// [`seed`]'s places of one offset at the signed distance `d`; None when
+/// its results cannot be placed (their kinds do not match their sources',
+/// a radius not above zero), and it keeps its stored positions.
+fn placement(
+    offset: &SketchOffset<ParamId>,
+    entities: &[Entity],
+    users: &BTreeMap<EntityUid, Vec<EntityUid>>,
+    held: &BTreeSet<EntityUid>,
+    d: f64,
+) -> Option<Placement> {
+    // Whether a curve the offset did not make goes through a point.
+    let made: BTreeSet<EntityUid> = made_and_helpers(offset).into_iter().collect();
+    let joined_elsewhere = |p: EntityUid| {
+        users
+            .get(&p)
+            .is_some_and(|curves| curves.iter().any(|c| !made.contains(c)))
+    };
+    // Each result end that may be free, where its source's end puts it.
+    let mut ends: Vec<(EntityUid, FreeEnd)> = Vec::new();
+    let index = EntityIndex::new(entities);
+    let at = |p: EntityUid| match index.get(p).map(|e| &e.kind) {
+        Some(EntityKind::Point { at }) => Some(*at),
+        _ => None,
+    };
+    let mut curves = std::collections::BTreeMap::new();
+    for id in &offset.curves {
+        let curve = match index.get(*id).map(|e| &e.kind) {
+            Some(EntityKind::Line { start, end, .. }) => {
+                let (Some(a), Some(b)) = (at(*start), at(*end)) else {
+                    continue;
+                };
+                Curve2::Line { a, b }
+            }
+            Some(EntityKind::Arc { center, start, end }) => {
+                let (Some(c), Some(a), Some(b)) = (at(*center), at(*start), at(*end)) else {
+                    continue;
+                };
+                let (va, vb) = (sub(a, c), sub(b, c));
+                let start = va[1].atan2(va[0]);
+                Curve2::Arc {
+                    center: c,
+                    radius: norm(va),
+                    start,
+                    end: angle_after(start, vb[1].atan2(vb[0])),
+                }
+            }
+            Some(EntityKind::Circle {
+                center,
+                radius,
+                start,
+            }) => {
+                let Some(c) = at(*center) else { continue };
+                Curve2::Circle {
+                    center: c,
+                    radius: *radius,
+                    start: *start,
+                }
+            }
+            _ => continue,
+        };
+        curves.insert(*id, curve);
+    }
+    // Each source curve with the direction it runs along the chain:
+    // by its shared points, else (a chain joined at coincident ends,
+    // as an import's offset of an offset is) where its ends meet.
+    let chain = match sources(offset, &index, &curves) {
+        Ok((chain, _)) => chain,
+        Err(_) => {
+            let listed: Option<Vec<(Curve2, bool)>> = offset
+                .curves
+                .iter()
+                .map(|id| curves.get(id).map(|c| (c.clone(), true)))
+                .collect();
+            joined_by_ends(&listed?).0
+        }
+    };
+    // The curves that have a result (mitcad#1234: the results on
+    // either side of one that vanished share their corner, which is
+    // placed below where their offset curves cross).
+    let chain: Vec<(Curve2, bool)> = chain
+        .into_iter()
+        .zip(&offset.curves)
+        .filter(|(_, c)| !offset.dropped.contains(c))
+        .map(|(piece, _)| piece)
+        .collect();
+    if chain.len() != offset.results.len() {
+        return None;
+    }
+    // Each result where the offset of its own source curve is: the
+    // offset's joins are its constraints', which the solve keeps. A
+    // point two results share (a corner) takes where their offset
+    // lines meet, else the middle of their ends.
+    let mut points: Vec<(EntityUid, P2)> = Vec::new();
+    let mut lines: Vec<(EntityUid, P2, P2)> = Vec::new();
+    let mut radii: Vec<(EntityUid, f64)> = Vec::new();
+    let mut circles: Vec<(EntityUid, P2, f64)> = Vec::new();
+    // The arcs and circles in chain order: centre, the source's
+    // radius and the result's, and an arc's range of angles.
+    let mut rounds: Vec<Round> = Vec::new();
+    let mut fits = true;
+    let kept = offset.kept();
+    for (((curve, forward), result), source) in chain.iter().zip(&offset.results).zip(&kept) {
+        // Along the left normal of the curve's own direction, as
+        // `compute` offsets a piece.
+        let left = if *forward { -d } else { d };
+        match (curve, index.get(*result).map(|e| &e.kind)) {
+            (Curve2::Line { a, b }, Some(EntityKind::Line { start, end, .. })) => {
+                let length = norm(sub(*b, *a));
+                if !(length.is_finite() && length > 0.0) {
+                    fits = false;
+                    continue;
+                }
+                let along = unit(sub(*b, *a));
+                let n = perp(along);
+                let (a, b) = (add(*a, scale(n, left)), add(*b, scale(n, left)));
+                // Over the lines that run on along it too
+                // (mitcad#1244): an open chain's end is free.
+                let (a, b) = offset
+                    .merged
+                    .iter()
+                    .filter(|m| m.into == *source)
+                    .filter_map(|m| match curves.get(&m.curve) {
+                        Some(Curve2::Line { a, b }) => Some([*a, *b]),
+                        _ => None,
+                    })
+                    .flatten()
+                    .map(|q| add(q, scale(n, left)))
+                    .fold((a, b), |(a, b), q| {
+                        let t = dot(sub(q, a), along);
+                        if t < 0.0 {
+                            (q, b)
+                        } else if t > dot(sub(b, a), along) {
+                            (a, q)
+                        } else {
+                            (a, b)
+                        }
+                    });
+                // The result keeps its own direction.
+                let stored = at(*start).zip(at(*end)).map(|(s, e)| sub(e, s));
+                let (a, b) = match stored {
+                    Some(v) if dot(v, along) < 0.0 => (b, a),
+                    _ => (a, b),
+                };
+                // An end the user joined a curve of their own to
+                // (an arc that rounds a corner, mitcad#1774) starts
+                // where it is along the line, so that a drag that
+                // moved it along there (the arc's radius) stays.
+                let on_line = |p: EntityUid, end: P2| match at(p) {
+                    Some(q) if joined_elsewhere(p) => add(a, scale(along, dot(sub(q, a), along))),
+                    _ => end,
+                };
+                let (pa, pb) = (on_line(*start, a), on_line(*end, b));
+                // An end no curve of the user's joins may be free,
+                // shifted along the source's direction.
+                for (p, base) in [(*start, a), (*end, b)] {
+                    if !joined_elsewhere(p) {
+                        ends.push((p, FreeEnd::Line { at: base, along }));
+                    }
+                }
+                points.extend([(*start, pa), (*end, pb)]);
+                lines.extend([(*start, a, b), (*end, a, b)]);
+            }
+            (
+                Curve2::Arc {
+                    center,
+                    radius,
+                    start: s,
+                    end: e,
+                },
+                Some(EntityKind::Arc {
+                    center: c,
+                    start,
+                    end,
+                }),
+            ) => {
+                let r = radius - left;
+                if !(r.is_finite() && r > 0.0) {
+                    fits = false;
+                    continue;
+                }
+                // The ends at the source's angles (a free end where
+                // the source's is, even where the source turned, or
+                // where the arcs that run on along it end,
+                // mitcad#1246); a corner is placed below, where the
+                // curves cross.
+                let run_on = offset
+                    .merged
+                    .iter()
+                    .rev()
+                    .filter(|m| m.into == *source)
+                    .find_map(|m| match curves.get(&m.curve) {
+                        Some(Curve2::Arc { start, end, .. }) => Some((*start, *end)),
+                        _ => None,
+                    });
+                let (s0, e0) = match run_on {
+                    Some((ms, _)) if !*forward => (ms, *e),
+                    Some((_, me)) => (*s, me),
+                    None => (*s, *e),
+                };
+                let on = |t: f64| add(*center, [r * t.cos(), r * t.sin()]);
+                // Either end may be free, turned about the centre.
+                for (p, angle) in [(*start, s0), (*end, e0)] {
+                    let center = *center;
+                    ends.push((
+                        p,
+                        FreeEnd::Arc {
+                            center,
+                            radius: r,
+                            angle,
+                        },
+                    ));
+                }
+                points.extend([(*c, *center), (*start, on(s0)), (*end, on(e0))]);
+                circles.extend([(*start, *center, r), (*end, *center, r)]);
+                rounds.push((*center, *radius, r, Some((*s, *e))));
+            }
+            // An arc whose offset runs round its whole circle
+            // (mitcad#1246): its helper across the arc's middle.
+            (
+                Curve2::Arc {
+                    center,
+                    radius,
+                    start: s,
+                    end: e,
+                },
+                Some(EntityKind::Circle { center: c, .. }),
+            ) => {
+                let r = radius - left;
+                if !(r.is_finite() && r > 0.0) {
+                    fits = false;
+                    continue;
+                }
+                points.push((*c, *center));
+                radii.push((*result, r));
+                rounds.push((*center, *radius, r, Some((*s, *e))));
+            }
+            (Curve2::Circle { center, radius, .. }, Some(EntityKind::Circle { center: c, .. })) => {
+                let r = radius - left;
+                if !(r.is_finite() && r > 0.0) {
+                    fits = false;
+                    continue;
+                }
+                points.push((*c, *center));
+                radii.push((*result, r));
+                rounds.push((*center, *radius, r, None));
+            }
+            _ => fits = false,
+        }
+    }
+    if !fits {
+        return None;
+    }
+    // The construction line each arc or circle holds its distance
+    // with (one per arc, in chain order, from a point on the source
+    // to one on the result through the centre) goes along with it:
+    // left where it was when its arc had moved, it started a solve of
+    // its own once the corners were held where the curves touch
+    // (mitcad#890), and that solve did not find the arc again from
+    // 17 mm away. It goes where the solve holds it (mitcad#1171,
+    // [`independent`]): across an arc's middle, level with a
+    // circle's centre on the side it is on.
+    if offset.helpers.len() == rounds.len() {
+        for (helper, (center, from, to, range)) in offset.helpers.iter().zip(&rounds) {
+            let Some(EntityKind::Line { start, end, .. }) = index.get(*helper).map(|e| &e.kind)
+            else {
+                continue;
+            };
+            let (Some(p0), Some(p1)) = (at(*start), at(*end)) else {
+                continue;
+            };
+            // Out from the centre along the helper, the way the
+            // result lies from the source.
+            let along = sub(p1, p0);
+            let length = norm(along);
+            let mut radial = if length > 0.0 {
+                scale(along, if to > from { 1.0 } else { -1.0 } / length)
+            } else {
+                [1.0, 0.0]
+            };
+            match range {
+                Some((s, e)) => {
+                    let middle = (s + e) / 2.0;
+                    radial = [middle.cos(), middle.sin()];
+                }
+                None => radial = [radial[0].signum(), 0.0],
+            }
+            points.push((*start, add(*center, scale(radial, *from))));
+            points.push((*end, add(*center, scale(radial, *to))));
+        }
+    }
+    // Corners: each point once.
+    let mut placed: Vec<(EntityUid, P2)> = Vec::new();
+    for (id, p) in &points {
+        if placed.iter().any(|(q, _)| q == id) {
+            continue;
+        }
+        let all: Vec<P2> = points
+            .iter()
+            .filter(|(q, _)| q == id)
+            .map(|(_, p)| *p)
+            .collect();
+        if all.len() == 1 {
+            placed.push((*id, *p));
+            continue;
+        }
+        let through: Vec<(P2, P2)> = lines
+            .iter()
+            .filter(|(q, _, _)| q == id)
+            .map(|(_, a, b)| (*a, *b))
+            .collect();
+        let round: Vec<(P2, f64)> = circles
+            .iter()
+            .filter(|(q, _, _)| q == id)
+            .map(|(_, c, r)| (*c, *r))
+            .collect();
+        let middle = scale(
+            all.iter().fold([0.0, 0.0], |s, p| add(s, *p)),
+            1.0 / all.len() as f64,
+        );
+        let meet = match (through.as_slice(), round.as_slice()) {
+            ([(a1, b1), (a2, b2)], []) => {
+                let (u, v) = (sub(*b1, *a1), sub(*b2, *a2));
+                let den = cross(u, v);
+                (den.abs() > 1e-9 * norm(u) * norm(v))
+                    .then(|| add(*a1, scale(u, cross(sub(*a2, *a1), v) / den)))
+            }
+            // A line meeting an arc: their crossing nearest the
+            // middle of the two ends; a line touching the circle
+            // (within rounding, a tangent corner) at the point it
+            // touches, as the two crossings' distance from it is the
+            // square root of the rounding and would move the corner.
+            ([(a, b)], [(c, r)]) => {
+                let u = unit(sub(*b, *a));
+                let foot = add(*a, scale(u, dot(sub(*c, *a), u)));
+                let h = norm(sub(foot, *c));
+                if (r - h).abs() <= TOUCH * r.max(1.0) {
+                    Some(foot)
+                } else {
+                    (h < *r).then(|| {
+                        let s = (r * r - h * h).sqrt();
+                        let (p, q) = (add(foot, scale(u, s)), add(foot, scale(u, -s)));
+                        if norm(sub(p, middle)) <= norm(sub(q, middle)) {
+                            p
+                        } else {
+                            q
+                        }
+                    })
+                }
+            }
+            // Two arcs: their circles' crossing nearest the middle
+            // of the two ends; circles touching (within rounding) at
+            // the point they touch. Circles whose centres lie within
+            // rounding of each other (one circle split into two arcs
+            // with a centre point each, as a projection makes them)
+            // neither cross nor touch at a point: their "touching
+            // point" fell near the centre, far off the circle, and
+            // the solve started from there lost the profile
+            // (mitcad#709). Their corner is the middle of the ends.
+            ([], [(c1, r1), (c2, r2)]) => {
+                let d = norm(sub(*c2, *c1));
+                let touch = TOUCH * (r1 + r2).max(1.0);
+                (d > touch && d <= r1 + r2 + touch && d >= (r1 - r2).abs() - touch).then(|| {
+                    let u = scale(sub(*c2, *c1), 1.0 / d);
+                    let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
+                    let foot = add(*c1, scale(u, a));
+                    if (d - (r1 + r2)).abs() <= touch || (d - (r1 - r2).abs()).abs() <= touch {
+                        return foot;
+                    }
+                    let h = (r1 * r1 - a * a).max(0.0).sqrt();
+                    let (p, q) = (add(foot, scale(perp(u), h)), add(foot, scale(perp(u), -h)));
+                    if norm(sub(p, middle)) <= norm(sub(q, middle)) {
+                        p
+                    } else {
+                        q
+                    }
+                })
+            }
+            _ => None,
+        };
+        placed.push((*id, meet.unwrap_or(middle)));
+    }
+    // The free ends: placed once (not a corner two results share), not on
+    // a round corner's arc, and neither fixed nor named by a constraint or
+    // dimension.
+    let on_corners: BTreeSet<EntityUid> = offset
+        .corners
+        .iter()
+        .filter_map(|c| index.get(c.arc))
+        .flat_map(|e| e.kind.points())
+        .collect();
+    let free = ends
+        .into_iter()
+        .filter(|(p, _)| points.iter().filter(|(q, _)| q == p).count() == 1)
+        .filter(|(p, _)| !on_corners.contains(p))
+        .filter(|(p, _)| !held.contains(p) && !index.get(*p).is_some_and(|e| e.fixed))
+        .collect();
+    Some(Placement {
+        points: placed,
+        radii,
+        free,
+    })
 }
 
 /// The tangent corners of the offsets made by constraints, as solver
@@ -4004,6 +4404,7 @@ impl SketchEdit<'_> {
             helpers: Vec::new(),
             derived: true,
             round: false,
+            shifts: Vec::new(),
         });
         self.report.constraints.push(id);
         Ok((id, ids))
@@ -4675,7 +5076,7 @@ impl SketchEdit<'_> {
         };
         self.reuse_results.clear();
         self.renumber_offset(remade?.0, offset.id);
-        let made = self
+        let mut made = self
             .def
             .offsets
             .iter()
@@ -4721,6 +5122,28 @@ impl SketchEdit<'_> {
             if let (Some(a), Some(b)) = (old_end, new_end) {
                 map.entry(a).or_insert(b);
             }
+        }
+        // The ends a drag put off their source's ends keep their shifts
+        // (mitcad#2277), on their points made again.
+        let ends: BTreeSet<EntityUid> = made
+            .results
+            .iter()
+            .filter_map(|r| self.def.entity(*r))
+            .flat_map(|e| e.kind.points())
+            .collect();
+        made.shifts = offset
+            .shifts
+            .iter()
+            .map(|s| OffsetShift {
+                point: map.get(&s.point).copied().unwrap_or(s.point),
+                by: s.by,
+            })
+            .filter(|s| ends.contains(&s.point))
+            .collect();
+        made.shifts.sort_by_key(|s| s.point);
+        made.shifts.dedup_by_key(|s| s.point);
+        if let Some(o) = self.def.offsets.iter_mut().find(|o| o.id == offset.id) {
+            o.shifts = made.shifts.clone();
         }
         Ok(made)
     }

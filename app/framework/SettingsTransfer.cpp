@@ -116,6 +116,8 @@ const SettingsRule kRules[] = {
     {"quickAccess/visible", "preferences", PathKind::None},
     {"drawing/alwaysShowCorners", "preferences", PathKind::None},
     {"drawing/cornerDotSize", "preferences", PathKind::None},
+    {"browser/activateButtonPlace", "preferences", PathKind::None}, // mitcad#2223
+    {"browser/showEyePlace", "preferences", PathKind::None},
     // The View menu.
     {"view/style", "preferences", PathKind::None},
     {"view/componentColors", "preferences", PathKind::None},
@@ -153,6 +155,7 @@ const SettingsRule kRules[] = {
     {"chat/acp/enabled", "preferences", PathKind::None},
     {"chat/acp/arguments", "preferences", PathKind::None},
     {"ai/agentsMayResolveComments", "preferences", PathKind::None},
+    {"ai/agentsMayUsePrintLibraries", "preferences", PathKind::None},
     // Sketch, Suppliers, Assembly.
     {"sketch/scaleToFirstDimension", "preferences", PathKind::None},
     {"sketch/clickAddsToSelection", "preferences", PathKind::None},

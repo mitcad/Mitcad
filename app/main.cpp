@@ -27,6 +27,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "MainWindow.hpp"
 #include "WindowManager.hpp"
@@ -44,10 +45,14 @@
 #include "framework/HangWatchdog.hpp"
 #include "framework/RibbonLabels.hpp"
 #include "framework/SessionLog.hpp"
+#include "framework/ShutdownSteps.hpp"
 #include "framework/DesktopEntry.hpp"
 #include "framework/Diagnostics.hpp"
 #include "framework/DisplayMeshes.hpp"
 #include "framework/DisplayPlatform.hpp"
+#if defined(__linux__) && defined(MITCAD_OCCT_EGL)
+#include "framework/GraphicsStart.hpp"
+#endif
 #include "framework/InterfaceSize.hpp"
 #include "framework/UiSizes.hpp"
 #include "framework/IconSizeStyle.hpp"
@@ -272,6 +277,11 @@ int runApplication(int argc, char* argv[]) {
       return 2;
     }
   }
+#if defined(__linux__) && defined(MITCAD_OCCT_EGL)
+  // The command line as given, for a start again on another platform
+  // (mitcad#2292): the application object takes Qt's own arguments out.
+  const std::vector<std::string> originalArguments(argv, argv + argc);
+#endif
   // Its notify() drops an event whose handler read the model while a job
   // computes it, instead of ending the application (mitcad#1360).
   mitcad::Application app(argc, argv);
@@ -295,6 +305,56 @@ int runApplication(int argc, char* argv[]) {
     }
     qInfo("Headless UI test: Qt offscreen; no viewport");
   }
+  // The window draws with OpenGL (mitcad#2292, framework/GraphicsStart.hpp):
+  // checked before any window, as a window holding the 3D view whose
+  // context or surface fails stays black, panels and all. The format that
+  // works becomes the viewport's; where none does, MitCad starts again in
+  // this process on the next platform (in a Wayland session native Wayland
+  // first; X11 with GLX at the end, where the window draws and the 3D view
+  // says it cannot start). The lines go to the log after "Display platform:".
+  QStringList graphicsLog;
+#if defined(__linux__) && defined(MITCAD_OCCT_EGL)
+  if (!mitcad::headlessUiTest() && (QGuiApplication::platformName() == QLatin1String("xcb") ||
+                                    QGuiApplication::platformName() == QLatin1String("wayland"))) {
+    const QString earlier = mitcad::graphicsStartFailure();
+    const int restarts = qEnvironmentVariableIntValue(mitcad::kGraphicsRestartsVariable);
+    if (!earlier.isEmpty()) {
+      graphicsLog << QStringLiteral("Graphics check: started again after: %1").arg(earlier);
+    }
+    // Tests only: the first start's EGL contexts fail the check.
+    const bool forceFailure = restarts == 0 && qEnvironmentVariable("MITCAD_TEST_GL_FAILURE") == QLatin1String("start");
+    const mitcad::GraphicsStart graphics = mitcad::startGraphics(
+        {mitcad::viewportSurfaceFormat(), mitcad::viewportFallbackSurfaceFormat()}, forceFailure);
+    graphicsLog << graphics.log;
+    if (graphics.format) {
+      mitcad::useViewportSurfaceFormat(*graphics.format);
+    } else {
+      // In a Wayland session native Wayland comes first: the reported black
+      // window (NVIDIA's driver under XWayland) had no EGL surface for its
+      // X11 window, while native Wayland drew everything.
+      const QString integration = qEnvironmentVariable("QT_XCB_GL_INTEGRATION");
+      QStringList tried = qEnvironmentVariable(mitcad::kGraphicsTriedVariable)
+                              .split(QLatin1Char(','), Qt::SkipEmptyParts);
+      const std::optional<mitcad::GraphicsFallback> fallback =
+          mitcad::graphicsFallback(QGuiApplication::platformName(), integration,
+                                   !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY"), tried);
+      if (fallback && restarts < mitcad::kGraphicsRestartLimit) {
+        tried << mitcad::graphicsOption(QGuiApplication::platformName(), integration);
+        // This start's lines on stderr; the next start logs the note.
+        for (const QString& line : std::as_const(graphicsLog)) {
+          qWarning().noquote() << line;
+        }
+        qWarning().noquote() << QStringLiteral("Graphics check: starting again on %1").arg(fallback->description);
+        const QString error = mitcad::startAgainWithGraphicsFallback(
+            originalArguments, *fallback, mitcad::graphicsFallbackNote(earlier, graphics.failure, *fallback),
+            restarts, tried);
+        graphicsLog << QStringLiteral("Graphics check: could not start again: %1").arg(error);
+      } else {
+        graphicsLog << QStringLiteral("Graphics check: no other platform to start on (%1)").arg(graphics.failure);
+      }
+    }
+  }
+#endif
   // UI tests' sync key (MITCAD_TEST_SYNC), before the window's timers exist.
   mitcad::TestSync::installIfRequested();
   // What the UI tests type into text fields (MITCAD_LOG_TYPED_TEXT).
@@ -354,16 +414,30 @@ int runApplication(int argc, char* argv[]) {
   // the whole run, after the test driver's, which it passes every message
   // on to; the debug log's file (framework/DebugLog.hpp) is its sink. The
   // file is closed and the handler removed before the test driver's goes.
+  // It holds the hang marker (framework/HangWatchdog.hpp), which so
+  // outlives every later local of this function and times the shutdown's
+  // steps (framework/ShutdownSteps.hpp, mitcad#2275) up to the session
+  // log's clean end.
   struct LogScope {
     LogScope() { mitcad::mcp::installLogRing(); }
     ~LogScope() {
-      mitcad::DebugLog::instance().stop();
+      {
+        const mitcad::shutdown::Step step(QStringLiteral("the debug log closes"));
+        mitcad::DebugLog::instance().stop();
+      }
+      // The last step before the session log's lock goes.
+      mitcad::shutdown::step(QStringLiteral("the session log ends"));
+      mitcad::shutdown::end();
+      hangWatchdog.reset();
       mitcad::SessionLog::instance().finish();
       mitcad::mcp::removeLogRing();
     }
     LogScope(const LogScope&) = delete;
     LogScope& operator=(const LogScope&) = delete;
+    std::unique_ptr<mitcad::HangWatchdog> hangWatchdog;
   } logScope;
+  // The shutdown's steps: its aboutToQuit handler before any other's.
+  mitcad::shutdown::install();
 
   QCommandLineParser parser;
   parser.addHelpOption();
@@ -512,6 +586,9 @@ int runApplication(int argc, char* argv[]) {
   qInfo().noquote() << QStringLiteral("Display platform: %1")
                            .arg(mitcad::displayPlatformDescription(displayPlatform, QGuiApplication::platformName()));
 #endif
+  for (const QString& line : std::as_const(graphicsLog)) {
+    qInfo().noquote() << line;
+  }
 
   // The layout (mitcad#419): --chrome for this run, else Preferences' Layout,
   // else the platform's. The native macOS frontend has a layout of its own.
@@ -847,17 +924,30 @@ int runApplication(int argc, char* argv[]) {
   // Each window owns one document. Closing the last document ends this
   // process, also on macOS; Quit applies every window's save/lock guard.
   // The hang marker (framework/HangWatchdog.hpp, mitcad#1896): from the
-  // event loop's first turn to its end; what follows it is no hang.
-  mitcad::HangWatchdog hangWatchdog(mitcad::HangWatchdog::thresholdFromEnvironment());
+  // event loop's first turn to its end, then the shutdown's steps
+  // (mitcad#2275) until the session log's clean end (LogScope).
+  logScope.hangWatchdog = std::make_unique<mitcad::HangWatchdog>(mitcad::HangWatchdog::thresholdFromEnvironment());
+  mitcad::shutdown::setStepTimer([watchdog = logScope.hangWatchdog.get()](const QString& step, int limitMs) {
+    watchdog->timeStep(step, limitMs);
+  });
   // A UI test script that already ended (mitcad#1933): a step that failed
   // while the start-up open still computed asked for its exit before this
   // loop ran, and the loop would never end; its status instead.
   const int status = testDriver.left() ? testDriver.exitStatus() : QApplication::exec();
-  hangWatchdog.stop();
-  // Display meshes still to be stored after an open (mitcad#880): the body
-  // being written is finished, the others are dropped (the next open
-  // meshes and stores them).
-  mitcad::finishDisplayMeshWrites();
+  // The loop turns no more (its aboutToQuit handlers have run, the first
+  // of them switched the watchdog already; not when the loop never ran).
+  mitcad::shutdown::eventLoopEnded();
+  mitcad::shutdown::step(QStringLiteral("the event loop returned %1").arg(status));
+  {
+    // Display meshes still to be stored after an open (mitcad#880): the
+    // body being written is finished, the others are dropped (the next
+    // open meshes and stores them).
+    const mitcad::shutdown::Step step(QStringLiteral("display mesh writes"));
+    mitcad::finishDisplayMeshWrites();
+  }
+  // Then this function's locals go, the window manager with every window
+  // (its steps: WindowManager's destructor), and LogScope's steps last.
+  mitcad::shutdown::step(QStringLiteral("the window manager and the start-up's objects go"));
   return status;
 }
 

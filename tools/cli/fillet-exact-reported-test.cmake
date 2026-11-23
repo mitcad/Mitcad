@@ -8,8 +8,10 @@ cmake_minimum_required(VERSION 3.24)
 # archive by its own, unpacked into WORK. Each is opened by mitcad-cli run
 # with its script (fillet_exact_reported*.json):
 # the design's rounding is built at its size, with no warning or
-# information, or refused in words where the script says so. Skipped when
-# the folder or every archive is not there.
+# information, or refused in words where the script says so. GitHub #557's
+# design (`github-557/`, mitcad#2279) has its rounding turned into a Full
+# Round, whose radius is worked out from the faces. Skipped when the folder
+# or every archive is not there.
 #
 # cmake -DCLI=<mitcad-cli> -DSCRIPTS=<tools/cli/tests> -DWORK=<folder> -P fillet-exact-reported-test.cmake
 
@@ -30,7 +32,8 @@ set(cases
   "github-375:db2f0aa4:81de8088:fillet_exact_reported375b.json" # the inner corner, a chamfer (mitcad#2068)
   "github-403:253bc9b5:7f5fa5c4:fillet_exact_reported403_ball.json" # a cube at 5
   "github-403:d4663f27:c72ac063:fillet_exact_reported403_step.json" # corners meet
-  "github-403:dfdf80d2:ebdd0f2c:fillet_exact_reported403_inner.json") # and the inner corner
+  "github-403:dfdf80d2:ebdd0f2c:fillet_exact_reported403_inner.json" # and the inner corner
+  "github-557:6b8fce5c:e95dcc81:fillet_full_round_reported557.json") # a full round (mitcad#2279)
 
 set(reported "$ENV{MITCAD_MITCAD_REPORTED}")
 if(reported STREQUAL "" OR NOT IS_DIRECTORY "${reported}")

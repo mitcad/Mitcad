@@ -27,6 +27,9 @@ QString curveIcon(const QString& type, bool centerline) {
   if (type == QStringLiteral("spline")) {
     return QStringLiteral("spline-control");
   }
+  if (type == QStringLiteral("conic")) {
+    return QStringLiteral("conic");
+  }
   return QStringLiteral("spline-fit");
 }
 

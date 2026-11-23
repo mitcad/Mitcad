@@ -37,8 +37,14 @@
 //
 // Every body of the reported design, the five bare rods too, is checked by
 // the volume it has in common with the union, both ways (mitcad#2217):
-// short by at most 1e-6 relative (no material lost), over by at most
-// kExcessLimit (see there). The common of a bare rod with a body holding it
+// short by at most 1e-6 relative (no material lost), over by at most 1e-6
+// (the ring by at most kRingExcessLimit, 5e-6: its common's volume moves by
+// that much with the point it is integrated about, mitcad#2262, see
+// there), and the common's cut by the body empty; each body's numbers go
+// to common-volumes.txt in the work folder, for the ring with what its
+// common is made of, down to each face's vector integral of its normal
+// and the joints of its pcurves (mitcad#2267). The common of a bare rod
+// with a body holding it
 // whose side face lies on the rod's cylinder, built from scratch (a rod
 // with fins, its faces merged or not, alone or in a union), is checked the
 // same way: OCCT's common of a reported bare rod with its finned rod came
@@ -55,8 +61,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <zlib.h>
@@ -65,10 +73,15 @@
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
+#include <BRepGProp_Domain.hxx>
+#include <BRepGProp_Face.hxx>
+#include <BRepGProp_Vinert.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
@@ -76,10 +89,17 @@
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
+#include <Geom2d_Curve.hxx>
+#include <Geom_Curve.hxx>
 #include <Geom_Surface.hxx>
+#include <NCollection_Array1.hxx>
+#include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Edge.hxx>
@@ -87,6 +107,8 @@
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
+#include <gp_Vec.hxx>
 
 #include "../src/union_groups.hpp"
 #include "check.hpp"
@@ -101,6 +123,7 @@ namespace {
 using mitcad::geometry::Shape;
 using mitcad::geometry::ShapePtr;
 namespace detail = mitcad::geometry::detail;
+using Ancestors = NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>;
 
 std::string env(const char* name) {
 #ifdef _MSC_VER
@@ -174,15 +197,514 @@ template <typename Operation> Measured measured(const TopoDS_Shape& argument, co
   return out;
 }
 
-// What a common is made of where it measures more than the body: its
-// faces, how many of them lie on one of the body's own surfaces (the
-// others come from the union), the largest tolerance of its edges and the
-// length of its edges with a tolerance above 1e-7 mm; and the excess as a
-// layer over those edges seen from the shape's middle (the volume
-// integration's reference point): an excess that is the gap between the
-// faces' boundaries along such edges, not material, gives a layer of the
-// order of their tolerances.
-void print_excess(const TopoDS_Shape& body, const TopoDS_Shape& common, double excess) {
+const char* surface_type_name(GeomAbs_SurfaceType type) {
+  switch (type) {
+  case GeomAbs_Plane:
+    return "plane";
+  case GeomAbs_Cylinder:
+    return "cylinder";
+  case GeomAbs_Cone:
+    return "cone";
+  case GeomAbs_Sphere:
+    return "sphere";
+  case GeomAbs_Torus:
+    return "torus";
+  case GeomAbs_BezierSurface:
+  case GeomAbs_BSplineSurface:
+    return "spline surface";
+  default:
+    return "other surface";
+  }
+}
+
+const char* curve_type_name(GeomAbs_CurveType type) {
+  switch (type) {
+  case GeomAbs_Line:
+    return "line";
+  case GeomAbs_Circle:
+    return "circle";
+  case GeomAbs_Ellipse:
+    return "ellipse";
+  case GeomAbs_BezierCurve:
+  case GeomAbs_BSplineCurve:
+    return "B-spline";
+  default:
+    return "other curve";
+  }
+}
+
+// The volume of a shape's faces integrated (to a relative error of 1e-9)
+// about `point` instead of the shape's middle, which BRepGProp takes: the
+// same for every point where the faces' boundaries close up; where they
+// leave slivers open between two faces (each face integrated over the
+// domain its own curves bound), the slivers' flux moves with the point
+// (mitcad#2217). With it the integration's own bound of its error: each
+// face's integral times the relative error BRepGProp_Vinert reports for it
+// (its two Gauss orders compared), summed, and the largest such relative
+// error of one face (mitcad#2262). Each face's integral grows with the
+// point's distance from the shape, so does this bound: a difference
+// between the volumes about two points that stays within it is the
+// integration's error, not a gap between faces.
+struct Integral {
+  double volume = 0.0;
+  double error = 0.0;
+  double worst = 0.0;
+};
+
+// One face's share of the volume about `point` (BRepGProp_Vinert, to a
+// relative error of 1e-9), with the relative error the integration reports
+// for it.
+Integral face_integral(const TopoDS_Face& face, const gp_Pnt& point) {
+  BRepGProp_Vinert integral;
+  integral.SetLocation(point);
+  BRepGProp_Face surface(face);
+  if (face.NbChildren() == 0) {
+    integral.Perform(surface, 1e-9);
+  } else {
+    BRepGProp_Domain domain(face);
+    integral.Perform(surface, domain, 1e-9);
+  }
+  Integral out;
+  out.volume = integral.Mass();
+  out.error = std::abs(integral.Mass()) * integral.GetEpsilon();
+  out.worst = integral.GetEpsilon();
+  return out;
+}
+
+bool oriented(const TopoDS_Shape& shape) {
+  return shape.Orientation() == TopAbs_FORWARD || shape.Orientation() == TopAbs_REVERSED;
+}
+
+Integral volume_about(const TopoDS_Shape& shape, const gp_Pnt& point) {
+  Integral out;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    if (!oriented(face)) {
+      continue;
+    }
+    const Integral one = face_integral(face, point);
+    out.volume += one.volume;
+    out.error += one.error;
+    out.worst = std::max(out.worst, one.worst);
+  }
+  return out;
+}
+
+// Where a shell's volume moves with the point it is integrated about
+// (mitcad#2267). A face's share of the volume about a point O is a third
+// of the integral of (P - O) . n over its area, so it moves with O by a
+// third of O's offset dotted with the face's vector integral of its normal
+// over its area, A; the shell's volume moves by the sum of the faces' A,
+// which is zero for a shell that closes. A face's A is also half the
+// integral of (P - O) x dP round its boundary, whatever O: from its edges'
+// 3D curves that is the face's share of the shell's surface, and the
+// faces' shares sum to zero exactly, each edge's curve run once each way.
+//
+// BRepGProp_Gauss integrates a face by Green's theorem in its parameters:
+// along each of its edges' pcurves (the edge's orientation in the forward
+// face) the integrand is first integrated in u from the face's lowest u
+// (its UV bounds) to the pcurve's point, at the pcurve's v, and that is
+// integrated along the pcurve against dv. That is exact only for a loop of
+// pcurves that closes in the parameters. Where one pcurve ends at (u, v)
+// and the next one starts at (u', v'), within the vertex's tolerance in
+// space but not at the same parameters, the integral leaves out a strip
+// from the lowest u to u, (v' - v) wide: on a torus face reaching round the
+// ring a joint 1e-6 mm apart along v leaves out about 1e-6 mm times the
+// strip's length round the ring, some 1e-4 mm^2. A gap along u leaves out
+// nothing.
+//
+// FaceFlux records for one face: `integrated`, A as the integration gives
+// it (its volume about the middle and about points `offset` away from it
+// along X, Y and Z); `edges`, A from the edges' 3D curves; `pcurves`, A
+// from the edges' curves on the face (the pcurves lifted to the surface)
+// with straight chords across the joints; the joints of its pcurves (each
+// pcurve's end paired with the nearest start of another in the same wire),
+// their largest gaps along u and v and in space; `strips`, the vector
+// integral of the normal over the strips the joints leave out (minus the
+// sum of each joint's v gap times the integral of the normal from the
+// lowest u to the joint at its v), so that `integrated` should equal
+// `pcurves` plus `strips`; and `closure`, the volume about the middle
+// those strips leave out (each joint's v gap times the integral of
+// (P - middle) . n / 3 from the lowest u), which, added to the face's
+// volume, gives the volume of the domain its pcurves bound with the joints
+// closed.
+struct FaceFlux {
+  gp_Vec integrated{0.0, 0.0, 0.0};
+  gp_Vec edges{0.0, 0.0, 0.0};
+  gp_Vec pcurves{0.0, 0.0, 0.0};
+  gp_Vec strips{0.0, 0.0, 0.0};
+  double closure = 0.0;
+  int wires = 0;
+  int edge_count = 0;
+  int joints = 0;
+  int unpaired = 0;
+  int without_pcurve = 0;
+  double du = 0.0;
+  double dv = 0.0;
+  double apart = 0.0;
+  double u_low = 0.0;
+  double u_high = 0.0;
+  double v_low = 0.0;
+  double v_high = 0.0;
+};
+
+// An 8-point Gauss-Legendre rule on [-1, 1].
+constexpr double kGaussNodes[8] = {-0.9602898564975363, -0.7966664774136267, -0.5255324099163290,
+                                   -0.1834346424956498, 0.1834346424956498,  0.5255324099163290,
+                                   0.7966664774136267,  0.9602898564975363};
+constexpr double kGaussWeights[8] = {0.1012285362903763, 0.2223810344533745, 0.3137066458778873,
+                                     0.3626837833783620, 0.3626837833783620, 0.3137066458778873,
+                                     0.2223810344533745, 0.1012285362903763};
+
+// Calls at(t, weight) at the nodes of the 8-point rule on each of `pieces`
+// equal pieces of [a, b]: the sum of weight * f(t) integrates f over [a, b].
+template <typename At> void gauss_nodes(double a, double b, int pieces, At&& at) {
+  const double h = (b - a) / static_cast<double>(pieces);
+  for (int p = 0; p < pieces; ++p) {
+    const double mid = a + (static_cast<double>(p) + 0.5) * h;
+    for (int k = 0; k < 8; ++k) {
+      at(mid + 0.5 * h * kGaussNodes[k], 0.5 * h * kGaussWeights[k]);
+    }
+  }
+}
+
+// Half the integral of (C(t) - origin) x C'(t) along a curve, from its
+// first to its last parameter, over its C2 intervals.
+gp_Vec half_moment(const BRepAdaptor_Curve& curve, const gp_Pnt& origin) {
+  const int intervals = curve.NbIntervals(GeomAbs_C2);
+  NCollection_Array1<double> bounds(1, intervals + 1);
+  curve.Intervals(bounds, GeomAbs_C2);
+  gp_Vec sum(0.0, 0.0, 0.0);
+  for (int i = 1; i <= intervals; ++i) {
+    gauss_nodes(bounds.Value(i), bounds.Value(i + 1), 16, [&](double t, double weight) {
+      gp_Pnt point;
+      gp_Vec tangent;
+      curve.D1(t, point, tangent);
+      sum += gp_Vec(origin, point).Crossed(tangent) * weight;
+    });
+  }
+  return sum * 0.5;
+}
+
+FaceFlux face_flux(const TopoDS_Face& face, const gp_Pnt& middle, double offset) {
+  FaceFlux out;
+  const double at_middle = face_integral(face, middle).volume;
+  const double along_x = face_integral(face, middle.Translated(gp_Vec(offset, 0.0, 0.0))).volume;
+  const double along_y = face_integral(face, middle.Translated(gp_Vec(0.0, offset, 0.0))).volume;
+  const double along_z = face_integral(face, middle.Translated(gp_Vec(0.0, 0.0, offset))).volume;
+  out.integrated = gp_Vec(3.0 * (at_middle - along_x) / offset, 3.0 * (at_middle - along_y) / offset,
+                          3.0 * (at_middle - along_z) / offset);
+  // As BRepGProp_Face and BRepGProp_Domain take it: the forward face, its
+  // UV bounds, the normal reversed for a reversed face.
+  const double sign = face.Orientation() == TopAbs_REVERSED ? -1.0 : 1.0;
+  const TopoDS_Face forward = TopoDS::Face(face.Oriented(TopAbs_FORWARD));
+  const BRepAdaptor_Surface surface(forward);
+  out.u_low = surface.FirstUParameter();
+  out.u_high = surface.LastUParameter();
+  out.v_low = surface.FirstVParameter();
+  out.v_high = surface.LastVParameter();
+  gp_Vec edges(0.0, 0.0, 0.0);
+  gp_Vec pcurves(0.0, 0.0, 0.0);
+  for (TopExp_Explorer wire(forward, TopAbs_WIRE); wire.More(); wire.Next()) {
+    ++out.wires;
+    std::vector<gp_Pnt2d> starts;
+    std::vector<gp_Pnt2d> ends;
+    for (TopExp_Explorer it(wire.Current(), TopAbs_EDGE); it.More(); it.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+      if (!oriented(edge)) {
+        continue;
+      }
+      ++out.edge_count;
+      const double direction = edge.Orientation() == TopAbs_REVERSED ? -1.0 : 1.0;
+      double first = 0.0;
+      double last = 0.0;
+      const occ::handle<Geom2d_Curve> pcurve = BRep_Tool::CurveOnSurface(edge, forward, first, last);
+      if (pcurve.IsNull()) {
+        ++out.without_pcurve;
+        continue;
+      }
+      if (!BRep_Tool::Degenerated(edge)) {
+        edges += half_moment(BRepAdaptor_Curve(edge), middle) * direction;
+      }
+      pcurves += half_moment(BRepAdaptor_Curve(edge, forward), middle) * direction;
+      const gp_Pnt2d at_first = pcurve->Value(first);
+      const gp_Pnt2d at_last = pcurve->Value(last);
+      starts.push_back(direction > 0.0 ? at_first : at_last);
+      ends.push_back(direction > 0.0 ? at_last : at_first);
+    }
+    std::vector<bool> taken(starts.size(), false);
+    for (const gp_Pnt2d& end : ends) {
+      std::size_t best = starts.size();
+      double nearest = 0.0;
+      for (std::size_t j = 0; j < starts.size(); ++j) {
+        const double distance = end.SquareDistance(starts[j]);
+        if (!taken[j] && (best == starts.size() || distance < nearest)) {
+          best = j;
+          nearest = distance;
+        }
+      }
+      if (best == starts.size()) {
+        ++out.unpaired;
+        continue;
+      }
+      taken[best] = true;
+      const gp_Pnt2d& start = starts[best];
+      ++out.joints;
+      const double gap_u = start.X() - end.X();
+      const double gap_v = start.Y() - end.Y();
+      out.du = std::max(out.du, std::abs(gap_u));
+      out.dv = std::max(out.dv, std::abs(gap_v));
+      const gp_Pnt from = surface.Value(end.X(), end.Y());
+      const gp_Pnt to = surface.Value(start.X(), start.Y());
+      out.apart = std::max(out.apart, from.Distance(to));
+      pcurves += gp_Vec(middle, from).Crossed(gp_Vec(middle, to)) * 0.5;
+      // The strip the joint leaves out, at its middle, the parameters kept
+      // within the UV bounds as BRepGProp_Gauss keeps them.
+      const double strip_u = std::clamp(0.5 * (end.X() + start.X()), out.u_low, out.u_high);
+      const double strip_v = std::clamp(0.5 * (end.Y() + start.Y()), out.v_low, out.v_high);
+      gp_Vec strip(0.0, 0.0, 0.0);
+      double flux = 0.0;
+      if (strip_u - out.u_low > 1e-12) {
+        gauss_nodes(out.u_low, strip_u, 32, [&](double s, double weight) {
+          gp_Pnt point;
+          gp_Vec along_u;
+          gp_Vec along_v;
+          surface.D1(s, strip_v, point, along_u, along_v);
+          const gp_Vec normal = along_u.Crossed(along_v) * sign;
+          strip += normal * weight;
+          flux += weight * gp_Vec(middle, point).Dot(normal) / 3.0;
+        });
+      }
+      out.strips -= strip * gap_v;
+      out.closure += flux * gap_v;
+    }
+  }
+  out.edges = edges * sign;
+  out.pcurves = pcurves * sign;
+  return out;
+}
+
+const char* orientation_name(TopAbs_Orientation orientation) {
+  return orientation == TopAbs_REVERSED ? "reversed" : "forward";
+}
+
+// For each face of `shape` (`label` names them), the record of face_flux;
+// the sums of the faces' vectors; and the closures' change of the shape's
+// volume about each of `points` (each face's closure moved from the
+// middle to the point: plus a third of the point's offset dotted with the
+// face's strips).
+struct ShellFlux {
+  std::vector<std::string> lines;
+  gp_Vec integrated{0.0, 0.0, 0.0};
+  gp_Vec edges{0.0, 0.0, 0.0};
+  gp_Vec pcurves{0.0, 0.0, 0.0};
+  gp_Vec strips{0.0, 0.0, 0.0};
+  double closure[3] = {0.0, 0.0, 0.0};
+  int faces = 0;
+};
+
+ShellFlux shell_flux(const TopoDS_Shape& shape, const char* label, const gp_Pnt& middle, double offset,
+                     const gp_Pnt (&points)[3]) {
+  ShellFlux out;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    if (!oriented(face)) {
+      continue;
+    }
+    const FaceFlux flux = face_flux(face, middle, offset);
+    ++out.faces;
+    out.integrated += flux.integrated;
+    out.edges += flux.edges;
+    out.pcurves += flux.pcurves;
+    out.strips += flux.strips;
+    for (int k = 0; k < 3; ++k) {
+      out.closure[k] += flux.closure + gp_Vec(middle, points[k]).Dot(flux.strips) / 3.0;
+    }
+    const gp_Vec off_edges = flux.integrated - flux.edges;
+    const gp_Vec off_loop = flux.integrated - flux.pcurves - flux.strips;
+    char text[1400];
+    std::snprintf(text, sizeof(text),
+                  "%s face %d (%s, %s, %d wires, %d edges, u %.9f to %.9f, v %.9f to %.9f): its normal over "
+                  "its area integrated (%.9g, %.9g, %.9g) mm2, the ring's surface within its edges' 3D curves "
+                  "(%.9g, %.9g, %.9g), the integrated off it by (%.3g, %.3g, %.3g); %d joints of its pcurves "
+                  "(%d unpaired, %d edges without a pcurve), apart by up to %.3g along u, %.3g along v, %.3g mm "
+                  "in space; the strips they leave out (%.3g, %.3g, %.3g) mm2, the integrated off its pcurves "
+                  "plus the strips by (%.3g, %.3g, %.3g); closing them adds %.3g mm3 about the middle",
+                  label, out.faces, surface_type_name(BRepAdaptor_Surface(face, false).GetType()),
+                  orientation_name(face.Orientation()), flux.wires, flux.edge_count, flux.u_low, flux.u_high,
+                  flux.v_low, flux.v_high, flux.integrated.X(), flux.integrated.Y(), flux.integrated.Z(),
+                  flux.edges.X(), flux.edges.Y(), flux.edges.Z(), off_edges.X(), off_edges.Y(), off_edges.Z(),
+                  flux.joints, flux.unpaired, flux.without_pcurve, flux.du, flux.dv, flux.apart, flux.strips.X(),
+                  flux.strips.Y(), flux.strips.Z(), off_loop.X(), off_loop.Y(), off_loop.Z(), flux.closure);
+    out.lines.emplace_back(text);
+  }
+  return out;
+}
+
+// The edges of a common with a tolerance above 1e-7 mm, grouped by how
+// they were made (mitcad#2262): a piece of one of the body's own edges
+// (its 3D curve the body's edge's curve) or a section curve the boolean
+// built; the type of its 3D curve; and the surfaces of the union's faces
+// beside it other than the body's (the surface the body's face was cut
+// by; "not an edge of the union" where the common did not take the
+// union's edge). For each group: how many, their length, their largest
+// tolerance; the largest distance, at 33 points of each edge, between its
+// 3D curve and its curve on each of the common's faces beside it (its
+// pcurve on that face's surface): what the tolerance has to cover; how
+// many of the edges lie between two faces on different surfaces (or are a
+// face's seam), and the largest distance between the two faces' curves on
+// their surfaces there. Two faces on one surface share one pcurve of the
+// edge, so the domains the volume integration bounds by the pcurves meet
+// exactly whatever the 3D curve's tolerance; only faces on two surfaces
+// can leave a sliver between them in the integral.
+std::vector<std::string> edge_makeup(const TopoDS_Shape& body, const TopoDS_Shape& common,
+                                     const TopoDS_Shape& joined) {
+  std::vector<const Geom_Curve*> own_curves;
+  for (TopExp_Explorer it(body, TopAbs_EDGE); it.More(); it.Next()) {
+    TopLoc_Location location;
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(TopoDS::Edge(it.Current()), location, first, last);
+    if (!curve.IsNull()) {
+      own_curves.push_back(curve.get());
+    }
+  }
+  Ancestors common_faces;
+  TopExp::MapShapesAndAncestors(common, TopAbs_EDGE, TopAbs_FACE, common_faces);
+  Ancestors union_faces;
+  TopExp::MapShapesAndAncestors(joined, TopAbs_EDGE, TopAbs_FACE, union_faces);
+  struct Group {
+    int edges = 0;
+    double length = 0.0;
+    double tolerance = 0.0;
+    double deviation = 0.0;
+    int two_surfaces = 0;
+    double gap = 0.0;
+  };
+  std::map<std::string, Group> groups;
+  constexpr int kSamples = 33;
+  for (int e = 1; e <= common_faces.Extent(); ++e) {
+    const TopoDS_Edge& edge = TopoDS::Edge(common_faces.FindKey(e));
+    const double tolerance = BRep_Tool::Tolerance(edge);
+    if (tolerance <= 1e-7 || BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    TopLoc_Location location;
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, location, first, last);
+    if (curve.IsNull()) {
+      continue;
+    }
+    const bool own = std::find(own_curves.begin(), own_curves.end(), curve.get()) != own_curves.end();
+    const BRepAdaptor_Curve in_space(edge);
+    std::string beside;
+    if (union_faces.Contains(edge)) {
+      for (const TopoDS_Shape& face : union_faces.FindFromKey(edge)) {
+        const GeomAbs_SurfaceType type = BRepAdaptor_Surface(TopoDS::Face(face), false).GetType();
+        if (type != GeomAbs_Torus) {
+          beside += beside.empty() ? "" : " and ";
+          beside += surface_type_name(type);
+        }
+      }
+      if (beside.empty()) {
+        beside = "torus only";
+      }
+    } else {
+      beside = "not an edge of the union";
+    }
+    const std::string key = std::string(own ? "a piece of the body's own edge" : "a section curve") + ", " +
+                            curve_type_name(in_space.GetType()) + ", beside the union's " + beside;
+    Group& group = groups[key];
+    ++group.edges;
+    GProp_GProps props;
+    BRepGProp::LinearProperties(edge, props);
+    group.length += props.Mass();
+    group.tolerance = std::max(group.tolerance, tolerance);
+    std::vector<TopoDS_Face> faces;
+    for (const TopoDS_Shape& face : common_faces.FindFromIndex(e)) {
+      faces.push_back(TopoDS::Face(face));
+    }
+    std::vector<std::unique_ptr<BRepAdaptor_Curve>> on_faces;
+    for (const TopoDS_Face& face : faces) {
+      on_faces.push_back(std::make_unique<BRepAdaptor_Curve>(edge, face));
+    }
+    bool apart = false;
+    if (faces.size() == 2) {
+      TopLoc_Location l0;
+      TopLoc_Location l1;
+      const occ::handle<Geom_Surface>& s0 = BRep_Tool::Surface(faces[0], l0);
+      const occ::handle<Geom_Surface>& s1 = BRep_Tool::Surface(faces[1], l1);
+      apart = s0 != s1 || !l0.IsEqual(l1) || BRep_Tool::IsClosed(edge, faces[0]);
+    }
+    group.two_surfaces += apart ? 1 : 0;
+    const double t0 = in_space.FirstParameter();
+    const double t1 = in_space.LastParameter();
+    for (int k = 0; k < kSamples; ++k) {
+      const double t = t0 + (t1 - t0) * static_cast<double>(k) / static_cast<double>(kSamples - 1);
+      const gp_Pnt point = in_space.Value(t);
+      for (const std::unique_ptr<BRepAdaptor_Curve>& on_face : on_faces) {
+        group.deviation = std::max(group.deviation, point.Distance(on_face->Value(t)));
+      }
+      if (apart) {
+        group.gap = std::max(group.gap, on_faces[0]->Value(t).Distance(on_faces[1]->Value(t)));
+      }
+    }
+  }
+  std::vector<std::string> out;
+  for (const auto& [key, group] : groups) {
+    char text[640];
+    std::snprintf(text, sizeof(text),
+                  "edges: %s: %d edges, %.3f mm, tolerance up to %.3g mm; the 3D curve within %.3g mm of its "
+                  "curves on the faces; %d between faces on two surfaces, their curves apart by up to %.3g mm",
+                  key.c_str(), group.edges, group.length, group.tolerance, group.deviation, group.two_surfaces,
+                  group.gap);
+    out.emplace_back(text);
+  }
+  return out;
+}
+
+// The middle of a shape's box and the half of its diagonal.
+gp_Pnt middle_of(const TopoDS_Shape& shape, double& reach) {
+  Bnd_Box box;
+  BRepBndLib::Add(shape, box);
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+  box.Get(x0, y0, z0, x1, y1, z1);
+  reach = 0.5 * std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0));
+  return gp_Pnt(0.5 * (x0 + x1), 0.5 * (y0 + y1), 0.5 * (z0 + z1));
+}
+
+// What a common is made of where it measures more than the body (and
+// always for the ring): its faces, how many of them lie on one of the
+// body's own surfaces (the others come from the union), the largest
+// tolerance of its edges and the length of its edges with a tolerance
+// above 1e-7 mm; the excess as a layer over those edges seen from the
+// shape's middle (the volume integration's reference point): an excess
+// that is the gap between the faces' boundaries along such edges, not
+// material, gives a layer of the order of their tolerances; the volume of
+// the common and of the body about the middle and points a diagonal away
+// from it along X and Z (volume_about): an excess of open slivers changes
+// with the point, the body's own volume does not; at each point the
+// integration's own error bound, relative to the body's volume; and the
+// common's loose edges by how they were made (edge_makeup); each face's
+// vector integral of its normal, of the common and of the body
+// (shell_flux, mitcad#2267). `spread` is the largest difference,
+// relative, between the common's and the body's volume about one of the
+// three points; `closed_spread` the same with every face's loop of
+// pcurves closed at its joints (recorded, not checked).
+struct Makeup {
+  std::vector<std::string> lines;
+  double spread = 0.0;
+  double closed_spread = 0.0;
+};
+
+Makeup excess_makeup(const TopoDS_Shape& body, const TopoDS_Shape& common, const TopoDS_Shape& joined,
+                     double excess) {
   std::vector<const Geom_Surface*> own;
   for (TopExp_Explorer it(body, TopAbs_FACE); it.More(); it.Next()) {
     own.push_back(BRep_Tool::Surface(TopoDS::Face(it.Current())).get());
@@ -206,20 +728,101 @@ void print_excess(const TopoDS_Shape& body, const TopoDS_Shape& common, double e
       loose_length += props.Mass();
     }
   }
-  Bnd_Box box;
-  BRepBndLib::Add(common, box);
-  double x0 = 0.0;
-  double y0 = 0.0;
-  double z0 = 0.0;
-  double x1 = 0.0;
-  double y1 = 0.0;
-  double z1 = 0.0;
-  box.Get(x0, y0, z0, x1, y1, z1);
-  const double reach = 0.5 * std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0));
+  double reach = 0.0;
+  const gp_Pnt middle = middle_of(common, reach);
   const double layer = loose_length > 0.0 && reach > 0.0 ? 3.0 * excess / (reach * loose_length) : 0.0;
-  std::printf("    its common: %d faces, %d on the body's own surfaces; edge tolerance up to %.3g mm, %.3f mm "
-              "of edges above 1e-7 mm; the excess as a layer over them %.3g mm\n",
-              faces, on_own, largest, loose_length, layer);
+  const gp_Pnt along_x = middle.Translated(gp_Vec(2.0 * reach, 0.0, 0.0));
+  const gp_Pnt along_z = middle.Translated(gp_Vec(0.0, 0.0, 2.0 * reach));
+  const Integral common_at[3] = {volume_about(common, middle), volume_about(common, along_x),
+                                 volume_about(common, along_z)};
+  const Integral body_at[3] = {volume_about(body, middle), volume_about(body, along_x),
+                               volume_about(body, along_z)};
+  double relative[3] = {0.0, 0.0, 0.0};
+  Makeup out;
+  for (int k = 0; k < 3; ++k) {
+    relative[k] = body_at[k].volume != 0.0 ? (common_at[k].volume - body_at[k].volume) / body_at[k].volume : 0.0;
+    out.spread = std::max(out.spread, std::abs(relative[k]));
+  }
+  const double scale = body_at[0].volume != 0.0 ? std::abs(body_at[0].volume) : 1.0;
+  char text[640];
+  std::snprintf(text, sizeof(text),
+                "its common: %d faces, %d on the body's own surfaces; edge tolerance up to %.3g mm, %.3f mm of "
+                "edges above 1e-7 mm; the excess as a layer over them %.3g mm",
+                faces, on_own, largest, loose_length, layer);
+  out.lines.emplace_back(text);
+  std::snprintf(text, sizeof(text),
+                "about the middle, a diagonal along X and along Z: common %.9f, %.9f, %.9f, body %.9f, %.9f, "
+                "%.9f; the common %+.3g, %+.3g, %+.3g relative to the body",
+                common_at[0].volume, common_at[1].volume, common_at[2].volume, body_at[0].volume, body_at[1].volume,
+                body_at[2].volume, relative[0], relative[1], relative[2]);
+  out.lines.emplace_back(text);
+  std::snprintf(text, sizeof(text),
+                "the integration's own error bound about those points, relative to the body's volume: common "
+                "%.3g, %.3g, %.3g (one face's relative error up to %.3g), body %.3g, %.3g, %.3g (one face's up "
+                "to %.3g)",
+                common_at[0].error / scale, common_at[1].error / scale, common_at[2].error / scale,
+                std::max({common_at[0].worst, common_at[1].worst, common_at[2].worst}), body_at[0].error / scale,
+                body_at[1].error / scale, body_at[2].error / scale,
+                std::max({body_at[0].worst, body_at[1].worst, body_at[2].worst}));
+  out.lines.emplace_back(text);
+  // Where the common's shell does not close (mitcad#2267): each face's
+  // vector integral of its normal over its area against its share of the
+  // ring's surface, the joints of its pcurves and the strips they leave out
+  // of the integration (shell_flux), for the common's faces and the
+  // body's; the spread the summed vectors give against the one measured;
+  // and the volumes about the three points with every face's loop closed
+  // at its joints.
+  const gp_Pnt points[3] = {middle, along_x, along_z};
+  const ShellFlux common_flux = shell_flux(common, "the common's", middle, 2.0 * reach, points);
+  const ShellFlux body_flux = shell_flux(body, "the body's", middle, 2.0 * reach, points);
+  for (const ShellFlux* flux : {&common_flux, &body_flux}) {
+    std::snprintf(text, sizeof(text),
+                  "%s %d faces summed: their normals over their areas integrated (%.3g, %.3g, %.3g) mm2, the "
+                  "ring's surface within their edges' 3D curves (%.3g, %.3g, %.3g), through their pcurves with "
+                  "the joints closed (%.3g, %.3g, %.3g), the strips the joints leave out (%.3g, %.3g, %.3g)",
+                  flux == &common_flux ? "the common's" : "the body's", flux->faces, flux->integrated.X(),
+                  flux->integrated.Y(), flux->integrated.Z(), flux->edges.X(), flux->edges.Y(), flux->edges.Z(),
+                  flux->pcurves.X(), flux->pcurves.Y(), flux->pcurves.Z(), flux->strips.X(), flux->strips.Y(),
+                  flux->strips.Z());
+    out.lines.emplace_back(text);
+  }
+  const double offset = 2.0 * reach;
+  double closed[3] = {0.0, 0.0, 0.0};
+  double closed_body[3] = {0.0, 0.0, 0.0};
+  double closed_relative[3] = {0.0, 0.0, 0.0};
+  for (int k = 0; k < 3; ++k) {
+    closed[k] = common_at[k].volume + common_flux.closure[k];
+    closed_body[k] = body_at[k].volume + body_flux.closure[k];
+    closed_relative[k] = closed_body[k] != 0.0 ? (closed[k] - closed_body[k]) / closed_body[k] : 0.0;
+    out.closed_spread = std::max(out.closed_spread, std::abs(closed_relative[k]));
+  }
+  std::snprintf(text, sizeof(text),
+                "the common's summed vector moves its volume from the middle to the points along X and Z by "
+                "%+.3g, %+.3g relative to the body (measured %+.3g, %+.3g); with every face's loop closed at "
+                "its joints, about the three points: common %.9f, %.9f, %.9f, body %.9f, %.9f, %.9f; the "
+                "common %+.3g, %+.3g, %+.3g relative to the body",
+                -offset * common_flux.integrated.X() / 3.0 / scale,
+                -offset * common_flux.integrated.Z() / 3.0 / scale, (common_at[1].volume - common_at[0].volume) / scale,
+                (common_at[2].volume - common_at[0].volume) / scale, closed[0], closed[1], closed[2], closed_body[0],
+                closed_body[1], closed_body[2], closed_relative[0], closed_relative[1], closed_relative[2]);
+  out.lines.emplace_back(text);
+  for (std::string& line : edge_makeup(body, common, joined)) {
+    out.lines.push_back(std::move(line));
+  }
+  for (const ShellFlux* flux : {&common_flux, &body_flux}) {
+    out.lines.insert(out.lines.end(), flux->lines.begin(), flux->lines.end());
+  }
+  return out;
+}
+
+// Whether a shape has a toroidal face (the reported design's ring).
+bool has_torus(const TopoDS_Shape& shape) {
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    if (BRepAdaptor_Surface(TopoDS::Face(it.Current()), false).GetType() == GeomAbs_Torus) {
+      return true;
+    }
+  }
+  return false;
 }
 
 ShapePtr body(const TopoDS_Shape& shape, int index) {
@@ -661,30 +1264,103 @@ void test_reported_hub_with_blades_and_ring() {
   // the five bare rods lying wholly inside finned rods (mitcad#2217): the
   // volume it has in common with the union, integrated to 1e-9, falls
   // short of its own volume by at most 1e-6 relative (no material lost),
-  // and exceeds it by at most kExcessLimit. A common cannot hold more than
-  // the body; the ring's common, its torus cut by the intersection curves
-  // of 30 bodies, measured 1.09e-6 over the ring (21135.164 against
-  // 21135.141 mm3) in mitcad#2170's check. An excess above 1e-6 is printed
-  // with what the common is made of (print_excess) to tell its cause.
-  constexpr double kExcessLimit = 1e-4;
-  int short_of = 0;
+  // and exceeds it by at most 1e-6, the bare rods too (a looser limit
+  // would hide a small wrong common of a rod with its finned rod). Only
+  // the ring's common may exceed it, by up to kRingExcessLimit
+  // (mitcad#2262). Its torus is cut by the section curves of the bodies
+  // crossing it into 40 faces, all on the ring's own surfaces, and it
+  // measured 1.09e-6 over the ring (21135.163943 against 21135.140975 mm3,
+  // the check of mitcad#2217), its cut by the ring empty. That excess is
+  // no material outside the ring: about the middle, a diagonal along X and
+  // one along Z the common measured 21135.163838, 21135.164173 and
+  // 21135.077405 mm3 while the ring measured 21135.140975 about each, so
+  // the common's volume is determined only to within a spread of 4.1e-6
+  // relative (from +1.1e-6 to -3.0e-6 of the ring), and the excess about
+  // the middle lies inside that spread. A shell that closes has one volume
+  // about every point. Its loose edges (tolerances up to 1e-6 mm, 1851 mm
+  // of them above 1e-7 mm) are where the other bodies cross the torus;
+  // where a plane cuts it, OCCT's face-face intersection walks the section,
+  // approximates it, and gives a plane's section with a torus a
+  // tolerance of at least 1e-6 mm whatever the approximation reached
+  // (IntTools_FaceFace::MakeCurve), so the tolerance alone shows no
+  // gap. The volume integration reads no 3D curves, only the faces'
+  // surfaces and the domains their pcurves bound; two faces on one surface
+  // share one pcurve of their edge. The record of mitcad#2262 ruled out
+  // both causes that text then offered (mitcad#2267): the integration's
+  // own error bound about the three points is at most 6.5e-10 of the ring,
+  // some 6000 times less than the spread; the 8 loose edges between faces
+  // on two surfaces (or a face's seam), pieces of the ring's own circular
+  // edges, leave no gap between the two faces' curves, and the 133 loose
+  // section edges lie between faces on one surface. What remains is inside
+  // each face: BRepGProp_Gauss integrates a face along its pcurves, each
+  // point's strip integrated from the face's lowest u (shell_flux), which
+  // is exact only where each pcurve starts at the parameters where the
+  // one before it ends. A joint of two pcurves 1e-6 mm apart along v, as
+  // the vertex's tolerance allows, leaves out a strip of that width from
+  // the lowest u, on a torus face up to the ring's circumference long; the
+  // strips run round the ring's axis, so their sideways parts turn and
+  // largely cancel while their parts along the axis add up, as the spread
+  // about the point along Z (260 times the one along X) does. That is the
+  // cause being checked, not yet a found one: excess_makeup now records,
+  // for each face of the common and of the ring, its vector integral of
+  // its normal as integrated, its share of the ring's surface from its
+  // edges' 3D curves, the gaps at the joints of its pcurves, the strips
+  // they leave out, and the volumes about the three points with every
+  // face's loop closed at its joints. Until that record shows where the
+  // shell opens, kRingExcessLimit stays the measured spread rounded up;
+  // the ring's spread itself is checked against it, so a common that
+  // opens wider fails. Material the common would hold outside the body is
+  // checked on its own, for every body within 1e-6: the common's cut by
+  // the body is empty. Each body's numbers, and for the ring and an excess
+  // above 1e-6 what the common is made of (excess_makeup), are written to
+  // common-volumes.txt in the work folder, kept after a passing run.
+  constexpr double kRingExcessLimit = 5e-6;
+  const std::string record_path = (std::filesystem::path(work_folder) / "common-volumes.txt").string();
+  std::ofstream record(record_path);
+  int wrong = 0;
   for (std::size_t i = 0; i < inputs.size(); ++i) {
-    const Measured common = measured<BRepAlgoAPI_Common>(inputs[i]->occt(), joined->occt());
-    const double own = accurate_volume_of(inputs[i]->occt());
+    const TopoDS_Shape& input = inputs[i]->occt();
+    const Measured common = measured<BRepAlgoAPI_Common>(input, joined->occt());
+    const double own = accurate_volume_of(input);
     const double held = common.done ? common.volume : 0.0;
+    const Measured outside = common.done ? measured<BRepAlgoAPI_Cut>(common.shape, input) : Measured{};
     const bool rod = std::find(inside.begin(), inside.end(), i) != inside.end();
-    if (own - held > 1e-6 * own || held - own > kExcessLimit * own) {
-      std::fprintf(stderr, "  body %zu%s: %.9f of its %.9f in the union (common done %d, valid %d)\n", i,
-                   rod ? " (a bare rod inside a finned rod)" : "", held, own, common.done ? 1 : 0,
-                   common.valid ? 1 : 0);
-      ++short_of;
-    } else if (held - own > 1e-6 * own) {
-      std::printf("  body %zu: its common with the union measures %.9f, its own volume %.9f (%.3g over)\n", i, held,
-                  own, (held - own) / own);
-      print_excess(inputs[i]->occt(), common.shape, held - own);
+    const bool ring = has_torus(input);
+    const double excess_limit = ring ? kRingExcessLimit : 1e-6;
+    char line[400];
+    std::snprintf(line, sizeof(line),
+                  "body %zu%s: common %.9f (done %d, valid %d), own %.9f, %+.3g relative; the common's cut by the "
+                  "body %.9f (done %d)",
+                  i, rod ? " (a bare rod inside a finned rod)" : (ring ? " (the ring)" : ""), held,
+                  common.done ? 1 : 0, common.valid ? 1 : 0, own, (held - own) / own, outside.volume,
+                  outside.done ? 1 : 0);
+    record << line << "\n";
+    Makeup makeup;
+    const bool described = common.done && (ring || held - own > 1e-6 * own);
+    if (described) {
+      makeup = excess_makeup(input, common.shape, joined->occt(), held - own);
+      for (const std::string& part : makeup.lines) {
+        record << "  " << part << "\n";
+      }
+    }
+    const bool right = common.done && own - held <= 1e-6 * own && held - own <= excess_limit * own &&
+                       outside.done && outside.volume <= 1e-6 * own && (!ring || makeup.spread <= kRingExcessLimit);
+    if (!right) {
+      std::fprintf(stderr, "  %s\n", line);
+      ++wrong;
+    }
+    if (described) {
+      std::FILE* to = right ? stdout : stderr;
+      if (right) {
+        std::fprintf(to, "  %s\n", line);
+      }
+      for (const std::string& part : makeup.lines) {
+        std::fprintf(to, "    %s\n", part.c_str());
+      }
     }
   }
-  CHECK(short_of == 0);
+  std::printf("  each body's common with the union: %s\n", record ? record_path.c_str() : "(not written)");
+  CHECK(wrong == 0);
 }
 
 } // namespace

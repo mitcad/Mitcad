@@ -657,7 +657,7 @@ struct InputDef {
   // List: the preview leaves out a row whose selections are not all made
   // yet (an empty row, one with only its first pick) and shows the
   // complete rows; the panel still says what the row needs, and OK waits
-  // for it (mitcad#1813: Assembly Constraint's rows). Without it a row that
+  // for it (mitcad#1813: Constraint Set's rows). Without it a row that
   // waits for a pick takes the whole preview away.
   bool previewCompleteRows = false;
 
@@ -746,9 +746,24 @@ struct InputDef {
   // starts a new line and Ctrl+Enter is OK; Tab still moves to the next
   // field. Its text keeps its line breaks as `\n`.
   bool multiLine = false;
+  // Text: an equation curve's formula (mitcad#2237), the name of its
+  // variable (`x`, `t`): the field suggests the design's parameters while
+  // a name is typed, as a value field does, and its fx opens Edit Formula,
+  // which takes the variable as a known name (`formula_help`'s
+  // `variable`). Empty: a plain text field.
+  QString formulaVariable;
+  // The choice input whose value is what that variable is (mitcad#2264:
+  // `none`, `length` or `angle`, `formula_help`'s `variable_unit`); empty:
+  // a plain number.
+  QString formulaVariableUnit;
 
   InputDef& withTooltip(const QString& tip) {
     tooltip = tip;
+    return *this;
+  }
+  InputDef& withFormulaVariable(const QString& variable, const QString& unitInput = QString()) {
+    formulaVariable = variable;
+    formulaVariableUnit = unitInput;
     return *this;
   }
   InputDef& withPrintedFit(const QString& feature) {
@@ -1386,6 +1401,11 @@ struct CommandDef {
   // whose preview fails with an operation chosen by hand tries the model's
   // other one (mitcad#2216, AutoOperationPolicy).
   std::function<int(const CommandState&)> toolDirection;
+  // The check input that turns the tool's direction (Extrude's Flip): a
+  // new feature's Cut or Join chosen by hand whose preview fails while the
+  // other direction works checks or unchecks it once (mitcad#2283,
+  // AutoOperationPolicy). Empty: the command turns nothing.
+  QString toolFlip;
   // Sketch commands (U2): `build` gives a `sketch.*` command (or
   // {"commands": [...]}) instead of a feature definition; the preview runs
   // it and takes it back, OK keeps it as one undo step.
@@ -1412,6 +1432,14 @@ struct CommandDef {
   // Inspections (U4: Measure, Interference, Section Analysis): the panel
   // shows the answer while the inputs change, OK closes it.
   std::function<Inspection(const CommandState&, const CommandContext&)> inspect;
+  // The command changes nothing in the design while its panel is open
+  // (mitcad#2281): Measure, Interference, Section Analysis and Print
+  // Analysis. Work that arrives meanwhile (a Component from Web download, a
+  // file dropped on the window) comes in at once beside it, where it waits
+  // for any other command to close (docs/ui-conventions.md, "Work that
+  // arrives while a command is open"). Not `inspect`, which design-changing
+  // commands set too for their panel's result, nor `closeOnly`.
+  bool changesNoDesign = false;
   // Whether OK keeps an inspection's section shown (Section Analysis), or
   // its overlay (Print Analysis, mitcad#620). With
   // `build` it is kept in the document (mitcad#41): `build` gives the
@@ -1467,6 +1495,21 @@ struct CommandDef {
   // stays where it is, the feature is not rolled back, and `apply` runs the
   // edit's commands on the design as it is (one undo step of their own).
   bool editInPlace = false;
+  // Apply beside OK for a new feature (mitcad#2293: Constraint): Apply adds
+  // the feature as OK does, its own undo step, and keeps the panel open
+  // for the next one: the inputs start again from their defaults, then
+  // `applyNext` keeps in `next` what the next one shares with the one
+  // `applied` (Constraint's type). Cancel then adds nothing more and keeps
+  // what was applied (`Closed <command> after <n>`). Set: the panel shows
+  // Apply beside OK and Cancel, not while editing (an edit's OK closes
+  // it) nor in the asynchronous frontend.
+  std::function<void(const CommandState& applied, CommandState& next, const CommandContext&)> applyNext;
+  // The check input that suppresses the feature (mitcad#2293: Constraint's
+  // Suppress): OK and Apply add the feature and set its suppression
+  // (`suppress_feature`) in the same undo step; an edit starts from the
+  // feature's suppression and OK sets it as checked. The preview shows the
+  // feature as it holds when it is not suppressed.
+  QString suppressInput;
   // A panel that only shows something (Measure, mitcad#1010): one Close
   // button in place of OK and Cancel; Enter and Esc close it too.
   bool closeOnly = false;

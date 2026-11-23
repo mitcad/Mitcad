@@ -6,5 +6,5 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGE
     COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-board-box-test.sh"
             "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-board-box")
   set_tests_properties(app.ui-macos-board-box PROPERTIES
-    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+    TIMEOUT 720 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
 endif()

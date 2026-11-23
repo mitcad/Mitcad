@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/drawing-flat-pattern-view.mitcad-ui (mitcad#2280): the L of tools/cli/tests/sheet_flat_dxf.json without its hole (sheet rules F1: t = 2, r = 3, K = 0.3; a 35 x 20 Face F3 at x = -30..5; a 90 degree Flange F4 on its edge at x = 5, tangent length 15, inside), its body named Plate (F3.b0), and an empty Drawing1 (D1, A3). Its Flat Pattern seen from the front is 50.654866776461628 x 20 with a down bend's centre line at x = 2.827433388230814: placed at 1:1 with its middle at (150, 150) on the sheet, the bend line runs at x = 157.5 from y = 140 to 160 and the blank ends at x = 175.33. All geometry is synthetic."},
+  {"cmd": "add_feature", "def": {"type": "sheet_rules", "thickness": 2, "bend_radius": 3, "allowance": {"type": "k_factor", "k": 0.3}, "reference_side": "back", "bend_relief": {"type": "rectangular", "width": 2, "depth": 3}, "corner_relief": {"type": "round", "width": 2, "depth": 3}}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F2", "corner": [-30, 0], "width": 35, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "sheet_face", "rules": "F1", "profiles": [{"sketch": "F2", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"cmd": "add_feature", "def": {"type": "sheet_flange", "body": "F3.b0", "boundary": {"panel": {"feature": "F3", "slot": 0}, "curve": {"type": "sketch", "sketch": "F2", "segment": "c2[c1,c3]"}}, "angle": 1.5707963267948966, "length": {"mode": "tangent", "value": 15}, "position": "inside", "offsets": {"start": 0, "end": 0}}},
+  {"expect": {"feature": "F4", "status": "ok", "bodies": 1}},
+  {"cmd": "rename_body", "uid": "F3.b0", "name": "Plate"},
+  {"cmd": "add_drawing", "size": "A3"}
+]

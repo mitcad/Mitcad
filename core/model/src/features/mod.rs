@@ -154,7 +154,7 @@ pub use helix::{HelixConstruction, HelixDef};
 // Joints between occurrences (mitcad#55).
 pub use joint::{
     AsBuiltJointDef, FrameOverride, JointDef, JointOrigin, JointOriginDef, JointPosition, Limit,
-    Limits, OccurrencePath, RigidGroupDef,
+    Limits, OccurrencePath, RelativeFrame, RigidGroupDef,
 };
 // Assembly constraints (mitcad#148).
 pub use constraint_set::{ConstraintRow, ConstraintSetDef, ConstraintType};
@@ -355,8 +355,14 @@ pub use mesh_tools::{
     FitKind, MeshDecimateDef, MeshFitSurfaceDef, MeshLasso, MeshRemoveDef, MeshRepairDef,
     MeshSegmentDef,
 };
+// Cell Grid: sketch profiles filled with cells cut from bodies (mitcad#2238).
+pub mod cell_grid;
+pub use cell_grid::CellGridDef;
 // Cone: a cone or a frustum beside the other primitives (mitcad#2239).
 pub use primitive::ConeDef;
+// End caps: a plate closing a tube's or a profile's open end (mitcad#2243).
+pub mod end_cap;
+pub use end_cap::EndCapDef;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -554,8 +560,12 @@ feature_types! {
     // Mesh tools for reverse engineering (mitcad#1871).
     MeshDecimate(MeshDecimateDef), MeshRepair(MeshRepairDef), MeshRemove(MeshRemoveDef),
     MeshSegment(MeshSegmentDef), MeshFitSurface(MeshFitSurfaceDef),
+    // Cell Grid (mitcad#2238).
+    CellGrid(CellGridDef),
     // Cone (mitcad#2239).
     Cone(ConeDef),
+    // End caps of tubes and profiles (mitcad#2243).
+    EndCap(EndCapDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is
@@ -796,6 +806,8 @@ pub struct FeatureOutput<S> {
     /// A derived part's mount frames by name, in its component's
     /// coordinates (mitcad#375).
     pub mounts: BTreeMap<String, Transform>,
+    /// A derived part's evaluated cut directions, end A then end B.
+    pub end_tilts: [Option<derived_part::Tilt>; 2],
     /// The values of reference parameters the feature measured (a bound
     /// length, mitcad#375): the features after it use them.
     pub measured: Vec<(ParamId, f64)>,
@@ -836,6 +848,7 @@ impl<S> Default for FeatureOutput<S> {
             datum: None,
             placements: Vec::new(),
             mounts: BTreeMap::new(),
+            end_tilts: [None; 2],
             measured: Vec::new(),
             threaded_walls: Vec::new(),
             thread_fits: Vec::new(),

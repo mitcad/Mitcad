@@ -161,6 +161,7 @@ fn origin_on(member: &Member, origin: V3, x: V3, z: V3) -> Result<JointOrigin, M
             z_axis: Some(to_local.apply_vector(z)),
             x_axis: Some(to_local.apply_vector(x)),
             shift: None,
+            relative: None,
         }),
     })
 }

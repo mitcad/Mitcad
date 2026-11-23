@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the End Cap UI test (mitcad#2243; tools/ui-build-end-cap-test.sh): Post (C1, Post:1 O1, its derived part F1, its body F1.b0), the test library's 40 x 40 x 3 steel tube (LIBRARY_URL, replaced by the test) placed by BUILD at the origin lying along +X, 600 long: x 0 to 600, its top side at z = 20. All geometry is synthetic."},
+  {"cmd": "build_place", "part": {"library": "test-tubes", "url": "LIBRARY_URL", "rev": "HEAD", "component": "tube-test"},
+   "at": {"point": [0, 0, 0], "direction": [1, 0, 0]}, "length": 600, "name": "Post"},
+  {"expect": {"bodies": 1}}
+]

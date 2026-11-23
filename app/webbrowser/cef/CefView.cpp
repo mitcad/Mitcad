@@ -839,6 +839,19 @@ QString CefView::downloadStarting(std::uint32_t id, const QString& suggestedName
 
 void CefView::downloadChanged(std::uint32_t id, qint64 received, qint64 total, DownloadState state,
                               const QString& reportedPath, const QString& reason, const QString& detail) {
+  // An ended download is told once (mitcad#2281): a report after its end
+  // would import a file that is gone with its folder. Logged as info, not
+  // debug: the line that confirms the cause of mitcad#2281's "is empty"
+  // note in a session log (mitcad#2289).
+  if (m_ended.count(id) != 0) {
+    qInfo().noquote() << QStringLiteral("Component browser download %1: reported again after its end (%2), ignored")
+                             .arg(id)
+                             .arg(QLatin1String(state == DownloadState::Complete   ? "complete"
+                                                : state == DownloadState::Canceled ? "canceled"
+                                                : state == DownloadState::Failed   ? "interrupted"
+                                                                                   : "in progress"));
+    return;
+  }
   // An item interrupted before it wrote anything has no path of its own:
   // the one it was given names it (mitcad#1716).
   QString path = reportedPath;
@@ -865,6 +878,11 @@ void CefView::downloadChanged(std::uint32_t id, qint64 received, qint64 total, D
   if (state != DownloadState::InProgress) {
     m_downloadLog.erase(id);
     m_downloadPaths.erase(id);
+    // Complete and canceled are final; CEF may still resume an interrupted
+    // one by itself (mitcad#1716).
+    if (state != DownloadState::Failed) {
+      m_ended.insert(id);
+    }
   }
   emit downloadUpdated(id, received, total, static_cast<int>(state), path, reason);
 }

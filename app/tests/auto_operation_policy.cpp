@@ -187,6 +187,138 @@ int flipRetryTests() {
   return failures;
 }
 
+// Its mirror (mitcad#2283): Cut or Join chosen by hand in a new feature of
+// one side, whose preview fails while the other direction works, turns the
+// direction once; the turn is no flip of the user's (no mitcad#2216 retry).
+int turnTests() {
+  int failures = 0;
+  const auto check = [&failures](bool ok, const char* message) {
+    if (!ok) { std::fprintf(stderr, "direction turn: %s\n", message); ++failures; }
+  };
+  using mitcad::AutoOperationPolicy;
+  using mitcad::NewFeatureOperation;
+  using Turn = AutoOperationPolicy::TurnAction;
+  AutoOperationPolicy state;
+
+  // Fails this way, works the other: turned, and it stays.
+  state.start(true, false);
+  state.observeDirection(1); // the automatic Join's preview, out of the block
+  state.cancelFlip();
+  state.disable();
+  state.operationChosen("cut", 1);
+  check(state.turnWaiting(), "Cut chosen by hand waits for its preview");
+  check(!state.asksSuggestion(), "the turn asks the model for no suggestion");
+  state.observeDirection(1);
+  check(state.turnWaiting() && !state.flipWaiting(), "its own preview's direction is no flip");
+  check(state.operationPreviewed(false, true) == Turn::Turn, "the Cut that misses, flip_would_cut: turned");
+  check(state.turnWaiting(), "the turned preview is waited for");
+  state.observeDirection(-1); // the session checked Flip
+  check(state.turnWaiting(), "the turn's own direction keeps it waiting");
+  check(!state.flipWaiting(), "the turn's own flip arms no retry of another operation (mitcad#2216)");
+  check(state.operationPreviewed(true, std::nullopt) == Turn::Taken, "the turned Cut works: it stays");
+  check(!state.turnWaiting() && !state.flipWaiting(), "nothing waits after it");
+  state.observeDirection(-1);
+  check(!state.flipWaiting(), "the turned direction stays the direction the policy knows");
+  check(state.operationPreviewed(false, true) == Turn::Keep,
+        "a later failure without a hand choice turns nothing");
+  // The user's own flip after it is theirs: mitcad#2216's retry, as before.
+  state.observeDirection(1);
+  check(state.flipWaiting(), "the user's own flip back after the turn arms mitcad#2216's retry");
+
+  // Works the way it goes: never turned.
+  state.start(true, false);
+  state.disable();
+  state.operationChosen("cut", 1);
+  state.observeDirection(1);
+  check(state.operationPreviewed(true, false) == Turn::Keep, "a Cut that works (a profile inside a body) stays");
+  check(!state.turnWaiting(), "and waits for nothing");
+  state.operationChosen("join", -1);
+  state.observeDirection(-1);
+  check(state.operationPreviewed(true, std::nullopt) == Turn::Keep,
+        "a Join going into a body merges with it: it works and stays");
+
+  // Fails both ways: the model says so (Cut), nothing is turned.
+  state.operationChosen("cut", 1);
+  state.observeDirection(1);
+  check(state.operationPreviewed(false, false) == Turn::Keep,
+        "a Cut that misses both ways (no flip_would_cut) stays as it is, with its failure");
+  check(!state.turnWaiting() && !state.flipWaiting(), "no retry of any kind waits");
+
+  // Fails both ways, found by the turned preview (a Join): restored.
+  state.operationChosen("join", 1);
+  state.observeDirection(1);
+  check(state.operationPreviewed(false, std::nullopt) == Turn::Turn, "a Join that touches nothing: turned");
+  state.observeDirection(-1);
+  check(state.operationPreviewed(false, std::nullopt) == Turn::Restore,
+        "the turned Join misses too: the direction comes back");
+  check(!state.turnWaiting(), "the first failure is shown without another try");
+  state.observeDirection(1); // the session unchecked Flip again
+  check(!state.flipWaiting(), "turning it back arms no retry of another operation either");
+  // The model's answer and a turned preview that fails all the same.
+  state.operationChosen("cut", 1);
+  state.observeDirection(1);
+  check(state.operationPreviewed(false, true) == Turn::Turn, "flip_would_cut: turned");
+  state.observeDirection(-1);
+  check(state.operationPreviewed(false, true) == Turn::Restore, "its preview fails all the same: restored");
+  state.observeDirection(1);
+  check(!state.flipWaiting() && !state.turnWaiting(), "and nothing waits");
+
+  // Symmetric and two sides have no direction to turn; Intersect, New
+  // Body and New Component are never turned.
+  state.operationChosen("cut", 0);
+  check(!state.turnWaiting(), "a symmetric or two-sided Cut waits for nothing");
+  check(state.operationPreviewed(false, true) == Turn::Keep, "and its failure stays");
+  state.operationChosen("intersect", 1);
+  check(!state.turnWaiting(), "Intersect is never turned");
+  state.operationChosen("new_body", 1);
+  check(!state.turnWaiting(), "New Body is never turned");
+  state.operationChosen("new_component", 1);
+  check(!state.turnWaiting(), "New Component is never turned");
+
+  // The user's own changes end a waiting turn.
+  state.operationChosen("cut", 1);
+  state.observeDirection(-1);
+  check(!state.turnWaiting(), "the user's own Flip or distance sign ends it");
+  check(state.flipWaiting(), "and is their flip (mitcad#2216)");
+  state.cancelFlip();
+  state.operationChosen("cut", -1);
+  state.observeDirection(0);
+  check(!state.turnWaiting(), "Direction changed to Symmetric or Two Sides ends it");
+  state.operationChosen("cut", -1);
+  state.cancelFlip();
+  check(!state.turnWaiting(), "the user's Objects or Affected components end it");
+  state.operationChosen("cut", -1);
+  state.observeDirection(-1);
+  check(state.operationPreviewed(false, true) == Turn::Turn, "turned");
+  state.operationChosen("join", 1);
+  check(state.turnWaiting(), "Operation chosen again while turned: the new choice waits for its own preview");
+  state.observeDirection(1);
+  check(state.operationPreviewed(true, std::nullopt) == Turn::Keep, "and stays when it works");
+
+  // Preferences › General › Extrude starts with: New Body (mitcad#2164)
+  // does not change the rule.
+  state.start(true, false, NewFeatureOperation::NewBody);
+  state.operationChosen("join", 1);
+  state.observeDirection(1);
+  check(state.operationPreviewed(false, std::nullopt) == Turn::Turn,
+        "a Join chosen under the New Body preference is turned the same way");
+
+  // An edit keeps its stored inputs (mitcad#868); a command without an
+  // automatic operation turns nothing.
+  state.start(true, true);
+  state.operationChosen("cut", 1);
+  check(!state.turnWaiting(), "an edit's Cut chosen by hand is never turned");
+  state.start(false, false);
+  state.operationChosen("cut", 1);
+  check(!state.turnWaiting(), "a command without an automatic operation turns nothing");
+  // A new start forgets a waiting turn.
+  state.start(true, false);
+  state.operationChosen("cut", 1);
+  state.start(true, false);
+  check(!state.turnWaiting(), "a new command waits for no turn of the last one");
+  return failures;
+}
+
 } // namespace
 
 int autoOperationPolicyTests() {
@@ -233,6 +365,6 @@ int autoOperationPolicyTests() {
   check(state.active() && !state.offByPreference(),
         "the preference set back to Automatic: the next Extrude chooses again");
 
-  return failures + extrudeStartSettingsTests() + flipRetryTests();
+  return failures + extrudeStartSettingsTests() + flipRetryTests() + turnTests();
 }
 MITCAD_UNIT_TEST(autoOperationPolicyTests);

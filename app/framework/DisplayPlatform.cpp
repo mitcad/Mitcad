@@ -2,8 +2,11 @@
 // Qt's platform plugin on Linux (mitcad#2031): see DisplayPlatform.hpp.
 #include "framework/DisplayPlatform.hpp"
 
+#include <QList>
 #include <QStringList>
 #include <QtGlobal>
+
+#include <utility>
 
 namespace mitcad {
 
@@ -93,6 +96,54 @@ QString displayPlatformDescription(const DisplayPlatformChoice& choice, const QS
     reason += QStringLiteral("; OpenGL through %1").arg(choice.xcbGlIntegration);
   }
   return QStringLiteral("%1 (%2)").arg(platformName, reason);
+}
+
+QString graphicsOption(const QString& platformName, const QString& xcbGlIntegration) {
+  if (platformName == QLatin1String("wayland")) {
+    return QStringLiteral("wayland");
+  }
+  if (platformName == kXcb && (xcbGlIntegration.isEmpty() || xcbGlIntegration == kXcbEgl)) {
+    return kXcbEgl;
+  }
+  if (platformName == kXcb && xcbGlIntegration == QLatin1String("xcb_glx")) {
+    return QStringLiteral("xcb_glx");
+  }
+  return QString();
+}
+
+std::optional<GraphicsFallback> graphicsFallback(const QString& platformName, const QString& xcbGlIntegration,
+                                                 bool waylandSession, const QStringList& tried) {
+  const QString current = graphicsOption(platformName, xcbGlIntegration);
+  if (current.isEmpty()) {
+    return std::nullopt;
+  }
+  // "wayland;xcb": Qt takes X11 where the Wayland platform does not start
+  // (the check then goes on from there) rather than ending.
+  const GraphicsFallback wayland{QStringLiteral("wayland"), QStringLiteral("wayland;xcb"), QString(),
+                                 QStringLiteral("native Wayland")};
+  const GraphicsFallback egl{kXcbEgl, kXcb, kXcbEgl, QStringLiteral("X11 (XWayland) with Qt's EGL integration")};
+  const GraphicsFallback glx{QStringLiteral("xcb_glx"), kXcb, QStringLiteral("xcb_glx"),
+                             QStringLiteral("X11 with GLX: the window draws, the 3D view (EGL) cannot")};
+  QList<GraphicsFallback> order;
+  if (waylandSession) {
+    order << wayland;
+  }
+  order << egl << glx;
+  for (const GraphicsFallback& option : std::as_const(order)) {
+    if (option.key != current && !tried.contains(option.key)) {
+      return option;
+    }
+  }
+  return std::nullopt;
+}
+
+QString graphicsFallbackNote(const QString& earlier, const QString& failure, const GraphicsFallback& fallback) {
+  const QString note = QStringLiteral("%1; started again on %2").arg(failure, fallback.description);
+  return earlier.isEmpty() ? note : QStringLiteral("%1; then %2").arg(earlier, note);
+}
+
+QString graphicsStartFailure() {
+  return qEnvironmentVariable(kGraphicsFallbackVariable);
 }
 
 } // namespace mitcad

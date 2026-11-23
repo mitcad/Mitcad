@@ -21,9 +21,10 @@ if [ "$#" != 2 ]; then
 fi
 ui_init "$1" "$2"
 UI_TIMEOUT=300
-# The Theme Dark; no view/background: the default, Follow System.
-mkdir -p "$MITCAD_SETTINGS_DIR/Mitcad"
-printf '[appearance]\ntheme=dark\n' > "$MITCAD_SETTINGS_DIR/Mitcad/Mitcad.ini"
+# The Theme Dark; no view/background: the default, Follow System. On macOS
+# Qt names the settings folder by the organization domain (main.cpp).
+mkdir -p "$MITCAD_SETTINGS_DIR/nocodo.fi"
+printf '[appearance]\ntheme=dark\n' > "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"
 MITCAD_TEST_INPUT=$here/ui-scripts/view-background-theme.mitcad-ui MITCAD_TEST_STEP_MS=100 \
   MITCAD_TEST_THEME_DESKTOP_DARK=dark \
   ui_run_app view-background-theme --ui=qt --no-native-dialogs --no-recovery --no-mcp
@@ -32,7 +33,7 @@ ui_expect_log 'TestDriver: view Background #f7f8fa #dfe3ea' 'the light gradient 
 ui_expect_log 'Preferences: restore defaults, all settings: ' 'Restore Defaults › All Settings'
 ui_expect_log '^TestDriver: done' 'Follow System: dark with the dark theme, light with the light one, after Restore Defaults too'
 ui_expect_no_log 'TestDriver: FAIL' 'no failed assertion'
-if grep -q '^background=5$' "$MITCAD_SETTINGS_DIR/Mitcad/Mitcad.ini"; then
+if grep -q '^background=5$' "$MITCAD_SETTINGS_DIR/nocodo.fi/Mitcad.ini"; then
   ui_pass 'Follow System saved after Restore Defaults'
 else
   ui_fail 'Restore Defaults did not save Follow System as view/background'

@@ -6,19 +6,26 @@
 // item is suppressed, rolled back or gone. A set's row selects its members;
 // the item's own rows are what Find in Browser finds, never the links. The
 // members a set takes of a selection and of rows (browser/SelectionSets).
+// The Delete key on a member row removes the link, not the item
+// (mitcad#2219).
 #include "UnitTests.hpp"
 #include "browser/BrowserPanel.hpp"
 #include "browser/SelectionSets.hpp"
 
 #include <cstdio>
 
+#include <QCoreApplication>
 #include <QHash>
+#include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QObject>
+#include <QSignalBlocker>
 #include <QStringList>
 #include <QTreeWidget>
 #include <QList>
+#include <QVector>
 
 namespace {
 
@@ -256,12 +263,123 @@ void memberTests() {
   CHECK(setMemberText(setMemberOf(body)) == QStringLiteral("body F2.b0 in O1"));
 }
 
+// The row named `name` under the row named `parent`.
+QTreeWidgetItem* rowUnder(QTreeWidget* tree, const QString& parent, const QString& name) {
+  for (QTreeWidgetItem* row : tree->findItems(name, Qt::MatchExactly | Qt::MatchRecursive, 0)) {
+    if (row->parent() != nullptr && row->parent()->text(0) == parent) {
+      return row;
+    }
+  }
+  return nullptr;
+}
+
+// The Delete key on a member row (mitcad#2219): the link leaves its set
+// (set_selection_set_members with `remove`), the item is not deleted, also
+// when the item's own row is selected with it (a click on a member row
+// selects the item's rows too); on the item's own row the item goes, not
+// its links.
+void deleteTests() {
+  DocumentSnapshot snapshot = design(QStringLiteral("Lid"));
+  QJsonArray both = sets(QStringLiteral("Lid"));
+  // Zeta links Lid too.
+  QJsonObject zeta = both.at(0).toObject();
+  zeta.insert(QStringLiteral("members"), QJsonArray{member("body", "body", "F2.b0", "Lid", true)});
+  both.replace(0, zeta);
+  snapshot.selectionSets = both;
+  BrowserPanel panel;
+  panel.rebuild(snapshot, false);
+  QVector<BrowserNode> requested;
+  int requests = 0;
+  QObject::connect(&panel, &BrowserPanel::deleteRequested, &panel,
+                   [&requested, &requests](const QVector<BrowserNode>& nodes) {
+                     requested = nodes;
+                     ++requests;
+                   });
+  auto* tree = panel.findChild<QTreeWidget*>();
+  CHECK(tree != nullptr);
+  if (tree == nullptr) {
+    return;
+  }
+  QTreeWidgetItem* link = rowUnder(tree, QStringLiteral("Favourites"), QStringLiteral("Lid"));
+  QTreeWidgetItem* otherLink = rowUnder(tree, QStringLiteral("Zeta"), QStringLiteral("Lid"));
+  QTreeWidgetItem* own = rowUnder(tree, QStringLiteral("Bodies"), QStringLiteral("Lid"));
+  CHECK(link != nullptr && otherLink != nullptr && own != nullptr);
+  if (link == nullptr || otherLink == nullptr || own == nullptr) {
+    return;
+  }
+  // The rows a click on the member row selects: the link, the item's own
+  // row and its link in Zeta; the key pressed on the link.
+  const auto pressDelete = [tree](QTreeWidgetItem* current, const QList<QTreeWidgetItem*>& rows) {
+    {
+      const QSignalBlocker blocker(tree);
+      tree->clearSelection();
+      tree->setCurrentItem(current, 0, QItemSelectionModel::NoUpdate);
+      for (QTreeWidgetItem* row : rows) {
+        row->setSelected(true);
+      }
+    }
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QCoreApplication::sendEvent(tree, &press);
+  };
+  pressDelete(link, {link, own, otherLink});
+  CHECK(requests == 1);
+  CHECK(requested.size() == 1);
+  if (requested.size() == 1) {
+    CHECK(requested.first().isSetMember() && requested.first().selectionSet == QStringLiteral("Favourites"));
+    CHECK(requested.first().type == BrowserNode::Type::Body && requested.first().uid == QStringLiteral("F2.b0"));
+  }
+  // What the controller sends: the member removed from Favourites alone.
+  const QJsonArray commands = setMemberRemovals(requested);
+  CHECK(commands ==
+        QJsonArray({QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_selection_set_members")},
+                                {QStringLiteral("name"), QStringLiteral("Favourites")},
+                                {QStringLiteral("remove"),
+                                 QJsonArray{QJsonObject{{QStringLiteral("body"), QStringLiteral("F2.b0")}}}}}}));
+  // On the item's own row: the item, not its links.
+  pressDelete(own, {link, own, otherLink});
+  CHECK(requests == 2);
+  CHECK(requested.size() == 1 && !requested.first().isSetMember() &&
+        requested.first().type == BrowserNode::Type::Body);
+  CHECK(setMemberRemovals(requested).isEmpty());
+  // Several member rows of one set, and the menu's row given: one command
+  // per set, each member once.
+  BrowserNode lid;
+  lid.type = BrowserNode::Type::Body;
+  lid.uid = QStringLiteral("F2.b0");
+  lid.selectionSet = QStringLiteral("Favourites");
+  BrowserNode sketch;
+  sketch.type = BrowserNode::Type::Sketch;
+  sketch.uid = QStringLiteral("F1");
+  sketch.selectionSet = QStringLiteral("Favourites");
+  BrowserNode rail;
+  rail.type = BrowserNode::Type::Component;
+  rail.uid = QStringLiteral("C1");
+  rail.occurrence = QStringLiteral("O1");
+  rail.selectionSet = QStringLiteral("Zeta");
+  BrowserNode plain = lid;
+  plain.selectionSet.clear();
+  CHECK(BrowserPanel::rowsToDelete({lid, plain, sketch, rail}, sketch).size() == 2);
+  CHECK(BrowserPanel::rowsToDelete({lid, plain, sketch, rail}, plain).size() == 1);
+  const QJsonArray removals = setMemberRemovals({lid, plain, sketch, lid, rail});
+  CHECK(removals.size() == 2);
+  if (removals.size() == 2) {
+    CHECK(removals.at(0).toObject().value(QStringLiteral("name")) == QStringLiteral("Favourites"));
+    CHECK(removals.at(0).toObject().value(QStringLiteral("remove")).toArray() ==
+          QJsonArray({QJsonObject{{QStringLiteral("body"), QStringLiteral("F2.b0")}},
+                      QJsonObject{{QStringLiteral("feature"), QStringLiteral("F1")}}}));
+    CHECK(removals.at(1).toObject().value(QStringLiteral("name")) == QStringLiteral("Zeta"));
+    CHECK(removals.at(1).toObject().value(QStringLiteral("remove")).toArray() ==
+          QJsonArray({QJsonObject{{QStringLiteral("occurrence"), QStringLiteral("O1")}}}));
+  }
+}
+
 } // namespace
 
 int browserSelectionSetsTests() {
   failures = 0;
   folderTests();
   memberTests();
+  deleteTests();
   return failures;
 }
 MITCAD_UNIT_TEST(browserSelectionSetsTests);

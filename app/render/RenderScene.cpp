@@ -366,6 +366,10 @@ QJsonObject materialJson(const MaterialData& m) {
         texture.insert(QLatin1String(name), double(factor));
       }
     }
+    // The image's alpha as the surface's (a decal's, mitcad#2244).
+    if (m.textureAlpha) {
+      texture.insert(QStringLiteral("alpha"), true);
+    }
     // The base colour's image and the other maps' (mitcad#314), each when
     // there is one.
     for (const auto& [name, file] : {std::pair<const char*, const std::string*>{"path", &m.texture},
@@ -434,6 +438,7 @@ MaterialData materialOf(const QJsonObject& json) {
   };
   m.roughnessFactor = factor("roughness_factor");
   m.metalnessFactor = factor("metalness_factor");
+  m.textureAlpha = texture.value(QStringLiteral("alpha")).toBool();
   return m;
 }
 

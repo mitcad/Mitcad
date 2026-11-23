@@ -86,6 +86,21 @@ const char* const kUsage = R"(usage:
       --properties adds the physical properties of each body: mass, centre
       of mass and inertia, with its material (steel by default), or with
       --density (g/cm3) for bodies without a material.
+  mitcad-cli export-script <part> [<out.json>] [--upto marker|<feature>] [--check] [--json]
+      Writes the design's timeline as a script that `run` replays on an
+      empty design: its parameters, features (with their uids and names),
+      components and occurrences, timeline groups and marker, and at the
+      end expectations of its bodies' volumes and face counts. Without
+      <out.json> the script is printed. --upto stops after the marker or a
+      feature (uid or name). What a replay does not make again is listed
+      ("Omitted: ..."). <part> is a design (.mitcad) or a script (.json)
+      that builds one.
+      --check replays the script on a new document and compares the two
+      (features, parameters, bodies, volumes, face names): it exits with 1
+      at the first difference and with 5 when the design cannot be
+      replayed by itself (the script leaves imported bodies out, the
+      export refuses the design, or a script given as <part> needs files
+      it does not have).
   mitcad-cli measure <part> <a> [<b>] [--json]
       Measures a body, a face, edge or vertex of it, or a datum: volume,
       area, length, radius or coordinates; with two, also the distance and
@@ -532,7 +547,7 @@ const char* const kExitStatus = R"(Exit status: 0 on success, 1 on errors (also 
 the remote), failed expectations and exceeded limits, 2 on wrong arguments,
 3 when a sync needs a choice for files changed on both sides, 4 when the installation is
 incomplete (Windows: OCCT DLLs of another build, which an update could not replace while
-they were in use).
+they were in use), 5 when export-script --check cannot replay the design by itself.
 )";
 
 bool read_file(const std::string& path, std::string& text) {
@@ -935,6 +950,62 @@ int export_sketch(const std::vector<std::string>& args) {
   const std::string result(document->command(command));
   std::cout << (a.flag("--json") ? result : "Exported: " + result) << "\n";
   return 0;
+}
+
+// The design's timeline as a script that `run` replays (mitcad#2245); with
+// --check the script replayed on a new document and compared with the
+// design. Exit status 5: the design cannot be replayed by itself.
+int export_script(const std::vector<std::string>& args) {
+  Arguments a;
+  std::string problem;
+  if (!parse_arguments(args, {"--upto"}, {"--check", "--json"}, a, problem)) {
+    return usage(problem);
+  }
+  if (a.positional.size() != 1 && a.positional.size() != 2) {
+    return usage("export-script needs a design and optionally an output file");
+  }
+  const std::string* upto = a.option("--upto");
+  const std::string out = a.positional.size() == 2 ? a.positional[1] : std::string();
+  const bool check = a.flag("--check");
+  if (check && (upto != nullptr || a.flag("--json"))) {
+    return usage("--check replays every feature: no --upto or --json");
+  }
+  rust::Box<mitcad::Document> document = mitcad::new_document();
+  try {
+    document = open_part(a.positional[0]);
+  } catch (const std::exception& error) {
+    if (!check) {
+      throw;
+    }
+    std::cout << "Skipped: " << a.positional[0] << " does not build by itself: " << error.what() << "\n";
+    return 5;
+  }
+  if (!check) {
+    const std::string text(document->export_script(upto != nullptr ? *upto : std::string(), out));
+    if (a.flag("--json") && !out.empty()) {
+      std::cout << R"({"path": )" << json_string(out) << "}\n";
+    } else {
+      std::cout << text;
+    }
+    return 0;
+  }
+  if (!out.empty()) {
+    std::cout << std::string(document->export_script(std::string(), out));
+  }
+  std::string found;
+  try {
+    found = std::string(document->script_round_trip());
+  } catch (const std::exception& error) {
+    const std::string message = error.what();
+    if (message.find("cannot export the timeline as a script") != std::string::npos) {
+      std::cout << "Skipped: " << message << "\n";
+      return 5;
+    }
+    std::cerr << "mitcad-cli: " << message << "\n";
+    return 1;
+  }
+  std::cout << found << "\n";
+  return found.rfind("Skipped:", 0) == 0 ? 5 : 0;
 }
 
 // The Flat Pattern of a sheet-metal body as a DXF drawing (mitcad#210).
@@ -1522,6 +1593,10 @@ int run(int argc, char* argv[]) {
     }
     if (mode == "export-sketch") {
       return export_sketch(args);
+    }
+    // The timeline as a script (mitcad#2245).
+    if (mode == "export-script") {
+      return export_script(args);
     }
     if (mode == "export-flat") {
       return export_flat(args);

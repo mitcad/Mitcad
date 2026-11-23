@@ -222,6 +222,17 @@ mod selection_sets;
 // Which bodies a print service may take: library parts not for print
 // services left out (mitcad#2214).
 mod print_service;
+// The timeline as a script, and a script run as one undo step
+// (mitcad#2245).
+pub mod script_export;
+// Point clouds and Point Cloud Deviation (mitcad#2240).
+mod point_clouds;
+// Decals: images put on faces of bodies, their commands and queries
+// (mitcad#2244).
+mod decals;
+// A base view of a sheet-metal body's Flat Pattern: its developed blank,
+// bend lines and bend notes (mitcad#2280).
+mod drawing_flat;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -333,6 +344,8 @@ pub mod prelude {
     pub(crate) use super::press_pull::PressPullOps;
     // Mesh tools for reverse engineering (mitcad#1871).
     pub(crate) use super::mesh_tools::MeshToolsOps;
+    // Flat Pattern views on drawings (mitcad#2280).
+    pub(crate) use super::drawing_flat::DrawingFlatOps;
 }
 
 use std::fmt;
@@ -462,6 +475,15 @@ named_enum! {
             /// too (`parameter` or `own`, as `auto_fix`'s `shared`).
             #[serde(default)]
             shared: Option<mitcad_model::SharedChoice>,
+            /// The feature's uid instead of the next one: an exported
+            /// script's features keep theirs (mitcad#2245).
+            #[serde(default)]
+            uid: Option<FeatureUid>,
+            /// With `uid`: what the feature remembers of the pieces of its
+            /// splits (mitcad#408), as the design file keeps it, so that
+            /// an exported script's pieces keep their ids (mitcad#2268).
+            #[serde(default)]
+            pieces: Option<Vec<mitcad_model::features::PieceGroup>>,
         },
         "edit_feature" => EditFeature {
             uid: FeatureUid,
@@ -1485,10 +1507,27 @@ named_enum! {
         // Which bodies a print service may take (mitcad#2214,
         // `print_service.rs`).
         "print_service_check" => PrintServiceCheck(print_service::PrintServiceQuery),
+        // Point clouds and Point Cloud Deviation (mitcad#2240,
+        // `point_clouds.rs`).
+        "point_clouds" => PointClouds,
+        "point_cloud_points" => PointCloudPoints {
+            name: String,
+        },
+        "point_cloud_deviation" => PointCloudDeviation(Box<point_clouds::DeviationQuery>),
         // A point file for Insert Points (mitcad#2232, `sketch.rs`).
         "points_info" => PointsInfo {
             path: String,
         },
+        // Decals: each with its grid on its face, an image's file, and
+        // where a new one would lie (mitcad#2244, `decals.rs`).
+        "decals" => Decals,
+        "decal_image" => DecalImage {
+            name: String,
+        },
+        "decal_outline" => DecalOutline(Box<decals::OutlineQuery>),
+        // The design's end caps and a preview of capping ends (mitcad#2243,
+        // `build.rs`).
+        "build_end_caps" => BuildEndCaps(build::EndCapsQuery),
     }
 }
 
@@ -2326,8 +2365,18 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::SelectionSets => selection_sets::sets_json(self),
             // Which bodies a print service may take (mitcad#2214).
             Query::PrintServiceCheck(query) => print_service::query(self, &query)?,
+            // Point clouds and Point Cloud Deviation (mitcad#2240).
+            Query::PointClouds => point_clouds::clouds_json(self),
+            Query::PointCloudPoints { name } => point_clouds::points_json(self, &name)?,
+            Query::PointCloudDeviation(query) => point_clouds::deviation_json(self, *query)?,
             // A point file for Insert Points (mitcad#2232).
             Query::PointsInfo { path } => sketch::points_info_json(&path)?,
+            // Decals (mitcad#2244).
+            Query::Decals => self.decals_json(),
+            Query::DecalImage { name } => self.decal_image_json(&name)?,
+            Query::DecalOutline(query) => decals::outline_json(self, &query)?,
+            // End caps (mitcad#2243).
+            Query::BuildEndCaps(query) => self.build_end_caps_json(&query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2533,12 +2582,71 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 index,
                 fit_faces,
                 shared,
+                uid,
+                pieces,
             } => {
                 let component = component
                     .as_deref()
                     .map(|c| self.component_ref(c))
                     .transpose()?;
                 let requested = component.unwrap_or(self.active_component());
+                // The pieces' memory names the feature's bodies by its uid
+                // (mitcad#2268).
+                if pieces.is_some() && uid.is_none() {
+                    return Err(ApiError(
+                        "pieces name the feature's bodies by its uid: give uid too".to_owned(),
+                    ));
+                }
+                // A uid of the caller's (mitcad#2245): one feature added at
+                // the marker or a timeline position.
+                if let Some(uid) = uid {
+                    if fit_faces {
+                        return Err(ApiError(
+                            "fit_faces adds more than the feature: no uid".to_owned(),
+                        ));
+                    }
+                    let position = match (after, index) {
+                        (Some(_), Some(_)) => {
+                            return Err(ApiError(
+                                "add_feature takes either after or index, not both".to_owned(),
+                            ));
+                        }
+                        (Some(after), None) => Some(
+                            self.features()
+                                .position(|f| f.uid == after)
+                                .map(|i| i + 1)
+                                .ok_or_else(|| {
+                                    ApiError(format!("feature {after} does not exist"))
+                                })?,
+                        ),
+                        (None, index) => index,
+                    };
+                    self.check_two_side_distances(&def, None)?;
+                    let pieces = pieces.unwrap_or_default();
+                    let added = self.with_feature_uid(uid, |doc| {
+                        doc.with_feature_pieces(uid, pieces, |doc| match position {
+                            Some(position) => {
+                                doc.add_feature_at(&def, name.as_deref(), component, position)
+                            }
+                            None => doc.add_feature_to(&def, name.as_deref(), component),
+                        })
+                    })?;
+                    let mut reply = json!({"uid": added.uid, "name": added.name,
+                                           "parameters": names(&added.parameters)});
+                    let warnings = self.warnings(added.uid);
+                    if !warnings.is_empty() {
+                        reply["warnings"] = json!(warnings);
+                    }
+                    add_remark_notices(
+                        &mut reply,
+                        &remark_notices(self.remarks(added.uid), added.uid),
+                    );
+                    if let Some(made) = self.assembly().created_by(added.uid) {
+                        let what = format!("{}'s new component", added.name);
+                        self.note_placed_beside(&mut reply, requested, made, &what);
+                    }
+                    return Ok(reply);
+                }
                 // At a timeline position (mitcad#403).
                 let position = match (after, index) {
                     (Some(_), Some(_)) => {
@@ -2605,7 +2713,27 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             Command::EditFeature { uid, def } => {
                 let before = self.assembly().created_by(uid);
                 self.check_two_side_distances(&def, Some(uid))?;
+                let member =
+                    self.feature(uid)
+                        .filter(|entry| {
+                            matches!(entry.def, FeatureDef::DerivedPart(_))
+                                && matches!(def, FeatureDef::DerivedPart(_))
+                                && self.assembly().component(entry.component).is_some_and(
+                                    |component| {
+                                        component
+                                            .build
+                                            .as_ref()
+                                            .is_some_and(|record| record.part == Some(uid))
+                                    },
+                                )
+                        })
+                        .map(|entry| entry.component);
+                let depth = self.undo_depth();
                 let (created, kept) = self.edit_feature_keeping(uid, &def)?;
+                let stale_joints = member.and_then(|component| {
+                    mitcad_model_build::EditBuild::refresh_build_joints(self, component, depth)
+                        .err()
+                });
                 let mut reply = json!({"parameters": names(&created)});
                 // Own parameters kept as user parameters (mitcad#1536), as
                 // `sketch.set_dimension` reports a dimension's.
@@ -2618,7 +2746,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     let notes: Vec<&str> = kept.iter().map(|k| k.note.as_str()).collect();
                     reply["notes"] = json!(notes);
                 }
-                let warnings = self.warnings(uid);
+                let mut warnings = self.warnings(uid).to_vec();
+                if let Some(error) = stale_joints {
+                    warnings.push(format!("the feature was edited, but its BUILD joints could not be refreshed: {error}"));
+                }
                 if !warnings.is_empty() {
                     reply["warnings"] = json!(warnings);
                 }

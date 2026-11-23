@@ -99,6 +99,7 @@
 #include "emboss_projection.hpp"
 #include "face_join.hpp"
 #include "face_select.hpp"
+#include "full_round.hpp"
 #include "groove_end.hpp"
 #include "history.hpp"
 #include "mitcad/geometry/boolean.hpp"
@@ -319,7 +320,9 @@ ShapePtr detail::without_strips(const Shape& smaller, const Shape& input, double
       ++solids;
     }
     const double before = detail::volume_of(smaller.occt());
+    // (A valid open shell is no result for a closed body, mitcad#2276.)
     if (solids != 1 || !BRepCheck_Analyzer(whole, true, true).IsValid() ||
+        (closed_solids(smaller.occt()) && !closed_solids(whole)) ||
         std::abs(detail::volume_of(whole) - before) > 1.0e-4 * std::abs(before)) {
       return nullptr;
     }
@@ -1299,6 +1302,9 @@ void check_fillet_set(const FilletSet& set) {
   case FilletSize::Spline:
     check_spline(set);
     break;
+  case FilletSize::FullRound:
+    // (Its radius is worked out on the body before, full_round.hpp.)
+    break;
   }
   if (set.curvature && !(set.weight >= 0.1 && set.weight <= 2.0)) {
     throw std::invalid_argument("the tangency weight must be between 0.1 and 2");
@@ -1490,6 +1496,7 @@ constexpr double kSetback = 1.5;
 double largest_radius(const Shape& body, const FilletSet& set, int edge) {
   switch (set.size) {
   case FilletSize::Constant:
+  case FilletSize::FullRound: // (its radius worked out already)
     return set.radius;
   case FilletSize::ChordLength:
     return edge < 0 ? set.chord : chord_radius(body, edge, set.chord);
@@ -2591,6 +2598,7 @@ ShapePtr round_edges(const std::string& feature, const Shape& body, const std::v
     const TopoDS_Edge& e = body.edge(edge);
     switch (set.size) {
     case FilletSize::Constant:
+    case FilletSize::FullRound: // (its radius worked out already)
       maker.Add(set.radius * scale, e);
       break;
     case FilletSize::ChordLength:
@@ -3056,6 +3064,7 @@ ShapePtr round_and_blend(const std::string& feature, const Shape& body, const st
       break;
     case FilletSize::Constant:
     case FilletSize::ChordLength:
+    case FilletSize::FullRound:
       maker.Add(contact_distance(start, e, set) * scale, start.edge(e));
       break;
     case FilletSize::Variable:
@@ -3149,6 +3158,7 @@ ShapePtr ring_fillet(const std::string& feature, const Shape& body, const std::v
     ring.edge = edge;
     switch (set.size) {
     case FilletSize::Constant:
+    case FilletSize::FullRound: // (its radius worked out already)
       ring.radius = set.radius;
       break;
     case FilletSize::ChordLength:
@@ -4809,6 +4819,28 @@ ShapePtr past_narrow_faces(const std::string& feature, const Shape& input, const
     where.clear();
   }
   if (where.empty()) {
+    // No face beside the edges narrower than the rounding: a chain ending
+    // against a plane that does not reach across the rounding there is
+    // ended on that plane, the rounding on the body without the material
+    // past it (ended_on_end_planes, GitHub #353), as below where a narrow
+    // face is continued (an overhang's bottom edge rounded from the end
+    // face of the block below it, which reaches up the overhang's front
+    // face only to an earlier rounding's top edge and not at all behind
+    // it: the kernel leaves the end open at every size, mitcad#2276).
+    // Else the kernel's error stands.
+    if (ShapePtr ended = ended_on_end_planes(input, owner, given_contact, feature + ":fillet(",
+                                             [&](const Shape& on, const std::vector<int>& edges) -> ShapePtr {
+                                               ShapePtr made = build(on, edges);
+                                               if (made && folded_out(on, edges, *made)) {
+                                                 return nullptr;
+                                               }
+                                               return made;
+                                             })) {
+      if (ShapePtr whole = detail::without_strips(*ended, input, given_contact)) {
+        return whole;
+      }
+      return ended;
+    }
     throw;
   }
   // A rounding of whole circles that runs over a neighbouring face is built
@@ -6047,10 +6079,11 @@ std::string with_cause(const std::string& error, const std::string& cause) {
 // their selected edges into edges no set selects (mitcad#2037): OCCT
 // cannot end the dressup at such a vertex, so it is built over the whole
 // chain (`full`, the sets with their tangent chain) and kept over the
-// selected edges only, running out over the next edge, else ending flat
+// selected edges only, ending against the face beyond the vertex
+// (mitcad#2193), else running out over the next edge, else ending flat
 // there (runout_dressup.hpp). `size_of` gives a chain its set's size and
-// throws for sizes that cannot run out. Null when no set has such a chain;
-// throws the refusal, said in words, when neither way builds.
+// throws for sizes that cannot end so. Null when no set has such a chain;
+// throws the refusal, said in words, when no way builds.
 template <class Set, class Full, class SizeOf>
 ShapePtr over_partial_chains(const std::string& feature, const char* what, const Shape& body,
                              const std::vector<Set>& sets, bool is_chamfer, Full&& full, SizeOf&& size_of) {
@@ -6097,12 +6130,34 @@ ShapePtr over_partial_chains(const std::string& feature, const char* what, const
     chain.size = size_of(chain, seed, unselected);
     whole[static_cast<std::size_t>(chain.set)].tangent_chain = true;
   }
+  for (const detail::PartialChain& chain : chains) {
+    std::string listed;
+    for (std::size_t i = 0; i < chain.edges.size(); ++i) {
+      listed += std::string(chain.selected[i] != 0 ? " [selected] " : " ") + body.edge_name(chain.edges[i]);
+    }
+    detail::runout_trace(std::string("chain") + (chain.closed ? " (closed):" : ":") + listed);
+  }
   const ShapePtr built = full(whole);
   if (built) {
-    for (const bool run_out : {true, false}) {
+    std::string made;
+    for (int f = 0; f < built->face_count(); ++f) {
+      for (const std::string& name : built->face_names(f)) {
+        if (name.compare(0, feature.size() + 1, feature + ":") == 0) {
+          made += " " + name;
+        }
+      }
+    }
+    detail::runout_trace("the dressup over the whole chain:" + made);
+    // Against the face beyond the vertex, else running out over the next
+    // edge, else flat (mitcad#2193).
+    for (const detail::ChainEnd end : {detail::ChainEnd::Face, detail::ChainEnd::RunOut, detail::ChainEnd::Flat}) {
+      const std::string ending = end == detail::ChainEnd::Face     ? "face end"
+                                 : end == detail::ChainEnd::RunOut ? "run-out"
+                                                                   : "flat end";
+      detail::runout_trace(ending + ":");
       try {
         OCC_CATCH_SIGNALS
-        ShapePtr result = detail::over_selected_edges(feature, body, *built, chains, run_out);
+        ShapePtr result = detail::over_selected_edges(feature, body, *built, chains, end);
         int solids = 0;
         for (TopExp_Explorer it(result ? result->occt() : TopoDS_Shape(), TopAbs_SOLID); it.More(); it.Next()) {
           ++solids;
@@ -6110,20 +6165,29 @@ ShapePtr over_partial_chains(const std::string& feature, const char* what, const
         if (result && solids == 1 && closed_solids(result->occt())) {
           return result;
         }
+        if (result) {
+          detail::runout_trace(ending + ": " + std::to_string(solids) + " solids, or not closed");
+        }
       } catch (const Cancelled&) {
         throw;
-      } catch (const Standard_Failure&) {
-      } catch (const std::exception&) {
+      } catch (const Standard_Failure& failure) {
+        detail::runout_trace(ending + ": the geometry kernel failed: " + std::string(failure.what()));
+      } catch (const std::exception& error) {
+        detail::runout_trace(ending + ": " + error.what());
       }
     }
+  } else {
+    detail::runout_trace("the dressup over the whole chain is not built");
   }
   const std::string said = std::string("unsupported: a selected edge continues smoothly into an edge not selected, "
                                        "and the ") +
-                           what + " could neither run out over that edge nor end flat at it";
+                           what +
+                           " could neither end against the face beyond it, run out over that edge nor end flat at it";
   throw std::invalid_argument(edges_error(body, {seed, unselected}, said,
                                           "unsupported: " + describe_edge(body, seed) + " continues smoothly into " +
                                               describe_edge(body, unselected) + ", and the " + what +
-                                              " could neither run out over it nor end flat at it"));
+                                              " could neither end against the face beyond it, run out over it nor "
+                                              "end flat at it"));
 }
 
 // The size of a fillet set's chain for its run-out; variable, asymmetric,
@@ -6680,12 +6744,29 @@ ShapePtr groups_apart(const Shape& body, const std::vector<int>& owner, const st
 
 ShapePtr fillet(const std::string& feature, const Shape& given, const std::vector<FilletSet>& sets,
                 bool rolling_ball_corners) {
+  // Full rounds (mitcad#2279): each set's radius worked out on the body
+  // (full_round.hpp), then rounded as a constant set; the middle faces'
+  // names go onto the roundings that take their place.
+  if (std::any_of(sets.begin(), sets.end(), [](const FilletSet& set) { return set.size == FilletSize::FullRound; })) {
+    std::vector<FilletSet> sized = sets;
+    std::vector<detail::FullRound> rounds;
+    for (FilletSet& set : sized) {
+      if (set.size == FilletSize::FullRound) {
+        rounds.push_back(detail::full_round(given, set));
+        set.size = FilletSize::Constant;
+        set.radius = rounds.back().radius;
+      }
+    }
+    return detail::with_full_round_names(fillet(feature, given, sized, rolling_ball_corners), given, feature,
+                                         rounds);
+  }
   for (const FilletSet& set : sets) {
     check_fillet_set(set);
   }
   detail::require_surfaces(given.occt(), "fillet");
-  // (Tangent Chain off on a chain that runs on: the rounding runs out over
-  // the next edge, mitcad#2037.)
+  // (Tangent Chain off on a chain that runs on: the rounding ends against
+  // the face beyond the vertex, else runs out over the next edge,
+  // mitcad#2037, mitcad#2193.)
   if (ShapePtr partial = over_partial_chains(
           feature, "fillet", given, sets, false,
           [&](const std::vector<FilletSet>& whole) { return fillet(feature, given, whole, rolling_ball_corners); },
@@ -6724,11 +6805,22 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
       result = canonical(input, with_own_chains("fillet", input, sets, owner,
                                                       [&](const std::vector<int>& selected) {
       const auto build = [&](const Shape& target, const std::vector<int>& own_edges) {
+        // A way that leaves a closed body open is a failed try, so that the
+        // next way runs (the narrow faces continued, a chain ended on its
+        // end plane, the 0.1 % smaller retry, the rings), never the result
+        // that ends the fillet (mitcad#2276).
+        const bool closed_target = closed_solids(target.occt());
+        const auto kept_closed = [closed_target](ShapePtr made) {
+          if (closed_target && made && !closed_solids(made->occt())) {
+            throw OpenResult("fillet");
+          }
+          return made;
+        };
         const auto rings = [&](const Shape& body) {
           if (quick) {
             throw std::runtime_error("no rings on the first pass");
           }
-          return ring_fillet(feature, body, sets, own_edges);
+          return kept_closed(ring_fillet(feature, body, sets, own_edges));
         };
         return or_rings("fillet", target, [&] {
           const auto contact = [&] { return largest_contact(target, sets, own_edges); };
@@ -6755,10 +6847,10 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
               if (quick) {
                 throw std::runtime_error("no smaller retry on the first pass");
               }
-              return at_size();
+              return kept_closed(at_size());
             }
             try {
-              return at_size();
+              return kept_closed(at_size());
             } catch (const std::invalid_argument&) {
               throw;
             } catch (const Cancelled&) {
@@ -6771,7 +6863,7 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
                 return groove_ends_rounded(feature, body, sets, own_edges);
               };
               try {
-                return past_narrow_faces(feature, target, own_edges, contact(), rounded_on, rings, ends);
+                return kept_closed(past_narrow_faces(feature, target, own_edges, contact(), rounded_on, rings, ends));
               } catch (const std::invalid_argument&) {
                 throw;
               } catch (const Cancelled&) {
@@ -6803,7 +6895,9 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
                 };
                 if (ShapePtr apart = groups_apart(target, own_edges, seed_order(target, sets, own_edges), contact(),
                                                   exact_on)) {
-                  return apart;
+                  if (!closed_target || closed_solids(apart->occt())) {
+                    return apart;
+                  }
                 }
                 throw;
               }
@@ -7053,8 +7147,9 @@ std::string chamfer_context(const Shape& body, const std::vector<ChamferSet>& se
 // the .f3d import tells a failure of the kernel (kernel_failure).
 ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
                  ChamferCorner corner) {
-  // (Tangent Chain off on a chain that runs on: the bevel runs out over the
-  // next edge, mitcad#2037.)
+  // (Tangent Chain off on a chain that runs on: the bevel ends against the
+  // face beyond the vertex, else runs out over the next edge, mitcad#2037,
+  // mitcad#2193.)
   if (ShapePtr partial = over_partial_chains(
           feature, "chamfer", input, sets, true,
           [&](const std::vector<ChamferSet>& whole) { return chamfer(feature, input, whole, corner); },

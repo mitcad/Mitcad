@@ -27,7 +27,7 @@ use super::{DocState, Document, InsertOptions, LibraryChange, LibraryPart, Model
 use crate::assembly::ExternalLink;
 use crate::build::{LibrarySourceDef, SourceDesign, SourceId};
 use crate::expr::{Expr, ParamKind, Unit};
-use crate::features::derived_part::{DerivedPartDef, Ends};
+use crate::features::derived_part::{CutBack, DerivedPartDef, Ends};
 use crate::features::geom_ref::{GeomRef, valid_mount_name};
 use crate::features::joint::{JointOriginDef, MOUNT_PREFIX, MountSpec};
 use crate::features::{FeatureDef, Operation, ValueInput};
@@ -510,6 +510,7 @@ impl<K: Kernel> Document<K> {
                 ends: Ends { a: None, b: None },
                 operation: Operation::NewBody,
                 cuts: Vec::new(),
+                cut_back: CutBack::none(),
             };
             let added = state.add_feature_in(&FeatureDef::DerivedPart(def), None, made)?;
             let settled = settle_options(state, added.uid)?;

@@ -21,7 +21,7 @@ use mitcad_vec3::{scale as scaled, sub};
 
 use crate::assembly::{Assembly, inverse};
 use crate::datum::{DatumAxis, Vec3};
-use crate::ids::{BodyUid, ComponentUid};
+use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::parameters::ParamId;
 use crate::transform::{Instance, Transform};
@@ -36,8 +36,12 @@ use crate::transform::{Instance, Transform};
 /// occurrence's component and placed where the occurrence puts it at the
 /// feature's point of the timeline (an occurrence the feature moves: where
 /// it was before this motion), then taken into the coordinates of the
-/// feature's component (its first occurrence). Without one, the reference
-/// is in the feature's component's coordinates, as before.
+/// feature's component through the occurrence of it that the first such
+/// path passes through (mitcad#2305: a part picked through the second
+/// occurrence of its parent is taken through that one, so that it lands on
+/// the picked target there), else through its first occurrence. Without
+/// one, the reference is in the feature's component's coordinates, as
+/// before.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)]
@@ -317,6 +321,10 @@ impl MoveSpec {
         &self,
         ctx: &mut EvalContext<'_, K>,
     ) -> Result<Transform, String> {
+        // The paths the points and axes were picked in, from, to, point or
+        // axis first: the first that passes through an occurrence of the
+        // feature's component gives the frame (mitcad#2305).
+        let picked = self.occurrence_paths();
         let transform = match self {
             Self::Free { matrix } => free_transform(matrix)?,
             Self::TranslateXyz { x, y, z } => {
@@ -327,7 +335,7 @@ impl MoveSpec {
                 distance,
                 axis_occurrence,
             } => {
-                let axis = placed_axis(ctx, axis, axis_occurrence.as_ref())?;
+                let axis = placed_axis(ctx, axis, axis_occurrence.as_ref(), &picked)?;
                 Transform::translation(scaled(axis.direction, ctx.param(*distance)?))
             }
             Self::Rotate {
@@ -335,7 +343,7 @@ impl MoveSpec {
                 angle,
                 axis_occurrence,
             } => {
-                let axis = placed_axis(ctx, axis, axis_occurrence.as_ref())?;
+                let axis = placed_axis(ctx, axis, axis_occurrence.as_ref(), &picked)?;
                 // The axis the motion turns about, for a drag (mitcad#838).
                 ctx.move_basis = Some(MotionBasis::Rotate {
                     origin: axis.origin,
@@ -350,8 +358,8 @@ impl MoveSpec {
                 from_occurrence,
                 to_occurrence,
             } => {
-                let from = placed_point(ctx, from, from_occurrence.as_ref())?;
-                let to = placed_point(ctx, to, to_occurrence.as_ref())?;
+                let from = placed_point(ctx, from, from_occurrence.as_ref(), &picked)?;
+                let to = placed_point(ctx, to, to_occurrence.as_ref(), &picked)?;
                 ctx.move_basis = Some(MotionBasis::PointToPoint { from, to });
                 Transform::translation(sub(to, from))
             }
@@ -362,7 +370,7 @@ impl MoveSpec {
                 z,
                 point_occurrence,
             } => {
-                let point = placed_point(ctx, point, point_occurrence.as_ref())?;
+                let point = placed_point(ctx, point, point_occurrence.as_ref(), &picked)?;
                 ctx.move_basis = Some(MotionBasis::PointToPosition { point });
                 let position = [ctx.param(*x)?, ctx.param(*y)?, ctx.param(*z)?];
                 Transform::translation(sub(position, point))
@@ -377,24 +385,53 @@ impl MoveSpec {
 }
 
 /// From the design's coordinates into the feature's component's: the
-/// inverse of where its first occurrence places it (identity in the root).
-fn from_world<K: Kernel>(ctx: &mut EvalContext<'_, K>) -> Result<Transform, String> {
-    let path = crate::links::first_path(ctx.env.assembly, ctx.component(), None)?;
+/// inverse of where its occurrence on the move's picked paths places it
+/// ([`frame_path`], mitcad#2305), else its first occurrence (identity in
+/// the root).
+fn from_world<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    picked: &[&OccurrencePath],
+) -> Result<Transform, String> {
+    let component = ctx.component();
+    let through = picked
+        .iter()
+        .find_map(|path| frame_path(ctx.env.assembly, component, &path.0));
+    let path = crate::links::first_path(ctx.env.assembly, component, through)?;
     Ok(inverse(&placement(ctx, &OccurrencePath(path))?))
 }
 
+/// The part of an occurrence path (absolute, from the root) that places
+/// `component`, when the path passes through an occurrence of it (a point
+/// of a part picked through the second occurrence of its parent, the
+/// feature's component: that occurrence); none for the root and for a
+/// path outside the component (mitcad#2305).
+fn frame_path<'a>(
+    assembly: &Assembly,
+    component: ComponentUid,
+    path: &'a [OccurrenceUid],
+) -> Option<&'a [OccurrenceUid]> {
+    if component == ComponentUid::ROOT {
+        return None;
+    }
+    (1..=path.len()).map(|n| &path[..n]).find(|prefix| {
+        crate::joints::path_component(assembly, ComponentUid::ROOT, prefix) == Ok(component)
+    })
+}
+
 /// A move's point in the feature's coordinates: picked in an occurrence,
-/// where the occurrence places it now (mitcad#699); else as the feature's
-/// component has it.
+/// where the occurrence places it now (mitcad#699), taken through the
+/// feature's component's occurrence on the move's picked paths (`picked`,
+/// [`from_world`]); else as the feature's component has it.
 fn placed_point<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     point: &GeomRef,
     occurrence: Option<&OccurrencePath>,
+    picked: &[&OccurrencePath],
 ) -> Result<Vec3, String> {
     match occurrence {
         None => ctx.point(point),
         Some(path) => {
-            let from_world = from_world(ctx)?;
+            let from_world = from_world(ctx, picked)?;
             point_in(ctx, point, path, &from_world)
         }
     }
@@ -405,11 +442,12 @@ fn placed_axis<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     axis: &GeomRef,
     occurrence: Option<&OccurrencePath>,
+    picked: &[&OccurrencePath],
 ) -> Result<DatumAxis, String> {
     match occurrence {
         None => ctx.axis(axis),
         Some(path) => {
-            let from_world = from_world(ctx)?;
+            let from_world = from_world(ctx, picked)?;
             axis_in(ctx, axis, path, &from_world)
         }
     }

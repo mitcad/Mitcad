@@ -6,6 +6,7 @@
 # check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp app/view/SpaceMouseTiming.hpp
 # check-all sources: app/view/ViewController.cpp app/framework/TestDriverNavigation.cpp
 # check-all sources: app/platform/unix/SpaceMouseMagellan.cpp app/platform/unix/SpaceMouseMagellan.hpp app/platform/SpaceMouseDriverReports.hpp
+# check-all sources: app/framework/TestDriverViewCamera.cpp app/WindowManager.cpp app/DocumentFrame.cpp
 # A 3D mouse (mitcad#951) on a private Xvfb display, through the test
 # driver's input (tools/ui-scripts/space-mouse.mitcad-ui): no device logs
 # "3D mouse: none", a spin turns the view, a push pans it, a pull zooms in
@@ -14,7 +15,9 @@
 # (mitcad#1023); the 3D Mouse tab of Preferences has its Navigation mode
 # and Lock horizon (mitcad#978); Lock Rotation on the second button locks
 # and frees the rotation, also in a sketch, where it starts locked
-# (mitcad#1910).
+# (mitcad#1910); a second design shares the process's one connection, the
+# input turning the active design's view only, the first one's again
+# after the second closes (mitcad#2297).
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-test-lib.sh"
@@ -24,7 +27,7 @@ ui_start_display
 export MITCAD_TEST_PREFERENCES_DONE=Return
 MITCAD_TEST_INPUT=$here/ui-scripts/space-mouse.mitcad-ui \
   ui_start_app --ui=qt --no-mcp --demo
-for _ in $(seq 1 600); do
+for _ in $(seq 1 900); do
   kill -0 "$UI_RUNNER" 2> /dev/null || break
   sleep 0.2
 done

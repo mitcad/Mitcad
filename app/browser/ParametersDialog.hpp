@@ -197,6 +197,16 @@ private:
   void newRowEdited(QTreeWidgetItem* item, int column);
   void newRowEditorClosed(int column, int hint);
   void createFromNewRow(bool asked);
+  // Edit Formula for the empty row (mitcad#2290), from its Expression
+  // cell's fx (whose editing ends first, without applying it) or the
+  // Edit Formula… button, with `text`: OK makes the row a parameter with
+  // the window's formula as Enter would (one undo step; without a name the
+  // row keeps the formula and the message line asks for one), Cancel makes
+  // nothing. While the window is open, the cell's editor closing makes no
+  // parameter of the row (m_newRowFormula).
+  void formulaForNewRow(QLineEdit* editor, const QString& text);
+  void runNewRowFormula(const QString& text);
+  bool m_newRowFormula = false;
   void addDeleteButton(QTreeWidgetItem* row, const QJsonObject& parameter);
   void deleteParameter(const QString& name);
   // The message line under the table, which takes no room while empty.

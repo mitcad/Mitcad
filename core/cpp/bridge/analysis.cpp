@@ -260,11 +260,19 @@ struct BoundaryIndex {
 
   explicit BoundaryIndex(const geometry::Shape& shape) {
     // The faces only, so that a point inside a solid has its distance to
-    // the boundary, not zero.
+    // the boundary, not zero. A face without a surface (a mesh body's
+    // triangles, or a face whose surface is missing) has no probe: it has
+    // nothing to project onto or to grid, and the shape is measured by its
+    // other faces; a point only it could measure has the infinite distance,
+    // "could not be measured" (mitcad#2294: its projection was set up on a
+    // null surface and crashed). Every probe's face has a surface.
     for (int i = 0; i < shape.face_count(); ++i) {
       Probe probe;
       probe.face = shape.face(i);
       probe.index = i;
+      if (BRep_Tool::Surface(probe.face).IsNull()) {
+        continue;
+      }
       BRepBndLib::Add(probe.face, probe.box);
       probe.box.Enlarge(kNearBoundary);
       switch (BRepAdaptor_Surface(probe.face, false).GetType()) {
@@ -325,8 +333,10 @@ struct BoundaryIndex {
   // (with the face's tolerance), its view of the face kept.
   static bool on_face(Probe& probe, const gp_Pnt2d& uv) {
     if (!probe.explorer) {
-      probe.explorer = std::make_unique<BRepClass_FaceExplorer>(probe.face);
+      // The bounds first: a set explorer means both are set (a crash
+      // between leaves both to the next call).
       BRepTools::UVBounds(probe.face, probe.bounds[0], probe.bounds[1], probe.bounds[2], probe.bounds[3]);
+      probe.explorer = std::make_unique<BRepClass_FaceExplorer>(probe.face);
     }
     // A periodic surface's parameters in the face's period (the projection
     // gives the surface's own).
@@ -344,10 +354,17 @@ struct BoundaryIndex {
   }
 
   // The distance from `p` to the edges of the face, those whose boxes are
-  // nearer than `bound` only (`bound` when none is nearer).
+  // nearer than `bound` only (`bound` when none is nearer). An edge without
+  // a curve (neither a 3D curve nor one on a surface) is left out: the
+  // face's other edges measure (mitcad#2294).
   static double boundary_distance(Probe& probe, const gp_Pnt& p, double bound) {
     if (!probe.edges_listed) {
+      // (Listed anew after a crash halfway.)
+      probe.edges.clear();
       for (TopExp_Explorer it(probe.face, TopAbs_EDGE); it.More(); it.Next()) {
+        if (!BRep_Tool::IsGeometric(TopoDS::Edge(it.Current()))) {
+          continue;
+        }
         // From the curve, not a display mesh: the box bounds the edge.
         Bnd_Box box;
         BRepBndLib::Add(it.Current(), box, false);
@@ -533,12 +550,19 @@ struct BoundaryIndex {
     return std::sqrt(dx * dx + dy * dy + dz * dz);
   }
 
-  // The face's projection, classifier and (not analytic) grid.
+  // The face's projection, classifier and (not analytic) grid. The probe
+  // is prepared once all are made: a crash halfway (a query runs guarded,
+  // mitcad#2294) leaves it to be prepared anew by the next query.
   static void prepare(Probe& probe) {
     probe.surface = new ShapeAnalysis_Surface(BRep_Tool::Surface(probe.face));
     probe.inside = std::make_unique<BRepTopAdaptor_FClass2d>(probe.face, kOnBoundary);
-    probe.prepared = true;
+    probe.grid.clear();
+    probe.grid_uv.clear();
+    probe.grid_u = 0;
+    probe.grid_v = 0;
+    probe.reach = 0.0;
     if (probe.analytic) {
+      probe.prepared = true;
       return;
     }
     double u0 = 0.0;
@@ -591,6 +615,7 @@ struct BoundaryIndex {
       }
     }
     probe.reach = 1.5 * diagonal + kNearBoundary;
+    probe.prepared = true;
   }
 
   std::mutex mutex;
@@ -614,7 +639,14 @@ AnalysisDeviation deviation(const analysis::Deviation& d) {
 // Runs an analysis the application asks for (Section Analysis, Measure,
 // Interference, Physical Properties) as an operation of the geometry
 // library: a crash inside OCCT is an error, also on the UI thread, where
-// Section Analysis clips the bodies shown (mitcad#392).
+// Section Analysis clips the bodies shown (mitcad#392). The import's
+// queries (the comparisons, boundary distances, points inside, segment
+// crossings, edge middles, face points and boxes, new faces, changed
+// volume) run in it too, so that a crash inside OCCT is the item's error
+// and the import goes on (mitcad#2294). It opens the input check itself.
+// A crash may go back to the operation without unwinding the frames
+// between (guard.hpp; always on Linux and macOS): a lock `work` takes is
+// held by an object outside it, which the error does unwind.
 template <class Work>
 auto guarded(const char* operation, Work&& work) -> decltype(work()) {
   std::optional<decltype(work())> result;
@@ -1052,53 +1084,54 @@ std::unique_ptr<AnalysisClips> analysis_detach_all(const ShapeList& shapes,
 
 AnalysisComparison analysis_compare_step(const ShapeList& bodies, rust::Str path,
                                          rust::Str step_body, std::size_t samples, double fuzzy) {
-  const geometry::CheckedOperation check("comparison with a STEP file");
-  const std::vector<TopoDS_Shape> mine = occt(bodies);
-  if (mine.empty()) {
-    throw std::invalid_argument("there are no bodies to compare");
-  }
-  const std::vector<io::Body> file_bodies = io::read_step(std::string(path));
-  if (file_bodies.empty()) {
-    throw std::runtime_error("the STEP file has no bodies");
-  }
-  const std::string wanted(step_body);
-  std::vector<const io::Body*> chosen;
-  for (const io::Body& body : file_bodies) {
-    if (wanted.empty() || body.name == wanted) {
-      chosen.push_back(&body);
+  return guarded("comparison with a STEP file", [&] {
+    const std::vector<TopoDS_Shape> mine = occt(bodies);
+    if (mine.empty()) {
+      throw std::invalid_argument("there are no bodies to compare");
     }
-  }
-  if (chosen.empty() && is_index(wanted) && std::stoul(wanted) < file_bodies.size()) {
-    chosen.push_back(&file_bodies[std::stoul(wanted)]);
-  }
-  if (chosen.empty()) {
-    std::string names;
+    const std::vector<io::Body> file_bodies = io::read_step(std::string(path));
+    if (file_bodies.empty()) {
+      throw std::runtime_error("the STEP file has no bodies");
+    }
+    const std::string wanted(step_body);
+    std::vector<const io::Body*> chosen;
     for (const io::Body& body : file_bodies) {
-      names += (names.empty() ? "" : ", ") + body.name;
+      if (wanted.empty() || body.name == wanted) {
+        chosen.push_back(&body);
+      }
     }
-    throw std::runtime_error("the STEP file has no body '" + wanted + "' (it has " + names + ")");
-  }
-  std::vector<TopoDS_Shape> theirs;
-  AnalysisComparison result{};
-  for (const io::Body* body : chosen) {
-    theirs.push_back(body->shape);
-    result.step_bodies.push_back(rust::String(body->name));
-  }
-  analysis::CompareOptions options;
-  options.samples = samples;
-  options.fuzzy = fuzzy;
-  const analysis::Comparison c = analysis::compare(compound(mine), compound(theirs), options);
-  result.volume_a = c.volume_a;
-  result.volume_b = c.volume_b;
-  result.has_differences = c.a_minus_b.has_value() && c.b_minus_a.has_value();
-  result.a_minus_b = c.a_minus_b.value_or(0.0);
-  result.b_minus_a = c.b_minus_a.value_or(0.0);
-  result.relative_difference = c.relative_difference.value_or(0.0);
-  result.a_to_b = deviation(c.a_to_b);
-  result.b_to_a = deviation(c.b_to_a);
-  result.max_deviation = c.max_deviation;
-  result.bounds_difference = c.bounds_difference;
-  return result;
+    if (chosen.empty() && is_index(wanted) && std::stoul(wanted) < file_bodies.size()) {
+      chosen.push_back(&file_bodies[std::stoul(wanted)]);
+    }
+    if (chosen.empty()) {
+      std::string names;
+      for (const io::Body& body : file_bodies) {
+        names += (names.empty() ? "" : ", ") + body.name;
+      }
+      throw std::runtime_error("the STEP file has no body '" + wanted + "' (it has " + names + ")");
+    }
+    std::vector<TopoDS_Shape> theirs;
+    AnalysisComparison result{};
+    for (const io::Body* body : chosen) {
+      theirs.push_back(body->shape);
+      result.step_bodies.push_back(rust::String(body->name));
+    }
+    analysis::CompareOptions options;
+    options.samples = samples;
+    options.fuzzy = fuzzy;
+    const analysis::Comparison c = analysis::compare(compound(mine), compound(theirs), options);
+    result.volume_a = c.volume_a;
+    result.volume_b = c.volume_b;
+    result.has_differences = c.a_minus_b.has_value() && c.b_minus_a.has_value();
+    result.a_minus_b = c.a_minus_b.value_or(0.0);
+    result.b_minus_a = c.b_minus_a.value_or(0.0);
+    result.relative_difference = c.relative_difference.value_or(0.0);
+    result.a_to_b = deviation(c.a_to_b);
+    result.b_to_a = deviation(c.b_to_a);
+    result.max_deviation = c.max_deviation;
+    result.bounds_difference = c.bounds_difference;
+    return result;
+  });
 }
 
 // .f3d import (T1).
@@ -1106,147 +1139,165 @@ AnalysisComparison analysis_compare_step(const ShapeList& bodies, rust::Str path
 AnalysisComparison analysis_compare_shapes(const ShapeList& a, const ShapeList& b,
                                            std::size_t samples, double fuzzy, double seconds,
                                            double booleans_above) {
-  const geometry::CheckedOperation check("comparison");
-  const std::vector<TopoDS_Shape> mine = occt(a);
-  const std::vector<TopoDS_Shape> theirs = occt(b);
-  if (mine.empty() || theirs.empty()) {
-    throw std::invalid_argument("there are no bodies to compare");
-  }
-  analysis::CompareOptions options;
-  options.samples = samples;
-  options.fuzzy = fuzzy;
-  options.seconds = seconds;
-  options.booleans_above = booleans_above;
-  const analysis::Comparison c = analysis::compare(compound(mine), compound(theirs), options);
-  AnalysisComparison result{};
-  result.volume_a = c.volume_a;
-  result.volume_b = c.volume_b;
-  result.has_differences = c.a_minus_b.has_value() && c.b_minus_a.has_value();
-  result.a_minus_b = c.a_minus_b.value_or(0.0);
-  result.b_minus_a = c.b_minus_a.value_or(0.0);
-  result.relative_difference = c.relative_difference.value_or(0.0);
-  result.a_to_b = deviation(c.a_to_b);
-  result.b_to_a = deviation(c.b_to_a);
-  result.max_deviation = c.max_deviation;
-  result.bounds_difference = c.bounds_difference;
-  return result;
+  return guarded("comparison", [&] {
+    const std::vector<TopoDS_Shape> mine = occt(a);
+    const std::vector<TopoDS_Shape> theirs = occt(b);
+    if (mine.empty() || theirs.empty()) {
+      throw std::invalid_argument("there are no bodies to compare");
+    }
+    analysis::CompareOptions options;
+    options.samples = samples;
+    options.fuzzy = fuzzy;
+    options.seconds = seconds;
+    options.booleans_above = booleans_above;
+    const analysis::Comparison c = analysis::compare(compound(mine), compound(theirs), options);
+    AnalysisComparison result{};
+    result.volume_a = c.volume_a;
+    result.volume_b = c.volume_b;
+    result.has_differences = c.a_minus_b.has_value() && c.b_minus_a.has_value();
+    result.a_minus_b = c.a_minus_b.value_or(0.0);
+    result.b_minus_a = c.b_minus_a.value_or(0.0);
+    result.relative_difference = c.relative_difference.value_or(0.0);
+    result.a_to_b = deviation(c.a_to_b);
+    result.b_to_a = deviation(c.b_to_a);
+    result.max_deviation = c.max_deviation;
+    result.bounds_difference = c.bounds_difference;
+    return result;
+  });
 }
+
+namespace {
+
+// The shape's boundary index under its lock, for a guarded query: `lock`,
+// outside the guarded work, holds it (guarded), so that a crash does not
+// leave it locked. What a crash leaves half set up in a probe is set up
+// again by the next query (BoundaryIndex::prepare, on_face,
+// boundary_distance), so the index stays with the shape.
+std::shared_ptr<BoundaryIndex> locked_index(const geometry::Shape& shape, std::unique_lock<std::mutex>& lock) {
+  std::shared_ptr<BoundaryIndex> index = BoundaryIndex::of(shape);
+  lock = std::unique_lock<std::mutex>(index->mutex);
+  return index;
+}
+
+} // namespace
 
 rust::Vec<double> analysis_boundary_distances(const geometry::Shape& shape,
                                               rust::Slice<const double> points) {
-  const geometry::CheckedOperation check("boundary distances");
   if (points.size() % 3 != 0) {
     throw std::invalid_argument("points come as x, y, z triples");
   }
   // The shape's boundary index, made by the first call and kept with the
   // shape (it never changes): the import asks about the same history
   // states for item after item, and setting up the faces' projections
-  // takes most of the time.
-  const std::shared_ptr<BoundaryIndex> index = BoundaryIndex::of(shape);
-  const std::lock_guard<std::mutex> lock(index->mutex);
-  std::vector<BoundaryIndex::Probe>& probes = index->probes;
-  // The point's distance from the face's surface where it projects inside
-  // the face, else none (also when it is far from a free-form surface's
-  // grid, or the projection from the nearest grid point finds no nearer
-  // point: BoundaryIndex::nearest then measures it).
-  const auto gap = [](BoundaryIndex::Probe& probe, const gp_Pnt& p) -> std::optional<double> {
-    if (!probe.prepared) {
-      BoundaryIndex::prepare(probe);
-    } else if (probe.surface.IsNull()) {
-      probe.surface = new ShapeAnalysis_Surface(BRep_Tool::Surface(probe.face));
-    }
-    gp_Pnt2d uv;
-    if (probe.analytic) {
-      uv = probe.surface->ValueOfUV(p, kOnBoundary);
-    } else {
-      std::size_t nearest = 0;
-      double best = std::numeric_limits<double>::infinity();
-      for (std::size_t k = 0; k < probe.grid.size(); ++k) {
-        const double d = p.SquareDistance(probe.grid[k]);
-        if (d < best) {
-          best = d;
-          nearest = k;
+  // takes most of the time. A crash inside OCCT is the error
+  // "boundary distances: ..." (mitcad#2294).
+  std::unique_lock<std::mutex> lock;
+  return guarded("boundary distances", [&] {
+    const std::shared_ptr<BoundaryIndex> index = locked_index(shape, lock);
+    std::vector<BoundaryIndex::Probe>& probes = index->probes;
+    // The point's distance from the face's surface where it projects inside
+    // the face, else none (also when it is far from a free-form surface's
+    // grid, or the projection from the nearest grid point finds no nearer
+    // point: BoundaryIndex::nearest then measures it).
+    const auto gap = [](BoundaryIndex::Probe& probe, const gp_Pnt& p) -> std::optional<double> {
+      if (!probe.prepared) {
+        BoundaryIndex::prepare(probe);
+      } else if (probe.surface.IsNull()) {
+        probe.surface = new ShapeAnalysis_Surface(BRep_Tool::Surface(probe.face));
+      }
+      gp_Pnt2d uv;
+      if (probe.analytic) {
+        uv = probe.surface->ValueOfUV(p, kOnBoundary);
+      } else {
+        std::size_t nearest = 0;
+        double best = std::numeric_limits<double>::infinity();
+        for (std::size_t k = 0; k < probe.grid.size(); ++k) {
+          const double d = p.SquareDistance(probe.grid[k]);
+          if (d < best) {
+            best = d;
+            nearest = k;
+          }
         }
-      }
-      if (probe.grid.empty() || std::sqrt(best) > probe.reach) {
-        return std::nullopt;
-      }
-      if (probe.large) {
-        // A local search from the nearest grid point only: when it fails,
-        // NextValueOfUV falls back to the general projection, whose
-        // search grid on such a spline takes gigabytes (memory limits
-        // then end the process in OCCT). BoundaryIndex::nearest measures a
-        // point it does not place.
-        Extrema_GenLocateExtPS locate(*probe.surface->Adaptor3d());
-        locate.Perform(p, probe.grid_uv[nearest].X(), probe.grid_uv[nearest].Y());
-        if (!locate.IsDone()) {
+        if (probe.grid.empty() || std::sqrt(best) > probe.reach) {
           return std::nullopt;
         }
-        double u = 0.0;
-        double v = 0.0;
-        locate.Point().Parameter(u, v);
-        uv.SetCoord(u, v);
-      } else {
-        uv = probe.surface->NextValueOfUV(probe.grid_uv[nearest], p, kOnBoundary, -1.0);
+        if (probe.large) {
+          // A local search from the nearest grid point only: when it fails,
+          // NextValueOfUV falls back to the general projection, whose
+          // search grid on such a spline takes gigabytes (memory limits
+          // then end the process in OCCT). BoundaryIndex::nearest measures a
+          // point it does not place.
+          Extrema_GenLocateExtPS locate(*probe.surface->Adaptor3d());
+          locate.Perform(p, probe.grid_uv[nearest].X(), probe.grid_uv[nearest].Y());
+          if (!locate.IsDone()) {
+            return std::nullopt;
+          }
+          double u = 0.0;
+          double v = 0.0;
+          locate.Point().Parameter(u, v);
+          uv.SetCoord(u, v);
+        } else {
+          uv = probe.surface->NextValueOfUV(probe.grid_uv[nearest], p, kOnBoundary, -1.0);
+        }
       }
-    }
-    const double g = p.Distance(probe.surface->Value(uv));
-    if (g > kNearBoundary) {
-      return std::nullopt;
-    }
-    // A point on one of the face's edges is on the face. (Most points
-    // asked about are edges' middles: the classifier finds them on the
-    // boundary only by OCCT's exact classifier, which it sets up for the
-    // whole face every time, a second a point on a face of a thousand
-    // holes.)
-    if (BoundaryIndex::boundary_distance(probe, p, kNearBoundary) < kNearBoundary) {
+      const double g = p.Distance(probe.surface->Value(uv));
+      if (g > kNearBoundary) {
+        return std::nullopt;
+      }
+      // A point on one of the face's edges is on the face. (Most points
+      // asked about are edges' middles: the classifier finds them on the
+      // boundary only by OCCT's exact classifier, which it sets up for the
+      // whole face every time, a second a point on a face of a thousand
+      // holes.)
+      if (BoundaryIndex::boundary_distance(probe, p, kNearBoundary) < kNearBoundary) {
+        return g;
+      }
+      if (probe.inside->Perform(uv) == TopAbs_OUT) {
+        return std::nullopt;
+      }
       return g;
+    };
+    const auto measure = [&](const gp_Pnt& p) {
+      // On a face: zero. Else near one (a stored surface that the replay's
+      // approximates), or measured.
+      double near = std::numeric_limits<double>::infinity();
+      for (BoundaryIndex::Probe& probe : probes) {
+        if (probe.box.IsOut(p)) {
+          continue;
+        }
+        const std::optional<double> g = gap(probe, p);
+        if (!g) {
+          continue;
+        }
+        if (*g <= kOnBoundary) {
+          return 0.0;
+        }
+        near = std::min(near, *g);
+      }
+      if (near <= kNearBoundary) {
+        return near;
+      }
+      return index->nearest(p);
+    };
+    rust::Vec<double> out;
+    for (std::size_t i = 0; i < points.size(); i += 3) {
+      const std::array<double, 3> key{points[i], points[i + 1], points[i + 2]};
+      const auto known = index->known.find(key);
+      if (known != index->known.end()) {
+        out.push_back(known->second);
+        continue;
+      }
+      const double d = measure(gp_Pnt(key[0], key[1], key[2]));
+      index->known.emplace(key, d);
+      out.push_back(d);
     }
-    if (probe.inside->Perform(uv) == TopAbs_OUT) {
-      return std::nullopt;
-    }
-    return g;
-  };
-  const auto measure = [&](const gp_Pnt& p) {
-    // On a face: zero. Else near one (a stored surface that the replay's
-    // approximates), or measured.
-    double near = std::numeric_limits<double>::infinity();
     for (BoundaryIndex::Probe& probe : probes) {
-      if (probe.box.IsOut(p)) {
-        continue;
+      if (probe.large) {
+        probe.surface.Nullify();
       }
-      const std::optional<double> g = gap(probe, p);
-      if (!g) {
-        continue;
-      }
-      if (*g <= kOnBoundary) {
-        return 0.0;
-      }
-      near = std::min(near, *g);
     }
-    if (near <= kNearBoundary) {
-      return near;
-    }
-    return index->nearest(p);
-  };
-  rust::Vec<double> out;
-  for (std::size_t i = 0; i < points.size(); i += 3) {
-    const std::array<double, 3> key{points[i], points[i + 1], points[i + 2]};
-    const auto known = index->known.find(key);
-    if (known != index->known.end()) {
-      out.push_back(known->second);
-      continue;
-    }
-    const double d = measure(gp_Pnt(key[0], key[1], key[2]));
-    index->known.emplace(key, d);
-    out.push_back(d);
-  }
-  for (BoundaryIndex::Probe& probe : probes) {
-    if (probe.large) {
-      probe.surface.Nullify();
-    }
-  }
-  return out;
+    return out;
+  });
 }
 
 std::size_t analysis_whole_face_searches() { return whole_face_searches.load(); }
@@ -1257,9 +1308,9 @@ bool analysis_face_point(const geometry::Shape& shape, const std::vector<int>& f
   if (faces.empty()) {
     return false;
   }
-  try {
-    const std::shared_ptr<BoundaryIndex> index = BoundaryIndex::of(shape);
-    const std::lock_guard<std::mutex> lock(index->mutex);
+  std::unique_lock<std::mutex> lock;
+  const auto work = [&] {
+    const std::shared_ptr<BoundaryIndex> index = locked_index(shape, lock);
     const gp_Pnt p(near[0], near[1], near[2]);
     double best = std::numeric_limits<double>::infinity();
     bool found = false;
@@ -1301,239 +1352,253 @@ bool analysis_face_point(const geometry::Shape& shape, const std::vector<int>& f
       found = true;
     }
     return found;
-  } catch (const Standard_Failure&) {
+  };
+  // An exception of OCCT's, or a crash inside it (mitcad#2294), leaves the
+  // point to geometry::face_point_normal.
+  try {
+    return guarded("face point", work);
+  } catch (const geometry::Cancelled&) {
+    throw;
+  } catch (const std::runtime_error&) {
     return false;
   }
 }
 
 rust::Vec<bool> analysis_points_inside(const geometry::Shape& shape, rust::Slice<const double> points) {
-  const geometry::CheckedOperation check("points inside");
-  if (points.size() % 3 != 0) {
-    throw std::invalid_argument("points come as x, y, z triples");
-  }
-  const std::size_t count = points.size() / 3;
-  std::vector<bool> inside(count, false);
-  for (TopExp_Explorer it(shape.occt(), TopAbs_SOLID); it.More(); it.Next()) {
-    // One classifier per solid (its set-up is the expensive part), and
-    // points outside the solid's box are outside.
-    Bnd_Box box;
-    BRepBndLib::Add(it.Current(), box);
-    std::vector<std::size_t> candidates;
-    for (std::size_t i = 0; i < count; ++i) {
-      if (!inside[i] && !box.IsOut(gp_Pnt(points[3 * i], points[3 * i + 1], points[3 * i + 2]))) {
-        candidates.push_back(i);
+  return guarded("points inside", [&] {
+    if (points.size() % 3 != 0) {
+      throw std::invalid_argument("points come as x, y, z triples");
+    }
+    const std::size_t count = points.size() / 3;
+    std::vector<bool> inside(count, false);
+    for (TopExp_Explorer it(shape.occt(), TopAbs_SOLID); it.More(); it.Next()) {
+      // One classifier per solid (its set-up is the expensive part), and
+      // points outside the solid's box are outside.
+      Bnd_Box box;
+      BRepBndLib::Add(it.Current(), box);
+      std::vector<std::size_t> candidates;
+      for (std::size_t i = 0; i < count; ++i) {
+        if (!inside[i] && !box.IsOut(gp_Pnt(points[3 * i], points[3 * i + 1], points[3 * i + 2]))) {
+          candidates.push_back(i);
+        }
+      }
+      if (candidates.empty()) {
+        continue;
+      }
+      BRepClass3d_SolidClassifier classifier(it.Current());
+      for (const std::size_t i : candidates) {
+        classifier.Perform(gp_Pnt(points[3 * i], points[3 * i + 1], points[3 * i + 2]), 1e-7);
+        inside[i] = classifier.State() == TopAbs_IN;
       }
     }
-    if (candidates.empty()) {
-      continue;
+    rust::Vec<bool> out;
+    for (const bool in : inside) {
+      out.push_back(in);
     }
-    BRepClass3d_SolidClassifier classifier(it.Current());
-    for (const std::size_t i : candidates) {
-      classifier.Perform(gp_Pnt(points[3 * i], points[3 * i + 1], points[3 * i + 2]), 1e-7);
-      inside[i] = classifier.State() == TopAbs_IN;
-    }
-  }
-  rust::Vec<bool> out;
-  for (const bool in : inside) {
-    out.push_back(in);
-  }
-  return out;
+    return out;
+  });
 }
 
 rust::Vec<double> analysis_segment_crossings(const geometry::Shape& shape, rust::Slice<const double> segment) {
-  const geometry::CheckedOperation check("segment crossings");
-  if (segment.size() != 6) {
-    throw std::invalid_argument("a segment comes as two x, y, z triples");
-  }
-  const gp_Pnt from(segment[0], segment[1], segment[2]);
-  const gp_Pnt to(segment[3], segment[4], segment[5]);
-  const double length = from.Distance(to);
-  if (length < Precision::Confusion()) {
-    throw std::invalid_argument("the segment has no length");
-  }
-  const gp_Lin line(from, gp_Dir(gp_Vec(from, to)));
-  Bnd_Box reach;
-  reach.Add(from);
-  reach.Add(to);
-  reach.Enlarge(1e-6);
-  // Only the faces whose boxes the segment reaches are intersected: their
-  // set-up is the expensive part, and a classifier sets up every face (a
-  // modelled thread's stored body has hundreds of spline faces).
-  std::vector<std::pair<double, double>> found;
-  for (TopExp_Explorer it(shape.occt(), TopAbs_FACE); it.More(); it.Next()) {
-    const TopoDS_Face& face = TopoDS::Face(it.Current());
-    Bnd_Box box;
-    BRepBndLib::Add(face, box);
-    if (box.IsOut(reach)) {
-      continue;
+  return guarded("segment crossings", [&] {
+    if (segment.size() != 6) {
+      throw std::invalid_argument("a segment comes as two x, y, z triples");
     }
-    IntCurvesFace_Intersector intersector(face, 1e-7);
-    intersector.Perform(line, -1e-9, length + 1e-9);
-    if (!intersector.IsDone()) {
-      continue;
+    const gp_Pnt from(segment[0], segment[1], segment[2]);
+    const gp_Pnt to(segment[3], segment[4], segment[5]);
+    const double length = from.Distance(to);
+    if (length < Precision::Confusion()) {
+      throw std::invalid_argument("the segment has no length");
     }
-    const BRepGProp_Face oriented(face);
-    for (int i = 1; i <= intersector.NbPnt(); ++i) {
-      gp_Pnt point;
-      gp_Vec normal;
-      // The normal points out of the material (the face's orientation).
-      oriented.Normal(intersector.UParameter(i), intersector.VParameter(i), point, normal);
-      const double along = normal.Dot(gp_Vec(line.Direction()));
-      if (std::abs(along) <= 1e-9 * normal.Magnitude()) {
-        continue; // touches the face without crossing it
+    const gp_Lin line(from, gp_Dir(gp_Vec(from, to)));
+    Bnd_Box reach;
+    reach.Add(from);
+    reach.Add(to);
+    reach.Enlarge(1e-6);
+    // Only the faces whose boxes the segment reaches are intersected: their
+    // set-up is the expensive part, and a classifier sets up every face (a
+    // modelled thread's stored body has hundreds of spline faces).
+    std::vector<std::pair<double, double>> found;
+    for (TopExp_Explorer it(shape.occt(), TopAbs_FACE); it.More(); it.Next()) {
+      const TopoDS_Face& face = TopoDS::Face(it.Current());
+      Bnd_Box box;
+      BRepBndLib::Add(face, box);
+      if (box.IsOut(reach)) {
+        continue;
       }
-      found.emplace_back(intersector.WParameter(i) / length, along < 0.0 ? -1.0 : 1.0);
+      IntCurvesFace_Intersector intersector(face, 1e-7);
+      intersector.Perform(line, -1e-9, length + 1e-9);
+      if (!intersector.IsDone()) {
+        continue;
+      }
+      const BRepGProp_Face oriented(face);
+      for (int i = 1; i <= intersector.NbPnt(); ++i) {
+        gp_Pnt point;
+        gp_Vec normal;
+        // The normal points out of the material (the face's orientation).
+        oriented.Normal(intersector.UParameter(i), intersector.VParameter(i), point, normal);
+        const double along = normal.Dot(gp_Vec(line.Direction()));
+        if (std::abs(along) <= 1e-9 * normal.Magnitude()) {
+          continue; // touches the face without crossing it
+        }
+        found.emplace_back(intersector.WParameter(i) / length, along < 0.0 ? -1.0 : 1.0);
+      }
     }
-  }
-  std::sort(found.begin(), found.end());
-  rust::Vec<double> out;
-  for (std::size_t i = 0; i < found.size(); ++i) {
-    // A crossing on an edge is found on each of its faces.
-    if (i > 0 && std::abs(found[i].first - found[i - 1].first) < 1e-9 && found[i].second == found[i - 1].second) {
-      continue;
+    std::sort(found.begin(), found.end());
+    rust::Vec<double> out;
+    for (std::size_t i = 0; i < found.size(); ++i) {
+      // A crossing on an edge is found on each of its faces.
+      if (i > 0 && std::abs(found[i].first - found[i - 1].first) < 1e-9 && found[i].second == found[i - 1].second) {
+        continue;
+      }
+      out.push_back(found[i].first);
+      out.push_back(found[i].second);
     }
-    out.push_back(found[i].first);
-    out.push_back(found[i].second);
-  }
-  return out;
+    return out;
+  });
 }
 
 rust::Vec<double> analysis_segments_crossings(const geometry::Shape& shape, rust::Slice<const double> segments) {
-  const geometry::CheckedOperation check("segment crossings");
-  if (segments.size() % 6 != 0) {
-    throw std::invalid_argument("segments come as two x, y, z triples each");
-  }
-  const std::size_t count = segments.size() / 6;
-  struct Segment {
-    gp_Lin line;
-    double length = 0.0;
-    Bnd_Box reach;
-  };
-  std::vector<Segment> lines(count);
-  for (std::size_t s = 0; s < count; ++s) {
-    const gp_Pnt from(segments[6 * s], segments[6 * s + 1], segments[6 * s + 2]);
-    const gp_Pnt to(segments[6 * s + 3], segments[6 * s + 4], segments[6 * s + 5]);
-    lines[s].length = from.Distance(to);
-    if (lines[s].length < Precision::Confusion()) {
-      throw std::invalid_argument("a segment has no length");
+  return guarded("segment crossings", [&] {
+    if (segments.size() % 6 != 0) {
+      throw std::invalid_argument("segments come as two x, y, z triples each");
     }
-    lines[s].line = gp_Lin(from, gp_Dir(gp_Vec(from, to)));
-    lines[s].reach.Add(from);
-    lines[s].reach.Add(to);
-    lines[s].reach.Enlarge(1e-6);
-  }
-  // As analysis_segment_crossings for each segment, with each face's set-up
-  // (its intersector and the classifier of its wires, the expensive part on
-  // a face with hundreds of holes) made once for all the segments that
-  // reach its box (mitcad#181: the probes of a sketch's regions on a body of
-  // 5 000 faces took 1.5 s each).
-  std::vector<std::vector<std::pair<double, double>>> found(count);
-  for (TopExp_Explorer it(shape.occt(), TopAbs_FACE); it.More(); it.Next()) {
-    const TopoDS_Face& face = TopoDS::Face(it.Current());
-    Bnd_Box box;
-    BRepBndLib::Add(face, box);
-    std::optional<IntCurvesFace_Intersector> intersector;
-    std::optional<BRepGProp_Face> oriented;
+    const std::size_t count = segments.size() / 6;
+    struct Segment {
+      gp_Lin line;
+      double length = 0.0;
+      Bnd_Box reach;
+    };
+    std::vector<Segment> lines(count);
     for (std::size_t s = 0; s < count; ++s) {
-      const Segment& segment = lines[s];
-      if (box.IsOut(segment.reach)) {
-        continue;
+      const gp_Pnt from(segments[6 * s], segments[6 * s + 1], segments[6 * s + 2]);
+      const gp_Pnt to(segments[6 * s + 3], segments[6 * s + 4], segments[6 * s + 5]);
+      lines[s].length = from.Distance(to);
+      if (lines[s].length < Precision::Confusion()) {
+        throw std::invalid_argument("a segment has no length");
       }
-      if (!intersector) {
-        intersector.emplace(face, 1e-7);
-        oriented.emplace(face);
-      }
-      intersector->Perform(segment.line, -1e-9, segment.length + 1e-9);
-      if (!intersector->IsDone()) {
-        continue;
-      }
-      for (int i = 1; i <= intersector->NbPnt(); ++i) {
-        gp_Pnt point;
-        gp_Vec normal;
-        oriented->Normal(intersector->UParameter(i), intersector->VParameter(i), point, normal);
-        const double along = normal.Dot(gp_Vec(segment.line.Direction()));
-        if (std::abs(along) <= 1e-9 * normal.Magnitude()) {
+      lines[s].line = gp_Lin(from, gp_Dir(gp_Vec(from, to)));
+      lines[s].reach.Add(from);
+      lines[s].reach.Add(to);
+      lines[s].reach.Enlarge(1e-6);
+    }
+    // As analysis_segment_crossings for each segment, with each face's set-up
+    // (its intersector and the classifier of its wires, the expensive part on
+    // a face with hundreds of holes) made once for all the segments that
+    // reach its box (mitcad#181: the probes of a sketch's regions on a body of
+    // 5 000 faces took 1.5 s each).
+    std::vector<std::vector<std::pair<double, double>>> found(count);
+    for (TopExp_Explorer it(shape.occt(), TopAbs_FACE); it.More(); it.Next()) {
+      const TopoDS_Face& face = TopoDS::Face(it.Current());
+      Bnd_Box box;
+      BRepBndLib::Add(face, box);
+      std::optional<IntCurvesFace_Intersector> intersector;
+      std::optional<BRepGProp_Face> oriented;
+      for (std::size_t s = 0; s < count; ++s) {
+        const Segment& segment = lines[s];
+        if (box.IsOut(segment.reach)) {
           continue;
         }
-        found[s].emplace_back(intersector->WParameter(i) / segment.length, along < 0.0 ? -1.0 : 1.0);
+        if (!intersector) {
+          intersector.emplace(face, 1e-7);
+          oriented.emplace(face);
+        }
+        intersector->Perform(segment.line, -1e-9, segment.length + 1e-9);
+        if (!intersector->IsDone()) {
+          continue;
+        }
+        for (int i = 1; i <= intersector->NbPnt(); ++i) {
+          gp_Pnt point;
+          gp_Vec normal;
+          oriented->Normal(intersector->UParameter(i), intersector->VParameter(i), point, normal);
+          const double along = normal.Dot(gp_Vec(segment.line.Direction()));
+          if (std::abs(along) <= 1e-9 * normal.Magnitude()) {
+            continue;
+          }
+          found[s].emplace_back(intersector->WParameter(i) / segment.length, along < 0.0 ? -1.0 : 1.0);
+        }
       }
     }
-  }
-  rust::Vec<double> out;
-  for (auto& crossings : found) {
-    std::sort(crossings.begin(), crossings.end());
-    std::vector<double> kept;
-    for (std::size_t i = 0; i < crossings.size(); ++i) {
-      if (i > 0 && std::abs(crossings[i].first - crossings[i - 1].first) < 1e-9 &&
-          crossings[i].second == crossings[i - 1].second) {
-        continue;
+    rust::Vec<double> out;
+    for (auto& crossings : found) {
+      std::sort(crossings.begin(), crossings.end());
+      std::vector<double> kept;
+      for (std::size_t i = 0; i < crossings.size(); ++i) {
+        if (i > 0 && std::abs(crossings[i].first - crossings[i - 1].first) < 1e-9 &&
+            crossings[i].second == crossings[i - 1].second) {
+          continue;
+        }
+        kept.push_back(crossings[i].first);
+        kept.push_back(crossings[i].second);
       }
-      kept.push_back(crossings[i].first);
-      kept.push_back(crossings[i].second);
+      out.push_back(static_cast<double>(kept.size() / 2));
+      for (const double v : kept) {
+        out.push_back(v);
+      }
     }
-    out.push_back(static_cast<double>(kept.size() / 2));
-    for (const double v : kept) {
-      out.push_back(v);
-    }
-  }
-  return out;
+    return out;
+  });
 }
 
 rust::Vec<AnalysisEdgeMiddle> analysis_edge_middles(const geometry::Shape& shape) {
-  const geometry::CheckedOperation check("edge middles");
-  rust::Vec<AnalysisEdgeMiddle> out;
-  for (const geometry::EdgeMiddle& middle : geometry::edge_middles(shape)) {
-    AnalysisEdgeMiddle m;
-    m.name = rust::String(middle.name);
-    m.point = {middle.point.X(), middle.point.Y(), middle.point.Z()};
-    m.tangent = {middle.tangent.X(), middle.tangent.Y(), middle.tangent.Z()};
-    m.length = middle.length;
-    out.push_back(std::move(m));
-  }
-  return out;
+  return guarded("edge middles", [&] {
+    rust::Vec<AnalysisEdgeMiddle> out;
+    for (const geometry::EdgeMiddle& middle : geometry::edge_middles(shape)) {
+      AnalysisEdgeMiddle m;
+      m.name = rust::String(middle.name);
+      m.point = {middle.point.X(), middle.point.Y(), middle.point.Z()};
+      m.tangent = {middle.tangent.X(), middle.tangent.Y(), middle.tangent.Z()};
+      m.length = middle.length;
+      out.push_back(std::move(m));
+    }
+    return out;
+  });
 }
 
 rust::Vec<AnalysisFacePoints> analysis_face_points(const geometry::Shape& shape) {
-  const geometry::CheckedOperation check("face points");
-  rust::Vec<AnalysisFacePoints> out;
-  for (const geometry::FacePoints& face : geometry::face_points(shape)) {
-    AnalysisFacePoints f;
-    f.name = rust::String(face.name);
-    for (const gp_Pnt& p : face.points) {
-      f.points.push_back(p.X());
-      f.points.push_back(p.Y());
-      f.points.push_back(p.Z());
+  return guarded("face points", [&] {
+    rust::Vec<AnalysisFacePoints> out;
+    for (const geometry::FacePoints& face : geometry::face_points(shape)) {
+      AnalysisFacePoints f;
+      f.name = rust::String(face.name);
+      for (const gp_Pnt& p : face.points) {
+        f.points.push_back(p.X());
+        f.points.push_back(p.Y());
+        f.points.push_back(p.Z());
+      }
+      out.push_back(std::move(f));
     }
-    out.push_back(std::move(f));
-  }
-  return out;
+    return out;
+  });
 }
 
 rust::Vec<AnalysisNewFace> analysis_new_faces(const ShapeList& before, const geometry::Shape& after,
                                               std::size_t count) {
-  const geometry::CheckedOperation check("new faces");
-  const int points = static_cast<int>(std::min<std::size_t>(count, 1024));
-  rust::Vec<AnalysisNewFace> out;
-  for (const geometry::NewFace& face : geometry::new_faces(shapes_of(before), after, points)) {
-    AnalysisNewFace f;
-    f.area = face.area;
-    for (const gp_Pnt& p : face.points) {
-      f.points.push_back(p.X());
-      f.points.push_back(p.Y());
-      f.points.push_back(p.Z());
+  return guarded("new faces", [&] {
+    const int points = static_cast<int>(std::min<std::size_t>(count, 1024));
+    rust::Vec<AnalysisNewFace> out;
+    for (const geometry::NewFace& face : geometry::new_faces(shapes_of(before), after, points)) {
+      AnalysisNewFace f;
+      f.area = face.area;
+      for (const gp_Pnt& p : face.points) {
+        f.points.push_back(p.X());
+        f.points.push_back(p.Y());
+        f.points.push_back(p.Z());
+      }
+      out.push_back(std::move(f));
     }
-    out.push_back(std::move(f));
-  }
-  return out;
+    return out;
+  });
 }
 
 rust::Vec<double> analysis_changed_volume(const ShapeList& before, const ShapeList& after) {
-  const geometry::CheckedOperation check("changed volume");
-  const geometry::ChangedVolume changed = geometry::changed_volume(shapes_of(before), shapes_of(after));
-  rust::Vec<double> out;
-  out.push_back(changed.volume);
-  out.push_back(changed.slack);
-  return out;
+  return guarded("changed volume", [&] {
+    const geometry::ChangedVolume changed = geometry::changed_volume(shapes_of(before), shapes_of(after));
+    rust::Vec<double> out;
+    out.push_back(changed.volume);
+    out.push_back(changed.slack);
+    return out;
+  });
 }
 
 std::size_t analysis_face_count(const geometry::Shape& shape) {
@@ -1546,15 +1611,17 @@ std::size_t analysis_face_count(const geometry::Shape& shape) {
 // Face boxes (the .f3d import's face lookups through a point, mitcad#119).
 
 rust::Vec<double> analysis_face_boxes(const geometry::Shape& shape) {
-  rust::Vec<double> out;
-  const std::vector<std::array<double, 6>> boxes = geometry::face_boxes(shape);
-  out.reserve(6 * boxes.size());
-  for (const std::array<double, 6>& box : boxes) {
-    for (const double value : box) {
-      out.push_back(value);
+  return guarded("face boxes", [&] {
+    rust::Vec<double> out;
+    const std::vector<std::array<double, 6>> boxes = geometry::face_boxes(shape);
+    out.reserve(6 * boxes.size());
+    for (const std::array<double, 6>& box : boxes) {
+      for (const double value : box) {
+        out.push_back(value);
+      }
     }
-  }
-  return out;
+    return out;
+  });
 }
 
 } // namespace mitcad::bridge

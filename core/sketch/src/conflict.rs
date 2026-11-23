@@ -92,6 +92,7 @@ fn noun(e: Option<&Entity>) -> (String, String) {
             EntityKind::Ellipse { .. } => ("ellipse", "ellipses"),
             EntityKind::EllipticalArc { .. } => ("elliptical arc", "elliptical arcs"),
             EntityKind::Spline { .. } | EntityKind::FittedSpline { .. } => ("spline", "splines"),
+            EntityKind::Conic { .. } => ("conic", "conics"),
         }
     };
     let (one, many) = if e.reference {

@@ -1,0 +1,43 @@
+{
+  "format": "solidcraft/57",
+  "name": "Equation curves",
+  "units": "mm",
+  "params": [
+    {"name": "a", "expr": "20", "unit": ""},
+    {"name": "rr", "expr": "10 mm", "unit": "mm"}
+  ],
+  "features": [
+    {
+      "id": 1, "name": "Curves", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [-10.0, 5.0]},
+          {"id": "p2", "pos": [-5.0, 1.25]},
+          {"id": "p3", "pos": [0.0, 0.0]},
+          {"id": "p4", "pos": [5.0, 1.25]},
+          {"id": "p5", "pos": [10.0, 5.0]},
+          {"id": "p6", "pos": [40.0, 0.0]},
+          {"id": "p7", "pos": [30.0, 10.0]},
+          {"id": "p8", "pos": [20.0, 0.0]},
+          {"id": "p9", "pos": [30.0, -10.0]},
+          {"id": "p10", "pos": [0.0, 20.0]},
+          {"id": "p11", "pos": [5.0, 21.0]},
+          {"id": "p12", "pos": [10.0, 22.0]}
+        ],
+        "curves": [
+          {"id": "s1", "type": "spline", "pts": [1, 2, 3, 4, 5]},
+          {"id": "s2", "type": "spline", "pts": [6, 7, 8, 9], "periodic": true},
+          {"id": "s3", "type": "spline", "pts": [10, 11, 12], "construction": true}
+        ],
+        "constraints": [],
+        "equations": [
+          {"curve": "s1", "y": "x^2/a", "start": "-10", "end": "10", "tolerance": 0.01},
+          {"curve": "s2", "x": "30 + rr*cos(t)", "y": "rr*sin(t)", "start": "0", "end": "2*PI", "tolerance": 0.02},
+          {"curve": "s3", "x": "t", "y": "20 mm + t / 5", "start": "0 mm", "end": "10 mm", "tolerance": 0.01, "variable_unit": "range"}
+        ]
+      }
+    }
+  ]
+}

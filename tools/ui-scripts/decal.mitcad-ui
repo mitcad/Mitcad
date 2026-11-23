@@ -1,0 +1,142 @@
+# SPDX-License-Identifier: MIT
+# Decals (mitcad#2244; app/COMMANDS.md "Decals") on decal.json: a box
+# (Body1), a rod of radius 10 at (80, 20) (Body2) and a plate standing on
+# the box's top, hidden (Body3). The image ${MITCAD_TEST_WORK}/decal.png
+# is a PNG file of 16 x 8 pixels, its left three quarters opaque red, its
+# right quarter transparent (the wrappers write it). Seen from the
+# isometric corner:
+#   1. Insert › Decal on the box's top, centred at (20, 20), 20 mm wide:
+#      drawn 20 x 10 mm on a plane, listed in the Decals folder; its red
+#      part red in the view, its transparent quarter showing the top.
+#   2. Edited from its row: turned 90 degrees and flipped, the red and the
+#      transparent parts where the turn and the flip put them.
+#   3. A decal on the rod's side, 15 mm wide around it: drawn on a
+#      cylinder in pieces, its red part red on the side.
+#   4. The plate on the box's top shown: the decal under it is hidden.
+#   5. Undo takes the plate's light bulb, the rod's decal and the edit
+#      back, one step each.
+#   6. A decal across the top's edge x = 40 (mitcad#2266), centred on it,
+#      20 mm wide: cut at the edge, its red part red on the top and not
+#      drawn past the edge, where the view shows what it showed before.
+# Run by tools/ui-decal-test.sh (Linux), tools/ui-windows-decal-test.ps1
+# (Windows) and tools/ui-macos-decal-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+capture-undo-depth start
+
+# The top and the rod's side as they are drawn without decals.
+capture-view-point-pixel top 20,28,20
+capture-view-point-pixel side 89.553,17.045,15
+# Just past the top's edge x = 40: the box's side or the background.
+capture-view-point-pixel beside 42,20,20
+
+# 1. A decal on the box's top.
+mark
+command insert.decal
+wait-log '^Command Decal started' 30
+wait-idle
+click-pick 'face F1\.b0/F1:top'
+wait-log '^Decal Face: 1 face' 30
+type-in '^Panel Decal input file at ' '${MITCAD_TEST_WORK}/decal.png'
+type-in '^Panel Decal input x at ' '20'
+type-in '^Panel Decal input y at ' '20'
+type-in '^Panel Decal input width at ' '20'
+wait-idle
+wait-log '^Decal panel decal decal\.png on a plane centre 20\.0+,20\.0+,20\.0+' 30
+mark
+button '^OK$'
+wait-log '^Inserted decal from decal\.png' 60
+wait-log '^Decals drawn: Decal1 20\.0 x 10\.0 mm on a plane 100%$' 30
+wait-idle
+expect-ever '^Browser Root/Decals/Decal1 at '
+expect-undo-depth ${start} 1
+expect-view-point-pixel 16,20,20 nearer '#ff0000' '${top}'
+expect-view-point-pixel 28,20,20 nearer '${top}' '#ff0000'
+screenshot '${MITCAD_TEST_WORK}/decal-top.png'
+
+# 2. Turned a quarter and flipped in its panel: the transparent quarter
+#    now towards -y, the red part towards +y.
+mark
+dblclick-logged '^Browser Root/Decals/Decal1 at '
+wait-log '^Editing decal Decal1 with Decal$' 30
+wait-idle
+type-in '^Panel Decal input angle at ' '90'
+click-logged '^Panel Decal input flip at '
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited decal Decal1' 60
+wait-log '^Decals drawn: Decal1 20\.0 x 10\.0 mm on a plane turned 90 deg flipped 100%$' 30
+wait-idle
+expect-undo-depth ${start} 2
+expect-view-point-pixel 20,28,20 nearer '#ff0000' '${top}'
+expect-view-point-pixel 20,12,20 nearer '${top}' '#ff0000'
+
+# 3. A decal on the rod's side, wrapped around it from its +x side.
+mark
+command insert.decal
+wait-log '^Command Decal started' 30
+wait-idle
+click-pick 'face F2\.b0/F2:side0'
+wait-log '^Decal Face: 1 face' 30
+type-in '^Panel Decal input file at ' '${MITCAD_TEST_WORK}/decal.png'
+type-in '^Panel Decal input x at ' '0'
+type-in '^Panel Decal input y at ' '15'
+type-in '^Panel Decal input width at ' '15'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Inserted decal from decal\.png' 60
+wait-log 'Decal2 15\.0 x 7\.5 mm on a cylinder 100% \([0-9]+ x 1\)$' 30
+wait-idle
+expect-undo-depth ${start} 3
+expect-view-point-pixel 89.553,17.045,15 nearer '#ff0000' '${side}'
+screenshot '${MITCAD_TEST_WORK}/decal-rod.png'
+
+# 4. The plate on the box's top shown: it hides the decal under it.
+mark
+click-logged '^Browser eye Root/Bodies/Body3 at '
+wait-log '^Visibility Root/Bodies/Body3: shown' 30
+wait-idle
+expect-view-point-pixel 20,28,20 nearer '${top}' '#ff0000'
+screenshot '${MITCAD_TEST_WORK}/decal-hidden.png'
+
+# 5. One undo step each.
+mark
+command edit.undo
+wait-idle
+command edit.undo
+wait-idle
+command edit.undo
+wait-idle
+expect-undo-depth ${start} 1
+wait-log '^Decals drawn: Decal1 20\.0 x 10\.0 mm on a plane 100%$' 30
+
+# 6. A decal across the top's edge x = 40: its rectangle from x = 30 to 50,
+#    its red part to x = 45; cut at the edge.
+mark
+command insert.decal
+wait-log '^Command Decal started' 30
+wait-idle
+click-pick 'face F1\.b0/F1:top'
+wait-log '^Decal Face: 1 face' 30
+type-in '^Panel Decal input file at ' '${MITCAD_TEST_WORK}/decal.png'
+type-in '^Panel Decal input x at ' '40'
+type-in '^Panel Decal input y at ' '20'
+type-in '^Panel Decal input width at ' '20'
+wait-idle
+wait-log '^Decal panel decal decal\.png on a plane centre 40\.0+,20\.0+,20\.0+' 30
+mark
+button '^OK$'
+wait-log '^Inserted decal from decal\.png' 60
+wait-log '^Decals drawn: Decal1 20\.0 x 10\.0 mm on a plane 100%, Decal2 20\.0 x 10\.0 mm on a plane 100% cut$' 30
+wait-idle
+expect-undo-depth ${start} 2
+expect-view-point-pixel 35,20,20 nearer '#ff0000' '${top}'
+expect-view-point-pixel 42,20,20 nearer '${beside}' '#ff0000'
+screenshot '${MITCAD_TEST_WORK}/decal-cut.png'
+expect-never 'OCCT view event failed|Recompute failed|TestDriver: FAIL'

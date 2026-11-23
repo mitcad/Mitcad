@@ -785,8 +785,10 @@ void addConvertProjected(CommandRegistry& registry, SketchController& c) {
   registry.add(def);
 }
 
-// Whether the end `point` of the line or arc `own` and an end of another line
-// or arc of the kind are one corner although they are two points (mitcad#1192,
+bool filletCurve(const sketch::CurveData& curve) { return curve.isLine() || curve.isArc() || curve.isConic(); }
+
+// Whether the end `point` of the curve `own` and an end of another fillet
+// curve of the kind are one corner although they are two points (mitcad#1192,
 // as a Trim made them): at the same place (within the model's join gap of
 // 0.01 mm) and held together by a point-to-point coincident, or by a
 // point-on-curve of one end on the other curve. The model merges them first.
@@ -803,7 +805,7 @@ bool heldCorner(const sketch::SketchModel& model, const QString& point, const sk
                        });
   };
   for (const sketch::CurveData& other : model.curves) {
-    if (other.id == own.id || other.construction != own.construction || !(other.isLine() || other.isArc())) {
+    if (other.id == own.id || other.construction != own.construction || !filletCurve(other)) {
       continue;
     }
     for (const QString& end : {other.start, other.end}) {
@@ -819,7 +821,7 @@ bool heldCorner(const sketch::SketchModel& model, const QString& point, const sk
   return false;
 }
 
-// A point of the sketch where exactly two lines or circular arcs of one kind
+// A point of the sketch where exactly two lines, arcs or conics of one kind
 // end (the drawn ones, else the construction ones), or one of them whose end
 // is held to another's (heldCorner): a corner Sketch Fillet rounds
 // (mitcad#867, arcs mitcad#1192; the model's `sketch.fillet` with `points`).
@@ -830,7 +832,7 @@ bool filletCorner(const sketch::SketchModel& model, const QString& point) {
     const sketch::CurveData* ending = nullptr;
     for (const sketch::CurveData& curve : model.curves) {
       if (curve.construction == construction && (curve.start == point || curve.end == point)) {
-        const bool rounds = curve.isLine() || curve.isArc();
+        const bool rounds = filletCurve(curve);
         ++(rounds ? lines : others);
         if (rounds) {
           ending = &curve;
@@ -849,13 +851,13 @@ bool filletCorner(const sketch::SketchModel& model, const QString& point) {
 
 // Sketch Fillet (mitcad#867): two lines, a closed chain of lines (a whole
 // rectangle), lines and corner points, several corners at once with one
-// radius dimension and the arcs Equal; one undo step. Circular arcs as lines
-// (mitcad#1192): a corner where an arc ends together with a line or an arc.
+// radius dimension and the arcs Equal; one undo step. Circular arcs and
+// conics can be rounded where they end with another curve.
 void addFillet(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.fillet", QObject::tr("Sketch Fillet"), "sketch-fillet",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
-  def.tooltip = QObject::tr("Rounds corners of lines and arcs: two curves, a chain or corner points");
+  def.tooltip = QObject::tr("Rounds corners of lines, arcs and conics: two curves, a chain or corner points");
   def.keywords = {QStringLiteral("round corners"), QStringLiteral("rounded rectangle")};
   def.inputs = {
       selectionInput(QStringLiteral("corners"), QObject::tr("Curves or Corners"),
@@ -864,13 +866,13 @@ void addFillet(CommandRegistry& registry, SketchController& c) {
             if (item.owner != c.uid()) {
               return false;
             }
-            if (item.geometry == QStringLiteral("line") || item.geometry == QStringLiteral("arc")) {
+            if (item.geometry == QStringLiteral("line") || item.geometry == QStringLiteral("arc") ||
+                item.geometry == QStringLiteral("conic")) {
               return true;
             }
             return c.model().pointAt(item.name).has_value() && filletCorner(c.model(), item.name);
           })
-          .withTooltip(QObject::tr("Two lines or arcs: their corner; more: every corner where two end together; "
-                                   "a point: its corner")),
+          .withTooltip(QObject::tr("Two curves: their corner; more: each corner where two end; a point: its corner")),
       valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length, QStringLiteral("2")).withStepMinimum(0.0, true),
   };
   def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
@@ -880,7 +882,7 @@ void addFillet(CommandRegistry& registry, SketchController& c) {
       (c.model().pointAt(item.name) ? points : curves).append(item.name);
     }
     if (points.isEmpty() && curves.size() < 2) {
-      return Built::failure(QObject::tr("Pick two lines or arcs, a chain of them or corner points."),
+      return Built::failure(QObject::tr("Pick two lines, arcs or conics, a chain of them or corner points."),
                             QStringLiteral("corners"));
     }
     QJsonObject cmd = base(c, "sketch.fillet");
@@ -947,10 +949,10 @@ void addChamfer(CommandRegistry& registry, SketchController& c) {
 }
 
 // Blend Curve (mitcad#2107): the curves it joins are open lines, arcs,
-// elliptical arcs and splines; a circle, an ellipse or a closed spline has
-// no end it can join.
+// elliptical arcs, splines and conics (mitcad#2236); a circle, an ellipse
+// or a closed spline has no end it can join.
 bool blendable(const sketch::CurveData& curve) {
-  const bool open = curve.isLine() || curve.isArc() || curve.isSpline() ||
+  const bool open = curve.isLine() || curve.isArc() || curve.isSpline() || curve.isConic() ||
                     curve.type == QStringLiteral("elliptical_arc");
   return open && !curve.closed && !curve.start.isEmpty() &&
          !curve.end.isEmpty() && curve.start != curve.end;
@@ -1625,6 +1627,52 @@ void addEditOffset(CommandRegistry& registry, SketchController& c) {
   registry.add(def);
 }
 
+// Edit Rho (mitcad#2236): a conic's Rho, from its right-click menu or a
+// double-click on it.
+void addEditRho(CommandRegistry& registry, SketchController& c) {
+  CommandDef def = sketchCommand("sketch.edit_rho", QObject::tr("Edit Rho"), "conic", CommandDef::Kind::Feature);
+  def.sketchCommand = true;
+  def.tooltip = QObject::tr("The Rho of a conic: 0.5 a parabola, less an ellipse, more a hyperbola");
+  def.keywords = {QStringLiteral("conic rho shoulder")};
+  const auto lookup = [](const sketch::SketchModel& m, const QString& id) -> const sketch::CurveData* {
+    const sketch::CurveData* curve = m.curve(id);
+    return curve != nullptr && curve->isConic() && !curve->reference ? curve : nullptr;
+  };
+  def.inputs = {
+      selectionInput(QStringLiteral("curve"), QObject::tr("Conic"), SelectKind::SketchCurve, 1, 1)
+          .withAccepts(editable(c, lookup)),
+      valueInput(QStringLiteral("rho"), QObject::tr("Rho"), ValueKind::Unitless, QStringLiteral("0.5"))
+          .withTooltip(QObject::tr("Between 0 and 1: a number, a parameter's name or an expression")),
+  };
+  def.init = [&c, lookup](CommandState& s, const CommandContext&) {
+    const Selection& picked = s.items(QStringLiteral("curve"));
+    const sketch::CurveData* conic = picked.isEmpty() ? nullptr : lookup(c.model(), picked.first().name);
+    if (conic != nullptr) {
+      s.setText(QStringLiteral("rho"), conic->rhoExpression.isEmpty() ? QString::number(conic->rho, 'g', 10)
+                                                                      : conic->rhoExpression);
+    }
+  };
+  def.build = [&c, lookup](const CommandState& s, const CommandContext&) -> Built {
+    const Selection& picked = s.items(QStringLiteral("curve"));
+    const sketch::CurveData* conic = picked.isEmpty() ? nullptr : lookup(c.model(), picked.first().name);
+    if (conic == nullptr) {
+      return Built::failure(QObject::tr("Pick a conic."), QStringLiteral("curve"));
+    }
+    QJsonObject cmd = base(c, "sketch.set_rho");
+    cmd.insert(QStringLiteral("curve"), conic->id);
+    cmd.insert(QStringLiteral("rho"), sketch::conicRhoValue(s.expression(QStringLiteral("rho"))));
+    return Built::of(cmd);
+  };
+  // "Edited conic c5: Rho 0.7", for the UI tests.
+  def.describe = [&c, lookup](const CommandState& s, const CommandContext&) {
+    const Selection& picked = s.items(QStringLiteral("curve"));
+    const sketch::CurveData* conic = picked.isEmpty() ? nullptr : lookup(c.model(), picked.first().name);
+    return QStringLiteral("Edited conic %1: Rho %2")
+        .arg(conic != nullptr ? conic->id : QString(), s.expression(QStringLiteral("rho")));
+  };
+  registry.add(def);
+}
+
 // The font families: the bundled one first, then the system's, then the
 // files of Preferences' font folders (mitcad#473) and a file `chosen` now
 // that is in none of them.
@@ -1804,6 +1852,289 @@ void addEditCode(CommandRegistry& registry, SketchController& c) {
     return QStringLiteral("Edited QR code %1: \"%2\", module %3, level %4")
         .arg(picked.isEmpty() ? QString() : picked.first().name, s.text(QStringLiteral("content")),
              number(s.value(QStringLiteral("module"))), s.choice(QStringLiteral("ecc")));
+  };
+  registry.add(def);
+}
+
+// --- Equation curves (mitcad#2237)
+
+// Whether the panel's Mode is `mode`.
+std::function<bool(const CommandState&)> equationModeIs(const char* mode) {
+  return [mode](const CommandState& s) { return s.choice(QStringLiteral("mode")) == QLatin1String(mode); };
+}
+
+// The suffix of the range inputs the panel's Mode and Variable use
+// (mitcad#2264): `_x` for a length range (an explicit curve's, a
+// parametric curve's length t), `_a` for an angle range (a polar
+// curve's, a parametric curve's angle t), `_t` for a parametric curve's
+// plain t.
+QString equationRange(const CommandState& s) {
+  const QString mode = s.choice(QStringLiteral("mode"));
+  const QString unit = s.choice(QStringLiteral("variable_unit"));
+  if (mode == QLatin1String("polar")) {
+    return QStringLiteral("_a");
+  }
+  if (mode == QLatin1String("parametric")) {
+    if (unit == QLatin1String("length")) {
+      return QStringLiteral("_x");
+    }
+    return unit == QLatin1String("angle") ? QStringLiteral("_a") : QStringLiteral("_t");
+  }
+  return QStringLiteral("_x");
+}
+
+// Whether the range inputs of `suffix` are the ones shown.
+std::function<bool(const CommandState&)> equationRangeIs(const char* suffix) {
+  return [suffix](const CommandState& s) { return equationRange(s) == QLatin1String(suffix); };
+}
+
+// The inputs Equation Curve and Edit Equation Curve share: Mode, Variable
+// (what the variable is, mitcad#2264), the mode's formulas (their
+// variable a known name in Edit Formula), the range in the variable's
+// units (a length for an explicit curve's x or a length t, an angle for a
+// polar curve's t or an angle t, else a plain number), Tolerance and
+// Construction.
+QVector<InputDef> equationInputs() {
+  const QVector<QPair<QString, QString>> modes = {
+      {QStringLiteral("explicit"), QObject::tr("Explicit: y(x)")},
+      {QStringLiteral("parametric"), QObject::tr("Parametric: x(t), y(t)")},
+      {QStringLiteral("polar"), QObject::tr("Polar: r(t)")}};
+  const QVector<QPair<QString, QString>> units = {{QStringLiteral("none"), QObject::tr("Plain number")},
+                                                  {QStringLiteral("length"), QObject::tr("Length")},
+                                                  {QStringLiteral("angle"), QObject::tr("Angle")}};
+  const QString unit = QStringLiteral("variable_unit");
+  const QString ofX = QObject::tr("A formula of x (in the length unit) and the parameters, such as x^2 / 20");
+  const QString ofT = QObject::tr("A formula of t and the parameters, such as 10 * cos(t); angles in radians");
+  return {
+      choiceInput(QStringLiteral("mode"), QObject::tr("Mode"), modes, QStringLiteral("explicit"))
+          .withTooltip(QObject::tr("Explicit: y of x; Parametric: x and y of t; Polar: the radius r of the angle t")),
+      choiceInput(unit, QObject::tr("Variable"), units, QStringLiteral("none"))
+          .withTooltip(QObject::tr("What x or t is in the formulas and the range: a plain number, a length or an angle")),
+      textInput(QStringLiteral("y"), QObject::tr("y(x)"), QStringLiteral("x^2/20"))
+          .withFormulaVariable(QStringLiteral("x"), unit)
+          .withVisible(equationModeIs("explicit"))
+          .withTooltip(ofX),
+      textInput(QStringLiteral("xt"), QObject::tr("x(t)"), QStringLiteral("10*cos(t)"))
+          .withFormulaVariable(QStringLiteral("t"), unit)
+          .withVisible(equationModeIs("parametric"))
+          .withTooltip(ofT),
+      textInput(QStringLiteral("yt"), QObject::tr("y(t)"), QStringLiteral("10*sin(t)"))
+          .withFormulaVariable(QStringLiteral("t"), unit)
+          .withVisible(equationModeIs("parametric"))
+          .withTooltip(ofT),
+      textInput(QStringLiteral("r"), QObject::tr("r(t)"), QStringLiteral("2 + t"))
+          .withFormulaVariable(QStringLiteral("t"), unit)
+          .withVisible(equationModeIs("polar"))
+          .withTooltip(QObject::tr("The radius as a formula of the angle t, in radians, and the parameters")),
+      valueInput(QStringLiteral("start_x"), QObject::tr("Start"), ValueKind::Length, QStringLiteral("-10 mm"))
+          .withVisible(equationRangeIs("_x"))
+          .withTooltip(QObject::tr("Where x starts")),
+      valueInput(QStringLiteral("end_x"), QObject::tr("End"), ValueKind::Length, QStringLiteral("10 mm"))
+          .withVisible(equationRangeIs("_x"))
+          .withTooltip(QObject::tr("Where x ends, beyond its start")),
+      valueInput(QStringLiteral("start_t"), QObject::tr("Start"), ValueKind::Unitless, QStringLiteral("0"))
+          .withVisible(equationRangeIs("_t"))
+          .withTooltip(QObject::tr("Where t starts, a plain number")),
+      valueInput(QStringLiteral("end_t"), QObject::tr("End"), ValueKind::Unitless, QStringLiteral("2*PI"))
+          .withVisible(equationRangeIs("_t"))
+          .withTooltip(QObject::tr("Where t ends, beyond its start")),
+      valueInput(QStringLiteral("start_a"), QObject::tr("Start"), ValueKind::Angle, QStringLiteral("0 deg"))
+          .withVisible(equationRangeIs("_a"))
+          .withTooltip(QObject::tr("The angle t starts at")),
+      valueInput(QStringLiteral("end_a"), QObject::tr("End"), ValueKind::Angle, QStringLiteral("720 deg"))
+          .withVisible(equationRangeIs("_a"))
+          .withTooltip(QObject::tr("The angle t ends at, beyond its start")),
+      valueInput(QStringLiteral("tolerance"), QObject::tr("Tolerance"), ValueKind::Length, QStringLiteral("0.01 mm"))
+          .withExactDefault()
+          .withTooltip(QObject::tr("How far the curve may be from its formulas; a smaller tolerance places more "
+                                   "points")),
+      checkInput(QStringLiteral("construction"), QObject::tr("Construction"), false)
+          .withTooltip(QObject::tr("Construction geometry, left out of profiles")),
+  };
+}
+
+// The fields of `sketch.equation_curve` and `sketch.edit_equation_curve`
+// added to `cmd` from the panel, or what the panel still needs.
+Built equationCommand(QJsonObject cmd, const CommandState& s) {
+  const QString mode = s.choice(QStringLiteral("mode"));
+  std::vector<std::pair<QString, QString>> formulas; // input, field
+  const QString range = equationRange(s);            // the range inputs' suffix
+  if (mode == QLatin1String("parametric")) {
+    formulas = {{QStringLiteral("xt"), QStringLiteral("x")}, {QStringLiteral("yt"), QStringLiteral("y")}};
+  } else if (mode == QLatin1String("polar")) {
+    formulas = {{QStringLiteral("r"), QStringLiteral("r")}};
+  } else {
+    formulas = {{QStringLiteral("y"), QStringLiteral("y")}};
+  }
+  cmd.insert(QStringLiteral("mode"), mode.isEmpty() ? QStringLiteral("explicit") : mode);
+  const QString unit = s.choice(QStringLiteral("variable_unit"));
+  cmd.insert(QStringLiteral("variable_unit"), unit.isEmpty() ? QStringLiteral("none") : unit);
+  for (const auto& [input, field] : formulas) {
+    const QString text = s.text(input).trimmed();
+    if (text.isEmpty()) {
+      return Built::failure(QObject::tr("Type the formula %1.").arg(field), input);
+    }
+    cmd.insert(field, text);
+  }
+  const QString start = s.expression(QStringLiteral("start") + range).trimmed();
+  if (start.isEmpty()) {
+    return Built::failure(QObject::tr("Give the start of the range."), QStringLiteral("start") + range);
+  }
+  const QString end = s.expression(QStringLiteral("end") + range).trimmed();
+  if (end.isEmpty()) {
+    return Built::failure(QObject::tr("Give the end of the range."), QStringLiteral("end") + range);
+  }
+  cmd.insert(QStringLiteral("start"), start);
+  cmd.insert(QStringLiteral("end"), end);
+  const double tolerance = s.value(QStringLiteral("tolerance"));
+  if (!(tolerance > 0.0)) {
+    return Built::failure(QObject::tr("The tolerance must be greater than zero."), QStringLiteral("tolerance"));
+  }
+  cmd.insert(QStringLiteral("tolerance"), tolerance);
+  cmd.insert(QStringLiteral("construction"), s.checked(QStringLiteral("construction")));
+  return Built::of(cmd);
+}
+
+// An equation curve as the log shows it, for UI tests: "c12, 10 points from
+// p4 (3.000, 0.000) to p13 (4.207, 5.225), open" (a closed one "from p4
+// (10.000, 0.000), closed").
+QString equationCurveText(const sketch::SketchModel& model, const QString& curve, const QStringList& points,
+                          bool closed) {
+  if (points.isEmpty()) {
+    return QStringLiteral("%1, no points").arg(curve);
+  }
+  if (closed) {
+    return QStringLiteral("%1, %2 points from %3, closed")
+        .arg(curve)
+        .arg(points.size())
+        .arg(pointPositions(model, {points.first()}));
+  }
+  return QStringLiteral("%1, %2 points from %3 to %4, open")
+      .arg(curve)
+      .arg(points.size())
+      .arg(pointPositions(model, {points.first()}), pointPositions(model, {points.last()}));
+}
+
+// What a preview of an equation curve made, for UI tests (the model's
+// answer: its curve, points, closed and deviation).
+std::function<void(const QJsonObject&)> equationPreviewLog(SketchController& c, const QString& name) {
+  return [&c, name](const QJsonObject& answer) {
+    if (answer.isEmpty()) {
+      return;
+    }
+    QStringList points;
+    for (const QJsonValue& p : answer.value(QStringLiteral("points")).toArray()) {
+      points << p.toString();
+    }
+    qDebug().noquote() << QStringLiteral("Preview %1 curve: %2, deviation %3 mm")
+                              .arg(name,
+                                   equationCurveText(c.model(), answer.value(QStringLiteral("curve")).toString(),
+                                                     points, answer.value(QStringLiteral("closed")).toBool()),
+                                   QString::number(answer.value(QStringLiteral("deviation")).toDouble(), 'f', 4));
+  };
+}
+
+// The panel's description of an equation curve: its mode, formulas and
+// range ("parametric x = 10*cos(t), y = 10*sin(t), t from 0 to 2*PI"; a
+// length or angle t "…, t a length from 0 mm to 10 mm", mitcad#2264).
+QString equationDescription(const CommandState& s) {
+  const QString mode = s.choice(QStringLiteral("mode"));
+  const QString range = equationRange(s);
+  const QString unit = s.choice(QStringLiteral("variable_unit"));
+  if (mode == QLatin1String("parametric")) {
+    const QString variable = unit == QLatin1String("length")  ? QStringLiteral("t a length")
+                             : unit == QLatin1String("angle") ? QStringLiteral("t an angle")
+                                                              : QStringLiteral("t");
+    return QStringLiteral("parametric x = %1, y = %2, %3 from %4 to %5")
+        .arg(s.text(QStringLiteral("xt")), s.text(QStringLiteral("yt")), variable,
+             s.expression(QStringLiteral("start") + range), s.expression(QStringLiteral("end") + range));
+  }
+  if (mode == QLatin1String("polar")) {
+    return QStringLiteral("polar r = %1, t from %2 to %3")
+        .arg(s.text(QStringLiteral("r")), s.expression(QStringLiteral("start_a")), s.expression(QStringLiteral("end_a")));
+  }
+  return QStringLiteral("explicit y = %1, x from %2 to %3")
+      .arg(s.text(QStringLiteral("y")), s.expression(QStringLiteral("start_x")), s.expression(QStringLiteral("end_x")));
+}
+
+// Equation Curve (mitcad#2237): a curve given by formulas of the design's
+// parameters, a fit point spline through the points they place, within
+// the tolerance; it follows the parameters (`sketch.equation_curve`).
+void addEquationCurve(CommandRegistry& registry, SketchController& c) {
+  CommandDef def =
+      sketchCommand("sketch.equation_curve", QObject::tr("Equation Curve"), "equation-curve", CommandDef::Kind::Feature);
+  def.sketchCommand = true;
+  def.tooltip = QObject::tr("A curve from formulas of the design's parameters, which it follows");
+  def.keywords = {QStringLiteral("formula"), QStringLiteral("equation"), QStringLiteral("involute"),
+                  QStringLiteral("spiral"), QStringLiteral("parametric"), QStringLiteral("polar"),
+                  QStringLiteral("function")};
+  def.inputs = equationInputs();
+  def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
+    return equationCommand(base(c, "sketch.equation_curve"), s);
+  };
+  def.sketchPreviewShown = equationPreviewLog(c, def.name);
+  def.describe = [](const CommandState& s, const CommandContext&) {
+    return QStringLiteral("Added equation curve, %1").arg(equationDescription(s));
+  };
+  registry.add(def);
+}
+
+// Edit Equation Curve (mitcad#2237): an equation curve's mode, formulas,
+// range, tolerance and construction (`sketch.edit_equation_curve`); a
+// double-click on the curve and its right-click menu open it. Its start
+// point, and an open curve's end point, keep their ids.
+void addEditEquationCurve(CommandRegistry& registry, SketchController& c) {
+  CommandDef def = sketchCommand("sketch.edit_equation_curve", QObject::tr("Edit Equation Curve"), "equation-curve",
+                                 CommandDef::Kind::Feature);
+  def.sketchCommand = true;
+  def.tooltip = QObject::tr("An equation curve's formulas, range and tolerance");
+  const auto lookup = [](const sketch::SketchModel& m, const QString& id) { return m.equationOf(id); };
+  def.inputs = {selectionInput(QStringLiteral("curve"), QObject::tr("Equation Curve"), SelectKind::SketchCurve, 1, 1)
+                    .withAccepts(editable(c, lookup))
+                    .withTooltip(QObject::tr("The equation curve to change"))};
+  for (const InputDef& input : equationInputs()) {
+    def.inputs.push_back(input);
+  }
+  def.init = [&c](CommandState& s, const CommandContext& context) {
+    const Selection& picked = s.items(QStringLiteral("curve"));
+    const sketch::EquationData* e = picked.isEmpty() ? nullptr : c.model().equationOf(picked.first().name);
+    const sketch::CurveData* curve = picked.isEmpty() ? nullptr : c.model().curve(picked.first().name);
+    if (e == nullptr || curve == nullptr) {
+      return;
+    }
+    s.setChoice(QStringLiteral("mode"), e->mode);
+    s.setChoice(QStringLiteral("variable_unit"), e->variableUnit.isEmpty() ? QStringLiteral("none") : e->variableUnit);
+    if (e->mode == QLatin1String("parametric")) {
+      s.setText(QStringLiteral("xt"), e->x);
+      s.setText(QStringLiteral("yt"), e->y);
+    } else if (e->mode == QLatin1String("polar")) {
+      s.setText(QStringLiteral("r"), e->r);
+    } else {
+      s.setText(QStringLiteral("y"), e->y);
+    }
+    const QString range = equationRange(s);
+    s.setText(QStringLiteral("start") + range, e->start);
+    s.setText(QStringLiteral("end") + range, e->end);
+    s.setText(QStringLiteral("tolerance"), QString::number(e->tolerance / context.unitMillimetres(), 'g', 12));
+    s.setChecked(QStringLiteral("construction"), curve->construction);
+    // For UI tests: the curve where the sketch has it now.
+    qDebug().noquote() << QStringLiteral("Edit Equation Curve opened on %1: %2")
+                              .arg(e->mode, equationCurveText(c.model(), curve->id, curve->points, curve->closed));
+  };
+  def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
+    const Selection& picked = s.items(QStringLiteral("curve"));
+    if (picked.isEmpty() || c.model().equationOf(picked.first().name) == nullptr) {
+      return Built::failure(QObject::tr("Pick an equation curve."), QStringLiteral("curve"));
+    }
+    QJsonObject cmd = base(c, "sketch.edit_equation_curve");
+    cmd.insert(QStringLiteral("curve"), picked.first().name);
+    return equationCommand(cmd, s);
+  };
+  def.sketchPreviewShown = equationPreviewLog(c, def.name);
+  def.describe = [](const CommandState& s, const CommandContext&) {
+    const Selection& picked = s.items(QStringLiteral("curve"));
+    return QStringLiteral("Edited equation curve %1, %2")
+        .arg(picked.isEmpty() ? QString() : picked.first().name, equationDescription(s));
   };
   registry.add(def);
 }
@@ -2091,6 +2422,9 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   add({"sketch.ellipse", QObject::tr("Ellipse"), "ellipse",
        [&c] { c.startTool(sketch::ellipseTool(c)); }, none,
        QObject::tr("An ellipse: the center, the end of the major axis, a point on it")});
+  // Conic Curve (mitcad#2236).
+  add({"sketch.conic", QObject::tr("Conic Curve"), "conic", [&c] { c.startTool(sketch::conicTool(c)); }, none,
+       QObject::tr("A conic: its start, its end and the shoulder where its end tangents meet, shaped by Rho")});
   add({"sketch.polygon", QObject::tr("Circumscribed Polygon"), "polygon",
        draw(sketch::polygonTool, "circumscribed"), none,
        QObject::tr("A regular polygon around a circle: the center, then a side's middle")});
@@ -2118,6 +2452,9 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   add({"sketch.spline_control", QObject::tr("Control Point Spline"), "spline-control",
        [&c] { c.startTool(sketch::splineTool(c, true)); }, none,
        QObject::tr("A smooth curve shaped by control points; Enter or a double-click ends it")});
+  // Equation curves (mitcad#2237), after the splines.
+  addEquationCurve(registry, c);
+  addEditEquationCurve(registry, c);
   add({"sketch.text", QObject::tr("Text"), "text", [&c] { c.startTool(sketch::textTool(c)); }, none, QObject::tr("Text: click where it starts, type it and its height")});
   addRectangularPattern(registry, c);
   addCircularPattern(registry, c);
@@ -2162,6 +2499,7 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   addScale(registry, c);
   addEditPattern(registry, c);
   addEditOffset(registry, c);
+  addEditRho(registry, c);
   addEditText(registry, c);
   // QR codes (mitcad#473).
   addQrCode(registry, c);

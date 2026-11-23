@@ -60,9 +60,10 @@ const char* const kProjectsUsage = R"(  mitcad-cli project inspect <folder> [--j
       ~/.ssh/known_hosts; --trust adds them to known_hosts (never a key that
       differs from what the service publishes).
   mitcad-cli project tree <folder> [--json]
-      A project's folders and designs: each design's latest version, edit
-      lock (as the last poll saw it) and whether it changed since; the
-      project's kind and the versions to send and to fetch. No network.
+      A project's folders, designs and other files: each design's latest
+      version, edit lock (as the last poll saw it) and whether it changed
+      since; each other file's size and whether it is recorded and changed;
+      the project's kind and the versions to send and to fetch. No network.
   mitcad-cli project mkdir|new-design <folder> <path> [--author A] [--message M] [--no-push] [--json]
   mitcad-cli project move <folder> <from> <to> [--author A] [--message M] [--no-push] [--json]
   mitcad-cli project delete <folder> <path> [--force] [--author A] [--message M] [--no-push] [--json]
@@ -73,6 +74,19 @@ const char* const kProjectsUsage = R"(  mitcad-cli project inspect <folder> [--j
       Refused, nothing changed: a target that is there, a path outside the
       project or hidden, a design locked by someone else; a delete of
       files the latest version lacks or holds otherwise without --force.
+      Other files (a picture, a PDF) are moved and deleted as designs are.
+  mitcad-cli project add-files <folder> <file>... [--to <folder in it>] [--allow-large]
+                               [--author A] [--message M] [--no-push] [--json]
+      Copies files (from anywhere) into the project, or into a folder of it
+      with --to, recorded as one version; a name that is there is refused
+      and nothing replaced. A file over 100 MiB needs --allow-large:
+      hosting services such as GitHub refuse files that large, and the
+      history keeps every copy for good.
+  mitcad-cli project record <folder> [<path>] [--allow-large] [--author A] [--message M]
+                            [--no-push] [--json]
+      Records the changes other programs made to the project's other files
+      (at a file or folder <path>, else all of them), new and deleted files
+      too, as one version. Designs are recorded when they are saved.
 )";
 
 namespace {
@@ -207,25 +221,38 @@ bool port_of(const std::string& text, std::string& port) {
 }
 
 // A project's folders and designs (mitcad#144): tree, mkdir, new-design,
-// move and delete; paths relative to the project's folder.
+// move and delete; its other files (mitcad#2204): add-files and record;
+// paths relative to the project's folder.
 bool is_folder_command(const std::string& what) {
-  return what == "tree" || what == "mkdir" || what == "new-design" || what == "move" || what == "delete";
+  return what == "tree" || what == "mkdir" || what == "new-design" || what == "move" || what == "delete" ||
+         what == "add-files" || what == "record";
 }
 
 int project_folders(const std::vector<std::string>& args) {
   Parsed a;
   std::string error;
-  if (!parse(args, {"--author", "--message"}, {"--json", "--no-push", "--force"}, a, error)) {
+  if (!parse(args, {"--author", "--message", "--to"}, {"--json", "--no-push", "--force", "--allow-large"}, a,
+             error)) {
     return problem(error);
   }
   const std::string what = a.positional.empty() ? std::string() : a.positional[0];
   const bool json = a.flag("--json");
-  const std::size_t paths = what == "tree" ? 0U : what == "move" ? 2U : 1U;
-  if (a.positional.size() != 2U + paths) {
-    return problem("project " + what + " needs a project's folder" +
-                   (paths == 0U   ? std::string()
-                    : paths == 1U ? std::string(" and a path in it")
-                                  : std::string(", a design or folder in it and its new path")));
+  if (what == "add-files") {
+    if (a.positional.size() < 3U) {
+      return problem("project add-files needs a project's folder and the files to add");
+    }
+  } else if (what == "record") {
+    if (a.positional.size() != 2U && a.positional.size() != 3U) {
+      return problem("project record needs a project's folder and at most one path in it");
+    }
+  } else {
+    const std::size_t paths = what == "tree" ? 0U : what == "move" ? 2U : 1U;
+    if (a.positional.size() != 2U + paths) {
+      return problem("project " + what + " needs a project's folder" +
+                     (paths == 0U   ? std::string()
+                      : paths == 1U ? std::string(" and a path in it")
+                                    : std::string(", a design or folder in it and its new path")));
+    }
   }
   const std::string& folder = a.positional[1];
   if (what == "tree") {
@@ -237,8 +264,28 @@ int project_folders(const std::vector<std::string>& args) {
   if (a.flag("--force") && what != "delete") {
     return problem("--force goes with project delete");
   }
+  if (a.one("--to") != nullptr && what != "add-files") {
+    return problem("--to goes with project add-files");
+  }
+  if (a.flag("--allow-large") && what != "add-files" && what != "record") {
+    return problem("--allow-large goes with project add-files and project record");
+  }
   std::string command;
-  if (what == "mkdir") {
+  if (what == "add-files") {
+    command = R"({"cmd": "add_files", "files": [)";
+    for (std::size_t i = 2; i < a.positional.size(); ++i) {
+      command += (i > 2 ? ", " : "") + json_text(a.positional[i]);
+    }
+    command += "]";
+    if (const std::string* to = a.one("--to")) {
+      command += R"(, "folder": )" + json_text(*to);
+    }
+  } else if (what == "record") {
+    command = R"({"cmd": "record")";
+    if (a.positional.size() == 3U) {
+      command += R"(, "path": )" + json_text(a.positional[2]);
+    }
+  } else if (what == "mkdir") {
     command = R"({"cmd": "create_folder", "path": )" + json_text(a.positional[2]);
   } else if (what == "new-design") {
     command = R"({"cmd": "new_design", "path": )" + json_text(a.positional[2]);
@@ -259,6 +306,9 @@ int project_folders(const std::vector<std::string>& args) {
   }
   if (a.flag("--no-push")) {
     command += R"(, "push": false)";
+  }
+  if (a.flag("--allow-large")) {
+    command += R"(, "allow_large": true)";
   }
   command += "}";
   const rust::Box<mitcad::Project> project = mitcad::open_project(folder);

@@ -154,6 +154,39 @@ pub struct DerivedPartDef<P = ParamId> {
     /// Joinery and rips (mitcad#478): boxes taken away after the ends.
     #[serde(default = "Vec::new", skip_serializing_if = "Vec::is_empty")]
     pub cuts: Vec<PartCut<P>>,
+    /// The ends cut back square by an inward end cap's thickness
+    /// (mitcad#2243): the body stops that much short of z = 0 or L, the
+    /// length and the frames stay.
+    #[serde(default = "CutBack::none", skip_serializing_if = "CutBack::is_none")]
+    pub cut_back: CutBack<P>,
+}
+
+/// How far an end is cut back (mitcad#2243), mm; a missing end is not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CutBack<P = ParamId> {
+    #[serde(default = "no_back", skip_serializing_if = "Option::is_none")]
+    pub a: Option<P>,
+    #[serde(default = "no_back", skip_serializing_if = "Option::is_none")]
+    pub b: Option<P>,
+}
+
+fn no_back<P>() -> Option<P> {
+    None
+}
+
+impl<P> CutBack<P> {
+    pub fn none() -> Self {
+        Self { a: None, b: None }
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.a.is_none() && self.b.is_none()
+    }
+
+    pub fn end(&self, b: bool) -> Option<&P> {
+        if b { self.b.as_ref() } else { self.a.as_ref() }
+    }
 }
 
 /// A box a member's joinery (or a rip) takes away (mitcad#478): from
@@ -232,6 +265,17 @@ impl<P> DerivedPartDef<P> {
                 depth: cut.depth,
             });
         }
+        // An inward end cap's cut back (mitcad#2243), after the cuts.
+        let mut back = |key: &str, value: &Option<P>| -> Result<Option<Q>, E> {
+            value
+                .as_ref()
+                .map(|v| f(&format!("cut_back.{key}"), v))
+                .transpose()
+        };
+        let cut_back = CutBack {
+            a: back("a", &self.cut_back.a)?,
+            b: back("b", &self.cut_back.b)?,
+        };
         Ok(DerivedPartDef {
             source: self.source,
             config: self.config.clone(),
@@ -239,6 +283,7 @@ impl<P> DerivedPartDef<P> {
             ends,
             operation: self.operation,
             cuts,
+            cut_back,
         })
     }
 }
@@ -278,6 +323,13 @@ impl FeatureInfo for DerivedPartDef {
                     "the {} cut's size must be greater than zero",
                     cut.kind
                 ));
+            }
+        }
+        for (key, back) in [("a", self.cut_back.a), ("b", self.cut_back.b)] {
+            if let Some(id) = back
+                && (value(id).is_nan() || value(id) < 0.0)
+            {
+                return Err(format!("end {key}'s cut back must be zero or more"));
             }
         }
         Ok(())
@@ -499,6 +551,90 @@ pub(crate) fn end_faces<K: Kernel>(
     out
 }
 
+/// A BUILD miter is linked when its angle is the edge frame's reference
+/// parameter. An angle owned by Ends (including one typed as the same
+/// number) keeps the hand-set tilt.
+fn shared_mitre_tilt<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    mounts: &BTreeMap<String, Transform>,
+    angle: ParamId,
+    end: bool,
+) -> Option<Tilt> {
+    use super::bound_length::InComponent;
+    use super::edge_frame::{MeetSide, START, mitre_axes};
+    use super::geom_ref::GeomRef;
+    use mitcad_vec3::dot;
+
+    let frame = ctx.env.params.owner(angle)?;
+    let frame_entry = ctx.env.feature(frame)?;
+    let FeatureDef::EdgeFrame(def) = &frame_entry.def else {
+        return None;
+    };
+    let (measured, meet) = if end {
+        (def.end_angle, def.end_meets.as_ref())
+    } else {
+        (def.start_angle, def.start_meets.as_ref())
+    };
+    let meet = meet.filter(|m| m.to == MeetSide::Corner && measured == Some(angle))?;
+    let member = ctx
+        .env
+        .assembly
+        .component(ctx.component())?
+        .build
+        .as_ref()?;
+    let FeatureDef::Joint(placement) = &ctx.env.feature(member.joint?)?.def else {
+        return None;
+    };
+    if !matches!(&placement.b.geometry, GeomRef::Mount { feature, name } if *feature == frame && name == START)
+    {
+        return None;
+    }
+    let GeomRef::Mount { feature, name } = &placement.a.geometry else {
+        return None;
+    };
+    if *feature != ctx.uid {
+        return None;
+    }
+    let mut mount = *mounts.get(name)?;
+    if let Some(override_a) = &placement.a.frame_override {
+        mount = crate::joints::apply_override(&mount, override_a).ok()?;
+    }
+    let turn = placement
+        .angle
+        .map(|id| ctx.param(id))
+        .transpose()
+        .ok()?
+        .unwrap_or(0.0);
+    // Track the frame's output and its inputs even when the angle has the
+    // same value on opposite sides of the line.
+    let edge_frame = ctx.mount(frame, START).ok()?;
+    let component =
+        crate::joints::path_component(ctx.env.assembly, frame_entry.component, &def.occurrence.0)
+            .ok()?;
+    let mut resolver = InComponent { ctx, component };
+    let (line, _, into) = mitre_axes(&mut resolver, &def.edge, def.reversed, end, meet).ok()?;
+    let along = if def.reversed { -1.0 } else { 1.0 };
+    let lean = [
+        dot(into, line.x) * along,
+        dot(into, line.n),
+        dot(into, line.z) * along,
+    ];
+    let lean = match &placement.b.frame_override {
+        Some(override_b)
+            if override_b.x_axis.is_some()
+                || override_b.z_axis.is_some()
+                || override_b.relative.is_some() =>
+        {
+            let joint_frame = crate::joints::apply_override(&edge_frame, override_b).ok()?;
+            crate::assembly::inverse(&joint_frame).apply_vector(edge_frame.apply_vector(lean))
+        }
+        _ => lean,
+    };
+    let relative = crate::joints::alignment(turn, 0.0, placement.flip);
+    let local = mount.apply_vector(crate::assembly::inverse(&relative).apply_vector(lean));
+    Tilt::towards(local)
+}
+
 impl<K: Kernel> Evaluate<K> for DerivedPartDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let source = ctx.source(self.source)?;
@@ -527,7 +663,6 @@ impl<K: Kernel> Evaluate<K> for DerivedPartDef {
             values.push((name.clone(), value));
         }
         let mut angles = [0.0; 2];
-        let mut tilts = [Tilt::X; 2];
         for (i, (key, cut)) in [("a", &self.ends.a), ("b", &self.ends.b)]
             .into_iter()
             .enumerate()
@@ -535,10 +670,31 @@ impl<K: Kernel> Evaluate<K> for DerivedPartDef {
             if let Some(cut) = cut {
                 angles[i] = ctx.param(cut.angle)?;
                 check_angle(key, angles[i])?;
-                tilts[i] = cut.tilt.unwrap_or_default();
             }
         }
         let angled = angles.map(|a| a > 1e-12);
+        // An inward end cap's cut back (mitcad#2243).
+        let mut backs = [0.0; 2];
+        for (i, back) in [self.cut_back.a, self.cut_back.b].into_iter().enumerate() {
+            if let Some(id) = back {
+                backs[i] = ctx.param(id)?;
+                if backs[i].is_nan() || backs[i] < 0.0 {
+                    return Err(format!(
+                        "end {}'s cut back must be zero or more",
+                        if i == 1 { "b" } else { "a" }
+                    ));
+                }
+            }
+        }
+        let backed = backs.map(|b| b > 1e-12);
+        if (backed[0] || backed[1]) && length_name.is_none() {
+            return Err(format!(
+                "{} is not cut to length: its ends cannot be cut back",
+                source.label()
+            ));
+        }
+        // The ends cut by a plane of their own rather than named as they are.
+        let cut = [angled[0] || backed[0], angled[1] || backed[1]];
         if (angled[0] || angled[1]) && length_name.is_none() {
             return Err(format!(
                 "{} is not cut to length: its ends cannot be cut",
@@ -581,6 +737,12 @@ impl<K: Kernel> Evaluate<K> for DerivedPartDef {
         };
         let kernel = ctx.kernel;
         let at_length = evaluate_source(kernel, &state).map_err(|e| format!("{label}: {e}"))?;
+        let tilts = [false, true].map(|end| {
+            self.ends.end(end).map(|cut| {
+                shared_mitre_tilt(ctx, &at_length.mounts, cut.angle, end)
+                    .unwrap_or_else(|| cut.tilt.unwrap_or_default())
+            })
+        });
         let bodies = at_length.bodies;
         // The section's bounds, where the angled ends' long sides are; the
         // cuts take away material only, the body stays within its length.
@@ -599,7 +761,7 @@ impl<K: Kernel> Evaluate<K> for DerivedPartDef {
             let mut renames = Vec::new();
             if let Some(length) = length {
                 for (b, z) in [(false, 0.0), (true, length)] {
-                    if !angled[usize::from(b)] {
+                    if !cut[usize::from(b)] {
                         for face in end_faces(kernel, body, z, b) {
                             renames.push((face, end_name(b)));
                         }
@@ -612,12 +774,27 @@ impl<K: Kernel> Evaluate<K> for DerivedPartDef {
             if let Some(length) = length {
                 for b in [false, true] {
                     let end = usize::from(b);
-                    if !angled[end] {
+                    if !cut[end] {
                         continue;
                     }
-                    let plane = end_plane(section.as_ref(), b, length, angles[end], tilts[end])
-                        .ok_or("the cut has no normal")?;
-                    shape = cut_end(ctx, &shape, b, length, plane)?;
+                    let (mut point, normal) = if angled[end] {
+                        end_plane(
+                            section.as_ref(),
+                            b,
+                            length,
+                            angles[end],
+                            tilts[end].unwrap_or_default(),
+                        )
+                        .ok_or("the cut has no normal")?
+                    } else {
+                        (
+                            [0.0, 0.0, if b { length } else { 0.0 }],
+                            [0.0, 0.0, if b { 1.0 } else { -1.0 }],
+                        )
+                    };
+                    // Cut back (mitcad#2243): the plane moved in along the axis.
+                    point[2] += if b { -backs[end] } else { backs[end] };
+                    shape = cut_end(ctx, &shape, b, length, (point, normal))?;
                 }
             }
             // Joinery and rips (mitcad#478).
@@ -639,6 +816,7 @@ impl<K: Kernel> Evaluate<K> for DerivedPartDef {
         Ok(FeatureOutput {
             changes,
             mounts: at_length.mounts,
+            end_tilts: tilts,
             ..FeatureOutput::default()
         })
     }

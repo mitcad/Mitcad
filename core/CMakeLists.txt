@@ -157,7 +157,9 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # Flex drape: a Flex item let hang (mitcad#1713).
   kernel/flex_drape.rs
   # Surface groups of faces for model_render's edges (mitcad#2148).
-  kernel/surface_groups.rs)
+  kernel/surface_groups.rs
+  # Point Cloud Deviation: closest points on a body's faces (mitcad#2240).
+  kernel/point_clouds.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -378,6 +380,10 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/surface_groups.cpp
   cpp/bridge/surface_groups.hpp)
+# Point Cloud Deviation: closest points on a body's faces (mitcad#2240).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/point_clouds.cpp
+  cpp/bridge/point_clouds.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.
@@ -399,6 +405,18 @@ if(BUILD_TESTING)
   target_link_libraries(test_bridge PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_analysis
                                             mitcad_warnings)
   add_test(NAME core.bridge COMMAND test_bridge)
+
+  # The import's analysis queries as operations: a crash inside OCCT is the
+  # query's error, not the end of the import process (mitcad#2294).
+  add_executable(test_analysis_crash tests/test_analysis_crash.cpp)
+  target_link_libraries(test_analysis_crash PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_analysis
+                                                    mitcad_warnings)
+  add_test(NAME core.analysis_crash_boundary_distances COMMAND test_analysis_crash boundary-distances)
+  set_tests_properties(core.analysis_crash_boundary_distances PROPERTIES
+    ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=boundary distances" TIMEOUT 120)
+  add_test(NAME core.analysis_crash_points_inside COMMAND test_analysis_crash points-inside)
+  set_tests_properties(core.analysis_crash_points_inside PROPERTIES
+    ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=points inside" TIMEOUT 120)
 
   # .f3d body import: Rust reads and converts, C++ builds with OCCT. The
   # corpus run reads MITCAD_F3D_CORPUS (default ~/f3d-corpus) and is skipped

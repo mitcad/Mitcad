@@ -19,8 +19,17 @@ expect-ever 'View area'
 wait-idle
 command view.fit
 wait-idle 30
-# The browser's Bodies and Construction folders open collapsed here: open
-# them, and wait for their rows' places.
+# The browser opens folded or expanded as its height takes the rows
+# (folded on the Linux and Windows test screens; a taller one takes them
+# all, and a click on the Bodies arrow would fold it): folded by Collapse
+# All, then its Bodies and Construction folders opened, and their rows'
+# places waited for.
+expect-ever '^Browser opened (folded|expanded): ' 30
+expect-ever '^Browser Root at ' 30
+mark
+context-menu-logged '^Browser Root at ' 'Collapse All'
+wait-log '^Browser collapsed all$' 10
+wait-idle
 mark
 click-logged '^Browser arrow Root/Bodies at '
 wait-log '^Browser Root/Bodies/Body5 at ' 30

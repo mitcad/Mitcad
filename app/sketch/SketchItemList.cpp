@@ -205,6 +205,9 @@ QString curveKind(const CurveData& curve) {
   if (curve.type == QStringLiteral("spline")) {
     return SketchItemList::tr("Control Point Spline");
   }
+  if (curve.isConic()) {
+    return SketchItemList::tr("Conic");
+  }
   return SketchItemList::tr("Curve");
 }
 
@@ -223,6 +226,9 @@ QString curveIcon(const CurveData& curve) {
   }
   if (curve.type == QStringLiteral("spline")) {
     return QStringLiteral("spline-control");
+  }
+  if (curve.isConic()) {
+    return QStringLiteral("conic");
   }
   return QStringLiteral("spline-fit");
 }
@@ -598,6 +604,12 @@ void SketchItemList::describeStep(const QString& kind, Cell& cell) const {
       {"edit_block", "edit-block", tr("Edit Block")},
       // Explode Text (mitcad#2163).
       {"explode_text", "explode-text", tr("Explode Text")},
+      // Conic Curve and its Rho (mitcad#2236).
+      {"conic", "conic", tr("Conic Curve")},
+      {"set_rho", "conic", tr("Rho")},
+      // Equation curves (mitcad#2237).
+      {"equation_curve", "equation-curve", tr("Equation Curve")},
+      {"edit_equation_curve", "equation-curve", tr("Edit Equation Curve")},
   };
   cell.name = tr("Sketch Step");
   cell.icon = QStringLiteral("sketch");

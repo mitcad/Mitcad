@@ -162,7 +162,7 @@ public:
   // (mitcad#1805): the joint as it moves inside it, for it alone; empty:
   // the joint's own.
   virtual void animateJoint(const QString& uid, const QString& occurrence) = 0;
-  // Animate in the Joint and Assembly Constraint panels (mitcad#1790): the
+  // Animate in the Joint and Constraint Set panels (mitcad#1790): the
   // panel's feature previewed with `motion` at one value after another,
   // back and forth between `low` and `high` from `start`, without end and
   // without changing anything, until Esc, the panel's Animate again, an
@@ -291,6 +291,8 @@ public:
   // its own, from the Browser's Sketch Blocks.
   virtual void editSketchBlock(const QString& /*name*/) {}
   virtual void calibrateImageReference(const QString& /*name*/) {}
+  // Decals (mitcad#2244): one opened in the Decal panel.
+  virtual void editDecal(const QString& /*name*/) {}
 
   // Comments for AI agents (mitcad#1119): asks for the text of a comment
   // on `target` (the `add_comment` command's: {"feature"}, {"body",
@@ -329,6 +331,10 @@ public:
   // in Edit Form; a cage that does not map is refused in words.
   virtual bool hasKeptCage(const QString& /*body*/) const { return false; }
   virtual void openKeptCage(const QString& /*body*/) {}
+
+  // Point clouds (mitcad#2240, MainWindowPointClouds.cpp): one moved in
+  // Move Point Cloud's panel, from the Browser's Point Clouds.
+  virtual void movePointCloud(const QString& /*name*/) {}
 };
 
 } // namespace mitcad

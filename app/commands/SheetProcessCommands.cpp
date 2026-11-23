@@ -4,6 +4,8 @@
 // profile's command filter and the commands of laser sheet and board.
 #include "SheetProcess.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <exception>
 #include <functional>
 
@@ -76,6 +78,31 @@ QJsonValue expr(const CommandState& state, const char* id) { return state.expres
 // command's panel edits (Flat Pack, Standard Box).
 InputDef editedInput() {
   return textInput(QStringLiteral("edited"), QString()).withVisible([](const CommandState&) { return false; });
+}
+
+// Standard Box's styles (core/model-api/src/sheet_process.rs, BoxStyle): a
+// folder (FEFCO 04) has locking tabs and a lid with a tuck or a front flap;
+// the reverse tuck end carton has tucks too (mitcad#2269).
+bool folderStyle(const QString& style) { return style.startsWith(QStringLiteral("fefco_04")); }
+
+bool tuckStyle(const QString& style) { return folderStyle(style) || style == QStringLiteral("ecma_a20"); }
+
+// A folder's locking tabs on each turned over wall when Tabs is empty, as
+// the model takes them (BoxStyle::tabs).
+int styleTabs(const QString& style) {
+  if (style == QStringLiteral("fefco_0426")) {
+    return 3;
+  }
+  if (style == QStringLiteral("fefco_0470") || style == QStringLiteral("fefco_0471")) {
+    return 1;
+  }
+  return 2;
+}
+
+// Whether an Auto value field (InputDef::autoText) is left empty: the
+// model's default then.
+bool leftEmpty(const CommandState& state, const QString& key) {
+  return state.text(key).trimmed().isEmpty() || !std::isfinite(state.value(key));
 }
 
 } // namespace
@@ -432,7 +459,9 @@ CommandDef standardBoxCommand(const CommandContext& context) {
   def.icon = QStringLiteral("sheet-face");
   def.tooltip = QObject::tr("A standard box style of board: its blank, creases and folds");
   def.keywords = {QStringLiteral("fefco"), QStringLiteral("ecma"), QStringLiteral("carton"), QStringLiteral("0201"),
-                  QStringLiteral("tuck end"), QStringLiteral("packaging")};
+                  QStringLiteral("tuck end"), QStringLiteral("packaging"), QStringLiteral("0203"), QStringLiteral("0206"),
+                  QStringLiteral("full overlap"), QStringLiteral("0421"), QStringLiteral("0426"), QStringLiteral("0427"),
+                  QStringLiteral("0470"), QStringLiteral("0471"), QStringLiteral("folder"), QStringLiteral("mailer")};
   def.modelCommand = true;
   // A standard box's rules open here (mitcad#1939): OK changes its
   // options, and its blank, creases, Face and Folds follow.
@@ -440,11 +469,20 @@ CommandDef standardBoxCommand(const CommandContext& context) {
   def.canEdit = [](const QJsonObject& rules) { return rules.contains(QStringLiteral("standard_box")); };
   const auto custom = [](const CommandState& s) { return s.choice(QStringLiteral("board")) == QStringLiteral("custom"); };
   const auto adding = [](const CommandState& s) { return s.text(QStringLiteral("edited")).isEmpty(); };
+  const auto isFolder = [](const CommandState& s) { return folderStyle(s.choice(QStringLiteral("style"))); };
+  const auto hasTuck = [](const CommandState& s) { return tuckStyle(s.choice(QStringLiteral("style"))); };
   def.inputs = {
       editedInput(),
       choiceInput(QStringLiteral("style"), QObject::tr("Style"),
                   {{QStringLiteral("fefco_0201"), QStringLiteral("FEFCO 0201 Slotted Box")},
-                   {QStringLiteral("ecma_a20"), QStringLiteral("ECMA A20 Reverse Tuck End")}},
+                   {QStringLiteral("ecma_a20"), QStringLiteral("ECMA A20 Reverse Tuck End")},
+                   {QStringLiteral("fefco_0203"), QStringLiteral("FEFCO 0203 Full Overlap Slotted Box")},
+                   {QStringLiteral("fefco_0206"), QStringLiteral("FEFCO 0206 Full Overlap Sides, Meeting Ends")},
+                   {QStringLiteral("fefco_0421"), QStringLiteral("FEFCO 0421 Folder with Tuck Lid")},
+                   {QStringLiteral("fefco_0426"), QStringLiteral("FEFCO 0426 Folder with Double Front Wall")},
+                   {QStringLiteral("fefco_0427"), QStringLiteral("FEFCO 0427 Folder with Lid Ears")},
+                   {QStringLiteral("fefco_0470"), QStringLiteral("FEFCO 0470 Folder, Ends on the Back Wall")},
+                   {QStringLiteral("fefco_0471"), QStringLiteral("FEFCO 0471 Folder, Ends on the Back, Front Flap")}},
                   QStringLiteral("fefco_0201")),
       valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("300 mm"))
           .withStepMinimum(0.0, true)
@@ -471,8 +509,24 @@ CommandDef standardBoxCommand(const CommandContext& context) {
       valueInput(QStringLiteral("deduction"), QObject::tr("Crease Deduction"), ValueKind::Length, QStringLiteral("4 mm"))
           .withTooltip(QObject::tr("The measured deduction of a 90° crease of this board"))
           .withVisible(custom),
+      // A folder (FEFCO 04) has no glue flap (mitcad#2226).
       valueInput(QStringLiteral("glue_flap"), QObject::tr("Glue Flap"), ValueKind::Length, QStringLiteral("30 mm"))
-          .withStepMinimum(0.0, true),
+          .withStepMinimum(0.0, true)
+          .withVisible([isFolder](const CommandState& s) { return !isFolder(s); }),
+      // A tuck end's tuck and a folder's lid and tabs (mitcad#2269): empty
+      // leaves the style's.
+      valueInput(QStringLiteral("tuck"), QObject::tr("Tuck"), ValueKind::Length, QString())
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("How deep the tuck or front flap reaches down from the lid; empty: the style's"))
+          .withAuto([](const CommandState&, const CommandContext&) { return QString(); })
+          .withVisible(hasTuck),
+      valueInput(QStringLiteral("tabs"), QObject::tr("Tabs"), ValueKind::Unitless, QString())
+          .withStepMinimum(0)
+          .withTooltip(QObject::tr("The locking tabs on each turned over wall; empty: the style's"))
+          .withAuto([](const CommandState& s, const CommandContext&) {
+            return QString::number(styleTabs(s.choice(QStringLiteral("style"))));
+          })
+          .withVisible(isFolder),
       checkInput(QStringLiteral("folded"), QObject::tr("Folded"), true)
           .withTooltip(QObject::tr("Off: the flat blank with its creases"))
           .withVisible(adding),
@@ -493,6 +547,33 @@ CommandDef standardBoxCommand(const CommandContext& context) {
     }
     for (const char* key : {"length", "width", "height", "glue_flap"}) {
       command.insert(QString::fromLatin1(key), state.value(QString::fromLatin1(key)));
+    }
+    // Tuck and Tabs (mitcad#2269): for the styles that have them; empty
+    // leaves the style's (an edit takes a value given before away: null).
+    const QString style = state.choice(QStringLiteral("style"));
+    if (tuckStyle(style)) {
+      const QString key = QStringLiteral("tuck");
+      if (!leftEmpty(state, key)) {
+        if (state.value(key) <= 0.0) {
+          return Built::failure(QObject::tr("The tuck must be deeper than 0."), key);
+        }
+        command.insert(key, state.value(key));
+      } else if (!edited.isEmpty()) {
+        command.insert(key, QJsonValue::Null);
+      }
+    }
+    if (folderStyle(style)) {
+      const QString key = QStringLiteral("tabs");
+      if (!leftEmpty(state, key)) {
+        const double tabs = state.value(key);
+        // The model says how many the blank takes (at most 12).
+        if (tabs < 0.0 || std::abs(tabs - std::round(tabs)) > 1e-9) {
+          return Built::failure(QObject::tr("Tabs must be a whole number, 0 or more."), key);
+        }
+        command.insert(key, static_cast<qint64>(std::llround(std::min(tabs, 1e9))));
+      } else if (!edited.isEmpty()) {
+        command.insert(key, QJsonValue::Null);
+      }
     }
     const QString board = state.choice(QStringLiteral("board"));
     if (board == QStringLiteral("custom")) {
@@ -524,12 +605,39 @@ CommandDef standardBoxCommand(const CommandContext& context) {
         loadValue(state, QString::fromLatin1(key), value, rules, context);
       }
     }
+    // Tuck and Tabs as given, empty (the style's) when the box has none.
+    const QJsonValue tuck = box.value(QStringLiteral("tuck"));
+    if (tuck.isDouble()) {
+      loadValue(state, QStringLiteral("tuck"), tuck, rules, context);
+    } else {
+      state.setText(QStringLiteral("tuck"), QString());
+    }
+    const QJsonValue tabs = box.value(QStringLiteral("tabs"));
+    if (tabs.isDouble()) {
+      loadCount(state, QStringLiteral("tabs"), tabs, rules, context);
+    } else {
+      state.setText(QStringLiteral("tabs"), QString());
+    }
   };
   def.describe = [](const CommandState& state, const CommandContext&) {
-    return QStringLiteral("%1 %2, %3 x %4 x %5")
-        .arg(state.text(QStringLiteral("edited")).isEmpty() ? QStringLiteral("Standard box") : QStringLiteral("Edited standard box"))
-        .arg(state.choice(QStringLiteral("style")), state.text(QStringLiteral("length")),
-             state.text(QStringLiteral("width")), state.text(QStringLiteral("height")));
+    const QString style = state.choice(QStringLiteral("style"));
+    QString line = QStringLiteral("%1 %2, %3 x %4 x %5")
+                       .arg(state.text(QStringLiteral("edited")).isEmpty() ? QStringLiteral("Standard box")
+                                                                           : QStringLiteral("Edited standard box"))
+                       .arg(style, state.text(QStringLiteral("length")), state.text(QStringLiteral("width")),
+                            state.text(QStringLiteral("height")));
+    // Tuck and Tabs as sent (mitcad#2269): mm, or the style's.
+    if (tuckStyle(style)) {
+      line += leftEmpty(state, QStringLiteral("tuck"))
+                  ? QStringLiteral(", tuck by the style")
+                  : QStringLiteral(", tuck %1 mm").arg(state.value(QStringLiteral("tuck")));
+    }
+    if (folderStyle(style)) {
+      line += leftEmpty(state, QStringLiteral("tabs"))
+                  ? QStringLiteral(", tabs by the style")
+                  : QStringLiteral(", tabs %1").arg(std::llround(state.value(QStringLiteral("tabs"))));
+    }
+    return line;
   };
   // Offered for every profile: it makes its own board rules.
   (void)context;

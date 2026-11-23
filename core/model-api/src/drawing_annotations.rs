@@ -1783,6 +1783,24 @@ pub(super) trait DrawingAnnotationsOps<K: Kernel> {
     /// shape version.
     fn body_geometry(&self, body: BodyUid) -> Result<Arc<BodyGeometry>, String>;
 
+    /// [`DrawingAnnotationsOps::body_geometry`] of what a view shows of a
+    /// body: on a Flat Pattern view the developed solid's (mitcad#2280),
+    /// kept by what the blank is made of; its curved faces' silhouettes
+    /// are not looked for (the blank has none).
+    fn shown_geometry(&self, s: &Shown) -> Result<Arc<BodyGeometry>, String>;
+
+    /// A shape's geometry as [`DrawingAnnotationsOps::body_geometry`]
+    /// gives it, kept by `key` (for `body`'s entry `own` of the cache);
+    /// its curved faces with `curved`.
+    fn geometry_kept(
+        &self,
+        shape: &K::Shape,
+        body: BodyUid,
+        own: u128,
+        key: u128,
+        curved: bool,
+    ) -> Result<Arc<BodyGeometry>, String>;
+
     /// The bodies a view looks square at a planar face of (mitcad#718):
     /// their lengths in that face's plane are true, so a view along a
     /// given direction straight at an inclined face is drawn and
@@ -1939,6 +1957,30 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let own = fp.finish();
         fp.u128(self.body_version(body).unwrap_or(0));
         let key = fp.finish();
+        self.geometry_kept(shape, body, own, key, true)
+    }
+
+    fn shown_geometry(&self, s: &Shown) -> Result<Arc<BodyGeometry>, String> {
+        if !s.flat {
+            return self.body_geometry(s.body);
+        }
+        let shape = self.shown_shape(s)?;
+        let mut fp = Fingerprint::new("drawing-flat-geometry-v1");
+        fp.str(&s.body.to_string());
+        let own = fp.finish();
+        fp.u128(self.shown_version(s));
+        let key = fp.finish();
+        self.geometry_kept(&shape, s.body, own, key, false)
+    }
+
+    fn geometry_kept(
+        &self,
+        shape: &K::Shape,
+        body: BodyUid,
+        own: u128,
+        key: u128,
+        curved: bool,
+    ) -> Result<Arc<BodyGeometry>, String> {
         if let Some(geometry) = self.drawing_cache().geometry(key) {
             return Ok(geometry);
         }
@@ -1966,13 +2008,15 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                     };
                     // The curved faces that are no cylinders, whose
                     // silhouettes are picked (mitcad#1909).
-                    if matches!(
-                        surface,
-                        SurfaceGeometry::Cone { .. }
-                            | SurfaceGeometry::Sphere { .. }
-                            | SurfaceGeometry::Torus { .. }
-                            | SurfaceGeometry::Other { .. }
-                    ) {
+                    if curved
+                        && matches!(
+                            surface,
+                            SurfaceGeometry::Cone { .. }
+                                | SurfaceGeometry::Sphere { .. }
+                                | SurfaceGeometry::Torus { .. }
+                                | SurfaceGeometry::Other { .. }
+                        )
+                    {
                         geometry.curved.push(CurvedFace {
                             face: face.clone(),
                             names: names.clone(),
@@ -2043,19 +2087,23 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         shown: &[Shown],
         spec: &ViewSpec,
     ) -> Vec<(BodyUid, Vec<OccurrenceUid>)> {
-        if !angled(spec) || !sheet.along_a_given_direction(id) {
+        // A Flat Pattern view looks along its pattern's frame, given or
+        // not (mitcad#2280).
+        if !angled(spec) || !(sheet.along_a_given_direction(id) || shown.iter().any(|s| s.flat)) {
             return Vec::new();
         }
         shown
             .iter()
             .filter(|s| {
-                self.body_geometry(s.body).is_ok_and(|geometry| {
-                    geometry.planes.iter().any(|plane| {
-                        mitcad_vec3::unit(s.transform.apply_vector(plane.normal)).is_some_and(|n| {
-                            mitcad_vec3::dot(n, spec.toward_eye).abs() > 1.0 - 1e-9
+                // A Flat Pattern's blank is seen square on (mitcad#2280).
+                s.flat
+                    || self.body_geometry(s.body).is_ok_and(|geometry| {
+                        geometry.planes.iter().any(|plane| {
+                            mitcad_vec3::unit(s.transform.apply_vector(plane.normal)).is_some_and(
+                                |n| mitcad_vec3::dot(n, spec.toward_eye).abs() > 1.0 - 1e-9,
+                            )
                         })
                     })
-                })
             })
             .map(|s| (s.body, s.path.clone()))
             .collect()
@@ -2063,7 +2111,8 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
 
     fn body_in_view(&self, view: &ViewAt<'_>, s: &Shown) -> Result<Arc<BodyInView>, String> {
         let placed = view.placed;
-        let version = self.body_version(s.body).unwrap_or(0);
+        // A Flat Pattern's blank by what it is made of (mitcad#2280).
+        let version = self.shown_version(s);
         let mut fp = Fingerprint::new("drawing-body-in-view-v1");
         fp.u128(super::drawings::view_key(
             "drawing-body-in-view-v1",
@@ -3040,6 +3089,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                     out.groups.extend(self.automatic_marks(v));
                 }
                 if view.retrieved_dimensions
+                    && !v.shown.iter().any(|s| s.flat)
                     && drawing.component.is_root()
                     && v.placed.role != ViewRole::Pictorial
                     && !v.pictorial
@@ -3059,6 +3109,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                     }
                 }
                 if view.model_annotations
+                    && !v.shown.iter().any(|s| s.flat)
                     && drawing.component.is_root()
                     && v.placed.role != ViewRole::Pictorial
                     && !v.pictorial
@@ -3696,6 +3747,7 @@ fn kept_pick<K: Kernel>(
         side: None,
         outline: None,
         extreme: None,
+        bend: None,
     };
     if let Some(edge) = &pick.edge {
         let whole = ViewPick {
@@ -4086,7 +4138,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         let mut ends = Vec::new();
         let mut outlines = Vec::new();
         for s in &view.shown {
-            let Ok(geometry) = self.body_geometry(s.body) else {
+            let Ok(geometry) = self.shown_geometry(s) else {
                 continue;
             };
             let occurrence = (!s.path.is_empty()).then(|| OccurrencePath(s.path.clone()));
@@ -4102,6 +4154,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 side: None,
                 outline: None,
                 extreme: None,
+                bend: None,
             };
             for (edge, curve) in &geometry.edges {
                 let curve = placed_curve(curve, &s.transform);
@@ -4133,6 +4186,27 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     if let Ok(found) = seen_edge(view, &curve, *point) {
                         out.push(Candidate {
                             pick: pick(Some(edge), None, *point),
+                            found,
+                            line: None,
+                        });
+                    }
+                }
+            }
+            // A Flat Pattern's bend lines (mitcad#2280): each whole and by
+            // its ends, as a straight edge is.
+            for line in self.bend_lines(s).unwrap_or_default() {
+                let bend = mitcad_model_drawing::annotate::BendLinePick {
+                    bend: line.bend,
+                    piece: line.piece,
+                };
+                for point in [None, Some(PickPoint::Start), Some(PickPoint::End)] {
+                    let picked = ViewPick {
+                        bend: Some(bend),
+                        ..pick(None, None, point)
+                    };
+                    if let Ok(found) = self.resolve_found(view, &picked) {
+                        out.push(Candidate {
+                            pick: picked,
                             found,
                             line: None,
                         });
@@ -4667,7 +4741,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         let (Some(face), Some(point)) = (&pick.face, pick.outline) else {
             return Err("an outline is a pick of a curved face with a point of it".to_owned());
         };
-        let geometry = self.body_geometry(s.body)?;
+        let geometry = self.shown_geometry(s)?;
         let curved = silhouettes::curved_face(&geometry, face).ok_or_else(gone)?;
         let spec = &view.placed.spec;
         let toward =
@@ -4691,9 +4765,10 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         let eye = spec.toward_eye;
         let mut best: Option<(f64, Candidate)> = None;
         for s in &view.shown {
-            let Some(shape) = self.body_shape(s.body) else {
+            let Ok(owned) = self.shown_shape(s) else {
                 continue;
             };
+            let shape = &owned;
             // The kernel's planar faces as they are now (a click inside a
             // face is rarer than one on an edge: not worth a cache).
             let Ok(surfaces) = self.kernel().face_geometries(shape) else {
@@ -4764,6 +4839,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                             side: None,
                             outline: None,
                             extreme: None,
+                            bend: None,
                         },
                         found: Found {
                             seen: Seen::Point(spec.project(at)),
@@ -4784,7 +4860,8 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             .shown
             .iter()
             .find(|s| s.body == pick.body && s.path.as_slice() == pick.path())?;
-        let shape = self.body_shape(s.body)?;
+        let owned = self.shown_shape(s).ok()?;
+        let shape = &owned;
         let SurfaceGeometry::Plane { origin, normal } =
             self.kernel().face_geometry(shape, face).ok()?
         else {
@@ -4830,10 +4907,44 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     .map_or(String::new(), |p| format!(" in {p}"));
                 format!("the view does not show the body {}{at}", pick.body)
             })?;
-        let shape = self
-            .body_shape(s.body)
-            .ok_or_else(|| format!("the body {} is gone", s.body))?;
         let spec = &view.placed.spec;
+        // A Flat Pattern's bend line (mitcad#2280): where its bend lies
+        // now, or a point of it.
+        if let Some(bend) = pick.bend {
+            let line = self
+                .bend_lines(s)?
+                .into_iter()
+                .find(|l| l.bend == bend.bend && l.piece == bend.piece)
+                .ok_or_else(|| {
+                    format!(
+                        "the bend line it was picked on is gone from the Flat Pattern of {}",
+                        s.name
+                    )
+                })?;
+            let (a, b) = (spec.project(line.start), spec.project(line.end));
+            let middle = line.middle();
+            return Ok(match pick.point {
+                Some(PickPoint::Start) => Found {
+                    seen: Seen::Point(a),
+                    at: line.start,
+                },
+                Some(PickPoint::End) => Found {
+                    seen: Seen::Point(b),
+                    at: line.end,
+                },
+                Some(PickPoint::Center) => Found {
+                    seen: Seen::Point(spec.project(middle)),
+                    at: middle,
+                },
+                None => Found {
+                    seen: Seen::Line(a, b),
+                    at: middle,
+                },
+            });
+        }
+        // A Flat Pattern's developed solid on its view (mitcad#2280).
+        let owned = self.shown_shape(s)?;
+        let shape = &owned;
         // An extreme point (mitcad#1909): of what the rest of the pick
         // names as the view sees it now, the point furthest along its
         // direction.
@@ -4922,7 +5033,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 at,
             });
         }
-        let geometry = self.body_geometry(s.body)?;
+        let geometry = self.shown_geometry(s)?;
         let found = match surface {
             SurfaceGeometry::Cylinder {
                 origin,
@@ -5088,11 +5199,13 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             1 => {
                 let pick = kept[0].clone();
                 let first = seen[0].seen;
-                // A straight edge, or a piece of a section's cut line
-                // (mitcad#1361).
-                let has_length = (pick.edge.is_some() || pick.on_cut.is_some())
-                    && pick.point.is_none()
-                    && pick.drawn.is_none();
+                // A straight edge, a piece of a section's cut line
+                // (mitcad#1361) or a Flat Pattern's bend line
+                // (mitcad#2280).
+                let has_length =
+                    (pick.edge.is_some() || pick.on_cut.is_some() || pick.bend.is_some())
+                        && pick.point.is_none()
+                        && pick.drawn.is_none();
                 match first {
                     // A centre pattern's circle (mitcad#1693): its
                     // diameter, the bolt circle's, on an arc too.
@@ -5657,7 +5770,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         let mut circles: Vec<(P2, f64)> = Vec::new();
         let mut axes: Vec<(P2, P2)> = Vec::new();
         for s in &view.shown {
-            let Ok(geometry) = self.body_geometry(s.body) else {
+            let Ok(geometry) = self.shown_geometry(s) else {
                 continue;
             };
             for (_, curve) in &geometry.edges {

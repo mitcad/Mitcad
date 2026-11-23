@@ -530,6 +530,9 @@ struct LiveServer::State {
     // now, before the request reads them.
     client.session->set_mcp_comment_policy(
         QSettings().value(QStringLiteral("ai/agentsMayResolveComments"), false).toBool());
+    // Whether agents may use the print libraries (mitcad#2224): off, their
+    // calls are refused in words naming the preference.
+    client.session->set_mcp_print_library_policy(agentsMayUsePrintLibraries());
     // Clicks, keys and dialogs for viewing (mitcad#1735): only in a run
     // started with --mcp-folder, and never for the chat's own connection.
     client.session->set_mcp_input_tools(runAgentFoldersGiven() && client.chat.isEmpty());

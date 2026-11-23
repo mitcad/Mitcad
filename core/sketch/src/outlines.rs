@@ -13,7 +13,9 @@
 //! (the face's leftover region about the drawn shapes, mitcad#1226) are
 //! not part of it, and their holes do not count. When curves cross so (two
 //! overlapping circles), the sketch has none: which of the areas are meant
-//! is not clear, so they are picked.
+//! is not clear, so they are picked. On a face sketch only the own curves
+//! cross: the face's edges and the outline projected when the sketch was
+//! made never do (mitcad#2233, [`super::regions::own_area_regions`]).
 
 use super::geometry::{P2, polygon_contains};
 use super::regions::{Layout, Region};

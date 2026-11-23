@@ -413,6 +413,13 @@ QJsonObject FormulaEditor::help(int position, int end) const {
                     {QStringLiteral("kind"),formulaKindName(m_options.kind)}};
   if (end >= 0) query.insert(QStringLiteral("selection_end"),int(text.left(end).toUtf8().size()));
   if (m_canLimit) query.insert(QStringLiteral("parameter"),m_options.own);
+  // An equation curve's variable (mitcad#2237).
+  if (!m_options.variable.isEmpty()) query.insert(QStringLiteral("variable"), m_options.variable);
+  // A variable with a unit (mitcad#2264).
+  if (!m_options.variable.isEmpty() && !m_options.variableUnit.isEmpty() &&
+      m_options.variableUnit != QLatin1String("none")) {
+    query.insert(QStringLiteral("variable_unit"), m_options.variableUnit);
+  }
   return m_source.query(query);
 }
 
@@ -454,10 +461,15 @@ void FormulaEditor::updateTokens() {
   const QString text = m_expression->toPlainText();
   if (m_source.query && !text.trimmed().isEmpty()) {
     try {
-      const QJsonObject answer = m_source.query({{QStringLiteral("query"), QStringLiteral("formula_help")},
-                                                 {QStringLiteral("expression"), text},
-                                                 {QStringLiteral("kind"), formulaKindName(m_options.kind)},
-                                                 {QStringLiteral("tokens_only"), true}});
+      QJsonObject tokens{{QStringLiteral("query"), QStringLiteral("formula_help")},
+                         {QStringLiteral("expression"), text},
+                         {QStringLiteral("kind"), formulaKindName(m_options.kind)},
+                         {QStringLiteral("tokens_only"), true}};
+      // An equation curve's variable is a known name (mitcad#2237).
+      if (!m_options.variable.isEmpty()) {
+        tokens.insert(QStringLiteral("variable"), m_options.variable);
+      }
+      const QJsonObject answer = m_source.query(tokens);
       const std::vector<int> at = utf16Positions(text);
       const auto position = [&at](int byte) {
         return at[static_cast<std::size_t>(std::clamp(byte, 0, static_cast<int>(at.size()) - 1))];

@@ -1408,6 +1408,11 @@ target_sources(mitcad PRIVATE
 # The edit panel of a derived part: a BUILD part, or a component inserted
 # with options (mitcad#1812, app/COMMANDS.md "Derived Component").
 target_sources(mitcad PRIVATE commands/DerivedPartCommands.cpp)
+# BUILD's End Cap: plates closing profiles' and tubes' ends (mitcad#2243,
+# app/COMMANDS.md "End Cap").
+target_sources(mitcad PRIVATE
+  commands/BuildEndCapCommand.cpp
+  commands/BuildEndCapCommand.hpp)
 # The part picker's data (mitcad#418, app/library): the user's favourite
 # parts and groups in the settings, the picker's order, the library parts
 # the design uses (the model's `library_usage` query) and the groups' tree
@@ -2292,7 +2297,9 @@ target_sources(mitcad PRIVATE framework/LengthUnits.cpp framework/LengthUnits.hp
 target_sources(mitcad PRIVATE WindowManager.cpp WindowManager.hpp DocumentFrame.cpp DocumentFrame.hpp ViewerVisibility.cpp
                framework/TestDriverDocuments.cpp)
 if(BUILD_TESTING)
-  target_sources(test_app PRIVATE files/Autosave.cpp framework/AppSettings.cpp)
+  # Autosave's destructor marks the shutdown's steps (mitcad#2275).
+  target_sources(test_app PRIVATE files/Autosave.cpp framework/AppSettings.cpp framework/ShutdownSteps.cpp
+                 framework/ShutdownSteps.hpp)
 endif()
 
 # Insert another open document through the shared saved-design insertion workflow (mitcad#1172).
@@ -2664,7 +2671,7 @@ target_sources(mitcad PRIVATE framework/CommandDockWidth.cpp framework/CommandDo
 # the Browser's Delete and Delete Component share the build_remove command
 # list, which leaves a fastener to its connector when both go.
 target_sources(mitcad PRIVATE browser/BuildMembers.cpp browser/BuildMembers.hpp)
-# Joint, As-Built Joint, Rigid Group and Assembly Constraint on picks under
+# Joint, As-Built Joint, Rigid Group and Constraint Set on picks under
 # another component than the active one (mitcad#1856, app/COMMANDS.md "The
 # component that holds the picks"): the question that offers the component
 # holding every pick, its preference, and the main window's side.
@@ -2699,6 +2706,12 @@ target_sources(mitcad PRIVATE
   framework/HangWatchdog.hpp
   framework/SessionLog.cpp
   framework/SessionLog.hpp)
+
+# The shutdown's steps in the session log, timed by the hang marker
+# (mitcad#2275, GitHub mitcad/Mitcad#573); the web browser module reaches
+# them through the header-only ShutdownModuleStep.hpp.
+target_sources(mitcad PRIVATE framework/ShutdownSteps.cpp framework/ShutdownSteps.hpp
+               framework/ShutdownModuleStep.hpp)
 
 # The busy mark beside a command panel's OK and Cancel while its preview
 # computes (mitcad#1907, GitHub mitcad/Mitcad#361), in place of a message
@@ -2893,3 +2906,67 @@ target_sources(mitcad PRIVATE files/NewDesignSave.cpp files/NewDesignSave.hpp)
 # Parameter's field and Edit Parameters' Expression cells show the model's
 # words and mark the unknown name in the field.
 target_sources(mitcad PRIVATE framework/ExpressionCheck.hpp)
+
+# Cell Grid in the SOLID tab's CREATE group (mitcad#2238): sketch profiles
+# filled with cells and cut from bodies.
+target_sources(mitcad PRIVATE commands/CellGridCommands.cpp)
+
+# Scripts and macros (mitcad#2245, app/COMMANDS.md "Macros and scripts"):
+# File › Export Timeline as Script…, Tools › Macro's recorder (the commands
+# DocumentSession notes), Save Macro… and Run Script…; the recorder's rules
+# are read by the unit test macro_recorder.
+target_sources(mitcad PRIVATE framework/MacroRecorder.cpp framework/MacroRecorder.hpp files/MainWindowScripts.cpp)
+
+# Favorite Parameters (mitcad#2203, GitHub mitcad/Mitcad#547, app/COMMANDS.md
+# "Favorite Parameters"): the starred parameters' rows (read by the unit test
+# favorite_parameter_rows), the card's content with its fields and sliders,
+# and the main window's card, dock and MANAGE toggle.
+target_sources(mitcad PRIVATE
+  browser/FavoriteParameterRows.cpp
+  browser/FavoriteParameterRows.hpp
+  browser/FavoriteParametersCard.cpp
+  browser/FavoriteParametersCard.hpp
+  browser/MainWindowFavoriteParameters.cpp)
+
+# Cancel Sketch, and every sketch edit as one undo step at Finish Sketch
+# (mitcad#2225).
+target_sources(mitcad PRIVATE MainWindowSketchCancel.cpp)
+
+# Point clouds and Point Cloud Deviation (mitcad#2240, app/COMMANDS.md
+# "Point Clouds", "Point Cloud Deviation"): Insert > Point Cloud and Move
+# Point Cloud, the clouds drawn in the view, and the analysis' definition,
+# query and words with its coloured points over the bodies.
+target_sources(mitcad PRIVATE MainWindowPointClouds.cpp view/PointClouds.cpp view/PointClouds.hpp
+                              view/PointCloudView.cpp commands/PointCloudDeviation.cpp
+                              commands/PointCloudDeviation.hpp)
+
+# Decals (mitcad#2244, app/COMMANDS.md "Decals"): Insert › Decal's panel,
+# the decals drawn on their faces in the view, and the meshes and
+# materials the renderer draws them with.
+target_sources(mitcad PRIVATE
+  MainWindowDecals.cpp
+  render/RenderDecals.cpp
+  render/RenderDecals.hpp
+  view/DecalView.cpp
+  view/Decals.cpp
+  view/Decals.hpp)
+
+# Work that arrives while a command is open (mitcad#2281,
+# docs/ui-conventions.md): a Component from Web download or files dropped on
+# the window, at once beside an inspection, else waiting until the open
+# command closes.
+target_sources(mitcad PRIVATE files/MainWindowArrivals.cpp)
+
+# Move/Copy of a component picked inside a sub-assembly (mitcad#2302,
+# app/COMMANDS.md "Move/Copy"): the component the move works in and the
+# occurrence whose placement is its frame.
+target_sources(mitcad PRIVATE commands/MoveTarget.cpp commands/MoveTarget.hpp)
+
+# The graphics check at start on Linux (mitcad#2292, GitHub mitcad/Mitcad#586,
+# framework/GraphicsStart.hpp): the window's OpenGL context and surface
+# checked before any window, a lower format where the driver refuses the
+# viewport's, and a start again on X11 with GLX where none works, so that
+# the window and its panels draw instead of a black window.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND OpenCASCADE_WITH_EGL)
+  target_sources(mitcad PRIVATE framework/GraphicsStart.cpp framework/GraphicsStart.hpp)
+endif()

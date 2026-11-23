@@ -56,20 +56,21 @@ $menus = [ordered]@{
     ' | - | Joinery > [Dogbone | Mortise and Tenon]' +
     ' | - | Material | Appearance'
   'SOLID/ASSEMBLE' = ('New Component' +
-    ' | - | Joint | As-Built Joint | Joint Origin | Rigid Group | Assembly Constraint' +
+    ' | - | Joint | As-Built Joint | Joint Origin | Rigid Group | Constraint | Constraint Set' +
     ' | - | Drive Joint | Motion Link | Contact Set | - | Let It Hang | - | Animate Joint | Motion Study...').Replace('...', $e)
   'SOLID/CONSTRUCT' = $construct
-  'SOLID/INSPECT' = 'Measure | Interference | Section Analysis | Print Analysis | Draft Analysis | Physical Properties | Center of Mass | Add Comment'
+  'SOLID/INSPECT' = 'Measure | Interference | Section Analysis | Print Analysis | Draft Analysis | Point Cloud Deviation | Physical Properties | Center of Mass | Add Comment'
   'SOLID/INSERT' = ('Insert Component | Insert from Library' +
     ' | - | Insert Mesh | Insert DXF | Insert SVG | Insert Points | From an Open Design... | Component from Web... | Import...' +
-    ' | Image Reference').Replace('...', $e)
+    ' | Image Reference | Point Cloud | Decal').Replace('...', $e)
   'SURFACE/CREATE' = 'Create Sketch | - | Surface Extrude | Surface Revolve | Surface Sweep | Surface Loft | Surface Helix' +
     ' | - | Patch | Ruled Surface | Boundary Surface | Blend Surface | - | Offset Surface'
   'SURFACE/MODIFY' = 'Trim | Untrim | Extend | - | Stitch | Unstitch | Reverse Normal | - | Match Surface | Fair Surface' +
     ' | - | Thicken | Boundary Fill'
   'SURFACE/CONSTRUCT' = $construct
   'SHEET METAL/CREATE' = 'Create Sketch | - | Face | Flange | Hem | Convert to Sheet Metal | - | Bend | Fold'
-  'SHEET METAL/MODIFY' = ('Sheet Cut | Perforate | - | Corner Relief | Corner Round | Corner Chamfer | - | Unfold | Refold | Flat Pattern | Show Flat Pattern' +
+  'SHEET METAL/MODIFY' = ('Sheet Cut | Perforate | - | Corner Relief | Corner Round | Corner Chamfer' +
+    ' | - | Unfold | Refold | Flat Pattern | Show Flat Pattern' +
     ' | - | Export Flat Pattern... | Export Bend Table...').Replace('...', $e)
   'SHEET METAL/RULES' = $rules
   'MANAGE/MATERIALS' = 'Edit Materials... | Edit Appearances...'.Replace('...', $e)
@@ -79,7 +80,7 @@ $menus = [ordered]@{
 # The groups' own buttons, in the menus' order.
 $buttons = [ordered]@{
   'SOLID/MODIFY' = 'solid.press_pull, solid.fillet, solid.chamfer, solid.shell'
-  'SOLID/ASSEMBLE' = 'solid.new_component, assemble.joint, assemble.constraint'
+  'SOLID/ASSEMBLE' = 'solid.new_component, assemble.joint, assemble.constraint_one'
   'SOLID/CONSTRUCT' = 'construct.offset_plane, construct.plane_angle, construct.midplane'
   'SOLID/INSPECT' = 'inspect.measure, inspect.section'
   'SOLID/INSERT' = 'insert.component, insert.mesh, insert.dxf'
@@ -89,7 +90,7 @@ $buttons = [ordered]@{
   'SHEET METAL/CREATE' = 'sketch.create, sheet.face, sheet.flange, sheet.bend'
   'SHEET METAL/MODIFY' = 'sheet.unfold, sheet.flat_pattern'
   'SHEET METAL/RULES' = 'sheet.rules'
-  'MANAGE/PARAMETERS' = 'solid.parameters'
+  'MANAGE/PARAMETERS' = 'solid.parameters, manage.favorite_parameters'
   'MANAGE/CONFIGURATIONS' = 'solid.configurations'
   'MANAGE/MATERIALS' = 'solid.materials, solid.appearances'
   'MANAGE/RULES' = 'sheet.rules, manage.plastic_rules'

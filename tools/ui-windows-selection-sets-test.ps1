@@ -6,7 +6,9 @@
 # makes (tools/ui-scripts/selection-sets.json): a body, a used sketch and a
 # feature into a new set, renamed in place; the set's row selects them;
 # Find in Timeline and Find in Browser from member rows; Remove from Set,
-# Delete and Undo; the saved design checked with selection-sets-check.json.
+# the Delete key on a member row (the link goes, the body stays,
+# mitcad#2219), Delete and Undo; the saved design checked with
+# selection-sets-check.json.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-selection-sets-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(

@@ -1,0 +1,167 @@
+# SPDX-License-Identifier: MIT
+# Constraint, one assembly constraint at a time (mitcad#2293,
+# app/COMMANDS.md "Constraint"), on constraint-apply.json (Base:1 grounded
+# with a 40 x 20 x 10 box F1.b0 at the origin and a hole of diameter 6
+# through it at (30, 10); Block:1 with a 10 x 10 x 10 box F3.b0 placed at
+# (60, 40, 30); Pin:1 with a cylinder of diameter 6 and height 20 F4.b0
+# placed at (100, 0, 0)):
+#   1. Type Align, Block's top face onto Base's top face, Orientation Same
+#      Way, Offset 5 mm: the preview puts Block's top 5 mm over Base's,
+#      at (60, 40, 5).
+#   2. Apply adds Constraint1 (one undo step, on the timeline) and keeps
+#      the panel open, cleared for the next one with Type still Align.
+#   3. Type Insert, the pin's top rim into the hole's top rim (facing):
+#      the preview stands the pin turned over on the hole; OK adds
+#      Constraint2 and closes the panel: two constraint features, two
+#      undo steps.
+#   4. Constraint1 edited from the timeline opens the Constraint panel
+#      (one row, no limits), without Apply; Offset 8 mm raises Block;
+#      OK edits it.
+#   5. Undo takes the edit back, then Constraint2, then Constraint1, one
+#      at a time.
+# Run by tools/ui-constraint-apply-test.sh (Linux),
+# tools/ui-windows-constraint-apply-test.ps1 (Windows) and
+# tools/ui-macos-constraint-apply-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+expect-shown-body F3.b0 O2 1000 60 40 30 70 50 40
+capture-undo-depth start
+
+# 1. An align with an offset.
+mark
+command assemble.constraint_one
+expect-log '^Command Constraint started'
+wait-log '^Pick places:' 20
+# Keep the requested geometry clear of the command card at this window size.
+command view.fit
+wait-idle
+expect-log '^Panel Constraint Apply at '
+qt-choice input_type 'Align'
+wait-log '^Constraint: Type = Align'
+click-pick 'face F3[.]b0/F3:top'
+wait-log '^Constraint Geometry 1: 1 face'
+wait-log '^View ghosts: O2 [(]1 body[)]'
+wait-idle
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Constraint Geometry 2: 1 face'
+wait-log '^Preview Constraint: ok' 30
+wait-log '^Preview Constraint moves O2'
+wait-idle
+mark
+qt-choice input_orientation 'Same Way'
+wait-log '^Constraint: Orientation = Same Way'
+wait-log '^Preview Constraint: ok' 30
+wait-idle
+mark
+type-in '^Panel Constraint input offset at ' '5 mm'
+wait-log '^Preview bodies: .*F3[.]b0 in O2 at 60,40,5' 30
+wait-idle
+expect-shown-body F3.b0 O2 1000 60 40 5 70 50 15
+
+# 2. Apply: Constraint1 added, the panel open for the next one.
+mark
+button '^Apply$'
+wait-log '^Panel Constraint Apply clicked'
+wait-log '^Added constraint Constraint1: align placed, moved O2' 30
+wait-log '^Applied Constraint [(]1[)]$' 30
+wait-log '^Timeline Constraint1 at ' 30
+wait-idle
+expect-undo-depth ${start} 1
+expect-no-log '^Command Constraint cancelled|^Done Constraint'
+expect-choice-text type '^Align$'
+expect-input-text offset '^0 mm$'
+expect-shown-body F3.b0 O2 1000 60 40 5 70 50 15
+
+# 3. An insert, OK: Constraint2 added, the panel closed.
+mark
+qt-choice input_type 'Insert'
+wait-log '^Constraint: Type = Insert'
+click-pick 'edge F4[.]b0/E[{](?:F4:top[|]F4:side0|F4:side0[|]F4:top)[}] at '
+wait-log '^Constraint Geometry 1: 1 edge'
+wait-log '^View ghosts: O3 [(]1 body[)]'
+wait-idle
+click-pick 'edge F1[.]b0/E[{](?:F1:top[|]F2:side0|F2:side0[|]F1:top)[}] at '
+wait-log '^Constraint Geometry 2: 1 edge'
+wait-log '^Preview Constraint: ok' 30
+wait-log '^Preview Constraint moves O3'
+wait-idle
+capture-shown-body pin F4.b0 O3
+expect-near ${pin_volume} 565.4867 0 0.01
+expect-near ${pin_min_x} 27 0 0.01
+expect-near ${pin_min_y} 7 0 0.01
+expect-near ${pin_min_z} 10 0 0.01
+expect-near ${pin_max_z} 30 0 0.01
+mark
+button '^OK$'
+wait-log '^Added constraint Constraint2: insert placed, moved O3' 30
+wait-log '^Timeline Constraint2 at ' 30
+wait-idle
+expect-undo-depth ${start} 2
+expect-shown-body F3.b0 O2 1000 60 40 5 70 50 15
+capture-shown-body pin F4.b0 O3
+expect-near ${pin_volume} 565.4867 0 0.01
+expect-near ${pin_min_x} 27 0 0.01
+expect-near ${pin_min_y} 7 0 0.01
+expect-near ${pin_min_z} 10 0 0.01
+expect-near ${pin_max_z} 30 0 0.01
+
+# 4. Constraint1 edited: the Constraint panel, without Apply.
+mark
+dblclick-logged '^Timeline Constraint1 at '
+wait-log '^Editing F5 with Constraint$' 30
+wait-log '^Preview Constraint: ok' 60
+wait-idle 30
+expect-no-log '^Panel Constraint Apply at '
+expect-choice-text orientation '^Same Way$'
+mark
+type-in '^Panel Constraint input offset at ' '8 mm'
+wait-log '^Preview Constraint: ok' 60
+wait-idle 30
+expect-shown-body F3.b0 O2 1000 60 40 8 70 50 18
+mark
+button '^OK$'
+wait-log '^Edited F5' 60
+wait-idle 30
+expect-undo-depth ${start} 3
+expect-shown-body F3.b0 O2 1000 60 40 8 70 50 18
+capture-shown-body pin F4.b0 O3
+expect-near ${pin_volume} 565.4867 0 0.01
+expect-near ${pin_min_x} 27 0 0.01
+expect-near ${pin_min_y} 7 0 0.01
+expect-near ${pin_min_z} 10 0 0.01
+expect-near ${pin_max_z} 30 0 0.01
+
+# 5. Undo: the edit, then Constraint2, then Constraint1.
+command edit.undo
+wait-idle 30
+expect-undo-depth ${start} 2
+expect-shown-body F3.b0 O2 1000 60 40 5 70 50 15
+capture-shown-body pin F4.b0 O3
+expect-near ${pin_volume} 565.4867 0 0.01
+expect-near ${pin_min_x} 27 0 0.01
+expect-near ${pin_min_y} 7 0 0.01
+expect-near ${pin_min_z} 10 0 0.01
+expect-near ${pin_max_z} 30 0 0.01
+command edit.undo
+wait-idle 30
+expect-undo-depth ${start} 1
+expect-shown-body F3.b0 O2 1000 60 40 5 70 50 15
+capture-shown-body pin F4.b0 O3
+expect-near ${pin_volume} 565.4867 0 0.01
+expect-near ${pin_min_x} 97 0 0.01
+expect-near ${pin_min_y} -3 0 0.01
+expect-near ${pin_min_z} 0 0 0.01
+expect-near ${pin_max_z} 20 0 0.01
+command edit.undo
+wait-idle 30
+expect-undo-depth ${start} 0
+expect-shown-body F3.b0 O2 1000 60 40 30 70 50 40
+capture-shown-body pin F4.b0 O3
+expect-near ${pin_volume} 565.4867 0 0.01
+expect-near ${pin_min_x} 97 0 0.01
+expect-near ${pin_min_y} -3 0 0.01
+expect-near ${pin_min_z} 0 0 0.01
+expect-near ${pin_max_z} 20 0 0.01
+expect-never 'Recompute failed|TestDriver: FAIL'

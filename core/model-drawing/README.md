@@ -10,7 +10,7 @@ them out.
 
 | Module | What it does |
 |---|---|
-| `compose` | The layout of a sheet: views in their places, their marks, the automatic annotations, the frame and the title block |
+| `compose` | The layout of a sheet: views in their places, their marks, the automatic annotations, the frame and the title block; a Flat Pattern view's bend lines in their two thin pens and its bend notes (mitcad#2280) |
 | `clip` | Detail views and breaks cut in the view's plane |
 | `convention` | Drawing conventions on the projected lines (mitcad#1112): fillets and chamfers smaller than the pen as sharp corners, tangent and short edges that would blot left out, threads drawn by ISO 6410 |
 | `annotate` | Annotations on views laid out from their picks |

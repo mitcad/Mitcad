@@ -38,6 +38,13 @@ QJsonArray setMembersOf(const Selection& items);
 // among them (selecting a feature's row selects its bodies' rows too).
 QJsonArray setMembersOf(const QVector<BrowserNode>& nodes);
 
+// Delete on selection set member rows (mitcad#2219): their links go, as
+// Remove from Set, never their items. One `set_selection_set_members`
+// command per set, in the order of the rows (`{"cmd":
+// "set_selection_set_members", "name": "Favourites", "remove": [members]}`);
+// the rows of no set give none.
+QJsonArray setMemberRemovals(const QVector<BrowserNode>& nodes);
+
 // A member as a short text for the log ("body F2.b0", "feature F5 in O1",
 // "occurrence O1/O4").
 QString setMemberText(const QJsonObject& member);

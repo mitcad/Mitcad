@@ -99,6 +99,68 @@ void HangWatchdog::stop() {
   m_thread = nullptr;
 }
 
+void HangWatchdog::watchShutdown() {
+  if (m_thread == nullptr) {
+    return;
+  }
+  // The loop's timer ticks no more; its last beat must not read as a hang.
+  if (m_timer != nullptr) {
+    m_timer->stop();
+  }
+  const std::lock_guard<std::mutex> lock(m_mutex);
+  if (!m_shutdown) {
+    m_shutdown = true;
+    m_reported = false;
+  }
+}
+
+void HangWatchdog::timeStep(const QString& step, int limitMs) {
+  if (m_thread == nullptr) {
+    return;
+  }
+  // The first step: the event loop has ended.
+  watchShutdown();
+  QString finished;
+  {
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    const qint64 now = steadyMs();
+    if (m_stepReported) {
+      finished = QStringLiteral("Shutdown step finished after %1 s: %2")
+                     .arg((now - m_stepSince) / 1000.0, 0, 'f', 1)
+                     .arg(quoted(m_step));
+    }
+    m_step = step;
+    m_stepSince = now;
+    m_stepLimit = limitMs > 0 ? limitMs : m_threshold;
+    m_stepReported = false;
+    m_stepNextReport = 0;
+  }
+  if (!finished.isEmpty()) {
+    qInfo().noquote() << finished;
+  }
+}
+
+QString HangWatchdog::checkStep() {
+  if (m_step.isEmpty()) {
+    return QString();
+  }
+  const qint64 running = steadyMs() - m_stepSince;
+  if (running < m_stepLimit) {
+    return QString();
+  }
+  const QString seconds = QString::number(running / 1000.0, 'f', 1);
+  if (!m_stepReported) {
+    m_stepReported = true;
+    m_stepNextReport = running + kRepeatMs;
+    return QStringLiteral("Shutdown step not finished after %1 s: %2").arg(seconds, quoted(m_step));
+  }
+  if (running >= m_stepNextReport) {
+    m_stepNextReport += kRepeatMs;
+    return QStringLiteral("Shutdown step still not finished after %1 s: %2").arg(seconds, quoted(m_step));
+  }
+  return QString();
+}
+
 void HangWatchdog::noteActivity(const QString& activity) {
   const std::lock_guard<std::mutex> lock(g_activityMutex);
   g_activity = activity;
@@ -125,7 +187,18 @@ void HangWatchdog::watch() {
   std::unique_lock<std::mutex> lock(m_mutex);
   while (!m_stopping) {
     m_wake.wait_for(lock, interval);
-    if (m_stopping || m_lastBeat == 0) {
+    if (m_stopping) {
+      continue;
+    }
+    if (m_shutdown) {
+      const QString warning = checkStep();
+      if (!warning.isEmpty()) {
+        // Under the lock: the UI thread's "finished" line comes after it.
+        qWarning().noquote() << warning;
+      }
+      continue;
+    }
+    if (m_lastBeat == 0) {
       continue;
     }
     const qint64 hung = steadyMs() - m_lastBeat;

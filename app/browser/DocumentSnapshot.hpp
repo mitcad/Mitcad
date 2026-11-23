@@ -264,6 +264,15 @@ struct DocumentSnapshot {
   // members: each with its kind, reference, occurrence path, live name,
   // feature type, `exists` and `active`), in the order they were added.
   QJsonArray selectionSets;
+  // Point clouds (mitcad#2240): the `point_clouds` query's clouds (name,
+  // visible, occurrence, placement, file, count, bounds), in the order
+  // they were inserted.
+  QJsonArray pointClouds;
+  // Decals (mitcad#2244): the `decals` query's entries (settings, pixels,
+  // digest, and the face's kind, corners and grid at the marker or why
+  // the face is not there), and one by name (an empty object when none).
+  QJsonArray decals;
+  QJsonObject decal(const QString& name) const;
   // CAM (mitcad#1013): the `cam_setups` query's setups (each with its
   // operations and their states, its work frame) and the design's
   // machines; empty when the design has none. A setup's `visible` is its

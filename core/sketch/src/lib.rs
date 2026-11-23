@@ -157,6 +157,13 @@ pub mod outlines;
 pub mod bspline;
 pub mod point_file;
 pub mod point_fit;
+// Conic curves: two ends, a shoulder point and Rho (mitcad#2236).
+pub mod conic;
+#[cfg(test)]
+mod conic_tests;
+// Equation curves: formulas of the design's parameters kept beside the
+// fit point spline they place (mitcad#2237).
+pub mod equation;
 
 /// A refusal or note of a sketch edit that names the sketch's ids
 /// (mitcad#1612, `docs/ui-conventions.md` "What a message says"): `said`
@@ -210,6 +217,17 @@ mod own_area_2197_tests;
 // Insert Points' reader, airfoils and fit (mitcad#2232).
 #[cfg(test)]
 mod point_file_tests;
+// The automatic boundaries of a face sketch make no crossing (mitcad#2233).
+#[cfg(test)]
+mod outline_set_2233_tests;
+// The free ends of an offset's results stay where they are dragged
+// (mitcad#2277).
+#[cfg(test)]
+mod offset_free_ends_2277_tests;
+// Points held on derived offsets of splines and ellipses (mitcad#2278).
+pub mod offset_hold;
+#[cfg(test)]
+mod offset_hold_2278_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -458,6 +476,22 @@ pub enum EntityKind {
         #[serde(default, skip_serializing_if = "is_false")]
         closed: bool,
     },
+    /// A conic (mitcad#2236) from `start` to `end`, its end tangents
+    /// meeting at the shoulder `apex`, shaped by `rho` (0 < rho < 1: 0.5 a
+    /// parabola, less an ellipse, more a hyperbola). Exactly the rational
+    /// quadratic Bezier with control points `start`, `apex`, `end` and
+    /// weights 1, `rho / (1 - rho)`, 1 ([`conic`]). `rho` is the last
+    /// value: a sketch whose conic follows a parameter
+    /// ([`def::SketchDef::conic_rhos`]) sets it from there.
+    Conic {
+        #[serde(with = "point_serde")]
+        start: EntityUid,
+        #[serde(with = "point_serde")]
+        end: EntityUid,
+        #[serde(with = "point_serde")]
+        apex: EntityUid,
+        rho: f64,
+    },
 }
 
 impl EntityKind {
@@ -476,13 +510,14 @@ impl EntityKind {
             Self::EllipticalArc { .. } => "elliptical_arc",
             Self::Spline { .. } => "spline",
             Self::FittedSpline { .. } => "fitted_spline",
+            Self::Conic { .. } => "conic",
         }
     }
 
     /// The points a curve refers to: line `[start, end]`, circle
     /// `[center]`, arc `[center, start, end]`, ellipse `[center, major]`,
     /// elliptical arc `[center, major, start, end]`, splines their control
-    /// or fit points.
+    /// or fit points, a conic `[start, apex, end]` (its control points).
     pub fn points(&self) -> Vec<EntityUid> {
         match self {
             Self::Point { .. } => Vec::new(),
@@ -499,6 +534,9 @@ impl EntityKind {
             } => vec![*center, *major, *start, *end],
             Self::Spline { control, .. } => control.clone(),
             Self::FittedSpline { points, .. } => points.clone(),
+            Self::Conic {
+                start, end, apex, ..
+            } => vec![*start, *apex, *end],
         }
     }
 
@@ -508,7 +546,8 @@ impl EntityKind {
         match self {
             Self::Line { start, end, .. }
             | Self::Arc { start, end, .. }
-            | Self::EllipticalArc { start, end, .. } => Some((*start, *end)),
+            | Self::EllipticalArc { start, end, .. }
+            | Self::Conic { start, end, .. } => Some((*start, *end)),
             Self::Spline { control: p, .. }
             | Self::FittedSpline {
                 points: p,
@@ -558,6 +597,13 @@ impl EntityKind {
             }
             | Self::FittedSpline { points, .. } => {
                 points.iter_mut().for_each(swap);
+            }
+            Self::Conic {
+                start, end, apex, ..
+            } => {
+                swap(start);
+                swap(end);
+                swap(apex);
             }
         }
     }
@@ -1785,6 +1831,36 @@ impl<P> TextValue<P> {
     ) -> Result<TextValue<Q>, E> {
         Ok(TextValue {
             text: self.text,
+            value: f(&self.slot(), &self.value)?,
+        })
+    }
+}
+
+/// The Rho of a conic as a parameter (mitcad#2236): `{"curve": "c5",
+/// "value": "rho1"}` in a sketch's `conic_rhos`. The parameter is the
+/// conic's own one (its slot `conics[c5].rho`), whose value is a number or
+/// an expression of other parameters; the solve takes the conic's Rho from
+/// it, and the entity's `rho` keeps the last value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConicRho<P> {
+    #[serde(with = "curve_serde")]
+    pub curve: EntityUid,
+    pub value: P,
+}
+
+impl<P> ConicRho<P> {
+    /// The slot of its value: `conics[c5].rho`.
+    pub fn slot(&self) -> String {
+        format!("conics[c{}].rho", self.curve.0)
+    }
+
+    pub fn map_value<Q, E>(
+        &self,
+        f: &mut dyn FnMut(&str, &P) -> Result<Q, E>,
+    ) -> Result<ConicRho<Q>, E> {
+        Ok(ConicRho {
+            curve: self.curve,
             value: f(&self.slot(), &self.value)?,
         })
     }

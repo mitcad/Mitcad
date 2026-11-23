@@ -1,0 +1,14 @@
+{
+  "format": "mitcad-library", "version": 1, "id": "test-tubes", "name": "Test tubes",
+  "description": "A synthetic steel tube of the End Cap UI test (mitcad#2243).",
+  "library_version": "1.0.0", "license": "MIT", "authors": ["Mitcad UI test"], "units": "mm",
+  "categories": [{"id": "tubes", "name": "Tubes"}],
+  "components": [
+    {"id": "tube-test", "path": "tubes/tube-test.mitcad", "name": "Steel tube test", "category": "tubes",
+     "designation": "Tube 40x40x3 L={L}",
+     "build": {"role": "profile", "material": {"density": 7850},
+       "length": {"parameter": "L", "min": "10 mm", "max": "6000 mm", "default": "600 mm", "stock": ["6000 mm"]},
+       "section": {"width": "40 mm", "height": "40 mm"},
+       "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"}]}}
+  ]
+}

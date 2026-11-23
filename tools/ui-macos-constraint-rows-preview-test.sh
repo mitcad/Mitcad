@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands/JointCommands.cpp app/framework/CommandSession.cpp app/framework/Command.hpp
 # check-all sources: app/framework/TestDriver.cpp tools/cli tools/ui-scripts/constraint-rows-preview.mitcad-ui
-# Assembly Constraint's preview with more than one row (mitcad#1813) on
+# Constraint Set's preview with more than one row (mitcad#1813) on
 # macOS, through the test driver (tools/ui-scripts/constraint-rows-preview.mitcad-ui,
 # the same script as the Linux and Windows tests'): an incomplete row is
 # left out of the preview, which still places the block by row 1; the
@@ -26,9 +26,9 @@ mkdir -p "$UI_OUT/files"
 }
 MITCAD_TEST_STEP_MS=70 MITCAD_TEST_INPUT=$here/ui-scripts/constraint-rows-preview.mitcad-ui \
   ui_run_app constraint-rows-preview --ui=qt --no-recovery --no-mcp --open "$UI_OUT/files/constraint-rows-preview.mitcad"
-ui_expect_log 'Preview Assembly Constraint without its incomplete rows [(]rows row 2: Select geometry 1[.][)]: ok' \
+ui_expect_log 'Preview Constraint Set without its incomplete rows [(]rows row 2: Select geometry 1[.][)]: ok' \
   'the empty row left out, row 1 still previewed'
-ui_expect_log 'Assembly Constraint picks drawn where the preview places them: 2' \
+ui_expect_log 'Constraint Set picks drawn where the preview places them: 2' \
   'the picks on the block where the preview puts it'
 ui_expect_log 'TestDriver: done' 'the rows'"'"' preview and OK'
 ui_expect_no_log '^TestDriver: FAIL' 'no failed driver assertion'

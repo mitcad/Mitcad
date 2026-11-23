@@ -631,6 +631,8 @@ impl<K: Kernel> Document<K> {
                         .map(|b| b.designation.clone())
                         .or_else(|| c.library.as_ref().map(|l| l.designation.clone()))
                         .filter(|d| !d.is_empty())
+                        // A BUILD end cap's plate (mitcad#2243).
+                        .or_else(|| self.end_cap_designation(c.uid))
                         // A part converted to features keeps it (mitcad#1815).
                         .or_else(|| self.stored_text(c.uid, "Designation"))
                         .unwrap_or_else(|| c.name.clone()),

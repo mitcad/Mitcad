@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Analyses kept in the document (mitcad#41): section analyses, print
-//! analyses (mitcad#620) and draft analyses (mitcad#2166), listed in the
+//! analyses (mitcad#620), draft analyses (mitcad#2166) and point cloud
+//! deviations (mitcad#2240), listed in the
 //! browser's Analysis folder and saved in the design file. They change no
 //! geometry: adding, editing, renaming, showing, hiding and deleting one is
 //! an undo step that recomputes nothing.
@@ -57,6 +58,9 @@ pub enum AnalysisDef {
     Print(PrintAnalysis),
     /// The bodies' faces by their draft from a pull direction (mitcad#2166).
     Draft(DraftAnalysis),
+    /// A point cloud's points by their distance from a body's faces
+    /// (mitcad#2240).
+    PointCloudDeviation(super::PointCloudDeviation),
 }
 
 impl AnalysisDef {
@@ -66,6 +70,7 @@ impl AnalysisDef {
             Self::Section(_) => "Section",
             Self::Print(_) => "Print",
             Self::Draft(_) => "Draft",
+            Self::PointCloudDeviation(_) => "Deviation",
         }
     }
 }
@@ -475,6 +480,11 @@ impl Analysis {
             AnalysisDef::Draft(draft) => {
                 draft.check().map_err(|e| format!("{}: {e}", self.name))?;
             }
+            AnalysisDef::PointCloudDeviation(deviation) => {
+                deviation
+                    .check()
+                    .map_err(|e| format!("{}: {e}", self.name))?;
+            }
         }
         Ok(())
     }
@@ -537,7 +547,7 @@ impl<K: Kernel> Document<K> {
     /// The occurrence a section's plane or axis (`what`) is in: the given
     /// path when it owns the reference, else the owner's only placement,
     /// else the root for references of no component.
-    fn analysis_occurrence(
+    pub(crate) fn analysis_occurrence(
         &self,
         reference: &GeomRef,
         occurrence: Option<&OccurrencePath>,
@@ -727,6 +737,12 @@ impl<K: Kernel> Document<K> {
                             Ok(pull) => value["pull_direction"] = json!(pull),
                             Err(error) => value["error"] = json!(error),
                         },
+                        // Why its cloud or body is not there (mitcad#2240).
+                        AnalysisDef::PointCloudDeviation(deviation) => {
+                            if let Err(error) = self.point_cloud_deviation_check(deviation) {
+                                value["error"] = json!(error);
+                            }
+                        }
                     }
                     value
                 })
@@ -749,6 +765,10 @@ impl<K: Kernel> Document<K> {
             AnalysisDef::Draft(draft) => {
                 self.draft_pull(draft)
                     .map_err(|e| invalid(format!("the draft analysis: {e}")))?;
+            }
+            AnalysisDef::PointCloudDeviation(deviation) => {
+                self.point_cloud_deviation_check(deviation)
+                    .map_err(|e| invalid(format!("the deviation: {e}")))?;
             }
         }
         Ok(())

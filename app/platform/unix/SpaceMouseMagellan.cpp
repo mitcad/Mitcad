@@ -66,6 +66,14 @@ public:
     return false;
   }
 
+  // The active design's window changed (mitcad#2297): registered with the
+  // driver in place of the one before, as at a focus change.
+  void windowPlaced() override {
+    if (m_x11 != nullptr) {
+      refresh(true);
+    }
+  }
+
 private:
   bool active() const {
     return QGuiApplication::applicationState() == Qt::ApplicationActive &&

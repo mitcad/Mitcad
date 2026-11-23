@@ -422,6 +422,34 @@ void Sketch3dController::stopTool() {
   updateOverlay();
 }
 
+void Sketch3dController::detachFromView() {
+  // Called while the window's members and the view still live (its
+  // destructor, mitcad#2263): nothing here reaches the model, the view's
+  // scene or the palette.
+  // The overlay's repaint on a view change waits for an active sketch,
+  // which ends below.
+  m_viewer.removeEventFilter(this);
+  disconnect(&m_viewer, nullptr, this, nullptr);
+  if (toolActive()) {
+    toolLog(QStringLiteral("3D sketch tool %1: ends with the window").arg(logName(m_tool)));
+  }
+  m_tool = Sketch3dTool::None;
+  m_rotation = RotationDrag();
+  m_leftPressed = false;
+  m_pending.clear();
+  m_chainPoint.clear();
+  m_chainCurve.clear();
+  m_focusField.clear();
+  m_hoverText.clear();
+  m_hasPointer = false;
+  m_pointerInView = false;
+  // A palette row the pointer leaves as its card goes paints nothing.
+  m_paletteHover.clear();
+  m_paletteHoverPlaces = QJsonArray();
+  m_hooks.paintPlaces = nullptr;
+  m_uid.clear();
+}
+
 void Sketch3dController::resetInput() {
   const SegmentInput::Mode mode = m_input.mode;
   const Axis3 axis = m_input.axis;
@@ -1359,6 +1387,14 @@ void Sketch3dController::updateHover() {
   if (!m_pending.empty() || !m_chainPoint.isEmpty()) {
     candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
                                     [&from](const SnapTarget& t) { return snapsOntoStart(t, from.at); }),
+                     candidates.end());
+  }
+  // A shape's typed size puts its next point (shapeHover). A point, curve,
+  // edge or face snap could add a relation at a different position. Keep
+  // the guide axes, which can give a direction without adding a relation.
+  if (isShapeTool(m_tool) && shapeSizeTyped()) {
+    candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                    [](const SnapTarget& t) { return t.kind != SnapKind::Guide; }),
                      candidates.end());
   }
   const std::optional<SnapTarget> snap = chooseSnap(candidates, kSnapPixels);

@@ -65,6 +65,7 @@ def main():
             assert "cargo_build" in props.get("RESOURCE_LOCK", []), name
             assert "macos_cargo_build" in props.get("LABELS", []), name
             assert "MITCAD_CARGO_MAX_JOBS=2" in props.get("ENVIRONMENT", []), name
+            assert float(props.get("TIMEOUT", 0)) >= 10800, name
     # Timed Metal scene acceptance needs the whole machine free of
     # competing work. Its performance assertions are unchanged.
     for name in ("app.render_metal_scenes",

@@ -162,10 +162,28 @@ impl DocState {
                             }
                         }
                     }
+                    // A Flat Pattern's body (mitcad#2280).
+                    Some(Subject::FlatPattern {
+                        body: shown,
+                        occurrence,
+                        ..
+                    }) => {
+                        *shown = body(*shown);
+                        if let Some(p) = occurrence {
+                            *p = path(p);
+                        }
+                    }
                     Some(Subject::Design) | None => {}
                 }
                 for pick in view.annotations.iter_mut().flat_map(|a| a.picks.iter_mut()) {
                     pick.body = body(pick.body);
+                    // A bend line's bend (mitcad#2280), of the copied
+                    // feature.
+                    if let Some(line) = &mut pick.bend
+                        && let Some(feature) = features.get(&line.bend.feature)
+                    {
+                        line.bend.feature = *feature;
+                    }
                     if let Some(p) = &mut pick.occurrence {
                         *p = path(p);
                     }

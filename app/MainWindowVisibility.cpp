@@ -79,6 +79,14 @@ void MainWindow::logSketchPicks() {
   if (!qEnvironmentVariableIsSet("MITCAD_LOG_PICKS")) {
     return;
   }
+  // Not while the view cannot try the faces (a navigation not ended, such
+  // as a fit made at once in a window that is not exposed, Windows session
+  // 0): an empty list then hid the faces for good (app.ui-windows-cell-grid).
+  // The retry after the navigation's end or the next frame logs them.
+  m_sketchPicksDeferred = !m_viewer->pickPointsReady();
+  if (m_sketchPicksDeferred) {
+    return;
+  }
   // Where a click picks each face the policy lets the sketch lie on, and
   // where it hits each face that cannot take the sketch (mitcad#474: not
   // planar, or left out by the policy), as "Pick refused face ...".
@@ -126,6 +134,9 @@ void MainWindow::updateModeBanner() {
     m_viewer->setPlanesBehind(false);
     m_viewer->setPlanesByDepth(false);
   }
+  // Files that waited for the command or the sketch, and a Move that
+  // waited for an inspection, go on once it closed (mitcad#2281).
+  followArrivals();
 }
 
 void MainWindow::refusePlanePick(const SelectionItem& item) {

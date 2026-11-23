@@ -281,6 +281,8 @@ void reservedHueTests() {
       ColorRole::SearchMatch, ColorRole::JointA,    ColorRole::JointB,     ColorRole::JointOrigin,
       ColorRole::CamStock,    ColorRole::CamLeftThin, ColorRole::CamLeftThick, ColorRole::CamGouge,
       ColorRole::Support,     ColorRole::DiscordFill,
+      ColorRole::DeviationInside, ColorRole::DeviationNeutral, ColorRole::DeviationOutside,
+      ColorRole::DeviationUnmeasured,
   };
   for (const ColorRole role : domain) {
     for (const bool dark : {false, true}) {
@@ -316,6 +318,22 @@ void reservedHueTests() {
     CHECK(hueDistance(positive, under) >= 40.0);
     CHECK(hueDistance(positive, negative) >= 40.0);
     CHECK(hueDistance(under, negative) >= 40.0);
+  }
+  // Point Cloud Deviation's scale (mitcad#2240): its two ends far apart in
+  // hue, the middle grey enough to read as neither.
+  for (const bool dark : {false, true}) {
+    const QColor inside = themeColor(ColorRole::DeviationInside, dark);
+    const QColor outside = themeColor(ColorRole::DeviationOutside, dark);
+    CHECK(hueDistance(inside, outside) >= 60.0);
+    CHECK(themeColor(ColorRole::DeviationNeutral, dark).hsvSaturationF() < 0.2);
+    // The points not measured (mitcad#2265): grey too, dimmer than the
+    // neutral one towards the background (lighter on the light view,
+    // darker on the dark one).
+    const QColor unmeasured = themeColor(ColorRole::DeviationUnmeasured, dark);
+    const QColor neutral = themeColor(ColorRole::DeviationNeutral, dark);
+    CHECK(unmeasured.hsvSaturationF() < 0.2);
+    CHECK(dark ? unmeasured.lightnessF() < neutral.lightnessF() - 0.1
+               : unmeasured.lightnessF() > neutral.lightnessF() + 0.1);
   }
 }
 

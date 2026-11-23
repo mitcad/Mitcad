@@ -166,6 +166,13 @@ fn circumcenter(a: P2, b: P2, c: P2) -> Result<P2, String> {
 }
 
 impl SketchEdit<'_> {
+    /// The existing point a point input names, as a tool joins its
+    /// geometry to it: one a derived offset computes as a new point held
+    /// to it ([`SketchEdit::own_point`], mitcad#2278).
+    fn own_existing(&mut self, input: PointInput) -> Option<EntityUid> {
+        existing(input).map(|p| self.own_point(p))
+    }
+
     /// Adds a curve with a fresh id.
     fn curve_entity(&mut self, kind: EntityKind, construction: bool) -> EntityUid {
         let id = self.id();
@@ -246,8 +253,8 @@ impl SketchEdit<'_> {
                 let (a, b) = (self.input_position(pa)?, self.input_position(pb)?);
                 let (x0, x1) = (a[0].min(b[0]), a[0].max(b[0]));
                 let (y0, y1) = (a[1].min(b[1]), a[1].max(b[1]));
-                joined[corner_index(a, b)] = existing(pa);
-                if let Some(p) = existing(pb) {
+                joined[corner_index(a, b)] = self.own_existing(pa);
+                if let Some(p) = self.own_existing(pb) {
                     joined[corner_index(b, a)] = Some(p);
                 }
                 ([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true)
@@ -257,7 +264,7 @@ impl SketchEdit<'_> {
                 corner: pk,
             } => {
                 let (center, corner) = (self.input_position(pc)?, self.input_position(pk)?);
-                joined[corner_index(corner, center)] = existing(pk);
+                joined[corner_index(corner, center)] = self.own_existing(pk);
                 let (dx, dy) = ((corner[0] - center[0]).abs(), (corner[1] - center[1]).abs());
                 let (cx, cy) = (center[0], center[1]);
                 (
@@ -280,12 +287,12 @@ impl SketchEdit<'_> {
                 let n = perp(unit(side));
                 let h = scale(n, dot(sub(c, b), n));
                 let corners = [a, b, add(b, h), add(a, h)];
-                joined[0] = existing(pa);
+                joined[0] = self.own_existing(pa);
                 if cross(side, h) < 0.0 {
-                    joined[3] = existing(pb);
+                    joined[3] = self.own_existing(pb);
                     ([corners[0], corners[3], corners[2], corners[1]], false)
                 } else {
-                    joined[1] = existing(pb);
+                    joined[1] = self.own_existing(pb);
                     (corners, false)
                 }
             }
@@ -494,7 +501,7 @@ impl SketchEdit<'_> {
                 end,
             } => {
                 let through = self.input_position(pt)?;
-                on.extend(existing(pt));
+                on.extend(self.own_existing(pt));
                 let (s, e) = (self.point(start)?, self.point(end)?);
                 let (ps, pe) = (self.at(s)?, self.at(e)?);
                 let c = circumcenter(ps, through, pe)?;
@@ -650,6 +657,7 @@ impl SketchEdit<'_> {
         if r == 0.0 {
             return Err("the polygon has no size".to_owned());
         }
+        let first_corner = first_corner.map(|p| self.own_point(p));
         let a0 = (vertex[1] - center[1]).atan2(vertex[0] - center[0]);
         let n = sides as f64;
         let (big, first) = if inscribed {
@@ -827,7 +835,7 @@ impl SketchEdit<'_> {
         let at = |radius: f64, a: f64| [center[0] + radius * a.cos(), center[1] + radius * a.sin()];
         let curves = self.ids(4); // outer, cap at end, inner, cap at start
         let c = self.point(center_input)?;
-        let es = match existing(start_input) {
+        let es = match self.own_existing(start_input) {
             Some(p) => p,
             None => self.new_point(at(big, a0)),
         };

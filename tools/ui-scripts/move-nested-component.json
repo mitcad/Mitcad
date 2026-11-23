@@ -1,0 +1,18 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of tools/ui-scripts/move-nested-component.mitcad-ui (mitcad#2302): a component three levels deep, written by mitcad-cli. The root places Head:1 (C1, O1) 100 mm along X; Head places Common:1 (C2, O2) 50 mm along Y and Side:1 (C5, O5) 40 mm along -Y; Common places Led:1 (C3, O3) 5 mm along X and Bracket:1 (C4, O4) 30 mm along X. Head and Common are assemblies without bodies of their own. Led's body F1.b0 is an 8 x 12 x 6 box, in the design (105, 50, 0) to (113, 62, 6); Bracket's F2.b0 a 10 mm cube at (130, 50, 0); Side's F3.b0 a 10 mm cube at (100, -40, 0). The root active."},
+  {"cmd": "create_component", "name": "Head", "transform": {"translation": [100, 0, 0]}},
+  {"cmd": "create_component", "name": "Common", "transform": {"translation": [0, 50, 0]}},
+  {"cmd": "create_component", "name": "Led", "transform": {"translation": [5, 0, 0]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 8, "width": 12, "height": 6, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Common"},
+  {"cmd": "create_component", "name": "Bracket", "transform": {"translation": [30, 0, 0]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Head"},
+  {"cmd": "create_component", "name": "Side", "transform": {"translation": [0, -40, 0]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"}
+]

@@ -516,6 +516,17 @@ The fields of the block:
 
 - `role`: `profile`, `connector`, `fastener`, `panel`, `linear` or
   `cap`. Every role but `fastener` has `frames`.
+- **Caps and end caps** (mitcad#2243): a `cap` is a library part that
+  fits a slot system's profile end (a plastic cover cap); Build places it
+  on the end with Profile, its `end` frame on the profile's end frame, and
+  it is listed with its supplier and part number. For a slot profile such
+  a cap is the first offer. Build's **End Cap** makes a plate instead,
+  with no library part: the outer section of any profile or tube cut to
+  length (a steel tube, a bar, an angle; a slot profile too), a component
+  of role `end_cap` that is no library's
+  ([End caps](../core/model-api/src/commands.md#end-caps)). A library
+  needs nothing for it but the profile's `end_a` and `end_b` frames; the
+  plate takes its outline from the profile's geometry.
 - `system`: `type` (`I` or `B`), `slot` (the slot width in mm: 5, 6, 8,
   10) and `grid` (the series: 20, 30, 40, 45 and others). A profile with
   slot frames has `system`. A profile without slots (a steel tube,

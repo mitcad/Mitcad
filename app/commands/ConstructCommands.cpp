@@ -31,7 +31,7 @@ enum class Field {
   Point,    // a point, vertex or sketch point
   Round,    // a cylinder, cone or torus face
   Tangent,  // a cylinder or cone face
-  Face,     // any face
+  Face,     // any face, or a plane (mitcad#2282)
   Center,   // a circular edge or sketch circle, a sphere or torus face
   Path,     // a sketch curve or connected edges
   Distance, // a length
@@ -385,7 +385,9 @@ InputDef fieldInput(const FieldSpec& field, const CommandContext& context) {
   case Field::Tangent:
     return face([](const QString& g) { return g == QStringLiteral("cylinder") || g == QStringLiteral("cone"); });
   case Field::Face:
-    return selectionInput(key, name, SelectKind::Face, 1, 1);
+    // A face, or a plane standing for a planar face: its whole plane
+    // (mitcad#2282, the model's `FaceOrPlane`).
+    return selectionInput(key, name, kPlaneKinds, 1, 1).withTooltip(QObject::tr("A face or a plane"));
   case Field::Center:
     return selectionInput(key, name, SelectKind::Edge | SelectKind::SketchCurve | SelectKind::Face, 1, 1)
         .withTooltip(QObject::tr("A circular edge or sketch circle, a sphere or a torus"))

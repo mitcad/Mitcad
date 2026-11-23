@@ -11,7 +11,9 @@
 # in four runs of the shared input scripts (also run by
 # tools/ui-windows-gl-failure-test.ps1):
 #   init       the first attach sees a driver that answers no GL version
-#              (tools/ui-scripts/gl-failure-init.mitcad-ui);
+#              (tools/ui-scripts/gl-failure-init.mitcad-ui); left, double
+#              and right clicks into the view then do nothing and do not
+#              crash in OCCT's picking (mitcad#2295);
 #   reconnect  the attach after the view moved to a new window does
 #              (tools/ui-scripts/gl-failure-reconnect.mitcad-ui);
 #   throw      that attach throws Standard_NullObject, as OCCT's

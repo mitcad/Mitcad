@@ -31,6 +31,14 @@ bool runAgentFoldersGiven();
 // Every allowed folder: the setting's, then this run's.
 QStringList agentFolders();
 
+// Preferences › AI Assistants › Agents may use my print libraries (the
+// setting ai/agentsMayUsePrintLibraries, off unless set; mitcad#2224):
+// whether live MCP agents may read the print libraries (My library, the
+// project's library) and choose, create, edit, delete or save items there.
+inline constexpr const char* kAgentsMayUsePrintLibrariesKey = "ai/agentsMayUsePrintLibraries";
+bool agentsMayUsePrintLibraries();
+void saveAgentsMayUsePrintLibraries(bool on);
+
 // A design file (.mitcad) in an allowed folder, as an absolute path with
 // its folder's links resolved; empty with the reason when it is not one.
 // `forWriting`: the folder must exist, an existing file must be a regular

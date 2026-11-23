@@ -49,8 +49,18 @@ fi
 
 logs=$UI_OUT/logs-restart
 rm -rf "$logs"
+# The Settings window is a window of its own on macOS, not a dialog: Esc
+# leaves it open and key, and File › Close (Cmd+W) then closes it instead
+# of the design (MainWindow::closeDocument). It is closed by its own Cmd+W
+# (Ctrl+W in Qt's terms) before the design's Close, as a person does.
+restart_script=$UI_OUT/last-design-close-restart.mitcad-ui
+sed 's/^key Escape$/key Ctrl+W/' "$here/ui-scripts/last-design-close-restart.mitcad-ui" > "$restart_script"
+grep -q '^key Ctrl+W$' "$restart_script" || {
+  echo 'last-design-close-restart.mitcad-ui has no "key Escape" line that closes Settings' >&2
+  exit 1
+}
 MITCAD_TEST_WORK=$UI_OUT/files MITCAD_TEST_STEP_MS=70 MITCAD_DEBUG_LOG_DIR=$logs \
-  MITCAD_TEST_INPUT=$here/ui-scripts/last-design-close-restart.mitcad-ui \
+  MITCAD_TEST_INPUT=$restart_script \
   ui_run_app last-design-close-restart --ui=qt --no-recovery --no-mcp --chrome=docked \
   --open "$UI_OUT/files/part.mitcad"
 ui_expect_no_log '^TestDriver: FAIL' 'no failed driver assertion after a restart'

@@ -31,6 +31,9 @@ public:
     std::function<void(const QString&)> rowAdded;
     std::function<void(const QString&, int)> rowRemoved;
     std::function<void()> accepted;
+    // Apply (CommandDef::applyNext, mitcad#2293): adds the feature and
+    // keeps the panel open for the next one.
+    std::function<void()> applied;
     std::function<void()> rejected;
     std::function<void()> detached;
     // A value field took the keyboard or lost it (mitcad#250: the view's

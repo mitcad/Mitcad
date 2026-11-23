@@ -89,7 +89,7 @@ dialog-click-logged '^Parameters group Table at '
 focus-widget parametersTable
 key shift+F10
 popup 'Delete'
-focus-dialog '^Delete Group$'
+focus-dialog '^Delete Group$|^Delete the group Table[?] '
 wait-log '^Delete parameter group Table asked: 2 parameter[(]s[)]$'
 button '^Delete Group$'
 wait-log '^Parameter group Table deleted: width, depth moved to User Parameters$'

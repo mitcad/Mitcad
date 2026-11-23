@@ -154,7 +154,7 @@ Write-Host '--- 0. The SOLID CREATE menu (mitcad#579)'
 # Bearing there). Session 0 closes the popup at once (ui-windows-lib.ps1),
 # after it logged its entries.
 $solidCreate = 'New Component | Create Sketch | - | Extrude | Revolve | Sweep | Loft | Rib | Web | Emboss' +
-  ' | - | Hole | Thread' +
+  ' | - | Hole | Cell Grid | Thread' +
   ' | - | Box | Cylinder | Cone | Sphere | Torus | Coil | Pipe' +
   ' | - | Pattern > [Rectangular Pattern | Circular Pattern | Pattern on Path | Pattern at Points] | Mirror | Thicken | Boundary Fill' +
   ' | - | Curves > [Helix | Intersection Curve | Helix Curve]' +

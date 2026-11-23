@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 
@@ -61,6 +63,40 @@ double geometric_tolerance(double radius) { return 1.0e-6 * std::max(1.0, radius
 
 constexpr double kPi = 3.14159265358979323846;
 
+// Whether MITCAD_TRACE_GROOVE_END is set (not empty): rounded_groove_end
+// then says on the standard error why it gives up (a line
+// `groove end: <exit>: <numbers>`); nothing else changes.
+bool tracing_groove_end() {
+#ifdef _WIN32
+  char* value = nullptr;
+  std::size_t length = 0;
+  if (_dupenv_s(&value, &length, "MITCAD_TRACE_GROOVE_END") != 0 || value == nullptr) {
+    return false;
+  }
+  const bool on = value[0] != '\0';
+  std::free(value);
+  return on;
+#else
+  const char* value = std::getenv("MITCAD_TRACE_GROOVE_END");
+  return value != nullptr && value[0] != '\0';
+#endif
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 1, 2)))
+#endif
+void trace(const char* format, ...) {
+  if (!tracing_groove_end()) {
+    return;
+  }
+  char line[512];
+  va_list args;
+  va_start(args, format);
+  std::vsnprintf(line, sizeof line, format, args);
+  va_end(args);
+  std::fprintf(stderr, "groove end: %s\n", line);
+}
+
 // The outward normal of `face` at the point of its surface nearest `at`.
 std::optional<gp_Dir> outward_normal(const TopoDS_Face& face, const gp_Pnt& at) {
   GeomAPI_ProjectPointOnSurf projection(at, BRep_Tool::Surface(face));
@@ -87,6 +123,15 @@ gp_Pnt area_centre(const TopoDS_Shape& face) {
   GProp_GProps props;
   BRepGProp::SurfaceProperties(face, props);
   return props.CentreOfMass();
+}
+
+// Default surface quadrature can give different volume errors before and
+// after the join, which retrims the curved faces. Integrate more precisely
+// for the volume checks that must agree across those representations.
+double groove_volume(const TopoDS_Shape& shape) {
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(shape, props, 1.0e-9, true);
+  return std::abs(props.Mass());
 }
 
 // One valid solid with closed shells.
@@ -175,6 +220,7 @@ std::optional<TopoDS_Shape> added_by_rounding(const GrooveEnd& end, const gp_Ax2
     for (const TopoDS_Shape& half : clip) {
       const std::optional<TopoDS_Shape> kept = common(shape, half);
       if (!kept) {
+        trace("clip by a face beyond's half space: the boolean failed");
         return std::nullopt;
       }
       shape = *kept;
@@ -188,6 +234,7 @@ std::optional<TopoDS_Shape> added_by_rounding(const GrooveEnd& end, const gp_Ax2
     gp_Pnt ball = centre.Translated(gp_Vec(end.into) * radius);
     if (end.bent) {
       if (radius >= end.spine) {
+        trace("ball: radius %.9g not below the spine %.9g", radius, end.spine);
         return std::nullopt;
       }
       depth = std::asin(radius / end.spine);
@@ -197,9 +244,14 @@ std::optional<TopoDS_Shape> added_by_rounding(const GrooveEnd& end, const gp_Ax2
     }
     const std::optional<TopoDS_Shape> within = clipped(tube_piece(end, frame, depth));
     if (!within) {
+      trace("ball: the tube's piece not clipped");
       return std::nullopt;
     }
-    return cut(*within, BRepPrimAPI_MakeSphere(ball, radius).Shape());
+    const std::optional<TopoDS_Shape> less = cut(*within, BRepPrimAPI_MakeSphere(ball, radius).Shape());
+    if (!less) {
+      trace("ball: the tube's piece less the ball failed");
+    }
+    return less;
   }
   // The extended body: a block round the tube's piece (a radius past it),
   // the piece cut out of it, the circle at the end cap rounded.
@@ -212,6 +264,7 @@ std::optional<TopoDS_Shape> added_by_rounding(const GrooveEnd& end, const gp_Ax2
   const std::optional<TopoDS_Shape> extended =
       cut(BRepPrimAPI_MakeBox(gp_Pnt(x0, y0, z0), gp_Pnt(x1, y1, z1)).Shape(), tube);
   if (!extended) {
+    trace("extended body: the block less the tube's piece failed");
     return std::nullopt;
   }
   TopoDS_Edge circle;
@@ -228,16 +281,27 @@ std::optional<TopoDS_Shape> added_by_rounding(const GrooveEnd& end, const gp_Ax2
     }
   }
   if (circle.IsNull()) {
+    trace("extended body: no circle of radius %.9g at the end cap (tolerance %.3g)", rc, tolerance);
     return std::nullopt;
   }
   BRepFilletAPI_MakeFillet rounding(*extended);
   rounding.Add(radius, circle);
   rounding.Build();
   if (!rounding.IsDone()) {
+    trace("extended body: the kernel's rounding of radius %.9g failed (stripe status %d)", radius,
+          rounding.NbContours() > 0 ? static_cast<int>(rounding.StripeStatus(1)) : -1);
     return std::nullopt;
+  }
+  if (end.bent) {
+    // Clip the torus first. Intersecting the whole tube with the rounded
+    // stock leaves coincident toroidal faces outside the part of the
+    // groove in the body, where OCCT can return an empty intersection.
+    const std::optional<TopoDS_Shape> within = clipped(tube);
+    return within ? common(rounding.Shape(), *within) : std::nullopt;
   }
   const std::optional<TopoDS_Shape> added = common(rounding.Shape(), tube);
   if (!added) {
+    trace("extended body: the rounding's common with the tube's piece failed");
     return std::nullopt;
   }
   return clipped(*added);
@@ -407,6 +471,8 @@ ShapePtr rounded_groove_end(const std::string& feature, const Shape& body, int e
     OCC_CATCH_SIGNALS
     const double rc = end.circle.Radius();
     if (radius <= 0.0 || radius > rc + kGrooveRadiusTolerance || body.edge_name(edge).empty()) {
+      trace("refused: radius %.9g, groove radius %.9g, edge named %d", radius, rc,
+            body.edge_name(edge).empty() ? 0 : 1);
       return nullptr;
     }
     const double tolerance = geometric_tolerance(rc);
@@ -415,6 +481,7 @@ ShapePtr rounded_groove_end(const std::string& feature, const Shape& body, int e
     // the rounding adds.
     const std::vector<int> beyond = faces_beyond(body, end);
     if (beyond.empty()) {
+      trace("no faces beyond the end cap");
       return nullptr;
     }
     std::vector<TopoDS_Shape> clip;
@@ -424,6 +491,7 @@ ShapePtr rounded_groove_end(const std::string& feature, const Shape& body, int e
       const TopoDS_Face& face = body.face(beyond[i]);
       const BRepAdaptor_Surface surface(face, false);
       if (surface.GetType() != GeomAbs_Plane) {
+        trace("face beyond %d not planar", beyond[i]);
         return nullptr;
       }
       const gp_Pln plane = surface.Plane();
@@ -447,16 +515,26 @@ ShapePtr rounded_groove_end(const std::string& feature, const Shape& body, int e
     const gp_Ax2 frame = tube_frame(end, up);
     const std::optional<TopoDS_Shape> added = added_by_rounding(end, frame, radius, clip);
     if (!added) {
+      trace("what the rounding adds not built (radius %.9g, groove radius %.9g, bent %d)", radius, rc,
+            end.bent ? 1 : 0);
       return nullptr;
     }
-    const double volume = std::abs(volume_of(*added));
-    const double before = std::abs(volume_of(body.occt()));
+    const double volume = groove_volume(*added);
+    const double before = groove_volume(body.occt());
     if (volume <= 1.0e-9) {
+      trace("what the rounding adds is empty: volume %.9g", volume);
       return nullptr;
     }
     // (It only fills the groove's end: none of it in the body's material.)
     const std::optional<TopoDS_Shape> overlap = common(*added, body.occt());
-    if (!overlap || std::abs(volume_of(*overlap)) > 1.0e-6 * std::max(1.0, volume)) {
+    if (!overlap) {
+      trace("overlap with the body: the boolean failed (added volume %.9g)", volume);
+      return nullptr;
+    }
+    const double overlap_volume = groove_volume(*overlap);
+    if (overlap_volume > 1.0e-6 * std::max(1.0, volume)) {
+      trace("overlap with the body: volume %.9g over the limit %.9g (added volume %.9g)",
+            overlap_volume, 1.0e-6 * std::max(1.0, volume), volume);
       return nullptr;
     }
     // Its faces named: on the end cap's plane or the floor's surface as
@@ -486,14 +564,22 @@ ShapePtr rounded_groove_end(const std::string& feature, const Shape& body, int e
     throw_if_cancelled();
     const BooleanResult joined = boolean(BooleanOp::Join, {&body}, tool);
     if (joined.pieces.size() != 1) {
+      trace("join: %d pieces, not 1", static_cast<int>(joined.pieces.size()));
       return nullptr;
     }
     ShapePtr result = join_same_surfaces(joined.pieces.front().shape);
-    if (!result || !one_closed_solid(result->occt())) {
+    if (!result) {
+      trace("join: the faces on the same surfaces not joined");
       return nullptr;
     }
-    const double after = std::abs(volume_of(result->occt()));
+    if (!one_closed_solid(result->occt())) {
+      trace("join: not one valid closed solid");
+      return nullptr;
+    }
+    const double after = groove_volume(result->occt());
     if (std::abs(after - (before + volume)) > 1.0e-6 * std::max(1.0, before)) {
+      trace("join: volume %.9g, expected %.9g (body %.9g + added %.9g), limit %.9g", after, before + volume, before,
+            volume, 1.0e-6 * std::max(1.0, before));
       return nullptr;
     }
     bool rounded = false;
@@ -501,12 +587,17 @@ ShapePtr rounded_groove_end(const std::string& feature, const Shape& body, int e
       const NameList& names = result->face_names(f);
       rounded = std::find(names.begin(), names.end(), made) != names.end();
     }
+    if (!rounded) {
+      trace("no face of the result named as the rounding");
+    }
     return rounded ? result : nullptr;
   } catch (const Cancelled&) {
     throw;
-  } catch (const Standard_Failure&) {
+  } catch (const Standard_Failure& failure) {
+    trace("the geometry kernel threw: %s", failure.what());
     return nullptr;
-  } catch (const std::exception&) {
+  } catch (const std::exception& error) {
+    trace("threw: %s", error.what());
     return nullptr;
   }
 }

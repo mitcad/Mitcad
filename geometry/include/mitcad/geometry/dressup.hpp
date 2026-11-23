@@ -18,13 +18,16 @@
 // chain reaches an edge that no set selects is built over the whole chain
 // and kept over its selected edges only (src/runout_dressup.hpp,
 // mitcad#2037): where a selected edge meets the next edge, the rounding or
-// bevel runs out over that edge, shallower by a depth growing linearly
-// with the length along it, gone just before its far vertex; where the
-// next edge is shorter than the dressup is wide, or the run-out does not
-// build, it ends flat in the plane normal to the edge at the vertex. Those
-// faces are named <feature>:runout(<edge>) and
+// bevel ends against the face beyond the vertex, its cross-section there
+// carried straight on until it leaves the body (mitcad#2193); where that
+// does not build (the faces beyond turn towards the dressup), it runs out
+// over that edge, shallower by a depth growing linearly with the length
+// along it, gone just before its far vertex; where the next edge is
+// shorter than the dressup is wide, or the run-out does not build, it ends
+// flat in the plane normal to the edge at the vertex. Those faces are named
+// <feature>:face_end(<edge>), <feature>:runout(<edge>) and
 // <feature>:runout_end(<vertex>). Constant and chord length fillets and
-// chamfers do this; other fillet sizes, and a set where neither builds,
+// chamfers do this; other fillet sizes, and a set where none builds,
 // fail with an "unsupported:" message, as do options OCCT lacks (see the
 // model's fillet and chamfer features); the importer then falls back to
 // the stored body.
@@ -85,7 +88,14 @@
 
 namespace mitcad::geometry {
 
-enum class FilletSize { Constant, ChordLength, Variable, Asymmetric, Spline };
+// FullRound (mitcad#2279): no values. The set's edges are the two edges
+// (or tangent chains) of one face, the middle face; each chain's other
+// face is a side face. Its radius is worked out on the body
+// (src/full_round.hpp): the circle that touches both side faces and the
+// middle face in the section across the edges, the same all along them.
+// Both chains are rounded with it, as a constant set, and the middle face
+// is gone; its names go onto the rounding's faces.
+enum class FilletSize { Constant, ChordLength, Variable, Asymmetric, Spline, FullRound };
 
 // Edges with one size: the named edges and every edge of the named faces.
 struct FilletSet {

@@ -1977,14 +1977,106 @@ fn an_axis_is_normal_to_a_plane_at_a_point() {
                "point": {"point": [10.0, 20.0, 5.0]}}),
     );
     assert_near(&fixed["direction"], [1.0, 0.0, 0.0]);
-    // Perpendicular-at-point still wants a face.
+    // Axis Perpendicular at Point takes a plane too (mitcad#2282): through
+    // the point's projection onto it, along its normal.
+    let on_origin = axis(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": "xy",
+               "point": {"point": [10.0, 20.0, 5.0]}}),
+    );
+    assert_near(&on_origin["origin"], [10.0, 20.0, 0.0]);
+    assert_near(&on_origin["direction"], [0.0, 0.0, 1.0]);
+    let raised = construct(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "offset", "plane": "xy", "distance": 10}),
+    );
+    let on_construction = axis(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": raised,
+               "point": {"point": [10.0, 20.0, 5.0]}}),
+    );
+    assert_near(&on_construction["origin"], [10.0, 20.0, 10.0]);
+    assert_near(&on_construction["direction"], [0.0, 0.0, 1.0]);
+    let on_fixed = axis(
+        &mut doc,
+        json!({"type": "perpendicular_at_point",
+               "face": {"origin": [0.0, 0.0, 3.0], "normal": [1.0, 0.0, 0.0]},
+               "point": {"point": [10.0, 20.0, 5.0]}}),
+    );
+    assert_near(&on_fixed["origin"], [0.0, 20.0, 5.0]);
+    assert_near(&on_fixed["direction"], [1.0, 0.0, 0.0]);
+    // A point is still no face.
     let error = command_error(
         &mut doc,
         json!({"cmd": "add_feature", "def": {"type": "construction_axis", "definition":
-               {"type": "perpendicular_at_point", "face": "xy",
+               {"type": "perpendicular_at_point", "face": "origin",
                 "point": {"point": [10.0, 20.0, 5.0]}}}}),
     );
-    assert!(error.contains("not a face"), "{error}");
+    assert!(error.contains("a face or a plane"), "{error}");
+}
+
+#[test]
+fn a_plane_tangent_at_a_point_of_a_construction_plane_is_that_plane() {
+    // mitcad#2282: a plane stands for a planar face; the tangent plane lies
+    // on it through the point's projection, facing along its normal, and
+    // the offset moves it along that normal.
+    let mut doc = block();
+    let raised = construct(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "offset", "plane": "xy", "distance": 10}),
+    );
+    let near = json!({"point": [10.0, 20.0, 5.0]});
+    let touching = plane(
+        &mut doc,
+        json!({"type": "tangent_at_point", "face": raised, "point": near}),
+    );
+    assert_near(&touching["origin"], [10.0, 20.0, 10.0]);
+    assert_near(&touching["normal"], [0.0, 0.0, 1.0]);
+    let moved = plane(
+        &mut doc,
+        json!({"type": "tangent_at_point", "face": raised, "point": near, "offset": 2.5}),
+    );
+    assert_near(&moved["origin"], [10.0, 20.0, 12.5]);
+    assert_near(&moved["normal"], [0.0, 0.0, 1.0]);
+    // An origin plane the same way.
+    let on_origin = plane(
+        &mut doc,
+        json!({"type": "tangent_at_point", "face": "yz", "point": {"point": [7.0, 3.0, 4.0]}}),
+    );
+    assert_near(&on_origin["origin"], [0.0, 3.0, 4.0]);
+    assert_near(&on_origin["normal"], [1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn a_plane_perpendicular_at_a_point_of_a_construction_plane_contains_its_normal() {
+    // mitcad#2282: through the point's projection onto the plane, with the
+    // plane's normal as y; angle 0 is X, the first origin axis across it.
+    let mut doc = block();
+    let raised = construct(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "offset", "plane": "xy", "distance": 10}),
+    );
+    let upright = plane(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": raised,
+               "point": {"point": [10.0, 20.0, 5.0]}}),
+    );
+    assert_near(&upright["origin"], [10.0, 20.0, 10.0]);
+    assert_near(&upright["x_axis"], [1.0, 0.0, 0.0]);
+    assert_near(&upright["y_axis"], [0.0, 0.0, 1.0]);
+    assert_near(&upright["normal"], [0.0, -1.0, 0.0]);
+    // Turned a quarter about the plane's normal.
+    let turned = plane(
+        &mut doc,
+        json!({"type": "perpendicular_at_point", "face": raised,
+               "point": {"point": [10.0, 20.0, 5.0]}, "angle": std::f64::consts::FRAC_PI_2}),
+    );
+    assert_near(&turned["origin"], [10.0, 20.0, 10.0]);
+    assert_near(&turned["y_axis"], [0.0, 0.0, 1.0]);
+    assert_near(&turned["x_axis"], [0.0, 1.0, 0.0]);
 }
 
 #[test]

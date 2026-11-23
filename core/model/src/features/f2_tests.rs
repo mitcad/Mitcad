@@ -835,3 +835,99 @@ fn a_set_of_every_edge_follows_the_body() {
         assert!(error.contains(expected), "{error}");
     }
 }
+
+/// Fillet's Full Round (mitcad#2279): a set of the top's two opposite
+/// edges with `{"type": "full_round"}` and no values reads, reaches the
+/// kernel as a full round, writes back as it was read and rebuilds after an
+/// edit upstream; it names no parameter. A face, one edge alone, every edge
+/// or curvature continuity is refused in words.
+#[test]
+fn fillet_full_round_reads_writes_and_rebuilds() {
+    let mut b = block();
+    let near = top_edge(b.extrude, 1, &b.region, 0);
+    let far = top_edge(b.extrude, 1, &b.region, 2);
+    let parameters = b.doc.parameters().len();
+    let fillet = add!(
+        b,
+        json!({"type": "fillet", "body": b.body, "sets": [
+            {"edges": [near, far], "size": {"type": "full_round"}}]}),
+    )
+    .unwrap();
+    assert_eq!(status(&b, fillet), FeatureStatus::Ok);
+    let made = history(&b, b.body);
+    assert!(
+        made.starts_with("fillet(prism(F2:0..20),FullRound"),
+        "{made}"
+    );
+    // No values: no parameter of its own.
+    assert_eq!(b.doc.parameters().len(), parameters);
+    // Written as it was read, and read back the same.
+    let json = b.doc.to_json();
+    let design: Value = serde_json::from_str(&json).unwrap();
+    let written = design["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["uid"] == json!(fillet))
+        .cloned()
+        .unwrap();
+    assert_eq!(written["sets"][0]["size"], json!({"type": "full_round"}));
+    assert_eq!(written["sets"][0]["edges"], json!([near, far]));
+    let loaded = crate::Document::from_json(&json, crate::testing::MockKernel::default()).unwrap();
+    assert_eq!(loaded.state(), b.doc.state());
+    assert_eq!(loaded.to_json(), json);
+    // An edit upstream: the block 30 high, the full round built again on it.
+    b.doc.set_parameter("d3", 30.0).unwrap();
+    assert_eq!(status(&b, fillet), FeatureStatus::Ok);
+    let made = history(&b, b.body);
+    assert!(
+        made.starts_with("fillet(prism(F2:0..30),FullRound"),
+        "{made}"
+    );
+
+    // Refused in words: what a person reads, then the agents' text.
+    for (set, said, named) in [
+        (
+            json!({"faces": [top(&b)], "size": {"type": "full_round"}}),
+            "a full round takes the two edges of the face it rounds away, not the face: pick the \
+             face's two edges",
+            format!("not face {}", top(&b)),
+        ),
+        (
+            json!({"edges": [near], "size": {"type": "full_round"}}),
+            "a full round takes the two edges of the face it rounds away: pick the face's edge on \
+             its other side too",
+            format!("only edge {near} is picked"),
+        ),
+        (
+            json!({"edges": [near, far], "size": {"type": "full_round"},
+                   "continuity": "curvature"}),
+            "a full round is tangent continuous (G1)",
+            "the circle that touches the three faces".to_owned(),
+        ),
+    ] {
+        let error = add!(b, json!({"type": "fillet", "body": b.body, "sets": [set]}))
+            .unwrap_err()
+            .to_string();
+        let error = crate::notice::FeatureError::from_text(&error);
+        assert!(error.message.contains(said), "{}", error.message);
+        assert!(
+            !error.message.contains(&top(&b).to_string()),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.agent_text().contains(&named),
+            "{}",
+            error.agent_text()
+        );
+    }
+    let error = add!(
+        b,
+        json!({"type": "fillet", "body": b.body, "sets": [
+            {"all_edges": true, "size": {"type": "full_round"}}]}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("not every edge of the body"), "{error}");
+}

@@ -761,6 +761,17 @@ impl<K: Kernel> Document<K> {
             .and_then(|name| src.parameters.find(name))
             .and_then(|id| src.parameters.value(id));
         let value = |id: ParamId| state.parameters.value(id).unwrap_or(f64::NAN);
+        // An inward end cap's cut back (mitcad#2243) stays with the part.
+        if !def.cut_back.is_none() {
+            return Err(refusal(
+                "the part is cut back by an inward end cap",
+                Vec::new(),
+                format!(
+                    "{} is cut back at an end for its end cap: make the cap outward or remove it first",
+                    entry.name
+                ),
+            ));
+        }
         let mut angles = [0.0; 2];
         let mut tilts = [Tilt::X; 2];
         for (i, cut) in [&def.ends.a, &def.ends.b].into_iter().enumerate() {
@@ -1079,6 +1090,7 @@ impl<K: Kernel> Document<K> {
         rewrite.items(&mut next.print_plates, "a print plate", &mut lost)?;
         rewrite.items(&mut next.filament_changes, "a filament change", &mut lost)?;
         rewrite.items(&mut next.comments, "a comment", &mut lost)?;
+        rewrite.items(&mut next.decals, "a decal", &mut lost)?;
         let others: Vec<ComponentUid> = next
             .assembly
             .components

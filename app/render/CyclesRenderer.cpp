@@ -1129,6 +1129,19 @@ private:
       if (color != nullptr) {
         g.connect(color, bsdf->input("Base Color"));
       }
+      // A decal's surface (mitcad#2244): the image's alpha times the
+      // opacity, so that its transparent pixels show the face under it.
+      if (m.textureAlpha && colorImage && !projection.planes.empty()) {
+        auto* image = g.create_node<ccl::ImageTextureNode>();
+        image->set_filename(ccl::ustring(m.texture));
+        image->set_colorspace(ccl::u_colorspace_scene_linear_srgb);
+        g.connect(projection.planes.front().coordinates, image->input("Vector"));
+        auto* alpha = g.create_node<ccl::MathNode>();
+        alpha->set_math_type(ccl::NODE_MATH_MULTIPLY);
+        alpha->set_value2(m.opacity);
+        g.connect(image->output("Alpha"), alpha->input("Value1"));
+        g.connect(alpha->output("Value"), bsdf->input("Alpha"));
+      }
       // A map's values scaled by its factor (mitcad#1874: glTF's roughness
       // and metalness factors), where it is not 1.
       const auto scaled = [&](ccl::ShaderOutput* value, float factor) {

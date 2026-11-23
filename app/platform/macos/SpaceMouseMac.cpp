@@ -5,7 +5,11 @@
 // access, use its separately installed client framework. The axes are HID's, as on
 // Windows (SpaceMouseDevice.hpp maps them); input counts only while Mitcad
 // is the active application. IOKit gives each axis's value on its own, so
-// how a device splits its reports (mitcad#1034) does not matter here.
+// how a device splits its reports (mitcad#1034) does not matter here. The
+// process has one HID Manager (SpaceMouseConnection, mitcad#2297), its
+// input going to the active design only; one per design had moved every
+// open design's view. The driver's client is the application's already
+// (its executable name, no window), so nothing follows the active window.
 
 #include "../SpaceMouseDevice.hpp"
 

@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: MIT
+# The Browser rows' Activate radio button and Show eye places (mitcad#2223,
+# GitHub mitcad/Mitcad#508) in the Docked layout, on the design of
+# tools/ui-scripts/browser-control-places.json (Frame:1 with Pin:1 a level
+# deeper, a component with a long name; the root active):
+#   0. The defaults (Classic): the radio button right after each name.
+#   1. Browser Activate button: Right. Every radio button's centre has the
+#      same x (within 1 px) just inside the panel's visible right edge, the
+#      long name elided before it; a click on Pin:1's radio button
+#      activates Pin, the root's the root.
+#   2. Browser Show eye: Right too. Every eye's centre has the same x, left
+#      of the radio buttons; a click on Frame:1's eye hides it, another
+#      shows it.
+#   3. Both Classic again: the rows as at the start.
+# Run by tools/ui-browser-control-places-test.sh (Linux),
+# tools/ui-windows-browser-control-places-test.ps1 (Windows) and
+# tools/ui-macos-browser-control-places-test.sh (macOS), after
+# browser-control-places.mitcad-ui (the Floating layout's steps), whose
+# Restore Defaults leaves both places Classic in the settings the runs share.
+expect-ever 'View area'
+wait-idle
+window-resize 1260 860
+wait-idle
+sleep 300
+
+# 0. The defaults.
+expect-ever '^Browser controls: activate classic, eye classic$'
+expect-ever '^Browser radio Root/Frame:1/Pin:1 at ' 30
+expect-never '^Browser right edge at '
+capture rootRadio '^Browser radio Root at (-?[0-9]+),'
+capture frameRadio '^Browser radio Root/Frame:1 at (-?[0-9]+),'
+capture pinRadio '^Browser radio Root/Frame:1/Pin:1 at (-?[0-9]+),'
+expect-less ${rootRadio} ${frameRadio}
+capture pinName '^Browser Root/Frame:1/Pin:1 at (-?[0-9]+),'
+capture longRadio '^Browser radio Root/Bracket-for-the-left-side-motor-unit-with-the-mounting-plate-and-cover:1 at (-?[0-9]+),'
+expect-less ${pinName} ${pinRadio}
+expect-less ${frameRadio} ${longRadio}
+
+# 1. Activate on the right.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice browserActivatePlace 'Right'
+key Return
+wait-log '^Preferences: browser activate button right$'
+focus-main
+expect-setting browser/activateButtonPlace right
+wait-log '^Browser controls: activate right, eye classic$'
+wait-idle
+sleep 500
+capture edge '^Browser right edge at (-?[0-9]+),'
+capture rootRadio '^Browser radio Root at (-?[0-9]+),'
+capture frameRadio '^Browser radio Root/Frame:1 at (-?[0-9]+),'
+capture pinRadio '^Browser radio Root/Frame:1/Pin:1 at (-?[0-9]+),'
+capture longRadio '^Browser radio Root/Bracket-for-the-left-side-motor-unit-with-the-mounting-plate-and-cover:1 at (-?[0-9]+),'
+capture longName '^Browser Root/Bracket-for-the-left-side-motor-unit-with-the-mounting-plate-and-cover:1 at (-?[0-9]+),'
+expect-near ${frameRadio} ${rootRadio} 0 1
+expect-near ${pinRadio} ${rootRadio} 0 1
+expect-near ${longRadio} ${rootRadio} 0 1
+expect-less ${rootRadio} ${edge}
+expect-near ${rootRadio} ${edge} 0 24
+expect-less ${longName} ${longRadio}
+expect-log '^Browser name elided Root/Bracket-for-the-left-side-motor-unit-with-the-mounting-plate-and-cover:1: '
+mark
+click-logged '^Browser radio Root/Frame:1/Pin:1 at '
+wait-log '^Activated Pin$'
+wait-idle
+mark
+click-logged '^Browser radio Root at '
+wait-log '^Activated Root$'
+wait-idle
+
+# 2. The eye on the right too.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice browserEyePlace 'Right'
+key Return
+wait-log '^Preferences: browser show eye right$'
+focus-main
+expect-setting browser/showEyePlace right
+wait-log '^Browser controls: activate right, eye right$'
+wait-idle
+sleep 500
+capture rootRadio '^Browser radio Root at (-?[0-9]+),'
+capture frameRadio '^Browser radio Root/Frame:1 at (-?[0-9]+),'
+capture frameEye '^Browser eye Root/Frame:1 at (-?[0-9]+),'
+capture pinEye '^Browser eye Root/Frame:1/Pin:1 at (-?[0-9]+),'
+capture bodyEye '^Browser eye Root/Bodies/[^ ]+ at (-?[0-9]+),'
+capture longEye '^Browser eye Root/Bracket-for-the-left-side-motor-unit-with-the-mounting-plate-and-cover:1 at (-?[0-9]+),'
+capture longName '^Browser Root/Bracket-for-the-left-side-motor-unit-with-the-mounting-plate-and-cover:1 at (-?[0-9]+),'
+expect-near ${frameRadio} ${rootRadio} 0 1
+expect-near ${pinEye} ${frameEye} 0 1
+expect-near ${bodyEye} ${frameEye} 0 1
+expect-near ${longEye} ${frameEye} 0 1
+expect-less ${frameEye} ${frameRadio}
+expect-less ${longName} ${longEye}
+mark
+click-logged '^Browser eye Root/Frame:1 at '
+wait-log '^Visibility Root/Frame:1: hidden$'
+wait-idle
+mark
+click-logged '^Browser eye Root/Frame:1 at '
+wait-log '^Visibility Root/Frame:1: shown$'
+wait-idle
+
+# 3. Both Classic again.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice browserActivatePlace 'Classic'
+qt-choice browserEyePlace 'Classic'
+key Return
+wait-log '^Preferences: browser show eye classic$'
+focus-main
+expect-setting browser/activateButtonPlace classic
+expect-setting browser/showEyePlace classic
+wait-log '^Browser controls: activate classic, eye classic$'
+wait-idle
+sleep 500
+capture rootRadio '^Browser radio Root at (-?[0-9]+),'
+capture frameRadio '^Browser radio Root/Frame:1 at (-?[0-9]+),'
+capture pinRadio '^Browser radio Root/Frame:1/Pin:1 at (-?[0-9]+),'
+expect-less ${rootRadio} ${frameRadio}
+capture pinName '^Browser Root/Frame:1/Pin:1 at (-?[0-9]+),'
+capture longRadio '^Browser radio Root/Bracket-for-the-left-side-motor-unit-with-the-mounting-plate-and-cover:1 at (-?[0-9]+),'
+expect-less ${pinName} ${pinRadio}
+expect-less ${frameRadio} ${longRadio}
+expect-never 'Recompute failed|TestDriver: FAIL'

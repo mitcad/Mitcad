@@ -23,6 +23,7 @@
 #include <QPoint>
 #include <QRectF>
 #include <QSizeF>
+#include <QToolTip>
 #include <QtLogging>
 
 #include <AIS_InteractiveContext.hxx>
@@ -195,6 +196,42 @@ protected:
 private:
   std::vector<float> m_points;
   QColor m_color;
+};
+
+// Point Cloud Deviation's points (mitcad#2240): each in its own colour,
+// depth-tested with the bodies, not pickable.
+class DeviationPoints : public AIS_InteractiveObject {
+public:
+  DeviationPoints(const std::vector<float>& points, const std::vector<QRgb>& colors)
+      : m_points(points), m_colors(colors) {}
+
+  bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
+
+protected:
+  void Compute(const occ::handle<PrsMgr_PresentationManager>&, const occ::handle<Prs3d_Presentation>& presentation,
+               const int mode) override {
+    const std::size_t count = std::min(m_points.size() / 3, m_colors.size());
+    if (mode != 0 || count == 0) {
+      return;
+    }
+    occ::handle<Graphic3d_ArrayOfPoints> points = new Graphic3d_ArrayOfPoints(static_cast<int>(count), true);
+    for (std::size_t i = 0; i < count; ++i) {
+      const float* v = m_points.data() + i * 3;
+      const QColor color = QColor::fromRgb(m_colors[i]);
+      points->AddVertex(gp_Pnt(v[0], v[1], v[2]), occtColor(color));
+    }
+    // Each point has its own colour; the aspect's is the first point's.
+    occ::handle<Graphic3d_AspectMarker3d> aspect =
+        new Graphic3d_AspectMarker3d(Aspect_TOM_POINT, occtColor(QColor::fromRgb(m_colors[0])), 4.0);
+    const occ::handle<Graphic3d_Group> group = presentation->NewGroup();
+    group->SetGroupPrimitivesAspect(aspect);
+    group->AddPrimitiveArray(points);
+  }
+  void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}
+
+private:
+  std::vector<float> m_points;
+  std::vector<QRgb> m_colors;
 };
 
 // A card over the view, as the view's banner draws one.
@@ -375,6 +412,18 @@ void OcctViewer::setPrintOverlay(const PrintOverlay& overlay) {
     m_context->Display(m_printGaps, 0, -1, false);
     m_context->SetZLayer(m_printGaps, Graphic3d_ZLayerId_Topmost);
   }
+  // Point Cloud Deviation's points (mitcad#2240), and their distances for
+  // the hover's words (deviationToolTip).
+  if (!m_deviationPoints.IsNull()) {
+    m_context->Remove(m_deviationPoints, false);
+    m_deviationPoints.Nullify();
+  }
+  m_deviationPlaces = overlay.cloudPoints;
+  m_deviationDistances = overlay.cloudDistances;
+  if (!overlay.cloudPoints.empty()) {
+    m_deviationPoints = new DeviationPoints(overlay.cloudPoints, overlay.cloudColors);
+    m_context->Display(m_deviationPoints, 0, -1, false);
+  }
   if (m_printLabels == nullptr && !overlay.isEmpty()) {
     m_printLabels = new PrintOverlayLabels(this, m_context, [this] { sceneChanged(); });
   }
@@ -423,6 +472,8 @@ void PrintOverlayLabels::setOverlay(const PrintOverlay& overlay) {
   m_gapLabel = overlay.narrowestLabel;
   m_gapColor = overlay.gapColor;
   m_draftColors = overlay.draftColors;
+  m_deviationColors = overlay.deviationColors;
+  m_unmeasuredColor = overlay.unmeasuredColor;
   m_title = overlay.title;
   m_entries = overlay.legend;
   m_markerColor = overlay.thinColor;
@@ -436,6 +487,13 @@ void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin, c
   // (mitcad#2166), the thin walls' entry has the marker's colour, the
   // narrow gaps' the gap marker's, the other is the overhangs'.
   for (auto& entry : m_entries) {
+    // A Point Cloud Deviation's scale (mitcad#2240) keeps its colours: its
+    // points were coloured with them.
+    if (entry.first.isValid() &&
+        (std::find(m_deviationColors.cbegin(), m_deviationColors.cend(), entry.first) != m_deviationColors.cend() ||
+         entry.first == m_unmeasuredColor)) {
+      continue;
+    }
     const auto known = std::find(m_draftColors.cbegin(), m_draftColors.cend(), entry.first);
     if (entry.first.isValid() && known != m_draftColors.cend()) {
       entry.first = draft[static_cast<std::size_t>(known - m_draftColors.cbegin())];
@@ -560,6 +618,38 @@ void PrintOverlayLabels::placeLegend() {
   const NCollection_Vec2<int> offset(qRound((m_insets.left() + kMargin - 1.0) * m_ratio),
                                      qRound((m_insets.bottom() + kMargin - 1.0) * m_ratio));
   m_legend->SetTransformPersistence(new Graphic3d_TransformPers(Graphic3d_TMF_2d, Aspect_TOTP_LEFT_LOWER, offset));
+}
+
+bool OcctViewer::deviationToolTip(const QPoint& at, const QPoint& global) {
+  // The measured point nearest the pointer, within a few pixels: its
+  // distance in words (mitcad#2240).
+  constexpr double kReach = 6.0;
+  const std::size_t count = std::min(m_deviationPlaces.size() / 3, m_deviationDistances.size());
+  if (m_deviationPoints.IsNull() || count == 0) {
+    return false;
+  }
+  double best = kReach * kReach;
+  std::optional<std::size_t> found;
+  for (std::size_t i = 0; i < count; ++i) {
+    const float* v = m_deviationPlaces.data() + i * 3;
+    const QPointF p = toWidgetF(gp_Pnt(v[0], v[1], v[2]));
+    const double dx = p.x() - at.x();
+    const double dy = p.y() - at.y();
+    if (dx * dx + dy * dy < best) {
+      best = dx * dx + dy * dy;
+      found = i;
+    }
+  }
+  if (!found) {
+    return false;
+  }
+  const double d = m_deviationDistances[*found];
+  const QString side = d > 0.0 ? tr("outside") : d < 0.0 ? tr("inside") : tr("on the faces");
+  const QString tip = tr("Distance %1 mm (%2)").arg(QString::number(std::abs(d), 'f', 3), side);
+  // For UI tests: what the hover says.
+  qDebug().noquote() << QStringLiteral("Deviation hover: %1").arg(tip);
+  QToolTip::showText(global, tip, this);
+  return true;
 }
 
 } // namespace mitcad

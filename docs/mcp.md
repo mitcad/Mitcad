@@ -730,6 +730,48 @@ read from a file. The refusal names the path. Thus an AI assistant can make and
 assign a custom or emissive appearance in a live session. The user does
 not have to open the design again.
 
+**The print libraries** (mitcad#2224). My library (the user's), the
+project's library and the base library of materials and print profiles
+are file IO: they read and write MitCad's library folders, and an edit
+or a delete there reaches other designs. The live server uses them only
+when the user turned on **Preferences › AI Assistants › Agents may use my
+print libraries** (the setting `ai/agentsMayUsePrintLibraries`, off by
+default; MitCad reads it for each request; Export and Import Settings
+carry it). With it on, the live server permits:
+
+- the queries `library_items` and `print_library`;
+- the library forms of `create_material`, `edit_material`,
+  `delete_material`, `merge_materials`, `import_materials`,
+  `create_dataset_materials`, `set_component_material`,
+  `set_body_material`, `create_print_profile`, `edit_print_profile`,
+  `delete_print_profile` and `set_property` (`library` given as `base`,
+  `user` or `project`, or `based_on` as a library's item
+  `{"library", "id"}`);
+- `copy_from_print_library`, `update_from_print_library`,
+  `decline_print_library_update` and `save_to_print_library`.
+
+Each runs as the application's own command does, one undo step labelled
+`(agent)`: undo takes a written file back, as for the user's own change.
+The server never takes an agent's `project`: it fills in the open
+design's own project folder (none for a design outside a project), and
+refuses in words a call whose `project` names any other folder, or names
+one for a design outside a project. The open Materials, Printers and
+Processes managers read the libraries again after such a call. With the
+preference off, each is refused with "The print libraries are left to
+the user (Preferences › AI Assistants › Agents may use my print
+libraries); …" as the tool's error result with `applied: false`; in an
+array it names the `entry`, and nothing of the array runs.
+
+Still refused with it on: `slicer_presets` (an installed slicer's own
+folders, mitcad#830), `import_print_profile` and `import_slicer_presets`
+into a library (they read files by path), Send to Slicer (another
+program's window), every call that reads a file path, and Flex types
+from a library (`flex.set_item` with `library`: not a print library). The
+headless server has no Preferences: it refuses the print libraries in
+words, and its print imports stay in the design (mitcad#1570).
+`core/mcp/src/print_library.rs` holds the rule, and the commands'
+schemas (`model_reference`) say when their library forms run.
+
 Each change that an AI assistant makes is labelled `… (agent)` in the undo text
 and in the version history. Examples are `Add Line (agent)` and `Edit
 Sketch2 (agent)`. The second occurs when an assistant changed the open

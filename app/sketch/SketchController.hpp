@@ -153,7 +153,9 @@ struct ToolMenuEntry;
 
 // A value typed in the view while drawing (heads-up input).
 struct FieldSpec {
-  enum class Kind { Length, Angle, Count, Text };
+  // Ratio: a number without a unit that is no count (a conic's Rho,
+  // mitcad#2236).
+  enum class Kind { Length, Angle, Count, Text, Ratio };
   FieldSpec() = default;
   // A constructor, not an aggregate: the tools' brace lists leave the step
   // minimum out without a missing-initializer warning.
@@ -803,8 +805,9 @@ public:
   bool editStepPattern(const QString& kind, const QStringList& items);
   // The edit panel a double-click on one selected item of this sketch
   // opens, shared by the view and the step list (mitcad#2089):
-  // `sketch.edit_code`, `sketch.edit_text`, `sketch.edit_offset` or
-  // `sketch.edit_pattern`; empty for none.
+  // `sketch.edit_code`, `sketch.edit_text`, `sketch.edit_equation_curve`
+  // (mitcad#2237), `sketch.edit_offset` or `sketch.edit_pattern`; empty for
+  // none.
   QString editCommandOf(const SelectionItem& item) const;
   // The edit panel a double-click on constraint `id`'s glyph opens, shared
   // by the view and the step list (mitcad#2099): `sketch.edit_equal_spacing`

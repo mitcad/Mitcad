@@ -110,7 +110,10 @@ private:
   QString m_design;
   QTabWidget* m_tabs = nullptr;
   QDoubleSpinBox* m_kerf = nullptr;
-  QVector<QTableWidget*> m_cutTables; // rows, stock, other
+  QVector<QTableWidget*> m_cutTables; // rows, stock, other, end cap plates
+  // The end cap plates' heading and table (mitcad#2243): shown when the
+  // design has plates.
+  QWidget* m_platesBox = nullptr;
   QTableWidget* m_partsTable = nullptr;
   // The keys of the parts list's property columns (mitcad#496).
   QLineEdit* m_columns = nullptr;

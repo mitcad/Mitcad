@@ -77,7 +77,7 @@ QStringList jointHolderInputs(const QString& command) {
   if (command == QLatin1String("assemble.rigid_group")) {
     return {QStringLiteral("occurrences")};
   }
-  if (command == QLatin1String("assemble.constraint")) {
+  if (command == QLatin1String("assemble.constraint") || command == QLatin1String("assemble.constraint_one")) {
     return {QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("b2")};
   }
   return {};
@@ -126,7 +126,7 @@ QString madeWhat(const QString& command) {
   if (command == QLatin1String("assemble.rigid_group")) {
     return QCoreApplication::translate("JointHolder", "A rigid group");
   }
-  if (command == QLatin1String("assemble.constraint")) {
+  if (command == QLatin1String("assemble.constraint") || command == QLatin1String("assemble.constraint_one")) {
     return QCoreApplication::translate("JointHolder", "A constraint");
   }
   return QString();

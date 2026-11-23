@@ -8,9 +8,11 @@ use std::sync::Arc;
 
 use crate::analysis_plan::AnalysisPlans;
 use crate::equations::{CurvTerm, EqKind, Interval, P, Rad, SplineEq, TParam};
+// Points on offsets of curves (mitcad#2278).
+use crate::equations::{OffsetSrc, OffsetT};
 use crate::sparse::{GramPlan, Rows};
 use crate::system::{ConstraintRec, EntityData, System};
-use crate::types::{Anchor, Constraint, EntityId, SpacingMode, SplineEnd};
+use crate::types::{Anchor, Constraint, EntityId, OffsetAt, SpacingMode, SplineEnd};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Owner {
@@ -1465,6 +1467,121 @@ fn constraint_equations(
             how: x.interval(v, mode),
             side: rec.side,
         }),
+        // Points on offsets of curves (mitcad#2278).
+        PointOnOffset {
+            point,
+            curve,
+            left,
+            at,
+        } => {
+            let param = rec.params.first().copied();
+            for axis in 0..2 {
+                b.push(z, |v, x| {
+                    let (src, t) = x.offset_src(v, curve.index(), at, param);
+                    EqKind::OnOffset {
+                        p: x.p(v, point.index()),
+                        src,
+                        t,
+                        left,
+                        axis,
+                    }
+                });
+            }
+        }
+        PointOnOffsetCorner {
+            point,
+            corner,
+            a,
+            a_at,
+            a_left,
+            b: e_b,
+            b_at,
+            b_left,
+            ..
+        } => {
+            let s = rec.params[0];
+            for axis in 0..2 {
+                b.push(z, |v, x| EqKind::OnOffsetCorner {
+                    p: x.p(v, point.index()),
+                    corner: x.p(v, corner.index()),
+                    a: {
+                        let (src, t) = x.offset_src(v, a.index(), a_at, None);
+                        (src, t, a_left)
+                    },
+                    b: {
+                        let (src, t) = x.offset_src(v, e_b.index(), b_at, None);
+                        (src, t, b_left)
+                    },
+                    s: v.v(s),
+                    axis,
+                });
+            }
+        }
+    }
+}
+
+impl Ctx<'_> {
+    // Points on offsets of curves (mitcad#2278).
+    /// The curve `e` as an offset's source, and the parameter `at` gives
+    /// on it (`param`, the constraint's unknown, for
+    /// [`OffsetAt::Along`]).
+    fn offset_src(
+        &self,
+        v: &mut Vars,
+        e: usize,
+        at: OffsetAt,
+        param: Option<usize>,
+    ) -> (OffsetSrc, OffsetT) {
+        let data = self.ent(e).clone();
+        let src = match &data {
+            EntityData::Line { p1, p2 } => OffsetSrc::Line {
+                a: self.p(v, *p1),
+                b: self.p(v, *p2),
+            },
+            EntityData::Circle { c, .. } | EntityData::Arc { c, .. } => OffsetSrc::Round {
+                c: self.p(v, *c),
+                r: self.rad(v, e),
+            },
+            EntityData::Ellipse { c, a, b } | EntityData::EllipticalArc { c, a, b, .. } => {
+                OffsetSrc::Ellipse {
+                    c: self.p(v, *c),
+                    a: self.p(v, *a),
+                    b: v.v(*b),
+                }
+            }
+            EntityData::BSpline { basis, ctrl } | EntityData::Fitted { basis, ctrl, .. } => {
+                OffsetSrc::Spline {
+                    basis: basis.clone(),
+                    ctrl: ctrl.iter().map(|&q| self.p(v, q)).collect(),
+                }
+            }
+        };
+        let last = match at {
+            OffsetAt::Along { t, .. } => {
+                let t = match param {
+                    Some(g) => OffsetT::Var(v.v(g)),
+                    None => OffsetT::Const(t),
+                };
+                return (src, t);
+            }
+            OffsetAt::At(t) => return (src, OffsetT::Const(t)),
+            OffsetAt::Start => false,
+            OffsetAt::End => true,
+        };
+        let t = match &data {
+            EntityData::Line { .. } => OffsetT::Const(if last { 1.0 } else { 0.0 }),
+            EntityData::Arc { s, e, .. } => OffsetT::At(self.p(v, if last { *e } else { *s })),
+            EntityData::EllipticalArc { ts, te, .. } => {
+                OffsetT::Var(v.v(if last { *te } else { *ts }))
+            }
+            EntityData::BSpline { basis, .. } | EntityData::Fitted { basis, .. } => {
+                let (lo, hi) = basis.domain();
+                OffsetT::Const(if last { hi } else { lo })
+            }
+            // Validated: a closed curve has no ends.
+            EntityData::Circle { .. } | EntityData::Ellipse { .. } => OffsetT::Const(0.0),
+        };
+        (src, t)
     }
 }
 

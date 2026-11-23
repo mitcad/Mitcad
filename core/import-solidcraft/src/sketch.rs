@@ -6,9 +6,8 @@
 //!   origin becomes a fixed point at (0, 0) when something uses it. Points
 //!   of linked (projected) geometry are fixed where the file has them.
 //! - Lines, circles, arcs (counter-clockwise), ellipses, splines (control
-//!   points, or fit points: `fitted_spline`) and conics (a rational
-//!   quadratic spline through the conic's ends with its apex as the middle
-//!   pole, weight ρ / (1 − ρ): the same curve). Construction lines,
+//!   points, or fit points: `fitted_spline`) and conics (MitCad's `conic`
+//!   with the same ends, apex and Rho, mitcad#2236). Construction lines,
 //!   centerlines and infinite lines are construction geometry.
 //! - Constraints and dimensions of the same meaning; a dimension's value
 //!   is its parameter (`d1 = width`); an angle from line a to line b is the
@@ -18,6 +17,10 @@
 //!   pattern relations (the copies stay where they are), the angle of a
 //!   line from the x axis and an arc's sweep (other than level or upright
 //!   lines), a slot's overall length and offset distances.
+//! - Equation curves (format 44, mitcad#2237): the sketch's own equation
+//!   curves on their fit point splines, the formulas kept; one whose
+//!   variable takes its range's unit (format 46) gets that unit
+//!   (`variable_unit`, mitcad#2264), its formulas as they are.
 //! - 3D curves ([`super::spatial`], mitcad#2157): a 3D sketch of their own,
 //!   the sketch itself when it has nothing else, else right after it
 //!   (`<name> 3D`).
@@ -144,9 +147,148 @@ pub(super) struct Translated {
     pub dropped: Vec<String>,
     pub constraints_mapped: usize,
     pub dimensions_mapped: usize,
+    /// The formulas of its equation curves (mitcad#2237), as the sketch
+    /// definition keeps them.
+    pub equations: Vec<Value>,
 }
 
 impl<K: Kernel> Importer<'_, '_, K> {
+    /// A SolidCraft equation curve (format 44) as the sketch's record of
+    /// its formulas (mitcad#2237): `explicit` without `x`, `parametric`
+    /// with it; its parameters by their MitCad names, its variable as it
+    /// is; its fit point spline's points fixed, closed where the file's
+    /// spline is periodic. Why one cannot keep its formulas comes back.
+    fn equation_curve(&mut self, s: &Sketch, q: &Value, t: &mut Translated) -> Result<(), String> {
+        use mitcad_model::sketch::equation::{EquationCurve, VariableUnit};
+        let text = |key: &str| q.get(key).and_then(Value::as_str).map(str::to_owned);
+        let file_curve = text("curve").ok_or("it names no curve")?;
+        // `number` (format 46; before it every variable): a plain number;
+        // `range`: the unit of the range (mitcad#2264).
+        let file_unit = text("variable_unit").unwrap_or_else(|| "number".to_owned());
+        if file_unit != "number" && file_unit != "range" {
+            return Err(format!(
+                "its variable's unit {file_unit} is not one this import knows"
+            ));
+        }
+        let curve = t
+            .curves
+            .get(&file_curve)
+            .cloned()
+            .ok_or_else(|| format!("the sketch has no curve {file_curve}"))?;
+        let at = t
+            .entities
+            .iter()
+            .position(|e| e["id"] == json!(curve))
+            .ok_or_else(|| format!("the curve {file_curve} did not come in"))?;
+        if t.entities[at]["type"] != "fitted_spline" {
+            return Err(format!("{file_curve} is not a spline through fit points"));
+        }
+        let x = text("x").filter(|x| !x.trim().is_empty());
+        let y = text("y").ok_or("it has no formula y")?;
+        let start = text("start").ok_or("it has no start")?;
+        let end = text("end").ok_or("it has no end")?;
+        let tolerance = q
+            .get("tolerance")
+            .and_then(Value::as_f64)
+            .unwrap_or(mitcad_model::sketch::equation::DEFAULT_TOLERANCE)
+            .clamp(1e-6, 10.0);
+        let variable = if x.is_some() { "t" } else { "x" };
+        let local = [(variable, variable.to_owned())];
+        let y = self.params.expression_with(self.doc, &y, &local)?;
+        let x = match x {
+            Some(x) => Some(self.params.expression_with(self.doc, &x, &local)?),
+            None => None,
+        };
+        let start = self.params.expression(self.doc, &start)?;
+        let end = self.params.expression(self.doc, &end)?;
+        let variable_unit = if file_unit == "range" {
+            self.range_unit(&start, &end)?
+        } else {
+            VariableUnit::Plain
+        };
+        let mut record = json!({
+            "curve": curve,
+            "mode": if x.is_some() { "parametric" } else { "explicit" },
+            "y": y,
+            "start": start,
+            "end": end,
+            "tolerance": tolerance,
+        });
+        if let Some(x) = x {
+            record["x"] = json!(x);
+        }
+        if !variable_unit.is_plain() {
+            record["variable_unit"] = json!(variable_unit);
+        }
+        // Refused here rather than with the whole sketch.
+        let read: EquationCurve =
+            serde_json::from_value(record.clone()).map_err(|e| e.to_string())?;
+        read.check_fields()?;
+        // A curve that returns to its start: closed, smooth there.
+        let periodic = s.curves.iter().any(|c| {
+            c.id == file_curve && matches!(c.kind, CurveKind::Spline { periodic: true, .. })
+        });
+        let points: Vec<Value> = t.entities[at]["points"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if periodic && points.len() >= 3 {
+            t.entities[at]["closed"] = json!(true);
+            let note = format!("{file_curve}: periodic (taken as an open spline)");
+            t.dropped.retain(|d| *d != note);
+        }
+        // Its points are fixed for the solver; the formulas place them.
+        for e in t.entities.iter_mut() {
+            if points.contains(&e["id"]) {
+                e["fixed"] = json!(true);
+            }
+        }
+        t.equations.push(record);
+        Ok(())
+    }
+
+    /// The unit of an equation curve's range, its (MitCad) expressions
+    /// `start` and `end` (mitcad#2264): a length or an angle, a plain
+    /// number where both are plain; the variable of a file's `range` curve
+    /// is that.
+    fn range_unit(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<mitcad_model::sketch::equation::VariableUnit, String> {
+        use mitcad_model::expr::{Dims, Value as ExprValue};
+        use mitcad_model::sketch::equation::VariableUnit;
+        let table = self.doc.parameters().table();
+        let mut found = Dims::NONE;
+        for (name, text) in [("start", start), ("end", end)] {
+            let dims = match table.evaluate_value(text) {
+                Ok(ExprValue::Number(q)) => q.dims,
+                Ok(ExprValue::Text(_)) => return Err(format!("its {name} is a text")),
+                Err(e) => return Err(format!("its {name} does not evaluate: {e}")),
+            };
+            if dims.is_dimensionless() {
+                continue;
+            }
+            if !found.is_dimensionless() && found != dims {
+                return Err(format!(
+                    "its range's start and end have different units ({found} and {dims})"
+                ));
+            }
+            found = dims;
+        }
+        if found == Dims::LENGTH {
+            Ok(VariableUnit::Length)
+        } else if found == Dims::ANGLE {
+            Ok(VariableUnit::Angle)
+        } else if found.is_dimensionless() {
+            Ok(VariableUnit::Plain)
+        } else {
+            Err(format!(
+                "its range has units ({found}), neither a length nor an angle"
+            ))
+        }
+    }
+
     pub(super) fn sketch(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let s: SketchFeature = f.typed()?;
         // 3D curves only: the 3D sketch is the sketch (mitcad#2157).
@@ -175,6 +317,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             "entities": t.entities,
             "constraints": t.constraints,
             "dimensions": t.dimensions,
+            "equations": t.equations,
         });
         if let Some(frame) = &plane.frame {
             def["frame"] = json!({"origin": frame.0, "x_axis": frame.1, "y_axis": frame.2});
@@ -319,6 +462,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             dropped: Vec::new(),
             constraints_mapped: 0,
             dimensions_mapped: 0,
+            equations: Vec::new(),
         };
         // Which points something uses (the origin only then).
         let mut used = vec![false; s.points.len()];
@@ -426,10 +570,20 @@ impl<K: Kernel> Importer<'_, '_, K> {
                         json!({"id": id, "type": "fitted_spline", "points": ids})
                     }
                 }
+                // A conic with its Rho (mitcad#2236). The file's Rho lies
+                // in (0, 1) as SolidCraft makes it; one outside is taken at
+                // the nearest Rho a conic has, and said.
                 CurveKind::Conic { a, b, apex, rho } => {
-                    let w = (rho / (1.0 - rho)).clamp(1e-6, 1e6);
-                    json!({"id": id, "type": "spline", "degree": 2,
-                        "control": [pid(*a)?, pid(*apex)?, pid(*b)?], "weights": [1.0, w, 1.0]})
+                    let r = rho.clamp(1e-6, 1.0 - 1e-6);
+                    if r != *rho || !rho.is_finite() {
+                        t.dropped.push(format!(
+                            "{}: its Rho {rho} is outside (0, 1) (taken as {r})",
+                            c.id
+                        ));
+                    }
+                    let r = if r.is_finite() { r } else { 0.5 };
+                    json!({"id": id, "type": "conic", "start": pid(*a)?, "end": pid(*b)?,
+                        "apex": pid(*apex)?, "rho": r})
                 }
             };
             if c.centerline {
@@ -653,16 +807,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     .push(format!("{n} {what}{}", if n > 1 { "s" } else { "" }));
             }
         }
-        if !s.equations.is_empty() {
-            // One and several as whole messages (mitcad#1284).
-            t.dropped.push(if s.equations.len() == 1 {
-                "the formula of an equation curve (it stays the spline it placed)".to_owned()
-            } else {
-                format!(
-                    "the formulas of {} equation curves (each stays the spline it placed)",
-                    s.equations.len()
-                )
-            });
+        // Equation curves keep their formulas (mitcad#2237); one that cannot
+        // stays the spline it placed.
+        for q in &s.equations {
+            if let Err(why) = self.equation_curve(s, q, &mut t) {
+                t.dropped.push(format!(
+                    "the formula of an equation curve: {why} (it stays the spline it placed)"
+                ));
+            }
         }
         let wire_links = wire_links(s);
         for l in &s.links {

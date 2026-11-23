@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# The shutdown's steps (mitcad#2275), a third run after
+# session-log-ended.mitcad-ui, with MITCAD_HANG_WATCHDOG_MS=1000 and
+# MITCAD_TEST_SHUTDOWN_DELAY=3000:display mesh writes: the window comes up,
+# the run quits; its teardown, after the driver, logs each step, and the
+# watchdog warns of the step held for 3 s. The wrapper checks the file
+# after (the driver is gone by then).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Hang watchdog: 1000 ms$' 10
+expect-session-log 'info +Session log: '
+quit

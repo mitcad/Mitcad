@@ -299,6 +299,10 @@ impl SketchEdit<'_> {
             }
         }
         self.def.entities.retain(|e| !entities.contains(&e.id));
+        // A conic's Rho parameter goes with it (mitcad#2236).
+        self.def.conic_rhos.retain(|r| !entities.contains(&r.curve));
+        // An equation curve's formulas go with it (mitcad#2237).
+        self.def.equations.retain(|q| !entities.contains(&q.curve));
         // Block instances forget them (mitcad#2110).
         self.forget_in_blocks(entities);
         // Equal spacings (mitcad#221) lose the removed anchors; one too
@@ -743,6 +747,30 @@ impl SketchEdit<'_> {
             )
             .map_err(|e| e.message)?;
         solved.store(&mut self.def.entities);
+        // A dragged free end of an offset's result keeps where it now lies
+        // from its source's end (mitcad#2277): the next solve starts it
+        // there, not back on the source's end.
+        let dragged: BTreeSet<EntityUid> = goals
+            .iter()
+            .filter_map(|g| match g {
+                Goal::Point(p, _) => Some(*p),
+                Goal::Radius(..) => None,
+            })
+            .collect();
+        if !dragged.is_empty() && self.def.offsets.iter().any(|o| !o.derived) {
+            let held = super::offset::held_points(&self.def.constraints, &self.def.dimensions);
+            super::offset::record_shifts(
+                &mut self.def.offsets,
+                &self.def.entities,
+                &held,
+                &dragged,
+                &mut |id| {
+                    params
+                        .value(id)
+                        .ok_or_else(|| format!("parameter {} does not exist", params.name(id)))
+                },
+            );
+        }
         // What finishing the edit would solve again (mitcad#679).
         self.dragged = Some(Box::new((self.def.clone(), self.params.clone(), solved)));
         Ok(())
@@ -1499,7 +1527,8 @@ impl SketchEdit<'_> {
                 EntityKind::Arc { .. }
                 | EntityKind::Circle { .. }
                 | EntityKind::Spline { .. }
-                | EntityKind::FittedSpline { .. },
+                | EntityKind::FittedSpline { .. }
+                | EntityKind::Conic { .. },
             ) => Some(false),
             _ => None,
         };
@@ -1925,6 +1954,37 @@ impl SketchEdit<'_> {
                 }
                 return Ok(());
             }
+            EntityKind::Conic {
+                start: s,
+                end: e,
+                apex,
+                ..
+            } => {
+                // A piece of a conic is a conic on the same curve
+                // (mitcad#2236): a new shoulder where the piece's end
+                // tangents meet, a Rho of its own.
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let piece = crate::conic::ConicPiece::of_curve(curve)
+                    .and_then(|c| c.piece(lo, hi))
+                    .ok_or_else(|| {
+                        crate::said(
+                            "the piece of the conic has no shoulder: it would reach the \
+                             curve's asymptote or turn through half an ellipse",
+                            format!("c{}: no conic piece between {lo} and {hi}", id.0),
+                        )
+                    })?;
+                let new_apex = self.add_point(piece.apex);
+                self.def.entity_mut(id).expect("a curve").kind = EntityKind::Conic {
+                    start: start.unwrap_or(s),
+                    end: end.unwrap_or(e),
+                    apex: new_apex,
+                    rho: piece.rho,
+                };
+                // Its Rho is the piece's own now, no longer a parameter's.
+                self.def.conic_rhos.retain(|r| r.curve != id);
+                self.drop_if_unused(apex);
+                return Ok(());
+            }
             other => return Err(format!("a {} cannot be trimmed", other.type_name())),
         };
         self.def.entity_mut(id).expect("a curve").kind = new_kind;
@@ -1951,12 +2011,30 @@ impl SketchEdit<'_> {
             .cloned()
             .ok_or_else(|| format!("curve c{} does not exist", id.0))?;
         let kind = self.curve(id)?.kind.clone();
-        let (start, end) = curve.ends().ok_or("only lines and arcs can be extended")?;
+        let (start, end) = curve
+            .ends()
+            .ok_or("only lines, arcs and conics can be extended")?;
         let at_end = dist(at, end) <= dist(at, start);
         let size = sketch_size(&solved.curves) * 10.0;
         let tol = 1e-9 * size;
+        // A conic runs on along its own curve (mitcad#2236): the solved
+        // conic and how far its continuation goes as a conic.
+        let conic = match kind {
+            EntityKind::Conic { .. } => Some(
+                crate::conic::ConicPiece::of_curve(&curve)
+                    .ok_or_else(|| format!("c{} is not solved as a conic", id.0))?,
+            ),
+            _ => None,
+        };
+        let conic_reach = conic
+            .map(|c| conic_continuation(&c, at_end, size))
+            .transpose()?;
         // The extension as a curve of its own.
         let (extension, from) = match &curve {
+            _ if conic_reach.is_some() => {
+                let (piece, _) = conic_reach.expect("a conic");
+                (piece.curve(), if at_end { end } else { start })
+            }
             Curve2::Line { a, b } => {
                 let d = unit(sub(*b, *a));
                 if at_end {
@@ -1999,7 +2077,7 @@ impl SketchEdit<'_> {
                     if at_end { end } else { start },
                 )
             }
-            _ => return Err("only lines and arcs can be extended".to_owned()),
+            _ => return Err("only lines, arcs and conics can be extended".to_owned()),
         };
         let mut best: Option<(f64, P2, EntityUid)> = None;
         for (other, c) in &solved.curves {
@@ -2020,6 +2098,15 @@ impl SketchEdit<'_> {
                             e - hit.ta
                         }
                     }
+                    // A conic's continuation: its parameter away from the
+                    // end (it may bend back toward it).
+                    Curve2::Nurbs(_) if conic.is_some() => {
+                        if at_end {
+                            hit.ta
+                        } else {
+                            1.0 - hit.ta
+                        }
+                    }
                     _ => d,
                 };
                 if along > 1e-9 && best.is_none_or(|(b, ..)| along < b) {
@@ -2032,6 +2119,18 @@ impl SketchEdit<'_> {
         };
         let (old_start, old_end) = kind.ends().expect("open");
         let moved = if at_end { old_end } else { old_start };
+        // The conic's parameter range up to the curve reached.
+        let conic_range = match (conic, conic_reach) {
+            (Some(c), Some((_, far))) => {
+                let t = if at_end {
+                    crate::conic::parameter_of(c.start, c.apex, c.end, c.rho, point, 1.0, far)
+                } else {
+                    crate::conic::parameter_of(c.start, c.apex, c.end, c.rho, point, far, 0.0)
+                };
+                Some(if at_end { (0.0, t) } else { (t, 1.0) })
+            }
+            _ => None,
+        };
         self.drop_extent_constraints(id);
         // A full turn closes the arc.
         if let (EntityKind::Arc { center, .. }, true) = (
@@ -2060,6 +2159,10 @@ impl SketchEdit<'_> {
         if keeps {
             if let Some(e) = self.def.entity_mut(moved) {
                 e.kind = EntityKind::Point { at: point };
+            }
+            // A conic gets the longer piece's shoulder and Rho.
+            if let Some((t0, t1)) = conic_range {
+                self.reshape(id, &curve, t0, t1, None, None)?;
             }
             let on = match reached {
                 Some((q, _)) => self.computing_offset(q).is_none().then_some(Ref::Point(q)),
@@ -2099,7 +2202,7 @@ impl SketchEdit<'_> {
         } else {
             (Some(p), None)
         };
-        let (lo, hi) = curve.domain();
+        let (lo, hi) = conic_range.unwrap_or_else(|| curve.domain());
         self.reshape(id, &curve, lo, hi, s, e)?;
         self.drop_if_unused(moved);
         Ok(reached.map(|(q, _)| q))
@@ -2218,8 +2321,8 @@ impl SketchEdit<'_> {
     /// Rounds the corner of two lines with an arc of `radius` tangent to
     /// both (sketch Fillet), dimensioned by its radius. The corner
     /// stays as a point on both lines, as in [`SketchEdit::chamfer`].
-    /// A circular arc and a line or another arc (mitcad#1192) are rounded
-    /// at the point where they end together.
+    /// A pair with a circular arc or conic is rounded at the point where
+    /// the curves end together (mitcad#1192, mitcad#2255).
     pub fn fillet(
         &mut self,
         a: EntityUid,
@@ -2268,7 +2371,7 @@ impl SketchEdit<'_> {
     /// of `curves` end at one point, and every one of `points` that ends
     /// exactly two lines (construction lines count only among
     /// construction lines, so a rectangle's diagonal does not spoil its
-    /// corners). Circular arcs count as lines do (mitcad#1192). Each
+    /// corners). Circular arcs and conics count as lines do. Each
     /// corner gets an arc of `radius` as in [`SketchEdit::fillet`]; the
     /// first arc has the radius dimension and the others are Equal to it,
     /// so the one dimension drives them all. Two lines without a shared
@@ -2361,14 +2464,18 @@ impl SketchEdit<'_> {
         )
     }
 
+    fn is_conic(&self, id: EntityUid) -> bool {
+        self.def
+            .entity(id)
+            .is_some_and(|e| matches!(e.kind, EntityKind::Conic { .. }))
+    }
+
     /// The ends of a curve whose corners Sketch Fillet rounds: a line or a
-    /// circular arc (mitcad#1192), or why it is neither.
+    /// circular arc (mitcad#1192) or a conic (mitcad#2255).
     fn fillet_ends(&self, id: EntityUid) -> Result<(EntityUid, EntityUid), String> {
-        match self.curve(id)?.kind {
-            EntityKind::Line { start, end, .. } | EntityKind::Arc { start, end, .. } => {
-                Ok((start, end))
-            }
-            ref other => Err(not_filleted(id, other)),
+        match &self.curve(id)?.kind {
+            kind if can_fillet(kind) => Ok(kind.ends().expect("open curve")),
+            other => Err(not_filleted(id, other)),
         }
     }
 
@@ -2429,20 +2536,18 @@ impl SketchEdit<'_> {
             })
     }
 
-    /// The other side of a corner at the end `p` of the line or arc `x`
-    /// that no other curve shares (mitcad#1192): another line or arc whose
-    /// end is held to `p` ([`SketchEdit::held_ends`]), with that end; one
-    /// of the two curves an arc, of one kind (drawn or construction).
+    /// The other side of a corner at the end `p` of `x` that no other
+    /// curve shares (mitcad#1192): another fillet curve whose end is held
+    /// to `p` ([`SketchEdit::held_ends`]), with that end. At least one
+    /// is curved, and both are drawn or both construction.
     fn held_partner(&self, p: EntityUid, x: EntityUid) -> Option<(EntityUid, EntityUid)> {
         let entity = self.def.entity(x)?;
-        let arc_x = matches!(entity.kind, EntityKind::Arc { .. });
+        let curved_x = !self.is_line(x);
         self.def.entities.iter().find_map(|e| {
-            let arc = match e.kind {
-                EntityKind::Arc { .. } => true,
-                EntityKind::Line { .. } => false,
-                _ => return None,
-            };
-            if e.construction != entity.construction || !(arc || arc_x) {
+            if e.construction != entity.construction
+                || !can_fillet(&e.kind)
+                || (!curved_x && matches!(e.kind, EntityKind::Line { .. }))
+            {
                 return None;
             }
             let (s, t) = e.kind.ends()?;
@@ -2494,7 +2599,7 @@ impl SketchEdit<'_> {
         ))
     }
 
-    /// A line or a circular arc as it leaves its end `at` (at `corner`).
+    /// A fillet leg as it leaves its end `at` (at `corner`).
     fn fillet_leg(&self, curve: EntityUid, at: EntityUid, corner: P2) -> Result<Leg, String> {
         let not_an_end = || {
             crate::said(
@@ -2533,6 +2638,30 @@ impl SketchEdit<'_> {
                     radius: dist(corner, c),
                     ccw,
                     sweep,
+                })
+            }
+            EntityKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => {
+                if at != start && at != end {
+                    return Err(not_an_end());
+                }
+                let rho = self
+                    .def
+                    .conic_rho(curve)
+                    .and_then(|id| self.params.value(id))
+                    .unwrap_or(rho);
+                Ok(Leg::Conic {
+                    from_start: at == start,
+                    piece: crate::conic::ConicPiece {
+                        start: self.at(start)?,
+                        apex: self.at(apex)?,
+                        end: self.at(end)?,
+                        rho,
+                    },
                 })
             }
             ref other => Err(not_filleted(curve, other)),
@@ -2650,8 +2779,7 @@ impl SketchEdit<'_> {
             } else {
                 drawn
             };
-            let rounds =
-                |e: &Entity| matches!(e.kind, EntityKind::Line { .. } | EntityKind::Arc { .. });
+            let rounds = |e: &Entity| can_fillet(&e.kind);
             match ends_here[..] {
                 [a, b] if rounds(a) && rounds(b) => {
                     if self.is_line(a.id) && self.is_line(b.id) {
@@ -2690,15 +2818,15 @@ impl SketchEdit<'_> {
                 _ => {
                     return Err(match ends_here.len() {
                         0 => format!(
-                            "p{} is not the corner of two lines or arcs (no curve ends there)",
+                            "p{} is not the corner of two lines, arcs or conics (no curve ends there)",
                             p.0
                         ),
                         1 => format!(
-                            "p{} is not the corner of two lines or arcs (one curve ends there)",
+                            "p{} is not the corner of two lines, arcs or conics (one curve ends there)",
                             p.0
                         ),
                         n => format!(
-                            "p{} is not the corner of two lines or arcs ({n} curves end there)",
+                            "p{} is not the corner of two lines, arcs or conics ({n} curves end there)",
                             p.0
                         ),
                     });
@@ -2726,7 +2854,8 @@ impl SketchEdit<'_> {
                 ));
             }
             return Err(
-                "the selection has no corner where two lines or arcs end together".to_owned(),
+                "the selection has no corner where two lines, arcs or conics end together"
+                    .to_owned(),
             );
         }
         Ok(corners)
@@ -2743,6 +2872,9 @@ impl SketchEdit<'_> {
                 // No arc of r touches the curves ahead of the corner: an
                 // arc's circle too small to hold it.
                 let (a, b, _) = corner;
+                if self.is_conic(a) || self.is_conic(b) {
+                    return Err(conic_fillet_does_not_fit(r));
+                }
                 let (arc, other) = if self.is_line(a) { (b, a) } else { (a, b) };
                 return Err(format!(
                     "the fillet radius {} mm does not fit on c{} at its corner with c{}, \
@@ -2761,6 +2893,9 @@ impl SketchEdit<'_> {
         }
         for (curve, (need, len)) in taken {
             if need >= len {
+                if self.is_conic(curve) {
+                    return Err(conic_fillet_does_not_fit(r));
+                }
                 // A line's corners with lines take of it in proportion to
                 // the radius.
                 let linear = corners
@@ -2787,9 +2922,9 @@ impl SketchEdit<'_> {
     }
 
     /// What a fillet of `r` takes of each of its two curves at a corner,
-    /// from the corner along the curve (an arc's length), with the
-    /// curve's length: None where no arc of `r` touches both curves
-    /// ahead of the corner.
+    /// from the corner along the curve (the parameter span for a conic),
+    /// with the curve's extent: None where no arc of `r` touches both
+    /// curves ahead of the corner.
     fn fillet_takes(
         &self,
         (a, b, at): FilletCorner,
@@ -2909,15 +3044,15 @@ impl SketchEdit<'_> {
         Ok(arc)
     }
 
-    /// Rounds the corner at `at`, where a circular arc ends together with
-    /// a line or another arc (mitcad#1192), with an arc of `r` tangent to
-    /// both, without a dimension. Of the circles of `r` tangent to both,
+    /// Rounds the corner at `at` with an arc of `r` tangent to both
+    /// legs, without a dimension. Of the circles of `r` tangent to both,
     /// the one on the side where the two curves bound the corner (between
     /// the directions in which they leave it), nearest to it. Both curves
     /// are trimmed back to where the arc touches them; an arc keeps its
     /// centre and radius (and their constraints and dimensions), and its
     /// arc length dimension and the midpoints on it, which measured the
-    /// piece cut off, go. The corner stays as a point on both curves.
+    /// piece cut off, go. A conic keeps the exact piece beyond the join.
+    /// The original corner stays on the underlying lines and circles.
     fn fillet_curves(
         &mut self,
         a: EntityUid,
@@ -2927,21 +3062,78 @@ impl SketchEdit<'_> {
     ) -> Result<EntityUid, String> {
         let (corner, leg_a, leg_b) = self.fillet_legs(a, b, at)?;
         let (end_a, end_b) = (self.corner_end(a, b, at)?, self.corner_end(b, a, at)?);
+        let conic_corner = self.is_conic(a) || self.is_conic(b);
         let fillet = fillet_at(corner, &leg_a, &leg_b, r)
             .filter(|f| f.along[0] < leg_a.length() && f.along[1] < leg_b.length())
             .ok_or_else(|| {
-                format!(
-                    "the fillet radius {} mm does not fit at p{}",
-                    short(r),
-                    at.0
-                )
+                if conic_corner {
+                    conic_fillet_does_not_fit(r)
+                } else {
+                    format!(
+                        "the fillet radius {} mm does not fit at p{}",
+                        short(r),
+                        at.0
+                    )
+                }
             })?;
         let arc = self.id();
         let pa = self.add_point(fillet.touch[0]);
         let pb = self.add_point(fillet.touch[1]);
         let c = self.add_point(fillet.center);
-        self.move_end(a, end_a, pa);
-        self.move_end(b, end_b, pb);
+        let sides = [(a, end_a, pa, leg_a), (b, end_b, pb, leg_b)];
+        let mut sharp = Vec::new();
+        for (index, (curve, old, join, leg)) in sides.into_iter().enumerate() {
+            if let Leg::Conic { piece, from_start } = leg {
+                // The old sharp is outside the trimmed conic's domain.
+                // A point-to-point Coincident holds the new arc and conic
+                // together at the actual contact, where Tangent applies.
+                let end = self.add_point(fillet.touch[index]);
+                let t = fillet.along[index];
+                let (lo, hi, start, finish) = if from_start {
+                    (t, 1.0, Some(end), None)
+                } else {
+                    (0.0, 1.0 - t, None, Some(end))
+                };
+                self.reshape(curve, &piece.curve(), lo, hi, start, finish)?;
+                self.drop_replaced_tangents(curve, old);
+                self.add_constraint(ConstraintKind::Coincident {
+                    point: end,
+                    entity: Ref::Point(join),
+                });
+                self.add_constraint(ConstraintKind::Tangent {
+                    a: curve,
+                    b: arc,
+                    at: Some(join),
+                });
+            } else {
+                self.move_end(curve, old, join);
+                self.add_constraint(ConstraintKind::tangent(curve, arc));
+                sharp.push((curve, old, join));
+            }
+            if !self.is_line(curve) {
+                self.drop_extent_constraints(curve);
+            }
+        }
+        if conic_corner {
+            let stale = self
+                .def
+                .constraints
+                .iter()
+                .filter_map(|c| match c.kind {
+                    ConstraintKind::Coincident {
+                        point,
+                        entity: Ref::Curve(curve),
+                    } if (curve == a || curve == b)
+                        && self.is_conic(curve)
+                        && (point == end_a || point == end_b) =>
+                    {
+                        Some(c.id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            self.drop_constraints(&stale);
+        }
         // Counter-clockwise from one touch to the other over the side that
         // faces the corner.
         let angle = |p: P2| {
@@ -2963,14 +3155,7 @@ impl SketchEdit<'_> {
                 end,
             },
         ));
-        self.add_constraint(ConstraintKind::tangent(a, arc));
-        self.add_constraint(ConstraintKind::tangent(b, arc));
-        for curve in [a, b] {
-            if !self.is_line(curve) {
-                self.drop_extent_constraints(curve);
-            }
-        }
-        self.keep_shared_corner([(a, end_a, pa), (b, end_b, pb)]);
+        self.keep_shared_corner(&sharp);
         Ok(arc)
     }
 
@@ -2981,8 +3166,8 @@ impl SketchEdit<'_> {
     /// the two curves with their old ends at the corner and their new ends
     /// at the fillet. Two old ends held together (two points,
     /// [`SketchEdit::held_ends`]) stay so, each on its own curve.
-    fn keep_shared_corner(&mut self, curves: [(EntityUid, EntityUid, EntityUid); 2]) {
-        for (curve, p, new_end) in curves {
+    fn keep_shared_corner(&mut self, curves: &[(EntityUid, EntityUid, EntityUid)]) {
+        for &(curve, p, new_end) in curves {
             self.add_constraint(ConstraintKind::Coincident {
                 point: p,
                 entity: Ref::Curve(curve),
@@ -3481,6 +3666,7 @@ impl SketchEdit<'_> {
             helpers,
             derived: false,
             round,
+            shifts: Vec::new(),
         });
         // The offset's id first in the result, before its own constraints.
         self.report.constraints.insert(first, id);
@@ -3913,6 +4099,44 @@ fn apart(d: f64, size: f64) -> String {
     }
 }
 
+/// How far a conic runs on past its end (`at_end`) or before its start as
+/// a conic of its own (mitcad#2236), at most about `reach` away: the piece
+/// of its continuation from the end (or up to the start) and the conic's
+/// parameter where that piece stops. A hyperbola stops short of its
+/// asymptote, an ellipse before it would turn through half of it.
+fn conic_continuation(
+    conic: &crate::conic::ConicPiece,
+    at_end: bool,
+    reach: f64,
+) -> Result<(crate::conic::ConicPiece, f64), String> {
+    let from = if at_end { conic.end } else { conic.start };
+    let mut best = None;
+    let mut step = 0.02;
+    for _ in 0..64 {
+        let t = if at_end { 1.0 + step } else { -step };
+        let piece = if at_end {
+            conic.piece(1.0, t)
+        } else {
+            conic.piece(t, 0.0)
+        };
+        let Some(piece) = piece else {
+            break;
+        };
+        let far = if at_end { piece.end } else { piece.start };
+        best = Some((piece, t));
+        if dist(far, from) > reach {
+            break;
+        }
+        step *= 2.0;
+    }
+    best.ok_or_else(|| {
+        crate::said(
+            "the conic does not run on as a conic past this end",
+            "no conic continuation past the end",
+        )
+    })
+}
+
 /// Why a curve of `kind` is no line, a whole message for each kind
 /// (mitcad#1626: a kind's name put into one message stays English).
 fn not_a_line(kind: &EntityKind) -> &'static str {
@@ -3926,6 +4150,7 @@ fn not_a_line(kind: &EntityKind) -> &'static str {
         EntityKind::EllipticalArc { .. } => "the curve is an elliptical arc, not a line",
         EntityKind::Spline { .. } => "the curve is a spline, not a line",
         EntityKind::FittedSpline { .. } => "the curve is a fitted spline, not a line",
+        EntityKind::Conic { .. } => "the curve is a conic, not a line",
     }
 }
 
@@ -3943,6 +4168,7 @@ fn not_round(kind: &EntityKind) -> &'static str {
         }
         EntityKind::Spline { .. } => "the curve is a spline, not a circle or an arc",
         EntityKind::FittedSpline { .. } => "the curve is a fitted spline, not a circle or an arc",
+        EntityKind::Conic { .. } => "the curve is a conic, not a circle or an arc",
     }
 }
 
@@ -3950,14 +4176,28 @@ fn not_round(kind: &EntityKind) -> &'static str {
 /// together (none for two lines that meet where they would cross).
 type FilletCorner = (EntityUid, EntityUid, Option<EntityUid>);
 
-/// What a fillet takes of one curve at its corner: the curve, the length
-/// taken from the corner along it, and the curve's length.
+/// The curve, the part taken from its corner and its whole extent.
+/// For a conic these are parameter spans, otherwise millimetres.
 type FilletTake = (EntityUid, f64, f64);
+
+fn can_fillet(kind: &EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::Line { .. } | EntityKind::Arc { .. } | EntityKind::Conic { .. }
+    )
+}
+
+fn conic_fillet_does_not_fit(radius: f64) -> String {
+    format!(
+        "the fillet radius {} mm does not fit at the conic corner",
+        short(radius)
+    )
+}
 
 /// Why Sketch Fillet does not round a corner of a curve.
 fn not_filleted(id: EntityUid, kind: &EntityKind) -> String {
     format!(
-        "c{} is a {}: Sketch Fillet rounds corners of lines and circular arcs",
+        "c{} is a {}: Sketch Fillet rounds corners of lines, circular arcs and conics",
         id.0,
         kind.type_name()
     )

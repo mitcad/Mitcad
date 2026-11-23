@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Cell Grid (mitcad#2238) for tools/ui-scripts/cell-grid.mitcad-ui: a plate 100 x 60 x 10 about the origin (Box1, F1, F1.b0), its top face F1:top at z 10, off the origin planes."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [-50, -30], "length": 100, "width": 60, "height": 10, "operation": "new_body"}},
+  {"expect": {"body": "F1.b0", "volume": 60000}}
+]

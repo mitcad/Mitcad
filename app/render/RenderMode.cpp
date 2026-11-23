@@ -24,6 +24,7 @@
 #include "framework/Diagnostics.hpp"
 #include "render/RenderBatch.hpp"
 #include "render/RenderClient.hpp"
+#include "render/RenderDecals.hpp"
 #include "render/RenderDevice.hpp"
 #include "render/RenderImage.hpp"
 #include "render/RenderMesh.hpp"
@@ -445,6 +446,19 @@ void RenderMode::sendScene() {
     }
     m_sentLooks[id] = look;
     update.bodies.push_back(std::move(entry));
+  }
+  // Decals (mitcad#2244): what the view draws on the faces, as bodies of
+  // their own; their meshes sent once, as the bodies' are.
+  for (render::DecalBody& decal :
+       render::decalBodies(m_viewer.drawnDecals(), m_viewer.drawnDecalImages(), m_dir.path())) {
+    auto held = m_workerMeshes.find(decal.body.mesh);
+    if (held == m_workerMeshes.end()) {
+      held = m_workerMeshes.emplace(decal.body.mesh, WorkerMesh{bytesOf(decal.mesh), sequence}).first;
+      sentFor << QString::fromStdString(decal.body.id);
+      fresh.push_back(std::move(decal.mesh));
+    }
+    held->second.used = sequence;
+    update.bodies.push_back(std::move(decal.body));
   }
   // Texture images that are missing: the base colour, a map left out
   // (mitcad#314), and a message.

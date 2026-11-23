@@ -549,7 +549,9 @@ fn arc_fillets_that_do_not_fit_or_have_no_corner_are_refused() {
         json!({"cmd": "sketch.fillet", "sketch": "F1", "a": line, "b": circle, "radius": 1}),
     );
     assert!(
-        error.contains("is a circle: Sketch Fillet rounds corners of lines and circular arcs"),
+        error.contains(
+            "is a circle: Sketch Fillet rounds corners of lines, circular arcs and conics"
+        ),
         "{error}"
     );
     let other = made(&command(

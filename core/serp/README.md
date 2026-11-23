@@ -38,15 +38,24 @@ half.
 - A placed block is an object whose shape is the block's shapes placed:
   the file keeps no placement. The import finds it by comparing the
   shapes (`Kernel::rigid_copies`).
+- A point cloud (mitcad#2240): an entry of the scene's `pointclouds`
+  (`id`, `name`, `layer`, `visible`, `count`, `bbox`, an optional float64
+  `origin` the points are measured from when the cloud is far out, and
+  `blobs`): `blobs/<id>/xyz.f32`, little-endian float32 x, y, z per
+  point, and optionally `rgb.u8`, a byte per channel per point, both in
+  the container, stored. A bare JSON scene keeps no points.
 
 ## What is read
 
 `read` gives `Serp`: the version, the units, the layers (with
 `layer_path`, `Parts::Bolts`, and `layer_shown`, which follows the
 parents), the objects (each `Shape::Brep`, `Shape::Mesh`, `Shape::Other`
-or `Shape::Unreadable`), the blocks, and `Skipped`: how many point
-clouds, scan paths, pictures, hatches, texts, dimensions, layouts and
-history records the import does not take, in words (`Skipped::parts`).
+or `Shape::Unreadable`), the blocks, the point clouds whose points the
+container holds (`Cloud`, with `cloud_shown`; mitcad#2240), and
+`Skipped`: how many point clouds (those whose points cannot be read, and
+the tagged `SPCL` shapes), scan paths, pictures, hatches, texts,
+dimensions, layouts and history records the import does not take, in
+words (`Skipped::parts`).
 
 ## Untrusted files
 

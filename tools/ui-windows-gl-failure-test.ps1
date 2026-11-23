@@ -6,7 +6,9 @@
 # view's attach to the graphics card fail in four runs of the shared
 # scripts on the design that mitcad-cli makes
 # (tools/ui-scripts/gl-failure.json):
-#   init       the first attach (tools/ui-scripts/gl-failure-init.mitcad-ui);
+#   init       the first attach (tools/ui-scripts/gl-failure-init.mitcad-ui),
+#              with left, double and right clicks into the view without
+#              graphics that do nothing (mitcad#2295);
 #   reconnect  the attach after the view moved to a new window
 #              (tools/ui-scripts/gl-failure-reconnect.mitcad-ui);
 #   throw      that attach throws Standard_NullObject, as OCCT's

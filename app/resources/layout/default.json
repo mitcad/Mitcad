@@ -21,6 +21,7 @@
             "solid.emboss",
             "-",
             {"command": "solid.hole", "button": true},
+            "solid.cell_grid",
             "solid.thread",
             "-",
             "solid.box",
@@ -102,7 +103,8 @@
             "assemble.as_built_joint",
             "assemble.joint_origin",
             "assemble.rigid_group",
-            {"command": "assemble.constraint", "button": true},
+            {"command": "assemble.constraint_one", "button": true},
+            "assemble.constraint",
             "-",
             "assemble.drive_joint",
             "assemble.motion_link",
@@ -155,6 +157,7 @@
             {"command": "inspect.section", "button": true},
             {"command": "inspect.print_analysis", "repeat": true},
             "inspect.draft_analysis",
+            "inspect.point_cloud_deviation",
             "inspect.properties",
             "inspect.center_of_mass",
             "comment.add"
@@ -173,7 +176,9 @@
             "insert.open_design",
             "insert.component_web",
             "file.import",
-            "insert.image_reference"
+            "insert.image_reference",
+            "insert.point_cloud",
+            "insert.decal"
           ]
         },
         {
@@ -394,6 +399,7 @@
           "entries": [
             {"command": "build.length", "button": true},
             {"command": "build.ends", "button": true},
+            {"command": "build.end_cap", "button": true},
             {"command": "build.flip", "button": true},
             {"command": "build.rotate", "button": true},
             {"command": "build.spacing", "button": true},
@@ -597,7 +603,8 @@
         {
           "group": "PARAMETERS",
           "entries": [
-            {"command": "solid.parameters", "button": true}
+            {"command": "solid.parameters", "button": true},
+            {"command": "manage.favorite_parameters", "button": true}
           ]
         },
         {
@@ -679,6 +686,7 @@
               "submenu": "Other Geometry",
               "entries": [
                 "sketch.ellipse",
+                "sketch.conic",
                 "sketch.polygon",
                 "sketch.polygon_inscribed",
                 "sketch.polygon_edge",
@@ -688,7 +696,8 @@
                 "sketch.slot_arc",
                 "sketch.slot_arc_center",
                 "sketch.spline",
-                "sketch.spline_control"
+                "sketch.spline_control",
+                "sketch.equation_curve"
               ]
             },
             {"submenu": "Text", "entries": ["sketch.text", "sketch.add_code"]},
@@ -778,7 +787,8 @@
         {
           "group": "FINISH SKETCH",
           "entries": [
-            {"command": "sketch.finish", "button": true}
+            {"command": "sketch.finish", "button": true},
+            {"command": "sketch.cancel", "button": true}
           ]
         }
       ]
@@ -958,6 +968,7 @@
         "-",
         "file.import",
         "file.export",
+        "file.export_script",
         "view.export_snapshot",
         "file.create_drawing",
         "file.export_drawing",
@@ -1074,6 +1085,16 @@
             "tools.libraries"
           ]
         },
+        {
+          "submenu": "MACRO",
+          "entries": [
+            "tools.macro_record",
+            "tools.macro_stop",
+            "-",
+            "tools.macro_save",
+            "tools.run_script"
+          ]
+        },
         "-",
         "tools.preferences"
       ]
@@ -1115,10 +1136,12 @@
     "assemble.derived_component",
     "insert.mount_part",
     "insert.calibrate_image_reference",
+    "insert.move_point_cloud",
     "inspect.remove_section",
     "inspect.flip_section",
     "sketch.edit_pattern",
     "sketch.edit_offset",
+    "sketch.edit_rho",
     "sketch.edit_text",
     "sketch.edit_code",
     "sketch.equal_spacing_dimension",
@@ -1156,7 +1179,8 @@
     "test.leave_wait_cursor",
     "test.nested_wait",
     "edit.repeat",
-    "sketch.explode_text"
+    "sketch.explode_text",
+    "sketch.edit_equation_curve"
   ],
   "optional": [
     "file.render_image",

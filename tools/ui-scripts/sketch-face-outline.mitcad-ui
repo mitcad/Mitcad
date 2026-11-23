@@ -14,7 +14,9 @@
 #      then one undo brings the linked outline back.
 #   3. A rectangle drawn inside: a click inside it selects its profile of
 #      ordinary curves, whose context menu has no Convert to Sketch
-#      Geometry. Finish, and undo the rectangle and Sketch2.
+#      Geometry. Finish: the new sketch's edit is one undo step with its
+#      creation (mitcad#2225), so one undo takes Sketch2 back with the
+#      rectangle.
 #   4. The preference turned off in Preferences › Sketch: logged and saved.
 #   5. Create Sketch on the top face again: the new sketch starts empty, its
 #      one profile the face's region. A click there selects it, and its
@@ -96,10 +98,6 @@ wait-idle
 mark
 command sketch.finish
 wait-log '^Sketch finished'
-wait-idle
-mark
-key ctrl+z
-wait-log '^Undo: '
 wait-idle
 mark
 key ctrl+z

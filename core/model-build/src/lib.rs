@@ -46,6 +46,8 @@ pub(crate) mod travel;
 pub(crate) mod conditions;
 // Profiles in parallel (mitcad#2201).
 pub(crate) mod parallel;
+// End caps of profiles (mitcad#2243).
+pub(crate) mod end_cap;
 
 // What the design file keeps of BUILD: the sources, the records and the
 // libraries' `build` blocks (mitcad#777).
@@ -56,8 +58,8 @@ use mitcad_model::internal::build as geometry;
 
 pub use connect::{CONNECT_RULE, ConnectInput, ConnectRule, PanelInput, RemoveResult};
 pub use cut_list::{
-    BoardColumns, CutList, CutListOptions, CutRow, MachiningItem, StockEntry, TimberColumns,
-    TimberTotals,
+    BoardColumns, CutList, CutListOptions, CutRow, MachiningItem, PlateRow, StockEntry,
+    TimberColumns, TimberTotals,
 };
 pub use frames::{FrameInput, FrameKind, Opening, OpeningOffset, RoofKind};
 pub use joinery::JointInput;
@@ -87,6 +89,8 @@ pub use travel::{TravelInput, TravelNow, travel_of};
 pub use conditions::{Condition, Corners, JointEdit, JointKind, JointNow, LineEnd, LineJoint};
 // Profiles in parallel (mitcad#2201).
 pub use parallel::{Across, MatchLength, ParallelPart, parallel_of};
+// End caps of profiles (mitcad#2243).
+pub use end_cap::{CapAt, CapInfo, CapMade, EndCapBuild, EndCapInput};
 
 // The document's BUILD methods (mitcad#777).
 pub use connect::{ConnectBuild, SetMembersBuild};
@@ -138,6 +142,8 @@ pub mod prelude {
     pub use super::end_meets::EndMeetsBuild;
     // Profiles along sketch lines (mitcad#1965).
     pub use super::lines::LinesBuild;
+    // End caps (mitcad#2243).
+    pub use super::end_cap::EndCapBuild;
 }
 
 /// Items other Mitcad crates use; not part of this crate's API.
@@ -166,4 +172,6 @@ pub mod internal {
     pub use crate::gap::{SideGap, Standing};
     // Side snaps in line with other profiles (mitcad#1886).
     pub use crate::lineup::LineUp;
+    // End caps (mitcad#2243).
+    pub use crate::end_cap::{CapPlan, CapRefusal, plate_outline};
 }

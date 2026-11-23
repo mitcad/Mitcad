@@ -279,6 +279,17 @@ QVector<ProjectRow> projectRows(const QJsonObject& answer) {
       }
       row.designs << d;
     }
+    // Other files (mitcad#2204).
+    for (const QJsonValue& item : tree.value(QStringLiteral("files")).toArray()) {
+      const QJsonObject file = item.toObject();
+      ProjectFileRow f;
+      f.path = file.value(QStringLiteral("path")).toString();
+      f.size = file.value(QStringLiteral("size")).toInteger();
+      f.recorded = file.value(QStringLiteral("recorded")).toBool();
+      f.changed = file.value(QStringLiteral("changed")).toBool();
+      f.modified = QDateTime::fromString(file.value(QStringLiteral("modified")).toString(), Qt::ISODate);
+      row.files << f;
+    }
     rows << row;
   }
   return rows;

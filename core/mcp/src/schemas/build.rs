@@ -20,6 +20,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "build_remove",
     "build_swap_fasteners",
     "build_upgrade",
+    // End caps of profiles (mitcad#2243).
+    "build_end_cap",
 ];
 
 /// Where BUILD's reference describes the fields.
@@ -201,6 +203,36 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "properties": {},
             "required": [],
             "examples": [{"cmd": "build_upgrade"}]
+        }),
+        // End caps of profiles (mitcad#2243).
+        "build_end_cap" => json!({
+            "description": "Closes ends of profiles cut to length (tubes, bars, slot profiles) with plates of their outer sections, each cap a part of its own joined to its end; an end that has a cap has it changed. One undo step. Result: caps (component, occurrence, member, end, name, designation, new), count; refusals in words (a mitered end, a part on the end, an inset or chamfer that does not fit). The build_end_caps query previews them and lists the caps. model_reference {\"section\": \"End caps\"}.",
+            "properties": {
+                "ends": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "The ends to cap: a BUILD part (uid or name; an end cap stands for its member's end) and its end",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "component": id("The part's component (uid or name)"),
+                            "end": {"type": "string", "enum": ["a", "b"], "description": "Its end A or B"}
+                        },
+                        "required": ["component", "end"],
+                        "additionalProperties": false
+                    }
+                },
+                "thickness": value_input("The plate's thickness, greater than 0"),
+                "inset": value_input("How far the plate is set in from the outside of the section; left out: flush"),
+                "ratio": value_input("Or the inset as a share of the thickness (0.2); not with inset"),
+                "chamfer": value_input("The plate's corners chamfered, at least the section's corner round; left out or 0: none"),
+                "direction": {"type": "string", "enum": ["outward", "inward"], "default": "outward", "description": "outward: the plate past the end; inward: the member cut back by the thickness and the plate in its place"}
+            },
+            "required": ["ends", "thickness"],
+            "examples": [
+                {"cmd": "build_end_cap", "ends": [{"component": "C2", "end": "a"}, {"component": "C2", "end": "b"}], "thickness": 5},
+                {"cmd": "build_end_cap", "ends": [{"component": "C2", "end": "b"}], "thickness": "5 mm", "inset": 1, "chamfer": 6, "direction": "inward"}
+            ]
         }),
         _ => return None,
     };

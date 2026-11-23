@@ -59,6 +59,8 @@
 #include "ChromeStyle.hpp"
 #include "CommandMessage.hpp"
 #include "CutTargetsPanel.hpp"
+#include "Dialogs.hpp"
+#include "FormulaEditor.hpp"
 #include "GlassCard.hpp"
 #include "Icons.hpp"
 #include "InputPicks.hpp"
@@ -145,6 +147,8 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Rolling Ball"), QT_TRANSLATE_NOOP("Choice", "Setback"),
     QT_TRANSLATE_NOOP("Choice", "Chamfer"), QT_TRANSLATE_NOOP("Choice", "Miter"),
     QT_TRANSLATE_NOOP("Choice", "Blend"),
+    // Fillet's Full Round (mitcad#2279).
+    QT_TRANSLATE_NOOP("Choice", "Full Round"),
     // Rib's Direction (mitcad#1746).
     QT_TRANSLATE_NOOP("Choice", "Perpendicular to Chord"), QT_TRANSLATE_NOOP("Choice", "Sketch X"),
     QT_TRANSLATE_NOOP("Choice", "Sketch Y"), QT_TRANSLATE_NOOP("Choice", "Along Line"),
@@ -381,6 +385,13 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Deduction"), QT_TRANSLATE_NOOP("Choice", "Allowance"),
     QT_TRANSLATE_NOOP("Choice", "FEFCO 0201 Slotted Box"),
     QT_TRANSLATE_NOOP("Choice", "ECMA A20 Reverse Tuck End"),
+    QT_TRANSLATE_NOOP("Choice", "FEFCO 0203 Full Overlap Slotted Box"),
+    QT_TRANSLATE_NOOP("Choice", "FEFCO 0206 Full Overlap Sides, Meeting Ends"),
+    QT_TRANSLATE_NOOP("Choice", "FEFCO 0421 Folder with Tuck Lid"),
+    QT_TRANSLATE_NOOP("Choice", "FEFCO 0426 Folder with Double Front Wall"),
+    QT_TRANSLATE_NOOP("Choice", "FEFCO 0427 Folder with Lid Ears"),
+    QT_TRANSLATE_NOOP("Choice", "FEFCO 0470 Folder, Ends on the Back Wall"),
+    QT_TRANSLATE_NOOP("Choice", "FEFCO 0471 Folder, Ends on the Back, Front Flap"),
     QT_TRANSLATE_NOOP("Choice", "Corrugated C flute 4 mm"),
     QT_TRANSLATE_NOOP("Choice", "Corrugated B flute 3 mm"),
     QT_TRANSLATE_NOOP("Choice", "Corrugated E flute 1.5 mm"),
@@ -424,7 +435,15 @@ QString choiceLabel(const QString& label) {
     // and its length matching the target (mitcad#2201).
     QT_TRANSLATE_NOOP("Choice", "Parallel: along a profile, long faces in contact"),
     QT_TRANSLATE_NOOP("Choice", "Centered on the side"), QT_TRANSLATE_NOOP("Choice", "On the slot nearest the click"),
-    QT_TRANSLATE_NOOP("Choice", "Match target: as long as the profile it lies along")};
+    QT_TRANSLATE_NOOP("Choice", "Match target: as long as the profile it lies along"),
+    // commands/CellGridCommands.cpp: Cell Grid's Shape, Rows, Extent and
+    // Edge Cells (mitcad#2238; Square, Distance, One Side and Symmetric
+    // are above).
+    QT_TRANSLATE_NOOP("Choice", "Hexagon"), QT_TRANSLATE_NOOP("Choice", "Triangle"),
+    QT_TRANSLATE_NOOP("Choice", "Circle"), QT_TRANSLATE_NOOP("Choice", "Polygon"),
+    QT_TRANSLATE_NOOP("Choice", "Staggered"), QT_TRANSLATE_NOOP("Choice", "Through All"),
+    QT_TRANSLATE_NOOP("Choice", "Whole"), QT_TRANSLATE_NOOP("Choice", "Snapped"),
+    QT_TRANSLATE_NOOP("Choice", "Trimmed")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -847,6 +866,12 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
       call();
     }
   });
+  connect(this, &CommandPanel::applied, this, [this] {
+    auto call = CommandPresenter::actions().applied;
+    if (call) {
+      call();
+    }
+  });
   connect(this, &CommandPanel::rejected, this, [this] {
     auto call = CommandPresenter::actions().rejected;
     if (call) {
@@ -1053,6 +1078,20 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
     connect(cancel, &QPushButton::clicked, this, &CommandPanel::rejected);
     buttons->addButton(m_ok, QDialogButtonBox::AcceptRole);
     buttons->addButton(cancel, QDialogButtonBox::RejectRole);
+    // Apply (mitcad#2293: Constraint): adds what the panel shows and keeps
+    // it open for the next one; a new feature's only.
+    if (def.applyNext && !editing) {
+      m_apply = new QPushButton(tr("Apply"));
+      m_apply->setObjectName(QStringLiteral("commandApply"));
+      m_apply->setFocusPolicy(Qt::NoFocus);
+      m_apply->setAutoDefault(false);
+      m_apply->setToolTip(tr("Add it and keep the panel open for the next one"));
+      connect(m_apply, &QPushButton::clicked, this, [this] {
+        qDebug().noquote() << QStringLiteral("Panel %1 Apply clicked").arg(m_def.name);
+        emit applied();
+      });
+      buttons->addButton(m_apply, QDialogButtonBox::ApplyRole);
+    }
   }
   // The busy mark just before OK and Cancel (mitcad#1907, GitHub
   // mitcad/Mitcad#361): a preview being computed shows there, in room the
@@ -1348,6 +1387,53 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       ParameterField::attach(row.edit, suggest);
     } else {
       row.edit->installEventFilter(this); // Tab to the next field (mitcad#1181)
+    }
+    if (input.type == InputDef::Type::Text && !input.formulaVariable.isEmpty()) {
+      // An equation curve's formula (mitcad#2237): the parameters while a
+      // name is typed, and fx opens Edit Formula with the field's text,
+      // its variable a known name there; OK puts the formula in the field
+      // as typing it would.
+      ParameterFieldOptions suggest;
+      suggest.kind = ParameterKind::Length;
+      suggest.label = QStringLiteral("%1 %2").arg(m_def.name, input.label);
+      suggest.create = false;
+      suggest.variable = input.formulaVariable;
+      QLineEdit* edit = row.edit;
+      const QString label = input.label;
+      const QString variable = input.formulaVariable;
+      const QString unitInput = input.formulaVariableUnit;
+      suggest.formula = [this, key, edit, label, variable, unitInput](const QString& text) {
+        QTimer::singleShot(0, this, [this, key, edit, label, variable, unitInput, text] {
+          const ParameterSource* source = parameterSourceOf(this);
+          if (source == nullptr || !source->query) {
+            return;
+          }
+          ParameterFieldOptions options;
+          options.kind = ParameterKind::Length;
+          options.label = label;
+          options.variable = variable;
+          // What the variable is, as the panel's choice has it now
+          // (mitcad#2264).
+          if (const Row* unitRow = unitInput.isEmpty() ? nullptr : m_byKey.value(unitInput)) {
+            if (unitRow->combo != nullptr) {
+              options.variableUnit = unitRow->combo->currentData().toString();
+            } else {
+              for (auto it = unitRow->choiceButtons.cbegin(); it != unitRow->choiceButtons.cend(); ++it) {
+                if (it.value()->isChecked()) {
+                  options.variableUnit = it.key();
+                }
+              }
+            }
+          }
+          FormulaEditor dialog(*source, options, text, this);
+          qDebug().noquote() << QStringLiteral("Formula editor opened for %1 with: %2").arg(key, text);
+          if (execDialog(&dialog) == QDialog::Accepted && edit != nullptr) {
+            edit->setText(dialog.expression());
+            emit textEdited(key, dialog.expression());
+          }
+        });
+      };
+      ParameterField::attach(row.edit, suggest);
     }
     field = row.edit;
     if (input.hasSlider()) {
@@ -2663,7 +2749,12 @@ void CommandPanel::setInspection(const Inspection& result) {
   scheduleLogLayout();
 }
 
-void CommandPanel::setOkEnabled(bool enabled) { m_ok->setEnabled(enabled || m_def.closeOnly); }
+void CommandPanel::setOkEnabled(bool enabled) {
+  m_ok->setEnabled(enabled || m_def.closeOnly);
+  if (m_apply != nullptr) {
+    m_apply->setEnabled(enabled); // Apply adds what OK would (mitcad#2293)
+  }
+}
 
 void CommandPanel::setBusy(const QString& text) {
   const bool wasBusy = m_busy->busy();
@@ -2983,6 +3074,9 @@ QStringList CommandPanel::layoutLines() const {
   }
   lines << QStringLiteral("Panel %1 %2 at %3")
                .arg(m_def.name, m_def.closeOnly ? QStringLiteral("Close") : QStringLiteral("OK"), position(m_ok));
+  if (m_apply != nullptr) {
+    lines << QStringLiteral("Panel %1 Apply at %2").arg(m_def.name, position(m_apply));
+  }
   // Wider than the page would cut its right side off (mitcad#198).
   const QWidget* page = parentWidget() != nullptr ? parentWidget() : this;
   lines << QStringLiteral("Panel %1 width %2 of %3").arg(m_def.name).arg(width()).arg(page->width());

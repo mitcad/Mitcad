@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/webbrowser app/files/FileFormats.cpp core/ffi/src/web_downloads.rs core/model/src/document/library_parts.rs tools/cli
+# check-all sources: app/webbrowser app/files/FileFormats.cpp core/ffi/src/web_downloads.rs core/model/src/document/library_parts.rs tools/cli app/files/MainWindowArrivals.cpp
 """Insert > Component from Web (mitcad#1579) against a page of a small HTTP
 server of the test's own: a STEP file comes in as a component named after it
 with its part number and in Move; a zip of two STEP files lists both and
 brings in both checked, Move started once on the last (mitcad#1839); a PDF
 is refused with its note; a download the server breaks off fails with its
-reason in words (mitcad#1716). The downloads' temporary folders are gone
+reason in words (mitcad#1716). With Measure open the STEP file comes in at
+once and Measure stays open; with Extrude open it waits, its note says so,
+and it comes in with Move after Cancel (mitcad#2281). The downloads'
+temporary folders, and MitCad's copy of the one that waited, are gone
 afterwards.
 
 Usage: ui-component-web-test.py <app> <cli> <output folder> [<Qt's bin> [<the built web browser component>]]
@@ -218,6 +221,60 @@ def workflow(port):
         "focus-main",
         "expect-model-bodies 3 6000",
         "expect-undo-depth ${before} 3",
+        # Measure open (mitcad#2281): the STEP file comes in at once beside
+        # it, one undo step, Measure stays open, and Move starts on it once
+        # Measure closes.
+        "mark",
+        "command inspect.measure",
+        "expect-log '^Command Measure started' 20",
+        "focus-dialog '^Component from Web$'",
+        "invoke-widget componentBrowser clickLink 'Bearing 6494K13'",
+        "expect-log '^%s comes in beside Measure, which stays open$' 60" % step,
+        "expect-log '^Component from Web: inserted %s as component .* \\(C[0-9]+, occurrence O[0-9]+, "
+        "1 body\\(ies\\)\\), part number 6494K13$' 60" % step,
+        "expect-log '^Measure checks its picks again after the insert of %s$' 20" % step,
+        "expect-log '^Component from Web: Move on .* waits until Measure closes$' 20",
+        "expect-widget-property componentBrowserNote text 'Imported %s.'" % STEP,
+        "expect-log '^Component browser removed the temporary files of %s$' 20" % step,
+        "expect-no-log '^Component browser (could not import|could not read|refused)'",
+        "expect-no-log '^Command Measure cancelled'",
+        "expect-model-bodies 4 9000",
+        "expect-undo-depth ${before} 4",
+        "focus-main",
+        "key Escape",
+        "expect-log '^Command Measure cancelled' 20",
+        "expect-log '^Command Move/Copy started$' 20",
+        "focus-main",
+        "key Escape",
+        "expect-log '^Command Move/Copy cancelled$' 20",
+        # Extrude open: the download waits, its note says so and nothing
+        # comes in; its own temporary files go (MitCad keeps a copy); after
+        # Cancel it comes in, with Move.
+        "mark",
+        "command solid.extrude",
+        "expect-log '^Command Extrude started' 20",
+        "focus-dialog '^Component from Web$'",
+        "invoke-widget componentBrowser clickLink 'Bearing 6494K13'",
+        "expect-log '^Component from Web: %s waits until Extrude is finished or canceled$' 60" % step,
+        "expect-widget-property componentBrowserNote text '%s comes in when Extrude is finished or canceled.'"
+        % STEP,
+        "expect-log '^Component browser removed the temporary files of %s$' 20" % step,
+        "expect-no-log '^Component from Web: inserted'",
+        "expect-no-log '^Component browser (could not import|could not read|refused)'",
+        "expect-model-bodies 4 9000",
+        "focus-main",
+        "key Escape",
+        "expect-log '^Command Extrude cancelled$' 20",
+        "expect-log '^%s comes in now that Extrude closed$' 20" % step,
+        "expect-log '^Component from Web: inserted %s as component .* \\(C[0-9]+, occurrence O[0-9]+, "
+        "1 body\\(ies\\)\\), part number 6494K13$' 60" % step,
+        "expect-log '^Component browser note: Imported %s\\.$' 20" % step,
+        "expect-log '^Command Move/Copy started$' 20",
+        "expect-model-bodies 5 12000",
+        "expect-undo-depth ${before} 5",
+        "focus-main",
+        "key Escape",
+        "expect-log '^Command Move/Copy cancelled$' 20",
         "quit",
     ]
     return "\n".join(lines) + "\n"
@@ -292,7 +349,8 @@ def run(app, cli, directory, qt_bin=None, component=None):
         server.shutdown()
     verify(directory)
     print("PASS: Component from Web: a STEP as a numbered component in Move, a zip's two checked files with one Move, "
-          "a PDF refused, a broken-off download failed with its reason in words, temporary files removed")
+          "a PDF refused, a broken-off download failed with its reason in words, in at once beside Measure, "
+          "waiting while Extrude is open, temporary files removed")
 
 
 if __name__ == "__main__":

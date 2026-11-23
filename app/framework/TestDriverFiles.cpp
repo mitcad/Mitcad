@@ -36,6 +36,11 @@
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
 #include <QDockWidget>
 #include <QEnterEvent>
 #include <QEvent>
@@ -126,7 +131,55 @@ const TestDriver::StepSpec kStepSpecs[] = {
     // (mitcad#1641: the BUILD lists' Copy as Text and Save as Text…).
     {"expect-clipboard", 1, 2, TestDriver::kPlain},
     {"expect-clipboard-file", 1, 2, TestDriver::kPlain},
+    // Files dropped from the file manager (mitcad#2204: onto a Projects
+    // panel row).
+    {"drop-files-logged", 2, -1, TestDriver::kInputOfMain},
+    // The same onto the middle of a widget (mitcad#2281: the 3D view while
+    // a command is open).
+    {"drop-files-on-widget", 2, -1, TestDriver::kInputOfMain},
 };
+
+// Files dropped from the file manager at `at` (the main window's logical
+// pixels), as the system's drag and drop delivers them: the enter, a move
+// and the drop, each to the widget under the place that takes drops (an
+// item view's viewport), with the files' URLs. Empty, or why it was not
+// dropped.
+QString dropFilesAt(QWidget* main, const QPoint& at, const QList<QUrl>& urls) {
+  QWidget* target = main != nullptr ? main->childAt(at) : nullptr;
+  if (target == nullptr && main != nullptr && main->rect().contains(at) && main->acceptDrops()) {
+    target = main;
+  }
+  while (target != nullptr && !target->acceptDrops()) {
+    target = target->parentWidget();
+  }
+  if (target == nullptr) {
+    return QStringLiteral("nothing at %1,%2 takes drops").arg(at.x()).arg(at.y());
+  }
+  const QPoint local = target->mapFrom(main, at);
+  const Qt::DropActions actions = Qt::CopyAction | Qt::MoveAction | Qt::LinkAction;
+  QMimeData data;
+  data.setUrls(urls);
+  QDragEnterEvent enter(QPointF(local), actions, &data, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(target, &enter);
+  if (!enter.isAccepted()) {
+    return QStringLiteral("%1 refuses the files").arg(target->objectName());
+  }
+  QDragMoveEvent move(QPointF(local), actions, &data, Qt::LeftButton, Qt::NoModifier);
+  // As Qt delivers it (QWidgetWindow::handleDragMoveEvent): the move that
+  // follows an accepted enter comes accepted, with the enter's drop action,
+  // so a widget that only handles the enter and the drop (the main window
+  // over the 3D view) keeps the files; a move built here starts ignored.
+  move.setDropAction(enter.dropAction());
+  move.setAccepted(enter.isAccepted());
+  QApplication::sendEvent(target, &move);
+  if (!move.isAccepted()) {
+    return QStringLiteral("%1 refuses the files there").arg(target->objectName());
+  }
+  QDropEvent drop(QPointF(local), actions, &data, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(target, &drop);
+  qInfo().noquote() << QStringLiteral("TestDriver: dropped %1 file(s) at %2,%3").arg(urls.size()).arg(at.x()).arg(at.y());
+  return QString();
+}
 
 } // namespace
 
@@ -251,6 +304,55 @@ void TestDriver::runFileStep(const QString& name, const QStringList& a, int line
           return !copied.isEmpty() && saved == copied;
         },
         limit, QStringLiteral("'%1' does not hold the clipboard's text").arg(path));
+  } else if (name == QLatin1String("drop-files-logged")) {
+    // As the system's drag and drop delivers files from the file manager:
+    // the enter, a move and the drop, each to the widget under the place
+    // that takes drops (an item view's viewport), with the files' URLs.
+    QRegularExpression re;
+    if (!regex(a.at(0), re)) {
+      return;
+    }
+    QList<QUrl> urls;
+    for (const QString& path : a.mid(1)) {
+      urls << QUrl::fromLocalFile(QFileInfo(path).absoluteFilePath());
+    }
+    const auto at = std::make_shared<QPoint>();
+    whenReady([this, re, at] { return loggedPoint(re, 0, *at); }, 6,
+              QStringLiteral("no place logged for '%1'").arg(a.at(0)), [this, at, urls, line] {
+                queue([this, at, urls, line] {
+                  const QString refused = dropFilesAt(m_main.data(), *at, urls);
+                  if (!refused.isEmpty()) {
+                    fail(line, refused);
+                  }
+                });
+              });
+  } else if (name == QLatin1String("drop-files-on-widget")) {
+    // The same at the middle of the main window's widget of that object
+    // name, once it is shown.
+    const QString widget = a.at(0);
+    QList<QUrl> urls;
+    for (const QString& path : a.mid(1)) {
+      urls << QUrl::fromLocalFile(QFileInfo(path).absoluteFilePath());
+    }
+    const auto at = std::make_shared<QPoint>();
+    whenReady(
+        [this, widget, at] {
+          QWidget* main = m_main.data();
+          QWidget* found = main != nullptr ? main->findChild<QWidget*>(widget) : nullptr;
+          if (found == nullptr || !found->isVisible()) {
+            return false;
+          }
+          *at = found->mapTo(main, found->rect().center());
+          return true;
+        },
+        6, QStringLiteral("no shown widget '%1'").arg(widget), [this, at, urls, line] {
+          queue([this, at, urls, line] {
+            const QString refused = dropFilesAt(m_main.data(), *at, urls);
+            if (!refused.isEmpty()) {
+              fail(line, refused);
+            }
+          });
+        });
   }
 }
 

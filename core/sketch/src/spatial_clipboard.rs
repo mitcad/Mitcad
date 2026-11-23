@@ -442,6 +442,19 @@ pub fn from_planar(
                 ends: [SpatialSplineEnd::Natural; 2],
                 tangents: [None, None],
             },
+            // A 3D sketch has no conics (mitcad#2236): the same curve as a
+            // rational quadratic spline of its points.
+            EntityKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => SpatialCurveKind::Spline {
+                degree: 2,
+                control: vec![*start, *apex, *end],
+                weights: vec![1.0, crate::conic::weight(*rho), 1.0],
+                knots: Vec::new(),
+            },
         };
         // A centre line has no meaning in a 3D sketch: a construction line.
         let centerline = matches!(

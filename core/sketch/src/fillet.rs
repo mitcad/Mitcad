@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! The geometry of a sketch fillet at a corner where a circular arc meets
-//! a line or another arc (mitcad#1192): which circle of a radius tangent to
-//! both curves rounds the corner, and where it touches them. The sketch
+//! The geometry of a sketch fillet at a corner of a line, circular arc or
+//! conic (mitcad#1192, mitcad#2255): which circle of a radius tangent to both
+//! curves rounds the corner, and where it touches them. The sketch
 //! edit ([`crate::modify`]) makes the entities and constraints.
 
-use super::geometry::{P2, add, cross, dist, dot, perp, scale, sub, unit};
+use super::conic::ConicPiece;
+use super::geometry::{Curve2, P2, add, cross, dist, dot, perp, scale, sub, unit};
 
 /// The sine of the angle between two curves' directions at a corner at or
 /// below which they are taken as tangent there (or as leaving it the same
@@ -24,6 +25,8 @@ pub(crate) enum Leg {
         ccw: bool,
         sweep: f64,
     },
+    /// A rational conic leaving the corner from its start or its end.
+    Conic { piece: ConicPiece, from_start: bool },
 }
 
 /// The circle that rounds a corner.
@@ -32,8 +35,8 @@ pub(crate) struct Fillet {
     pub center: P2,
     /// Where it touches the first and the second curve.
     pub touch: [P2; 2],
-    /// How far from the corner along each curve it touches it (mm, along
-    /// an arc its length).
+    /// How far from the corner along each curve it touches it: for conics
+    /// its fraction of the original parameter span, otherwise mm.
     pub along: [f64; 2],
 }
 
@@ -54,14 +57,19 @@ impl Leg {
                 let tangent = perp(unit(sub(corner, center)));
                 if ccw { tangent } else { scale(tangent, -1.0) }
             }
+            Leg::Conic { piece, from_start } => {
+                let end = if from_start { piece.start } else { piece.end };
+                unit(sub(piece.apex, end))
+            }
         }
     }
 
-    /// Its length from the corner to its other end.
+    /// Its extent: for a conic the unit parameter span, otherwise mm.
     pub(crate) fn length(&self) -> f64 {
         match *self {
             Leg::Line { len, .. } => len,
             Leg::Arc { radius, sweep, .. } => radius * sweep,
+            Leg::Conic { .. } => 1.0,
         }
     }
 
@@ -85,6 +93,9 @@ impl Leg {
                 let turn = if ccw { turn } else { -turn };
                 (at, turn * radius)
             }
+            Leg::Conic { .. } => {
+                unreachable!("conic offsets are intersected with their parameters")
+            }
         }
     }
 
@@ -102,6 +113,53 @@ impl Leg {
                 let inside = dot(sub(center, corner), side) > 0.0;
                 let radius = if inside { radius - r } else { radius + r };
                 (radius > 0.0).then_some(CenterPath::Circle { center, radius })
+            }
+            Leg::Conic { .. } => None,
+        }
+    }
+
+    /// The leg's geometry relative to the corner, and whether its forward
+    /// direction leaves the corner.
+    fn curve(&self, corner: P2) -> (Curve2, bool) {
+        match *self {
+            Leg::Line { dir, len } => (
+                Curve2::Line {
+                    a: [0.0; 2],
+                    b: scale(dir, len),
+                },
+                true,
+            ),
+            Leg::Arc {
+                center,
+                radius,
+                ccw,
+                sweep,
+            } => {
+                let radial = sub(corner, center);
+                let angle = radial[1].atan2(radial[0]);
+                let (start, end) = if ccw {
+                    (angle, angle + sweep)
+                } else {
+                    (angle - sweep, angle)
+                };
+                (
+                    Curve2::Arc {
+                        center: sub(center, corner),
+                        radius,
+                        start,
+                        end,
+                    },
+                    ccw,
+                )
+            }
+            Leg::Conic { piece, from_start } => {
+                let relative = ConicPiece {
+                    start: sub(piece.start, corner),
+                    apex: sub(piece.apex, corner),
+                    end: sub(piece.end, corner),
+                    rho: piece.rho,
+                };
+                (relative.curve(), from_start)
             }
         }
     }
@@ -125,6 +183,15 @@ pub(crate) fn fillet_at(corner: P2, a: &Leg, b: &Leg, r: f64) -> Option<Fillet> 
     let turn = cross(da, db);
     if turn.abs() <= TANGENT {
         return None;
+    }
+    if matches!(a, Leg::Conic { .. }) || matches!(b, Leg::Conic { .. }) {
+        let (center, touch, [u, v]) =
+            super::offset::fillet_crossing(a.curve(corner), b.curve(corner), turn, r)?;
+        return Some(Fillet {
+            center: add(center, corner),
+            touch: touch.map(|point| add(point, corner)),
+            along: [u * a.length(), v * b.length()],
+        });
     }
     // The normals of the two curves into the corner's side.
     let side_a = scale(perp(da), turn.signum());
@@ -282,6 +349,53 @@ mod tests {
         assert!((dist(f.center, [10.0, 0.0]) - 9.0).abs() < 1e-9, "{f:?}");
         assert!(f.center[1] < corner[1], "{f:?}");
         assert!(f.along[0] > 0.0 && f.along[1] > 0.0, "{f:?}");
+    }
+
+    #[test]
+    fn conic_and_arc_and_two_conics_meet_on_their_exact_offsets() {
+        let corner = [0.0, 0.0];
+        let a = Leg::Conic {
+            piece: ConicPiece {
+                start: corner,
+                apex: [10.0, 0.0],
+                end: [20.0, 8.0],
+                rho: 0.3,
+            },
+            from_start: true,
+        };
+        let conic = Leg::Conic {
+            piece: ConicPiece {
+                start: [8.0, 20.0],
+                apex: [0.0, 10.0],
+                end: corner,
+                rho: 0.7,
+            },
+            from_start: false,
+        };
+        let arc = Leg::Arc {
+            center: [-10.0, 0.0],
+            radius: 10.0,
+            ccw: true,
+            sweep: 1.0,
+        };
+        for b in [arc, conic] {
+            let f = fillet_at(corner, &a, &b, 1.0).expect("a fillet");
+            for (leg, touch_index) in [a, b].into_iter().zip(0..2) {
+                let (curve, forward) = leg.curve(corner);
+                let (lo, hi) = curve.domain();
+                let u = f.along[touch_index] / leg.length();
+                let t = if forward {
+                    lo + u * (hi - lo)
+                } else {
+                    hi - u * (hi - lo)
+                };
+                let [point, derivative, _] = curve.eval(t);
+                let radial = sub(point, f.center);
+                assert!(close(point, f.touch[touch_index]), "{f:?}");
+                assert!((dist(point, f.center) - 1.0).abs() < 1e-9, "{f:?}");
+                assert!(dot(unit(derivative), radial).abs() < 1e-9, "{f:?}");
+            }
+        }
     }
 
     #[test]

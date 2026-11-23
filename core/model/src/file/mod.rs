@@ -164,6 +164,15 @@
 //! [`crate::SelectionSet`]. Members whose items are gone are left out when
 //! the design is read.
 //!
+//! Point clouds (mitcad#2240), when there are any: `point_clouds` (`name`,
+//! `"visible": false`, `occurrence`, `placement` (`linear`, `translation`)
+//! unless it is the identity, `origin`, `file_name`, `file_points`,
+//! `points`: base64 of little-endian 32-bit floats, x, y, z per point from
+//! the origin, `colors`: base64 of r, g, b bytes per point), see
+//! [`crate::PointCloud`]. Point Cloud Deviation is an analysis (`type`
+//! `point_cloud_deviation` with `cloud`, `body`, `faces`, `tolerance`,
+//! `max_samples`, `signed`, `limit`).
+//!
 //! The direction of gravity (mitcad#1713), when the design has one:
 //! `gravity` (`direction`, a unit vector, and `source`: `geometry`, a
 //! reference, `occurrence`, the path it was picked at, `"reverse": true`),

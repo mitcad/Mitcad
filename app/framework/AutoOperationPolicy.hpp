@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -37,6 +38,18 @@ enum class NewFeatureOperation { Automatic, NewBody };
 // once; it is taken when its preview works, else the user's operation
 // comes back with its failure. A flip whose preview works keeps the user's
 // operation. An edit never does it (mitcad#868).
+//
+// Its mirror (mitcad#2283, GitHub mitcad/Mitcad#541): Cut or Join chosen
+// by hand in a new feature (One Side) whose preview fails while the other
+// direction works turns the direction once (the command's Flip). The model
+// tells whether the other direction works (a scoped Cut's
+// `flip_would_cut`); without its answer (a Join, a Cut without targets)
+// the flipped preview tells. It stays when its preview works; else the
+// direction comes back with the first failure. The policy keeps the
+// direction it turned, so that its own flip is no direction flip of the
+// user's (above): a flipped Cut that fails never becomes Join. A preview
+// that works is never turned; the user's own Flip, distance sign,
+// Direction, Operation, Objects or targets end a waiting turn.
 class AutoOperationPolicy {
 public:
   // What the session does with the preview of a flip.
@@ -59,6 +72,7 @@ public:
     m_flips = enabled && !editing;
     m_direction = 0;
     m_flip = Flip::None;
+    m_turn = Turn::None;
   }
   bool active() const { return m_active; }
   // The preference, not an edit or the command, kept the automatic choice
@@ -70,9 +84,17 @@ public:
   // The tool's direction before a preview (CommandDef::toolDirection: +1
   // or -1, 0 when it has none, which changes nothing). A change while the
   // automatic choice is off makes a flip pending; flipped back before its
-  // preview came, none is.
+  // preview came, none is. Any other direction than the one a waiting turn
+  // (mitcad#2283) expects is the user's own and ends the turn: the
+  // turn's own flip was kept as the direction already.
   void observeDirection(int direction) {
-    if (!m_flips || direction == 0) {
+    if (!m_flips) {
+      return;
+    }
+    if (m_turn != Turn::None && direction != m_direction) {
+      m_turn = Turn::None;
+    }
+    if (direction == 0) {
       return;
     }
     if (m_direction != 0 && direction != m_direction && !m_active) {
@@ -85,8 +107,12 @@ public:
   bool asksSuggestion() const { return m_active || m_flip == Flip::Pending; }
   // A flip waits for its preview or its tried operation's.
   bool flipWaiting() const { return m_flip != Flip::None; }
-  // The user changed Operation, Objects or the targets: their choice stays.
-  void cancelFlip() { m_flip = Flip::None; }
+  // The user changed Operation, Objects or the targets: their choice stays
+  // (a turn of the direction waiting for its preview ends too).
+  void cancelFlip() {
+    m_flip = Flip::None;
+    m_turn = Turn::None;
+  }
 
   // The preview of the inputs came back: whether it works, the operation
   // it was made with and the model's suggestion for its tool.
@@ -121,13 +147,61 @@ public:
     return {};
   }
 
+  // What the session does with the preview of an operation chosen by hand
+  // (mitcad#2283).
+  enum class TurnAction {
+    Keep,    // nothing: the preview stays as it is
+    Turn,    // flip the tool's direction (its preview follows)
+    Taken,   // the turned direction works: it stays
+    Restore, // it fails too: the direction comes back with the failure
+  };
+
+  // The user chose `operation` by hand while the tool goes `direction`
+  // (CommandDef::toolDirection; 0 for two sides or a symmetric extrusion):
+  // a new feature's Cut or Join of one side waits for its preview. Any
+  // other operation, an edit and no direction wait for nothing.
+  void operationChosen(const std::string& operation, int direction) {
+    m_turn = Turn::None;
+    if (!m_flips || direction == 0 || (operation != "cut" && operation != "join")) {
+      return;
+    }
+    m_turn = Turn::Pending;
+    m_direction = direction;
+  }
+  // A turn waits for the hand choice's preview or the turned one's.
+  bool turnWaiting() const { return m_turn != Turn::None; }
+
+  // The preview came back: whether it works, and the model's answer
+  // whether the other direction works (a scoped Cut's `flip_would_cut`),
+  // none when it gives none (the turned preview tells then).
+  TurnAction operationPreviewed(bool works, std::optional<bool> otherWay) {
+    const Turn was = m_turn;
+    m_turn = Turn::None;
+    if (was == Turn::Trying) {
+      if (works) {
+        return TurnAction::Taken;
+      }
+      // The session turns it back: that is no flip of the user's either.
+      m_direction = -m_direction;
+      return TurnAction::Restore;
+    }
+    if (was != Turn::Pending || works || (otherWay.has_value() && !*otherWay)) {
+      return TurnAction::Keep;
+    }
+    m_turn = Turn::Trying;
+    m_direction = -m_direction;
+    return TurnAction::Turn;
+  }
+
 private:
   enum class Flip { None, Pending, Trying };
+  enum class Turn { None, Pending, Trying };
   bool m_active = false;
   bool m_offByPreference = false;
   bool m_flips = false;
   int m_direction = 0;
   Flip m_flip = Flip::None;
+  Turn m_turn = Turn::None;
 };
 
 } // namespace mitcad

@@ -189,6 +189,12 @@ struct FileOut<'a> {
     // Selection sets (mitcad#2192), when there are any.
     #[serde(skip_serializing_if = "<[crate::document::SelectionSet]>::is_empty")]
     selection_sets: &'a [crate::document::SelectionSet],
+    // Point clouds with their points (mitcad#2240), when there are any.
+    #[serde(skip_serializing_if = "<[crate::document::PointCloud]>::is_empty")]
+    point_clouds: &'a [crate::document::PointCloud],
+    // Decals with their images (mitcad#2244), when there are any.
+    #[serde(skip_serializing_if = "<[crate::document::Decal]>::is_empty")]
+    decals: &'a [crate::document::Decal],
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -613,6 +619,8 @@ pub(super) fn save_with(
         sketch_blocks: &state.sketch_blocks,
         parameter_groups: state.parameter_groups.paths(),
         selection_sets: &state.selection_sets,
+        point_clouds: &state.point_clouds,
+        decals: &state.decals,
         statistics,
         preview,
     };
@@ -941,7 +949,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 51] = [
+const TOP_FIELDS: [&str; 53] = [
     "format",
     "version",
     "units",
@@ -1022,6 +1030,10 @@ const TOP_FIELDS: [&str; 51] = [
     "parameter_groups",
     // Selection sets (mitcad#2192).
     "selection_sets",
+    // Point clouds (mitcad#2240).
+    "point_clouds",
+    // Decals (mitcad#2244).
+    "decals",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1791,6 +1803,28 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
     }
+    // Decals (mitcad#2244): their faces are found when they are asked for,
+    // so one whose face is gone loads and says why.
+    let decals = array(&mut top, "decals", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            let decal = serde_json::from_value::<crate::document::Decal>(value)
+                .map_err(|e| schema(format!("decals[{i}]: {e}")))?;
+            decal
+                .check_image()
+                .map_err(|e| invalid(format!("decals[{i}]: {e}")))?;
+            Ok(decal)
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    for (i, decal) in decals.iter().enumerate() {
+        if decals[..i].iter().any(|o| o.name == decal.name) {
+            return Err(invalid(format!(
+                "decals[{i}]: decal {} is listed more than once",
+                decal.name
+            )));
+        }
+    }
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -1842,6 +1876,28 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             return Err(invalid(format!(
                 "image_references[{i}]: image reference {} is listed more than once",
                 image.name
+            )));
+        }
+    }
+    // Point clouds (mitcad#2240): names once each, whole points; a cloud
+    // whose occurrence is gone is drawn in the root.
+    let point_clouds = array(&mut top, "point_clouds", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            let cloud = serde_json::from_value::<crate::document::PointCloud>(value)
+                .map_err(|e| schema(format!("point_clouds[{i}]: {e}")))?;
+            cloud
+                .check()
+                .map_err(|e| invalid(format!("point_clouds[{i}]: {e}")))?;
+            Ok(cloud)
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    for (i, cloud) in point_clouds.iter().enumerate() {
+        if point_clouds[..i].iter().any(|o| o.name == cloud.name) {
+            return Err(invalid(format!(
+                "point_clouds[{i}]: point cloud {} is listed more than once",
+                cloud.name
             )));
         }
     }
@@ -2284,6 +2340,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.sketch_blocks = sketch_blocks;
     state.selection_sets = selection_sets;
     state.prune_selection_sets();
+    state.decals = decals;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(
@@ -2294,6 +2351,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     }
     state.drawings = drawings;
     state.image_references = image_references;
+    state.point_clouds = point_clouds;
     state.render = render;
     // The configuration table (mitcad#64): rows of the file's parameters,
     // under the names they were loaded with.

@@ -433,6 +433,8 @@ pub(crate) fn make_along(
         align: line.map(|(_, align)| align.as_str().to_owned()),
         start_meets: None,
         end_meets: None,
+        start_angle: None,
+        end_angle: None,
     };
     let frames = add_feature(state, FeatureDef::EdgeFrame(def), active)?;
     move_before(state, frames, part);

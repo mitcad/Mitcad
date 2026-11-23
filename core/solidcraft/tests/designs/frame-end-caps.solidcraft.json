@@ -1,0 +1,56 @@
+{
+  "format": "solidcraft/58",
+  "name": "Frame end caps",
+  "units": "mm",
+  "params": [],
+  "features": [
+    {
+      "id": 1, "name": "Route", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [{"id": "origin", "pos": [0.0, 0.0], "fixed": true}],
+        "curves": [],
+        "constraints": [],
+        "wires": [
+          {"id": "w1", "space": "component", "fit": [[0, 0, 0], [100, 0, 0]], "pts": [[0, 0, 0], [100, 0, 0]]}
+        ]
+      }
+    },
+    {
+      "id": 2, "name": "Tubes", "type": "frame_member", "path_sketch": 1,
+      "profile": {"source": "library", "profile": {"kind": "round_tube", "diameter": "20", "wall": "2"}},
+      "body_name": "Tube"
+    },
+    {
+      "id": 3, "name": "Base", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [0.0, -100.0], "fixed": true},
+          {"id": "p2", "pos": [100.0, -100.0], "fixed": true}
+        ],
+        "curves": [{"id": "l1", "type": "line", "a": 1, "b": 2}],
+        "constraints": []
+      }
+    },
+    {
+      "id": 4, "name": "Beam", "type": "frame_member", "path_sketch": 3,
+      "profile": {"source": "library", "profile": {"kind": "bar", "width": "10", "height": "6"}},
+      "anchor": "top"
+    },
+    {
+      "id": 5, "name": "Tube cap", "type": "frame_end_cap",
+      "ends": [{"plane": {"type": "custom", "plane": {"origin": [100, 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]}},
+                "member": {"feature": 2, "line": "w1"}}],
+      "thickness": "3", "direction": "outward"
+    },
+    {
+      "id": 6, "name": "Beam cap", "type": "frame_end_cap",
+      "ends": [{"plane": {"type": "custom", "plane": {"origin": [100, -100, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]}},
+                "member": {"feature": 4, "line": "l1"}}],
+      "thickness": "4", "chamfer": "1", "direction": "inward"
+    }
+  ],
+  "next_id": 7
+}

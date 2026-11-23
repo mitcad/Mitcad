@@ -1,6 +1,6 @@
 [
   {"comment": "SPDX-License-Identifier: MIT"},
-  {"comment": "Assembly Constraint's rows previewed (mitcad#1813), tools/ui-constraint-rows-preview-test.sh: Base:1 (O1, C1, grounded) with a 40 x 20 x 10 box (F1.b0) at the origin; Block:1 (O2, C2) placed at (60, 40, 30) with a 10 x 10 x 10 box (F2.b0) at its origin. Box faces: top, side1 along +x (at x + length)."},
+  {"comment": "Constraint Set's rows previewed (mitcad#1813), tools/ui-constraint-rows-preview-test.sh: Base:1 (O1, C1, grounded) with a 40 x 20 x 10 box (F1.b0) at the origin; Block:1 (O2, C2) placed at (60, 40, 30) with a 10 x 10 x 10 box (F2.b0) at its origin. Box faces: top, side1 along +x (at x + length)."},
   {"cmd": "create_component", "name": "Base"},
   {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
     "length": 40, "width": 20, "height": 10, "operation": "new_body"}},

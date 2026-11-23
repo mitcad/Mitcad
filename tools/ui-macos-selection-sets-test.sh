@@ -8,7 +8,8 @@
 # the design mitcad-cli makes (tools/ui-scripts/selection-sets.json): a
 # body, a used sketch and a feature into a new set, renamed in place; the
 # set's row selects them; Find in Timeline and Find in Browser from member
-# rows; Remove from Set, Delete and Undo; the saved design checked with
+# rows; Remove from Set, the Delete key on a member row (the link goes, the
+# body stays, mitcad#2219), Delete and Undo; the saved design checked with
 # selection-sets-check.json.
 # Usage: tools/ui-macos-selection-sets-test.sh <app> <mitcad-cli> [output directory]
 set -uo pipefail

@@ -1247,10 +1247,10 @@ QString tangentPoint(const SketchModel& model, const QStringList& picks, const s
   if (!shared.isEmpty()) {
     return nearest(shared, clicks);
   }
-  if (a->isSpline() && !curveEnds(*a).isEmpty()) {
+  if ((a->isSpline() || a->isConic()) && !curveEnds(*a).isEmpty()) {
     return nearest(curveEnds(*a), {clicks[0]});
   }
-  if (b->isSpline() && !curveEnds(*b).isEmpty()) {
+  if ((b->isSpline() || b->isConic()) && !curveEnds(*b).isEmpty()) {
     return nearest(curveEnds(*b), {clicks[1]});
   }
   return {};
@@ -1891,7 +1891,8 @@ private:
         m_clicks.size() == 1) {
       if (!hover.isEmpty()) {
         end = tangentPoint(view(), {m_picks[0], hover}, {m_clicks[0], cursor});
-      } else if (const CurveData* c = view().curve(m_picks[0]); c != nullptr && c->isSpline()) {
+      } else if (const CurveData* c = view().curve(m_picks[0]);
+                 c != nullptr && (c->isSpline() || c->isConic())) {
         end = nearestEnd(view(), curveEnds(*c), {m_clicks[0]});
       }
     }

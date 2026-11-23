@@ -1771,7 +1771,8 @@ fn anchors(kind: &EntityKind, at: &dyn Fn(EntityUid) -> Option<P2>) -> Option<(V
             sizes.extend(weights);
             (points(control)?, sizes)
         }
-        EntityKind::FittedSpline { .. } => return None,
+        // Projections make no fitted splines or conics.
+        EntityKind::FittedSpline { .. } | EntityKind::Conic { .. } => return None,
     })
 }
 

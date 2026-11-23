@@ -73,6 +73,23 @@ RowMarks designMarks(const ProjectDesignRow& design) {
   return marks;
 }
 
+RowMarks fileMarks(const ProjectFileRow& file) {
+  RowMarks marks;
+  if (!file.recorded) {
+    marks.text = Text::tr("new");
+    marks.full = Text::tr("Not recorded");
+    marks.words = QStringLiteral("not recorded");
+  } else if (file.changed) {
+    marks.text = QStringLiteral("*");
+    marks.full = Text::tr("Changed");
+    marks.words = QStringLiteral("changed");
+  } else {
+    marks.full = Text::tr("Recorded");
+    marks.words = QStringLiteral("recorded");
+  }
+  return marks;
+}
+
 RowMarks projectMarks(const ProjectRow& row, int ahead, int behind, const QString& problem, bool conflict) {
   RowMarks marks;
   switch (row.kind) {

@@ -1,0 +1,27 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Board (mitcad#2226): the FEFCO 0203 full overlap slotted box. First of C flute corrugated board (4 mm, crease deduction 4, crease radius 0.5: each crease develops 2 (0.5 + 4) - 4 = 5), inside 500 x 200 x 150: every flap 200 - 4 = 196 deep, the first long panel's flaps a thickness and the seam gap (4.4) out over the short panels', the second long panel's 4.4 further out over the first's, so that the two long flaps lie one over the other across the whole end. The blank (sketch F2), its creases (sketch F3), the Face F4 and twelve Folds F5 to F16: the short panels' flaps, the first long panel's, the second's, the glue flap (F13), then the three walls from the far end. Its blank: panels' creases at x = 206, 710, 914 and the glue crease at 1413.6, the glue flap to 1446.1; the band 150 - 1 + 5 = 154 high, the flaps from y = -8.8 - 196 = -204.8 to 154 + 8.8 + 196 = 358.8."},
+  {"cmd": "add_standard_box", "style": "fefco_0203", "length": 500, "width": 200, "height": 150, "board": "c_flute", "radius": 0.5},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"feature": "F12", "status": "ok"}},
+  {"expect": {"feature": "F13", "status": "ok"}},
+  {"expect": {"feature": "F16", "status": "ok", "bodies": 1}},
+  {"comment": "It unfolds to its blank with the crease allowances."},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"},
+    "result": {"status": "valid", "bounds": {"min": [0, -204.8], "max": [1446.1, 358.8]}}}},
+  {"comment": "Its die line: cut and crease layers for a cutting table, and as PDF."},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_0203.dxf"},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_0203.pdf"},
+
+  {"comment": "Edited to 200 high (edit_standard_box of its rules F1): its rules, blank and creases are made again and its Face and Folds follow, the band 204 high and the blank to y = 204 + 8.8 + 196 = 408.8."},
+  {"cmd": "edit_standard_box", "rules": "F1", "height": 200},
+  {"expect": {"feature": "F16", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"},
+    "result": {"status": "valid", "bounds": {"min": [0, -204.8], "max": [1446.1, 408.8]}}}},
+
+  {"comment": "Then of 4 mm corrugated polypropylene (crease deduction 0.4: each crease develops 2 (0.5 + 4) - 0.4 = 8.6), inside 160 x 90 x 120: its rules F17, Face F20 and Folds F21 to F32, a second sheet body."},
+  {"cmd": "add_standard_box", "style": "fefco_0203", "length": 160, "width": 90, "height": 120, "board": "polypropylene_4", "radius": 0.5},
+  {"expect": {"feature": "F20", "status": "ok"}},
+  {"expect": {"feature": "F32", "status": "ok", "bodies": 2}},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F20.b0"}, "result": {"status": "valid"}}},
+  {"cmd": "export_die_line", "body": "F20.b0", "path": "sheet_board_0203_polypropylene.dxf"}
+]

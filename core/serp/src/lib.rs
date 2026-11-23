@@ -6,7 +6,10 @@
 //! - Version 1 is a bare JSON scene; versions 2 and later a zip holding
 //!   it as `document.json` beside `meta.json`, a thumbnail, and from
 //!   version 3 binary members (`blobs/`, `images/`) of point clouds and
-//!   pictures, which the import does not take.
+//!   pictures. The point clouds' points are read ([`Cloud`]: the scene's
+//!   `pointclouds` entries, their `blobs/<id>/xyz.f32` little-endian
+//!   float32 points from an optional float64 `origin`, `rgb.u8` colours;
+//!   mitcad#2240); the pictures are not taken.
 //! - The scene: its `units`, its `layers` (an id, a name, a colour,
 //!   whether it is shown, its parent layer), its `objects` (a name, a
 //!   layer, whether it is shown, a colour, the block it places, and its
@@ -208,6 +211,27 @@ pub struct Serp {
     pub skipped: Skipped,
     /// What was not read as it should be, in words with a detail.
     pub notes: Vec<Error>,
+    /// The point clouds whose points the container holds (mitcad#2240).
+    pub clouds: Vec<Cloud>,
+}
+
+/// The most points one point cloud may have.
+pub const MAX_CLOUD_POINTS: usize = 20_000_000;
+
+/// A point cloud of the scene: its points from the container (versions 3
+/// and later), in the file's units.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cloud {
+    pub name: Option<String>,
+    /// Its layer (an index into [`Serp::layers`]).
+    pub layer: Option<usize>,
+    pub visible: bool,
+    /// What the points are measured from (a far cloud's), else zero.
+    pub origin: [f64; 3],
+    /// x, y, z per point from the origin.
+    pub points: Vec<[f32; 3]>,
+    /// The colour of each point, when the file has them.
+    pub colors: Option<Vec<[u8; 3]>>,
 }
 
 impl Serp {
@@ -251,6 +275,11 @@ impl Serp {
         object.visible && object.layer.is_none_or(|l| self.layer_shown(l))
     }
 
+    /// Whether a point cloud is shown: itself and its layers.
+    pub fn cloud_shown(&self, cloud: &Cloud) -> bool {
+        cloud.visible && cloud.layer.is_none_or(|l| self.layer_shown(l))
+    }
+
     /// The object's colour: its own, else its layer's.
     pub fn color(&self, object: &Object) -> Option<[f64; 3]> {
         object
@@ -268,7 +297,7 @@ pub fn read_file(path: &Path) -> Result<Serp, Error> {
 
 /// The scene's JSON of a container: `document.json`, and the version of
 /// `meta.json` where it has one.
-fn unpack(bytes: &[u8]) -> Result<(Vec<u8>, Option<u64>), Error> {
+fn unpack(bytes: &[u8]) -> Result<(Vec<u8>, Option<u64>, mitcad_zip::Archive), Error> {
     let archive = mitcad_zip::Archive::new(bytes.to_vec()).map_err(|e| {
         Error::new(
             "the file is damaged: its container cannot be read",
@@ -292,7 +321,7 @@ fn unpack(bytes: &[u8]) -> Result<(Vec<u8>, Option<u64>), Error> {
         .ok()
         .and_then(|m| serde_json::from_slice::<Value>(&m).ok())
         .and_then(|m| m.get("version").and_then(version_of));
-    Ok((scene, meta))
+    Ok((scene, meta, archive))
 }
 
 fn version_of(value: &Value) -> Option<u64> {
@@ -308,10 +337,11 @@ fn version_of(value: &Value) -> Option<u64> {
 /// Reads a `.serp` file's bytes.
 pub fn read(bytes: &[u8]) -> Result<Serp, Error> {
     let container = bytes.starts_with(b"PK");
-    let (scene, meta_version) = if container {
-        unpack(bytes)?
+    let (scene, meta_version, archive) = if container {
+        let (scene, meta, archive) = unpack(bytes)?;
+        (scene, meta, Some(archive))
     } else {
-        (bytes.to_vec(), None)
+        (bytes.to_vec(), None, None)
     };
     let text = scene.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&scene);
     let doc: Value = serde_json::from_slice(text).map_err(|e| {
@@ -433,7 +463,22 @@ pub fn read(bytes: &[u8]) -> Result<Serp, Error> {
         });
     }
     let count = |key: &str| doc.get(key).and_then(Value::as_array).map_or(0, Vec::len);
-    skipped.point_clouds += count("pointclouds");
+    // Point clouds (mitcad#2240): their points from the container's blobs;
+    // one whose points cannot be read (a bare scene keeps none) is counted
+    // as left out.
+    let mut clouds = Vec::new();
+    for entry in doc
+        .get("pointclouds")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        match archive.as_ref().map(|a| cloud_of(a, entry, &layer_index)) {
+            Some(Ok(cloud)) => clouds.push(cloud),
+            // Counted in words with the rest that is left out.
+            Some(Err(_)) | None => skipped.point_clouds += 1,
+        }
+    }
     skipped.pictures += count("image_planes");
     skipped.layouts += count("layouts");
     skipped.history_records += count("history_records");
@@ -448,6 +493,74 @@ pub fn read(bytes: &[u8]) -> Result<Serp, Error> {
         blocks,
         skipped,
         notes,
+        clouds,
+    })
+}
+
+/// A point cloud entry of the scene with its points read from the
+/// container (`blobs.xyz`, little-endian float32 x, y, z per point;
+/// `blobs.rgb`, a byte per channel, dropped when its count differs), or
+/// why it cannot be read.
+fn cloud_of(
+    archive: &mitcad_zip::Archive,
+    entry: &Value,
+    layer_index: &HashMap<&str, usize>,
+) -> Result<Cloud, String> {
+    let blobs = entry.get("blobs");
+    let member = |key: &str| blobs.and_then(|b| b.get(key)).and_then(Value::as_str);
+    let xyz = member("xyz").ok_or_else(|| "it names no xyz member".to_owned())?;
+    let limit = (MAX_CLOUD_POINTS * 12) as u64;
+    let bytes = archive
+        .read_by_name_with_limit(xyz, limit)
+        .map_err(|e| format!("{xyz}: {e}"))?;
+    if bytes.is_empty() || !bytes.len().is_multiple_of(12) {
+        return Err(format!("{xyz}: not whole x, y, z triples"));
+    }
+    let points: Vec<[f32; 3]> = bytes
+        .as_chunks::<12>()
+        .0
+        .iter()
+        .map(|p| {
+            std::array::from_fn(|k| {
+                f32::from_le_bytes([p[4 * k], p[4 * k + 1], p[4 * k + 2], p[4 * k + 3]])
+            })
+        })
+        .collect();
+    if !points.iter().flatten().all(|c| c.is_finite()) {
+        return Err(format!("{xyz}: a coordinate is not finite"));
+    }
+    let colors = member("rgb")
+        .and_then(|rgb| archive.read_by_name_with_limit(rgb, limit / 4).ok())
+        .filter(|c| c.len() == points.len() * 3)
+        .map(|c| c.as_chunks::<3>().0.to_vec());
+    let origin = match entry.get("origin").and_then(Value::as_array) {
+        Some(o) if o.len() == 3 => {
+            let o: Vec<f64> = o.iter().filter_map(Value::as_f64).collect();
+            if o.len() != 3 || !o.iter().all(|c| c.is_finite()) {
+                return Err("its origin is not three numbers".to_owned());
+            }
+            [o[0], o[1], o[2]]
+        }
+        _ => [0.0; 3],
+    };
+    Ok(Cloud {
+        name: entry
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned),
+        layer: entry
+            .get("layer")
+            .and_then(id_of)
+            .and_then(|id| layer_index.get(id.as_str()).copied()),
+        visible: entry
+            .get("visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        origin,
+        points,
+        colors,
     })
 }
 

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! The stores beside the timeline that name occurrences by their paths and
 //! bodies by their ids follow the edits that change those (mitcad#1318):
-//! print plate items (mitcad#1050), comment targets (mitcad#1119) and the
-//! recorded bodies and picks of drawing views (mitcad#1293). Reparent
+//! print plate items (mitcad#1050), comment targets (mitcad#1119), the
+//! recorded bodies and picks of drawing views (mitcad#1293), selection
+//! set members (mitcad#2219; those of moved features and bodies follow in
+//! the moves themselves, `DocState::follow_set_members`) and the
+//! components point clouds are placed in (mitcad#2265). Reparent
 //! Occurrence, Move Features into a Component (and Move History into
 //! Component) and Save Component as Design with Replace call
 //! [`DocState::follow`] in the undo step of their change, beside their own
@@ -22,8 +25,9 @@ use crate::print_plates::PlateTarget;
 pub(crate) enum Follow<'a> {
     /// An occurrence moved to another parent (Reparent Occurrence): a path
     /// from the root that leads through `old` (its path before) leads
-    /// through `new` (after). Plate items and comment targets; the
-    /// drawings follow in the move's plan, which checks them.
+    /// through `new` (after). Plate items, comment targets, selection set
+    /// members and point clouds' occurrences; the drawings follow in the
+    /// move's plan, which checks them.
     Moved {
         old: &'a [OccurrenceUid],
         new: &'a [OccurrenceUid],
@@ -75,6 +79,16 @@ impl DocState {
                         moved(&mut path.0);
                     }
                 }
+                // Selection set members (mitcad#2219).
+                self.follow_set_paths(old, new);
+                // Point clouds placed in it or below it (mitcad#2265): the
+                // placement is in the component, which stays where it is in
+                // the design, so the points do too.
+                for cloud in &mut self.point_clouds {
+                    if let Some(path) = cloud.occurrence.as_mut() {
+                        moved(&mut path.0);
+                    }
+                }
             }
             Follow::Into {
                 source,
@@ -108,6 +122,18 @@ impl DocState {
                                     path.0.push(*occurrence);
                                 }
                             }
+                        }
+                        // A Flat Pattern's body (mitcad#2280), as a chosen
+                        // body.
+                        if let Some(Subject::FlatPattern {
+                            body,
+                            occurrence: Some(path),
+                            ..
+                        }) = &mut view.subject
+                            && bodies.contains(body)
+                            && ends_in_source(from, &path.0)
+                        {
+                            path.0.push(*occurrence);
                         }
                         let picks = view.annotations.iter_mut().flat_map(|a| a.picks.iter_mut());
                         for pick in picks {
@@ -151,12 +177,22 @@ impl DocState {
                 for comment in &mut self.comments {
                     renamed(&mut comment.target, *rename);
                 }
+                // Selection set members (mitcad#2219).
+                for set in &mut self.selection_sets {
+                    for member in &mut set.members {
+                        renamed(member, *rename);
+                    }
+                }
                 for drawing in &mut self.drawings {
                     for view in drawing.sheets.iter_mut().flat_map(|s| s.views.iter_mut()) {
                         if let Some(Subject::Bodies { bodies }) = &mut view.subject {
                             for body in bodies.iter_mut() {
                                 renamed(body, *rename);
                             }
+                        }
+                        // A Flat Pattern's body and occurrence (mitcad#2280).
+                        if let Some(subject @ Subject::FlatPattern { .. }) = &mut view.subject {
+                            renamed(subject, *rename);
                         }
                         let picks = view.annotations.iter_mut().flat_map(|a| a.picks.iter_mut());
                         for pick in picks {

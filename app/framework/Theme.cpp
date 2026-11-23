@@ -377,6 +377,16 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_ROLE(DraftPositive, hex(0x2b8cbe), hex(0x74c0e8), View, DraftPositive),
       MITCAD_ROLE(DraftUnder, hex(0xc2185b), hex(0xec6aa0), View, DraftUnder),
       MITCAD_ROLE(DraftNegative, hex(0x7b5cc4), hex(0xb59cf0), View, DraftNegative),
+      // Point Cloud Deviation's diverging scale (mitcad#2240): blue inside
+      // the material, a neutral grey within tolerance, magenta outside;
+      // none of the status hues, the two ends far apart in hue.
+      MITCAD_ROLE(DeviationInside, hex(0x2166ac), hex(0x6baed6), View, DeviationInside),
+      MITCAD_ROLE(DeviationNeutral, hex(0xa0a0a0), hex(0xbdbdbd), View, DeviationNeutral),
+      MITCAD_ROLE(DeviationOutside, hex(0xc51b7d), hex(0xe77fc0), View, DeviationOutside),
+      // The points a deviation did not measure (mitcad#2265): a grey
+      // between the neutral one and the view's background, so the whole
+      // cloud stays in sight without reading as within tolerance.
+      MITCAD_ROLE(DeviationUnmeasured, hex(0xcfcfcf), hex(0x6e6e6e), View, DeviationUnmeasured),
       // The Boost development pill (mitcad#1990): an outline and a rocket in
       // a warm pink, the label in the window's text; it fills with a
       // translucent tint of the pink only under the pointer. At least 3:1

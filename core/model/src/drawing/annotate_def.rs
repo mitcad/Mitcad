@@ -364,6 +364,27 @@ pub struct ViewPick {
     /// curved outline for an overall size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extreme: Option<[f64; 3]>,
+    /// A bend line of a Flat Pattern view (mitcad#2280): the pick is then
+    /// that line of the body's developed blank (no edge and no face), or
+    /// its `point`, found again on every draw from the pattern, so it
+    /// follows the model while the bend is there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bend: Option<BendLinePick>,
+}
+
+/// A bend line of a Flat Pattern (mitcad#2280): a bend of the sheet and
+/// which piece of its centre line (a bend whose material is cut across has
+/// one piece each side), from 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BendLinePick {
+    pub bend: crate::sheet::BendId,
+    #[serde(default, skip_serializing_if = "is_first")]
+    pub piece: usize,
+}
+
+fn is_first(piece: &usize) -> bool {
+    *piece == 0
 }
 
 impl ViewPick {
@@ -373,6 +394,22 @@ impl ViewPick {
     }
 
     fn check(&self) -> Result<(), String> {
+        // A Flat Pattern's bend line (mitcad#2280): the line or a point of
+        // it, nothing else.
+        if self.bend.is_some() {
+            if self.edge.is_some()
+                || self.face.is_some()
+                || self.on_face.is_some()
+                || self.on_cut.is_some()
+                || self.drawn.is_some()
+                || self.side.is_some()
+                || self.outline.is_some()
+                || self.extreme.is_some()
+            {
+                return Err("a bend line is picked alone: no edge or face with it".to_owned());
+            }
+            return Ok(());
+        }
         if self.drawn.is_some()
             && (self.point.is_some() || self.on_face.is_some() || self.on_cut.is_some())
         {

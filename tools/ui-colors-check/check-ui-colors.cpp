@@ -128,6 +128,7 @@ const Allowed kAllowed[] = {
     {"platform/macos/NativeDialogs.mm", 1, "the dimming outside a crop, as ReportDialogs.cpp"},
     {"view/TexturedBody.hpp", 1,
      "white under a texture in the shaded view (mitcad#2186), which OCCT multiplies its texture by"},
+    {"view/DecalView.cpp", 1, "white under a decal's image (mitcad#2244), which OCCT multiplies its texture by"},
 };
 
 // The source text without its comments: strings (raw strings too) and

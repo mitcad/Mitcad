@@ -30,7 +30,16 @@
 // delete goes to the window through the signals (MainWindow, in
 // projects/MainWindowProjectsPanel.cpp), which runs the core's commands
 // and calls refresh(). New Design, New Folder and Rename are named in place;
-// a drag moves designs and folders within their project. The AppKit
+// a drag moves designs and folders within their project.
+//
+// Other files (mitcad#2204): a project's pictures, PDFs, spreadsheets and
+// archives are rows of their own after the designs of their folder, with
+// the system's icon for their type, their size in the tooltip and the
+// marks "new" and "*" as a design's; Open (a double-click, Return) hands
+// one to the system's app, Rename, Delete and a drag work on them as on
+// designs, Record Changes records what their own app changed, and Add
+// Files… (or files dropped from the file manager onto a project or folder
+// row) copies files in, each one version. The AppKit
 // frontend presents the same rows natively (mitcad#816): its outline's
 // keys, its own name editor and its drags come back through treeKey,
 // setNativeEditor and dropRow to the same actions.
@@ -89,8 +98,9 @@ public:
   };
 
   // The kinds of rows. Message: the refusal of a name typed, below the row
-  // whose editor is open again (mitcad#1268).
-  enum class RowType { Project = 1, Folder, Design, NewItem, Message };
+  // whose editor is open again (mitcad#1268). File: another file of the
+  // project (mitcad#2204).
+  enum class RowType { Project = 1, Folder, Design, NewItem, Message, File };
 
   // The narrowest the Floating card can be dragged to (mitcad#529).
   static constexpr int kMinimumCardWidth = 180;
@@ -199,6 +209,14 @@ signals:
   void removeFromListRequested(const QString& root);
   // Remove Project... (mitcad#1562): the window confirms and removes it.
   void removeProjectRequested(const QString& root);
+  // Other files (mitcad#2204): one opened with the system's app (`path`
+  // absolute); files copied into `folder` (relative, "" the project's top)
+  // of the project at `root`, `files` absolute (empty: the window asks
+  // which); the changes of the files at `path` (a file or a folder,
+  // relative; "" the whole project) recorded.
+  void openFileRequested(const QString& path);
+  void addFilesRequested(const QString& root, const QString& folder, const QStringList& files);
+  void recordRequested(const QString& root, const QString& path);
   // A message for the status bar (a name refused).
   void statusMessage(const QString& message, bool error);
   void contentHeightChanged();
@@ -222,6 +240,7 @@ private:
   struct Editing {
     RowType kind = RowType::NewItem; // NewItem: a new design or folder; else a rename
     bool folder = false;             // a folder (new or renamed)
+    bool file = false;               // another file renamed (its whole name, mitcad#2204)
     QString root;
     QString parent; // the folder it is in (relative)
     QString from;   // a rename: the path it had
@@ -254,6 +273,14 @@ private:
   QTreeWidgetItem* projectItem(const QString& root) const;
   QTreeWidgetItem* folderItem(const QString& root, const QString& folder) const;
   const ProjectDesignRow* designOf(const QTreeWidgetItem* item) const;
+  // Other files (mitcad#2204): a file row's file; whether any other file
+  // at or under `path` ("" the whole project) of the project at `root` has
+  // changes no version holds (new, changed); the folder files dropped on
+  // `over` go in (a project or a folder row; false for another row).
+  const ProjectFileRow* fileOf(const QTreeWidgetItem* item) const;
+  bool hasFileChanges(const QString& root, const QString& path) const;
+  bool fileDropTarget(const QTreeWidgetItem* over, QString* folder) const;
+  void filesDropped(QTreeWidgetItem* over, const QStringList& paths);
   // The folder a new design or folder goes in for a row.
   QString folderFor(const QTreeWidgetItem* item) const;
   // The project whose settings the settings button opens for a row: the
@@ -360,6 +387,7 @@ private:
     QString path;
     QString from; // a rename's
     bool folder = false;
+    bool file = false; // another file's rename (mitcad#2204)
   };
   Request m_request; // the panel's last name request, until it is answered
   bool m_hasRequest = false;

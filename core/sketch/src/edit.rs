@@ -293,8 +293,31 @@ impl<'a> SketchEdit<'a> {
                 }
                 Ok(self.add_point(at))
             }
-            PointInput::Existing(id) => self.existing_point(id).map(|_| id),
+            PointInput::Existing(id) => {
+                self.existing_point(id)?;
+                Ok(self.own_point(id))
+            }
         }
+    }
+
+    /// The point a tool starts or ends at when given an existing point
+    /// (mitcad#2278): the point itself, or for one a derived offset
+    /// computes (which follows its source and is no solver unknown) a new
+    /// point there held to it by a Coincident, so that it stays on the
+    /// exact offset of the source as the source moves.
+    pub(crate) fn own_point(&mut self, id: EntityUid) -> EntityUid {
+        if self.computing_offset(id).is_none() {
+            return id;
+        }
+        let Ok(at) = self.at(id) else {
+            return id;
+        };
+        let own = self.add_point(at);
+        self.add_constraint(ConstraintKind::Coincident {
+            point: own,
+            entity: Ref::Point(id),
+        });
+        own
     }
 
     /// Where an existing point is, or why `id` names none. Points, curves
@@ -812,6 +835,12 @@ impl<'a> SketchEdit<'a> {
         }
         // Block instances keep their shape (mitcad#2110).
         self.check_blocks()?;
+        // Equation curves where their formulas put them with the values
+        // now, those that are no longer fit point splines without their
+        // formulas (mitcad#2237); what the evaluation warns of it tells.
+        if !self.def.equations.is_empty() {
+            let _ = super::equation::follow_formulas(&mut self.def, self.params.table());
+        }
         self.def.check_definition()?;
         let params = &*self.params;
         self.def

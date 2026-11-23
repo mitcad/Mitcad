@@ -60,16 +60,29 @@ std::optional<gp_Trsf> moveMotion(const CommandState& state, const gp_Pnt& pivot
   return std::nullopt;
 }
 
-std::optional<gp_Pnt> freeMovedMiddle(const CommandState& state, const gp_Pnt& pivot) {
+namespace {
+
+// Distances along the move's component's axes as a vector of the design
+// (mitcad#2305); the identity leaves them exactly as they are.
+gp_XYZ inDesign(const gp_XYZ& moved, const gp_Trsf& frame) { return gp_Vec(moved).Transformed(frame).XYZ(); }
+
+} // namespace
+
+gp_Dir moveAxisOf(const gp_Trsf& frame, int axis) {
+  return gp_Dir(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 0 || axis == 1 ? 0 : 1).Transformed(frame);
+}
+
+std::optional<gp_Pnt> freeMovedMiddle(const CommandState& state, const gp_Pnt& pivot, const gp_Trsf& frame) {
   const gp_XYZ moved(state.value(QStringLiteral("tx")), state.value(QStringLiteral("ty")),
                      state.value(QStringLiteral("tz")));
   if (!std::isfinite(moved.X()) || !std::isfinite(moved.Y()) || !std::isfinite(moved.Z())) {
     return std::nullopt;
   }
-  return gp_Pnt(pivot.XYZ() + moved);
+  return gp_Pnt(pivot.XYZ() + inDesign(moved, frame));
 }
 
-std::optional<gp_Pnt> freeArrowOrigin(const CommandState& state, const gp_Pnt& pivot, int axis) {
+std::optional<gp_Pnt> freeArrowOrigin(const CommandState& state, const gp_Pnt& pivot, int axis,
+                                      const gp_Trsf& frame) {
   if (axis < 0 || axis > 2) {
     return std::nullopt;
   }
@@ -81,7 +94,7 @@ std::optional<gp_Pnt> freeArrowOrigin(const CommandState& state, const gp_Pnt& p
   // the start stays the same while its own value is dragged, and the drag
   // keeps its grab (ManipulatorOverlay::setHandles).
   moved.SetCoord(axis + 1, 0.0);
-  return gp_Pnt(pivot.XYZ() + moved);
+  return gp_Pnt(pivot.XYZ() + inDesign(moved, frame));
 }
 
 FreeMove freeMoveOf(const QJsonArray& rows, const gp_Pnt& pivot) {

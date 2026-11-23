@@ -397,6 +397,12 @@ impl<K: Kernel> Document<K> {
                 &group.features,
                 &group.bodies,
             );
+            // Selection set members of the moved features and bodies
+            // (mitcad#2219): from the source's occurrence to the target's.
+            let moved: BTreeSet<FeatureUid> = group.features.iter().copied().collect();
+            state.follow_set_members(&moved, &group.bodies, &|p: &OccurrencePath| {
+                (p.0 == context.source).then(|| path.clone())
+            });
             let label = format!(
                 "Move Features of {label_source} into {}",
                 state.assembly.name(component)

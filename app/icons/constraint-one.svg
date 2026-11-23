@@ -1,0 +1,8 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- MitCad icon: 24 x 24, dark outline, blue solids, orange actions. -->
+<!-- Constraint (mitcad#2293): one face brought onto another. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+  <path d="M3 16 H21 V21 H3 Z" fill="#9cc0ec"/>
+  <path d="M8 3 H16 V9 H8 Z" fill="#c9ddf6"/>
+  <path d="M12 10.2 V14.4 M9.8 12.4 L12 14.6 L14.2 12.4" stroke="#e07b1a" stroke-width="1.6"/>
+</svg>

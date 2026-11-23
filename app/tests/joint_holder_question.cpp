@@ -113,6 +113,7 @@ void textTests() {
   CHECK(group.notice(QStringLiteral("Rigid Group")) ==
         QStringLiteral("Rigid Group goes into Assembly, which holds all the picks; Motor stays active."));
   CHECK(madeWhat(QStringLiteral("assemble.constraint")) == QStringLiteral("A constraint"));
+  CHECK(madeWhat(QStringLiteral("assemble.constraint_one")) == QStringLiteral("A constraint")); // mitcad#2293
   CHECK(madeWhat(QStringLiteral("solid.extrude")).isEmpty());
 }
 
@@ -155,6 +156,9 @@ void stepTests() {
         QStringList({QStringLiteral("a"), QStringLiteral("b")}));
   CHECK(jointHolderInputs(QStringLiteral("assemble.rigid_group")) == QStringList({QStringLiteral("occurrences")}));
   CHECK(jointHolderInputs(QStringLiteral("assemble.constraint")) ==
+        QStringList({QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("b2")}));
+  // Constraint (mitcad#2293): its references, as Constraint Set's rows'.
+  CHECK(jointHolderInputs(QStringLiteral("assemble.constraint_one")) ==
         QStringList({QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("b2")}));
   CHECK(jointHolderInputs(QStringLiteral("assemble.drive_joint")).isEmpty());
   CHECK(jointHolderInputs(QStringLiteral("solid.extrude")).isEmpty());

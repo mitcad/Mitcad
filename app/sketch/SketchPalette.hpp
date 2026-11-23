@@ -8,6 +8,7 @@
 class QAbstractButton;
 class QCheckBox;
 class QComboBox;
+class QDialogButtonBox;
 class QGridLayout;
 class QLabel;
 class QRadioButton;
@@ -54,10 +55,11 @@ public:
   // tools: line, rectangle, … (counts|defaults)".
   void chooseCreateTools(const QStringList& pinned);
   const QStringList& createTools() const { return m_createIds; }
-  // Finish Sketch out of the palette's own rows, for a page that keeps it
-  // in sight under the scrolling palette (MainWindow's wrapPalette,
-  // mitcad#1027); null without the command. Its places are logged with
-  // the palette's wherever it is.
+  // Finish Sketch, with Cancel Sketch beside it (mitcad#2225), out of the
+  // palette's own rows, for a page that keeps them in sight under the
+  // scrolling palette (MainWindow's wrapPalette, mitcad#1027): their
+  // button box, null without the command. Their places are logged with
+  // the palette's wherever they are.
   QWidget* takeFinish();
   // Whether a command can be in the Create section and is counted when it
   // starts in a sketch: a tool or a command with a panel of the Sketch
@@ -168,7 +170,22 @@ private:
   QAbstractButton* m_lookAt = nullptr; // Look At, logged for UI tests (mitcad#1060)
   // Show Unconstrained beside the status (mitcad#2026).
   QAbstractButton* m_showUnconstrained = nullptr;
+  // Cancel Sketch beside Finish Sketch, both in m_finishButtons
+  // (mitcad#2225, finishButtons).
+  QToolButton* m_cancel = nullptr;
+  QDialogButtonBox* m_finishButtons = nullptr;
 };
+
+// Finish Sketch and Cancel Sketch for a sketch palette (mitcad#2225), in
+// the platform's OK/Cancel order as a command panel's OK and Cancel
+// (QDialogButtonBox): capsules in the Floating layout, Finish Sketch the
+// prominent one, tool buttons with their icons in the Docked one; each
+// follows its command's action. The buttons are named `<prefix>Finish` and
+// `<prefix>Cancel`, the box `<prefix>FinishButtons`. Null (and both
+// buttons null) without the Finish Sketch command; `cancel` stays null
+// without Cancel Sketch's.
+QDialogButtonBox* finishButtons(CommandRegistry& registry, const QString& prefix, QToolButton*& finish,
+                                QToolButton*& cancel);
 
 } // namespace sketch
 } // namespace mitcad

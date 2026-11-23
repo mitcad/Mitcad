@@ -21,8 +21,9 @@
 #      end; Coincident on its right corner and the line's right end is
 #      added, the Horizontal it implies removed, and the hint says so; one
 #      undo takes both back.
-#   5. The Point tool on a derived offset curve: the point is added, the
-#      coincident of its snap is refused, and the hint shows why.
+#   5. The Point tool on a derived offset curve: the point is added and the
+#      coincident of its snap holds it on the offset (mitcad#2278), one
+#      degree of freedom along it, nothing refused.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-points-test.sh
@@ -192,7 +193,7 @@ echo "--- 4. A partly implied coincident replaces the Horizontal (mitcad#287)"
 # it (c8 its bottom from p4 at (0, 0) to p5 at (40, 0), Horizontal k12),
 # its left corner coincident with p1 (k16); and far above it a closed
 # outline of three lines and a spline offset out by 2 (derived: its lower
-# line at y = 58 cannot be constrained).
+# line at y = 58 is computed from c19 after every solve).
 cat > "$WORK/implied.json" << 'JSON'
 [
   {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
@@ -254,16 +255,19 @@ ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
 ui_expect_new "Undo: " "undone"
 expect_dof "$before" "one undo takes both back"
 
-echo "--- 5. A snapped coincident that is refused says why (mitcad#287)"
+echo "--- 5. A point snapped onto a derived offset is held on it (mitcad#2278)"
 ui_mark
 ui_step "point (search)"                 ui_command "Point"
 ui_expect_new "Sketch tool Point" "Point active"
+ui_sync
+before=$(dof)
 ui_mark
 ui_step "click on the derived offset"    ui_sketch_click 10 58
 ui_expect_new "Added point " "the point is added"
-ui_expect_new "Constraint coincident on " "the snap's coincident is logged"
-ui_expect_new " not added: " "refused, with the reason"
-ui_expect_new "Sketch notice: Coincident not added: " "the hint shows the reason"
+expect_dof $((before + 1)) "the snap's coincident holds it on the offset, free along it"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q " not added: " &&
+  ui_fail "the snap's coincident on the derived offset was refused"
+echo "ok   the snap's coincident on the derived offset is added"
 ui_step "end the tool (Esc)"             ui_key Escape
 ui_step "finish the sketch (Ctrl+Enter)" ui_key ctrl+Return
 ui_expect_log "Sketch finished" "sketch finished"

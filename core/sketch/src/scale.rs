@@ -278,7 +278,8 @@ impl SketchEdit<'_> {
                 EntityKind::Line { .. }
                 | EntityKind::Arc { .. }
                 | EntityKind::Spline { .. }
-                | EntityKind::FittedSpline { .. } => {}
+                | EntityKind::FittedSpline { .. }
+                | EntityKind::Conic { .. } => {}
             }
         }
         for t in &mut self.def.texts {

@@ -2489,6 +2489,12 @@ if(BUILD_TESTING)
                 --work "${CMAKE_CURRENT_BINARY_DIR}/f3d-reported-house-worker")
       set_tests_properties(cli.f3d_reported_house_worker PROPERTIES TIMEOUT 3000
         ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "f3d reported house: skipped")
+      # (On Windows the application in the build folder loads Qt from
+      # Qt's own bin folder, as the Windows UI tests' -QtBin gives it.)
+      if(WIN32)
+        set_property(TEST cli.f3d_reported_house_worker APPEND PROPERTY ENVIRONMENT_MODIFICATION
+          "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+      endif()
     endif()
   endif()
 endif()
@@ -2706,7 +2712,9 @@ endif()
 # kerf bend's slit lattice, the flat-pack generator and board's standard
 # boxes, with OCCT's volumes and flat patterns.
 if(BUILD_TESTING)
-  foreach(script sheet_process_allowances sheet_laser_joints sheet_kerf_bend sheet_flat_pack sheet_board_box sheet_board_polypropylene sheet_glue_flap)
+  foreach(script sheet_process_allowances sheet_laser_joints sheet_kerf_bend sheet_flat_pack sheet_board_box sheet_board_polypropylene sheet_glue_flap
+                 sheet_board_0203 sheet_board_0206 sheet_board_0421 sheet_board_0426 sheet_board_0427
+                 sheet_board_0470 sheet_board_0471 sheet_fold_beside_port)
     add_test(NAME cli.${script} COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/${script}.json")
   endforeach()
 endif()
@@ -3006,6 +3014,34 @@ if(BUILD_TESTING)
   set_tests_properties(cli.export_gltf PROPERTIES TIMEOUT 300)
 endif()
 
+# Cell Grid (mitcad#2238): hexagons and circles cut from a plate with
+# analytic volumes, whole, snapped and trimmed edge cells, through all, a
+# circle keep-out, and a fillet on a cell's edge through a change of the
+# plate's size.
+if(BUILD_TESTING)
+  add_test(NAME cli.cell_grid COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/cell_grid.json")
+endif()
+
+# Every script's design exported as a script and replayed (mitcad#2245).
+if(BUILD_TESTING)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/script-round-trip-tests.cmake")
+endif()
+
+# GitHub #553's design (mitcad#2193), found by its content id under
+# MITCAD_MITCAD_REPORTED and opened in a copy: a lip's edge rounded with 2,
+# Tangent Chain off, where it runs smoothly into a pocket wall's rounding of
+# radius 2: the rounding ends against that rounding, one valid solid without
+# a note (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_face_end_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-face-end-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-face-end-reported-test.cmake")
+  set_tests_properties(cli.fillet_face_end_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet face end reported: skipped" TIMEOUT 600)
+endif()
+
 # A test's PASS_REGULAR_EXPRESSION is a list: a ';' in its text splits it
 # into alternatives of which any one passes, so that the test no longer
 # checks what it says (mitcad#1913). Write '.' for a ';' of the output.
@@ -3018,6 +3054,15 @@ if(BUILD_TESTING)
       message(SEND_ERROR "${test}: its PASS_REGULAR_EXPRESSION holds a ';', which makes it ${alternatives} alternatives of which any one passes: write '.' for it")
     endif()
   endforeach()
+endif()
+
+# A base view of a sheet-metal body's Flat Pattern (mitcad#2280): its blank,
+# its bend lines in their two line types with their notes, dimensions on it,
+# the flange and the pattern's side followed, the view kept while the
+# pattern cannot be made.
+if(BUILD_TESTING)
+  add_test(NAME cli.drawing_flat_pattern_view
+           COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/drawing_flat_pattern_view.json")
 endif()
 
 # Every mitcad-cli test (mitcad-cli loads Qt's DLLs, mitcad-cli render): on

@@ -338,3 +338,32 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
     set_property(TEST "${tutorials_start_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()
+
+# Work that arrives while a command is open (mitcad#2281): a Component from
+# Web download (its test command, no web browser) and a STEP file dropped on
+# the 3D view come in at once beside Measure, which stays open (Move on the
+# download once it closes), and wait while Extrude is open, said, coming in
+# after its Cancel.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform)
+  set(insert_during_command_ui_test "app.ui-${selection_ui_platform}-insert-during-command")
+  if(APPLE)
+    add_test(NAME "${insert_during_command_ui_test}"
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-insert-during-command-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-insert-during-command")
+  else()
+    selection_ui_command_prefix(460)
+    add_test(NAME "${insert_during_command_ui_test}"
+      COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/ui-insert-during-command-test.py"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-insert-during-command"
+              "$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+  set_tests_properties("${insert_during_command_ui_test}" PROPERTIES TIMEOUT 360 SKIP_RETURN_CODE 77
+    ${selection_ui_alone} ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${insert_during_command_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()

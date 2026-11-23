@@ -45,7 +45,11 @@
 //! (to the other's near side, through to its far side, or to the outer
 //! corner of a shared miter, [`meet_offset`]), and the `start` or `end`
 //! offset adds to it. So the end follows when either line moves, and the
-//! member still follows its own line.
+//! member still follows its own line. A shared miter's cut angle is
+//! measured from the lines too (`start_angle`, `end_angle`, reference
+//! parameters of the feature's own, [`mitre_angle`]; mitcad#2234), which the
+//! member's derived part takes as its end's cut angle, so the cut follows
+//! when the corner's angle changes.
 
 use std::collections::BTreeMap;
 
@@ -115,6 +119,16 @@ pub struct EdgeFrameDef<P = ParamId> {
     /// Likewise at `end` (the member's end B).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_meets: Option<EdgeMeet>,
+    /// Along a sketch line, a shared miter at `start` (`start_meets` to
+    /// `corner`): the miter's cut angle, measured from both lines at every
+    /// evaluation into this reference parameter of the feature's own, which
+    /// the member's derived part takes as its end A's cut angle
+    /// (mitcad#2234).
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub start_angle: Option<P>,
+    /// Likewise at `end` (the member's end B).
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub end_angle: Option<P>,
 }
 
 /// Where a member's end along a sketch line goes in a joint with another
@@ -167,6 +181,8 @@ impl<P> EdgeFrameDef<P> {
             align: clone,
             start_meets: clone,
             end_meets: clone,
+            start_angle: option,
+            end_angle: option,
         }
     }
 
@@ -489,13 +505,7 @@ pub fn meet_offset<R: Resolver>(
             (dot(sub(middle, other.start), towards) - side) / sin
         }
         MeetSide::Corner => {
-            // The other member's end at this one: of its line's ends the
-            // nearer, its way out.
-            let v = if norm(sub(other.end, point)) <= norm(sub(other.start, point)) {
-                other.z
-            } else {
-                scale(other.z, -1.0)
-            };
+            let v = way_out(&other, point);
             let c = dot(out, v);
             let sin2 = 1.0 - c * c;
             if sin2 < 1e-12 {
@@ -515,6 +525,86 @@ pub fn meet_offset<R: Resolver>(
     };
     // Moved out by `moved`: an offset of as much the other way.
     Ok(-moved)
+}
+
+/// The other member's end at a corner (`point`, this member's line's end
+/// there): of its line's ends the nearer, its way out of the member.
+fn way_out(other: &LineFrame, point: Vec3) -> Vec3 {
+    if norm(sub(other.end, point)) <= norm(sub(other.start, point)) {
+        other.z
+    } else {
+        scale(other.z, -1.0)
+    }
+}
+
+/// A shared miter's cut angle at a member's end along the line `own`
+/// (mitcad#2234), from square in radians: half the turn from this
+/// member's way out of the corner into the other member's line (half of
+/// 180 degrees less the angle between the lines), so both members are cut
+/// on the corner's bisector. `at_end`, `reversed` and `meet` as
+/// [`meet_offset`]'s; lines that run along each other fail in words.
+pub fn mitre_angle<R: Resolver>(
+    r: &mut R,
+    own: &GeomRef,
+    reversed: bool,
+    at_end: bool,
+    meet: &EdgeMeet,
+) -> Result<f64, String> {
+    let (_, out, into) = mitre_axes(r, own, reversed, at_end, meet)?;
+    Ok(norm(cross(out, into)).atan2(dot(out, into)) / 2.0)
+}
+
+/// The two axes that determine a shared miter. The other member's inward
+/// axis also tells which way this cut leans (mitcad#2259).
+pub(crate) fn mitre_axes<R: Resolver>(
+    r: &mut R,
+    own: &GeomRef,
+    reversed: bool,
+    at_end: bool,
+    meet: &EdgeMeet,
+) -> Result<(LineFrame, Vec3, Vec3), String> {
+    let mine = line_frame(r, own)?;
+    let other = line_frame(r, &meet.edge)?;
+    let (point, out) = if at_end != reversed {
+        (mine.end, mine.z)
+    } else {
+        (mine.start, scale(mine.z, -1.0))
+    };
+    let into = scale(way_out(&other, point), -1.0);
+    if norm(cross(out, into)) < 1e-6 {
+        return Err(said(
+            "the member runs along the one it meets: its end is left as drawn",
+            format!("{own} is parallel to {}", meet.edge),
+        ));
+    }
+    Ok((mine, out, into))
+}
+
+/// An edge frame's miter angles are its own references (mitcad#2234): the
+/// number a new one is given makes a dimension of the feature, which
+/// becomes the reference, as a bound length's parameter does.
+pub(crate) fn settle_angles(
+    params: &mut crate::parameters::Parameters,
+    def: &EdgeFrameDef,
+    owner: FeatureUid,
+) -> Result<(), String> {
+    for (slot, id) in [
+        ("start_angle", def.start_angle),
+        ("end_angle", def.end_angle),
+    ] {
+        let Some(id) = id else {
+            continue;
+        };
+        if params.owner(id) != Some(owner) {
+            return Err(format!(
+                "{slot}: an edge frame measures a miter's angle in a parameter of its own; give \
+                 its first value as a number, not “{}”",
+                params.name(id)
+            ));
+        }
+        params.set_kind(id, crate::expr::ParamKind::Reference);
+    }
+    Ok(())
 }
 
 /// Works out an edge frame's frames from a straight edge and a planar face,
@@ -700,6 +790,7 @@ impl<K: Kernel> Evaluate<K> for EdgeFrameDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let mut offsets = self.offsets(ctx)?;
         let (at, placement) = path_placement(ctx, &self.occurrence)?;
+        let mut measured = Vec::new();
         let run = {
             let mut resolver = InComponent {
                 ctx: &mut *ctx,
@@ -714,6 +805,18 @@ impl<K: Kernel> Evaluate<K> for EdgeFrameDef {
                 } else {
                     offsets.start += by;
                 }
+                // A shared miter's cut angle, from the lines now
+                // (mitcad#2234).
+                let angle = if at_end {
+                    self.end_angle
+                } else {
+                    self.start_angle
+                };
+                if let (MeetSide::Corner, Some(id)) = (meet.to, angle) {
+                    let value =
+                        mitre_angle(&mut resolver, &self.edge, self.reversed, at_end, meet)?;
+                    measured.push((id, value));
+                }
             }
             edge_run(&mut resolver, &self.edge, self.face.as_ref(), &offsets)?
         };
@@ -722,6 +825,7 @@ impl<K: Kernel> Evaluate<K> for EdgeFrameDef {
         mounts.insert(END.to_owned(), placement.after(&run.end));
         Ok(FeatureOutput {
             mounts,
+            measured,
             ..FeatureOutput::default()
         })
     }

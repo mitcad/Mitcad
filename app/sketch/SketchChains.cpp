@@ -15,11 +15,11 @@
 namespace mitcad::sketch {
 namespace {
 
-// Lines, arcs, elliptical arcs and open splines chain; a closed curve is
-// offset on its own.
+// Lines, arcs, elliptical arcs, open splines and conics chain; a closed
+// curve is offset on its own.
 bool joinable(const CurveData& c) {
   return c.isLine() || c.isArc() || c.type == QStringLiteral("elliptical_arc") ||
-         (c.isSpline() && c.start != c.end);
+         ((c.isSpline() || c.isConic()) && c.start != c.end);
 }
 
 // Whether two open curves lie on each other (an edge projected twice,
@@ -36,7 +36,7 @@ bool sameCurve(const CurveData& a, const CurveData& b) {
   const auto along = [](const Curve2& c, double f) { return c.at(c.t0() + f * (c.t1() - c.t0())); };
   const std::array<double, 5> fractions = {0.0, 0.25, 0.5, 0.75, 1.0};
   bool ahead = true;
-  bool back = a.isLine() || a.isSpline();
+  bool back = a.isLine() || a.isSpline() || a.isConic();
   for (const double f : fractions) {
     ahead = ahead && dist(along(p, f), along(q, f)) <= tolerance;
     back = back && dist(along(p, f), along(q, 1.0 - f)) <= tolerance;

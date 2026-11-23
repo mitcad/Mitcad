@@ -61,8 +61,10 @@
 #include "framework/SelectionScope.hpp"
 #include "framework/Theme.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "view/Decals.hpp"
 #include "view/FirstBodiesFit.hpp"
 #include "view/ImageReferences.hpp"
+#include "view/PointClouds.hpp"
 #include "view/MeasurementDrawing.hpp"
 #include "view/SelectionLook.hpp"
 #include "view/ViewMatch.hpp"
@@ -106,6 +108,13 @@ struct StockMesh;
 // macOS 4.1 core; Windows/Linux 4.5 compatibility. main() selects it before
 // QApplication so document moves retain a compatible context and resources.
 QSurfaceFormat viewportSurfaceFormat();
+// Linux through EGL (mitcad#2292, framework/GraphicsStart.hpp): the format
+// tried when a driver refuses the 4.5 compatibility one, its own highest
+// compatibility version (as Qt's GLX integration fell back to a legacy
+// context); and the format the start-up's check found working, which
+// viewportSurfaceFormat() returns from then on.
+QSurfaceFormat viewportFallbackSurfaceFormat();
+void useViewportSurfaceFormat(const QSurfaceFormat& format);
 
 // Identifies a sketch profile: (sketch feature uid, region key).
 using ProfileKey = std::pair<std::string, std::string>;
@@ -444,6 +453,20 @@ public:
   // picked. The pictures come by their digest from `images` (one missing
   // is not drawn). Logs "Image references drawn: …" when it changes.
   void setImageReferences(const std::vector<ImageReferenceShown>& shown, const QHash<QString, QImage>& images);
+  // Point clouds (mitcad#2240, view/PointCloudView.cpp): each cloud drawn
+  // as points, depth-tested with the bodies, in its file's colours or the
+  // neutral grey; never picked. Logs "Point clouds drawn: …" when it
+  // changes.
+  void setPointClouds(const std::vector<PointCloudDrawn>& clouds);
+  // Decals (mitcad#2244, view/DecalView.cpp): each decal of `shown` drawn
+  // on its face by its grid, lit as the face is, with the image's alpha
+  // times its opacity, hidden where the bodies hide it; never picked (a
+  // click picks its face). The pictures come by their digest from
+  // `images` (one missing is not drawn). Logs "Decals drawn: …" when it
+  // changes. The renderer takes what is drawn (drawnDecals).
+  void setDecals(const std::vector<DecalShown>& shown, const QHash<QString, QImage>& images);
+  const std::vector<DecalShown>& drawnDecals() const { return m_drawnDecals; }
+  const QHash<QString, QImage>& drawnDecalImages() const { return m_drawnDecalImages; }
   // The Center of Mass marker (mitcad#1094, view/CenterOfMassView.cpp): a
   // crossed circle of constant size on screen at `at` (design coordinates,
   // mm), drawn over the bodies and never picked, in the colors of the
@@ -1760,6 +1783,10 @@ private:
   std::optional<gp_Pnt> pickedWorldPoint(const occ::handle<SelectMgr_EntityOwner>& owner) const;
   // Ends a drag of a component (mitcad#55), cancelled or where it is.
   void endOccurrenceDrag(const QPointF& position, bool cancelled);
+  // True (and logged) when the view has no window because its graphics
+  // never attached (mitcad#2125): a press or release (`what`) there does
+  // nothing, as OCCT's picking would crash (mitcad#2295).
+  bool ignoresClickWithoutGraphics(const QMouseEvent* event, const char* what) const;
   bool accepts(const occ::handle<SelectMgr_EntityOwner>& owner) const;
   // Selection scopes (mitcad#217): the kinds pickable now (the expanded
   // ones while Shift is held), Shift's state (`hover`: pick again where the
@@ -2157,6 +2184,13 @@ private:
   occ::handle<AIS_InteractiveObject> m_printTriangles;
   // The narrow gaps between bodies over everything (mitcad#1519).
   occ::handle<AIS_InteractiveObject> m_printGaps;
+  // Point Cloud Deviation's coloured points (mitcad#2240), with their
+  // places (3 numbers each) and distances for the hover's words
+  // (deviationToolTip, view/PrintOverlay.cpp).
+  occ::handle<AIS_InteractiveObject> m_deviationPoints;
+  std::vector<float> m_deviationPlaces;
+  std::vector<float> m_deviationDistances;
+  bool deviationToolTip(const QPoint& at, const QPoint& global);
   // Filament changes' print colours and rings (setFilamentChangeOverlay,
   // mitcad#1643).
   occ::handle<AIS_InteractiveObject> m_filamentBands;
@@ -2341,6 +2375,16 @@ private:
   QHash<QString, occ::handle<Graphic3d_Texture2D>> m_imageTextures;
   QString m_loggedImageReferences = QStringLiteral("Image references drawn: none");
   bool m_loggedImageLayer = false;
+  // The point clouds drawn (setPointClouds, mitcad#2240).
+  std::vector<occ::handle<AIS_InteractiveObject>> m_pointClouds;
+  QString m_loggedPointClouds = QStringLiteral("Point clouds drawn: none");
+  // The decals drawn, their textures by digest and opacity, and their
+  // pictures by digest (setDecals, mitcad#2244).
+  std::vector<occ::handle<AIS_InteractiveObject>> m_decalObjects;
+  QHash<QString, occ::handle<Graphic3d_Texture2D>> m_decalTextures;
+  std::vector<DecalShown> m_drawnDecals;
+  QHash<QString, QImage> m_drawnDecalImages;
+  QString m_loggedDecals = QStringLiteral("Decals drawn: none");
   // A 3D mouse's motion (setSpaceMouseRates, mitcad#951): its rates, the
   // clock between its frames and their pacing (mitcad#1023), the orbit's
   // centre taken as it began, and what it did so far (logged when it ends).

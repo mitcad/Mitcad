@@ -118,19 +118,41 @@ struct PrintOverlay {
   // drawn as the overhangs are, in their colours.
   std::array<std::vector<float>, 3> draft;
   std::array<QColor, 3> draftColors;
+  // Point Cloud Deviation (mitcad#2240, PointCloudDeviation.hpp): the
+  // measured points (3 numbers each, design coordinates, mm), drawn as
+  // points depth-tested with the bodies, each in its colour on the
+  // diverging scale (inside the material, within tolerance, outside), and
+  // each one's distance (mm, negative inside), which the hover tells.
+  std::vector<float> cloudPoints;
+  std::vector<QRgb> cloudColors;
+  std::vector<float> cloudDistances;
+  std::array<QColor, 3> deviationColors; // inside, within tolerance, outside
+  // The colour the window draws the cloud's points that were not measured
+  // in (mitcad#2265: outside the sample, or failed), the legend's entry
+  // "Measured 8 of 32 points; the others dimmed" when there are any.
+  QColor unmeasuredColor;
   bool isEmpty() const {
     return overhangs.empty() && thin.empty() && gaps.empty() && !thinnest && !narrowest && legend.empty() &&
-           draft[0].empty() && draft[1].empty() && draft[2].empty();
+           draft[0].empty() && draft[1].empty() && draft[2].empty() && cloudPoints.empty();
   }
 };
+// A deviation's colour (mitcad#2240): within `tolerance` of the faces the
+// neutral colour, beyond it towards the inside or outside colour, reached at
+// `limit` (mm; distances negative inside the material).
+QColor deviationColor(double distance, double tolerance, double limit, const std::array<QColor, 3>& colors);
 // What an inspection carries for the view (Inspection::printOverlay): the
 // triangles, the thinnest point, the narrow gaps and the settings of the
 // legend; empty when the definition checks neither overhangs, walls nor gaps.
 QJsonObject printOverlayJson(const QJsonObject& def, const PrintAnswers& answers, const QString& title);
 // The view's overlay of such an object; a Draft Analysis' (`draft`,
-// draftOverlayJson) in `draftColors`.
+// draftOverlayJson) in `draftColors`; a Point Cloud Deviation's
+// (`deviation`, pointCloudDeviationOverlayJson, mitcad#2240) in
+// `deviationColors`, its points not measured in `unmeasuredColor`
+// (mitcad#2265).
 PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor, const QColor& thinColor,
-                            const QColor& gapColor = QColor(), const std::array<QColor, 3>& draftColors = {});
+                            const QColor& gapColor = QColor(), const std::array<QColor, 3>& draftColors = {},
+                            const std::array<QColor, 3>& deviationColors = {},
+                            const QColor& unmeasuredColor = QColor());
 // For the log, when it changes: "Print overlay: 12 overhang triangle(s)
 // #rrggbb, 4 thin triangle(s) #rrggbb (150.0 mm^2: the area drawn thin),
 // thinnest 0.50 mm at (x, y, z) (with narrow gaps then ", 1 narrow gap(s)

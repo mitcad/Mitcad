@@ -4,6 +4,7 @@
 // The Browser's preferences (mitcad#1699).
 
 #include <QObject>
+#include <QString>
 
 namespace mitcad {
 
@@ -18,6 +19,27 @@ bool browserConsumeSketches();
 // rows at once.
 void setBrowserConsumeSketches(bool on);
 
+// Where a Browser row's Activate radio button or Show eye is (mitcad#2223,
+// Preferences > Display > Browser Activate button and Browser Show eye):
+// Classic, the default, keeps it where it always was (the radio button
+// right after the component's name, the eye before the row's icon); Right
+// puts it in one column at the right edge of the visible row, the same x on
+// every row (BrowserPanel::setControlPlaces).
+enum class BrowserControlPlace { Classic, Right };
+// The place's settings value ("classic", "right") and back; an unknown
+// value is Classic.
+QString browserControlPlaceId(BrowserControlPlace place);
+BrowserControlPlace browserControlPlaceFromId(const QString& id);
+// The saved places (settings "browser/activateButtonPlace" and
+// "browser/showEyePlace"), Classic without a saved choice.
+BrowserControlPlace browserActivatePlace();
+BrowserControlPlace browserEyePlace();
+// Save a place and tell every window's Browser, which lays its rows out
+// again at once; nothing when it is already the saved one. Restore Defaults
+// saves Classic for both.
+void setBrowserActivatePlace(BrowserControlPlace place);
+void setBrowserEyePlace(BrowserControlPlace place);
+
 // Tells the windows' Browsers that the preference changed.
 class BrowserPreferencesNotifier : public QObject {
   Q_OBJECT
@@ -27,6 +49,9 @@ public:
 
 signals:
   void consumeSketchesChanged(bool on);
+  // The Activate radio button's or the Show eye's place changed
+  // (mitcad#2223); both are read again.
+  void controlPlacesChanged();
 };
 
 } // namespace mitcad

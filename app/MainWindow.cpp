@@ -184,6 +184,7 @@
 #include "mitcad/io/mesh.hpp"
 #include "framework/UiSizes.hpp"
 #include "framework/CommandLayout.hpp"
+#include "framework/ShutdownSteps.hpp"
 
 namespace mitcad {
 namespace {
@@ -627,6 +628,8 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
        [this] { return chatOutgoingAgents(); },
        [this](const QString& id, bool offered) { offerChatAgent(id, offered); }},
       this);
+  // Beside them while a macro is recorded (mitcad#2245, MainWindowScripts.cpp).
+  createMacroIndicator();
   createRemote();
   createLocks();
   // The level's icon before the status line's text (mitcad#1040).
@@ -707,6 +710,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     if (!floatingTopCards()) {
       // The top bar of Windows and Linux has them in either layout
       // (mitcad#2082); the Docked layout of macOS here.
+      statusBar()->addPermanentWidget(m_macroIndicator);
       statusBar()->addPermanentWidget(m_indicator);
       statusBar()->addPermanentWidget(m_agentIndicator);
     }
@@ -737,6 +741,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     // after viewChanged, queued behind the actual picked signal.
     const auto retryPickPlaces = [this] {
       if (m_pickPlacesDeferred) logPickPlaces(m_pickPlacesFilter, true);
+      if (m_sketchPicksDeferred && m_mode == Mode::PickPlane) logSketchPicks();
     };
     // A camera change under a command's input (a view preset, a fit) moves
     // every place: they are logged again where they now are, so that no
@@ -889,9 +894,9 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   // when it was asked before the design sat in its frame, and the Floating
   // cards' translucent margins were painted black, as on Linux
   // (mitcad#2059). 0 until the frame is shown; windowPlaced() below then
-  // lets the driver try again.
-  // TODO: after the design moves to another frame, the window the driver
-  // holds is no longer its top level's (not re-homed yet).
+  // lets the driver try again. The process's one connection asks the
+  // active design's (mitcad#2297), and its driver session follows it when
+  // another design is activated or the active one moves to another frame.
   spaceMouseHooks.nativeWindow = [this] {
     const QWidget* top = window();
     return static_cast<std::uintptr_t>(top->isVisible() ? top->internalWinId() : 0);
@@ -902,7 +907,19 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   // the Floating cards' translucent margins black (mitcad#2059).
   spaceMouseHooks.nativeWindow = [this] { return static_cast<std::uintptr_t>(window()->internalWinId()); };
 #endif
-  m_spaceMouse = new SpaceMouseController(std::move(spaceMouseHooks), &createSpaceMouseBackend, this);
+  // One 3D mouse connection for the process (mitcad#2297, GitHub
+  // mitcad/Mitcad#587), shared by every design: its input goes to the
+  // design the window manager made active, and it runs on while another
+  // design that has the 3D mouse on is open.
+  m_spaceMouse = new SpaceMouseController(std::move(spaceMouseHooks),
+                                          SpaceMouseConnection::shared(&createSpaceMouseBackend), this);
+  if (WindowManager* manager = WindowManager::instance()) {
+    connect(manager, &WindowManager::activeWindowChanged, m_spaceMouse, [this](MainWindow* active) {
+      if (active == this) {
+        m_spaceMouse->activate();
+      }
+    });
+  }
   new PlacementWatch(this, [this] { m_spaceMouse->windowPlaced(); });
   m_viewController->toggleSpaceMouseRotation = [this] {
     const bool locked = m_spaceMouse->toggleRotationLock();
@@ -1030,6 +1047,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     // mitcad#2082).
     titleBar->setIndicator(m_indicator);
     titleBar->setAgentIndicator(m_agentIndicator);
+    titleBar->setMacroIndicator(m_macroIndicator);
   }
   // Look At, Fit, Visual Style and the grid's toggles at the bottom of the
   // view (mitcad#1086, MainWindowNavigationBar.cpp).
@@ -1139,15 +1157,31 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
 }
 
 MainWindow::~MainWindow() {
+  // The shutdown's steps (mitcad#2275): each part that can take time, its
+  // line once MitCad quits (none for a window closed while it runs on).
+  const QString shutdownHandle = property("documentWindowHandle").toString();
+  const auto shutdownStep = [&shutdownHandle](const char* part) {
+    shutdown::step(QStringLiteral("%1: %2").arg(shutdownHandle, QString::fromLatin1(part)));
+  };
+  shutdownStep("component browser");
   clearEmbeddedImageSource(this);
   // Insert › Component from Web's window (mitcad#1579) is a window of its
   // own whose imports go into this one: it ends first, its downloads' files
-  // with it.
+  // with it, and the files that waited for a command here before it, said
+  // in its note and the log (mitcad#2281).
+  dropArrivals(true);
   delete m_componentBrowser.data();
   // No more Enter's state on focus changes while the children go.
   disconnect(m_focusRepeat);
+  // A 3D sketch's tool still running (mitcad#2263): the view, the first
+  // child, goes before the controller, whose filter on it turned the view's
+  // last Leave into a hover on the view's and the window's freed members.
+  if (m_sketch3d != nullptr) {
+    m_sketch3d->detachFromView();
+  }
   // The section worker's rounds end first (mitcad#438): their ends call
   // back into the window.
+  shutdownStep("section worker");
   m_documentSession->setBeforeJob({});
   delete m_sectionWorker;
   m_sectionWorker = nullptr;
@@ -1168,7 +1202,12 @@ MainWindow::~MainWindow() {
   }
   m_selectionFilterPanel = nullptr;
   // The session refers to the window as its host.
+  shutdownStep("command session");
   delete m_session;
+  // Then its members and children: the document session (its steps:
+  // DocumentSession's destructor), the autosave (AutosaveManager's), the
+  // widgets with the view.
+  shutdownStep("document, autosave and widgets");
 }
 
 void MainWindow::present() {
@@ -1382,6 +1421,13 @@ void MainWindow::registerCommands() {
                              CommandDef::Mode::Sketch, [this] { finishSketch(); });
   finish.shortcut = QKeySequence(Qt::CTRL | Qt::Key_Return);
   m_registry->add(finish);
+  // Cancel Sketch (mitcad#2225): the sketch left with every change made
+  // since it was opened taken back; no shortcut, Esc never leaves a changed
+  // sketch (mitcad#1623).
+  CommandDef cancelSketchDef = action("sketch.cancel", tr("Cancel Sketch"), "cancel", CommandDef::Mode::Sketch,
+                                      [this] { cancelSketch(); });
+  cancelSketchDef.tooltip = tr("Leaves the sketch and takes back every change made since it was opened");
+  m_registry->add(cancelSketchDef);
 
   CommandDef undoDef =
       action("edit.undo", tr("Undo"), "undo", CommandDef::Mode::Any, [this] { undo(); });
@@ -1437,6 +1483,9 @@ void MainWindow::registerCommands() {
   registerVersionCommands();
   // Component libraries (mitcad#64, mitcad#63).
   registerLibraryCommands();
+  // Export Timeline as Script, the macro recorder and Run Script
+  // (mitcad#2245, files/MainWindowScripts.cpp).
+  registerScriptCommands();
 
   CommandDef search = action("tools.search", tr("Command Search"), "search", CommandDef::Mode::Any,
                              [this] { openCommandSearch(); });
@@ -1562,6 +1611,8 @@ void MainWindow::registerCommands() {
   m_registry->add(configurations);
   // SKETCH > MODIFY > Change Parameters (mitcad#564; MainWindowParameterEdits.cpp).
   registerParameterEditCommands();
+  // MANAGE › Parameters › Favorite Parameters (mitcad#2203).
+  registerFavoriteParametersCommands();
   // The active component's design policy (mitcad#220); the browser's
   // Design Policy... opens it for any component.
   CommandDef policy = action("assembly.policy", tr("Design Policy…"), "component", CommandDef::Mode::Model,
@@ -1647,10 +1698,14 @@ void MainWindow::registerCommands() {
   registerWaitCursorTestCommands();
   // Insert: Image Reference and Calibrate Image Reference (mitcad#782).
   registerImageReferenceCommands();
+  // Insert: Point Cloud and Move Point Cloud (mitcad#2240).
+  registerPointCloudCommands();
   // View › Chat (mitcad#947).
   registerChatCommands();
   // Help › Tutorials… and Leave Tutorial (mitcad#2012).
   registerTutorialCommands();
+  // Insert › Decal (mitcad#2244).
+  registerDecalCommands();
 }
 
 void MainWindow::showDiagnostics() {
@@ -1739,7 +1794,9 @@ QString menuTitle(const QString& key) {
       {"HELP", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Help")},
       {"PROJECT", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Project")},
       {"LIBRARIES", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Libraries")},
-      {"PANELS", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Panels")}};
+      {"PANELS", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Panels")},
+      // Tools › Macro (mitcad#2245).
+      {"MACRO", QT_TRANSLATE_NOOP("mitcad::MainWindow", "&Macro")}};
   static const std::pair<const char*, const char*> view[] = {
       {"STANDARD VIEWS", QT_TRANSLATE_NOOP("mitcad::ViewController", "Standard Views")},
       {"CAMERA", QT_TRANSLATE_NOOP("mitcad::ViewController", "Camera")},
@@ -2668,6 +2725,8 @@ void MainWindow::createPanels() {
   if (configurationDock != browserDock) {
     configurationDock->setVisible(m_controller->configurationBar()->isPresent());
   }
+  // The Favorite Parameters dock below them (mitcad#2203), as chosen.
+  dockFavoriteParametersPanel(browserDock);
 
   // At least 300 px times the larger of Text size and Icon size, so that
   // the palette and a command's panel fit at every size, and as wide as the
@@ -2783,6 +2842,8 @@ void MainWindow::createFloatingPanels() {
   // card between them (mitcad#1020).
   addProjectsCard();
   addConfigurationCard();
+  // The Favorite Parameters card below them (mitcad#2203), as chosen.
+  addFavoriteParametersCard();
   // As high as its rows, down to the card below it (the timeline) before
   // it scrolls (mitcad#425), sharing the left column with the cards above
   // it (mitcad#1020). On every platform: macOS's cap of 55 % of the view,
@@ -3630,6 +3691,8 @@ void MainWindow::editAnalysis(const QString& name) {
   const QString command = type == QStringLiteral("section") ? QStringLiteral("inspect.section")
                           : type == QStringLiteral("print") ? QStringLiteral("inspect.print_analysis")
                           : type == QStringLiteral("draft") ? QStringLiteral("inspect.draft_analysis")
+                          // mitcad#2240
+                          : type == QStringLiteral("point_cloud_deviation") ? QStringLiteral("inspect.point_cloud_deviation")
                                                             : QString();
   const CommandDef* def = command.isEmpty() ? nullptr : m_registry->find(command);
   if (analysis.isEmpty() || def == nullptr) {
@@ -4923,12 +4986,16 @@ void MainWindow::refreshScene() {
   followDrawing();
   // The image references shown, on their planes (mitcad#782).
   followImageReferences();
+  // The point clouds shown (mitcad#2240).
+  followPointClouds();
   // The Center of Mass marker where the design's center is (mitcad#1094).
   followCenterOfMass();
   // CAM's setups in the Browser and their toolpaths in the view (mitcad#1013).
   followCam();
   // The comments' pins and the Comments panel (mitcad#1119).
   followComments();
+  // The decals shown, on their faces (mitcad#2244).
+  followDecals();
   // The Origin folder and Isolate are the document's (P9).
   m_originShown = m_snapshot.originShown;
   m_isolation = m_snapshot.isolation;
@@ -6206,6 +6273,13 @@ bool MainWindow::refreshLoggedPickPlaces() {
   // A fit can be pending until the next paint without an active navigation
   // timer. Read pick places only after that camera has actually been fitted.
   m_viewer->settleCamera();
+  if (m_mode == Mode::PickPlane && m_sketchPicksDeferred) {
+    // Create Sketch's faces, not yet listed (logSketchPicks): wait for them.
+    logSketchPicks();
+    if (m_sketchPicksDeferred) {
+      return false;
+    }
+  }
   logPickPlaces(m_pickPlacesFilter, true);
   // Only a list that cannot be read yet (navigation or pointer input still
   // pending) waits. With no active pick input (the command was cancelled)
@@ -6358,7 +6432,9 @@ bool MainWindow::canChangeModel(bool visibilityOnly) const {
   if (!visibilityOnly && windowReadOnly()) {
     return false; // mitcad#89; what shows changes in the window's own state
   }
-  return m_mode == Mode::Idle || (visibilityOnly && m_mode == Mode::Sketch);
+  // A download or a dropped file beside an open inspection (mitcad#2281,
+  // bringInBeside) changes the design while its panel stays open.
+  return m_mode == Mode::Idle || (visibilityOnly && m_mode == Mode::Sketch) || m_insertingBeside;
 }
 
 QString MainWindow::changeBlockedReason() const {
@@ -7746,7 +7822,8 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
       if (m_selection.size() == 1 && m_selection.first().kind == SelectKind::SketchCurve) {
         const QString spline = m_selection.first().name;
         const QPointF clicked = m_viewer->mapFromGlobal(globalPosition);
-        if (m_sketch->splineAt(clicked) == spline) {
+        // An equation curve's points are its formulas' (mitcad#2237).
+        if (m_sketch->splineAt(clicked) == spline && m_sketch->model().equationOf(spline) == nullptr) {
           addCall(QStringLiteral("point"), tr("Insert Point"),
                   [this, spline, clicked] { m_sketch->insertSplinePoint(spline, clicked); });
         }
@@ -7775,6 +7852,16 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
         }
         if (model.offsetOf(id) != nullptr) {
           add(m_registry->action(QStringLiteral("sketch.edit_offset")));
+        }
+        // A conic's Rho (mitcad#2236).
+        if (const sketch::CurveData* curve =
+                m_selection.first().kind == SelectKind::SketchCurve ? model.curve(id) : nullptr;
+            curve != nullptr && curve->isConic() && !curve->reference) {
+          add(m_registry->action(QStringLiteral("sketch.edit_rho")));
+        }
+        // An equation curve opens with its formulas (mitcad#2237).
+        if (m_selection.first().kind == SelectKind::SketchCurve && model.equationOf(id) != nullptr) {
+          add(m_registry->action(QStringLiteral("sketch.edit_equation_curve")));
         }
       }
       addFitting();
@@ -7863,6 +7950,7 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
     }
     menu.addSeparator();
     add(m_registry->action(QStringLiteral("sketch.finish")));
+    add(m_registry->action(QStringLiteral("sketch.cancel"))); // mitcad#2225
     add(m_registry->action(QStringLiteral("edit.undo")));
   } else {
     // A face, an edge or a vertex of a body or an occurrence selected whole
@@ -7885,6 +7973,21 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
       // A right click on something not selected selects it.
       setSelection({item});
       selectMs = menuClock.restart();
+    }
+    // A decal on the face right-clicked (mitcad#2244): the face's pick is
+    // its decal's, whose entries come first.
+    if (const QString decal = decalUnder(item, globalPosition); !decal.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Context menu decal %1").arg(decal);
+      addCall(QStringLiteral("decal"), tr("Edit Decal"), [this, decal] { editDecal(decal); });
+      addCall(QStringLiteral("eye-off"), tr("Hide Decal"), [this, decal] {
+        runModelCommand({{QStringLiteral("cmd"), QStringLiteral("set_decal_visible")},
+                         {QStringLiteral("name"), decal},
+                         {QStringLiteral("visible"), false}});
+      });
+      addCall(QStringLiteral("delete"), tr("Delete Decal"), [this, decal] {
+        runModelCommand({{QStringLiteral("cmd"), QStringLiteral("delete_decal")}, {QStringLiteral("name"), decal}});
+      });
+      menu.addSeparator();
     }
     fillModelContextMenu(menu, entries, item);
   }
@@ -8151,6 +8254,7 @@ void MainWindow::enterSketch(const QString& uid, bool existing, const QString& p
   m_sketchEnterDepth = undoDepth();
   m_sketchEnterRevision = documentRevision();
   m_sketchEscHinted = false;
+  m_sketchCreation = existing ? QString() : sketchCreationStep(uid); // mitcad#2225
   m_viewer->setGridPlane(toAx3(m_sketch->model().frame)); // the grid on the sketch plane
   // Not drawn on a cylindrical or conical face (mitcad#1853).
   m_viewer->setGridOnCurvedFace(m_sketch->model().surface.has_value());
@@ -8315,6 +8419,7 @@ void MainWindow::leaveSketchMode() {
   m_commandPages->setCurrentWidget(m_idlePage);
   m_sketchExisting = false;
   m_sketchRestoreMarker = -1;
+  m_sketchCreation.clear();
   if (m_sketchingSession) {
     // The command whose sketch this was comes back once the sketch is left
     // (mitcad#1648: Flange's Edit Profile).
@@ -8377,6 +8482,12 @@ bool MainWindow::finishSketch() {
   const bool blockSketch = openBlock != nullptr && openBlock->temporary;
   const QString blockName = blockSketch ? openBlock->name : QString();
   const bool blockCancel = blockSketch && m_sketch->takeBlockCancel();
+  if (m_sketchRestoreMarker < 0 && !blockSketch) {
+    // Every sketch edit is one undo step (mitcad#2225): a new sketch's with
+    // its creation. A rolled-back timeline merges below as it rolls
+    // forward; a block's own sketch ends with the block's edit.
+    mergeSketchSteps(name);
+  }
   if (empty && !m_sketchExisting && sketchExists(uid)) {
     // An empty sketch is of no use: take back its creation if that was the
     // last command, else delete it.
@@ -8526,6 +8637,12 @@ void MainWindow::undo() {
   if (m_mode == Mode::Sketch && !sketchExists(editingSketchUid())) {
     // The active sketch itself was taken back.
     leaveSketchMode();
+  } else if (m_mode == Mode::Sketch && undoDepth() < m_sketchEnterDepth) {
+    // A step from before the sketch was entered taken back in it: the
+    // sketch's own steps start here now, for Finish Sketch's one step and
+    // Cancel Sketch (mitcad#2225).
+    m_sketchEnterDepth = undoDepth();
+    m_sketchCreation.clear();
   }
   // An undone conversion to a 3D sketch: the 2D editor again (mitcad#1544).
   followSketchKind();
@@ -9479,6 +9596,9 @@ void MainWindow::logNewDesignActive() {
 
 // Leaves any command or sketch, so the next document starts idle.
 void MainWindow::resetCommandState() {
+  // Files that waited for the old document's command go with it, said
+  // (mitcad#2281).
+  dropArrivals(false);
   m_commandFinished = nullptr; // the document it would follow up on goes
   if (m_session) {
     m_session->discard(); // nothing to restore in a document that goes

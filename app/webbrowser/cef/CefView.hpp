@@ -266,6 +266,10 @@ private:
     int tenth = 0;
   };
   std::map<std::uint32_t, DownloadLog> m_downloadLog;
+  // The downloads that ended (complete or canceled): told once
+  // (mitcad#2281). CEF may report an ended item again; told twice, the
+  // second import read the file the first had already taken away.
+  std::set<std::uint32_t> m_ended;
 };
 
 } // namespace mitcad

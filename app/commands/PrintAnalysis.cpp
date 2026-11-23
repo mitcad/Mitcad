@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "PrintAnalysis.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <initializer_list>
@@ -538,13 +539,30 @@ QJsonObject printOverlayJson(const QJsonObject& def, const PrintAnswers& answers
   return json;
 }
 
+QColor deviationColor(double distance, double tolerance, double limit, const std::array<QColor, 3>& colors) {
+  const double away = std::abs(distance);
+  if (!std::isfinite(distance) || away <= tolerance) {
+    return colors[1];
+  }
+  // From the neutral colour at the tolerance to the full one at the limit.
+  const double span = limit - tolerance;
+  const double t = span > 0.0 ? std::clamp((away - tolerance) / span, 0.0, 1.0) : 1.0;
+  const QColor& end = distance < 0.0 ? colors[0] : colors[2];
+  const QColor& start = colors[1];
+  const auto mix = [t](int a, int b) { return static_cast<int>(std::lround(a + (b - a) * t)); };
+  return QColor(mix(start.red(), end.red()), mix(start.green(), end.green()), mix(start.blue(), end.blue()));
+}
+
 PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor, const QColor& thinColor,
-                            const QColor& gapColor, const std::array<QColor, 3>& draftColors) {
+                            const QColor& gapColor, const std::array<QColor, 3>& draftColors,
+                            const std::array<QColor, 3>& deviationColors, const QColor& unmeasuredColor) {
   PrintOverlay overlay;
   overlay.overhangColor = overhangColor;
   overlay.thinColor = thinColor;
   overlay.gapColor = gapColor;
   overlay.draftColors = draftColors;
+  overlay.deviationColors = deviationColors;
+  overlay.unmeasuredColor = unmeasuredColor;
   overlay.title = json.value(QStringLiteral("title")).toString();
   const auto flatten = [](const QJsonValue& parts, std::vector<float>& out) {
     for (const QJsonValue& body : parts.toArray()) {
@@ -614,6 +632,57 @@ PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor
       overlay.legend.emplace_back(draftColors[c], words[c]);
     }
   }
+  // Point Cloud Deviation (mitcad#2240): the measured points, each in its
+  // colour on the diverging scale, the farthest marked, and the legend.
+  const QJsonObject deviation = json.value(QStringLiteral("deviation")).toObject();
+  if (!deviation.isEmpty()) {
+    const double tolerance = deviation.value(QStringLiteral("tolerance")).toDouble();
+    const double limit = deviation.value(QStringLiteral("limit")).toDouble();
+    const bool isSigned = deviation.value(QStringLiteral("signed")).toBool();
+    const QJsonArray points = deviation.value(QStringLiteral("points")).toArray();
+    const QJsonArray distances = deviation.value(QStringLiteral("distances")).toArray();
+    const qsizetype count = std::min(points.size() / 3, distances.size());
+    overlay.cloudPoints.reserve(static_cast<std::size_t>(count) * 3);
+    overlay.cloudColors.reserve(static_cast<std::size_t>(count));
+    overlay.cloudDistances.reserve(static_cast<std::size_t>(count));
+    for (qsizetype i = 0; i < count; ++i) {
+      // A point whose distance failed (null) is not drawn.
+      if (!distances.at(i).isDouble()) {
+        continue;
+      }
+      const double d = distances.at(i).toDouble();
+      for (qsizetype k = 0; k < 3; ++k) {
+        overlay.cloudPoints.push_back(static_cast<float>(points.at(3 * i + k).toDouble()));
+      }
+      overlay.cloudDistances.push_back(static_cast<float>(d));
+      overlay.cloudColors.push_back(deviationColor(d, tolerance, limit, deviationColors).rgb());
+    }
+    const QString within = fixed(tolerance, 3);
+    const QString reach = fixed(limit, 3);
+    if (isSigned) {
+      overlay.legend.emplace_back(deviationColors[0], QObject::tr("Inside the material, to −%1 mm").arg(reach));
+    }
+    overlay.legend.emplace_back(deviationColors[1], QObject::tr("Within ±%1 mm").arg(within));
+    overlay.legend.emplace_back(deviationColors[2], isSigned
+                                                        ? QObject::tr("Outside the material, to +%1 mm").arg(reach)
+                                                        : QObject::tr("Away from the faces, to %1 mm").arg(reach));
+    // How many of the cloud's points were measured, when not all were
+    // (mitcad#2265): the window draws the others dimmed.
+    const int total = deviation.value(QStringLiteral("count")).toInt();
+    const int measured = deviation.value(QStringLiteral("measured")).toInt();
+    if (total > 0 && measured < total) {
+      overlay.legend.emplace_back(unmeasuredColor,
+                                  QObject::tr("Measured %1 of %2 points; the others dimmed").arg(measured).arg(total));
+    }
+    // (Not `far`: a macro of the Windows headers.)
+    const QJsonArray farthest = deviation.value(QStringLiteral("farthest")).toArray();
+    if (farthest.size() == 3) {
+      overlay.thinnest =
+          std::array<double, 3>{farthest.at(0).toDouble(), farthest.at(1).toDouble(), farthest.at(2).toDouble()};
+      overlay.thinnestLabel = QObject::tr("Farthest %1 mm")
+                                  .arg(fixed(deviation.value(QStringLiteral("farthest_distance")).toDouble(), 3));
+    }
+  }
   return overlay;
 }
 
@@ -646,6 +715,13 @@ QString printOverlayLog(const PrintOverlay& overlay) {
                   .arg(overlay.draftColors[1].name())
                   .arg(static_cast<qulonglong>(overlay.draft[2].size() / 9))
                   .arg(overlay.draftColors[2].name());
+  }
+  // Point Cloud Deviation's points (mitcad#2240), when it has any.
+  if (!overlay.cloudPoints.empty()) {
+    marker += QStringLiteral(", deviation %1 point(s) %2 %3 %4")
+                  .arg(static_cast<qulonglong>(overlay.cloudPoints.size() / 3))
+                  .arg(overlay.deviationColors[0].name(), overlay.deviationColors[1].name(),
+                       overlay.deviationColors[2].name());
   }
   QStringList legend;
   for (const auto& [color, words] : overlay.legend) {

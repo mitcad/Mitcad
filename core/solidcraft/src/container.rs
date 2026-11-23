@@ -2,9 +2,11 @@
 //! The design container (SolidCraft's `docs/design-container.md`, version
 //! 1): a zip with `container.json` (`{"format": "solidcraft-container/1"}`)
 //! and `document.json`, the design's JSON with its large payloads moved to
-//! `blobs/<sha-256>.<step|mesh|png|jpeg>`: an Import feature's `step`
-//! (`step_blob`) and a mesh import's triangles (`mesh_blob`). The blobs are
-//! put back into the JSON, so the rest of the reader sees one document.
+//! `blobs/<sha-256>.<step|mesh|points|png|jpeg>`: an Import feature's
+//! `step` (`step_blob`), a mesh import's triangles (`mesh_blob`) and a
+//! point cloud's points and colours (`points_blob`, mitcad#2240). The
+//! blobs are put back into the JSON, so the rest of the reader sees one
+//! document.
 //! The cached display meshes and evaluated B-rep (`cache/`) are not read:
 //! the import rebuilds the design. Canvases' images are not read either.
 
@@ -100,7 +102,80 @@ pub fn read(bytes: &[u8]) -> Result<Value, String> {
             }
         }
     }
+    // Point clouds (format 43, mitcad#2240): `points_blob` put back as the
+    // plain JSON's base64 `points` and `colors`.
+    if let Some(Value::Array(clouds)) = doc.get_mut("point_clouds") {
+        for cloud in clouds.iter_mut() {
+            if cloud.get("points_blob").is_none() {
+                continue;
+            }
+            let bytes = blob(cloud, "points_blob", "points")?;
+            let (points, colors) = decode_points(&bytes)?;
+            if let Some(o) = cloud.as_object_mut() {
+                o.remove("points_blob");
+                o.insert("points".into(), Value::String(base64(points)));
+                o.insert("colors".into(), Value::String(base64(colors)));
+            }
+        }
+    }
     Ok(doc)
+}
+
+/// A point cloud's blob: `SCPNTS01`, the point count and whether it has
+/// colours (u64 little-endian each), the points (x, y, z as f32
+/// little-endian) and, when coloured, a byte of r, g, b per point. Gives
+/// the points' bytes and the colours' bytes (empty without colours).
+pub fn decode_points(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
+    let bad = || "design container: a damaged point cloud blob".to_owned();
+    if bytes.len() < 24 || &bytes[..8] != b"SCPNTS01" {
+        return Err(bad());
+    }
+    let word = |at: usize| -> Result<u64, String> {
+        let b: [u8; 8] = bytes[at..at + 8].try_into().map_err(|_| bad())?;
+        Ok(u64::from_le_bytes(b))
+    };
+    let count = usize::try_from(word(8)?).map_err(|_| bad())?;
+    let colored = match word(16)? {
+        0 => false,
+        1 => true,
+        _ => return Err(bad()),
+    };
+    let middle = count
+        .checked_mul(12)
+        .and_then(|n| n.checked_add(24))
+        .ok_or_else(bad)?;
+    let end = if colored {
+        count.checked_mul(3).and_then(|n| n.checked_add(middle))
+    } else {
+        Some(middle)
+    }
+    .ok_or_else(bad)?;
+    if end != bytes.len() {
+        return Err(bad());
+    }
+    Ok((&bytes[24..middle], &bytes[middle..]))
+}
+
+/// Standard base64 with padding.
+fn base64(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for (k, shift) in [18u32, 12, 6, 0].into_iter().enumerate() {
+            if k <= chunk.len() {
+                out.push(char::from(DIGITS[((n >> shift) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// A mesh blob: `SCMESH01`, the counts of coordinates and indices (u64

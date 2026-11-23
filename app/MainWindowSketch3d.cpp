@@ -95,7 +95,8 @@ bool placementKeyCommand(const QString& id) {
 }
 
 bool keptIn3dSketch(const QString& id) {
-  return id == QStringLiteral("sketch.finish") || id == QStringLiteral("sketch.delete") ||
+  return id == QStringLiteral("sketch.finish") || id == QStringLiteral("sketch.cancel") ||
+         id == QStringLiteral("sketch.delete") ||
          sketch::Sketch3dController::toolForCommand(id) != sketch::Sketch3dTool::None || editCommand(id) ||
          clipboardCommand(id) || placementKeyCommand(id);
 }
@@ -392,6 +393,7 @@ void MainWindow::enterSketch3d(const QString& uid, bool existing, const QString&
   m_sketchEnterDepth = undoDepth();
   m_sketchEnterRevision = documentRevision(); // Esc leaving it unchanged (mitcad#1623)
   m_sketchEscHinted = false;
+  m_sketchCreation = existing ? QString() : sketchCreationStep(uid); // mitcad#2225
   // The grid on the sketch's own XY plane; the camera stays where it is:
   // the sketch is in space, orbit, pan and zoom see it from every side.
   if (m_sketch3d->model().hasFrame) {
@@ -839,6 +841,7 @@ void MainWindow::switchSketchEditor(bool spatial) {
   const int depth = m_sketchEnterDepth;
   const qint64 revision = m_sketchEnterRevision; // the conversion is a change (mitcad#1623)
   const int marker = m_sketchRestoreMarker;
+  const QString creation = m_sketchCreation; // mitcad#2225
   const bool agent = m_mcpSketchEdited;
   const QString occurrence = m_sketchOccurrence;
   // The view the sketch was opened from stays the one a 2D sketch's Finish
@@ -861,6 +864,7 @@ void MainWindow::switchSketchEditor(bool spatial) {
   m_sketchEnterDepth = depth;
   m_sketchEnterRevision = revision;
   m_sketchRestoreMarker = marker;
+  m_sketchCreation = creation;
   m_mcpSketchEdited = agent;
   updateActions();
 }

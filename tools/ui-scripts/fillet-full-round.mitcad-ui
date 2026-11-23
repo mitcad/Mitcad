@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# Fillet's Full Round (mitcad#2279), on fillet-full-round.json (a block
+# F1.b0 20 x 30 x 30 whose top's edge at x 20 Chamfer1, F2, bevels by 4):
+#   Fillet with Full Round chosen in Radius Type: Radius is hidden. The top
+#   face clicked into Edges is not taken, the status bar saying to pick the
+#   face's two edges. Its edge at the side and its edge at the bevel picked:
+#   the preview builds, and OK adds the full round.
+# Run by tools/ui-fillet-full-round-test.sh (Linux, both layouts),
+# tools/ui-windows-fillet-full-round-test.ps1 (Windows) and
+# tools/ui-macos-fillet-full-round-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Full Round: Radius hidden.
+mark
+command solid.fillet
+wait-log '^Panel Fillet input sets[.]0[.]size at ' 20
+wait-log '^Panel Fillet input sets[.]0[.]radius at [0-9]+,[0-9]+$' 20
+mark
+qt-choice input_sets.0.size 'Full Round'
+expect-choice-text sets.0.size '^Full Round$'
+wait-log '^Panel Fillet input sets[.]0[.]radius at .*[(]hidden[)]$' 20
+wait-idle
+
+# The top face clicked: not taken, the status bar says to pick its edges.
+mark
+click-view-point 8,15,30
+wait-log '^Fillet Edges: .*face F1:top of F1[.]b0 not taken: Full Round takes the two edges of the face it rounds away, not the face: pick the face.s two edges[.]$' 20
+expect-no-log '^Fillet Edges: 1 face'
+
+# Its two edges: at the side and at the bevel.
+mark
+click-pick-offset 'edge F1[.]b0/E[{]F1:side3[|]F1:top[}]' 0 0 '^edge E[{]F1:side3[|]F1:top[}] of F1[.]b0$'
+wait-log '^Fillet Edges: 1 edge' 20
+click-pick-offset 'edge F1[.]b0/E[{]F1:top[|]F2:chamfer[(]E[{]F1:side1[|]F1:top[}][)][}]' 0 0 '^edge E[{]F1:top[|]F2:chamfer[(]E[{]F1:side1[|]F1:top[}][)][}] of F1[.]b0$'
+wait-log '^Fillet Edges: 2 edges' 20
+wait-log '^Preview Fillet: ok' 30
+wait-idle 30
+expect-no-log '^Preview Fillet: (failed|error)'
+mark
+button '^OK$'
+wait-log '^Added Fillet' 30
+wait-idle 30
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

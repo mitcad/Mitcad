@@ -30,6 +30,8 @@ pub(super) const COMMANDS: &[&str] = &[
 
 /// Where the nested fields are described in full.
 const SECTION: &str = "model_reference {\"section\": \"CAM: setups, operations and machines\"}";
+/// Where a lathe, its tools and turning are described (mitcad#1869).
+const TURNING: &str = "model_reference {\"section\": \"CAM: turning on a lathe\"}";
 
 /// A CAM value: a number in the design's units or an expression with units.
 fn cam_value(description: &str) -> Value {
@@ -189,7 +191,7 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "properties": {
                 "machine": {
                     "type": "object",
-                    "description": format!("The machine: id (letters, digits, _ and -), machine {{name, controller (grbl, grblhal, reprapfirmware, millenniumos, mach3, mach4, linuxcnc), travel {{min, max}} (mm, machine coordinates), spindle {{min_rpm, max_rpm, spin_up_seconds, nose_diameter, nose_length}}, max_feed, rapid_feed (mm/min), zones, tool_changer, park}}, tools {{tools}} ({SECTION})"),
+                    "description": format!("The machine: id (letters, digits, _ and -), machine {{name, controller (grbl, grblhal, reprapfirmware, millenniumos, mach3, mach4, linuxcnc), travel {{min, max}} (mm, machine coordinates), spindle {{min_rpm, max_rpm, spin_up_seconds, nose_diameter, nose_length}}, max_feed, rapid_feed (mm/min), zones, tool_changer, park, lathe}}, tools {{tools}} ({SECTION}). A lathe has lathe {{turret_stations (1 to 99), chuck_diameter, chuck_length (mm), axes}} and a turning controller (fanuc_turning; cam_dialects lists them with lathe true); its travel and zones are in the lathe's axes: X the distance from the spindle axis (a radius, Y unused), Z along the spindle ({TURNING})"),
                     "properties": {
                         "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
                         "machine": {"type": "object"},
@@ -204,7 +206,13 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "name": "Router", "controller": "grbl",
                 "travel": {"min": [0, 0, -80], "max": [800, 600, 0]},
                 "spindle": {"min_rpm": 8000, "max_rpm": 24000, "nose_diameter": 52, "nose_length": 60},
-                "max_feed": 5000, "rapid_feed": 8000}}}]
+                "max_feed": 5000, "rapid_feed": 8000}}},
+                {"cmd": "cam_machine_put", "machine": {"id": "lathe", "machine": {
+                "name": "Lathe", "controller": "fanuc_turning",
+                "travel": {"min": [-5, 0, -300], "max": [150, 0, 200]},
+                "spindle": {"min_rpm": 50, "max_rpm": 3000, "nose_diameter": 0, "nose_length": 0},
+                "max_feed": 5000, "rapid_feed": 20000,
+                "lathe": {"turret_stations": 12, "chuck_diameter": 160, "chuck_length": 50}}}}]
         }),
         "cam_machine_delete" => json!({
             "description": "Deletes one of the design's machines; refused while a setup uses it.",
@@ -218,11 +226,11 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "machine": machine_id("The machine's id"),
                 "tool": {
                     "type": "object",
-                    "description": format!("The tool; lengths and angles as values with units ({SECTION})"),
+                    "description": format!("The tool; lengths and angles as values with units ({SECTION}). Milling tools on a mill, lathe tools on a lathe: the number is then the turret station (1 to 99), diameter the holder's size (a boring bar's diameter), flute_length the deepest the insert cuts (4 mm, a grooving insert's 5, a parting blade's 25 when left out), length the overhang ({TURNING})"),
                     "properties": {
                         "number": {"type": "integer", "minimum": 1, "maximum": 999, "description": "Its number"},
                         "name": text("Its name"),
-                        "shape": {"type": "object", "description": "{\"kind\": \"flat\"}, {\"kind\": \"ball\"}, {\"kind\": \"bull\", \"corner_radius\"}, {\"kind\": \"drill\", \"point_angle\"}, {\"kind\": \"chamfer\", \"angle\", \"tip_diameter\"} or {\"kind\": \"engraver\", \"angle\", \"tip_diameter\"}", "properties": {"kind": {"type": "string", "enum": ["flat", "ball", "bull", "drill", "chamfer", "engraver"]}}, "required": ["kind"]},
+                        "shape": {"type": "object", "description": "{\"kind\": \"flat\"}, {\"kind\": \"ball\"}, {\"kind\": \"bull\", \"corner_radius\"}, {\"kind\": \"drill\", \"point_angle\"}, {\"kind\": \"chamfer\", \"angle\", \"tip_diameter\"} or {\"kind\": \"engraver\", \"angle\", \"tip_diameter\"} on a mill; {\"kind\": \"turning\", \"nose_radius\"}, {\"kind\": \"boring\", \"nose_radius\"}, {\"kind\": \"grooving\", \"width\", \"nose_radius\", \"inside\"}, {\"kind\": \"parting\", \"width\"} or {\"kind\": \"threading\", \"angle\" (60), \"inside\"} on a lathe", "properties": {"kind": {"type": "string", "enum": ["flat", "ball", "bull", "drill", "chamfer", "engraver", "turning", "boring", "grooving", "parting", "threading"]}}, "required": ["kind"]},
                         "diameter": cam_value("Its cutting diameter"),
                         "shank_diameter": cam_value("Its shank's diameter"),
                         "flute_length": cam_value("Its flute length; three diameters when left out"),
@@ -236,7 +244,8 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 }
             },
             "required": ["machine", "tool"],
-            "examples": [{"cmd": "cam_tool_put", "machine": "router", "tool": {"number": 1, "name": "6 mm flat", "shape": {"kind": "flat"}, "diameter": 6, "flutes": 2, "cutting": {"spindle_rpm": 18000, "feed": 1200, "plunge_feed": 300}}}]
+            "examples": [{"cmd": "cam_tool_put", "machine": "router", "tool": {"number": 1, "name": "6 mm flat", "shape": {"kind": "flat"}, "diameter": 6, "flutes": 2, "cutting": {"spindle_rpm": 18000, "feed": 1200, "plunge_feed": 300}}},
+                {"cmd": "cam_tool_put", "machine": "lathe", "tool": {"number": 2, "shape": {"kind": "parting", "width": "3 mm"}, "diameter": "20 mm"}}]
         }),
         "cam_tool_delete" => json!({
             "description": "Deletes a tool from a machine's tool library.",

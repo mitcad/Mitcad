@@ -282,11 +282,18 @@ pub struct OwnAreaRegions {
 /// face inside it makes no hole in it. Outside every own area the
 /// automatic boundaries bound regions as [`face_bounded_regions`] finds
 /// them: the face's leftover around the shapes, a region closed by drawn
-/// lines and the face's edge, the outline alone.
+/// lines and the face's edge, the outline alone. The layout's crossings
+/// ([`Layout::crossings`]) are those of the own curves alone (mitcad#2233):
+/// a drawn curve across an automatic boundary does not cross it.
 pub fn own_area_regions(own: &[RegionCurve], automatic: &[RegionCurve]) -> OwnAreaRegions {
     let curves: Vec<RegionCurve> = own.iter().chain(automatic).cloned().collect();
     let (pieces, mut layout) = face_bounded_regions(&curves);
-    let areas = regions(own);
+    let (areas, own_layout) = regions_and_layout(own);
+    // Whether the sketch's curves cross is the own curves' matter alone
+    // (mitcad#2233): the automatic boundaries are not curves the user drew,
+    // and a circle across the outline projected on the face's edge is one
+    // disc, not a crossing.
+    layout.crossings = own_layout.crossings;
     // The own area each piece lies in. The arrangement of all the curves
     // refines that of the own curves, so a piece lies in one area or in
     // none, and a point deep inside it tells which.

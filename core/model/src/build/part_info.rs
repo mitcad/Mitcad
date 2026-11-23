@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use super::{BuildMeta, BuildRecord, LibrarySourceDef};
 use crate::document::Document;
 use crate::features::FeatureDef;
-use crate::features::derived_part::{DerivedPartDef, Ends};
+use crate::features::derived_part::{DerivedPartDef, Ends, Tilt};
 use crate::ids::{ComponentUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::parameters::{ParamId, Parameters};
@@ -35,6 +35,8 @@ pub struct PartInfo {
     pub middles: BTreeMap<String, Transform>,
     /// The design's parameter that sets its length, and its value.
     pub length: Option<(ParamId, f64)>,
+    /// The directions used by the evaluated end cuts.
+    pub end_tilts: [Option<Tilt>; 2],
 }
 
 impl PartInfo {
@@ -283,11 +285,13 @@ impl<K: Kernel> Document<K> {
                 role: record.role,
                 ..BuildMeta::default()
             });
-        let mounts = record
+        let output = record
             .part
             .and_then(|uid| self.last_result().result(uid))
             .filter(|r| r.status.is_ok())
-            .and_then(|r| r.output.as_ref())
+            .and_then(|r| r.output.as_ref());
+        let end_tilts = output.map_or([None; 2], |o| o.end_tilts);
+        let mounts = output
             .and_then(|o| o.mounts.as_ref())
             .map(|m| (**m).clone())
             .unwrap_or_default();
@@ -308,6 +312,7 @@ impl<K: Kernel> Document<K> {
             mounts,
             middles,
             length,
+            end_tilts,
         })
     }
 

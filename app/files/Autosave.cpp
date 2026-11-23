@@ -18,6 +18,7 @@
 
 #include "../framework/AppSettings.hpp"
 #include "../framework/Diagnostics.hpp"
+#include "../framework/ShutdownSteps.hpp"
 #include "platform/MacChrome.hpp"
 
 namespace mitcad {
@@ -39,11 +40,15 @@ AutosaveManager::AutosaveManager(QObject* parent)
 }
 
 AutosaveManager::~AutosaveManager() {
+  // The shutdown's steps (mitcad#2275): lines only once MitCad quits.
+  shutdown::step(QStringLiteral("autosave: recovery files discarded"));
   m_timer.stop();
   discard();
   if (m_lock) {
     m_lock->unlock(); // removes the lock file
   }
+  // Then its members: a write under way finishes (the writer's pool).
+  shutdown::step(QStringLiteral("autosave: its writer finishes"));
 }
 
 void AutosaveManager::apply(const GeneralSettings& settings) {

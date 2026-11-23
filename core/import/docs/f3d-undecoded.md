@@ -869,7 +869,7 @@ the reference models (one model per option, against their dumps):
 | tangent chain | the set's options object: tangent chain byte | not read (the import chained) | read, verified (on and off) |
 | rolling-ball or setback corners | the fillet object: the byte after its set list | not read (built rolling) | read, verified |
 | what a set selects (edges, faces, a face's edges) | the set input (mitcad#96) | read | read |
-| full round, rule fillet | face groups (description) | not read | not read (no corpus item) |
+| full round, rule fillet | face groups (description) | not read | not read (no corpus item; the model's fillet has a `full_round` size since mitcad#2279, which a decoded full round could map to) |
 | chamfer corners (chamfer, miter, blend) | the chamfer object: the `u32` after its root part | not read (built with chamfer corners) | read, verified |
 | chamfer tangent chain and flip | the chamfer set object (`0D383DB2`): `u8 tangent chain`, `u8 flipped` after its root part | not read | read from the API reference dumps' 312 sets (the flipped byte agrees on all; the chain byte 324 of 324 with dumps and models); older class versions not read |
 | options of the older set records (class version 9 and earlier) | another layout | not read | not read (no reference model) |

@@ -243,11 +243,20 @@ QString SketchController::editCommandOf(const SelectionItem& item) const {
   if (kind == SelectKind::Profile) {
     return {};
   }
+  // An equation curve opens with its formulas (mitcad#2237).
+  if (kind == SelectKind::SketchCurve && m_model.equationOf(item.name) != nullptr) {
+    return QStringLiteral("sketch.edit_equation_curve");
+  }
   if (m_model.offsetOf(item.name) != nullptr) {
     return QStringLiteral("sketch.edit_offset");
   }
   if (m_model.patternOf(item.name) != nullptr) {
     return QStringLiteral("sketch.edit_pattern");
+  }
+  // A conic's Rho (mitcad#2236).
+  if (const CurveData* curve = m_model.curve(item.name);
+      kind == SelectKind::SketchCurve && curve != nullptr && curve->isConic() && !curve->reference) {
+    return QStringLiteral("sketch.edit_rho");
   }
   return {};
 }

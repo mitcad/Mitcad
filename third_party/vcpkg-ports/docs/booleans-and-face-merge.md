@@ -305,6 +305,102 @@ leaving that point, as it does at a vertex on a seam with the 2d
 tolerance. Planar faces, vertices whose edges meet them at one point and
 vertices on a closed edge are split as before.
 
+### The ring's common: its volume, not material, is loose (mitcad#2262)
+
+The join test checks every reported body by its volume in common with the
+union (mitcad#2217). The ring's common came out 1.09e-6 relative over the
+ring (21135.163943 against 21135.140975 mm³), with nothing of it outside
+the ring (the common's cut by the ring empty). Its 40 faces all lie on the
+ring's own surfaces, cut where the other bodies cross the torus; edges of
+1851 mm carry tolerances above 1e-7 mm, up to 1e-6 mm.
+
+- The excess is not material. Integrated about the middle, a diagonal
+  along X and one along Z, the common measured 21135.163838, 21135.164173
+  and 21135.077405 mm³, the ring 21135.140975 mm³ about each: the common's
+  volume moves by 4.1e-6 relative with the point it is integrated about,
+  from 1.1e-6 over the ring to 3.0e-6 short of it, and the 1.09e-6 lies
+  inside that spread. A shell that closes has one volume about every
+  point.
+- The 1e-6 mm tolerances need not measure a gap. Where a body's plane cuts
+  the torus, OCCT's face-face
+  intersection (`IntTools_FaceFace::MakeCurve`) walks such a section,
+  approximates it in the plane's parameters, lifts the 3D curve from
+  there, and then raises the curve's tolerance to at least 1e-6 mm for any
+  plane–torus pair, whatever the approximation reached
+  (`ComputeTolReached3d` then raises it only where the 3D curve lies
+  farther from a pcurve). No port patch touches that step.
+- The volume integration (`BRepGProp_Vinert`, through `BRepGProp_Gauss`)
+  reads no 3D curve: each face is integrated over the domain its pcurves
+  bound, from the face's lowest u to the boundary. Two faces on one
+  surface share one pcurve of their edge, so their domains meet exactly
+  whatever the edge's tolerance; a sliver can only open where the faces
+  beside an edge lie on two surfaces. Each face's integral also carries an
+  error, relative to the face's own integral, which grows with the point's
+  distance from the shape.
+
+A lower tolerance for those sections (a port patch of the 1e-6 mm floor)
+would therefore change the edges' numbers, not the volume, and is not
+made. The test writes, for the ring, each kind of loose edge (a section
+or a piece of the ring's own edge, its curve type, the union's surface
+beside it), how far its 3D curve really lies from its pcurves, how many
+of them lie between faces on two surfaces and how far apart those faces'
+curves are, and the integration's own error bound about each of the three
+points (each face's integral times the relative error the integration
+reports for it) to `common-volumes.txt` in its build folder: that record
+tells whether the spread is the integration's error or slivers between
+faces on two surfaces. The ring's limit is the measured spread rounded
+up, 5e-6 relative (`kRingExcessLimit` in
+`geometry/tests/test_join_holds_inputs.cpp`), and the test checks the
+ring's spread itself against it; every other body stays within 1e-6 both
+ways.
+
+#### Neither: the joints of a face's pcurves (mitcad#2267)
+
+The record ruled out both causes above. About the three points the
+integration's own error bound came to at most 6.5e-10 of the ring (one
+face's relative error up to 5.4e-10), some 6000 times less than the
+spread; the 8 loose edges between faces on two surfaces (or a face's
+seam), pieces of the ring's own circular edges, leave no gap between the
+two faces' curves, and the 133 loose section edges (B-splines, tolerance
+up to 1e-6 mm, their 3D curves within 8.5e-8 mm of their pcurves) lie
+between faces on one surface. So the common's shell does not close for a
+reason inside its faces, not between them.
+
+`BRepGProp_Gauss` integrates a face by Green's theorem in its
+parameters: along each of the forward face's edges, its pcurve in the
+edge's orientation, the integrand is first integrated in u from the
+face's lowest u (its UV bounds) to the pcurve's point at the pcurve's v,
+and that is integrated along the pcurve against dv. This is exact only
+for a loop of pcurves that closes in the parameters. Where one pcurve
+ends at (u, v) and the next one starts at (u', v'), the two points within
+the vertex's tolerance in space but not equal, the integral leaves out a
+strip from the lowest u to u, v' - v wide (a gap along u leaves out
+nothing). The strip's flux moves the face's volume with the point it is
+integrated about, and its width counts against the strip's whole length:
+on a torus face reaching round the ring a joint 1e-6 mm apart along v
+leaves out about 1e-6 mm times up to the ring's circumference, of the
+order of 1e-4 mm², the size of the net normal integral the spread along
+the ring's axis implies. The strips run round the axis, so their parts
+across it turn and largely cancel while their parts along it add up, as
+in the record, where the spread about the point along Z is 260 times the
+one along X. This is the cause being checked, not yet a found one.
+
+The test now writes, for each face of the ring's common and of the ring
+(`shell_flux`), the vector integral of its normal over its area as the
+integration gives it (its volume about the middle and about points along
+X, Y and Z), its share of the ring's surface from its edges' 3D curves
+(half the integral of (P − O) × dP round them; the shares sum to zero),
+the same through its pcurves with chords across the joints, the joints'
+largest gaps along u and v and in space, the strips they leave out, and
+how much closing them changes its volume; the sums over the faces, the
+spread the summed vector gives against the one measured, and the volumes
+about the three points with every face's loop closed at its joints. If
+the strips account for the spread, the fix is in `BRepGProp_Gauss` (a
+port patch integrating across each joint so the loop closes, the shape
+left as it is) and the ring's limit returns to 1e-6; if not, the faces
+whose integrated vector is off their share of the ring's surface by more
+than their strips carry the open part, and the record names them.
+
 ## Reports and tests
 
 - 0220: mitcad#284 and the coaxial cylinders' join in
@@ -347,4 +443,13 @@ vertices on a closed edge are split as before.
   (ctest `geometry.port.2170`): such a face built from scratch on a
   cylinder, split by the face builder from its own edges and with a
   section line across it, in every order of the edges; and the reported
-  join of 31 bodies in `geometry/tests/test_join_holds_inputs.cpp`.
+  join of 31 bodies in `geometry/tests/test_join_holds_inputs.cpp`. With
+  the patch a bare rod's common with a finned rod holding it is the rod
+  (mitcad#2217: the test's rods built from scratch, fins beside and over
+  the rod's seam, its faces merged or not, joined with a plate, within
+  1e-6 both ways; the reported design's five bare rods no more than 1e-6
+  short in the union), so no patch of the common was needed. The
+  reported ring's common with the union is checked within 5e-6, the
+  spread of its volume about different points (mitcad#2262, above), with
+  each face's vector integral of its normal and the joints of its pcurves
+  recorded (mitcad#2267, above).

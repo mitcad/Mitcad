@@ -173,6 +173,16 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     snapshot.selectionSets = model.queryArray(QStringLiteral("selection_sets"));
   } catch (const std::exception&) {
   }
+  // Point clouds (mitcad#2240).
+  try {
+    snapshot.pointClouds = model.queryArray(QStringLiteral("point_clouds"));
+  } catch (const std::exception&) {
+  }
+  // Decals (mitcad#2244).
+  try {
+    snapshot.decals = model.queryArray(QStringLiteral("decals"));
+  } catch (const std::exception&) {
+  }
   // CAM setups with their operations' states (mitcad#1013): a model
   // without CAM has none.
   try {
@@ -235,7 +245,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
                                           snapshot.sheets, snapshot.motionStudies, snapshot.contactSets,
                                           snapshot.measurements, snapshot.drawings, snapshot.imageReferences,
                                           snapshot.centerOfMass, snapshot.camSetups,
-                                          snapshot.camMachines, snapshot.selectionSets})
+                                          snapshot.camMachines, snapshot.selectionSets, snapshot.pointClouds,
+                                          snapshot.decals})
                      .toJson(QJsonDocument::Compact);
   // The values Show When conditions use (mitcad#863): a parameter changed
   // without changing what is shown still changes the light bulbs' tooltips.
@@ -626,6 +637,15 @@ QJsonObject DocumentSnapshot::imageReference(const QString& name) const {
   return QJsonObject();
 }
 
+QJsonObject DocumentSnapshot::decal(const QString& name) const {
+  for (const QJsonValue& value : decals) {
+    if (value.toObject().value(QStringLiteral("name")).toString() == name) {
+      return value.toObject();
+    }
+  }
+  return QJsonObject();
+}
+
 QJsonObject DocumentSnapshot::camSetup(int id) const {
   for (const QJsonValue& value : camSetups) {
     if (value.toObject().value(QStringLiteral("id")).toInt() == id) {
@@ -838,6 +858,8 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("panelize"), QStringLiteral("panelize")},
       // Boundary Fill (mitcad#457, its panel mitcad#2149).
       {QStringLiteral("boundary_fill"), QStringLiteral("boundary-fill")},
+      // Cell Grid (mitcad#2238).
+      {QStringLiteral("cell_grid"), QStringLiteral("cell-grid")},
       // Cone (mitcad#2239).
       {QStringLiteral("cone"), QStringLiteral("cone")},
   };

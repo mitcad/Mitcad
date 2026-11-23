@@ -118,6 +118,10 @@ public:
   // Whether the last command that failed was cancelled rather than
   // rejected: it changed nothing, and is no error to show.
   virtual bool lastCancelled() const = 0;
+  // The words of the last command the model rejected (runCommand,
+  // runCommands): a model command's panel shows them in its own message
+  // area (mitcad#2285).
+  virtual QString lastError() const { return QString(); }
   // Runs commands as one undo step named `label` and shows the result;
   // those before a rejected one are taken back.
   virtual bool runCommands(const QJsonArray& commands, const QString& label) = 0;
@@ -365,6 +369,10 @@ public:
   // OK: adds or edits the feature; false (with the panel showing why) when
   // it cannot, or when its computation was cancelled.
   bool commit();
+  // Apply (CommandDef::applyNext, mitcad#2293): adds the feature as OK
+  // does and keeps the panel open for the next one; false as commit, and
+  // for a command without Apply, an edit or the asynchronous frontend.
+  bool applyAndContinue();
   void cancel();
   // Ends without changing the model: the document goes (another is opened).
   void discard();
@@ -410,6 +418,13 @@ public:
   void suspend(const QString& why = QStringLiteral("while a sketch is edited"));
   void resume();
   bool suspended() const { return m_suspended; }
+  // The design changed beside a panel that changes nothing in it
+  // (CommandDef::changesNoDesign, mitcad#2281: a download or a dropped file
+  // inserted while Measure is open; `why` for the log): the panel checks
+  // its picks again (the inputs shown again, CommandDef::modelChanged, the
+  // highlights on the bodies shown now) and computes its result again with
+  // the new bodies.
+  void designChangedBeside(const QString& why);
   // A light bulb of the browser while the panel is open (mitcad#295;
   // CommandSessionVisibility.cpp): runs the visibility commands as one undo
   // step `label` outside the command's undo range. An applied sketch
@@ -810,6 +825,17 @@ private:
   // mitcad#375): runs them; one that repeats stays open for the next,
   // another closes. False (the panel stays) when the model refused.
   bool applyCommand();
+  // After Apply added the feature (mitcad#2293): the inputs from their
+  // defaults again with what CommandDef::applyNext keeps, the preview
+  // gone, the first needed selection active.
+  void continueAfterApply();
+  // The added or edited feature `uid` suppressed as CommandDef::
+  // suppressInput is checked (mitcad#2293), merged into the undo step that
+  // starts at `depth`.
+  void followSuppressInput(const QString& uid, int depth);
+  // The commit under way is Apply's (applyAndContinue): it continues
+  // instead of closing; OK and a click that confirms clear it.
+  bool m_continueAfterCommit = false;
   // Whether a choice with a Tab cycle is shown (the filter is installed
   // only for such commands) and steps it, or the active selection with
   // InputDef::tabPicks picks its next item (mitcad#857); false when there
@@ -1288,6 +1314,11 @@ private:
   // What a flip's tried operation replaced: the user's own.
   QString m_flipOperation;
   Selection m_flipObjects;
+  // Its mirror (mitcad#2283): Cut or Join chosen by hand whose preview
+  // fails while the other direction works turns the command's Flip
+  // (CommandDef::toolFlip) once. True when it turned it or turned it back:
+  // that preview follows instead of the answer's.
+  bool turnMissedOperation(const QJsonObject& report);
 
   // What the preview draws, logged as "Preview bodies: ..." when it
   // changed (mitcad#266), for UI tests.

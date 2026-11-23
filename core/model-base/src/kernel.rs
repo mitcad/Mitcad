@@ -549,7 +549,10 @@ pub trait Kernel: Send {
 
     /// The distance of each point from the shape's boundary (its faces),
     /// mm: zero on a face, positive inside and outside; within 1e-5 of a
-    /// face, the distance to that face (another may be nearer still).
+    /// face, the distance to that face (another may be nearer still). A
+    /// face without a surface (a mesh body's triangles) does not measure:
+    /// a point no other face measures has the infinite distance, "could not
+    /// be measured" (mitcad#2294).
     fn boundary_distances(
         &self,
         _shape: &Self::Shape,
@@ -2342,6 +2345,21 @@ pub trait Kernel: Send {
     fn face_surface_groups(&self, _shape: &Self::Shape) -> Result<Vec<u32>, KernelError> {
         Err(KernelError::Unsupported("surface groups of faces"))
     }
+
+    // Point Cloud Deviation (mitcad#2240): exact closest points on faces.
+
+    /// Each point's distance (mm, never negative) from the faces named,
+    /// every face of the shape when none is named, with the nearest point
+    /// of them, solved on the exact faces, their edges and vertices (no
+    /// tessellation). A name that finds no face of the shape is an error.
+    fn boundary_nearest(
+        &self,
+        _shape: &Self::Shape,
+        _faces: &[FaceName],
+        _points: &[Vec3],
+    ) -> Result<Vec<(f64, Vec3)>, KernelError> {
+        Err(KernelError::Unsupported("closest points on faces"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -2715,6 +2733,15 @@ pub enum FilletSize<'a> {
         knots: &'a [f64],
         radii: &'a [f64],
     },
+    /// A full round (mitcad#2279): the set's edges are the two edges (or
+    /// tangent chains) of one face, the middle face; the kernel works out
+    /// on every build the radius of the circle that touches both side
+    /// faces and the middle face, rounds both chains with it and takes the
+    /// middle face away (its names go onto the rounding). Refused in words
+    /// where the edges are not two chains of one face, the radius would
+    /// change along them, or no such circle touches the middle face
+    /// between its edges.
+    FullRound,
 }
 
 /// Removed faces (none: a closed void) and the wall thickness inside and

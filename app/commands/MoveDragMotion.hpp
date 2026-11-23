@@ -16,6 +16,7 @@
 #include <QString>
 
 #include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_XYZ.hxx>
@@ -40,9 +41,21 @@ std::optional<gp_Trsf> moveMotion(const CommandState& state, const gp_Pnt& pivot
 // 2: X, Y, Z) starts from that middle without its own distance, so that its
 // knob, at the start plus its value, is at the moved middle as well, where
 // all three arrows and the rings meet; none while a distance is not a
-// number.
-std::optional<gp_Pnt> freeMovedMiddle(const CommandState& state, const gp_Pnt& pivot);
-std::optional<gp_Pnt> freeArrowOrigin(const CommandState& state, const gp_Pnt& pivot, int axis);
+// number. `pivot` and the points are in the design; the distances are
+// along the axes of the move's component, `frame` its placement in the
+// design (moveFrame, mitcad#2305: a component inside a turned parent moves
+// along the parent's axes), so they go along moveAxisOf(frame, …).
+std::optional<gp_Pnt> freeMovedMiddle(const CommandState& state, const gp_Pnt& pivot,
+                                      const gp_Trsf& frame = gp_Trsf());
+std::optional<gp_Pnt> freeArrowOrigin(const CommandState& state, const gp_Pnt& pivot, int axis,
+                                      const gp_Trsf& frame = gp_Trsf());
+
+// The direction of the move's axis `axis` (0, 1, 2: X, Y, Z; Z for any
+// other) in the design: the axis of the component the move works in,
+// `frame` its placement (moveFrame; the identity in the root). Free Move's
+// and Translate's distances run along these axes and its angles about
+// them, so their arrows and rings are drawn along them (mitcad#2305).
+gp_Dir moveAxisOf(const gp_Trsf& frame, int axis);
 
 // A free move as the panel holds it (mitcad#1583): its X, Y and Z
 // distances (mm) and its angles about X, then Y, then Z (radians), about a

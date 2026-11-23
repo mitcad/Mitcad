@@ -16,7 +16,7 @@ use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::expr::Unit;
 use mitcad_model::features::bound_length::BoundMode;
-use mitcad_model::features::derived_part::{EndCut, Ends, PartCut};
+use mitcad_model::features::derived_part::{EndCut, Ends, PartCut, Tilt};
 use mitcad_model::features::{FeatureDef, GeomRef, OccurrencePath, ValueInput};
 use mitcad_model::ids::{ComponentUid, OccurrenceUid};
 use mitcad_model::internal::build::value_in;
@@ -74,7 +74,43 @@ named_enum! {
         "build_swap_fasteners" => BuildSwapFasteners(Box<mitcad_model_build::SwapInput>),
         // Connectors placed by the first rule placed again (mitcad#1115).
         "build_upgrade" => BuildUpgrade {},
+        // End caps of profiles (mitcad#2243).
+        "build_end_cap" => BuildEndCap(Box<mitcad_model_build::EndCapInput>),
     }
+}
+
+/// The `build_end_caps` query (mitcad#2243): the design's end caps and,
+/// with `ends` and a `thickness`, what `build_end_cap` would make of them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EndCapsQuery {
+    #[serde(default)]
+    ends: Vec<mitcad_model_build::CapAt>,
+    #[serde(default)]
+    thickness: Option<ValueInput>,
+    #[serde(default)]
+    inset: Option<ValueInput>,
+    #[serde(default)]
+    ratio: Option<ValueInput>,
+    #[serde(default)]
+    chamfer: Option<ValueInput>,
+    #[serde(default)]
+    direction: mitcad_model::features::end_cap::CapDirection,
+}
+
+/// A BUILD end cap as answers give it (mitcad#2243).
+fn cap_json(cap: &mitcad_model_build::CapInfo) -> Value {
+    json!({
+        "component": cap.component,
+        "feature": cap.feature,
+        "member": cap.member,
+        "end": cap.end.as_str(),
+        "direction": cap.direction.as_str(),
+        "thickness": cap.thickness,
+        "inset": cap.inset,
+        "ratio": cap.ratio,
+        "chamfer": cap.chamfer,
+    })
 }
 
 /// What a timber frame's command made (mitcad#479).
@@ -140,12 +176,18 @@ fn path_text(path: &[OccurrenceUid]) -> String {
     OccurrencePath(path.to_vec()).to_string()
 }
 
-fn ends_json(ends: &Ends, angle: &dyn Fn(ParamId) -> Option<f64>) -> Value {
-    let cut = |c: &Option<EndCut>| match c {
-        Some(c) => json!({"angle": angle(c.angle), "tilt": c.tilt.unwrap_or_default().as_str()}),
+fn ends_json(
+    ends: &Ends,
+    tilts: [Option<Tilt>; 2],
+    angle: &dyn Fn(ParamId) -> Option<f64>,
+) -> Value {
+    let cut = |c: &Option<EndCut>, tilt: Option<Tilt>| match c {
+        Some(c) => {
+            json!({"angle": angle(c.angle), "tilt": tilt.or(c.tilt).unwrap_or_default().as_str()})
+        }
         None => Value::Null,
     };
-    json!({"a": cut(&ends.a), "b": cut(&ends.b)})
+    json!({"a": cut(&ends.a, tilts[0]), "b": cut(&ends.b, tilts[1])})
 }
 
 fn placed_json(placed: &Placed) -> Value {
@@ -230,6 +272,9 @@ pub(crate) trait BuildCrateOps<K: Kernel> {
 
     /// The `build_end_meets` query (mitcad#1940).
     fn build_end_meets_json(&self, query: &EndMeetsQuery) -> Result<Value, ApiError>;
+
+    /// The `build_end_caps` query (mitcad#2243).
+    fn build_end_caps_json(&self, query: &EndCapsQuery) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> BuildCrateOps<K> for Document<K> {
@@ -320,7 +365,87 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                 let placed = self.build_upgrade()?;
                 json!({"upgraded": placed, "count": placed.len()})
             }
+            // End caps (mitcad#2243).
+            BuildCommand::BuildEndCap(input) => {
+                let made = self.build_end_cap(&input)?;
+                let caps: Vec<Value> = made
+                    .iter()
+                    .map(|c| {
+                        json!({
+                            "component": c.component,
+                            "occurrence": c.occurrence,
+                            "member": c.member,
+                            "end": c.end.as_str(),
+                            "name": c.name,
+                            "new": c.new,
+                            "designation": self.end_cap_designation(c.component),
+                        })
+                    })
+                    .collect();
+                json!({"caps": caps, "count": caps.len()})
+            }
         })
+    }
+
+    fn build_end_caps_json(&self, query: &EndCapsQuery) -> Result<Value, ApiError> {
+        let caps: Vec<Value> = self
+            .end_caps()
+            .iter()
+            .map(|cap| {
+                let mut value = cap_json(cap);
+                value["designation"] = json!(self.end_cap_designation(cap.component));
+                value
+            })
+            .collect();
+        let mut answer = json!({"caps": caps});
+        let Some(thickness) = &query.thickness else {
+            return Ok(answer);
+        };
+        let input = mitcad_model_build::EndCapInput {
+            ends: query.ends.clone(),
+            thickness: thickness.clone(),
+            inset: query.inset.clone(),
+            ratio: query.ratio.clone(),
+            chamfer: query.chamfer.clone(),
+            direction: query.direction,
+        };
+        let value = |v: &ValueInput| value_in(self, v, Unit::MM).unwrap_or(f64::NAN);
+        let t = value(thickness);
+        let mut plates = Vec::new();
+        let mut problems = Vec::new();
+        match self.plan_end_caps(&input) {
+            Ok(plans) => {
+                for plan in plans {
+                    match plan {
+                        Ok(plan) => {
+                            let (outline, along) = mitcad_model_build::internal::plate_outline(
+                                &plan,
+                                t,
+                                query.direction,
+                            );
+                            plates.push(json!({
+                                "component": plan.member,
+                                "end": plan.end.as_str(),
+                                "cap": plan.existing,
+                                "outline": outline,
+                                "along": along,
+                                "size": [plan.plate.width(), plan.plate.height()],
+                                "thickness": t,
+                                "area": plan.plate.area(),
+                                "disc": plan.plate.is_disc(),
+                            }));
+                        }
+                        Err((component, text)) => {
+                            problems.push(json!({"component": component, "problem": text}));
+                        }
+                    }
+                }
+            }
+            Err(e) => problems.push(json!({"component": null, "problem": e.to_string()})),
+        }
+        answer["plates"] = json!(plates);
+        answer["problems"] = json!(problems);
+        Ok(answer)
     }
 
     fn build_preview_json(&self, fields: Map<String, Value>) -> Result<Value, ApiError> {
@@ -720,6 +845,8 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
     fn build_parts_json(&self) -> Value {
         let params = self.parameters();
         let angle = |id: ParamId| params.value(id);
+        // End caps (mitcad#2243).
+        let caps = self.end_caps();
         let parts: Vec<Value> = self
             .build_parts_info()
             .into_iter()
@@ -786,7 +913,7 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     "part_number": part_number,
                     "config": config,
                     "length": info.length.map(|(_, l)| l),
-                    "ends": info.ends().map(|e| ends_json(e, &angle)),
+                    "ends": info.ends().map(|e| ends_json(e, info.end_tilts, &angle)),
                     "bound": bound,
                     "flip": flip,
                     "rotate": rotate,
@@ -824,6 +951,29 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                 });
                 // Centred between these profiles (mitcad#1401).
                 part["gap"] = json!(info.record.gap);
+                // End caps (mitcad#2243): a cap's member, end and values,
+                // its plate as its designation; a member's caps by end
+                // and how far each end is cut back for an inward one.
+                if let Some(cap) = caps.iter().find(|c| c.component == info.component) {
+                    part["end_cap"] = cap_json(cap);
+                    part["designation"] = json!(self.end_cap_designation(info.component));
+                }
+                let on = |end: mitcad_model::features::end_cap::CapEnd| {
+                    caps.iter()
+                        .find(|c| c.member == info.component && c.end == end)
+                        .map(|c| c.component)
+                };
+                part["end_caps"] = json!({
+                    "a": on(mitcad_model::features::end_cap::CapEnd::A),
+                    "b": on(mitcad_model::features::end_cap::CapEnd::B),
+                });
+                // A profile with slots: the library's caps of its system
+                // come first (End Cap's panel says so).
+                part["slotted"] = json!(!info.slots().is_empty());
+                part["cut_back"] = json!(info.def.as_ref().map(|d| json!({
+                    "a": d.cut_back.a.and_then(|id| params.value(id)),
+                    "b": d.cut_back.b.and_then(|id| params.value(id)),
+                })));
                 // Its offset from `from`, as `build_edit`'s `at.offset`
                 // takes it (mitcad#1885).
                 // On a plane or a face (mitcad#2046): its offset along the
@@ -984,6 +1134,7 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                         "condition": j.condition.as_str(),
                         "through": j.through,
                         "problem": j.problem,
+                        "warning": j.warning,
                     }),
                     None => Value::Null,
                 };
@@ -1115,7 +1266,28 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     .is_none_or(|c| !list.cut.contains(&c))
             })
             .collect();
-        let mut answer = json!({"rows": rows, "stock": stock, "kerf": kerf, "other": other});
+        // End caps' plates (mitcad#2243).
+        let plates: Vec<Value> = list
+            .plates
+            .iter()
+            .map(|p| {
+                json!({
+                    "designation": p.designation,
+                    "width": p.width,
+                    "height": p.height,
+                    "thickness": p.thickness,
+                    "area": p.area,
+                    "disc": p.disc,
+                    "material": p.material,
+                    "quantity": p.quantity,
+                    "mass": p.mass,
+                    "components": p.components,
+                    "members": p.members,
+                })
+            })
+            .collect();
+        let mut answer = json!({"rows": rows, "stock": stock, "kerf": kerf, "other": other,
+                                "plates": plates});
         if let Some(t) = &list.timber {
             answer["timber"] = json!(true);
             answer["totals"] = json!({

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <exception>
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -137,38 +138,109 @@ bool made_face_at(const Shape& shape, const std::string& feature, const gp_Pnt& 
   return false;
 }
 
+// Whether a face named `name` (or one of its pieces) reaches the point.
+bool named_face_at(const Shape& shape, const std::string& name, const gp_Pnt& point) {
+  const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(point).Vertex();
+  for (int i = 0; i < shape.face_count(); ++i) {
+    if (face_matches(shape.face_names(i), name)) {
+      BRepExtrema_DistShapeShape distance(shape.face(i), vertex);
+      if (distance.IsDone() && distance.Value() < 1.0e-4) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Faces whose name starts with `prefix`.
+int faces_starting(const Shape& shape, const std::string& prefix) {
+  int count = 0;
+  for (int i = 0; i < shape.face_count(); ++i) {
+    for (const std::string& name : shape.face_names(i)) {
+      if (name.compare(0, prefix.size(), prefix) == 0) {
+        ++count;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
+// The integral of f over [a, b] by Simpson's rule in n (even) steps.
+double integral(const std::function<double(double)>& f, double a, double b, int n = 20000) {
+  const double h = (b - a) / n;
+  double sum = f(a) + f(b);
+  for (int i = 1; i < n; ++i) {
+    sum += f(a + i * h) * (i % 2 == 1 ? 4.0 : 2.0);
+  }
+  return sum * h / 3.0;
+}
+
+// A rounding's cross-section of radius r across a right angle, the part of
+// it at least c from one face's plane: its area.
+double rounding_area_beyond(double r, double c) {
+  const double u = std::clamp(r - c, 0.0, r);
+  return r * u - (0.5 * u * std::sqrt(std::max(0.0, r * r - u * u)) + 0.5 * r * r * std::asin(u / r));
+}
+
+// A bevel's cross-section of equal distances d across a right angle, the
+// part of it at least c from one face's plane: its area.
+double bevel_area_beyond(double d, double c) {
+  const double u = std::max(0.0, d - c);
+  return 0.5 * u * u;
+}
+
 // The block's top front edge alone dressed with Tangent Chain off, on the
-// block with its vertical corners rounded with 5: one valid closed solid;
-// the straight edge's whole dressup (`straight` mm3) and less than the
-// whole of each corner arc's (`arc` mm3), the run-out on both arcs and no
-// made face at their far vertices; the other top edges and arcs sharp.
-void check_top_front_run_out(const Shape& rounded, const Shape& result, const std::string& feature,
-                             const std::string& role, double straight, double arc) {
+// block with its vertical corners rounded with `radius`: one valid closed
+// solid whose dressup ends against each corner's rounding (mitcad#2193):
+// the volume taken away is the straight edge's whole dressup (`straight`
+// mm3) and, past each of its two vertices, the dressup's cross-section
+// carried straight on inside the corner. At s past the vertex the corner's
+// face lies c = R - sqrt(R^2 - s^2) behind the front face's plane, and
+// `area(c)` is the part of the cross-section that far behind it or more.
+// The cross-section's middle lies `middle` behind both the top and the
+// front. The face ends are named after the edge; no run-out, flat end, cap or tool
+// face is left, no made face reaches the arcs' far vertices, and the other
+// top edges and arcs stay sharp.
+void check_top_front_face_end(const Shape& rounded, const Shape& result, const std::string& feature,
+                              const std::string& role, double straight, double radius,
+                              const std::function<double(double)>& area, double middle) {
   CHECK(closed_valid_solid(result));
   const double removed = volume(rounded) - volume(result);
-  std::printf("%s run out over the corner arcs: %.6f removed, %.6f along the straight edge, %.6f along each arc "
-              "in full\n",
-              role.c_str(), removed, straight, arc);
-  CHECK(removed > straight + 0.1 * 2.0 * arc);
-  CHECK(removed < straight + 0.9 * 2.0 * arc);
+  const auto behind = [&](double s) { return radius - std::sqrt(std::max(0.0, radius * radius - s * s)); };
+  const double past = integral([&](double s) { return area(behind(s)); }, 0.0, radius);
+  const double expected = straight + 2.0 * past;
+  std::printf("%s ends against the corner roundings: %.6f removed, %.6f expected (%.6f along the straight edge, "
+              "%.6f past each vertex)\n",
+              role.c_str(), removed, expected, straight, past);
+  CHECK(std::abs(removed - expected) < 1.0e-3 * expected);
   CHECK(faces_matching(result, feature + ":" + role + "(" + top_front() + ")") == 1);
-  const double c = 5.0 * std::sqrt(0.5);
-  const std::string arc0 = edge_at(rounded, gp_Pnt(5.0 - c, 5.0 - c, 20.0));
-  const std::string arc1 = edge_at(rounded, gp_Pnt(55.0 + c, 5.0 - c, 20.0));
-  CHECK(faces_matching(result, feature + ":runout(" + arc0 + ")") >= 1);
-  CHECK(faces_matching(result, feature + ":runout(" + arc1 + ")") >= 1);
-  CHECK(!made_face_at(result, feature, gp_Pnt(0.0, 5.0, 20.0)));
-  CHECK(!made_face_at(result, feature, gp_Pnt(60.0, 5.0, 20.0)));
+  // A face end at each vertex: the cross-section's middle (`middle` behind
+  // the top and the front) 0.5 past it lies on a face named after the edge.
+  // The face ends lie on the dressup's own surface (the rounding's
+  // cylinder, the bevel's plane) and are one face with it, which holds both
+  // names.
+  const std::string face_end = feature + ":face_end(" + top_front() + ")";
+  std::printf("%s face ends: %d faces\n", role.c_str(), faces_matching(result, face_end));
+  CHECK(faces_matching(result, face_end) >= 1);
+  CHECK(named_face_at(result, face_end, gp_Pnt(radius - 0.5, middle, 20.0 - middle)));
+  CHECK(named_face_at(result, face_end, gp_Pnt(60.0 - radius + 0.5, middle, 20.0 - middle)));
+  const double c = radius * std::sqrt(0.5);
+  const std::string arc0 = edge_at(rounded, gp_Pnt(radius - c, radius - c, 20.0));
+  const std::string arc1 = edge_at(rounded, gp_Pnt(60.0 - radius + c, radius - c, 20.0));
+  for (const std::string& arc : {arc0, arc1}) {
+    CHECK(faces_matching(result, feature + ":" + role + "(" + arc + ")") == 0);
+  }
+  CHECK(!made_face_at(result, feature, gp_Pnt(0.0, radius, 20.0)));
+  CHECK(!made_face_at(result, feature, gp_Pnt(60.0, radius, 20.0)));
   for (int i = 1; i < 4; ++i) {
     CHECK(faces_matching(result, feature + ":" + role + "(" + edge(end_cap("F2", 1), side("F2", 1, i)) + ")") == 0);
   }
-  for (const gp_Pnt& far : {gp_Pnt(55.0 + c, 35.0 + c, 20.0), gp_Pnt(5.0 - c, 35.0 + c, 20.0)}) {
-    const std::string name = edge_at(rounded, far);
-    CHECK(faces_matching(result, feature + ":" + role + "(" + name + ")") == 0);
-    CHECK(faces_matching(result, feature + ":runout(" + name + ")") == 0);
+  for (const gp_Pnt& far :
+       {gp_Pnt(60.0 - radius + c, 40.0 - radius + c, 20.0), gp_Pnt(radius - c, 40.0 - radius + c, 20.0)}) {
+    CHECK(faces_matching(result, feature + ":" + role + "(" + edge_at(rounded, far) + ")") == 0);
   }
-  CHECK(faces_matching(result, feature + ":runout_tool") == 0);
-  CHECK(faces_matching(result, feature + ":runout_end") == 0);
+  CHECK(faces_starting(result, feature + ":runout") == 0);
 }
 
 void test_fillet_volume_and_names() {
@@ -397,11 +469,20 @@ void test_fillet_tangent_chains() {
     CHECK(faces_named(*second, "F6:fillet(" + arc + ")") == 1);
   }
   CHECK(edge_names_unique(*second));
-  // Without a tangent chain only the one edge is rounded, the rounding
-  // running out over the corner arcs beside it (mitcad#2037).
+  // Without a tangent chain only the one edge is rounded (mitcad#2037), the
+  // rounding ending against the corner roundings beside it (mitcad#2193).
   top.tangent_chain = false;
-  check_top_front_run_out(*first, *fillet("F6", *first, {top}), "F6", "fillet", fillet_loss(3) * 50,
-                          fillet_loss(3) * (kPi / 2) * (5 - 3 * (5.0 / 6 - kPi / 4) / (1 - kPi / 4)));
+  check_top_front_face_end(*first, *fillet("F6", *first, {top}), "F6", "fillet", fillet_loss(3) * 50, 5,
+                           [](double c) { return rounding_area_beyond(3, c); }, 3 * (1 - std::sqrt(0.5)));
+  // A rounding nearly as large as the corners' (4.8 into 5): no tube
+  // round the corner arcs holds it without folding over itself inside
+  // their bend, so the region kept round them is a sector about each
+  // corner's axis; the rounding ends against the corners all the same
+  // (mitcad#2193).
+  FilletSet large = top;
+  large.radius = 4.8;
+  check_top_front_face_end(*first, *fillet("F6", *first, {large}), "F6", "fillet", fillet_loss(4.8) * 50, 5,
+                           [](double c) { return rounding_area_beyond(4.8, c); }, 4.8 * (1 - std::sqrt(0.5)));
   // Variable radii cannot run out: refused in words.
   FilletSet variable = top;
   variable.size = FilletSize::Variable;
@@ -994,11 +1075,11 @@ void test_chamfer_sets_and_reference_faces() {
   rim.edges = {top_front()};
   rim.spec.distance = 1;
   CHECK(chamfer("F5", *rounded, {rim})->face_count() == rounded->face_count() + 8);
-  // Without one only the selected edge is bevelled, the bevel running out
-  // over the corner arcs beside it (mitcad#2037).
+  // Without one only the selected edge is bevelled (mitcad#2037), the bevel
+  // ending against the corner roundings beside it (mitcad#2193).
   rim.tangent_chain = false;
-  check_top_front_run_out(*rounded, *chamfer("F5", *rounded, {rim}), "F5", "chamfer", 0.5 * 50,
-                          0.5 * (kPi / 2) * (5 - 1.0 / 3));
+  check_top_front_face_end(*rounded, *chamfer("F5", *rounded, {rim}), "F5", "chamfer", 0.5 * 50, 5,
+                           [](double c) { return bevel_area_beyond(1, c); }, 0.5);
 }
 
 // The area of the face named (or split from) `name`.
@@ -1843,9 +1924,12 @@ Segment arc_segment(const std::string& name, double cx, double cy, double radius
 // A plate 60 x 40 x 10 with a slot through it, 20 long between the centres
 // of its rounded ends of radius 5; one straight edge of the slot's rim on
 // the top face chamfered by 1 with Tangent Chain off (mitcad#2037). The
-// rim's chain is the two straight edges and the two half circles: the
-// bevel runs out over both half circles and is gone before their far
-// vertices; the other straight edge stays sharp. One valid closed solid.
+// rim's chain is the two straight edges and the two half circles. The
+// slot's rounded ends turn away from the bevel, into the slot: carried
+// straight on past the vertices, the bevel would cut a groove into the
+// plate beside them, so it does not end against them (mitcad#2193) but
+// runs out over both half circles and is gone before their far vertices;
+// the other straight edge stays sharp. One valid closed solid.
 void test_chamfer_runs_out_over_a_slots_rounded_ends() {
   Region plate = rectangle(1, 0, 0, 60, 40);
   Loop slot;
@@ -1877,33 +1961,77 @@ void test_chamfer_runs_out_over_a_slots_rounded_ends() {
   CHECK(!made_face_at(*bevelled, "F5", gp_Pnt(40, 25, 10)));
   CHECK(!made_face_at(*bevelled, "F5", gp_Pnt(20, 25, 10)));
   CHECK(faces_matching(*bevelled, "F5:runout_tool") == 0);
+  CHECK(faces_starting(*bevelled, "F5:runout_cap") == 0);
+  CHECK(faces_starting(*bevelled, "F5:face_end") == 0);
   // The input is not changed.
   CHECK(near(volume(*body), 60.0 * 40 * 10 - (20 * 10 + kPi * 25) * 10));
 }
 
-// A block whose front edge runs from (0, 0) along x to 50, turns by 20
-// degrees in an arc of radius 2 (0.70 long) and runs on straight to a sharp
-// corner; its top edge along x chamfered by 1 with Tangent Chain off
-// (mitcad#2037). The arc is shorter than the bevel is wide (1.41): no
-// run-out, the bevel ends flat in the plane x = 50 at the arc's vertex,
-// and the arc and the edge after it stay sharp. One valid closed solid.
-void test_chamfer_ends_flat_where_the_next_edge_is_too_short() {
+// A block 20 high whose front edge runs from (0, 0) along x to 50, turns by
+// 20 degrees in an arc of radius 2 (0.70 long) and runs on straight for 20
+// to a sharp corner; `away` turns it towards -y, out of the block's plan
+// (the block then widens past x = 50), else towards +y, into it.
+ShapePtr turning_block(bool away) {
   const double turn = 20.0 * kPi / 180.0;
+  const double side = away ? -1.0 : 1.0;
   const double ax = 50 + 2 * std::sin(turn);
-  const double ay = 2 - 2 * std::cos(turn);
+  const double ay = side * (2 - 2 * std::cos(turn));
   const double cx = ax + 20 * std::cos(turn);
-  const double cy = ay + 20 * std::sin(turn);
+  const double cy = ay + side * 20 * std::sin(turn);
   Region outline;
   outline.name = "r{c1,c2,c3,c4,c5,c6}";
   Loop loop;
   loop.segments.push_back(line_segment("c1[c6,c2]", 0, 0, 50, 0));
-  loop.segments.push_back(arc_segment("c2[c1,c3]", 50, 2, 2, -kPi / 2, -kPi / 2 + turn));
+  loop.segments.push_back(away ? arc_segment("c2[c1,c3]", 50, -2, 2, kPi / 2 - turn, kPi / 2)
+                               : arc_segment("c2[c1,c3]", 50, 2, 2, -kPi / 2, -kPi / 2 + turn));
   loop.segments.push_back(line_segment("c3[c2,c4]", ax, ay, cx, cy));
   loop.segments.push_back(line_segment("c4[c3,c5]", cx, cy, cx, 40));
   loop.segments.push_back(line_segment("c5[c4,c6]", cx, 40, 0, 40));
   loop.segments.push_back(line_segment("c6[c5,c1]", 0, 40, 0, 0));
   outline.loops.push_back(loop);
-  const ShapePtr body = extrude("F2", {outline}, 0, 20);
+  return extrude("F2", {outline}, 0, 20);
+}
+
+// turning_block's top edge along x chamfered by 1 with Tangent Chain off
+// (mitcad#2037), the front turning into the block's plan past x = 50. The
+// arc is shorter than the bevel is wide (1.41), too short to run out over,
+// but the front turns away from the bevel: the bevel ends against it
+// (mitcad#2193), carried straight on past x = 50 to where the front has
+// turned 1 behind the plane y = 0. One valid closed solid.
+void test_chamfer_ends_against_a_short_turn() {
+  const ShapePtr body = turning_block(false);
+  ChamferSet front;
+  front.edges = {edge_at(*body, gp_Pnt(25, 0, 20))};
+  front.spec.distance = 1;
+  front.tangent_chain = false;
+  const ShapePtr bevelled = chamfer("F5", *body, {front});
+  CHECK(closed_valid_solid(*bevelled));
+  // The bevel's prism, 50 long, and past x = 50 its triangle where it lies
+  // behind the front: the front at s past x = 50 lies f(s) behind y = 0.
+  const double turn = 20.0 * kPi / 180.0;
+  const auto front_at = [&](double s) {
+    const double arc = 2 * std::sin(turn);
+    return s <= arc ? 2 - std::sqrt(4 - s * s) : 2 - 2 * std::cos(turn) + (s - arc) * std::tan(turn);
+  };
+  const double expected = 0.5 * 50 + integral([&](double s) { return bevel_area_beyond(1, front_at(s)); }, 0, 10);
+  const double removed = volume(*body) - volume(*bevelled);
+  std::printf("chamfer ends against a short turn: %.6f removed, %.6f expected\n", removed, expected);
+  CHECK(std::abs(removed - expected) < 1.0e-3 * expected);
+  CHECK(removed > 0.5 * 50 + 0.1);
+  CHECK(faces_matching(*bevelled, "F5:chamfer(" + front.edges.front() + ")") == 1);
+  CHECK(faces_matching(*bevelled, "F5:face_end(" + front.edges.front() + ")") == 1);
+  CHECK(faces_starting(*bevelled, "F5:runout") == 0);
+}
+
+// turning_block's top edge along x chamfered by 1 with Tangent Chain off
+// (mitcad#2037), the front turning out of the block's plan past x = 50.
+// The bevel cannot end against the front (carried straight on, it would
+// cut a groove into the block, which widens there; mitcad#2193), nor run
+// out over the arc, which is shorter than the bevel is wide (1.41): it
+// ends flat in the plane x = 50 at the arc's vertex, and the arc and the
+// edge after it stay sharp. One valid closed solid.
+void test_chamfer_ends_flat_where_the_next_edge_is_too_short() {
+  const ShapePtr body = turning_block(true);
   ChamferSet front;
   front.edges = {edge_at(*body, gp_Pnt(25, 0, 20))};
   front.spec.distance = 1;
@@ -1914,16 +2042,12 @@ void test_chamfer_ends_flat_where_the_next_edge_is_too_short() {
   CHECK(near(volume(*body) - volume(*bevelled), 0.5 * 50));
   CHECK(faces_matching(*bevelled, "F5:chamfer(" + front.edges.front() + ")") == 1);
   // The flat end, named after the vertex it ends at.
-  const std::string end = "F5:runout_end(";
-  int ends = 0;
-  for (int i = 0; i < bevelled->face_count(); ++i) {
-    for (const std::string& name : bevelled->face_names(i)) {
-      ends += name.compare(0, end.size(), end) == 0 ? 1 : 0;
-    }
-  }
-  CHECK(ends == 1);
-  CHECK(!made_face_at(*bevelled, "F5", gp_Pnt(ax, ay, 20)));
+  CHECK(faces_starting(*bevelled, "F5:runout_end(") == 1);
+  const double turn = 20.0 * kPi / 180.0;
+  CHECK(!made_face_at(*bevelled, "F5", gp_Pnt(50 + 2 * std::sin(turn), -(2 - 2 * std::cos(turn)), 20)));
   CHECK(faces_matching(*bevelled, "F5:runout_tool") == 0);
+  CHECK(faces_starting(*bevelled, "F5:runout_cap") == 0);
+  CHECK(faces_starting(*bevelled, "F5:face_end") == 0);
 }
 
 void dressup_tests() {
@@ -1962,6 +2086,7 @@ void dressup_tests() {
   guarded("test_chamfer_runs_out_over_a_slots_rounded_ends", test_chamfer_runs_out_over_a_slots_rounded_ends);
   guarded("test_chamfer_ends_flat_where_the_next_edge_is_too_short",
           test_chamfer_ends_flat_where_the_next_edge_is_too_short);
+  guarded("test_chamfer_ends_against_a_short_turn", test_chamfer_ends_against_a_short_turn);
   guarded("test_own_edge_of_long_names", test_own_edge_of_long_names);
 }
 

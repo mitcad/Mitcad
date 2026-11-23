@@ -23,8 +23,8 @@ Modes:
                         limits, a rerun alone after a memory limit
   --dry-run             lists the tests with their predictions; runs nothing
   --ui-cap              prints the UI entries this machine runs at once: the
-                        bound (--ui-max, else MITCAD_UI_JOBS, else 4), kept
-                        for the memory budget only; a test that fails
+                        bound (--ui-max, else MITCAD_UI_JOBS), else 'no cap
+                        (memory budget)'; a test that fails
                         beside others and passes alone lowers its own room
                         (--ui-rooms), never this cap; runs nothing
   --ui-rooms            prints each UI entry's learnt room (name, the other
@@ -66,11 +66,11 @@ Options:
   --sensitive PATTERN   tests timing-sensitive from the start (a * matches
                         anything; repeatable), e.g. 'app.ui-*'
   --ui-max N            the most UI entries at once (default:
-                        MITCAD_UI_JOBS, else 4): giving it opts in to each
-                        UI entry's learnt room and to the rerun alone of a
-                        UI entry that failed beside others; without either
-                        the cap is 4 and no room applies (the rooms are
-                        still learnt)
+                        MITCAD_UI_JOBS): opts in to that cap, to each UI
+                        entry's learnt room and to the rerun alone of a UI
+                        entry that failed beside others; without either no
+                        UI cap or room applies, only the memory budget (the
+                        rooms are still learnt)
   --lane-share F        the budget's share kept for the lane (default 0.2)
   --lane-score N        the failure score that puts a test in the lane
                         (default 1)

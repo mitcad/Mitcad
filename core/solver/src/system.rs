@@ -896,6 +896,9 @@ pub(crate) fn constraint_entities(c: &Constraint) -> Vec<EntityId> {
         | TangentAt { a, b, .. }
         | SmoothAt { a, b, .. } => vec![a, b],
         SymmetricEntities { a, b, axis } | SymmetricCentres { a, b, axis } => vec![a, b, axis],
+        // Points on offsets of curves (mitcad#2278).
+        PointOnOffset { curve, .. } => vec![curve],
+        PointOnOffsetCorner { a, b, .. } => vec![a, b],
         EqualSpacing {
             mode: SpacingMode::Along(e),
             ..
@@ -937,6 +940,9 @@ pub(crate) fn constraint_points(c: &Constraint) -> Vec<PointId> {
         } => vec![a_center, a, b_center, b],
         EqualSpacing { ref anchors, .. } => anchors.iter().flat_map(|a| a.points()).collect(),
         Spacing { a, b, .. } => a.points().into_iter().chain(b.points()).collect(),
+        // Points on offsets of curves (mitcad#2278).
+        PointOnOffset { point, .. } => vec![point],
+        PointOnOffsetCorner { point, corner, .. } => vec![point, corner],
         _ => Vec::new(),
     }
 }
@@ -1219,8 +1225,129 @@ impl System {
                     rec.side = sign(self.interval(a, b, mode).unwrap_or(0.0));
                 }
             }
+            // Points on offsets of curves (mitcad#2278).
+            PointOnOffset {
+                curve, left, at, ..
+            } => {
+                if !left.is_finite() {
+                    return Err(Error::InvalidValue("the offset must be finite"));
+                }
+                self.offset_end(curve, at)?;
+                if let OffsetAt::Along { t, range } = at {
+                    let p = self.offset_param(curve, t, range)?;
+                    rec.params.push(p);
+                }
+            }
+            PointOnOffsetCorner {
+                a,
+                a_at,
+                a_left,
+                b,
+                b_at,
+                b_left,
+                s,
+                ..
+            } => {
+                if !(a_left.is_finite() && b_left.is_finite() && a_left != 0.0 && b_left != 0.0) {
+                    return Err(Error::InvalidValue(
+                        "the offset of a round corner must be finite and not zero",
+                    ));
+                }
+                for (e, at) in [(a, a_at), (b, b_at)] {
+                    if matches!(at, OffsetAt::Along { .. }) {
+                        return Err(Error::Unsupported(
+                            "a round corner is between fixed places of its curves",
+                        ));
+                    }
+                    self.offset_end(e, at)?;
+                }
+                let w = (0.1 * a_left).powi(2).max(1e-6);
+                let s = if s.is_finite() {
+                    s.clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                rec.params
+                    .push(self.new_param(s, ParamKind::SplineT { lo: 0.0, hi: 1.0 }, w));
+            }
         }
         Ok(())
+    }
+
+    // Points on offsets of curves (mitcad#2278).
+    /// Checks where [`Constraint::PointOnOffset`] holds a point on `curve`:
+    /// a finite parameter, and an end only on a curve that has ends.
+    fn offset_end(&self, curve: EntityId, at: OffsetAt) -> Result<(), Error> {
+        let data = self.ent(curve)?;
+        match at {
+            OffsetAt::Along { t, range } => {
+                let bad =
+                    range.is_some_and(|(lo, hi)| !(lo.is_finite() && hi.is_finite()) || lo > hi);
+                if !t.is_finite() || bad {
+                    return Err(Error::InvalidValue(
+                        "the parameter on an offset must be finite, its range lower first",
+                    ));
+                }
+            }
+            OffsetAt::At(t) => {
+                if !t.is_finite() {
+                    return Err(Error::InvalidValue(
+                        "the parameter on an offset must be finite",
+                    ));
+                }
+            }
+            OffsetAt::Start | OffsetAt::End => {
+                if data.ends().is_none() {
+                    return Err(Error::Unsupported(
+                        "a circle or an ellipse has no ends to hold an offset point at",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The unknown parameter of a point free along the offset of `curve`,
+    /// starting at `t` and kept in `range` (a spline's whole range without
+    /// one).
+    fn offset_param(
+        &mut self,
+        curve: EntityId,
+        t: f64,
+        range: Option<(f64, f64)>,
+    ) -> Result<usize, Error> {
+        let data = self.ent(curve)?.clone();
+        // The weight of a parameter step: about a tenth of the curve's size
+        // per unit of the parameter, as a point on a curve's.
+        let (w, range) = match &data {
+            EntityData::Line { p1, p2 } => {
+                let len = self.xy(*p2).sub(self.xy(*p1)).norm();
+                ((0.1 * len).powi(2).max(1e-6), range)
+            }
+            EntityData::Circle { r, .. } => ((0.1 * self.params[*r]).powi(2).max(1e-6), range),
+            EntityData::Arc { c, s, .. } => {
+                let r = self.xy(*s).sub(self.xy(*c)).norm();
+                ((0.1 * r).powi(2).max(1e-6), range)
+            }
+            EntityData::Ellipse { c, a, .. } | EntityData::EllipticalArc { c, a, .. } => {
+                (self.ellipse_param_weight(*c, *a), range)
+            }
+            EntityData::BSpline { basis, ctrl } | EntityData::Fitted { basis, ctrl, .. } => {
+                let (lo, hi) = basis.domain();
+                let mut len = 0.0;
+                for w in ctrl.windows(2) {
+                    len += self.xy(w[1]).sub(self.xy(w[0])).norm();
+                }
+                let w = (0.1 * len / (hi - lo)).powi(2).max(1e-6);
+                // Inside the spline's own range.
+                let (a, b) = range.unwrap_or((lo, hi));
+                (w, Some((a.max(lo), b.min(hi).max(a.max(lo)))))
+            }
+        };
+        Ok(match range {
+            Some((lo, hi)) => self.new_param(t.clamp(lo, hi), ParamKind::SplineT { lo, hi }, w),
+            None => self.new_param(t, ParamKind::Angle, w),
+        })
     }
 
     /// Where an anchor is.

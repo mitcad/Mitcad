@@ -10,6 +10,7 @@
 #include "framework/DisplayPlatform.hpp"
 
 #include <cstdio>
+#include <optional>
 
 #include <QByteArray>
 #include <QString>
@@ -176,12 +177,84 @@ void environmentTests() {
   CHECK(!qEnvironmentVariableIsSet("QT_XCB_GL_INTEGRATION"));
 }
 
+// The start again when the window cannot draw with OpenGL (mitcad#2292):
+// the first option not tried yet of native Wayland (in a Wayland session
+// only), X11 with the EGL integration, X11 with GLX; nothing after an X11
+// integration the user chose other than those; the note keeps each
+// earlier start's.
+void graphicsFallbackTests() {
+  const QString xcb = QStringLiteral("xcb");
+  const QString wl = QStringLiteral("wayland");
+  const QString egl = QStringLiteral("xcb_egl");
+  const QString glx = QStringLiteral("xcb_glx");
+  CHECK(mitcad::graphicsOption(wl, egl) == wl);
+  CHECK(mitcad::graphicsOption(xcb, egl) == egl);
+  CHECK(mitcad::graphicsOption(xcb, QString()) == egl);
+  CHECK(mitcad::graphicsOption(xcb, glx) == glx);
+  CHECK(mitcad::graphicsOption(xcb, QStringLiteral("none")).isEmpty());
+  CHECK(mitcad::graphicsOption(QStringLiteral("offscreen"), QString()).isEmpty());
+
+  // The reported case: XWayland with the EGL integration in a Wayland
+  // session, the window without an EGL surface: native Wayland next.
+  const std::optional<mitcad::GraphicsFallback> toWayland = mitcad::graphicsFallback(xcb, egl, true, {});
+  CHECK(toWayland.has_value());
+  if (toWayland) {
+    CHECK(toWayland->key == wl);
+    CHECK(toWayland->platform == QStringLiteral("wayland;xcb"));
+    CHECK(toWayland->xcbGlIntegration.isEmpty());
+  }
+  // Native Wayland failing after it: GLX, not back to X11 with EGL.
+  const std::optional<mitcad::GraphicsFallback> afterWayland = mitcad::graphicsFallback(wl, egl, true, {egl});
+  CHECK(afterWayland.has_value() && afterWayland->key == glx);
+  // Native Wayland chosen by MITCAD_WAYLAND=1 failing: X11 with EGL first.
+  const std::optional<mitcad::GraphicsFallback> toEgl = mitcad::graphicsFallback(wl, egl, true, {});
+  CHECK(toEgl.has_value());
+  if (toEgl) {
+    CHECK(toEgl->key == egl);
+    CHECK(toEgl->platform == xcb);
+    CHECK(toEgl->xcbGlIntegration == egl);
+  }
+  // Native Wayland reached through Qt's fallback to X11 ("wayland;xcb"):
+  // X11 with EGL failing after both: GLX.
+  const std::optional<mitcad::GraphicsFallback> last = mitcad::graphicsFallback(xcb, egl, true, {egl, wl});
+  CHECK(last.has_value() && last->key == glx);
+  // An X11 session: GLX after the EGL integration.
+  const std::optional<mitcad::GraphicsFallback> toGlx = mitcad::graphicsFallback(xcb, QString(), false, {});
+  CHECK(toGlx.has_value());
+  if (toGlx) {
+    CHECK(toGlx->key == glx);
+    CHECK(toGlx->platform == xcb);
+    CHECK(toGlx->xcbGlIntegration == glx);
+  }
+  // Nothing left.
+  CHECK(!mitcad::graphicsFallback(xcb, glx, false, {egl}).has_value());
+  CHECK(!mitcad::graphicsFallback(xcb, glx, true, {egl, wl}).has_value());
+  CHECK(!mitcad::graphicsFallback(xcb, QStringLiteral("none"), true, {}).has_value());
+  CHECK(!mitcad::graphicsFallback(QStringLiteral("offscreen"), QString(), true, {}).has_value());
+
+  if (toWayland && toGlx) {
+    const QString first = mitcad::graphicsFallbackNote(QString(), QStringLiteral("no surface"), *toWayland);
+    CHECK(first == QStringLiteral("no surface; started again on native Wayland"));
+    const QString second = mitcad::graphicsFallbackNote(first, QStringLiteral("no context"), *toGlx);
+    CHECK(second.startsWith(first + QStringLiteral("; then no context; started again on X11 with GLX")));
+  }
+
+  // The note is read back from the environment by the next start.
+  const KeptVariable note(mitcad::kGraphicsFallbackVariable);
+  qunsetenv(mitcad::kGraphicsFallbackVariable);
+  CHECK(mitcad::graphicsStartFailure().isEmpty());
+  qputenv(mitcad::kGraphicsFallbackVariable, QByteArray("no context"));
+  CHECK(mitcad::graphicsStartFailure() == QStringLiteral("no context"));
+  CHECK(mitcad::kGraphicsRestartLimit == 2);
+}
+
 } // namespace
 
 int displayPlatformTests() {
   eglTests();
   glxTests();
   environmentTests();
+  graphicsFallbackTests();
   return failures;
 }
 MITCAD_UNIT_TEST(displayPlatformTests);

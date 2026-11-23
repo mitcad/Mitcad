@@ -524,6 +524,8 @@ pub(crate) fn storable(def: &FeatureDef) -> bool {
         FeatureDef::DerivedPart(_) | FeatureDef::BoundLength(_) => false,
         // Edge frames (mitcad#1814): their frames are not stored either.
         FeatureDef::EdgeFrame(_) => false,
+        // End caps (mitcad#2243): their seat frame is not stored either.
+        FeatureDef::EndCap(_) => false,
         // Intersection curves (mitcad#1405): the curve is made again.
         FeatureDef::IntersectionCurve(_) => false,
         // Helix curves (mitcad#1777): likewise.
@@ -1314,6 +1316,7 @@ fn restore<K: Kernel>(
         datum: None,
         placements: Vec::new(),
         mounts: None,
+        end_tilts: [None; 2],
         measured: Vec::new(),
         split_pieces: head.split_pieces.clone().map(std::sync::Arc::new),
         changed_pieces: head.changed_pieces.clone(),

@@ -3,7 +3,9 @@
 # stand-in for its runtime (MITCAD_TEST_3DXWARE), in the Floating layout,
 # the design window has no native window of its own, the screen beside the
 # Floating cards shows the view's background where the system draws it, and
-# the driver connects ("via 3DxWare").
+# the driver connects ("via 3DxWare"); with a second design opened and
+# closed, the first design still gets the input and the stand-in opened
+# its device once (mitcad#2297).
 add_test(NAME app.ui-windows-space-mouse-3dxware
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass
           -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-space-mouse-3dxware-test.ps1"

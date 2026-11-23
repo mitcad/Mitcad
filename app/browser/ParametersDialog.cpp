@@ -852,6 +852,10 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   m_formula = new QPushButton(tr("Edit &Formula…"));
   m_formula->setObjectName(QStringLiteral("parametersFormula"));
   m_formula->setAutoDefault(false);
+  // A click leaves the keyboard where it is: an Expression cell being
+  // edited stays open, and the button opens Edit Formula with what is
+  // typed in it (mitcad#2290); Tab still reaches the button.
+  m_formula->setFocusPolicy(Qt::TabFocus);
   m_formula->setToolTip(tr("Edit the selected parameter's formula and limits"));
   bottom->addWidget(m_formula);
   bottom->addStretch(1);
@@ -935,6 +939,9 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
                 previous->data(kName, kNewRowRole).toBool()) {
               createFromNewRow(false);
             }
+            // The empty row becomes current without a selection
+            // (mitcad#2202): Edit Formula… follows it too (mitcad#2290).
+            updateButtons();
           });
   // User parameters dropped on a group (mitcad#2180), moved once the drag
   // has ended.
@@ -1474,6 +1481,10 @@ void ParametersDialog::edit(QTreeWidgetItem* item, int column) {
         suggest.kind = kindOfUnit(m_new.unit);
         suggest.label = QStringLiteral("new parameter expression");
         suggest.create = false;
+        // Its fx opens Edit Formula for the parameter not yet made, never
+        // the list (mitcad#2290).
+        const QPointer<QLineEdit> cellEditor(editor);
+        suggest.formula = [this, cellEditor](const QString& text) { formulaForNewRow(cellEditor.data(), text); };
         ParameterField::attach(editor, suggest);
         // The whole text in sight and what is wrong with it in words while
         // it is typed, as in a parameter's cell (mitcad#2179, mitcad#2181).
@@ -1789,7 +1800,8 @@ void ParametersDialog::newRowEdited(QTreeWidgetItem* item, int column) {
 // makes the row a parameter; leaving the table does when the row has a
 // name and an expression; Escape leaves the cell as it was.
 void ParametersDialog::newRowEditorClosed(int column, int hint) {
-  if (m_building) {
+  // Closed by its fx for Edit Formula (mitcad#2290): the window decides.
+  if (m_building || m_newRowFormula) {
     return;
   }
   switch (static_cast<QAbstractItemDelegate::EndEditHint>(hint)) {
@@ -1995,6 +2007,21 @@ void ParametersDialog::importParameters() {
 void ParametersDialog::editFormula() {
   QTreeWidgetItem* item=m_table->currentItem();
   if (!item) return;
+  // An Expression cell being edited (the button takes no keyboard focus on
+  // a click, so the cell's editor stays open): as its fx, with what is
+  // typed in it so far (mitcad#2290).
+  if (auto* editor = qobject_cast<QLineEdit*>(m_table->itemWidget(item, kExpression))) {
+    if (ParameterField* field = ParameterField::of(editor); field != nullptr && field->options().formula) {
+      field->activateFx();
+      return;
+    }
+  }
+  // The empty row (mitcad#2290): Edit Formula for the parameter not yet
+  // made, with what its Expression holds.
+  if (item->data(kName, kNewRowRole).toBool()) {
+    formulaForNewRow(nullptr, m_new.expression);
+    return;
+  }
   const QString name=item->data(kName,kNameRole).toString();
   if (name.isEmpty() || item->data(kName,kKindRole).toString()==QStringLiteral("reference")) return;
   if (item->data(kName,kHeldRole).toBool()) {
@@ -2033,10 +2060,57 @@ void ParametersDialog::runFormulaEditor(const QString& name, const QString& unit
   submit(name,kExpression,dialog.expression(),QStringLiteral("Edited formula"),dialog.parameterCommand());
 }
 
+void ParametersDialog::formulaForNewRow(QLineEdit* editor, const QString& text) {
+  // The cell's editing ends without applying what it holds; its closing
+  // makes no parameter of the row while the window is open.
+  m_newRowFormula = true;
+  if (editor != nullptr) {
+    emit m_align->closeEditor(editor, QAbstractItemDelegate::NoHint);
+  }
+  // Out of the fx button's handling first: a window opens.
+  QTimer::singleShot(0, this, [this, text] { runNewRowFormula(text); });
+}
+
+void ParametersDialog::runNewRowFormula(const QString& text) {
+  const ParameterSource* source = parameterSourceOf(this);
+  if (source == nullptr || !source->query) {
+    m_newRowFormula = false;
+    return;
+  }
+  // No parameter yet: no own name (none to leave out, no limits to show:
+  // the window says that limits belong to a saved parameter), the row's
+  // unit as the kind.
+  const QString name = m_new.name.trimmed();
+  const QString shownName = name.isEmpty() ? QStringLiteral("(no name)") : name;
+  ParameterFieldOptions options;
+  options.label = name;
+  options.kind = kindOfUnit(m_new.unit);
+  options.anyKind = true;
+  FormulaEditor dialog(*source, options, text, this);
+  qDebug().noquote() << QStringLiteral("Formula editor opened for new parameter %1 with: %2").arg(shownName, text);
+  const bool accepted = execDialog(&dialog) == QDialog::Accepted;
+  m_newRowFormula = false;
+  if (!accepted) {
+    qDebug().noquote() << QStringLiteral("Formula editor for new parameter %1 canceled").arg(shownName);
+    return;
+  }
+  // As if typed in the row and Enter pressed: `add_parameter`, one undo
+  // step; without a name the row keeps the formula and asks for one.
+  m_new.expression = dialog.expression();
+  m_new.refusal.clear();
+  qDebug().noquote() << QStringLiteral("New parameter %1 expression from Edit Formula: %2")
+                            .arg(shownName, m_new.expression);
+  createFromNewRow(true);
+}
+
 void ParametersDialog::updateButtons() {
   QTreeWidgetItem* item = m_table->currentItem();
-  m_formula->setEnabled(item != nullptr && !item->data(kName,kNameRole).toString().isEmpty() &&
-                        item->data(kName,kKindRole).toString()!=QStringLiteral("reference"));
+  // Also the empty row's: Edit Formula for the parameter not yet made
+  // (mitcad#2290).
+  m_formula->setEnabled(item != nullptr &&
+                        (item->data(kName, kNewRowRole).toBool() ||
+                         (!item->data(kName, kNameRole).toString().isEmpty() &&
+                          item->data(kName, kKindRole).toString() != QStringLiteral("reference"))));
   // An import changes many parameters at once: not while a sketch or a
   // panel holds some (mitcad#666).
   m_import->setEnabled(m_scope.isEmpty());

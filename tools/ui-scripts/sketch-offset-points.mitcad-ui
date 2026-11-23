@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# Lines started and ended at the ends of a derived offset of a spline are
+# held there (mitcad#2278, GitHub mitcad/Mitcad#569), on
+# sketch-offset-points.json's Sketch1: a cubic B-spline arch c3 from p4
+# (-20, 0) to p7 (20, 0) and its offset 4 mm outside it, from (-24, 0) to
+# (24, 0), computed from the spline after every solve.
+#   1. The Line tool from the offset's start to the spline's start, and from
+#      the spline's end to the offset's end: each line gets a point of its
+#      own at the offset's end, held there, nothing refused; the spline, its
+#      offset and the two lines close one profile.
+#   2. The spline's end p7 dragged to (22, -6): the offset follows its
+#      source, and the line's end stays on the offset's end, so that the
+#      profile stays closed.
+# The clicks stay within x -30..30 mm, y -25..25 mm: the free part of the
+# view after the fit, also in session 0's 1024x768 window on Windows. Run
+# by tools/ui-sketch-offset-points-test.sh (Linux) and
+# tools/ui-windows-sketch-offset-points-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+key F6
+wait-idle
+expect-profiles 0
+
+# 1. A line from the offset's start to the spline's start.
+mark
+command sketch.line
+sketch-click -24 0
+sketch-click -20 0
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+wait-idle
+expect-no-log 'not added: |cannot be constrained|computed from an offset'
+
+# A line from the spline's end to the offset's end.
+mark
+command sketch.line
+sketch-click 20 0
+sketch-click 24 0
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+wait-idle
+expect-no-log 'not added: |cannot be constrained|computed from an offset'
+expect-profiles 1
+screenshot '${MITCAD_TEST_WORK}/sketch-offset-points-drawn.png'
+
+# 2. The source moves: the offset and the held line ends follow.
+mark
+sketch-drag 20 0 22 -6
+wait-log '^Dragged p7 to '
+wait-idle
+expect-no-log 'not added: |cannot be constrained|computed from an offset'
+expect-profiles 1
+screenshot '${MITCAD_TEST_WORK}/sketch-offset-points-dragged.png'
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

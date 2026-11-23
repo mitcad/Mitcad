@@ -1,0 +1,136 @@
+# SPDX-License-Identifier: MIT
+# Move/Copy with Move Object set to Components on a component three levels
+# deep, picked by its Browser row with the root active (mitcad#2302): the
+# shared input script of tools/ui-move-nested-component-test.sh (Linux),
+# tools/ui-windows-move-nested-component-test.ps1 (Windows) and
+# tools/ui-macos-move-nested-component-test.sh (macOS), on the design
+# tools/ui-scripts/move-nested-component.json makes: Head:1 (O1) in the
+# root places Common:1 (O1/O2) and Side:1 (O1/O5); Common places Led:1
+# (O1/O2/O3) and Bracket:1 (O1/O2/O4).
+#   1. Led:1's row picked: the move goes into Common, the component Led:1
+#      is placed in (before mitcad#2302 the model refused it as placed in
+#      Common, not in the root); 40 mm along X moves Led:1 only, in one
+#      undo step. The model moves an occurrence only with a feature of the
+#      component it is placed in, so the move succeeding is the feature
+#      being in Common's timeline. One undo puts Led:1 back.
+#   2. Led:1 and Side:1 (placed in Head) picked together: one move cannot
+#      move components of two components; the panel says so and OK does
+#      nothing; Esc changes nothing.
+#   3. The move of 1. made again and edited from the timeline
+#      (mitcad#2305): the edit opens in Common, the feature's component,
+#      with its 40 mm and the X arrow's knob at Led:1's moved middle; 25 mm
+#      instead moves Led:1 alone, one more undo step.
+wait-idle
+key F6
+wait-idle
+expect-ever '^Browser Root/Head:1/Common:1/Led:1 at ' 60
+expect-ever '^Browser Root/Head:1/Side:1 at ' 60
+expect-shown-body F1.b0 O1/O2/O3 576 105 50 0 113 62 6
+expect-shown-body F2.b0 O1/O2/O4 1000 130 50 0 140 60 10
+expect-shown-body F3.b0 O1/O5 1000 100 -40 0 110 -30 10
+capture-undo-depth baseline
+
+# --- 1. Move/Copy, Move Object: Components, Led:1's Browser row.
+mark
+command solid.move
+wait-log '^Command Move/Copy started'
+wait-idle
+qt-choice input_move_type 'Components'
+wait-log '^Move/Copy: Move Object = Components$'
+wait-idle
+mark
+click-logged '^Browser Root/Head:1/Common:1/Led:1 at '
+wait-log '^Move/Copy Objects: 1 component \[component C[0-9]+ in O1/O2/O3\]$'
+wait-log '^Move/Copy: moving in C2 \(at O1/O2\), the parent of O1/O2/O3, which the active component C0 holds deeper$'
+wait-idle
+type-in '^Panel Move/Copy input tx at ' '40 mm'
+wait-log '^Preview Move/Copy: ok'
+wait-idle
+expect-no-log 'is placed in'
+mark
+key Return
+wait-log '^Moved 1 components \('
+wait-idle
+expect-undo-depth ${baseline} 1
+expect-shown-body F1.b0 O1/O2/O3 576 145 50 0 153 62 6
+expect-shown-body F2.b0 O1/O2/O4 1000 130 50 0 140 60 10
+expect-shown-body F3.b0 O1/O5 1000 100 -40 0 110 -30 10
+expect-no-log 'is placed in'
+mark
+command edit.undo
+wait-log '^Undo: '
+wait-idle
+expect-undo-depth ${baseline} 0
+expect-shown-body F1.b0 O1/O2/O3 576 105 50 0 113 62 6
+
+# --- 2. Led:1 (in Common) and Side:1 (in Head): refused in words.
+mark
+command solid.move
+wait-log '^Command Move/Copy started'
+wait-idle
+qt-choice input_move_type 'Components'
+wait-log '^Move/Copy: Move Object = Components$'
+wait-idle
+mark
+click-logged '^Browser Root/Head:1/Common:1/Led:1 at '
+wait-log '^Move/Copy Objects: 1 component '
+wait-idle
+click-logged '^Browser Root/Head:1/Side:1 at '
+wait-log '^Move/Copy Objects: 2 components '
+wait-log '^Preview Move/Copy: not built: These components are placed in different components'
+wait-idle
+key Escape
+wait-idle
+expect-undo-depth ${baseline} 0
+expect-shown-body F1.b0 O1/O2/O3 576 105 50 0 113 62 6
+expect-shown-body F3.b0 O1/O5 1000 100 -40 0 110 -30 10
+
+# --- 3. The nested move made again and edited from the timeline (the
+# timeline shows every component's features): the edit opens in Common,
+# the move's own component (loadTransform), with its 40 mm; 25 mm instead
+# moves Led:1 only, to 25 mm from where it was, in one more undo step.
+mark
+command solid.move
+wait-log '^Command Move/Copy started'
+wait-idle
+qt-choice input_move_type 'Components'
+wait-log '^Move/Copy: Move Object = Components$'
+wait-idle
+mark
+click-logged '^Browser Root/Head:1/Common:1/Led:1 at '
+wait-log '^Move/Copy: moving in C2 \(at O1/O2\), the parent of O1/O2/O3, which the active component C0 holds deeper$'
+wait-idle
+type-in '^Panel Move/Copy input tx at ' '40 mm'
+wait-log '^Preview Move/Copy: ok'
+wait-idle
+mark
+key Return
+wait-log '^Moved 1 components \('
+wait-idle
+expect-undo-depth ${baseline} 1
+expect-shown-body F1.b0 O1/O2/O3 576 145 50 0 153 62 6
+mark
+dblclick-logged '^Timeline Move[0-9]* at '
+wait-log '^Editing F[0-9]+ with Move/Copy$'
+# Split about Led:1's middle where the feature finds it, (109, 56, 3).
+wait-log '^Free move pivot where the feature finds what moves: 109\.000000,56\.000000,3\.000000$'
+expect-input-text tx '^40 mm$'
+wait-log '^Handle world Move/Copy tx: origin '
+wait-idle
+capture x '^Handle world Move/Copy tx: origin .*, knob ([-0-9.]+),'
+expect-near ${x} 149 0 0.000001
+mark
+type-in '^Panel Move/Copy input tx at ' '25 mm'
+wait-log '^Preview Move/Copy: ok'
+wait-idle
+expect-no-log 'is placed in'
+mark
+key Return
+wait-log '^Edited F[0-9]+$'
+wait-idle
+expect-undo-depth ${baseline} 2
+expect-shown-body F1.b0 O1/O2/O3 576 130 50 0 138 62 6
+expect-shown-body F2.b0 O1/O2/O4 1000 130 50 0 140 60 10
+expect-shown-body F3.b0 O1/O5 1000 100 -40 0 110 -30 10
+expect-no-log 'is placed in'
+expect-never 'Recompute failed|TestDriver: FAIL'

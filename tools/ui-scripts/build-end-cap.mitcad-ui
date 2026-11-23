@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: MIT
+# End Cap (mitcad#2243), on build-end-cap.json with the tube library the
+# runner makes: Post:1 (C1, its derived part F1) a 40 x 40 x 3 steel tube
+# lying along +X, x 0 to 600, its top side at z = 20.
+#   1. End Cap: a click near each end chooses it (A and B); both capped
+#      outward with 5 mm plates in one undo step: two caps of the tube
+#      (C2 at end A, C3 at end B), the tube 600 long in the cut list and
+#      two plates of 40 x 40 x 5.
+#   2. End B picked again, Direction Inward: the same cap changed, the tube
+#      cut back to 595 in the cut list, still two plates.
+#   3. The lists' window: the plates in the cut list and in the bill of
+#      materials.
+# Run by tools/ui-build-end-cap-test.sh (Linux),
+# tools/ui-windows-build-end-cap-test.ps1 (Windows) and
+# tools/ui-macos-build-end-cap-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+capture-model-number post '{"query": "build_parts"}' parts.0.length
+expect-near ${post} 600
+
+# 1. Both ends, outward.
+mark
+command build.end_cap
+wait-log '^Command End Cap started' 20
+wait-log '^View hint End Cap: Click near the ends to cap' 20
+wait-idle
+mark
+click-logged '^Panel End Cap input ends at '
+wait-log '^Pick places:' 20
+click-view-point 20,0,20
+wait-log '^Inspect End Cap: 1 end\(s\): C1 a 40x40; outward .*; 0 problem\(s\); 2 end labels$' 30
+wait-idle
+mark
+click-view-point 580,0,20
+wait-log '^Inspect End Cap: 2 end\(s\): C1 a 40x40, C1 b 40x40; outward .*; 0 problem\(s\); 2 end labels$' 30
+wait-idle
+capture-undo-depth start
+mark
+button '^OK$'
+wait-log '^End Cap: 2 cap\(s\) outward .*: C2 on C1 end a, C3 on C1 end b$' 60
+wait-log '^End Cap lists: Tube 40x40x3 L=600 600 mm x1; plates: 2 x Plate 40 x 40 x 5$' 30
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number plates '{"query": "build_cut_list"}' plates.0.quantity
+expect-near ${plates} 2
+capture-model-number length '{"query": "build_cut_list"}' rows.0.length
+expect-near ${length} 600
+
+# 2. End B again, inward: its cap changed, the tube cut back.
+mark
+click-logged '^Panel End Cap input ends at '
+wait-log '^Pick places:' 20
+click-view-point 580,0,20
+wait-log '^Inspect End Cap: 1 end\(s\): C1 b 40x40 \(changed\); outward .*; 0 problem\(s\); 2 end labels$' 30
+wait-idle
+mark
+qt-choice input_direction 'Inward: the component cut back'
+wait-log '^Inspect End Cap: 1 end\(s\): C1 b 40x40 \(changed\); inward .*; 0 problem\(s\); 2 end labels$' 30
+wait-idle
+capture-undo-depth start
+mark
+button '^OK$'
+wait-log '^End Cap: 1 cap\(s\) inward .*: C3 on C1 end b \(changed\)$' 60
+wait-log '^End Cap lists: Tube 40x40x3 L=600 595 mm x1; plates: 2 x Plate 40 x 40 x 5$' 30
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number length '{"query": "build_cut_list"}' rows.0.length
+expect-near ${length} 595
+capture-model-number back '{"query": "build_parts"}' parts.0.cut_back.b
+expect-near ${back} 5
+key Escape
+wait-idle
+
+# 3. The lists: the plates in the cut list and the bill of materials.
+mark
+command build.parts_list
+focus-dialog '^Bill of Materials$'
+wait-log '^Cut list plates: 2 x Plate 40 x 40 x 5, ' 30
+expect-log '^Build BOM row: [0-9]+ x Plate 40 x 40 x 5$'
+key Escape
+expect-dialog-gone '^Bill of Materials$'
+focus-main
+expect-never 'TestDriver: FAIL'

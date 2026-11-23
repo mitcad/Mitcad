@@ -59,7 +59,10 @@ struct BoundaryCurve {
 };
 
 // A new surface body of one face "<feature>:boundary" filling the closed
-// loop of boundaries (in order), meeting each as its continuity asks.
+// loop of boundaries (in order), meeting each as its continuity asks. The
+// face's edges are the boundaries' curves; chains of sketch curves whose
+// ends lie within 1e-6 of the largest coordinate of those ends (at least
+// 1e-6 mm, as the model joins them) share a corner (mitcad#2220).
 ShapePtr boundary_fill(const std::string& feature, const std::vector<BoundaryCurve>& loop);
 
 // A new surface body of one face "<feature>:boundary" through a network:

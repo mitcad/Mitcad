@@ -24,3 +24,7 @@ mod comment_tests;
 mod section_pick_tests;
 // Draft Analysis kept in the document and its query (mitcad#2166).
 mod draft_analysis_tests;
+// Point clouds and Point Cloud Deviation (mitcad#2240).
+mod point_cloud_tests;
+// Decals: images put on faces, following them (mitcad#2244).
+mod decal_tests;

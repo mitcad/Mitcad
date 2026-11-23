@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 38];
+    fn command_families() -> [CommandFamily<K>; 41];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 38] {
+    fn command_families() -> [CommandFamily<K>; 41] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -441,6 +441,32 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                 prefix: None,
                 run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
                     super::selection_sets::run(doc, parse(value, "command")?)
+                },
+            },
+            // Scripts: the timeline as a script, a script run as one undo
+            // step (mitcad#2245, `script_export.rs`).
+            CommandFamily {
+                names: super::script_export::ScriptCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::script_export::run(doc, parse(value, "command")?)
+                },
+            },
+            // Point clouds (mitcad#2240, `point_clouds.rs`).
+            CommandFamily {
+                names: super::point_clouds::PointCloudCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::point_clouds::run(doc, parse(value, "command")?)
+                },
+            },
+            // Decals: images put on faces of bodies (mitcad#2244,
+            // `decals.rs`).
+            CommandFamily {
+                names: super::decals::DecalCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::decals::run(doc, parse(value, "command")?)
                 },
             },
         ]

@@ -51,6 +51,10 @@ pub use array_refs::{check_refs, has_refs, resolve_entry};
 // loft merges its tangent edges).
 mod new_feature_defaults;
 pub use new_feature_defaults::new_feature_defaults;
+// The print libraries for live agents when the user allows it
+// (mitcad#2224): which calls use them, the refusal without the
+// preference, and the binding to the open design's project.
+pub mod print_library;
 
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -194,6 +198,10 @@ struct Session<B> {
     /// The user's preference that agents may resolve comments (mitcad#1119);
     /// the live application sets it, the headless server never does.
     may_resolve_comments: bool,
+    /// The user's preference that agents may use the print libraries
+    /// (mitcad#2224); the live application sets it, the headless server
+    /// never does.
+    may_use_print_libraries: bool,
     /// Live MCP's input tools (mitcad#1735): ui_click, ui_type and
     /// ui_dialog, which the application allows only in a run started with
     /// --mcp-folder; never in the headless server.
@@ -218,6 +226,7 @@ impl<B: Backend> Session<B> {
             vocabulary,
             author: comments::DEFAULT_AUTHOR.to_owned(),
             may_resolve_comments: false,
+            may_use_print_libraries: false,
             input_tools: false,
             subscriptions: BTreeSet::new(),
             comments: None,
@@ -548,6 +557,16 @@ impl<B: Backend> Session<B> {
         {
             return Dispatch::response(success(id, tool_content(refusal, true)));
         }
+        // The print libraries wait for the user's preference (mitcad#2224);
+        // the headless server never uses them.
+        if let Err(refusal) = print_library::apply_policy(
+            name,
+            &arguments,
+            self.may_use_print_libraries,
+            matches!(self.profile, Profile::Live),
+        ) {
+            return Dispatch::response(success(id, tool_content(refusal, true)));
+        }
         Dispatch::Tool {
             id: id.clone(),
             name: name.to_owned(),
@@ -723,6 +742,13 @@ impl LiveSession {
     /// comments (mitcad#1119): off, `resolve_comment` is refused.
     pub fn set_may_resolve_comments(&mut self, allowed: bool) {
         self.session.may_resolve_comments = allowed;
+    }
+
+    /// The user's preference Preferences › AI Assistants › Agents may use
+    /// my print libraries (mitcad#2224): off, the print library queries and
+    /// commands ([`print_library`]) are refused in words naming it.
+    pub fn set_may_use_print_libraries(&mut self, allowed: bool) {
+        self.session.may_use_print_libraries = allowed;
     }
 
     /// Whether the application allows the input tools (mitcad#1735):

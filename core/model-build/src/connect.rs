@@ -33,7 +33,7 @@ use crate::prelude::*;
 use crate::{BuildItem, BuildMeta, BuildRecord, BuildRole, LibrarySourceDef, PartRef};
 use mitcad_model::expr::Unit;
 use mitcad_model::features::bound_length::{BoundMode, BoundTo, RayDirection};
-use mitcad_model::features::derived_part::{DerivedPartDef, Ends};
+use mitcad_model::features::derived_part::{CutBack, DerivedPartDef, Ends};
 use mitcad_model::features::extrude::Operation;
 use mitcad_model::features::{
     FeatureDef, FrameOverride, GeomRef, JointDef, JointOrigin, OccurrencePath, ValueInput,
@@ -282,6 +282,7 @@ pub(crate) fn make_piece(
             ends: Ends { a: None, b: None },
             operation: Operation::NewBody,
             cuts: Vec::new(),
+            cut_back: CutBack::none(),
         }),
         made,
     )?;
@@ -1618,6 +1619,7 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                 z_axis: Some(lz),
                 x_axis: Some(lx),
                 shift: None,
+                relative: None,
             }),
         };
         let designation_values: BTreeMap<String, f64> = values
@@ -1824,7 +1826,11 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
             [one] => format!("Remove {}", one.name),
             _ => format!("Remove {} x{}", plans[0].name, plans.len()),
         };
-        self.apply(|state| {
+        // The joints of the members left that met a member going along a
+        // sketch line (mitcad#2234): left square, in the same undo step.
+        let orphaned = crate::conditions::ConditionsCrateOps::orphaned_joints(self, &targets);
+        let depth = self.undo_depth();
+        let mut removed = self.apply(|state| {
             let mut out = RemoveResult::default();
             let mut freed_of = Vec::new();
             for plan in &plans {
@@ -1854,8 +1860,28 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                     .extend(state.delete_components(BTreeSet::from([c])));
                 // Not listed in `components`: those are the BUILD parts removed.
             }
-            Ok((label, out))
-        })
+            Ok((label.clone(), out))
+        })?;
+        if !orphaned.is_empty() {
+            let writes: Vec<crate::conditions::EndWrite> =
+                orphaned.iter().map(|(w, _)| w.clone()).collect();
+            // The members are gone either way: joints that cannot be left
+            // square are said, not a failure of the removal.
+            match crate::conditions::ConditionsCrateOps::write_joints(self, &writes, &label) {
+                Ok(()) => {
+                    self.merge_undo(depth, &label);
+                    removed.notices.extend(
+                        orphaned
+                            .into_iter()
+                            .map(|(_, said)| mitcad_model::Notice::info(said)),
+                    );
+                }
+                Err(e) => removed.notices.push(mitcad_model::Notice::warning(format!(
+                    "The joints that met the removed members are kept: {e}"
+                ))),
+            }
+        }
+        Ok(removed)
     }
 }
 
@@ -2169,6 +2195,8 @@ pub(crate) fn apply_remove(
     crate::spacing::drop_cuts_with(state, components)?;
     // A timber frame's lead likewise (mitcad#479).
     crate::frames::hand_over_frame(state, components);
+    // An end cap's member that stays gets its length back (mitcad#2243).
+    crate::end_cap::release_caps(state, components)?;
     let mut removed = Vec::new();
     let features: BTreeSet<FeatureUid> = plan
         .features

@@ -159,6 +159,12 @@ std::unique_ptr<SketchTool> polygonTool(SketchController& c, const QString& mode
 // mode: center_to_center, overall, center_point, three_point_arc, center_point_arc
 std::unique_ptr<SketchTool> slotTool(SketchController& c, const QString& mode);
 std::unique_ptr<SketchTool> ellipseTool(SketchController& c);
+// Conic Curve (mitcad#2236): start, end and shoulder, shaped by Rho.
+std::unique_ptr<SketchTool> conicTool(SketchController& c);
+// A conic's Rho as `sketch.conic` and `sketch.set_rho` take it: a number
+// when the text is one, else the text (a parameter's name or an
+// expression, which the conic then follows).
+QJsonValue conicRhoValue(const QString& text);
 std::unique_ptr<SketchTool> splineTool(SketchController& c, bool controlPoints);
 std::unique_ptr<SketchTool> pointTool(SketchController& c);
 std::unique_ptr<SketchTool> textTool(SketchController& c);

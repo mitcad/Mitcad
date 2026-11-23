@@ -5,6 +5,7 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QHBoxLayout>
 #include <QEvent>
 #include <QGridLayout>
@@ -462,21 +463,10 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   m_tool->setWordWrap(true);
   layout->addWidget(m_tool);
 
-  if (QAction* finish = registry.action(QStringLiteral("sketch.finish"))) {
-    QToolButton* button = nullptr;
-    if (chromeStyle() == ChromeStyle::Floating) {
-      button = new CapsuleButton(finish->text(), true);
-      button->setDefaultAction(finish); // text and state follow the action
-      button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    } else {
-      button = new QToolButton;
-      button->setDefaultAction(finish);
-      button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-      button->setFocusPolicy(Qt::NoFocus);
-    }
-    button->setObjectName(QStringLiteral("paletteFinish"));
-    layout->addWidget(button, 0, Qt::AlignRight);
-    m_finish = button;
+  // Finish Sketch and Cancel Sketch (mitcad#2225).
+  m_finishButtons = finishButtons(registry, QStringLiteral("palette"), m_finish, m_cancel);
+  if (m_finishButtons != nullptr) {
+    layout->addWidget(m_finishButtons, 0, Qt::AlignRight);
   }
   layout->addStretch();
 
@@ -497,10 +487,45 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
 }
 
 QWidget* SketchPalette::takeFinish() {
-  if (m_finish != nullptr) {
-    layout()->removeWidget(m_finish);
+  if (m_finishButtons != nullptr) {
+    layout()->removeWidget(m_finishButtons);
   }
-  return m_finish;
+  return m_finishButtons;
+}
+
+QDialogButtonBox* finishButtons(CommandRegistry& registry, const QString& prefix, QToolButton*& finish,
+                                QToolButton*& cancel) {
+  finish = nullptr;
+  cancel = nullptr;
+  QAction* finishAction = registry.action(QStringLiteral("sketch.finish"));
+  if (finishAction == nullptr) {
+    return nullptr;
+  }
+  const auto button = [](QAction* action, bool prominent) {
+    QToolButton* made = nullptr;
+    if (chromeStyle() == ChromeStyle::Floating) {
+      made = new CapsuleButton(action->text(), prominent);
+      made->setDefaultAction(action); // text and state follow the action
+      made->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    } else {
+      made = new QToolButton;
+      made->setDefaultAction(action);
+      made->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+      made->setFocusPolicy(Qt::NoFocus);
+    }
+    return made;
+  };
+  auto* box = new QDialogButtonBox;
+  box->setObjectName(prefix + QStringLiteral("FinishButtons"));
+  finish = button(finishAction, true);
+  finish->setObjectName(prefix + QStringLiteral("Finish"));
+  box->addButton(finish, QDialogButtonBox::AcceptRole);
+  if (QAction* cancelAction = registry.action(QStringLiteral("sketch.cancel"))) {
+    cancel = button(cancelAction, false);
+    cancel->setObjectName(prefix + QStringLiteral("Cancel"));
+    box->addButton(cancel, QDialogButtonBox::RejectRole);
+  }
+  return box;
 }
 
 QToolButton* SketchPalette::commandButton(const QString& id, const QString& name) const {
@@ -981,6 +1006,11 @@ void SketchPalette::logLayout() const {
     const QPoint center = GlassCard::mapToHost(finish, finish->rect().center());
     qDebug().noquote() << QStringLiteral("Palette Finish Sketch at %1,%2").arg(center.x()).arg(center.y());
   }
+  if (const QWidget* cancel = m_cancel) {
+    // Cancel Sketch beside it, for UI tests that click it (mitcad#2225).
+    const QPoint center = GlassCard::mapToHost(cancel, cancel->rect().center());
+    qDebug().noquote() << QStringLiteral("Palette Cancel Sketch at %1,%2").arg(center.x()).arg(center.y());
+  }
   // Show Unconstrained, for UI tests that click it (mitcad#2026).
   if (m_showUnconstrained != nullptr && m_showUnconstrained->isVisible()) {
     const QPoint center = GlassCard::mapToHost(m_showUnconstrained, m_showUnconstrained->rect().center());
@@ -995,6 +1025,8 @@ void SketchPalette::logLayout() const {
   // palette's against its own: a row laid out below its hint overlaps the
   // next one (mitcad#470). Line extensions shares Snap to grid's row
   // (mitcad#2035), so that row is logged once, by its grid box.
+  // Cancel Sketch shares Finish Sketch's row (mitcad#2225): not a row of
+  // its own.
   for (const QWidget* row : std::initializer_list<const QWidget*>{
            m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_points, m_profiles, m_hideAbove, m_spatial,
            m_dimensionText, m_finish}) {
@@ -1073,9 +1105,12 @@ void SketchPalette::logRows() const {
   for (const QCheckBox* box : std::as_const(m_autoChecks)) {
     check(box, view);
   }
-  // Finish Sketch under the scroll area (wrapPalette), within the page.
-  if (m_finish != nullptr && m_finish->parentWidget() != nullptr && m_finish->parentWidget() != this) {
-    check(m_finish, m_finish->parentWidget());
+  // Finish Sketch and Cancel Sketch under the scroll area (wrapPalette),
+  // within the page.
+  if (m_finishButtons != nullptr && m_finishButtons->parentWidget() != nullptr &&
+      m_finishButtons->parentWidget() != this) {
+    check(m_finish, m_finishButtons->parentWidget());
+    check(m_cancel, m_finishButtons->parentWidget());
   }
   // "Palette rows cut: none (24 rows within 586 px)", for UI tests
   // (mitcad#1825).

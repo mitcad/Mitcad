@@ -19,6 +19,7 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
@@ -591,11 +592,36 @@ ShapePtr fuse_walls(const Shape& inner, const Shape& outer) {
   return namer.shape();
 }
 
+// The volume of the shape measured on a copy whose faces are split where
+// their surfaces are less than C2 continuous. The kernel integrates a face
+// with a fixed number of Gauss points over its whole parameter range (and
+// an offset surface without its basis's knots), which is far off on one
+// face that runs through pieces of very different curvature joined C1: the
+// side of a loft through sections merged into one smooth edge each, and
+// above all its offset (mitcad#2271: a valid 2 mm wall of 85 900 mm3
+// measured -10 460, so Shell called it empty). Split there, each piece is
+// smooth and measured as well as any face.
+double split_volume(const TopoDS_Shape& shape) {
+  ShapeUpgrade_ShapeDivideContinuity divide(BRepBuilderAPI_Copy(shape).Shape());
+  divide.SetBoundaryCriterion(GeomAbs_C2);
+  divide.SetPCurveCriterion(GeomAbs_C0);
+  divide.SetSurfaceCriterion(GeomAbs_C2);
+  // Perform says whether it split anything; unsplit, the result is the
+  // copy as it was.
+  divide.Perform();
+  const TopoDS_Shape split = divide.Result();
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(split.IsNull() ? shape : split, props);
+  return props.Mass();
+}
+
 void check_result(const ShapePtr& shape, const char* operation) {
   detail::require_valid(shape->occt(), operation);
   GProp_GProps props;
   BRepGProp::VolumeProperties(shape->occt(), props);
-  if (!(props.Mass() > kTolerance)) {
+  // Measured again with its faces split where the first measure says empty
+  // (mitcad#2271, split_volume).
+  if (!(props.Mass() > kTolerance) && !(split_volume(shape->occt()) > kTolerance)) {
     throw std::runtime_error(std::string(operation) + " produced an empty body");
   }
 }

@@ -1,0 +1,230 @@
+# SPDX-License-Identifier: MIT
+# A lathe made in Machines and Tools… (mitcad#2230, app/COMMANDS.md "The
+# CNC group"), the shared input script of tools/ui-cam-lathe-machine-test.sh
+# (Linux), tools/ui-windows-cam-lathe-machine-test.ps1 and
+# tools/ui-macos-cam-lathe-machine-test.sh, on
+# tools/ui-scripts/cam-lathe-machine.json (the turning test's block, no
+# machine in the design):
+#
+#   1. New Machine… > Lathe: the lathe's defaults on the Fanuc turning
+#      dialect, then Edit Machine… with the lathe's fields (an 8-station
+#      turret typed), and a keep-out zone in its X/Z axes (mitcad#2258);
+#   2. Add Tool… offers the lathe's kinds: a turning tool (the default
+#      kind) and a parting tool, each with the model's default name;
+#   3. New Setup on the new lathe, Turn Facing with the turning tool,
+#      Generate: up to date, its toolpath drawn.
+#   4. Save the lathe in the test library, remove its zone in the design,
+#      then import the machine and verify the zone is restored.
+#   5. Make a mill, add a zone, then reopen Edit Machine and edit its Y range.
+#   6. Edit a stored lathe zone with a legacy Y range and keep that range.
+wait-idle
+command view.fit
+wait-idle
+
+mark
+# Make's workspace first in the Floating toolbar panel (mitcad#1990).
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+
+# 1. New Machine…: a lathe, then its own fields in Edit Machine.
+mark
+command make.cam_machines
+focus-dialog '^Machines and Tools$'
+wait-log '^CAM machines dialog: 0 machine\(s\)$'
+button '.*' camNewMachine
+focus-dialog '^New Machine$'
+qt-choice camNewMachineKind 'Lathe'
+button '^OK$'
+wait-log '^CAM new machine: lathe$'
+wait-log '^CAM machine set: lathe \(new\)$'
+wait-log '^CAM machines dialog: 1 machine\(s\): lathe 0 tool\(s\)$'
+focus-dialog '^Edit Machine$'
+wait-log '^CAM machine form: lathe: lathe$'
+wait-log '^CAM machine controllers: lathe: fanuc_turning$'
+focus-widget camMachineTurret
+key Ctrl+a
+type '8'
+focus-widget camMachineTabs
+key Right
+expect-widget-property camMachineZoneList columnCount 3
+button '.*' camMachineZoneAdd
+focus-dialog '^Add Zone$'
+focus-widget camMachineZoneName
+type 'Chuck Guard'
+focus-widget camMachineZoneMinX
+type '2 * 50 mm'
+focus-widget camMachineZoneMaxX
+type '90 mm'
+focus-widget camMachineZoneMinZ
+type '-150 mm'
+focus-widget camMachineZoneMaxZ
+type '-130 mm'
+button '^OK$'
+expect-widget-property camMachineZoneMessage text 'Minimum X (radius) must be at or below Maximum X (radius).'
+focus-widget camMachineZoneMaxX
+key Ctrl+a
+type '5 in'
+button '^OK$'
+focus-dialog '^Edit Machine$'
+mark
+button '^OK$'
+wait-log '^CAM machine set: lathe$' 30
+wait-log '^CAM lathe shown: lathe: fanuc_turning, turret 8 stations, chuck 160 x 50 mm$'
+wait-log '^CAM machine zones: lathe: \[(?=.*"min":\[100,0,-150\])(?=.*"max":\[127,0,-130\])(?=.*"name":"Chuck Guard").*\]$'
+
+# 2. The lathe's tools: a turning tool and a parting tool.
+mark
+focus-dialog '^Machines and Tools$'
+button '.*' camAddTool
+focus-dialog '^Add Tool$'
+wait-log '^CAM tool dialog: lathe kinds: turning, boring, grooving, parting, threading$'
+button '^OK$'
+wait-log '^CAM tool set: lathe T1 20 mm turning tool$' 30
+
+mark
+focus-dialog '^Machines and Tools$'
+button '.*' camAddTool
+focus-dialog '^Add Tool$'
+wait-log '^CAM tool dialog: lathe kinds: '
+qt-choice camToolShape 'Parting tool'
+button '^OK$'
+wait-log '^CAM tool set: lathe T2 20 mm parting tool$' 30
+wait-log '^CAM machine shown: lathe: T1 20 mm turning tool [|] T2 20 mm parting tool$'
+focus-dialog '^Machines and Tools$'
+key Escape
+wait-log '^CAM machines dialog closed$'
+
+# 3. A lathe setup, Turn Facing, Generate.
+mark
+command make.cam_setup
+wait-log '^Command New Setup started'
+wait-log '^CAM setup panel: machine lathe$'
+type-in '^Panel New Setup input side at ' '2 mm'
+type-in '^Panel New Setup input top at ' '1 mm'
+type-in '^Panel New Setup input bottom at ' '5 mm'
+key Return
+wait-log '^CAM setup added: Setup 1$'
+
+mark
+command make.cam_turn_face
+wait-log '^Command Turn Facing started'
+wait-log '^CAM turning panel turn_face: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Turn Facing 1 to Setup 1$'
+
+mark
+command make.cam_generate
+wait-log '^CAM generate Setup 1: Turn Facing 1 up_to_date, [1-9][0-9]* moves' 60
+wait-log '^CAM states: Setup 1: Turn Facing 1 up_to_date$' 30
+wait-log '^CAM toolpaths drawn: 1 operation\(s\), [1-9][0-9]* moves$' 30
+
+# 4. The saved library copy retains the zone when the design copy loses it.
+mark
+command make.cam_machines
+focus-dialog '^Machines and Tools$'
+button '.*' camSaveMachine
+popup 'My library'
+wait-log '^CAM machine saved: lathe to user library: .*version 1$'
+focus-dialog '^Saved Lathe to your library as version 1[.]$'
+button '^OK$'
+focus-dialog '^Machines and Tools$'
+button '.*' camEditMachine
+focus-dialog '^Edit Machine$'
+focus-widget camMachineTabs
+key Right
+button '.*' camMachineZoneRemove
+mark
+button '^OK$'
+wait-log '^CAM machine set: lathe$'
+wait-log '^CAM machine zones: lathe: \[\]$'
+focus-dialog '^Machines and Tools$'
+mark
+button '.*' camImportMachine
+focus-dialog '^Import from Library$'
+button '^OK$'
+wait-log '^CAM machine imported: lathe from user library$'
+wait-log '^CAM machine zones: lathe: \[(?=.*"min":\[100,0,-150\])(?=.*"max":\[127,0,-130\])(?=.*"name":"Chuck Guard").*\]$'
+
+# 5. A mill has Y bounds. Edit the stored zone on the next opening.
+focus-dialog '^Machines and Tools$'
+button '.*' camNewMachine
+focus-dialog '^New Machine$'
+button '^OK$'
+focus-dialog '^Edit Machine$'
+focus-widget camMachineTabs
+key Right
+expect-widget-property camMachineZoneList columnCount 4
+button '.*' camMachineZoneAdd
+focus-dialog '^Add Zone$'
+focus-widget camMachineZoneName
+type 'Vise'
+focus-widget camMachineZoneMinX
+type '10 mm'
+focus-widget camMachineZoneMaxX
+type '20 mm'
+focus-widget camMachineZoneMinY
+type '20 mm'
+focus-widget camMachineZoneMaxY
+type '30 mm'
+focus-widget camMachineZoneMinZ
+type '-10 mm'
+focus-widget camMachineZoneMaxZ
+type '0 mm'
+button '^OK$'
+focus-dialog '^Edit Machine$'
+mark
+button '^OK$'
+wait-log '^CAM machine set: router$'
+wait-log '^CAM machine zones: router: \[(?=.*"min":\[10,20,-10\])(?=.*"max":\[20,30,0\])(?=.*"name":"Vise").*\]$'
+focus-dialog '^Machines and Tools$'
+button '.*' camEditMachine
+focus-dialog '^Edit Machine$'
+focus-widget camMachineTabs
+key Right
+button '.*' camMachineZoneEdit
+focus-dialog '^Edit Zone$'
+expect-widget-property camMachineZoneMinY text '20 mm'
+focus-widget camMachineZoneMinY
+key Ctrl+a
+type '1 in / 2'
+button '^OK$'
+focus-dialog '^Edit Machine$'
+mark
+button '^OK$'
+wait-log '^CAM machine set: router$'
+wait-log '^CAM machine zones: router: \[(?=.*"min":\[10,12[.]7,-10\])(?=.*"max":\[20,30,0\])(?=.*"name":"Vise").*\]$'
+focus-dialog '^Machines and Tools$'
+key Escape
+wait-log '^CAM machines dialog closed$'
+
+# 6. A lathe can already have Y bounds from a machine definition. Its
+# editor does not show Y, and editing Z must keep the stored Y unchanged.
+model-command '{"cmd":"cam_machine_put","machine":{"id":"legacy-lathe","machine":{"name":"Legacy Lathe","controller":"fanuc_turning","travel":{"min":[-5,0,-300],"max":[150,0,200]},"spindle":{"min_rpm":50,"max_rpm":3000,"nose_diameter":0,"nose_length":0},"max_feed":5000,"rapid_feed":20000,"lathe":{"turret_stations":8,"chuck_diameter":160,"chuck_length":50},"zones":[{"name":"Stored Guard","bounds":{"min":[70,-4,-90],"max":[90,7,-70]}}]}}}'
+mark
+command make.cam_machines
+focus-dialog '^Machines and Tools$'
+click-row camMachineList 2
+wait-log '^CAM lathe shown: legacy-lathe: '
+button '.*' camEditMachine
+focus-dialog '^Edit Machine$'
+focus-widget camMachineTabs
+key Right
+button '.*' camMachineZoneEdit
+focus-dialog '^Edit Zone$'
+expect-widget-property camMachineZoneMaxZ text '-70 mm'
+focus-widget camMachineZoneMaxZ
+key Ctrl+a
+type '-65 mm'
+button '^OK$'
+focus-dialog '^Edit Machine$'
+mark
+button '^OK$'
+wait-log '^CAM machine set: legacy-lathe$'
+wait-log '^CAM machine zones: legacy-lathe: \[(?=.*"min":\[70,-4,-90\])(?=.*"max":\[90,7,-65\])(?=.*"name":"Stored Guard").*\]$'
+focus-dialog '^Machines and Tools$'
+key Escape
+wait-log '^CAM machines dialog closed$'
+
+expect-never 'CAM generate .* failed'
+expect-never 'TestDriver: FAIL|CAM machines: .* refused|CAM operation refused|CAM setup refused'

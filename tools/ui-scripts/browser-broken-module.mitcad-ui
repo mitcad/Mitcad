@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Component from Web with a component of this MitCad's interface whose
+# module is not a library (mitcad#2289): the load fails, MitCad says so in
+# words ("The web browser could not be loaded") and does not end. Run by
+# tools/ui-browser-older-component-test.sh.
+wait-idle 60
+mark
+command insert.component_web
+wait-log '^Component from Web: the browser module did not load: ' 20
+focus-dialog '^Component from Web$'
+button '^OK$'
+focus-main
+wait-idle
+expect-no-log '^Component from Web: loaded |^Component browser opened: '
+model-command '{"cmd":"add_parameter","name":"afterBrokenModule","unit":"mm","expression":"5 mm"}'
+wait-idle
+expect-never 'TestDriver: FAIL|^Qt has caught an exception'
+quit

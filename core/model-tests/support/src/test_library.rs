@@ -950,6 +950,8 @@ impl TestLibrary {
                 designation: String::new(),
             },
         );
+        // A profile whose row `20x40` widens its section (mitcad#2234).
+        add("p20-rows", V1, rows_20());
         Arc::new(library)
     }
 }
@@ -1332,6 +1334,73 @@ fn bound_rows() -> Part {
         part_number: String::new(),
         name: "Bound rows".to_owned(),
         designation: "Bound rows {config} L={L}".to_owned(),
+    }
+}
+
+/// A profile in two sizes (mitcad#2234): 20 x 20 x `L` centred on its axis
+/// in the default row `20x20` (S 0), and 40 wide along X in the row
+/// `20x40` (S 10), where a body 10 wide on each side of it (x from 10 to
+/// 20 and from -20 to -10) is not suppressed (the condition `S < 1 mm`
+/// suppresses them in `20x20`).
+fn rows_20() -> Part {
+    let mut doc: Document<MockKernel> =
+        Document::from_json(&board_design(20.0, 20.0, &[]), MockKernel::default()).unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "S", "expression": "0 mm"}),
+    )
+    .unwrap();
+    for x in [10.0, -20.0] {
+        let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+        let region = doc
+            .add_rectangle(
+                sketch,
+                [x, -10.0],
+                &ValueInput::Number(10.0),
+                &ValueInput::Number(20.0),
+            )
+            .unwrap()
+            .region;
+        let side = doc
+            .add_feature(
+                &def(
+                    json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+                            "extent": {"type": "distance", "distance": "L"}, "operation": "new_body"}),
+                ),
+                None,
+            )
+            .unwrap()
+            .uid;
+        command(
+            &mut doc,
+            json!({"cmd": "suppress_feature", "uid": side, "expression": "S < 1 mm"}),
+        )
+        .unwrap();
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "set_configurations", "configurations": {
+            "parameters": ["S"], "default": "20x20",
+            "rows": [{"name": "20x20", "values": {"S": "0 mm"}},
+                     {"name": "20x40", "values": {"S": "10 mm"}}]}}),
+    )
+    .unwrap();
+    doc.recompute();
+    Part {
+        text: doc.to_json(),
+        build: Some(json!({
+            "role": "profile",
+            "section": {"width": "20 mm", "height": "20 mm"},
+            "rows": {"20x40": {"section": {"width": "40 mm"}}},
+            "mass_per_metre": "1 kg",
+            "length": {"parameter": "L", "min": "10 mm", "max": "6000 mm"},
+            "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"},
+                       {"name": "face_xp", "kind": "face"}, {"name": "face_xn", "kind": "face"},
+                       {"name": "face_yp", "kind": "face"}, {"name": "face_yn", "kind": "face"}],
+        })),
+        part_number: String::new(),
+        name: "Rows 20".to_owned(),
+        designation: "Rows 20 {config} L={L}".to_owned(),
     }
 }
 

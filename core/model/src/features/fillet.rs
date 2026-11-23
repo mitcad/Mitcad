@@ -13,6 +13,10 @@
 //!
 //! In files and commands a single plain set is written with the fields
 //! `edges` and `radius` next to `body`; the general form lists `sets`.
+//!
+//! A Full Round set (mitcad#2279) has no values: its edges are the two
+//! edges of the face it rounds away, and the geometry kernel works out the
+//! radius from that face and the two beside it on every build.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -90,6 +94,13 @@ pub enum FilletSizeDef<P = ParamId> {
         knots: Vec<f64>,
         radii: Vec<P>,
     },
+    /// A full round (mitcad#2279): no values. The set's edges are the two
+    /// edges or tangent chains of one face, the middle face; on every
+    /// rebuild the geometry kernel works out the radius of the circle that
+    /// touches both side faces and the middle face, rounds both chains
+    /// with it and takes the middle face away, so that an edit upstream
+    /// (a chamfer's size, a cut's angle) changes the radius with it.
+    FullRound,
 }
 
 impl<P> FilletSizeDef<P> {
@@ -383,6 +394,7 @@ impl<P> FilletDef<P> {
                         .map(|(k, r)| slot(&format!("radii[{k}]"), r))
                         .collect::<Result<_, E>>()?,
                 },
+                FilletSizeDef::FullRound => FilletSizeDef::FullRound,
             };
             let tangency_weight = match &set.tangency_weight {
                 Some(weight) => Some(slot("tangency_weight", weight)?),
@@ -440,6 +452,9 @@ impl FeatureInfo for FilletDef {
             check_all_edges(set.all_edges, &set.edges, &set.faces, self.sets.len()).map_err(at)?;
             if set.edges.is_empty() && set.faces.is_empty() && !set.all_edges {
                 return Err(at("no edges selected".to_owned()));
+            }
+            if matches!(set.size, FilletSizeDef::FullRound) {
+                check_full_round(set).map_err(at)?;
             }
             if !set.edges.is_empty() {
                 ctx.edges(&set.edges).map_err(at)?;
@@ -530,6 +545,8 @@ impl FeatureInfo for FilletDef {
                         positive(r, "control radius")?;
                     }
                 }
+                // (Its radius follows from the faces.)
+                FilletSizeDef::FullRound => {}
             }
             if let Some(weight) = set.tangency_weight {
                 check_weight(value(weight))?;
@@ -575,6 +592,50 @@ pub(super) fn every_edge<K: Kernel>(kernel: &K, shape: &K::Shape) -> Result<Vec<
     Ok(edges)
 }
 
+/// What a full round set (mitcad#2279) takes: the two edges (or tangent
+/// chains) of the face it rounds away, picked as edges, tangent continuous.
+/// Whether they are two chains of one face, and the radius, the geometry
+/// kernel works out on the body.
+fn check_full_round(set: &FilletSetDef) -> Result<(), String> {
+    if let Some(face) = set.faces.first() {
+        return Err(crate::notice::placed(
+            "a full round takes the two edges of the face it rounds away, not the face: \
+             pick the face's two edges",
+            crate::notice::NoticePlace::face(face.to_string()),
+            format!(
+                "a full round takes the two edges of the face it rounds away, not face {face}: \
+                 pick its two edges"
+            ),
+        ));
+    }
+    if set.all_edges {
+        return Err(
+            "a full round takes the two edges of the face it rounds away, not every edge \
+             of the body"
+                .to_owned(),
+        );
+    }
+    if let [edge] = set.edges.as_slice() {
+        return Err(crate::notice::placed(
+            "a full round takes the two edges of the face it rounds away: pick the face's \
+             edge on its other side too",
+            crate::notice::NoticePlace::edge(edge.to_string()),
+            format!(
+                "a full round takes the two edges of the face it rounds away, only edge \
+                 {edge} is picked: pick the face's edge on its other side too"
+            ),
+        ));
+    }
+    if set.continuity == Continuity::Curvature {
+        return Err(
+            "a full round is tangent continuous (G1): its cross-section is the circle that \
+             touches the three faces"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 fn check_weight(weight: f64) -> Result<(), String> {
     if (0.1..=2.0).contains(&weight) {
         Ok(())
@@ -594,6 +655,8 @@ enum Size {
     Asymmetric(f64, f64),
     /// The control radii of a spline radius.
     Spline(Vec<f64>),
+    /// The radius follows from the faces (the geometry kernel's).
+    FullRound,
 }
 
 impl<K: Kernel> Evaluate<K> for FilletDef {
@@ -713,6 +776,7 @@ impl FilletDef {
                         .map(|r| ctx.positive(*r))
                         .collect::<Result<_, _>>()?,
                 ),
+                FilletSizeDef::FullRound => Size::FullRound,
             });
             weights.push(match set.tangency_weight {
                 Some(id) => {
@@ -767,6 +831,7 @@ impl FilletDef {
                         },
                         radii,
                     },
+                    (Size::FullRound, _) => FilletSize::FullRound,
                 },
                 tangent_chain: set.tangent_chain,
                 curvature: set.continuity == Continuity::Curvature,

@@ -77,8 +77,9 @@ fn origin(description: &str) -> Value {
         "properties": {
             "occurrence": {"type": "string", "default": "", "description": "The occurrence by a path from the joint's component, uids or names (\"O1/O4\", \"Arm:1\"); \"\" or left out: the component's own geometry"},
             "geometry": {"type": ["string", "object"], "description": "The geometry the frame is on: an origin plane, axis or point (\"xy\", \"z\", \"origin\"), a construction feature (\"F5\"), or an object naming a face, edge or vertex of a body ({\"body\", \"face\"}), a sketch's curve or point ({\"sketch\", \"curve\"}, {\"sketch\", \"point\"}); model_reference {\"section\": \"Joints\"}"},
-            "frame_override": {"type": "object", "description": "The frame moved or turned: origin, z_axis, x_axis, shift ([x, y, z] each, all optional)",
-                "properties": {"origin": {"type": "array"}, "z_axis": {"type": "array"}, "x_axis": {"type": "array"}, "shift": {"type": "array"}},
+            "frame_override": {"type": "object", "description": "The frame moved or turned: origin, z_axis, x_axis, shift ([x, y, z] each, all optional); relative: {origin, z_axis, x_axis, nearest} in the resolved frame's own axes instead (BUILD's parts on a plane or a face)",
+                "properties": {"origin": {"type": "array"}, "z_axis": {"type": "array"}, "x_axis": {"type": "array"}, "shift": {"type": "array"},
+                    "relative": {"type": "object", "properties": {"origin": {"type": "array"}, "z_axis": {"type": "array"}, "x_axis": {"type": "array"}, "nearest": {"type": "boolean"}}, "additionalProperties": false}},
                 "additionalProperties": false}
         },
         "required": ["geometry"],

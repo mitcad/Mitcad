@@ -157,6 +157,31 @@ QStringList Sketch3dController::shapeFields() const {
   }
 }
 
+bool Sketch3dController::shapeSizeTyped() const {
+  if (m_pending.empty()) {
+    return false;
+  }
+  const std::size_t placed = m_pending.size();
+  switch (m_tool) {
+  case Sketch3dTool::CircleCenter:
+  case Sketch3dTool::PolygonCircumscribed:
+  case Sketch3dTool::PolygonInscribed:
+    return typed(m_radius).has_value();
+  case Sketch3dTool::CircleTwoPoint:
+    return typed(m_size).has_value();
+  case Sketch3dTool::PolygonEdge:
+    return placed == 1 && typed(m_input.length).has_value();
+  case Sketch3dTool::Ellipse:
+  case Sketch3dTool::RectangleThreePoint:
+    return typed(placed == 1 ? m_size : m_size2).has_value();
+  case Sketch3dTool::RectangleTwoPoint:
+  case Sketch3dTool::RectangleCenter:
+    return typed(m_size).has_value() || typed(m_size2).has_value();
+  default:
+    return false;
+  }
+}
+
 std::optional<Xyz> Sketch3dController::shapeHover(const Xyz& at) const {
   const ShapePlane plane = shapePlane();
   const Xyz first = m_pending.front().at;

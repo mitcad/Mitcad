@@ -1889,7 +1889,7 @@ struct FaceWay {
 
 /// A length along `direction` that reaches past every body from each of
 /// the points `from` (both ways with `both`).
-fn through_all_length<K: Kernel>(
+pub(crate) fn through_all_length<K: Kernel>(
     kernel: &K,
     from: &[[f64; 3]],
     direction: [f64; 3],

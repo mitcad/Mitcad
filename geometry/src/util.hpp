@@ -47,6 +47,10 @@ bool has_mesh_faces(const TopoDS_Shape& shape);
 // one from any other caller.
 void require_surfaces(const TopoDS_Shape& shape, const char* operation);
 
+// Maximum separation of a same-parameter edge's 3D curve and its pcurve
+// on the face, if OCCT could evaluate it.
+std::optional<double> curve_on_surface_gap(const TopoDS_Edge& edge, const TopoDS_Face& face);
+
 // For tests of OCCT's crash handlers (guard.hpp): crashes as an access
 // violation inside OCCT would when the environment variable
 // MITCAD_TEST_OCCT_CRASH names this operation ("fillet").

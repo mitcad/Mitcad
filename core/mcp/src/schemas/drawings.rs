@@ -196,8 +196,8 @@ fn direction() -> Value {
 fn subject() -> Value {
     json!({
         "type": "object",
-        "description": "What a base view shows: {\"type\": \"design\"} (the bodies shown now), {\"type\": \"occurrence\", \"occurrence\": \"O1/O4\"} or {\"type\": \"bodies\", \"bodies\": [{\"body\": \"F2.b0\", \"occurrence\": \"O1\"}]}",
-        "properties": {"type": {"type": "string", "enum": ["design", "occurrence", "bodies"]}},
+        "description": "What a base view shows: {\"type\": \"design\"} (the bodies shown now), {\"type\": \"occurrence\", \"occurrence\": \"O1/O4\"} or {\"type\": \"bodies\", \"bodies\": [{\"body\": \"F2.b0\", \"occurrence\": \"O1\"}]} or a sheet-metal body's Flat Pattern {\"type\": \"flat_pattern\", \"body\": \"F3.b0\", \"occurrence\": \"O1\", \"bend_notes\": false} (its developed blank seen square on with its bend lines; occurrence and bend_notes optional)",
+        "properties": {"type": {"type": "string", "enum": ["design", "occurrence", "bodies", "flat_pattern"]}},
         "required": ["type"]
     })
 }
@@ -405,7 +405,8 @@ fn drawings(name: &str) -> Option<Value> {
                 "center_marks": json!({"type": "boolean", "description": "Centre marks and centre lines worked out from the model"}),
                 "retrieved_dimensions": json!({"type": "boolean", "description": "The sketch dimensions it sees square on"}),
                 "model_annotations": json!({"type": "boolean", "description": "The model's annotations it sees square on"}),
-                "rotation": number("How far it is turned on the sheet, degrees counter-clockwise")
+                "rotation": number("How far it is turned on the sheet, degrees counter-clockwise"),
+                "bend_notes": json!({"type": "boolean", "description": "A Flat Pattern view's bend notes (direction, angle and inside radius beside each bend line) on or off"})
             },
             "required": ["drawing", "view"],
             "examples": [

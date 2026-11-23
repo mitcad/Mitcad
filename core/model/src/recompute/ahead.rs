@@ -347,6 +347,9 @@ fn role<S>(
         // An Envelope reads the bodies of the occurrences placed in its
         // source (mitcad#1271), from its first evaluation on.
         || matches!(def, FeatureDef::Envelope(_))
+        // An end cap reads its member's body in another component
+        // (mitcad#2243), from its first evaluation on.
+        || matches!(def, FeatureDef::EndCap(_))
         || newest.is_some_and(|output| {
             output.reads.iter().any(|read| match read {
                 Read::BodyIn(..)

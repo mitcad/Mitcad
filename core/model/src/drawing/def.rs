@@ -846,6 +846,34 @@ pub enum Subject {
     /// drawing's component) or, when left out, wherever the design places
     /// it; one that is gone is left out with a warning.
     Bodies { bodies: Vec<SubjectBody> },
+    /// A sheet-metal body's Flat Pattern (mitcad#2280): its developed
+    /// blank with the body's own Flat Pattern settings, where an occurrence
+    /// places the body (as a chosen body's), seen square on along the
+    /// pattern's frame so that it is the cut sheet's and the DXF's picture;
+    /// with its bend lines, each with its note (`bend_notes`, on unless
+    /// turned off). A base view of it keeps that direction whatever it is
+    /// given; it has no projected or section views. A body whose pattern
+    /// cannot be made keeps the view, not drawn, with the reason.
+    FlatPattern {
+        body: BodyUid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        occurrence: Option<OccurrencePath>,
+        #[serde(default = "yes", skip_serializing_if = "is_true")]
+        bend_notes: bool,
+    },
+}
+
+impl Subject {
+    /// A Flat Pattern's body and its occurrence (mitcad#2280), if it is
+    /// one.
+    pub fn flat_pattern(&self) -> Option<(BodyUid, Option<&OccurrencePath>)> {
+        match self {
+            Self::FlatPattern {
+                body, occurrence, ..
+            } => Some((*body, occurrence.as_ref())),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1045,7 +1073,11 @@ impl Drawing {
                 Some(Subject::Bodies { bodies }) => {
                     out.extend(bodies.iter_mut().filter_map(|b| b.occurrence.as_mut()));
                 }
-                Some(Subject::Design) | None => {}
+                Some(Subject::FlatPattern {
+                    occurrence: Some(occurrence),
+                    ..
+                }) => out.push(occurrence),
+                Some(Subject::FlatPattern { .. } | Subject::Design) | None => {}
             }
             out.extend(
                 view.annotations
@@ -1462,6 +1494,30 @@ impl DrawingSheet {
                 )
             {
                 return Err(format!("{at}: only a base view has a subject"));
+            }
+            // A Flat Pattern's view (mitcad#2280) is seen square on alone:
+            // details of it, no views from its sides or cuts of it.
+            if matches!(
+                view.kind,
+                ViewKind::Projected { .. }
+                    | ViewKind::Section {
+                        parent: Some(_),
+                        ..
+                    }
+            ) && self.subject(view.id).flat_pattern().is_some()
+            {
+                return Err(format!(
+                    "{at}: a Flat Pattern view has no projected or section views"
+                ));
+            }
+            if matches!(
+                (&view.kind, &view.subject),
+                (
+                    ViewKind::Section { parent: None, .. },
+                    Some(Subject::FlatPattern { .. })
+                )
+            ) {
+                return Err(format!("{at}: a Flat Pattern is shown by a base view"));
             }
             match &view.kind {
                 ViewKind::Base { direction } => {

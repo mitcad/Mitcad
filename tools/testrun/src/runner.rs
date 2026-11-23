@@ -360,12 +360,11 @@ pub struct Runner<'o> {
     limits: Limits,
     jobs: usize,
     /// The bound of the UI entries at once (`concurrency::bound`); None:
-    /// the scheduler holds UI entries to no room and reruns none (the cap
-    /// is then `concurrency::DEFAULT_BOUND`).
+    /// the scheduler holds UI entries to no cap or room and reruns none.
     ui_bound: Option<usize>,
-    /// The machine's cap (`concurrency::machine_cap`): the scheduler's
-    /// `Limits::ui_max` and the report's.
-    ui_cap: usize,
+    /// The machine's cap (`concurrency::machine_cap`; None without a
+    /// bound): the scheduler's `Limits::ui_max` and the report's.
+    ui_cap: Option<usize>,
     ceiling: u64,
     /// The budget's basis came from MITCAD_TEST_MEMORY (not re-read).
     fixed_basis: bool,
@@ -515,8 +514,8 @@ impl<'o> Runner<'o> {
             margin: o.margin,
         };
         let scheduling = o.mode == Mode::Schedule;
-        // The bound of the UI entries at once; without one the default cap
-        // applies, but no room (a machine opts in, `concurrency`).
+        // The bound of the UI entries at once; without one no cap or room
+        // is applied (a machine opts in, `concurrency`).
         let ui_jobs = std::env::var("MITCAD_UI_JOBS").ok();
         let ui_bound = concurrency::bound(o.ui_max, ui_jobs.as_deref());
         let (before, setups) = link(&selected);
@@ -651,7 +650,7 @@ impl<'o> Runner<'o> {
             cpu_gate: o.cpu_gate,
             sensitive_load: o.sensitive_load,
             sensitive_max: o.sensitive_max,
-            ui_max: ui_cap,
+            ui_max: concurrency::scheduled_cap(ui_cap),
             lane_share: o.lane_share,
             max_parallel: o
                 .jobs
@@ -1453,10 +1452,7 @@ impl<'o> Runner<'o> {
             Some(bound) => format!(
                 "UI entries at most {bound} at once (the bound; each within its room and the memory budget)"
             ),
-            None => format!(
-                "UI entries at most {} at once (the default, no --ui-max or MITCAD_UI_JOBS; no rooms, no rerun alone)",
-                self.ui_cap
-            ),
+            None => "UI entries not capped: memory budget only, no rooms (no bound)".to_owned(),
         }
     }
 

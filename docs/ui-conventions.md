@@ -140,10 +140,14 @@ not a level of its own, and MitCad has no separate assembly file.
   and sketches, and of an occurrence to another parent; its dialog has
   the same title) or **Move Features into a Component**; a menu does not
   name a structure move "Move to…" alone (mitcad#735).
-- **Constraint** alone is the sketch constraint. The relations of
-  components are the **joint** family (Joint, As-Built Joint, Rigid
-  Group, Motion Link, Contact Set); the Assemble command that relates
-  faces and edges is the **Assembly Constraint**.
+- **Constraint** alone is the sketch constraint in sketch texts. The
+  relations of components are the **joint** family (Joint, As-Built
+  Joint, Rigid Group, Motion Link, Contact Set); the Assemble commands
+  that relate faces and edges are **Constraint** (one at a time, its own
+  button in the Assemble group) and **Constraint Set** (several, with
+  limits) (mitcad#2293). Outside the Assemble group and the Joints
+  folder, a text names them an *assembly constraint* where *constraint*
+  alone could mean a sketch's.
 - **Options**: the configuration's *Option* (below). A command's inputs
   grouped under a heading are named by their subject alone
   (*Thickness*), not "… Options".
@@ -764,6 +768,36 @@ Where the window's messages are shown and kept (mitcad#1042,
   says what to click as a hint, which fades: it is no error and shows no
   *Failed:*.
 
+### Work that arrives while a command is open
+
+Work the user started elsewhere and that arrives while a command's panel,
+a sketch or Create Sketch's plane pick is open (a Component from Web
+download, files dropped on the window; mitcad#2281) is neither refused nor
+ignored, and no dialog asks to close the command:
+
+- **Beside an inspection: at once.** A command that changes nothing in the
+  design (`CommandDef::changesNoDesign`: Measure, Interference, Section
+  Analysis, Print Analysis) stays open; what arrives comes in as from
+  Idle, one undo step each, and the inspection checks its picks again and
+  shows its result for the new bodies. What would start a command of its
+  own afterwards (Move on a download) starts when the inspection closes.
+  `CommandDef::inspect` (a panel's result) and `closeOnly` are not this
+  marker: design-changing commands set them too.
+- **Beside a command that changes the design: it waits, said in words.**
+  A feature command, a sketch or the plane pick keeps its inputs; what
+  arrives waits and the place that took it says so as a hint (the
+  browser's note under its page, the message band for a drop): *`<file>`
+  comes in when `<command>` is finished or canceled.* (`the sketch` for a
+  sketch). When it closes, OK or Cancel, the waiting work comes in, in the
+  order it arrived, and anything it starts (one Move on the last download)
+  starts once.
+- **Nothing is lost while it waits.** A download that waits is kept (a
+  copy of its own) until it comes in; only a design closed or replaced
+  before drops what waited for it, and that is said (*`<file>` did not
+  come in: the design it waited for was closed.*).
+- **Empty means empty.** A note calls a file empty only when it has no
+  bytes; a file that cannot be read says that.
+
 ## 4. Colors
 
 The same color means the same thing everywhere. The color roles are one
@@ -874,6 +908,8 @@ dynamic value.
 | | `RuleFrame` … `RuleAction`, `RuleText` | see [configurations.md](configurations.md) | the rule blocks' categories under white text | |
 | | `CamStock`, `CamLeftThin`, `CamLeftThick`, `CamGouge` | #b0aaa2 / #8c877f, #4fb3bf / #6fd0db, #5e35b1 / #9575cd, #d81b60 / #ff5c8d | Simulate's stock (mitcad#1013): the stock grey (nothing left over the part reads as the stock), the material left from teal (thin) to violet (thick), a cut into the part pink; by the view's background, with the legend in the Simulate window | |
 | | `DraftPositive`, `DraftUnder`, `DraftNegative` | #2b8cbe / #74c0e8, #c2185b / #ec6aa0, #7b5cc4 / #b59cf0 | Draft Analysis' classes (mitcad#2166): blue where a face has the draft towards the pull, raspberry where it needs more draft, violet where it has the draft only against the pull (the other mold half); by the view's background, with the legend; none of the status hues, each far in hue from the others | |
+| | `DeviationInside`, `DeviationNeutral`, `DeviationOutside` | #2166ac / #6baed6, #a0a0a0 / #bdbdbd, #c51b7d / #e77fc0 | Point Cloud Deviation's diverging scale (mitcad#2240): a measured point blue inside the material, grey within the tolerance of the faces, magenta outside, shading from the grey at the tolerance to the full colour at the scale's limit; by the view's background, with the legend; none of the status hues, the two ends far apart in hue | |
+| | `DeviationUnmeasured` | #cfcfcf / #6e6e6e | the points of the cloud a shown Point Cloud Deviation did not measure (mitcad#2265: outside its sample, or failed): a grey between `DeviationNeutral` and the view's background, so the whole cloud stays in sight without reading as within tolerance; the legend's entry says how many were measured | |
 | Chrome | `Support` | #d81b60 / #f06292 | the top bar's Boost development pill (mitcad#1990): its outline and rocket (an indicator, at least 3:1 on the windows), its label in the window's text (`Text`); it fills only under the pointer, with a translucent tint of the pink (20%, pressed 32%) that keeps the label's contrast. A quiet, warm call to support the project that does not draw the eye, apart from the error's red and the accent's blue | |
 | | `DiscordFill`, `DiscordMark` | #5865f2 (both themes), #ffffff | the top bar's Discord pill (mitcad#2159): Discord's blurple fill (a badge under its mark, 4.6:1; a shade darker under the pointer and pressed) and its logo mark and × in white, as Discord's brand guidelines give them | |
 | Formula | `FormulaName`, `FormulaFunction`, `FormulaKeyword`, `FormulaNumber`, `FormulaUnit`, `FormulaOperator`, `FormulaString` | #0a559f / #86bdff, #6238b5 / #c9b1ff, #961e74 / #f59ad9, #00636c / #4fd1d9, #87420e / #f2a96a, #505664 / #b0b6c0, #505d00 / #c8d46a | the Formula Editor's text by its tokens' kinds (mitcad#2179): names, functions, `LET` and the constants (bold), numbers, units, operators and brackets, quoted texts; texts at least 4.5:1 on the fields and on the two fills below, none of them a status hue. An unknown name is `ErrorText` with the `ErrorBorder` wavy underline (a word or mark beside the color) | |
@@ -1020,6 +1056,22 @@ were what left the arrows far from the names. A flat list has no arrows.
    view takes its `indentationPerLevel` from the shared view's
    `indentation()` or from `PanelTree.hpp` (the Browser's
    `kTreeIndentation`), never a number of its own.
+
+**Browser rows** (mitcad#2223). A Browser row reads, from the left: its
+component's color bar, the fold arrow, the **Show** eye, the icon, the
+name (elided with "…" when the room ends, in full in its tooltip), then,
+for a component, the **Activate** radio button, and after them the fx
+badge of a row with expressions and the Make tab's marker. Two
+preferences under Display move the two controls: **Browser Activate
+button** and **Browser Show eye**, each **Classic** (the places above, the
+default in every layout and background) or **Right**: one column at the
+right edge of the visible row, 8 px in from it, the same x on every row
+whatever its depth or name, also with a horizontal scroll bar. When both
+are on the right, the eye is left of the radio button, and every row keeps
+the radio button's place so that the eyes line up. The name is elided a
+gap before the column; the fx badge and the Make marker stay after the
+name. With the Rows background every row's box reaches the column at the
+card's right edge, and the card's width counts the column in.
 
 **An empty list says how to fill it** where the way is not in sight
 (mitcad#2083): one short line, "No … yet." and the action, in the
@@ -1394,7 +1446,10 @@ right.
 
 - **One header per card**: its title (0.95, DemiBold) and at most a
   folding chevron and a small badge or button at its right. No second
-  title inside it.
+  title inside it. A card that the user shows and hides (a tool card
+  such as Favorite Parameters, mitcad#2203) may have two: a button that
+  opens the card's full window (its command's icon, 18) and then the
+  close mark last (16), both on the cards' flat 24 px button.
 - **Content** 8 px from the card's sides and bottom, 4 px under the
   header; the card is as high as its content and never higher than the
   room (no long empty area).
@@ -1436,6 +1491,11 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
   label; one per card or dialog, for the action the task ends with.
 - **Secondary** (`CapsuleButton`): a hairline outline and a faint gray
   fill, `Text` label.
+- **Accept and cancel pairs** (a command panel's OK and Cancel, the
+  Sketch Palette's Finish Sketch and Cancel Sketch, mitcad#2225): in a
+  `QDialogButtonBox` with the accept and reject roles, so that their order
+  is the platform's (OK first on Windows and KDE, Cancel first on macOS
+  and GNOME); the accept is the primary button, the cancel a secondary.
 - **Flat buttons** (toolbar, card headers, `setFlatCardButton`): nothing
   painted until hovered.
 - **A window's bottom row** (mitcad#2202, the Parameters window): one

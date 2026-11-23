@@ -139,7 +139,8 @@ QString symbolForAction(const QString& id) {
       {QStringLiteral("tools.search"), QStringLiteral("magnifyingglass")},
       {QStringLiteral("tools.preferences"), QStringLiteral("gearshape")},
       {QStringLiteral("sketch.create"), QStringLiteral("pencil.and.outline")},
-      {QStringLiteral("sketch.finish"), QStringLiteral("checkmark")}};
+      {QStringLiteral("sketch.finish"), QStringLiteral("checkmark")},
+      {QStringLiteral("sketch.cancel"), QStringLiteral("xmark")}};
   return symbols.value(id);
 }
 
@@ -1090,6 +1091,7 @@ void MainWindow::refreshNativeWindow() {
                                    row.node.type == BrowserNode::Type::Feature ||
                                    row.node.type == BrowserNode::Type::Drawing ||
                                    row.node.type == BrowserNode::Type::ImageReference ||
+                                   row.node.type == BrowserNode::Type::Decal ||
                                    (row.node.type == BrowserNode::Type::NamedView && row.node.uid.startsWith(QStringLiteral("named:"))));
       item.hasVisibility = row.node.hasEye;
       // Bodies, sketches, construction and components in every mode (mitcad#295),

@@ -827,7 +827,7 @@ mod tests {
     /// for `bound`, with memory, cores and slots to spare.
     fn ui_starts(bound: Option<usize>) -> usize {
         let limits = Limits {
-            ui_max: crate::concurrency::machine_cap(bound),
+            ui_max: crate::concurrency::scheduled_cap(crate::concurrency::machine_cap(bound)),
             max_parallel: 64,
             budget: gib(256.0),
             cores: 64.0,
@@ -844,12 +844,12 @@ mod tests {
     }
 
     #[test]
-    fn the_scheduler_holds_ui_entries_to_the_reported_cap() {
-        // No --ui-max, no MITCAD_UI_JOBS: the default the report names (4),
-        // not every UI entry the memory budget fits (a follow-up of
-        // mitcad#2124: the Windows VM ran 15 at once under "cap 4").
-        assert_eq!(ui_starts(None), crate::concurrency::DEFAULT_BOUND);
-        assert_eq!(ui_starts(None), 4);
+    fn without_a_bound_ui_entries_start_as_the_memory_budget_allows() {
+        // No --ui-max, no MITCAD_UI_JOBS: no UI count cap, only the memory
+        // budget and the CPU rules (mitcad#2260: 934331a20 held the Windows
+        // VM to 4 where its budget runs about 15).
+        let unbounded = ui_starts(None);
+        assert!(unbounded > 4, "{unbounded}");
         // A bound is the cap.
         assert_eq!(ui_starts(Some(6)), 6);
     }

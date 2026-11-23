@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# Favorite Parameters (mitcad#2203) in the Floating layout, after
+# favorite-parameters.mitcad-ui left the card shown: the next start shows
+# it as chosen; the header's Parameters button opens the Parameters window;
+# the card's own close button hides it, and the choice is saved. Run by
+# tools/ui-favorite-parameters-test.sh, tools/ui-windows-favorite-parameters-test.ps1
+# and tools/ui-macos-favorite-parameters-test.sh. ASCII only.
+expect-ever 'View area' 600
+wait-idle 600
+expect-ever '^Favorite parameters panel at the start: shown [(]as chosen[)]$'
+expect-ever '^Favorite parameters card: none$' 20
+expect-ever '^Favorite parameters window at ' 20
+expect-ever '^Favorite parameters close at ' 20
+wait-idle
+mark
+click-logged '^Favorite parameters window at '
+wait-log '^Favorite parameters: the Parameters window from the header$' 20
+wait-log '^Parameters dialog opened$' 20
+focus-dialog '^Parameters$'
+wait-idle
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+wait-idle
+mark
+click-logged '^Favorite parameters close at '
+wait-log '^Favorite parameters: closed by its button$' 20
+wait-log '^Favorite parameters panel: hidden$' 20
+expect-setting favoriteParameters/shown false
+wait-idle
+expect-never 'TestDriver: FAIL'

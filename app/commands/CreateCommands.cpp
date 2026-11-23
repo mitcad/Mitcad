@@ -51,6 +51,8 @@ void registerCreateCommands(CommandRegistry& registry, const CommandContext& con
   // Boundary Fill (mitcad#2149): the space solids, surfaces and planes
   // close off, filled; its places are the layout's (after Thicken).
   registry.add(boundaryFillCommand(context));
+  // Cell Grid (mitcad#2238): its place is the layout's (after Hole).
+  registry.add(cellGridCommand(context));
 }
 
 } // namespace mitcad

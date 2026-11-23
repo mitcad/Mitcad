@@ -6,7 +6,9 @@
 // events). Without the daemon nothing fails: the backend tries again every
 // 5 s, and finds a daemon started or restarted later. The daemon sends its
 // events to every client: they count only while MitCad is the active
-// application. On Linux, Magellan is the fallback for an X11 driver.
+// application. The process has one socket (SpaceMouseConnection,
+// mitcad#2297), its events going to the active design only; one per design
+// had moved every open design's view. On Linux, Magellan is the fallback for an X11 driver.
 
 #include "../SpaceMouseDevice.hpp"
 
@@ -74,6 +76,16 @@ public:
     }
     m_retry.start();
     return false;
+  }
+
+  // The active design's window changed (mitcad#2297): the X11 driver's
+  // events go to the window registered with it.
+  void windowPlaced() override {
+#ifdef Q_OS_LINUX
+    if (m_magellan && m_magellanConnected) {
+      m_magellan->windowPlaced();
+    }
+#endif
   }
 
 private:

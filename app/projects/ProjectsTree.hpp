@@ -38,6 +38,16 @@ struct ProjectDesignRow {
   QDateTime modified;
 };
 
+// Another file of a project (mitcad#2204): a picture, a PDF, a spreadsheet
+// kept with the designs, opened with the system's app.
+struct ProjectFileRow {
+  QString path;          // relative to the project, '/'-separated
+  qint64 size = 0;       // bytes
+  bool recorded = false; // in the latest version
+  bool changed = false;  // not recorded, or differs from the latest version
+  QDateTime modified;    // when the file last changed (invalid: not given)
+};
+
 // A project as the panel shows it.
 struct ProjectRow {
   enum class Kind {
@@ -63,6 +73,7 @@ struct ProjectRow {
   int behind = -1;
   QStringList folders; // relative, sorted
   QVector<ProjectDesignRow> designs;
+  QVector<ProjectFileRow> files; // the other files (mitcad#2204), sorted by path
   bool truncated = false;
   bool known = false; // in the list of known projects (else from the projects folder)
   QString problem;

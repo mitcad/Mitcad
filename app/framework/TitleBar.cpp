@@ -316,6 +316,26 @@ void TitleBar::setAgentIndicator(QWidget* indicator) {
   update();
 }
 
+void TitleBar::setMacroIndicator(QWidget* indicator) {
+  auto* row = qobject_cast<QHBoxLayout*>(layout());
+  if (row == nullptr || indicator == nullptr) {
+    return;
+  }
+  const bool shown = !indicator->isHidden();
+  m_macroIndicator = indicator;
+  indicator->setParent(this);
+  indicator->setFixedHeight(uiRoomSize(kControlHeight));
+  // Left of the project indicator, else where the indicators go.
+  const int at = m_indicator != nullptr ? row->indexOf(m_indicator.data()) : -1;
+  row->insertWidget(at >= 0 ? at : rightIndex(), indicator);
+  indicator->setVisible(shown);
+  if (m_floatingRow) {
+    indicator->installEventFilter(this);
+    updateRowMask();
+  }
+  update();
+}
+
 void TitleBar::setChatButton(QWidget* button) {
   auto* row = qobject_cast<QHBoxLayout*>(layout());
   if (row == nullptr || button == nullptr) {
@@ -677,6 +697,7 @@ std::vector<std::pair<QString, QRect>> TitleBar::rowParts() const {
   add("titleQuickAccess", m_quickAccess.data());
   add("titleBoost", m_boost.data());
   add("titleDiscord", m_discord.data());
+  add("titleMacro", m_macroIndicator.data());
   add("titleIndicator", m_indicator.data());
   add("titleAgent", m_agentIndicator.data());
   add("titleChat", m_chatButton.data());

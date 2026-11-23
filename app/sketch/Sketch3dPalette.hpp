@@ -134,6 +134,7 @@ private:
   QLabel* m_hover = nullptr;
   QLabel* m_tools = nullptr;
   QToolButton* m_finish = nullptr;
+  QToolButton* m_cancel = nullptr; // Cancel Sketch (mitcad#2225)
   QString m_logged; // the palette's text last logged
 
   // The tool's section.

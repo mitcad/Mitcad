@@ -210,6 +210,10 @@ const Allowed kAllowed[] = {
     {"drawing.cpp", "\"deflection=%.4g angle=%.3g\"", "a drawing view's trace note for the log (mitcad#1671), not a point"},
     {"shell_cavity.cpp", "shell_trace(\"cavity: it cuts into kept face \"",
      "the Shell's developer trace on stderr with MITCAD_SHELL_TRACE (mitcad#2050), not a user text"},
+    {"full_round.cpp", "\"an unnamed face\" : \"face \" + name",
+     "face_words(): a face's name for a full round error's detail, placed_error() (mitcad#2279)"},
+    {"full_round.cpp", "\"an unnamed edge\" : \"edge \" + name",
+     "edge_words(): an edge's name for a full round error's detail, placed_error() (mitcad#2279)"},
 };
 
 bool allowed(const std::string& file, const std::string& text) {

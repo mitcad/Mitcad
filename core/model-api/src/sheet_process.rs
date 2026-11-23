@@ -27,6 +27,8 @@ use mitcad_model::sheet::flat_dxf::{FlatDxfOptions, drawing};
 use mitcad_model::sheet::process::OutputPreset;
 use mitcad_model::topo::{RegionKey, SegmentKey};
 
+mod folder;
+
 /// `add_flat_pack`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,10 +75,16 @@ pub(super) struct AddStandardBoxCommand {
     radius: Option<f64>,
     #[serde(default = "glue_flap")]
     glue_flap: f64,
-    /// The tuck's depth of a tuck end box; a third of the height, at most
-    /// 20, when left out.
+    /// The tuck's depth of a tuck end box or a folder's lid (folded, below
+    /// the lid); a third of the height, at most 20, when left out, of a
+    /// folder whose lid has a front flap (0426, 0427, 0471) the height less
+    /// the thickness.
     #[serde(default)]
     tuck: Option<f64>,
+    /// A folder's locking tabs on each turned over wall (mitcad#2226); the
+    /// style's (two, three for 0426, one for 0470 and 0471) when left out.
+    #[serde(default)]
+    tabs: Option<u32>,
     #[serde(default)]
     flute: Option<String>,
     /// Folded (the default), or the flat blank with its creases.
@@ -107,6 +115,87 @@ pub enum BoxStyle {
     /// top of one long side and at the bottom of the other, dust (lock)
     /// flaps on the short sides.
     EcmaA20,
+    /// The full overlap slotted box: every flap the width deep, the long
+    /// panels' flaps lying one over the other across the whole end.
+    #[serde(rename = "fefco_0203")]
+    Fefco0203,
+    /// The slotted box with the short panels' flaps meeting at the middle
+    /// (half the length deep) and the long panels' flaps the width deep,
+    /// overlapping fully over them.
+    #[serde(rename = "fefco_0206")]
+    Fefco0206,
+    /// The folder with double end walls locked by tabs, dust flaps on the
+    /// front and back walls and a lid with a tuck (mitcad#2226).
+    #[serde(rename = "fefco_0421")]
+    Fefco0421,
+    /// The folder with a double front wall locked by tabs, corner flaps on
+    /// the end walls and a lid with ears and a front flap.
+    #[serde(rename = "fefco_0426")]
+    Fefco0426,
+    /// The 0421 with ears on its lid and a front flap with ears.
+    #[serde(rename = "fefco_0427")]
+    Fefco0427,
+    /// The folder whose end walls hang on the back wall, with floor flaps
+    /// and turned over with tabs into them, and a lid with a tuck.
+    #[serde(rename = "fefco_0470")]
+    Fefco0470,
+    /// The 0470 with a front flap with ears on its lid.
+    #[serde(rename = "fefco_0471")]
+    Fefco0471,
+}
+
+impl BoxStyle {
+    /// Whether the long panels' flaps lie one over the other across the
+    /// whole end (FEFCO 0203, 0206): the second long panel's creases lie
+    /// a further thickness and seam gap out.
+    fn full_overlap(self) -> bool {
+        matches!(self, BoxStyle::Fefco0203 | BoxStyle::Fefco0206)
+    }
+
+    /// Whether the style is a FEFCO 04 folder ([`folder`]).
+    fn folder(self) -> bool {
+        matches!(
+            self,
+            BoxStyle::Fefco0421
+                | BoxStyle::Fefco0426
+                | BoxStyle::Fefco0427
+                | BoxStyle::Fefco0470
+                | BoxStyle::Fefco0471
+        )
+    }
+
+    /// Whether a folder's lid closes with a front flap as deep as the box
+    /// (0426, 0427, 0471) rather than a tuck.
+    fn front_flap(self) -> bool {
+        matches!(
+            self,
+            BoxStyle::Fefco0426 | BoxStyle::Fefco0427 | BoxStyle::Fefco0471
+        )
+    }
+
+    /// A folder's locking tabs on each turned over wall when not given.
+    fn tabs(self) -> u32 {
+        match self {
+            BoxStyle::Fefco0426 => 3,
+            BoxStyle::Fefco0470 | BoxStyle::Fefco0471 => 1,
+            _ => 2,
+        }
+    }
+
+    /// The name of the component a box of the style is made in.
+    fn component_name(self) -> &'static str {
+        match self {
+            BoxStyle::Fefco0201 => "FEFCO 0201 Box",
+            BoxStyle::EcmaA20 => "ECMA A20 Carton",
+            BoxStyle::Fefco0203 => "FEFCO 0203 Box",
+            BoxStyle::Fefco0206 => "FEFCO 0206 Box",
+            BoxStyle::Fefco0421 => "FEFCO 0421 Box",
+            BoxStyle::Fefco0426 => "FEFCO 0426 Box",
+            BoxStyle::Fefco0427 => "FEFCO 0427 Box",
+            BoxStyle::Fefco0470 => "FEFCO 0470 Box",
+            BoxStyle::Fefco0471 => "FEFCO 0471 Box",
+        }
+    }
 }
 
 /// `export_die_line`.
@@ -125,25 +214,32 @@ pub(super) struct ExportDieLineCommand {
 }
 
 /// A crease of a blank: its line from `a` to `b`, which side stays (left
-/// of the line's direction or not), folded by 90 degrees.
+/// of the line's direction or not), and the angle it folds by, radians
+/// (towards the box's inside, the blank's front).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BlankFold {
     pub a: [f64; 2],
     pub b: [f64; 2],
     pub stationary_left: bool,
+    pub angle: f64,
 }
 
-/// A box's blank: its outline (counter-clockwise) and its creases in the
-/// order they fold.
+/// A crease folded square.
+const QUARTER: f64 = std::f64::consts::FRAC_PI_2;
+
+/// A box's blank: its outline (counter-clockwise), its holes (a folder's
+/// slots) and its creases in the order they fold.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Blank {
     pub outline: Vec<[f64; 2]>,
+    pub holes: Vec<Vec<[f64; 2]>>,
     pub folds: Vec<BlankFold>,
 }
 
 /// The sizes a blank is worked out from, mm: inside length, width and
 /// height, board thickness, crease radius and allowance (of a 90 degree
-/// crease), glue flap and tuck.
+/// crease), glue flap and tuck, and a folder's locking tabs on each
+/// turned over wall.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxSizes {
     pub length: f64,
@@ -154,6 +250,7 @@ pub struct BoxSizes {
     pub allowance: f64,
     pub glue_flap: f64,
     pub tuck: f64,
+    pub tabs: u32,
 }
 
 /// A stack of flaps on one end of a side panel, from the panel outwards:
@@ -167,15 +264,27 @@ type Stack = Vec<(f64, f64)>;
 /// length between their bends plus one allowance: a wall between two bends
 /// `inside - 2 r + BA`. The long panels' end creases lie a thickness
 /// further out than the short panels', so that their flaps fold over the
-/// short panels' flaps; the glue flap folds under the first panel's free
+/// short panels' flaps (of a full overlap box, 0203 and 0206, the second
+/// long panel's a thickness further still, its flaps over the first's
+/// across the whole end); the glue flap folds under the first panel's free
 /// edge, touching it inside (the last panel's straight is short by the
 /// thickness), and is a thickness in from the band's ends. Slots between
 /// the flaps are a thickness wider than the creases' strips and reach half
 /// a strip into the band, so that beside a crease's end no material of the
 /// panel lies in its strip (each crease's ends lie on the outline, the
 /// strip clear of the rest of the blank); a narrower flap on another (a
-/// tuck) keeps its root's width over the strip before it narrows.
-pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
+/// tuck) keeps its root's width over the strip before it narrows. A FEFCO
+/// 04 folder's blank is [`folder::blank`]'s (mitcad#2226), which refuses
+/// sizes that make none.
+pub fn blank(style: BoxStyle, s: &BoxSizes) -> Result<Blank, String> {
+    if style.folder() {
+        return folder::blank(style, s);
+    }
+    Ok(slotted(style, s))
+}
+
+/// [`blank`] of a slotted box or tuck end carton.
+fn slotted(style: BoxStyle, s: &BoxSizes) -> Blank {
     let (l, w, h, t, r, ba) = (
         s.length,
         s.width,
@@ -223,8 +332,25 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
     let flap = w / 2.0 - t;
     let closing = w - 2.0 * r - t - gap + ba;
     let tuck_inset = t + r;
+    // Flaps that run across the whole end (the long panels' of a full
+    // overlap box) stop a thickness short of the opposite wall, as meeting
+    // flaps stop a thickness short of the middle.
+    let across = w - t;
     let (bottom, top): (Vec<Stack>, Vec<Stack>) = match style {
-        BoxStyle::Fefco0201 => (vec![vec![(flap, 0.0)]; 4], vec![vec![(flap, 0.0)]; 4]),
+        BoxStyle::Fefco0203 | BoxStyle::Fefco0206 => {
+            // The short panels' flaps: the width deep (0203) or meeting at
+            // the middle (0206); the 0203's no deeper than that either, so
+            // that they do not overlap each other at the same level.
+            let short = if style == BoxStyle::Fefco0203 {
+                w.min(l / 2.0) - t
+            } else {
+                l / 2.0 - t
+            };
+            let ends: Vec<Stack> = (0..4)
+                .map(|i| vec![(if i % 2 == 1 { across } else { short }, 0.0)])
+                .collect();
+            (ends.clone(), ends)
+        }
         BoxStyle::EcmaA20 => (
             vec![
                 vec![(flap, 0.0)],
@@ -239,9 +365,22 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
                 vec![],
             ],
         ),
+        // 0201 (a folder style never comes here: [`blank`]).
+        _ => (vec![vec![(flap, 0.0)]; 4], vec![vec![(flap, 0.0)]; 4]),
     };
-    let low = |long: bool| if long { -(t + gap) } else { 0.0 };
-    let high = |long: bool| if long { band + t + gap } else { band };
+    // Each panel's flaps lie at a level: the short panels' lowest, the long
+    // panels' a thickness and a seam gap over them, and of a full overlap
+    // box the second long panel's (the last) over the first's.
+    let level = |i: usize| -> u32 {
+        match (i % 2 == 1, style.full_overlap() && i == 3) {
+            (false, _) => 0,
+            (true, false) => 1,
+            (true, true) => 2,
+        }
+    };
+    let step = t + gap;
+    let low = |i: usize| -f64::from(level(i)) * step;
+    let high = |i: usize| band + f64::from(level(i)) * step;
     // The slots' ends, half a strip into the band.
     let (slot_low, slot_high) = (half, band - half);
     // A stack's sides from the panel outwards (`dir` -1 down, +1 up): its
@@ -271,13 +410,13 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
         (left, right, creases)
     };
     let mut outline: Vec<[f64; 2]> = Vec::new();
-    // The flaps' creases per stack (outermost first) with whether the
-    // stack is a long panel's: the short panels' fold first (below).
-    let mut stacks: Vec<(bool, Vec<BlankFold>)> = Vec::new();
+    // The flaps' creases per stack (outermost first) with the level of its
+    // panel's flaps: the lowest fold first (below).
+    let mut stacks: Vec<(u32, Vec<BlankFold>)> = Vec::new();
     // The bottom, left to right: each panel's stack down its left side and
     // up its right side, the slots between.
-    for (i, &(u, v, long)) in spans.iter().enumerate() {
-        let y0 = low(long);
+    for (i, &(u, v, _)) in spans.iter().enumerate() {
+        let y0 = low(i);
         if i == 0 {
             outline.push([0.0, slot_low]);
         }
@@ -292,7 +431,7 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
             right.reverse();
             outline.extend(right);
             stacks.push((
-                long,
+                level(i),
                 creases
                     .into_iter()
                     .rev()
@@ -300,6 +439,7 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
                         a,
                         b,
                         stationary_left: true,
+                        angle: QUARTER,
                     })
                     .collect(),
             ));
@@ -324,8 +464,8 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
     outline.push([v4, glue_high]);
     // The top, right to left.
     for i in (0..4).rev() {
-        let (u, v, long) = spans[i];
-        let y0 = high(long);
+        let (u, v, _) = spans[i];
+        let y0 = high(i);
         if i < 3 {
             outline.push([v, slot_high]);
         }
@@ -339,7 +479,7 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
             left.reverse();
             outline.extend(left);
             stacks.push((
-                long,
+                level(i),
                 creases
                     .into_iter()
                     .rev()
@@ -347,6 +487,7 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
                         a,
                         b,
                         stationary_left: false,
+                        angle: QUARTER,
                     })
                     .collect(),
             ));
@@ -357,23 +498,22 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
         }
     }
     dedup(&mut outline);
-    // The short panels' flaps fold first: a fold refuses a seam of an
-    // earlier bend that lies past its own near tangent outside its line's
-    // ends (bends.rs, fold_panel), and the long panels' creases lie a
-    // thickness further out, so a short panel's crease would find a long
-    // panel's seam past it; the other way round each earlier seam lies
-    // behind. A stack folds outermost first, while its creases still lie on
-    // the flat blank.
-    let mut folds: Vec<BlankFold> = stacks
-        .iter()
-        .filter(|(long, _)| !long)
-        .chain(stacks.iter().filter(|(long, _)| *long))
+    // The short panels' flaps fold first, then the long panels' level by
+    // level: a fold refuses a seam of an earlier bend that lies past its
+    // own near tangent (bends.rs, fold_panel; since mitcad#2226 only along
+    // its line's extent), and each level's creases lie a thickness further
+    // out, so a lower level's crease could find a higher level's seam past
+    // it; the other way round each earlier seam lies behind. A stack folds
+    // outermost first, while its creases still lie on the flat blank.
+    let mut folds: Vec<BlankFold> = (0..=2)
+        .flat_map(|at| stacks.iter().filter(move |(level, _)| *level == at))
         .flat_map(|(_, creases)| creases.iter().copied())
         .collect();
     folds.push(BlankFold {
         a: [x4, glue_low],
         b: [x4, glue_high],
         stationary_left: true,
+        angle: QUARTER,
     });
     // The walls' creases run past the blank at both ends, through the
     // slots: the whole side past each crease (the next panels with their
@@ -389,9 +529,14 @@ pub fn blank(style: BoxStyle, s: &BoxSizes) -> Blank {
             a: [x, y_min - 1.0],
             b: [x, y_max + 1.0],
             stationary_left: true,
+            angle: QUARTER,
         });
     }
-    Blank { outline, folds }
+    Blank {
+        outline,
+        holes: Vec::new(),
+        folds,
+    }
 }
 
 /// The gap left between sheets of a box that lie against each other, mm: a
@@ -422,13 +567,26 @@ fn dedup(points: &mut Vec<[f64; 2]>) {
     }
 }
 
-/// The region key of a polygon of lines `c<first>` on, in its order.
-fn polygon_key(first: u32, n: u32) -> String {
-    let id = |i: u32| EntityUid(first + (i % n));
-    let keys: Vec<SegmentKey> = (0..n)
-        .map(|i| SegmentKey::between(id(i), id(i + n - 1), id(i + 1)))
-        .collect();
+/// The key of polygons of lines `c<first>` on, each polygon's lines in its
+/// order, the polygons one after another. A sketch region's key is its
+/// outer polygon's alone (its holes come with it), so a Face names its
+/// outline only.
+fn polygon_key(first: u32, sizes: &[u32]) -> String {
+    let mut keys: Vec<SegmentKey> = Vec::new();
+    let mut start = first;
+    for &n in sizes {
+        let id = |i: u32| EntityUid(start + (i % n));
+        keys.extend((0..n).map(|i| SegmentKey::between(id(i), id(i + n - 1), id(i + 1))));
+        start += n;
+    }
     RegionKey::new(keys).expect("a polygon").to_string()
+}
+
+/// A blank's outline and holes, one after the other.
+fn loops(blank: &Blank) -> Vec<&Vec<[f64; 2]>> {
+    std::iter::once(&blank.outline)
+        .chain(&blank.holes)
+        .collect()
 }
 
 fn uid_of(answer: &Value) -> Result<String, ApiError> {
@@ -536,6 +694,25 @@ fn make_box(c: &AddStandardBoxCommand) -> Result<BoxMade, ApiError> {
                 .into(),
         ));
     }
+    // A folder's front flap reaches down to a thickness above the base.
+    let tuck = c.tuck.unwrap_or(if c.style.front_flap() {
+        c.height - t
+    } else {
+        (c.height / 3.0).min(20.0)
+    });
+    if c.style.folder() && !(tuck > 0.0 && tuck <= c.height - r - seam_gap(t)) {
+        return Err(ApiError(format!(
+            "the lid's tuck must be deeper than 0 and end above the base: at most {:.1} mm, \
+             got {tuck}",
+            c.height - r - seam_gap(t)
+        )));
+    }
+    let tabs = c.tabs.unwrap_or(c.style.tabs());
+    if tabs > 12 {
+        return Err(ApiError(format!(
+            "a wall takes at most 12 locking tabs, got {tabs}"
+        )));
+    }
     let sizes = BoxSizes {
         length: c.length,
         width: c.width,
@@ -544,9 +721,10 @@ fn make_box(c: &AddStandardBoxCommand) -> Result<BoxMade, ApiError> {
         radius: r,
         allowance,
         glue_flap: c.glue_flap,
-        tuck: c.tuck.unwrap_or((c.height / 3.0).min(20.0)),
+        tuck,
+        tabs,
     };
-    let blank = blank(c.style, &sizes);
+    let blank = blank(c.style, &sizes).map_err(ApiError)?;
     let mut rules = json!({"type": "sheet_rules", "process": "board", "thickness": t,
         "bend_radius": r, "allowance": {"type": "bend_deduction", "deduction": deduction},
         "reference_side": "front",
@@ -556,18 +734,27 @@ fn make_box(c: &AddStandardBoxCommand) -> Result<BoxMade, ApiError> {
     if let Some(flute) = &flute {
         rules["flute"] = json!(flute);
     }
-    // The outline: points p1.. and lines after them.
-    let n = blank.outline.len() as u32;
-    let mut outline: Vec<Value> = blank
-        .outline
+    // The outline and its holes: points p1.., the outline's first, and
+    // lines after them, each polygon's in its order.
+    let polygons = loops(&blank);
+    let n: usize = polygons.iter().map(|p| p.len()).sum();
+    let mut outline: Vec<Value> = polygons
         .iter()
+        .flat_map(|p| p.iter())
         .enumerate()
         .map(|(i, p)| json!({"id": format!("p{}", i + 1), "type": "point", "at": p}))
         .collect();
-    for i in 0..n {
-        outline.push(json!({"id": format!("c{}", n + 1 + i), "type": "line",
-                             "start": format!("p{}", i + 1),
-                             "end": format!("p{}", (i + 1) % n + 1)}));
+    let mut start = 0;
+    for polygon in &polygons {
+        let k = polygon.len();
+        for i in 0..k {
+            outline.push(
+                json!({"id": format!("c{}", n + 1 + start + i), "type": "line",
+                                 "start": format!("p{}", start + i + 1),
+                                 "end": format!("p{}", start + (i + 1) % k + 1)}),
+            );
+        }
+        start += k;
     }
     let mut creases: Vec<Value> = Vec::new();
     for (k, fold) in blank.folds.iter().enumerate() {
@@ -582,6 +769,25 @@ fn make_box(c: &AddStandardBoxCommand) -> Result<BoxMade, ApiError> {
         creases,
         blank,
     })
+}
+
+/// The key of a blank's region in its outline sketch ([`make_box`]'s
+/// entities). It names the outer loop only: the holes inside it (a
+/// folder's slots) come with the region (mitcad#2226: naming them made the
+/// Face find its region by its outline, with a warning).
+fn blank_region(blank: &Blank) -> String {
+    let sizes: Vec<u32> = loops(blank).iter().map(|p| p.len() as u32).collect();
+    polygon_key(sizes.iter().sum::<u32>() + 1, &sizes[..1])
+}
+
+/// The definition of a box's Fold at its blank's crease `k` (the line
+/// `c<3k+3>` of the creases sketch), on the Face's body.
+fn fold_def(face: &str, creases: &str, k: usize, fold: &BlankFold) -> Value {
+    json!({"type": "sheet_fold", "body": format!("{face}.b0"),
+        "panel": {"feature": face, "slot": 0},
+        "line": {"sketch": creases, "curve": format!("c{}", 3 * k + 3)},
+        "stationary_side": if fold.stationary_left { "left" } else { "right" },
+        "angle": fold.angle, "position": "bend_line"})
 }
 
 /// A box's options as its rules keep them (`standard_box`): its fields but
@@ -605,10 +811,7 @@ pub(super) fn add_standard_box<K: Kernel>(
     let depth = doc.undo_depth();
     // As a component of its own: a part to save into a library.
     let component = if c.component {
-        let name = match c.style {
-            BoxStyle::Fefco0201 => "FEFCO 0201 Box",
-            BoxStyle::EcmaA20 => "ECMA A20 Carton",
-        };
+        let name = c.style.component_name();
         let answer = doc.run_command(json!({"cmd": "create_component", "name": name,
                                              "activate": true}))?;
         answer.get("component").cloned()
@@ -620,8 +823,7 @@ pub(super) fn add_standard_box<K: Kernel>(
         "def": {"type": "sketch", "plane": "xy", "entities": made.outline}}))?)?;
     let creases = uid_of(&doc.run_command(json!({"cmd": "add_feature",
         "def": {"type": "sketch", "plane": "xy", "entities": made.creases}}))?)?;
-    let n = made.blank.outline.len() as u32;
-    let region = polygon_key(n + 1, n);
+    let region = blank_region(&made.blank);
     let face = uid_of(
         &doc.run_command(json!({"cmd": "add_feature", "def": {"type": "sheet_face",
         "rules": rules, "profiles": [{"sketch": outline, "region": region}]}}))?,
@@ -630,11 +832,7 @@ pub(super) fn add_standard_box<K: Kernel>(
     let mut folds = Vec::new();
     if c.folded {
         for (k, fold) in made.blank.folds.iter().enumerate() {
-            let def = json!({"type": "sheet_fold", "body": body,
-                "panel": {"feature": face, "slot": 0},
-                "line": {"sketch": creases, "curve": format!("c{}", 3 * k + 3)},
-                "stationary_side": if fold.stationary_left { "left" } else { "right" },
-                "angle": std::f64::consts::FRAC_PI_2, "position": "bend_line"});
+            let def = fold_def(&face, &creases, k, fold);
             folds.push(uid_of(
                 &doc.run_command(json!({"cmd": "add_feature", "def": def}))?,
             )?);
@@ -678,6 +876,8 @@ pub(super) struct EditStandardBoxCommand {
     tuck: Option<Option<Value>>,
     #[serde(default, deserialize_with = "present")]
     flute: Option<Option<Value>>,
+    #[serde(default, deserialize_with = "present")]
+    tabs: Option<Option<Value>>,
 }
 
 impl EditStandardBoxCommand {
@@ -695,6 +895,7 @@ impl EditStandardBoxCommand {
             ("glue_flap", &self.glue_flap),
             ("tuck", &self.tuck),
             ("flute", &self.flute),
+            ("tabs", &self.tabs),
         ]
         .into_iter()
         .filter_map(|(name, v)| v.clone().map(|v| (name, v)))
@@ -702,11 +903,74 @@ impl EditStandardBoxCommand {
     }
 }
 
+/// The features a standard box made, as [`edit_standard_box`] finds them
+/// from its rules.
+struct BoxFeatures {
+    /// Its Face (of the rules, making a body of its own) and the Face's
+    /// definition as `edit_feature` takes it.
+    face: mitcad_model::ids::FeatureUid,
+    face_def: Value,
+    /// Its region's key in the outline sketch, as the Face names it.
+    region: String,
+    component: String,
+    outline: mitcad_model::ids::FeatureUid,
+    /// The sketch its Folds' lines are on (none for a flat box) and its
+    /// Folds by their crease (`k` of the line `c<3k+3>`), in timeline order.
+    creases: Option<mitcad_model::ids::FeatureUid>,
+    folds: Vec<(usize, mitcad_model::ids::FeatureUid)>,
+}
+
+fn box_features<K: Kernel>(
+    doc: &Document<K>,
+    rules: mitcad_model::ids::FeatureUid,
+) -> Result<BoxFeatures, ApiError> {
+    use mitcad_model::features::FeatureDef;
+    let mut found: Option<BoxFeatures> = None;
+    for entry in doc.features() {
+        match (&entry.def, found.as_mut()) {
+            (FeatureDef::SheetFace(f), None) if f.rules == rules && f.body.is_none() => {
+                let Some(profile) = f.profiles.first() else {
+                    continue;
+                };
+                let mut face_def = serde_json::to_value(f)
+                    .map_err(|e| ApiError(format!("the box's Face: {e}")))?;
+                face_def["type"] = json!("sheet_face");
+                found = Some(BoxFeatures {
+                    face: entry.uid,
+                    face_def,
+                    region: profile.region.to_string(),
+                    component: entry.component.to_string(),
+                    outline: profile.sketch,
+                    creases: None,
+                    folds: Vec::new(),
+                });
+            }
+            (FeatureDef::SheetFold(f), Some(made)) if f.body.feature == made.face => {
+                let creases = *made.creases.get_or_insert(f.line.sketch);
+                // Its own Folds only: one the user added on another
+                // sketch stays as it is.
+                let k = f.line.curve.0;
+                if f.line.sketch == creases && k >= 3 && k % 3 == 0 {
+                    made.folds.push(((k / 3 - 1) as usize, entry.uid));
+                }
+            }
+            _ => {}
+        }
+    }
+    found.ok_or_else(|| ApiError("the box's Face is gone".into()))
+}
+
 /// `edit_standard_box`: the box's rules, its blank's outline and its
 /// creases made again from its options with those given changed, as one
 /// undo step "Edit Standard Box"; its Face and Folds, which name the same
-/// curves, follow. Refused for rules of no standard box, and where the
-/// options change the blank's shape (another style).
+/// curves, follow. Options that change the number of the blank's lines
+/// within the style (another number of a folder's locking tabs,
+/// mitcad#2285) make the sketches again with the new lines: the Face names
+/// the new outline's region, a Fold whose crease the blank no longer has
+/// goes and a new crease gets a Fold after the box's last; the box's later
+/// features stay where their references survive. Refused for rules of no
+/// standard box and for another style; nothing changes when a step is
+/// refused.
 pub(super) fn edit_standard_box<K: Kernel>(
     doc: &mut Document<K>,
     c: EditStandardBoxCommand,
@@ -728,48 +992,120 @@ pub(super) fn edit_standard_box<K: Kernel>(
             }
         }
     }
+    if options.get("style") != stored.get("style") {
+        return Err(ApiError(
+            "another style changes the shape of the box's blank: make the box again".into(),
+        ));
+    }
     let command: AddStandardBoxCommand = serde_json::from_value(Value::Object(options))
         .map_err(|e| ApiError(format!("the box's options: {e}")))?;
     let made = make_box(&command)?;
-    // The features the box made: its Face (of these rules), the Face's
-    // outline sketch and the sketch its Folds' lines are on.
-    let mut face = None;
-    let mut outline = None;
-    let mut creases = None;
-    for entry in doc.features() {
-        match &entry.def {
-            FeatureDef::SheetFace(f) if f.rules == c.rules && f.body.is_none() => {
-                face = Some(entry.uid);
-                outline = f.profiles.first().map(|p| p.sketch);
-            }
-            FeatureDef::SheetFold(f) if Some(f.body.feature) == face => {
-                creases = Some(f.line.sketch);
-            }
-            _ => {}
-        }
-    }
-    let outline = outline.ok_or_else(|| ApiError("the box's Face is gone".into()))?;
-    let count = |uid: mitcad_model::ids::FeatureUid| match doc.feature(uid).map(|f| &f.def) {
-        Some(FeatureDef::Sketch(def)) => def.entities.len(),
-        _ => 0,
-    };
-    if count(outline) != made.outline.len()
-        || creases.is_some_and(|creases| count(creases) != made.creases.len())
-    {
-        return Err(ApiError(
-            "these options change the shape of the box's blank: make the box again".into(),
-        ));
-    }
+    let found = box_features(doc, c.rules)?;
     let depth = doc.undo_depth();
-    doc.run_command(json!({"cmd": "edit_feature", "uid": c.rules, "def": made.rules}))?;
-    doc.run_command(json!({"cmd": "edit_feature", "uid": outline,
-        "def": {"type": "sketch", "plane": "xy", "entities": made.outline}}))?;
-    if let Some(creases) = creases {
-        doc.run_command(json!({"cmd": "edit_feature", "uid": creases,
-            "def": {"type": "sketch", "plane": "xy", "entities": made.creases}}))?;
+    let edited = remake_box(doc, &c, &made, &found);
+    if edited.is_err() {
+        // What was changed before the refusal goes again.
+        if doc.undo_depth() > depth {
+            doc.merge_undo(depth, "Edit Standard Box");
+            doc.undo();
+        }
+        return edited;
     }
     doc.merge_undo(depth, "Edit Standard Box");
-    Ok(json!({"rules": c.rules, "outline": outline, "creases": creases, "face": face}))
+    edited
+}
+
+/// [`edit_standard_box`]'s changes to the box's features: its rules, its
+/// Face's region when the outline's lines are others, its outline and
+/// creases sketches and its Folds.
+fn remake_box<K: Kernel>(
+    doc: &mut Document<K>,
+    c: &EditStandardBoxCommand,
+    made: &BoxMade,
+    found: &BoxFeatures,
+) -> Result<Value, ApiError> {
+    doc.run_command(json!({"cmd": "edit_feature", "uid": c.rules, "def": made.rules}))?;
+    // The Face names the new outline's region (its key names the lines by
+    // their uids, which shift with their number) before the outline
+    // changes, so that the outline's edit builds the Face and its Folds
+    // once, on the new region.
+    let region = blank_region(&made.blank);
+    if region != found.region {
+        let mut def = found.face_def.clone();
+        def["profiles"][0]["region"] = json!(region);
+        // The renamed region keeps its panel slot (0): its body stays
+        // `<face>.b0`, which the Folds and the Flat Pattern name. Without
+        // it the new key would get a new slot and body, the old slot left
+        // as a tombstone (SheetFaceDef::settle).
+        if let Some(slots) = def["panel_slots"].as_array_mut() {
+            for slot in slots {
+                if slot["profile"]["region"] == json!(found.region) {
+                    slot["profile"]["region"] = json!(region);
+                }
+            }
+        }
+        doc.run_command(json!({"cmd": "edit_feature", "uid": found.face, "def": def}))?;
+    }
+    doc.run_command(json!({"cmd": "edit_feature", "uid": found.outline,
+        "def": {"type": "sketch", "plane": "xy", "entities": made.outline}}))?;
+    let face = found.face.to_string();
+    let mut folds: Vec<Value> = Vec::new();
+    if let Some(creases) = found.creases {
+        let creases_name = creases.to_string();
+        let crease_count = made.blank.folds.len();
+        let same =
+            found.folds.len() == crease_count && found.folds.iter().all(|&(k, _)| k < crease_count);
+        // The Folds of creases the blank no longer has go first, the last
+        // first; one a later feature uses refuses the edit in words.
+        if !same {
+            for &(k, uid) in found.folds.iter().rev() {
+                if k >= crease_count {
+                    doc.run_command(json!({"cmd": "delete_feature", "uid": uid}))
+                        .map_err(|e| {
+                            ApiError(format!(
+                                "the new blank has no crease for the box's Fold {uid}: {e}"
+                            ))
+                        })?;
+                }
+            }
+        }
+        doc.run_command(json!({"cmd": "edit_feature", "uid": creases,
+            "def": {"type": "sketch", "plane": "xy", "entities": made.creases}}))?;
+        if !same {
+            // Each crease's Fold made again from the blank (its side and
+            // angle may be others now), a new crease's after the box's last
+            // Fold kept (after the Face when none is).
+            let mut last = found
+                .folds
+                .iter()
+                .filter(|&&(k, _)| k < crease_count)
+                .map(|&(_, uid)| uid)
+                .next_back()
+                .unwrap_or(found.face)
+                .to_string();
+            for (k, fold) in made.blank.folds.iter().enumerate() {
+                let def = fold_def(&face, &creases_name, k, fold);
+                match found.folds.iter().find(|&&(at, _)| at == k) {
+                    Some(&(_, uid)) => {
+                        doc.run_command(json!({"cmd": "edit_feature", "uid": uid, "def": def}))?;
+                        folds.push(json!(uid));
+                    }
+                    None => {
+                        let uid = uid_of(&doc.run_command(json!({"cmd": "add_feature",
+                            "def": def, "component": found.component, "after": last}))?)?;
+                        folds.push(json!(uid));
+                        last = uid;
+                    }
+                }
+            }
+        } else {
+            folds = found.folds.iter().map(|&(_, uid)| json!(uid)).collect();
+        }
+    }
+    Ok(
+        json!({"rules": c.rules, "outline": found.outline, "creases": found.creases,
+              "face": found.face, "folds": folds}),
+    )
 }
 
 /// `add_glue_flap`: a Flange on a board sheet's edge whose wall is a glue
@@ -1055,6 +1391,7 @@ mod tests {
             allowance: 2.0 * 4.5 - 4.0,
             glue_flap: 30.0,
             tuck: 20.0,
+            tabs: 2,
         }
     }
 
@@ -1074,7 +1411,7 @@ mod tests {
     /// flap's and the three walls' creases from the far end.
     #[test]
     fn a_slotted_box_blank_folds_its_flaps_first() {
-        let b = blank(BoxStyle::Fefco0201, &sizes());
+        let b = blank(BoxStyle::Fefco0201, &sizes()).unwrap();
         assert!(area(&b.outline) > 0.0, "counter-clockwise");
         assert_eq!(b.folds.len(), 8 + 1 + 3);
         // The walls: x1 = W + t - r + BA/2 = 200 + 4 - 0.5 + 2.5.
@@ -1122,7 +1459,7 @@ mod tests {
 
     #[test]
     fn a_tuck_end_blank_has_closing_panels_and_tucks() {
-        let b = blank(BoxStyle::EcmaA20, &sizes());
+        let b = blank(BoxStyle::EcmaA20, &sizes()).unwrap();
         assert!(area(&b.outline) > 0.0);
         // Dust flaps 2 + 2, two closing panels with their tucks (4), the
         // glue flap and three walls.
@@ -1137,11 +1474,164 @@ mod tests {
         assert!(tuck < closing);
     }
 
+    /// Whether `p` lies on an edge of the closed outline.
+    fn on_outline(outline: &[[f64; 2]], p: [f64; 2]) -> bool {
+        let n = outline.len();
+        (0..n).any(|i| {
+            let (a, c) = (outline[i], outline[(i + 1) % n]);
+            let cross = (c[0] - a[0]) * (p[1] - a[1]) - (c[1] - a[1]) * (p[0] - a[0]);
+            let within =
+                (p[0] - a[0]) * (p[0] - c[0]) <= 1e-9 && (p[1] - a[1]) * (p[1] - c[1]) <= 1e-9;
+            cross.abs() < 1e-6 && within
+        })
+    }
+
+    /// Whether no two edges of the closed outline but neighbours meet.
+    fn simple(outline: &[[f64; 2]]) -> bool {
+        let n = outline.len();
+        let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+            (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+        };
+        let meet = |p: [f64; 2], q: [f64; 2], r: [f64; 2], s: [f64; 2]| {
+            let (d1, d2) = (cross(r, s, p), cross(r, s, q));
+            let (d3, d4) = (cross(p, q, r), cross(p, q, s));
+            let box_overlap = p[0].min(q[0]) <= r[0].max(s[0]) + 1e-9
+                && r[0].min(s[0]) <= p[0].max(q[0]) + 1e-9
+                && p[1].min(q[1]) <= r[1].max(s[1]) + 1e-9
+                && r[1].min(s[1]) <= p[1].max(q[1]) + 1e-9;
+            box_overlap && d1 * d2 <= 1e-12 && d3 * d4 <= 1e-12
+        };
+        (0..n).all(|i| {
+            (i + 2..n).all(|j| {
+                (i == 0 && j == n - 1)
+                    || !meet(
+                        outline[i],
+                        outline[(i + 1) % n],
+                        outline[j],
+                        outline[(j + 1) % n],
+                    )
+            })
+        })
+    }
+
+    /// The outline's bounds: (min, max).
+    fn bounds(outline: &[[f64; 2]]) -> ([f64; 2], [f64; 2]) {
+        outline.iter().fold(
+            ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]),
+            |(lo, hi), p| {
+                (
+                    [lo[0].min(p[0]), lo[1].min(p[1])],
+                    [hi[0].max(p[0]), hi[1].max(p[1])],
+                )
+            },
+        )
+    }
+
+    /// A FEFCO 0203 blank (mitcad#2226): every flap the width deep less
+    /// the thickness (the short panels' no deeper than half the length
+    /// less it), the second long panel's flaps a level (thickness and seam
+    /// gap) over the first's; the levels fold from the lowest.
+    #[test]
+    fn a_full_overlap_blank_lays_its_long_flaps_one_over_the_other() {
+        let s = BoxSizes {
+            length: 500.0,
+            ..sizes()
+        };
+        let b = blank(BoxStyle::Fefco0203, &s).unwrap();
+        assert!(area(&b.outline) > 0.0, "counter-clockwise");
+        assert!(simple(&b.outline), "{:?}", b.outline);
+        assert_eq!(b.folds.len(), 8 + 1 + 3);
+        for fold in &b.folds[..9] {
+            assert!(
+                on_outline(&b.outline, fold.a) && on_outline(&b.outline, fold.b),
+                "{fold:?}"
+            );
+            assert_eq!(fold.angle, QUARTER);
+        }
+        // The panels: x1 = W + t - r + BA/2 = 206, x2 = x1 + L - 2r + BA
+        // = 710, x3 = 914, the glue crease 1413.6 and the glue flap to
+        // 1446.1; the band 150 - 1 + 5 = 154 high.
+        let walls: Vec<f64> = b.folds[9..].iter().map(|f| f.a[0]).collect();
+        for (x, want) in walls.iter().zip([914.0, 710.0, 206.0]) {
+            assert!((x - want).abs() < 1e-9, "{walls:?}");
+        }
+        assert!((b.folds[8].a[0] - 1413.6).abs() < 1e-9, "{:?}", b.folds[8]);
+        // Levels: the short panels' creases at 0 and 154, the first long
+        // panel's 4.4 out, the second's 8.8; folded in that order.
+        let out = |f: &BlankFold| {
+            let y = f.a[1];
+            if y < 77.0 { -y } else { y - 154.0 }
+        };
+        let levels: Vec<f64> = b.folds[..8].iter().map(out).collect();
+        for (k, want) in [0.0, 0.0, 0.0, 0.0, 4.4, 4.4, 8.8, 8.8].iter().enumerate() {
+            assert!((levels[k] - want).abs() < 1e-9, "{levels:?}");
+        }
+        // Every flap 196 deep: the blank from y = -8.8 - 196 to 154 + 8.8
+        // + 196.
+        let (lo, hi) = bounds(&b.outline);
+        assert!((lo[1] + 204.8).abs() < 1e-9, "{lo:?}");
+        assert!((hi[1] - 358.8).abs() < 1e-9, "{hi:?}");
+        assert!(
+            (hi[0] - 1446.1).abs() < 1e-9 && lo[0] == 0.0,
+            "{lo:?} {hi:?}"
+        );
+        // A short box: the short panels' flaps half the length less the
+        // thickness deep, so that they do not overlap.
+        let short = blank(BoxStyle::Fefco0203, &sizes()).unwrap();
+        let deepest_short = short
+            .outline
+            .iter()
+            .filter(|p| p[0] > 1.0 && p[0] < 206.0)
+            .map(|p| p[1])
+            .fold(f64::INFINITY, f64::min);
+        assert!((deepest_short + 146.0).abs() < 1e-9, "{deepest_short}");
+    }
+
+    /// A FEFCO 0206 blank (mitcad#2226): the short panels' flaps half the
+    /// length deep less the thickness (meeting at the middle), the long
+    /// panels' the width less it at two levels over them.
+    #[test]
+    fn a_0206_blank_meets_its_short_flaps_and_overlaps_its_long_ones() {
+        let s = BoxSizes {
+            length: 400.0,
+            ..sizes()
+        };
+        let b = blank(BoxStyle::Fefco0206, &s).unwrap();
+        assert!(area(&b.outline) > 0.0, "counter-clockwise");
+        assert!(simple(&b.outline), "{:?}", b.outline);
+        assert_eq!(b.folds.len(), 8 + 1 + 3);
+        for fold in &b.folds[..9] {
+            assert!(
+                on_outline(&b.outline, fold.a) && on_outline(&b.outline, fold.b),
+                "{fold:?}"
+            );
+        }
+        // The first short panel (x from 0 to 206): its flaps 400 / 2 - 4
+        // = 196 deep below y = 0; the long panels' 196 below their
+        // creases at -4.4 and -8.8.
+        let below = |x0: f64, x1: f64| {
+            b.outline
+                .iter()
+                .filter(|p| p[0] > x0 && p[0] < x1)
+                .map(|p| p[1])
+                .fold(f64::INFINITY, f64::min)
+        };
+        assert!((below(1.0, 206.0) + 196.0).abs() < 1e-9);
+        // x2 = 206 + 400 - 1 + 5 = 610, x3 = 814, x4 = 1213.6.
+        assert!((below(210.0, 606.0) + 200.4).abs() < 1e-9);
+        assert!((below(818.0, 1210.0) + 204.8).abs() < 1e-9);
+    }
+
     #[test]
     fn the_region_key_names_the_polygon_lines() {
         assert_eq!(
-            polygon_key(5, 4),
+            polygon_key(5, &[4]),
             "r{c5[c8,c6],c6[c5,c7],c7[c6,c8],c8[c7,c5]}"
         );
+        // An outline with a hole: each loop's lines between their own.
+        let key = polygon_key(9, &[4, 4]);
+        for segment in ["c9[c12,c10]", "c12[c11,c9]", "c13[c16,c14]", "c16[c15,c13]"] {
+            assert!(key.contains(segment), "{key}");
+        }
     }
 }

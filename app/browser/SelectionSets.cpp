@@ -96,6 +96,31 @@ QJsonArray setMembersOf(const QVector<BrowserNode>& nodes) {
   return members;
 }
 
+QJsonArray setMemberRemovals(const QVector<BrowserNode>& nodes) {
+  QStringList sets;
+  QVector<QJsonArray> removed;
+  for (const BrowserNode& node : nodes) {
+    const QJsonObject member = setMemberOf(node);
+    if (!node.isSetMember() || member.isEmpty()) {
+      continue;
+    }
+    qsizetype at = sets.indexOf(node.selectionSet);
+    if (at < 0) {
+      at = sets.size();
+      sets << node.selectionSet;
+      removed.append(QJsonArray());
+    }
+    appendOnce(removed[at], member);
+  }
+  QJsonArray commands;
+  for (qsizetype i = 0; i < sets.size(); ++i) {
+    commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_selection_set_members")},
+                                {QStringLiteral("name"), sets.at(i)},
+                                {QStringLiteral("remove"), removed.at(i)}});
+  }
+  return commands;
+}
+
 QString setMemberText(const QJsonObject& member) {
   QString text = member.contains(QStringLiteral("body"))
                      ? QStringLiteral("body ") + member.value(QStringLiteral("body")).toString()

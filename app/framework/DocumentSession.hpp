@@ -19,6 +19,7 @@
 #include <QTimer>
 
 #include "DisplayMeshes.hpp"
+#include "MacroRecorder.hpp"
 #include "ModelWorker.hpp"
 #include "Command.hpp"
 #include "Selection.hpp"
@@ -103,6 +104,11 @@ public:
     // whether Esc already said how to leave a changed one.
     qint64 sketchEnterRevision = -1;
     bool sketchEscHinted = false;
+    // The undo label of a new sketch's creation when it was the last step
+    // as the sketch was entered ("Add Sketch2"); empty for an edited
+    // sketch. Finish Sketch merges the sketch's steps into it, and Cancel
+    // Sketch takes it back with them (mitcad#2225).
+    QString sketchCreation;
   };
 
   struct Snapshot {
@@ -249,6 +255,11 @@ public:
   // log line ("Background evaluation cancelled by <reason> after ...").
   void cancelBackgroundEvaluation(const QString& reason);
   bool backgroundEvaluationRunning() const { return m_background != nullptr; }
+  // Tools › Macro (mitcad#2245): command() and commandAsync() note each
+  // command the model accepted; while recording, macroStepRecorded tells
+  // the ones kept (MacroRecorder::recordable).
+  MacroRecorder& macro() { return m_macro; }
+  const MacroRecorder& macro() const { return m_macro; }
 
 signals:
   void changed();
@@ -256,8 +267,14 @@ signals:
   void jobStarted(const QString& label, const QString& stage);
   void jobProgress(const QString& stage, quint64 position, quint64 total, qint64 elapsedMilliseconds);
   void jobFinished(const QString& label, bool cancelled, const QString& error);
+  // A command kept by the macro being recorded: its name and how many steps
+  // the recording has now (mitcad#2245).
+  void macroStepRecorded(const QString& name, int count);
 
 private:
+  // A command the model accepted, for the macro being recorded.
+  void noteForMacro(const QJsonObject& request);
+  MacroRecorder m_macro;
   friend class TestDriver;
   // Armed only by the in-process UI driver, consumed on the worker once.
   QString m_testFailCommand;

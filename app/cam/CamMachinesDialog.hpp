@@ -8,11 +8,16 @@
 // are added, edited and deleted (number, name, shape, diameters, shank
 // diameter, flute length, stick-out, holder, speeds and feeds); a machine
 // is imported from the user's or the project's machine library and saved
-// back to either. Every change is a model command of its own, one undo
-// step (`cam_machine_put`, `cam_tool_put`, …); the window reads the design
-// again after each.
+// back to either. New Machine… makes a milling machine or a lathe
+// (mitcad#2230); a lathe's Edit Machine… shows its turret and chuck and its
+// travel and keep-out zones in the lathe's axes. The lathe's tools have
+// their own fields and kinds (turning, boring, grooving, parting,
+// threading), with the turret station as the number. Every change is
+// one model command and undo step (`cam_machine_put`, `cam_tool_put`, …).
+// The window reads the design again after each.
 
 #include <functional>
+#include <optional>
 
 #include <QDialog>
 #include <QJsonArray>
@@ -57,6 +62,8 @@ private:
   void showMachine();
   void newMachine();
   void editMachine();
+  QWidget* machineZonesPage(QDialog* dialog, QJsonArray& zones, bool lathe);
+  std::optional<QJsonObject> askZone(QDialog* parent, QJsonObject zone, bool lathe);
   void deleteMachine();
   void importMachine();
   void saveMachine(const QString& library);

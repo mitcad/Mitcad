@@ -27,7 +27,8 @@
 #      the line's right end is added, the Horizontal it implies removed, and
 #      the hint says so; one undo takes both back. The Point tool (a
 #      shortcut of the test's) on a derived offset curve: the point is
-#      added, the coincident of its snap is refused, and the hint shows why.
+#      added and the coincident of its snap holds it on the offset
+#      (mitcad#2278), one degree of freedom along it.
 #   7. A design (mitcad-cli, mitcad#736): a block and a sketch on XZ through
 #      it. Intersect (a shortcut of the test's) takes the block picked in the
 #      browser: its section, linked. Extrude1 made 30 high: the sketch has
@@ -222,7 +223,7 @@ Write-Host '--- A partly implied coincident replaces the Horizontal (mitcad#287)
 # p1 at (0, 0) to p2 at (60, 0)); a rectangle on it (c8 its bottom from p4
 # at (0, 0) to p5 at (40, 0), Horizontal k12), its left corner coincident
 # with p1 (k16); and above it a closed outline of three lines and a spline
-# offset out by 2 (derived: its lower line at y = 58 cannot be constrained).
+# offset out by 2 (derived: its lower line at y = 58 is computed from c19).
 $script = Join-Path $work 'implied.json'
 $design = Join-Path $work 'implied.mitcad'
 Set-Content -Encoding ascii $script @'
@@ -296,15 +297,19 @@ Ui-Sync
 if ((Sketch-Dof) -ne $before) { Ui-Fail "$(Sketch-Dof) DOF after the undo, expected $before" }
 Write-Host 'ok   one undo takes both back'
 
-Write-Host '--- A snapped coincident that is refused says why (mitcad#287)'
+Write-Host '--- A point snapped onto a derived offset is held on it (mitcad#2278)'
 Ui-Mark
 Ui-Step 'point (Shift+F6)'               { Ui-Key 'shift+F6' }
 Ui-ExpectNew 'Sketch tool Point' 'Point active'
+Ui-Sync
+$before = Sketch-Dof
 Ui-Step 'click on the derived offset'    { Ui-SketchClick 10 58 }
 Ui-ExpectNew 'Added point ' 'the point is added'
-Ui-ExpectNew 'Constraint coincident on ' 'the snap''s coincident is logged'
-Ui-ExpectNew ' not added: ' 'refused, with the reason'
-Ui-ExpectNew 'Sketch notice: Coincident not added: ' 'the hint shows the reason'
+Ui-Sync
+# Held on the offset by its snap's coincident: one degree of freedom along
+# it (a refused coincident would leave both).
+if ((Sketch-Dof) -ne $before + 1) { Ui-Fail "$(Sketch-Dof) DOF, expected $($before + 1)" }
+Write-Host 'ok   the snap''s coincident holds the point on the derived offset'
 Ui-Step 'end the tool (Esc)'             { Ui-Key 'Escape' }
 Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
 Ui-ExpectLog 'Sketch finished' 'sketch finished'

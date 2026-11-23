@@ -3,11 +3,14 @@
 #include "CamMachinesDialog.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <exception>
 #include <optional>
 #include <utility>
 
 #include <QAction>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -17,11 +20,14 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
 #include <QMenu>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStringList>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtLogging>
@@ -56,6 +62,13 @@ const QStringList& shapeKinds() {
   return kinds;
 }
 
+// A lathe's tool kinds (mitcad#2230), the model's lathe tools.
+const QStringList& latheKinds() {
+  static const QStringList kinds{QStringLiteral("turning"), QStringLiteral("boring"), QStringLiteral("grooving"),
+                                 QStringLiteral("parting"), QStringLiteral("threading")};
+  return kinds;
+}
+
 QString shapeName(const QString& kind) {
   if (kind == QStringLiteral("flat")) return CamMachinesDialog::tr("Flat end mill");
   if (kind == QStringLiteral("ball")) return CamMachinesDialog::tr("Ball end mill");
@@ -63,7 +76,19 @@ QString shapeName(const QString& kind) {
   if (kind == QStringLiteral("drill")) return CamMachinesDialog::tr("Drill");
   if (kind == QStringLiteral("chamfer")) return CamMachinesDialog::tr("Chamfer mill");
   if (kind == QStringLiteral("engraver")) return CamMachinesDialog::tr("Engraving cutter");
+  if (kind == QStringLiteral("turning")) return CamMachinesDialog::tr("Turning tool");
+  if (kind == QStringLiteral("boring")) return CamMachinesDialog::tr("Boring bar");
+  if (kind == QStringLiteral("grooving")) return CamMachinesDialog::tr("Grooving tool");
+  if (kind == QStringLiteral("parting")) return CamMachinesDialog::tr("Parting tool");
+  if (kind == QStringLiteral("threading")) return CamMachinesDialog::tr("Threading tool");
   return kind;
+}
+
+// Whether a machine (`cam_machines`' `machine`) is a lathe.
+bool isLathe(const QJsonObject& body) { return body.value(QStringLiteral("lathe")).isObject(); }
+
+QString zoneAxis(int axis, bool lathe) {
+  return lathe && axis == 0 ? CamMachinesDialog::tr("X (radius)") : QString(QLatin1Char("XYZ"[axis]));
 }
 
 QLineEdit* field(const QString& objectName, const QString& shown, const QString& tip = QString()) {
@@ -78,36 +103,69 @@ QLineEdit* field(const QString& objectName, const QString& shown, const QString&
 // The fields of a tool (cam_tool_put's `tool`, its values as typed: a
 // length with its unit, "6 mm", "0.25 in"; angles in degrees), from a
 // tool as the design keeps it (millimetres and degrees); none when
-// cancelled. `taken`: the numbers of the machine's other tools.
-std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int toolNumber, const QList<int>& taken) {
+// cancelled. `taken`: the numbers of the machine's other tools. On a
+// `lathe` the lathe's tool kinds with their own fields (mitcad#2230): the
+// number is the turret station, the diameter the holder's size (a boring
+// bar's diameter), the flute length the depth of cut, the stick-out the
+// overhang; the milling fields are hidden there and keep their values.
+std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int toolNumber, const QList<int>& taken,
+                                   bool lathe) {
   QDialog dialog(parent);
   dialog.setObjectName(QStringLiteral("camToolDialog"));
   dialog.setWindowTitle(tool.isEmpty() ? CamMachinesDialog::tr("Add Tool") : CamMachinesDialog::tr("Edit Tool"));
   auto* form = new QFormLayout;
   auto* numberBox = new QSpinBox;
   numberBox->setObjectName(QStringLiteral("camToolNumber"));
-  numberBox->setRange(1, 999);
+  numberBox->setRange(1, lathe ? 99 : 999);
   numberBox->setValue(toolNumber);
-  numberBox->setToolTip(CamMachinesDialog::tr("The tool number, also its place in a tool changer"));
-  form->addRow(CamMachinesDialog::tr("Number"), numberBox);
+  numberBox->setToolTip(lathe ? CamMachinesDialog::tr("The turret station the tool sits in, also its offset number")
+                              : CamMachinesDialog::tr("The tool number, also its place in a tool changer"));
+  form->addRow(lathe ? CamMachinesDialog::tr("Turret Station") : CamMachinesDialog::tr("Number"), numberBox);
   QLineEdit* name = field(QStringLiteral("camToolName"), text(tool, "name"),
-                          CamMachinesDialog::tr("Empty: the diameter and the shape"));
+                          lathe ? CamMachinesDialog::tr("Empty: the holder size and the kind")
+                                : CamMachinesDialog::tr("Empty: the diameter and the shape"));
   form->addRow(CamMachinesDialog::tr("Name"), name);
   auto* shape = new QComboBox;
   shape->setObjectName(QStringLiteral("camToolShape"));
-  for (const QString& kind : shapeKinds()) {
+  const QStringList& kinds = lathe ? latheKinds() : shapeKinds();
+  for (const QString& kind : kinds) {
     shape->addItem(shapeName(kind), kind);
   }
   const QJsonObject shapeJson = tool.value(QStringLiteral("shape")).toObject();
-  const QString kind = text(shapeJson, "kind").isEmpty() ? QStringLiteral("flat") : text(shapeJson, "kind");
-  shape->setCurrentIndex(std::max(0, static_cast<int>(shapeKinds().indexOf(kind))));
-  form->addRow(CamMachinesDialog::tr("Shape"), shape);
+  const QString kind = text(shapeJson, "kind").isEmpty() ? kinds.first() : text(shapeJson, "kind");
+  shape->setCurrentIndex(std::max(0, static_cast<int>(kinds.indexOf(kind))));
+  form->addRow(lathe ? CamMachinesDialog::tr("Kind") : CamMachinesDialog::tr("Shape"), shape);
+  qInfo().noquote() << QStringLiteral("CAM tool dialog: %1 kinds: %2")
+                           .arg(lathe ? QStringLiteral("lathe") : QStringLiteral("milling"),
+                                kinds.join(QStringLiteral(", ")));
   const auto mm = [&tool](const char* key, const QString& fallback) {
     return tool.contains(QLatin1String(key)) ? plain(numberOf(tool, key)) + QStringLiteral(" mm") : fallback;
   };
-  QLineEdit* diameter = field(QStringLiteral("camToolDiameter"), mm("diameter", QStringLiteral("6 mm")),
+  const auto shapeMm = [&shapeJson](const char* key, const QString& fallback) {
+    return shapeJson.contains(QLatin1String(key)) ? plain(numberOf(shapeJson, key)) + QStringLiteral(" mm") : fallback;
+  };
+  // The lathe's insert: nose radius, width, thread angle, outside or in a
+  // bore.
+  QLineEdit* noseRadius = field(QStringLiteral("camToolNoseRadius"), shapeMm("nose_radius", QStringLiteral("0.4 mm")),
+                                CamMachinesDialog::tr("The insert's corner radius; 0 for a sharp corner"));
+  form->addRow(CamMachinesDialog::tr("Nose Radius"), noseRadius);
+  QLineEdit* width = field(QStringLiteral("camToolWidth"), shapeMm("width", QStringLiteral("3 mm")),
+                           CamMachinesDialog::tr("The insert's or the blade's width"));
+  form->addRow(CamMachinesDialog::tr("Width"), width);
+  QLineEdit* threadAngle = field(QStringLiteral("camToolThreadAngle"),
+                                 plain(numberOf(shapeJson, "angle", 60.0)) + QStringLiteral(" deg"),
+                                 CamMachinesDialog::tr("The thread's included angle: 60 degrees for metric threads"));
+  form->addRow(CamMachinesDialog::tr("Thread Angle"), threadAngle);
+  auto* inside = new QCheckBox(CamMachinesDialog::tr("Cuts in a bore"));
+  inside->setObjectName(QStringLiteral("camToolInside"));
+  inside->setChecked(shapeJson.value(QStringLiteral("inside")).toBool());
+  inside->setToolTip(CamMachinesDialog::tr("An insert for the inside of a bore rather than the outside"));
+  form->addRow(QString(), inside);
+  auto* diameterLabel = new QLabel(CamMachinesDialog::tr("Diameter"));
+  QLineEdit* diameter = field(QStringLiteral("camToolDiameter"),
+                              mm("diameter", lathe ? QStringLiteral("20 mm") : QStringLiteral("6 mm")),
                               CamMachinesDialog::tr("The cutting diameter; a length with its unit"));
-  form->addRow(CamMachinesDialog::tr("Diameter"), diameter);
+  form->addRow(diameterLabel, diameter);
   QLineEdit* corner = field(QStringLiteral("camToolCorner"),
                             shapeJson.contains(QStringLiteral("corner_radius"))
                                 ? plain(numberOf(shapeJson, "corner_radius")) + QStringLiteral(" mm")
@@ -126,12 +184,16 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
   QLineEdit* shank = field(QStringLiteral("camToolShank"), mm("shank_diameter", QString()),
                            CamMachinesDialog::tr("Empty: the same as the cutting diameter"));
   form->addRow(CamMachinesDialog::tr("Shank Diameter"), shank);
-  QLineEdit* flutes = field(QStringLiteral("camToolFluteLength"), mm("flute_length", QString()),
-                            CamMachinesDialog::tr("The deepest cut in one pass; empty: three diameters"));
-  form->addRow(CamMachinesDialog::tr("Flute Length"), flutes);
-  QLineEdit* length = field(QStringLiteral("camToolStickOut"), mm("length", QString()),
-                            CamMachinesDialog::tr("From the holder to the tip; empty: the flutes and 5 mm"));
-  form->addRow(CamMachinesDialog::tr("Stick-Out"), length);
+  QLineEdit* flutes =
+      field(QStringLiteral("camToolFluteLength"), mm("flute_length", QString()),
+            lathe ? CamMachinesDialog::tr("The deepest cut in one pass; empty: 4 mm, grooving 5 mm, parting 25 mm")
+                  : CamMachinesDialog::tr("The deepest cut in one pass; empty: three diameters"));
+  form->addRow(lathe ? CamMachinesDialog::tr("Depth of Cut") : CamMachinesDialog::tr("Flute Length"), flutes);
+  QLineEdit* length =
+      field(QStringLiteral("camToolStickOut"), mm("length", QString()),
+            lathe ? CamMachinesDialog::tr("How far the tool reaches out of the turret; empty: the depth of cut and 5 mm")
+                  : CamMachinesDialog::tr("From the holder to the tip; empty: the flutes and 5 mm"));
+  form->addRow(lathe ? CamMachinesDialog::tr("Overhang") : CamMachinesDialog::tr("Stick-Out"), length);
   auto* count = new QSpinBox;
   count->setObjectName(QStringLiteral("camToolFlutes"));
   count->setRange(1, 16);
@@ -161,13 +223,37 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
   layout->addLayout(form);
   layout->addWidget(message);
   layout->addWidget(buttons);
-  const auto shapeChanged = [form, shape, corner, point, angle, tip] {
+  // A lathe's tools have no shank, flutes, spindle holder or speeds and
+  // feeds per minute here (the turning operations set their own); a value
+  // a tool already has is kept.
+  for (QWidget* milling : {static_cast<QWidget*>(shank), static_cast<QWidget*>(count), static_cast<QWidget*>(holder),
+                           static_cast<QWidget*>(rpm), static_cast<QWidget*>(feed), static_cast<QWidget*>(plunge)}) {
+    form->setRowVisible(milling, !lathe);
+  }
+  const auto shapeChanged = [form, shape, corner, point, angle, tip, noseRadius, width, threadAngle, inside,
+                             diameterLabel, diameter, lathe] {
     const QString now = shape->currentData().toString();
-    form->setRowVisible(corner, now == QStringLiteral("bull"));
-    form->setRowVisible(point, now == QStringLiteral("drill"));
-    const bool angled = now == QStringLiteral("chamfer") || now == QStringLiteral("engraver");
+    form->setRowVisible(corner, !lathe && now == QStringLiteral("bull"));
+    form->setRowVisible(point, !lathe && now == QStringLiteral("drill"));
+    const bool angled = !lathe && (now == QStringLiteral("chamfer") || now == QStringLiteral("engraver"));
     form->setRowVisible(angle, angled);
     form->setRowVisible(tip, angled);
+    const bool grooving = now == QStringLiteral("grooving");
+    const bool threading = now == QStringLiteral("threading");
+    const bool boring = now == QStringLiteral("boring");
+    form->setRowVisible(noseRadius, lathe && (now == QStringLiteral("turning") || boring || grooving));
+    form->setRowVisible(width, lathe && (grooving || now == QStringLiteral("parting")));
+    form->setRowVisible(threadAngle, lathe && threading);
+    form->setRowVisible(inside, lathe && (grooving || threading));
+    if (!lathe) {
+      diameterLabel->setText(CamMachinesDialog::tr("Diameter"));
+    } else if (boring) {
+      diameterLabel->setText(CamMachinesDialog::tr("Bar Diameter"));
+      diameter->setToolTip(CamMachinesDialog::tr("The bar's diameter: it must fit the stock's bore"));
+    } else {
+      diameterLabel->setText(CamMachinesDialog::tr("Holder Size"));
+      diameter->setToolTip(CamMachinesDialog::tr("The holder's size, for the tool's default name"));
+    }
   };
   QObject::connect(shape, &QComboBox::currentIndexChanged, &dialog, shapeChanged);
   shapeChanged();
@@ -178,8 +264,16 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
       message->setText(CamMachinesDialog::tr("Another tool has the number %1.").arg(numberBox->value()));
       return;
     }
+    const QString chosen = shape->currentData().toString();
     if (diameter->text().trimmed().isEmpty()) {
-      message->setText(CamMachinesDialog::tr("Type the tool's diameter."));
+      message->setText(!lathe                              ? CamMachinesDialog::tr("Type the tool's diameter.")
+                       : chosen == QStringLiteral("boring") ? CamMachinesDialog::tr("Type the bar's diameter.")
+                                                            : CamMachinesDialog::tr("Type the holder's size."));
+      return;
+    }
+    if (lathe && (chosen == QStringLiteral("grooving") || chosen == QStringLiteral("parting")) &&
+        width->text().trimmed().isEmpty()) {
+      message->setText(CamMachinesDialog::tr("Type the insert's width."));
       return;
     }
     const bool anyCutting = !rpm->text().trimmed().isEmpty() || !feed->text().trimmed().isEmpty() ||
@@ -190,9 +284,26 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
       message->setText(CamMachinesDialog::tr("Type the spindle speed, the feed and the plunge feed, or none of them."));
       return;
     }
-    const QString chosen = shape->currentData().toString();
     QJsonObject shapeOut{{QStringLiteral("kind"), chosen}};
-    if (chosen == QStringLiteral("bull")) {
+    const auto typed = [&shapeOut](const char* key, const QLineEdit* edit) {
+      if (!edit->text().trimmed().isEmpty()) {
+        shapeOut.insert(QLatin1String(key), edit->text().trimmed());
+      }
+    };
+    if (lathe) {
+      if (chosen == QStringLiteral("turning") || chosen == QStringLiteral("boring")) {
+        typed("nose_radius", noseRadius);
+      } else if (chosen == QStringLiteral("grooving")) {
+        typed("width", width);
+        typed("nose_radius", noseRadius);
+        shapeOut.insert(QStringLiteral("inside"), inside->isChecked());
+      } else if (chosen == QStringLiteral("parting")) {
+        typed("width", width);
+      } else if (chosen == QStringLiteral("threading")) {
+        typed("angle", threadAngle);
+        shapeOut.insert(QStringLiteral("inside"), inside->isChecked());
+      }
+    } else if (chosen == QStringLiteral("bull")) {
       shapeOut.insert(QStringLiteral("corner_radius"), corner->text().trimmed());
     } else if (chosen == QStringLiteral("drill")) {
       shapeOut.insert(QStringLiteral("point_angle"), point->text().trimmed());
@@ -256,18 +367,18 @@ CamMachinesDialog::CamMachinesDialog(Host host, QWidget* parent) : QDialog(paren
   };
   left->addWidget(button("camNewMachine", tr("New Machine…"), tr("Adds a machine to the design"),
                          [this] { newMachine(); }));
-  m_editMachine = button("camEditMachine", tr("Edit Machine…"), tr("Changes the machine's controller, travel and spindle"),
+  m_editMachine = button("camEditMachine", tr("Edit Machine…"), tr("Changes machine settings and keep-out zones"),
                          [this] { editMachine(); });
   left->addWidget(m_editMachine);
   m_deleteMachine = button("camDeleteMachine", tr("Delete Machine"), tr("Takes the machine out of the design"),
                            [this] { deleteMachine(); });
   left->addWidget(m_deleteMachine);
   left->addWidget(button("camImportMachine", tr("Import from Library…"),
-                         tr("Copies a machine with its tools from your or the project's library"),
+                         tr("Copies a machine with its tools and zones from your or the project's library"),
                          [this] { importMachine(); }));
   m_saveMachine = new QPushButton(tr("Save to Library"));
   m_saveMachine->setObjectName(QStringLiteral("camSaveMachine"));
-  m_saveMachine->setToolTip(tr("Writes the machine with its tools to your or the project's library"));
+  m_saveMachine->setToolTip(tr("Writes the machine with its tools and zones to your or the project's library"));
   m_saveMachine->setAutoDefault(false);
   auto* saveMenu = new QMenu(m_saveMachine);
   connect(saveMenu->addAction(tr("My library")), &QAction::triggered, this, [this] { saveMachine(QStringLiteral("user")); });
@@ -406,6 +517,11 @@ void CamMachinesDialog::showMachine() {
     return;
   }
   const QJsonObject body = machine.value(QStringLiteral("machine")).toObject();
+  if (!qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT")) {
+    const QJsonDocument zones(body.value(QStringLiteral("zones")).toArray());
+    qInfo().noquote() << QStringLiteral("CAM machine zones: %1: %2")
+                             .arg(text(machine, "id"), QString::fromUtf8(zones.toJson(QJsonDocument::Compact)));
+  }
   const QJsonObject travel = body.value(QStringLiteral("travel")).toObject();
   const QJsonArray min = travel.value(QStringLiteral("min")).toArray();
   const QJsonArray max = travel.value(QStringLiteral("max")).toArray();
@@ -417,17 +533,63 @@ void CamMachinesDialog::showMachine() {
       controller = text(dialect.toObject(), "label");
     }
   }
-  m_summary->setText(tr("%1, controller %2. Travel %3 × %4 × %5; spindle %6 to %7 rpm. Used by %n setup(s).", nullptr,
-                        users)
-                         .arg(text(body, "name"), controller,
-                              m_host.lengthText(max.at(0).toDouble() - min.at(0).toDouble()),
-                              m_host.lengthText(max.at(1).toDouble() - min.at(1).toDouble()),
-                              m_host.lengthText(max.at(2).toDouble() - min.at(2).toDouble()),
-                              plain(numberOf(spindle, "min_rpm")), plain(numberOf(spindle, "max_rpm"))));
+  const bool lathe = isLathe(body);
+  if (lathe) {
+    // A lathe's travel in its axes: X a radius from the spindle axis, Z
+    // along it (mitcad#2230).
+    const QJsonObject latheJson = body.value(QStringLiteral("lathe")).toObject();
+    m_summary->setText(tr("%1, a lathe, controller %2. Travel X %3 (a radius), Z %4; spindle %5 to %6 rpm; turret "
+                          "of %7 stations; chuck %8 across, %9 long. Used by %n setup(s).",
+                          nullptr, users)
+                           .arg(text(body, "name"), controller,
+                                m_host.lengthText(max.at(0).toDouble() - min.at(0).toDouble()),
+                                m_host.lengthText(max.at(2).toDouble() - min.at(2).toDouble()),
+                                plain(numberOf(spindle, "min_rpm")), plain(numberOf(spindle, "max_rpm")),
+                                QString::number(latheJson.value(QStringLiteral("turret_stations")).toInt(12)),
+                                m_host.lengthText(numberOf(latheJson, "chuck_diameter")),
+                                m_host.lengthText(numberOf(latheJson, "chuck_length"))));
+    m_tools->setHeaderLabels({tr("Station"), tr("Name"), tr("Kind"), tr("Nose Radius"), tr("Width"),
+                              tr("Thread Angle"), tr("Holder Size"), tr("Depth of Cut"), tr("Overhang")});
+    qInfo().noquote() << QStringLiteral("CAM lathe shown: %1: %2, turret %3 stations, chuck %4 x %5 mm")
+                             .arg(text(machine, "id"), text(body, "controller"))
+                             .arg(latheJson.value(QStringLiteral("turret_stations")).toInt(12))
+                             .arg(plain(numberOf(latheJson, "chuck_diameter")),
+                                  plain(numberOf(latheJson, "chuck_length")));
+  } else {
+    m_summary->setText(tr("%1, controller %2. Travel %3 × %4 × %5; spindle %6 to %7 rpm. Used by %n setup(s).",
+                          nullptr, users)
+                           .arg(text(body, "name"), controller,
+                                m_host.lengthText(max.at(0).toDouble() - min.at(0).toDouble()),
+                                m_host.lengthText(max.at(1).toDouble() - min.at(1).toDouble()),
+                                m_host.lengthText(max.at(2).toDouble() - min.at(2).toDouble()),
+                                plain(numberOf(spindle, "min_rpm")), plain(numberOf(spindle, "max_rpm"))));
+    m_tools->setHeaderLabels({tr("Number"), tr("Name"), tr("Shape"), tr("Diameter"), tr("Shank"), tr("Flute Length"),
+                              tr("Stick-Out"), tr("Holder"), tr("Speeds and Feeds")});
+  }
   QStringList logged;
   for (const QJsonValue& value : machine.value(QStringLiteral("tools")).toObject().value(QStringLiteral("tools")).toArray()) {
     const QJsonObject tool = value.toObject();
     const int number = tool.value(QStringLiteral("number")).toInt();
+    if (lathe) {
+      const QJsonObject shape = tool.value(QStringLiteral("shape")).toObject();
+      const QString kind = text(shape, "kind");
+      const QString kindShown = shape.value(QStringLiteral("inside")).toBool()
+                                    ? tr("%1, in a bore").arg(shapeName(kind))
+                                    : shapeName(kind);
+      const auto shapeLength = [this, &shape](const char* key) {
+        return shape.contains(QLatin1String(key)) ? m_host.lengthText(numberOf(shape, key)) : QString();
+      };
+      const QString angle = kind == QStringLiteral("threading")
+                                ? plain(numberOf(shape, "angle", 60.0)) + QStringLiteral("°")
+                                : QString();
+      auto* row = new QTreeWidgetItem(
+          m_tools, {QString::number(number), text(tool, "name"), kindShown, shapeLength("nose_radius"),
+                    shapeLength("width"), angle, m_host.lengthText(numberOf(tool, "diameter")),
+                    m_host.lengthText(numberOf(tool, "flute_length")), m_host.lengthText(numberOf(tool, "length"))});
+      row->setData(0, Qt::UserRole, number);
+      logged << QStringLiteral("T%1 %2").arg(number).arg(text(tool, "name"));
+      continue;
+    }
     const QJsonObject cutting = tool.value(QStringLiteral("cutting")).toObject();
     const QString shank = tool.contains(QStringLiteral("shank_diameter"))
                               ? m_host.lengthText(tool.value(QStringLiteral("shank_diameter")).toDouble())
@@ -485,26 +647,259 @@ bool CamMachinesDialog::evaluate(const QString& typed, const QString& kind, doub
   }
 }
 
+std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObject zone, bool lathe) {
+  const QJsonObject bounds = zone.value(QStringLiteral("bounds")).toObject();
+  QJsonArray minimum = bounds.value(QStringLiteral("min")).toArray();
+  QJsonArray maximum = bounds.value(QStringLiteral("max")).toArray();
+  const bool adding = zone.isEmpty();
+  if (adding) {
+    minimum = QJsonArray{0, 0, 0};
+    maximum = QJsonArray{0, 0, 0};
+  }
+
+  QDialog dialog(parent);
+  dialog.setObjectName(QStringLiteral("camMachineZoneDialog"));
+  dialog.setWindowTitle(adding ? tr("Add Zone") : tr("Edit Zone"));
+  auto* form = new QFormLayout;
+  QLineEdit* name = field(QStringLiteral("camMachineZoneName"), text(zone, "name"));
+  form->addRow(tr("Name"), name);
+  struct AxisFields {
+    QLineEdit* minimum = nullptr;
+    QLineEdit* maximum = nullptr;
+  };
+  std::array<AxisFields, 3> fields{};
+  const auto shown = [adding](double value) {
+    return adding ? QString() : QString::number(value, 'g', QLocale::FloatingPointShortest) + QStringLiteral(" mm");
+  };
+  for (int axis = 0; axis < 3; ++axis) {
+    if (lathe && axis == 1) {
+      continue;
+    }
+    const QString label = zoneAxis(axis, lathe);
+    const QLatin1Char key("XYZ"[axis]);
+    const QString tip = !lathe ? QString()
+                              : axis == 0 ? tr("Measure X as a radius from the spindle axis.")
+                                          : tr("Measure Z along the spindle axis.");
+    fields[axis].minimum = field(QStringLiteral("camMachineZoneMin") + key, shown(minimum.at(axis).toDouble()), tip);
+    fields[axis].maximum = field(QStringLiteral("camMachineZoneMax") + key, shown(maximum.at(axis).toDouble()), tip);
+    form->addRow(tr("Minimum %1").arg(label), fields[axis].minimum);
+    form->addRow(tr("Maximum %1").arg(label), fields[axis].maximum);
+  }
+  auto* message = new QLabel;
+  message->setObjectName(QStringLiteral("camMachineZoneMessage"));
+  message->setWordWrap(true);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+  auto* layout = new QVBoxLayout(&dialog);
+  layout->addLayout(form);
+  layout->addWidget(message);
+  layout->addWidget(buttons);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+    const auto refuse = [message](QLineEdit* edit, const QString& reason) {
+      message->setText(reason);
+      edit->setFocus();
+      edit->selectAll();
+    };
+    const QString title = name->text().trimmed();
+    if (title.isEmpty()) {
+      refuse(name, tr("Enter a name for the zone."));
+      return;
+    }
+    // A lathe's checker uses X and Z. Keep an existing zone's Y bounds
+    // when editing a machine that came from a file or a library.
+    QJsonArray lo = minimum;
+    QJsonArray hi = maximum;
+    for (int axis = 0; axis < 3; ++axis) {
+      const AxisFields& range = fields[axis];
+      if (range.minimum == nullptr) {
+        continue;
+      }
+      const QString label = zoneAxis(axis, lathe);
+      double lower = 0.0;
+      double upper = 0.0;
+      if (!evaluate(range.minimum->text(), QStringLiteral("length"), &lower) || !std::isfinite(lower)) {
+        refuse(range.minimum, tr("Enter a length for Minimum %1.").arg(label));
+        return;
+      }
+      if (!evaluate(range.maximum->text(), QStringLiteral("length"), &upper) || !std::isfinite(upper)) {
+        refuse(range.maximum, tr("Enter a length for Maximum %1.").arg(label));
+        return;
+      }
+      if (lower > upper) {
+        refuse(range.maximum, tr("Minimum %1 must be at or below Maximum %1.").arg(label));
+        return;
+      }
+      lo.replace(axis, lower);
+      hi.replace(axis, upper);
+    }
+    zone.insert(QStringLiteral("name"), title);
+    zone.insert(QStringLiteral("bounds"), QJsonObject{{QStringLiteral("min"), lo}, {QStringLiteral("max"), hi}});
+    dialog.accept();
+  });
+  prepareModal(&dialog);
+  if (execDialog(&dialog) != QDialog::Accepted) {
+    return std::nullopt;
+  }
+  return zone;
+}
+
+QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones, bool lathe) {
+  auto* page = new QWidget;
+  auto* layout = new QVBoxLayout(page);
+  auto* guidance = new QLabel(tr("Enter the bounds in machine coordinates."));
+  guidance->setWordWrap(true);
+  layout->addWidget(guidance);
+  auto* list = new QTreeWidget;
+  list->setObjectName(QStringLiteral("camMachineZoneList"));
+  list->setRootIsDecorated(false);
+  panel::setCompactIndentation(list, panel::Indent::Flat);
+  QStringList headers{tr("Name"), zoneAxis(0, lathe)};
+  if (!lathe) {
+    headers << zoneAxis(1, lathe);
+  }
+  headers << zoneAxis(2, lathe);
+  list->setHeaderLabels(headers);
+  list->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+  layout->addWidget(list, 1);
+
+  auto* actions = new QHBoxLayout;
+  auto* add = new QPushButton(tr("Add Zone…"));
+  auto* edit = new QPushButton(tr("Edit Zone…"));
+  auto* remove = new QPushButton(tr("Remove Zone"));
+  add->setObjectName(QStringLiteral("camMachineZoneAdd"));
+  edit->setObjectName(QStringLiteral("camMachineZoneEdit"));
+  remove->setObjectName(QStringLiteral("camMachineZoneRemove"));
+  for (QPushButton* button : {add, edit, remove}) {
+    button->setAutoDefault(false);
+    actions->addWidget(button);
+  }
+  actions->addStretch(1);
+  layout->addLayout(actions);
+
+  const auto showZones = [this, list, &zones, lathe](int selected) {
+    list->clear();
+    for (const QJsonValue& value : std::as_const(zones)) {
+      const QJsonObject zone = value.toObject();
+      const QJsonObject bounds = zone.value(QStringLiteral("bounds")).toObject();
+      const QJsonArray lo = bounds.value(QStringLiteral("min")).toArray();
+      const QJsonArray hi = bounds.value(QStringLiteral("max")).toArray();
+      const QString name = text(zone, "name");
+      QStringList cells{name.isEmpty() ? tr("Unnamed zone") : name};
+      for (int axis = 0; axis < 3; ++axis) {
+        if (!lathe || axis != 1) {
+          cells << tr("%1 to %2").arg(m_host.lengthText(lo.at(axis).toDouble()),
+                                     m_host.lengthText(hi.at(axis).toDouble()));
+        }
+      }
+      new QTreeWidgetItem(list, cells);
+    }
+    if (selected >= 0 && selected < list->topLevelItemCount()) {
+      list->setCurrentItem(list->topLevelItem(selected));
+    }
+  };
+  const auto enableActions = [list, edit, remove] {
+    const bool selected = list->currentItem() != nullptr;
+    edit->setEnabled(selected);
+    remove->setEnabled(selected);
+  };
+  connect(list, &QTreeWidget::currentItemChanged, page, enableActions);
+  connect(add, &QPushButton::clicked, page, [this, dialog, &zones, lathe, showZones] {
+    if (const auto zone = askZone(dialog, {}, lathe)) {
+      zones.append(*zone);
+      showZones(static_cast<int>(zones.size()) - 1);
+    }
+  });
+  const auto editZone = [this, dialog, list, &zones, lathe, showZones] {
+    const int row = list->indexOfTopLevelItem(list->currentItem());
+    if (row >= 0) {
+      if (const auto zone = askZone(dialog, zones.at(row).toObject(), lathe)) {
+        zones.replace(row, *zone);
+        showZones(row);
+      }
+    }
+  };
+  connect(edit, &QPushButton::clicked, page, editZone);
+  connect(list, &QTreeWidget::itemDoubleClicked, page, editZone);
+  connect(remove, &QPushButton::clicked, page, [list, &zones, showZones] {
+    const int row = list->indexOfTopLevelItem(list->currentItem());
+    if (row >= 0) {
+      zones.removeAt(row);
+      showZones(std::min(row, static_cast<int>(zones.size()) - 1));
+    }
+  });
+  showZones(0);
+  enableActions();
+  return page;
+}
+
 void CamMachinesDialog::newMachine() {
-  // A router-sized machine on the first controller; the form below changes it.
-  QJsonObject machine{
-      {QStringLiteral("name"), tr("Router")},
-      {QStringLiteral("controller"),
-       m_dialects.isEmpty() ? QStringLiteral("grbl") : text(m_dialects.first().toObject(), "id")},
-      {QStringLiteral("travel"), QJsonObject{{QStringLiteral("min"), QJsonArray{0, 0, -100}},
-                                             {QStringLiteral("max"), QJsonArray{600, 400, 0}}}},
-      {QStringLiteral("spindle"), QJsonObject{{QStringLiteral("min_rpm"), 8000},
-                                              {QStringLiteral("max_rpm"), 24000},
-                                              {QStringLiteral("spin_up_seconds"), 2},
-                                              {QStringLiteral("nose_diameter"), 50},
-                                              {QStringLiteral("nose_length"), 80}}},
-      {QStringLiteral("max_feed"), 5000},
-      {QStringLiteral("rapid_feed"), 5000},
-      {QStringLiteral("tool_changer"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("manual")}}}};
-  // A free id: router, router-2, …
-  QString id = QStringLiteral("router");
+  // The kind first (mitcad#2230): a milling machine, as before, or a lathe.
+  QDialog ask(this);
+  ask.setObjectName(QStringLiteral("camNewMachineDialog"));
+  ask.setWindowTitle(tr("New Machine"));
+  auto* askForm = new QFormLayout;
+  auto* kind = new QComboBox;
+  kind->setObjectName(QStringLiteral("camNewMachineKind"));
+  kind->addItem(tr("Milling machine"), QStringLiteral("mill"));
+  kind->addItem(tr("Lathe"), QStringLiteral("lathe"));
+  kind->setToolTip(tr("A router or mill for the milling operations, or a lathe for turning"));
+  askForm->addRow(tr("Kind"), kind);
+  auto* askButtons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+  auto* askLayout = new QVBoxLayout(&ask);
+  askLayout->addLayout(askForm);
+  askLayout->addWidget(askButtons);
+  connect(askButtons, &QDialogButtonBox::accepted, &ask, &QDialog::accept);
+  connect(askButtons, &QDialogButtonBox::rejected, &ask, &QDialog::reject);
+  prepareModal(&ask);
+  if (execDialog(&ask) != QDialog::Accepted) {
+    return;
+  }
+  const bool lathe = kind->currentData().toString() == QStringLiteral("lathe");
+  qInfo().noquote() << QStringLiteral("CAM new machine: %1").arg(lathe ? QStringLiteral("lathe") : QStringLiteral("mill"));
+  // The first controller of that kind (`cam_dialects`' `lathe`).
+  QString controller = lathe ? QStringLiteral("fanuc_turning") : QStringLiteral("grbl");
+  for (const QJsonValue& value : std::as_const(m_dialects)) {
+    if (value.toObject().value(QStringLiteral("lathe")).toBool() == lathe) {
+      controller = text(value.toObject(), "id");
+      break;
+    }
+  }
+  // A router-sized machine, or a two-axis lathe with a 12-station turret
+  // and a 160 mm chuck (its travel in the lathe's axes: X a radius from
+  // the spindle axis, Z along it); the form below changes it.
+  const QJsonObject machine =
+      lathe ? QJsonObject{{QStringLiteral("name"), tr("Lathe")},
+                          {QStringLiteral("controller"), controller},
+                          {QStringLiteral("travel"), QJsonObject{{QStringLiteral("min"), QJsonArray{-5, 0, -300}},
+                                                                 {QStringLiteral("max"), QJsonArray{150, 0, 200}}}},
+                          {QStringLiteral("spindle"), QJsonObject{{QStringLiteral("min_rpm"), 50},
+                                                                  {QStringLiteral("max_rpm"), 3000},
+                                                                  {QStringLiteral("spin_up_seconds"), 2},
+                                                                  {QStringLiteral("nose_diameter"), 0},
+                                                                  {QStringLiteral("nose_length"), 0}}},
+                          {QStringLiteral("max_feed"), 5000},
+                          {QStringLiteral("rapid_feed"), 20000},
+                          {QStringLiteral("lathe"), QJsonObject{{QStringLiteral("turret_stations"), 12},
+                                                                {QStringLiteral("chuck_diameter"), 160},
+                                                                {QStringLiteral("chuck_length"), 50}}}}
+            : QJsonObject{
+                  {QStringLiteral("name"), tr("Router")},
+                  {QStringLiteral("controller"), controller},
+                  {QStringLiteral("travel"), QJsonObject{{QStringLiteral("min"), QJsonArray{0, 0, -100}},
+                                                         {QStringLiteral("max"), QJsonArray{600, 400, 0}}}},
+                  {QStringLiteral("spindle"), QJsonObject{{QStringLiteral("min_rpm"), 8000},
+                                                          {QStringLiteral("max_rpm"), 24000},
+                                                          {QStringLiteral("spin_up_seconds"), 2},
+                                                          {QStringLiteral("nose_diameter"), 50},
+                                                          {QStringLiteral("nose_length"), 80}}},
+                  {QStringLiteral("max_feed"), 5000},
+                  {QStringLiteral("rapid_feed"), 5000},
+                  {QStringLiteral("tool_changer"), QJsonObject{{QStringLiteral("kind"), QStringLiteral("manual")}}}};
+  // A free id: router, router-2, … (lathe, lathe-2, …)
+  const QString base = lathe ? QStringLiteral("lathe") : QStringLiteral("router");
+  QString id = base;
   for (int n = 2; !machineJson(id).isEmpty(); ++n) {
-    id = QStringLiteral("router-%1").arg(n);
+    id = QStringLiteral("%1-%2").arg(base).arg(n);
   }
   const QJsonObject start{{QStringLiteral("id"), id}, {QStringLiteral("machine"), machine}};
   // Added with these defaults, then Edit Machine…'s form for its own
@@ -528,11 +923,13 @@ void CamMachinesDialog::editMachine() {
   const QJsonArray min = travel.value(QStringLiteral("min")).toArray();
   const QJsonArray max = travel.value(QStringLiteral("max")).toArray();
   QJsonObject spindle = body.value(QStringLiteral("spindle")).toObject();
+  QJsonArray zones = body.value(QStringLiteral("zones")).toArray();
 
   QDialog dialog(this);
   dialog.setObjectName(QStringLiteral("camMachineDialog"));
   dialog.setWindowTitle(tr("Edit Machine"));
-  auto* form = new QFormLayout;
+  auto* machinePage = new QWidget;
+  auto* form = new QFormLayout(machinePage);
   QLineEdit* name = field(QStringLiteral("camMachineName"), text(body, "name"));
   form->addRow(tr("Name"), name);
   auto* controller = new QComboBox;
@@ -558,12 +955,18 @@ void CamMachinesDialog::editMachine() {
   controller->setToolTip(tr("The controller the machine runs: the G-code it is written for"));
   form->addRow(tr("Controller"), controller);
   const auto mm = [](double value) { return plain(value) + QStringLiteral(" mm"); };
-  QLineEdit* travelX = field(QStringLiteral("camMachineTravelX"), mm(max.at(0).toDouble() - min.at(0).toDouble()));
+  // A lathe's travel is in its axes (mitcad#2230): X the tool's distance
+  // from the spindle axis, Z along the spindle; it has no Y.
+  QLineEdit* travelX =
+      field(QStringLiteral("camMachineTravelX"), mm(max.at(0).toDouble() - min.at(0).toDouble()),
+            lathe ? tr("How far the tool moves away from the spindle axis: a radius") : QString());
   QLineEdit* travelY = field(QStringLiteral("camMachineTravelY"), mm(max.at(1).toDouble() - min.at(1).toDouble()));
-  QLineEdit* travelZ = field(QStringLiteral("camMachineTravelZ"), mm(max.at(2).toDouble() - min.at(2).toDouble()));
+  QLineEdit* travelZ = field(QStringLiteral("camMachineTravelZ"), mm(max.at(2).toDouble() - min.at(2).toDouble()),
+                             lathe ? tr("How far the tool moves along the spindle axis") : QString());
   form->addRow(tr("Travel X"), travelX);
   form->addRow(tr("Travel Y"), travelY);
   form->addRow(tr("Travel Z"), travelZ);
+  form->setRowVisible(travelY, !lathe);
   QLineEdit* minRpm = field(QStringLiteral("camMachineMinRpm"), plain(numberOf(spindle, "min_rpm")));
   QLineEdit* maxRpm = field(QStringLiteral("camMachineMaxRpm"), plain(numberOf(spindle, "max_rpm")));
   QLineEdit* spinUp = field(QStringLiteral("camMachineSpinUp"), plain(numberOf(spindle, "spin_up_seconds")),
@@ -576,6 +979,8 @@ void CamMachinesDialog::editMachine() {
   QLineEdit* noseLength = field(QStringLiteral("camMachineNoseLength"), mm(numberOf(spindle, "nose_length")));
   form->addRow(tr("Spindle Nose Diameter"), noseDiameter);
   form->addRow(tr("Spindle Nose Length"), noseLength);
+  form->setRowVisible(noseDiameter, !lathe);
+  form->setRowVisible(noseLength, !lathe);
   QLineEdit* maxFeed = field(QStringLiteral("camMachineMaxFeed"), mm(numberOf(body, "max_feed")),
                              tr("The fastest cutting feed, a length per minute"));
   QLineEdit* rapid = field(QStringLiteral("camMachineRapid"), mm(numberOf(body, "rapid_feed")),
@@ -593,27 +998,69 @@ void CamMachinesDialog::editMachine() {
   changer->setCurrentIndex(std::max(0, changer->findData(changerKind)));
   changer->setToolTip(tr("Who changes the tools: the operator, or the controller's changer"));
   form->addRow(tr("Tool Changer"), changer);
+  // The tool changer of a lathe is its turret.
+  form->setRowVisible(changer, !lathe);
+  // A lathe's own: the turret and the chuck (mitcad#2230).
+  QJsonObject latheJson = body.value(QStringLiteral("lathe")).toObject();
+  auto* turret = new QSpinBox;
+  turret->setObjectName(QStringLiteral("camMachineTurret"));
+  turret->setRange(1, 99);
+  turret->setValue(latheJson.value(QStringLiteral("turret_stations")).toInt(12));
+  turret->setToolTip(tr("The turret's stations: a lathe tool's number is its station"));
+  form->addRow(tr("Turret Stations"), turret);
+  QLineEdit* chuckDiameter = field(QStringLiteral("camMachineChuckDiameter"), mm(numberOf(latheJson, "chuck_diameter")),
+                                   tr("The chuck's diameter, checked as a zone; 0: not checked"));
+  QLineEdit* chuckLength = field(QStringLiteral("camMachineChuckLength"), mm(numberOf(latheJson, "chuck_length")),
+                                 tr("How far the jaws reach out along the spindle from the face they grip at"));
+  form->addRow(tr("Chuck Diameter"), chuckDiameter);
+  form->addRow(tr("Chuck Length"), chuckLength);
+  form->setRowVisible(turret, lathe);
+  form->setRowVisible(chuckDiameter, lathe);
+  form->setRowVisible(chuckLength, lathe);
+  qInfo().noquote() << QStringLiteral("CAM machine form: %1: %2")
+                           .arg(text(machine, "id"), lathe ? QStringLiteral("lathe") : QStringLiteral("mill"));
   auto* message = new QLabel;
   message->setObjectName(QStringLiteral("camMachineMessage"));
   message->setWordWrap(true);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+  auto* tabs = new QTabWidget;
+  tabs->tabBar()->setObjectName(QStringLiteral("camMachineTabs"));
+  tabs->addTab(machinePage, tr("Machine"));
+  tabs->addTab(machineZonesPage(&dialog, zones, lathe), tr("Keep-Out Zones"));
   auto* layout = new QVBoxLayout(&dialog);
-  layout->addLayout(form);
+  layout->addWidget(tabs);
   layout->addWidget(message);
   layout->addWidget(buttons);
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-    // Every length as the design evaluates it: "600 mm", "24 in".
-    const std::pair<QLineEdit*, QString> lengths[] = {
-        {travelX, tr("Travel X")}, {travelY, tr("Travel Y")}, {travelZ, tr("Travel Z")},
-        {noseDiameter, tr("Spindle Nose Diameter")}, {noseLength, tr("Spindle Nose Length")},
-        {maxFeed, tr("Fastest Feed per Minute")},    {rapid, tr("Rapid Rate per Minute")}};
-    double values[7] = {};
-    for (int i = 0; i < 7; ++i) {
-      if (!evaluate(lengths[i].first->text(), QStringLiteral("length"), &values[i]) || values[i] <= 0.0) {
-        message->setText(tr("%1: a length above zero.").arg(lengths[i].second));
-        return;
+    // Every length as the design evaluates it: "600 mm", "24 in"; the
+    // rows a lathe hides keep their values.
+    const auto lengthOf = [this, message, tabs](QLineEdit* edit, const QString& label, bool zero, double* value) {
+      if (!evaluate(edit->text(), QStringLiteral("length"), value) || *value < 0.0 || (!zero && *value <= 0.0)) {
+        tabs->setCurrentIndex(0);
+        message->setText(zero ? tr("%1: a length of zero or more.").arg(label)
+                              : tr("%1: a length above zero.").arg(label));
+        return false;
       }
+      return true;
+    };
+    // Travel X, Y, Z, the nose's diameter and length, the fastest feed,
+    // the rapid rate.
+    double values[7] = {0.0, max.at(1).toDouble() - min.at(1).toDouble(), 0.0, numberOf(spindle, "nose_diameter"),
+                        numberOf(spindle, "nose_length"), 0.0, 0.0};
+    if (!lengthOf(travelX, tr("Travel X"), false, &values[0]) ||
+        (!lathe && !lengthOf(travelY, tr("Travel Y"), false, &values[1])) ||
+        !lengthOf(travelZ, tr("Travel Z"), false, &values[2]) ||
+        (!lathe && !lengthOf(noseDiameter, tr("Spindle Nose Diameter"), false, &values[3])) ||
+        (!lathe && !lengthOf(noseLength, tr("Spindle Nose Length"), false, &values[4])) ||
+        !lengthOf(maxFeed, tr("Fastest Feed per Minute"), false, &values[5]) ||
+        !lengthOf(rapid, tr("Rapid Rate per Minute"), false, &values[6])) {
+      return;
+    }
+    double chuck[2] = {};
+    if (lathe && (!lengthOf(chuckDiameter, tr("Chuck Diameter"), true, &chuck[0]) ||
+                  !lengthOf(chuckLength, tr("Chuck Length"), true, &chuck[1]))) {
+      return;
     }
     double rpm[3] = {};
     const std::pair<QLineEdit*, QString> numbers[] = {{minRpm, tr("Lowest Spindle Speed (rpm)")},
@@ -621,6 +1068,7 @@ void CamMachinesDialog::editMachine() {
                                                       {spinUp, tr("Spin-Up Time (s)")}};
     for (int i = 0; i < 3; ++i) {
       if (!evaluate(numbers[i].first->text(), QStringLiteral("unitless"), &rpm[i]) || rpm[i] < 0.0) {
+        tabs->setCurrentIndex(0);
         message->setText(tr("%1: a number of zero or more.").arg(numbers[i].second));
         return;
       }
@@ -631,7 +1079,8 @@ void CamMachinesDialog::editMachine() {
     body.insert(QStringLiteral("name"), name->text().trimmed());
     body.insert(QStringLiteral("controller"), controller->currentData().toString());
     // The travel keeps its corner: X and Y from their lowest, Z down from
-    // its highest (the spindle's top).
+    // its highest (the spindle's top; a lathe's end away from the chuck).
+    // A lathe's Y is unused and stays as it is.
     body.insert(QStringLiteral("travel"),
                 QJsonObject{{QStringLiteral("min"), QJsonArray{x0, y0, z1 - values[2]}},
                             {QStringLiteral("max"), QJsonArray{x0 + values[0], y0 + values[1], z1}}});
@@ -643,9 +1092,16 @@ void CamMachinesDialog::editMachine() {
     body.insert(QStringLiteral("spindle"), spindle);
     body.insert(QStringLiteral("max_feed"), values[5]);
     body.insert(QStringLiteral("rapid_feed"), values[6]);
-    if (changer->currentData().toString() != changerKind) {
+    body.insert(QStringLiteral("zones"), zones);
+    if (!lathe && changer->currentData().toString() != changerKind) {
       body.insert(QStringLiteral("tool_changer"),
                   QJsonObject{{QStringLiteral("kind"), changer->currentData().toString()}});
+    }
+    if (lathe) {
+      latheJson.insert(QStringLiteral("turret_stations"), turret->value());
+      latheJson.insert(QStringLiteral("chuck_diameter"), chuck[0]);
+      latheJson.insert(QStringLiteral("chuck_length"), chuck[1]);
+      body.insert(QStringLiteral("lathe"), latheJson);
     }
     dialog.accept();
   });
@@ -763,7 +1219,8 @@ void CamMachinesDialog::addTool() {
   while (taken.contains(next)) {
     ++next;
   }
-  const std::optional<QJsonObject> tool = askTool(this, QJsonObject(), next, taken);
+  const std::optional<QJsonObject> tool =
+      askTool(this, QJsonObject(), next, taken, isLathe(machine.value(QStringLiteral("machine")).toObject()));
   if (!tool) {
     return;
   }
@@ -796,7 +1253,8 @@ void CamMachinesDialog::editTool() {
       taken << other;
     }
   }
-  const std::optional<QJsonObject> changed = askTool(this, tool, number, taken);
+  const std::optional<QJsonObject> changed =
+      askTool(this, tool, number, taken, isLathe(machineJson(id).value(QStringLiteral("machine")).toObject()));
   if (!changed) {
     return;
   }

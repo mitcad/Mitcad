@@ -59,6 +59,10 @@ public:
   void setAgentIndicator(QWidget* indicator);
   // The chat panel's button (mitcad#947), right of the agent indicator.
   void setChatButton(QWidget* button);
+  // The macro recording indicator (mitcad#2245), left of the project
+  // indicator: shown only while a macro is recorded (the caller shows and
+  // hides it); the part "titleMacro" while it shows.
+  void setMacroIndicator(QWidget* indicator);
   // The Boost development button (mitcad#1990, BoostButton): the Floating
   // row's right part, left of the indicators (or Preferences and Help);
   // the part "titleBoost" while it shows.
@@ -215,6 +219,7 @@ private:
   QWidget* m_search = nullptr;
   QPointer<QWidget> m_indicator;
   QPointer<QWidget> m_agentIndicator;
+  QPointer<QWidget> m_macroIndicator; // setMacroIndicator
   QPointer<QWidget> m_chatButton;
   QPointer<QWidget> m_boost; // setBoostButton
   QPointer<QWidget> m_discord; // setDiscordButton

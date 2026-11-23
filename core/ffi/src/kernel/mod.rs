@@ -116,6 +116,8 @@ pub mod flex;
 pub mod flex_drape;
 // Surface groups of faces for model_render's edges (mitcad#2148).
 pub mod surface_groups;
+// Point Cloud Deviation: closest points on a body's faces (mitcad#2240).
+pub mod point_clouds;
 
 use std::sync::Arc;
 
@@ -400,6 +402,7 @@ impl Kernel for OcctKernel {
                         out.knots = knots.to_vec();
                         out.radii = radii.to_vec();
                     }
+                    FilletSize::FullRound => out.kind = dressup::ffi::FilletKind::FullRound,
                 }
                 out
             })
@@ -3413,6 +3416,26 @@ impl Kernel for OcctKernel {
 
     fn face_surface_groups(&self, shape: &Self::Shape) -> Result<Vec<u32>, KernelError> {
         surface_groups::ffi::face_surface_groups(occt(shape)?).map_err(failed)
+    }
+
+    // Point Cloud Deviation: closest points on a body's faces (mitcad#2240;
+    // point_clouds.rs).
+
+    fn boundary_nearest(
+        &self,
+        shape: &Self::Shape,
+        faces: &[FaceName],
+        points: &[Vec3],
+    ) -> Result<Vec<(f64, Vec3)>, KernelError> {
+        let flat: Vec<f64> = points.iter().flatten().copied().collect();
+        let found = point_clouds::ffi::boundary_nearest(occt(shape)?, &face_names(faces), &flat)
+            .map_err(failed)?;
+        Ok(found
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| (c[0], [c[1], c[2], c[3]]))
+            .collect())
     }
 }
 

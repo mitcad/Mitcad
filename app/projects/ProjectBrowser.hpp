@@ -17,8 +17,11 @@
 //
 // Left, the projects (Local and Cloud, with the Projects panel's names and
 // icons) and their folders; right, the place's sub-folders, then its
-// designs with their version, edit lock, last change and who made it. A
-// double-click (or Enter) on a folder goes into it, on a design opens it;
+// designs with their version, edit lock, last change and who made it, then
+// its other files (mitcad#2204) with the system's icon, "new" or "*" and
+// their size in the tooltip. A double-click (or Enter) on a folder goes
+// into it, on a design opens it, on another file hands it to the system's
+// app (the browser closes, "chose <path> (a file for the system's app)");
 // Backspace goes up. The path bar's parts are buttons. Typing in Search
 // lists the designs whose name holds the text, in every project or in the
 // place's (In), with their project and folder. Another File... leaves the
@@ -67,6 +70,7 @@ struct ProjectBrowserOptions {
 struct ProjectBrowserResult {
   bool other = false;    // Another File...: the caller asks with the system's dialog
   bool readOnly = false; // the read-only check was on
+  bool file = false;     // another file of the project (mitcad#2204): for the system's app
   QString root;          // the chosen design's project
   QString path;          // the chosen design's file (absolute, '/')
 };

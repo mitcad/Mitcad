@@ -16,11 +16,14 @@ commands make (`SketchEdit`). It sits below the model's core, on
 | `solve` | The solve and its status |
 | `edit`, `modify`, `tools`, `points`, `cleanup`, `stale`, `convert`, `axes` | Sketch edits (`SketchEdit`) |
 | `fillet` | The tangent circle of a sketch fillet at a corner of a circular arc with a line or an arc (mitcad#1192) |
+| `conic` | Conic curves (mitcad#2236): the rational quadratic of two ends, a shoulder point and Rho, its pieces for Trim, Break and Extend, the Conic Curve tool and a conic's Rho (`SketchEdit::set_conic_rho`) |
+| `equation` | Equation curves (mitcad#2237): formulas of the design's parameters kept beside the fit point spline whose fixed points they place, placed again before every solve; Equation Curve and Edit Equation Curve |
 | `project` | Model geometry and other sketches' curves and points (`ProjectionSource`, `SketchEntityRef`, mitcad#904) projected into the sketch; linked projections that follow their sources |
 | `offset`, `pattern`, `spacing` | Offsets, patterns, equal spacing |
 | `text`, `fonts`, `code`, `svg`, `dxf` | Texts, font files, QR codes, SVG and DXF drawings |
 | `point_file`, `point_fit`, `bspline` | Insert Points (mitcad#2232): x y coordinates of a point file and airfoils (Selig, Lednicer) into the sketch, the least-squares cubic spline fit, the cubic B-spline basis it shares with the mesh tools' surface fit |
 | `legacy` | The shapes of early version 2 files |
+| `offset_hold` | Points held on derived offsets (mitcad#2278): a `coincident` with what a derived offset computes, solved as the exact offset of its source curve (`PointOnOffset`, `PointOnOffsetCorner` of the solver) |
 
 The model re-exports the crate as `mitcad_model::sketch` and the
 definition as `mitcad_model::features::sketch`, so code above the model

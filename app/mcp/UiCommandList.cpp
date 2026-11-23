@@ -59,6 +59,8 @@ bool opensDialog(const QString& id) {
   // This creates an empty document owner without a file, modal question or
   // external application. All existing dialog/file refusals still apply.
   if (id == QStringLiteral("window.new")) return false;
+  // Record Macro and Stop Recording (mitcad#2245) open nothing either.
+  if (id == QStringLiteral("tools.macro_record") || id == QStringLiteral("tools.macro_stop")) return false;
   for (const char* prefix : {"file.", "help.", "tools.", "insert."}) {
     if (id.startsWith(QLatin1String(prefix))) {
       return true;
@@ -88,7 +90,8 @@ QString dialogViewRefusal(const QString& id) {
   if (id.startsWith(QLatin1String("help."))) {
     return QStringLiteral("it opens another application or a web page");
   }
-  for (const char* word : {"import", "export", "insert_", "publish"}) {
+  // Run Script… and Save Macro… read and write script files (mitcad#2245).
+  for (const char* word : {"import", "export", "insert_", "publish", "run_script", "macro_save"}) {
     if (id.contains(QLatin1String(word))) {
       return QStringLiteral("its dialog reads or writes files");
     }

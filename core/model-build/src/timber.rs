@@ -179,6 +179,7 @@ impl<K: Kernel> PointsCrateOps<K> for Document<K> {
                             z_axis: Some(d_local),
                             x_axis: Some(x_local),
                             shift: None,
+                            relative: None,
                         }),
                     },
                     frame_b: frame,
@@ -611,6 +612,7 @@ impl<K: Kernel> FaceSheetCrateOps<K> for Document<K> {
                 z_axis: Some(lz),
                 x_axis: Some(lx),
                 shift: None,
+                relative: None,
             }),
         };
         let shown: std::collections::BTreeMap<String, f64> = numbers.into_iter().collect();

@@ -48,7 +48,7 @@ void registerModifyCommands(CommandRegistry& registry, const CommandContext& con
 // "planes", "axes" and "points" (mitcad#1778).
 void registerConstructCommands(CommandRegistry& registry, const CommandContext& context);
 // ASSEMBLE (mitcad#55), in the menu's sections (mitcad#1778): Joint,
-// As-Built Joint, Joint Origin, Rigid Group, Assembly Constraint; Drive
+// As-Built Joint, Joint Origin, Rigid Group, Constraint, Constraint Set; Drive
 // Joint, Motion Link, Contact Set. New Component comes first
 // (registerCreateCommands); Animate Joint and Motion Study end "motion",
 // Insert Component and Insert from Library are the last section (the main

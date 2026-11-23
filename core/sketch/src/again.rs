@@ -969,6 +969,17 @@ fn placed(kind: &EntityKind, at: &dyn Fn(EntityUid) -> Option<P2>) -> Option<Cur
                 knots: knots.clone(),
             })
         }
+        EntityKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } => Curve2::Nurbs(crate::conic::nurbs(
+            at(*start)?,
+            at(*apex)?,
+            at(*end)?,
+            *rho,
+        )),
         EntityKind::Point { .. } | EntityKind::FittedSpline { .. } => return None,
     })
 }

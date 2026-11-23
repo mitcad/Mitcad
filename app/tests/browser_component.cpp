@@ -157,6 +157,16 @@ void offerTests(const QString& root) {
 
   CHECK(mitcad::browserInterfaceMessage(2, 1).contains(text("1")));
   CHECK(mitcad::browserPublishedInterfaceMessage(2, {1, 3}).contains(text("1, 3")));
+  // Only older interfaces published (mitcad#2289): not "update MitCad",
+  // which would not help; a newer one among them: update MitCad.
+  CHECK(mitcad::browserPublishedInterfaceMessage(4, {2, 3}).contains(text("not published yet")));
+  CHECK(!mitcad::browserPublishedInterfaceMessage(4, {2, 3}).contains(text("Update MitCad")));
+  CHECK(mitcad::browserPublishedInterfaceMessage(4, {3, 5}).contains(text("Update MitCad")));
+  // A component MitCad does not replace: its interface and this MitCad's,
+  // no download promised.
+  const QString module = mitcad::browserModuleInterfaceMessage(4, 3);
+  CHECK(module.contains(text("interface 3")) && module.contains(text("needs 4")));
+  CHECK(!module.contains(text("download")));
   CHECK(!mitcad::browserDownloadSize(52345678).isEmpty());
 }
 

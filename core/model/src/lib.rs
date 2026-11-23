@@ -473,3 +473,13 @@ pub use document::{SelectionSet, SetMember};
 pub use document::OperationFollow;
 // Why a body may not go to a print service (mitcad#2214).
 pub use document::PrintServiceBlock;
+// Point clouds: their files, the item kept in the design and Point Cloud
+// Deviation (mitcad#2240).
+pub mod point_cloud_files;
+pub use document::{
+    CloudColors, CloudData, CloudInsert, CloudPoints, CloudSource, DEFAULT_DEVIATION_TOLERANCE,
+    DEFAULT_MAX_SAMPLES, DEFAULT_WORST, Deviation, DeviationPoint, MAX_SAMPLES, PointCloud,
+    PointCloudDeviation, check_deviation_settings,
+};
+// Decals: images put on faces of bodies (mitcad#2244).
+pub use document::{DEFAULT_DECAL_OPACITY, Decal, DecalEdit, DecalMesh, DecalSurface, DecalTarget};

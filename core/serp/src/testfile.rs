@@ -24,6 +24,9 @@ pub struct TestScene {
     /// Members added to the scene as they are (`pointclouds`, `layouts`,
     /// `history_records`, ...).
     pub extra: Map<String, Value>,
+    /// Binary members of the container by name (a point cloud's
+    /// `blobs/<id>/xyz.f32`, mitcad#2240), stored as they are.
+    pub members: Vec<(String, Vec<u8>)>,
 }
 
 impl Default for TestScene {
@@ -36,8 +39,45 @@ impl Default for TestScene {
             objects: Vec::new(),
             blocks: Vec::new(),
             extra: Map::new(),
+            members: Vec::new(),
         }
     }
+}
+
+/// A point cloud as the writer keeps it (mitcad#2240): its entry for the
+/// scene's `pointclouds` and its members, `blobs/<id>/xyz.f32` (the points
+/// from `origin` as little-endian float32) and `blobs/<id>/rgb.u8`.
+pub fn cloud(
+    id: &str,
+    name: &str,
+    layer: &str,
+    origin: Option<[f64; 3]>,
+    points: &[[f32; 3]],
+    colors: Option<&[[u8; 3]]>,
+) -> (Value, Vec<(String, Vec<u8>)>) {
+    let xyz = format!("blobs/{id}/xyz.f32");
+    let mut blobs = json!({"xyz": xyz});
+    let mut members = vec![(
+        xyz,
+        points
+            .iter()
+            .flatten()
+            .flat_map(|c| c.to_le_bytes())
+            .collect(),
+    )];
+    if let Some(colors) = colors {
+        let rgb = format!("blobs/{id}/rgb.u8");
+        blobs["rgb"] = json!(rgb);
+        members.push((rgb, colors.iter().flatten().copied().collect()));
+    }
+    let mut entry = json!({
+        "id": id, "name": name, "layer": layer, "visible": true,
+        "count": points.len(), "blobs": blobs,
+    });
+    if let Some(origin) = origin {
+        entry["origin"] = json!(origin);
+    }
+    (entry, members)
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +308,11 @@ pub fn write(scene: &TestScene) -> Vec<u8> {
             mitcad_zip::Method::Stored,
         )
         .expect("a small test archive");
+    for (name, bytes) in &scene.members {
+        writer
+            .add(name, bytes, mitcad_zip::Method::Stored)
+            .expect("a small test archive");
+    }
     writer.finish().expect("a small test archive")
 }
 

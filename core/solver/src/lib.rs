@@ -100,3 +100,5 @@ pub use spatial::SpatialDir;
 // Relations along constant directions: a rotated placement plane's axes and
 // normal (mitcad#1661).
 pub use spatial::SpatialAlong;
+// Points on offsets of curves (mitcad#2278).
+pub use types::OffsetAt;

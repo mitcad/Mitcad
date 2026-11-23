@@ -278,6 +278,56 @@ pub struct PlacedView {
     pub holes: Option<Vec<usize>>,
     /// The pens chosen in it for edges and bodies (mitcad#1546).
     pub pens: LinePens,
+    /// Texts it writes beside its lines: a Flat Pattern's bend notes
+    /// (mitcad#2280).
+    pub notes: Vec<ViewNote>,
+}
+
+/// A text a view writes beside one of its lines (mitcad#2280: a Flat
+/// Pattern's bend note): along the line through `at` (view coordinates)
+/// in the direction `angle` (radians in the view's plane), just above it
+/// as it is read. One in a band a break takes out is not written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewNote {
+    pub at: P2,
+    pub angle: f64,
+    pub text: String,
+}
+
+/// The letters' height of a Flat Pattern's bend notes, paper mm
+/// (mitcad#2280).
+pub const BEND_NOTE_TEXT: f64 = 2.5;
+
+/// How far a bend note stands off its line, paper mm.
+const BEND_NOTE_GAP: f64 = 1.0;
+
+/// A bend note's baseline as it is read (mitcad#2280): the direction of its
+/// line turned to read from left to right or from below, and its anchor
+/// just above the line's point `at` (sheet mm).
+pub fn bend_note_place(at: P2, angle: f64) -> (P2, f64) {
+    let mut a = angle.rem_euclid(TAU);
+    // Read from the left, or upwards on an upright line.
+    if a > PI / 2.0 + 1e-9 && a <= 1.5 * PI + 1e-9 {
+        a -= PI;
+    }
+    if a > PI {
+        a -= TAU;
+    }
+    let (s, c) = a.sin_cos();
+    // Above the line as it is read: its left normal.
+    ([at[0] - s * BEND_NOTE_GAP, at[1] + c * BEND_NOTE_GAP], a)
+}
+
+/// A Flat Pattern's bend note (mitcad#2280): the bend's direction, its
+/// angle (degrees, as the bend table gives it, without its sign) and its
+/// inside radius in the sheet's unit: `UP 90° R3`.
+pub fn bend_note_text(up: bool, angle_degrees: f64, radius: f64, units: Units) -> String {
+    format!(
+        "{} {}° R{}",
+        if up { "UP" } else { "DOWN" },
+        super::trim_number(angle_degrees.abs(), 2),
+        units.length(radius)
+    )
 }
 
 /// A model edge as a view sees it, to find its lines among the projected
@@ -1282,6 +1332,7 @@ pub fn compose(options: &DrawingOptions, units: Units, input: &SheetInput) -> Co
             shading: Vec::new(),
             holes: None,
             pens: LinePens::default(),
+            notes: Vec::new(),
         });
     }
     // The section's cutting plane in a view that sees it edge on.
@@ -1325,9 +1376,13 @@ pub fn compose(options: &DrawingOptions, units: Units, input: &SheetInput) -> Co
 }
 
 /// The pen of an edge: a thread's roots (ISO 6410) and tangent edges
-/// narrow, other visible edges wide.
-pub(crate) fn edge_pen(visible: bool, kind: ViewEdgeKind) -> Pen {
+/// narrow, other visible edges wide; a Flat Pattern's bend lines
+/// (mitcad#2280) narrow, up bends long dash dotted, down bends long dash
+/// double dotted.
+pub fn edge_pen(visible: bool, kind: ViewEdgeKind) -> Pen {
     match (visible, kind) {
+        (_, ViewEdgeKind::Bend { up: true }) => Pen::Chain,
+        (_, ViewEdgeKind::Bend { up: false }) => Pen::Phantom,
         (false, _) => Pen::Hidden,
         (true, ViewEdgeKind::Smooth | ViewEdgeKind::ThreadRoot) => Pen::Thin,
         (true, _) => Pen::Thick,
@@ -1426,6 +1481,19 @@ pub fn render(
                     }
                 }
             });
+        }
+        // A Flat Pattern's bend notes (mitcad#2280), but in a band a break
+        // takes out.
+        for note in &view.notes {
+            if place
+                .breaks
+                .iter()
+                .any(|b| note.at[b.axis] > b.from && note.at[b.axis] < b.to)
+            {
+                continue;
+            }
+            let (at, angle) = bend_note_place(place.at(note.at), note.angle);
+            g.text(at, BEND_NOTE_TEXT, angle, Anchor::Middle, note.text.clone());
         }
         if !view.bounds.is_empty() {
             break_lines(&mut g, view);
@@ -2118,6 +2186,40 @@ mod tests {
             depth,
             counterbore: None,
             countersink: None,
+        }
+    }
+
+    /// A Flat Pattern's bend lines are thin, up and down bends in two
+    /// patterns; their notes say the direction, the angle without its sign
+    /// and the inside radius, and read from the left or from below, just
+    /// above their line (mitcad#2280).
+    #[test]
+    fn bend_lines_are_thin_and_their_notes_read_upright() {
+        assert_eq!(edge_pen(true, ViewEdgeKind::Bend { up: true }), Pen::Chain);
+        assert_eq!(
+            edge_pen(true, ViewEdgeKind::Bend { up: false }),
+            Pen::Phantom
+        );
+        assert_eq!(edge_pen(true, ViewEdgeKind::Sharp), Pen::Thick);
+        assert_eq!(bend_note_text(true, -90.0, 3.0, Units::MM), "UP 90° R3");
+        assert_eq!(
+            bend_note_text(false, 45.5, 1.25, Units::MM),
+            "DOWN 45.5° R1.25"
+        );
+        let inch = Units::by_symbol("in").expect("inches");
+        assert_eq!(bend_note_text(false, 90.0, 25.4, inch), "DOWN 90° R1");
+        let near = |a: P2, b: P2| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        // Along x either way: read from the left, above the line.
+        for angle in [0.0, PI] {
+            let (at, a) = bend_note_place([10.0, 20.0], angle);
+            assert!(a.abs() < 1e-9, "{a}");
+            assert!(near(at, [10.0, 20.0 + BEND_NOTE_GAP]), "{at:?}");
+        }
+        // Upright either way: read upwards, left of the line.
+        for angle in [PI / 2.0, -PI / 2.0] {
+            let (at, a) = bend_note_place([10.0, 20.0], angle);
+            assert!((a - PI / 2.0).abs() < 1e-9, "{a}");
+            assert!(near(at, [10.0 - BEND_NOTE_GAP, 20.0]), "{at:?}");
         }
     }
 

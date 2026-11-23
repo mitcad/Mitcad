@@ -20,7 +20,7 @@
 # back to Ask, and Keep Roller keeps the joint in the roller, which refuses
 # the frame's face. Last, Tube's and Frame's faces selected before Joint
 # starts get the same question before the panel opens (mitcad#1864). Then,
-# with the root active, Joint, As-Built Joint and Assembly Constraint
+# with the root active, Joint, As-Built Joint and Constraint Set
 # between two parts of one sub-assembly (mitcad#2027, GitHub
 # mitcad/Mitcad#457): side A's ghost covers only its own occurrence's
 # bodies, B is picked beside it and the question offers the sub-assembly.
@@ -67,7 +67,7 @@ ui_expect_log 'View ghosts: only O6/O7 (1 body)' 'side A inside the sub-assembly
 ui_expect_log 'View ghosts: only O6 (1 body)' "the sub-assembly's own body ghosts only itself"
 ui_expect_log 'Joint component answer: make it in Carrier' 'Make it in the sub-assembly that holds both'
 ui_expect_log 'As-Built Joint component answer: make it in Carrier' 'As-Built Joint asks for the sub-assembly'
-ui_expect_log 'Assembly Constraint component answer: make it in Carrier' 'Assembly Constraint asks for the sub-assembly'
+ui_expect_log 'Constraint Set component answer: make it in Carrier' 'Constraint Set asks for the sub-assembly'
 ui_expect_log 'TestDriver: done' 'the joint goes into the component that holds its picks'
 UI_RUNNER=""
 

@@ -114,7 +114,9 @@ pub enum PlaneDefinition<P = ParamId> {
     },
     /// Through a line and a point off it.
     EdgeAndPoint { line: GeomRef, point: GeomRef },
-    /// Tangent to a face at the face point nearest to a point.
+    /// Tangent to a face at the face point nearest to a point. The face may
+    /// be a plane (mitcad#2282): the result is that plane (before the
+    /// offset), facing along its normal.
     TangentAtPoint {
         face: GeomRef,
         point: GeomRef,
@@ -159,7 +161,9 @@ pub enum PlaneDefinition<P = ParamId> {
     },
     /// Plane Perpendicular to Face at Point (mitcad#2111): through the face
     /// point nearest to `point`, containing the face's normal there, turned
-    /// about that normal by `angle` from the reference direction.
+    /// about that normal by `angle` from the reference direction. The face
+    /// may be a plane (mitcad#2282): through the point's projection onto
+    /// it, containing its normal.
     PerpendicularAtPoint {
         face: GeomRef,
         point: GeomRef,
@@ -324,7 +328,9 @@ impl<P> ConstructionPlaneDef<P> {
                 (point3, Want::Point),
             ],
             D::EdgeAndPoint { line, point } => vec![(line, Want::Line), (point, Want::Point)],
-            D::TangentAtPoint { face, point, .. } => vec![(face, Want::Face), (point, Want::Point)],
+            D::TangentAtPoint { face, point, .. } => {
+                vec![(face, Want::FaceOrPlane), (point, Want::Point)]
+            }
             D::AlongPath { .. } | D::Fixed { .. } | D::FlangeWall { .. } => Vec::new(),
             D::NormalAtPoint { point, .. } => vec![(point, Want::Point)],
             D::OffsetThroughPoint { plane, point } => {
@@ -332,7 +338,7 @@ impl<P> ConstructionPlaneDef<P> {
             }
             // The reference is checked as a direction (`direction`).
             D::PerpendicularAtPoint { face, point, .. } => {
-                vec![(face, Want::Face), (point, Want::Point)]
+                vec![(face, Want::FaceOrPlane), (point, Want::Point)]
             }
         }
     }

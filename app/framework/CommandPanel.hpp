@@ -134,6 +134,8 @@ signals:
   // A note row's button (InputDef::onNoteAction, mitcad#655).
   void noteActionClicked(const QString& key, int index);
   void accepted();
+  // Apply (CommandDef::applyNext, mitcad#2293).
+  void applied();
   void rejected();
 
 protected:
@@ -269,6 +271,8 @@ private:
   // label above keeps its text, hidden then.
   ResultRows* m_resultRows = nullptr;
   QPushButton* m_ok = nullptr;
+  // Apply beside OK (CommandDef::applyNext, mitcad#2293); null without it.
+  QPushButton* m_apply = nullptr;
   QWidget* m_buttonBox = nullptr; // OK and Cancel (and the busy mark) until takeButtons
   // Beside OK and Cancel while a preview computes (mitcad#1907).
   BusyMark* m_busy = nullptr;

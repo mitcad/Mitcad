@@ -1201,6 +1201,62 @@ void rowLookTests() {
   CHECK(!field->isOpen());
 }
 
+// A field whose fx opens Edit Formula through its owner (Edit Parameters'
+// Expression cells, Add User Parameter's Expression; mitcad#2179,
+// mitcad#2290): the fx button and activateFx give the owner the text typed
+// so far and never open the list, which a typed name still opens (fx then
+// closes it); entering the field opens nothing.
+void fxFormulaTests() {
+  QWidget window;
+  window.resize(640, 480);
+  setParameterSource(&window, {[] { return designParameters(); }, {}, [] { return QStringLiteral("mm"); }});
+  auto* edit = new QLineEdit(&window);
+  edit->setGeometry(20, 20, 200, 24);
+  QStringList asked;
+  ParameterFieldOptions options;
+  options.label = QStringLiteral("test expression");
+  options.anyKind = true;
+  options.create = false;
+  options.formula = [&asked](const QString& text) { asked << text; };
+  ParameterField* field = ParameterField::attach(edit, options);
+  window.show();
+  edit->setFocus(Qt::MouseFocusReason);
+  QApplication::processEvents();
+  CHECK(!field->isOpen()); // entering the field opens no list
+
+  edit->setText(QStringLiteral("2 * "));
+  edit->setCursorPosition(4);
+  field->activateFx();
+  CHECK(asked == QStringList{QStringLiteral("2 * ")});
+  CHECK(!field->isOpen());
+  auto* fx = edit->findChild<QAction*>(QStringLiteral("parameterFx"));
+  CHECK(fx != nullptr);
+  if (fx != nullptr) {
+    fx->trigger();
+  }
+  CHECK(asked.size() == 2);
+  CHECK(!field->isOpen());
+
+  // Typing a name lists the parameters; fx closes the list and asks the
+  // owner with the text as typed.
+  type(*edit, QStringLiteral("thi"));
+  CHECK(field->isOpen());
+  field->activateFx();
+  CHECK(!field->isOpen());
+  CHECK(asked.size() == 3 && asked.last() == QStringLiteral("2 * thi"));
+
+  // Without the owner's Edit Formula, fx is the list as before.
+  ParameterFieldOptions plain = options;
+  plain.formula = nullptr;
+  ParameterField::attach(edit, plain);
+  edit->clear();
+  field->activateFx();
+  CHECK(field->isOpen());
+  CHECK(asked.size() == 3);
+  press(*edit, Qt::Key_Escape);
+  CHECK(!field->isOpen());
+}
+
 int parameterSuggestTests() {
   failures = 0;
   fragmentTests();
@@ -1215,6 +1271,7 @@ int parameterSuggestTests() {
   stepTests();
   removeNameTests();
   rowLookTests();
+  fxFormulaTests();
   return failures;
 }
 MITCAD_UNIT_TEST(parameterSuggestTests);

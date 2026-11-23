@@ -204,13 +204,29 @@ QString browserInterfaceMessage(int abi, int installed) {
 
 QString browserPublishedInterfaceMessage(int abi, const QList<int>& published) {
   QStringList numbers;
+  bool newer = false;
   for (const int number : published) {
     numbers << QString::number(number);
+    newer = newer || number > abi;
+  }
+  if (!newer) {
+    // Only older interfaces: updating MitCad would not help.
+    return Text::tr("The web browser component for this version of MitCad is not published yet (it needs "
+                    "interface %1, the published ones are for %2). Try again after the next release.")
+        .arg(abi)
+        .arg(numbers.join(QStringLiteral(", ")));
   }
   return Text::tr("No web browser component for this version of MitCad is published (it needs interface %1, "
                   "the published ones are for %2). Update MitCad to use Component from Web.")
       .arg(abi)
       .arg(numbers.join(QStringLiteral(", ")));
+}
+
+QString browserModuleInterfaceMessage(int abi, int module) {
+  return Text::tr("This web browser component is for another version of MitCad (interface %1; this MitCad "
+                  "needs %2).")
+      .arg(module)
+      .arg(abi);
 }
 
 QString browserDownloadSize(qint64 bytes) { return QLocale().formattedDataSize(bytes, 1); }

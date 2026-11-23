@@ -329,14 +329,22 @@ design in a project.
   attributes, assembly, visibility, named views, analyses) is cheap to
   clone and pushed on a stack; several commands can merge into one step
   (`merge_undo`). Each state has a revision number, so `mark_saved` and
-  the `document` query's `modified` work without comparing files.
+  the `document` query's `modified` work without comparing files. The
+  app makes a sketch edit one step at Finish Sketch, and Cancel Sketch
+  merges it the same way (a rolled-back marker's roll-forward included,
+  mitcad#2263) and undoes that step, so Redo brings it back as Finish
+  Sketch leaves it (mitcad#2225, `app/MainWindowSketchCancel.cpp`; no model command of
+  its own).
 - **Selection sets** (mitcad#2192, `document/selection_sets.rs`): named
   lists of links to bodies, occurrences and features in the definition
   state, kept by reference (uid and occurrence path, never by name); their
   commands are undo steps that recompute nothing, and every edit drops the
   members whose items it deleted (`DocState::prune_selection_sets`, in the
-  same step). The Browser shows a member as a row of its item's own type
-  marked with the set's name, so that it acts as the item's row.
+  same step); the moves of features, bodies and occurrences into other
+  components take their members' paths along (mitcad#2219,
+  `follow_set_members`, `follow_set_paths`). The Browser shows a member as
+  a row of its item's own type marked with the set's name, so that it acts
+  as the item's row, except that Delete there removes the link.
 - **Parameters:** name, expression (`d1 * 2 + 5 mm`), unit, comment,
   kind (model or user), evaluated in dependency order; cycles and unit
   mismatches are errors. Internal units are mm and radians. Input accepts
@@ -629,6 +637,29 @@ design in a project.
   classed by its draft in Rust (`print_analysis::drafts`, the
   `draft_analysis` query), and the app draws the classes with Print
   Analysis' overlay.
+- **Point clouds and Point Cloud Deviation** (mitcad#2240;
+  `core/model/src/point_cloud_files.rs`,
+  `core/model/src/document/point_clouds.rs`, `api/point_clouds.rs`): a
+  scan's points kept in the definition state as a reference item, not a
+  body: a name, a light bulb, the occurrence it is placed in and a rigid
+  placement there, a double-precision origin and the points from it as
+  single-precision floats with optional colours (shared `Arc` slices, so
+  undo copies nothing; base64 in the design file). The readers (PLY ASCII
+  and binary, XYZ/PTS, CSV, even thinning) are Rust of our own. Point
+  Cloud Deviation is a fourth analysis type kept as Draft Analysis is: the
+  sampled points are taken into the body's coordinates and measured by
+  the kernel on the exact faces (`Kernel::boundary_distances`, signed by
+  `Kernel::points_inside` for a closed solid; with some faces or for the
+  worst points' nearest points the new `Kernel::boundary_nearest`, OCCT's
+  `BRepExtrema_DistShapeShape` against a compound of the faces), the
+  statistics computed in Rust, in chunks that report progress and stop on
+  a cancel. The app draws the clouds as OCCT point arrays placed by their
+  transform (`view/PointCloudView.cpp`) and a deviation's coloured points
+  with Print Analysis' overlay and legend; the points a deviation did not
+  measure stay drawn, dimmed (mitcad#2265). A cloud's occurrence path
+  follows its component to another parent (`DocState::follow`). The
+  `.serp` and `.solidcraft` imports map their files' clouds to these
+  items.
 - **Image references** (mitcad#782;
   `core/model/src/document/image_references.rs`,
   `core/model-base/src/image_header.rs`, `api/image_references.rs`):
@@ -649,6 +680,24 @@ design in a project.
   corners the `image_references` query gives
   (`MainWindowImageReferences.cpp`, `view/ImageReferenceView.cpp`).
   Their commands are undo steps that recompute nothing.
+- **Decals** (mitcad#2244; `core/model/src/document/decals.rs`,
+  `api/decals.rs`): images on faces, kept in the definition state beside
+  the image references with the same embedded image storage, a face
+  reference followed by its topological name at the marker, a centre,
+  angle and flip in the face's coordinates (a planar face's plane frame
+  with its normal out of the material, a cylindrical or conical face's
+  development, `mitcad_model::developed`, as sketches on curved faces
+  have it), a width and height (Lock Aspect), an opacity and a light
+  bulb. The model works out each decal's grid on its face (points,
+  normals and the image's coordinates, the `decals` query's `mesh`) and
+  the triangles of it on the face, cut at the face's edges (mitcad#2266,
+  `decals/cut.rs`); the app draws those triangles as a lit, blended,
+  depth-tested textured surface
+  (`MainWindowDecals.cpp`, `view/DecalView.cpp`) and hands the same
+  triangles to the renderer as a body of its own with the image as its base colour
+  by texture coordinates and its alpha as the surface's
+  (`render/RenderDecals.*`, `MaterialData::textureAlpha`). Their commands
+  are undo steps that recompute nothing.
 - **Annotations** (mitcad#702, grown from the measurement objects of
   mitcad#649; `core/model/src/document/annotations.rs`,
   `api/measurements.rs`, `api/annotations.rs`, `iso286.rs`): dimensions,
@@ -722,7 +771,17 @@ design in a project.
   `Kernel::triangle_mesh`; threads are drawn by ISO 6410 before that and
   details smaller than the pen simplified when the view is drawn
   (`core/model-drawing/src/convention.rs`, mitcad#1112); the sheet is drawn by the export's
-  `compose::render` (`core/model-drawing`). A view's place is where the component's
+  `compose::render` (`core/model-drawing`). A base view's subject can be
+  a sheet-metal body's Flat Pattern (mitcad#2280, `Subject::FlatPattern`,
+  `api/drawing_flat.rs`): the view projects the pattern's developed solid
+  (`Document::developed_flat_pattern`, its evaluations kept per body in
+  the document's flat cache) in place of the body, its direction taken
+  from the pattern's frame whenever the sheet is worked out
+  (`DrawingFlatOps::current_sheet`), and adds the bend lines as edges of
+  their own kind (`ViewEdgeKind::Bend`, thin in two patterns) with their
+  notes (`PlacedView::notes`); its picks, holes and line styles are of the
+  developed solid (`Shown::flat`), a bend line a pick of its own
+  (`ViewPick::bend`). A view's place is where the component's
   origin lies on the sheet, so views in line share a coordinate. The
   application paints the query's groups with the query's pens (the
   writers' line widths) in a sheet view of its own
@@ -846,7 +905,13 @@ design in a project.
   fail the feature. Motions are driven by a stored position (else the
   rest value) or free within limits; degrees of freedom are the rank of
   the joint equations; a drag query and command move occurrences while
-  the joints hold. A joint moves only top-level occurrences of its
+  the joints hold. A BUILD carriage that a Rigid joint or Rigid Group
+  joins to another carriage follows it (mitcad#2274,
+  `build/follow.rs`): from that feature's point its slide's driven
+  motions are released in `JointsState::active`, `Document::apply`
+  rewrites its stored offset from the solved value after the recompute,
+  and an edit of one carriage's offset moves the others through a solve
+  of the joints (`joints::coupled_values`). A joint moves only top-level occurrences of its
   component (a sub-assembly as a whole), except inside a flexible
   occurrence (mitcad#1793): its component's joints, constraint rows and
   links are brought into the parent's solve for it alone (paths through
@@ -883,10 +948,13 @@ design in a project.
   limits). Recompute treats the rows like joints (`joints::apply`): they
   are `ActiveJoint`s with their parts, solved in the same runs, rank
   analysis, degrees of freedom and drags; conflicts name rows
-  (`Constraint1 row 2 (insert)`). The application's Constraint command
+  (`Constraint1 row 2 (insert)`). The application's Constraint Set command
   edits the rows in one panel, the type inferred from the picks by the
   `constraint_row` query ([commands.md](../core/model-api/src/commands.md),
-  "Assembly constraints").
+  "Assembly constraints"); its Constraint command (mitcad#2293) adds one
+  constraint at a time, each a set of one row, with Apply beside OK
+  (`CommandDef::applyNext`: each its own feature and undo step, the panel
+  kept open), and edits such a set; no new feature type.
 - **Motion studies and contact sets** (mitcad#454, `core/model/src/motion.rs`,
   `contact.rs`, `document/motion.rs`): definition state beside the
   timeline, saved in the design file. A study keys joints' free motions
@@ -1125,7 +1193,21 @@ design in a project.
   line (mitcad#2200, `start_meets`/`end_meets`): the end is worked out
   from both lines and the two sections at every evaluation, so joints of
   members along sketch lines follow the sketch without binding one member
-  to another (BUILD's `conditions.rs`). The rules that
+  to another (BUILD's `conditions.rs`); a shared miter's cut angle is
+  measured from the lines too, into the edge frame's own reference
+  parameters (`start_angle`/`end_angle`, mitcad#2234) that the derived
+  part's end cut names, as a bound length's measured length. The
+  sections are not read at evaluation (the other member may come later in
+  the timeline): `build_edit` keeps an edited member's section anew in
+  the joints it is in, and `build_remove` leaves the ends that met a
+  removed member square. An end cap (mitcad#2243,
+  `features/end_cap.rs`) is a component of its own whose `end_cap`
+  feature reads its member's derived part body in another component
+  (`EvalContext::body_in`) and its end frame (`mount`), takes the section
+  from the body's box across the frame and its circular edges, and makes
+  the plate in the end frame's coordinates; a rigid joint, flipped, puts
+  its `seat` frame on the end frame, and an inward cap's thickness is the
+  member's `cut_back` parameter. The rules that
   place, mitre, connect, size panels and list cuts
   plan everything against the document and make it in one undo step;
   components record what BUILD made (`build`). They work in the **BUILD
@@ -1169,6 +1251,19 @@ design in a project.
   fixed. Swap recomputes it from the replacement's row. Boards are not
   machined for the intentional overlap; `build_parts.seating` reports
   physical head-top and tip distances for inspection and UI acceptance.
+- **Parts on a plane or a face follow it** (mitcad#2286): a joint
+  origin's `FrameOverride` may give its origin and axes in the resolved
+  frame's own axes (`relative`, a `RelativeFrame`) instead of the
+  component's; `joints::apply_override` resolves that form first
+  (`absolute_override`), so every reader of a joint frame follows the
+  plane or face when it moves or turns. BUILD's `plan_on_geometry`
+  writes it for origin planes, construction geometry and planar faces
+  (`relative_form`); on a planar face it is measured from the point of
+  the face's plane nearest to the component's origin (`nearest`), as the
+  face's frame is at its middle, which moves when the face grows. The
+  absolute form keeps its meaning (old designs open unchanged);
+  `build_edit` rewrites it in the relative form on the part's next
+  placement edit.
 - **Boundary Fill** (mitcad#457, `features/boundary_fill.rs`): a
   `boundary_fill` feature fills the cells its tool bodies enclose, each
   picked by a point inside it (a cell: inside every tool that holds the
@@ -1187,6 +1282,16 @@ design in a project.
   the model chooses the closed ones, refuses one that opens out in words
   with its places, and joins them to the body
   ([commands.md](../core/model-api/src/commands.md), "Fill Cavity").
+- **Cell Grid** (mitcad#2238, `features/cell_grid.rs`): a `cell_grid`
+  feature fills the nested loops of sketch profiles with cells of one
+  shape. The planning is plain Rust without the kernel
+  (`features/cell_grid/plan.rs`: the field's loops, the lattice, whole,
+  snapped and trimmed edge cells, at most 250 cells); the planned
+  outlines become profile regions whose segment curves carry the cell's
+  lattice index, swept by the existing `Kernel::extrude_feature` as one
+  tool that cuts the targets once (trimmed cells first intersected with
+  the field's prism). No new `Kernel` method
+  ([commands.md](../core/model-api/src/commands.md), "Cell Grid").
 - **Surface modelling** (mitcad#455, beside Patch, Stitch and Thicken of
   mitcad#456): surface (sheet) bodies are ordinary bodies whose shape is
   open shells; `Kernel::body_kind` tells them from solids. Extrude,
@@ -1801,8 +1906,21 @@ the `Shape` type.
   and read a null handle on a face without one, so the analysis sections
   and clips mesh bodies on their triangles instead
   (`geometry/analysis/src/mesh_section.cpp`).
+  The import's queries in the same bridge (the comparisons, boundary
+  distances, face point, points inside, segment crossings, edge middles,
+  face points and boxes, new faces, changed volume) run as operations too
+  (mitcad#2294): a crash inside OCCT is the query's error, which the
+  replay's geometric checks already take as a failed check, instead of the
+  end of the import process. The boundary distances' index, kept with the
+  shape, is locked outside the operation (a crash on Linux and macOS does
+  not unwind the frames between) and its probes are set up so that a
+  crash halfway leaves them to be set up again. A face without a surface
+  (a mesh body's triangles) has no probe and an edge without a curve is
+  left out: the other faces measure, and a point only such a face could
+  measure has the infinite distance ("could not be measured").
   `MITCAD_TEST_OCCT_CRASH=<operation>` forces a crash (`cli.occt_crash`,
   `cli.occt_crash_section`, `geometry.guard_operation`,
+  `core.analysis_crash_*`,
   `tools/ui-section-crash-test.sh` with `clip` and `section`).
   On Linux and macOS OCCT's handlers are the process's; a crash outside
   an operation that catches it (`Standard_ErrorHandler::IsInTryBlock`)
@@ -1839,6 +1957,16 @@ the `Shape` type.
   vertices where OCCT's faces would meet at a crease: their faces' edges are eased so that the faces are tangent
   there, the faces joined so pieces of one surface (`match_seams` in
   `loft_skin.cpp`, mitcad#2141), which offsets (Shell, Thicken) need.
+  Two sections merged into one smooth closed edge each (Tangent Edges:
+  Merge, mitcad#2162) are skinned as they are too (mitcad#2271): OCCT's
+  through-sections would make their one side face a clamped surface that
+  only closes on itself, which the kernel's offset does not take. A side
+  that is one surface all round the sections is made periodic where it
+  closes smoothly (`periodic_where_closed`), and a merged section's curve
+  (`joined_curve` in `loft_merge.cpp`) is continuous in its second
+  derivative along each former edge, only in its first across the former
+  joins. A symmetric Thicken splits the half offset of such a face at
+  those joins (`split_at_creases` in `surfaces.cpp`).
 - Import of STEP assemblies (mitcad#1274): `Kernel::read_file_structure`
   reads the file once (`geometry/io` `read_step_structured`) and gives
   each distinct part's bodies once, in the part's coordinates, with the
@@ -1938,6 +2066,7 @@ them through operations and derives edge names.
 | Imported body | `import(<i>)` |
 | Boundary fill | none of its own: a cell's faces keep the names of the tool faces they are pieces of |
 | Fill cavity | `fill(<cap face>)` (`fill` for a plane cap) on the filled top; the box's `fill_side(<k>)` and `fill_bottom` only on the empty spaces it chooses from |
+| Cell grid | an extrusion's: `side(c<n>[…])` with `n = 2^30 + side + 128 (2048 I + J)` from the cell's lattice index (mitcad#2238), `end(r{…})`; trimmed cells' cut faces the field prism's `side(<segment>)` |
 
 - **Segment:** the part of a sketch curve in a profile,
   `<curve>[<start>,<end>]`, bounded by the curves it ends on in the
@@ -1984,6 +2113,10 @@ them through operations and derives edge names.
   A face a fillet or chamfer consumes, where the blend runs along the
   face's far edge (a face as wide as the blend or narrower, mitcad#121),
   gives its names to the blend's face, so its edges keep their names.
+  The face a Full Round rounds away (mitcad#2279) gives its names to the
+  rounding's faces (`fillet(<edge>)` of the round's edges), so that what
+  referred to it finds the rounding; its radius is worked out on the
+  body on every build (`geometry/src/full_round.hpp`).
 - A modelled thread numbers its pieces (a crest, two flanks and a root a
   turn) by their place along its axis, comparing centres and areas only
   where they differ by more than 1e-4 mm, so that rounding noise, which
@@ -2057,7 +2190,14 @@ is the crate `core/sketch`, mitcad#780) is stored; its evaluation
   fit point spline may be closed: periodic, C2 through its first point,
   mitcad#783), text, projections (optionally linked). Flags `construction` and `fixed`.
   Points are entities and curves refer to them, so a shared point is a
-  real connection.
+  real connection. An equation curve (mitcad#2237, `mitcad_sketch::equation`)
+  is a fit point spline whose formulas of the design's parameters the
+  sketch keeps beside it (`SketchDef::equations`): its points are fixed,
+  and every solve (the evaluation's, each edit's) places them again from
+  the formulas with the parameter values, reading those parameters, so
+  the recompute follows a changed one; a renamed parameter is renamed in
+  the formulas (`document/equation_curves.rs`). Its variable is a plain
+  number, or a length or an angle (`variable_unit`, mitcad#2264).
 - **Constraints:** coincident, horizontal, vertical, parallel,
   perpendicular, tangent, equal, fix, midpoint, concentric, collinear,
   symmetric, smooth; a tangent or smooth may name the point (an end of the
@@ -2316,7 +2456,13 @@ entities and constraints, shared by the UI and the imports.
 - **Offsets** (`sketch/offset.rs`): lines, arcs and circles are offset
   exactly with constraints. Chains with ellipses or splines are derived
   after each solve as a C1 cubic B-spline within 1e-4 mm; they are not
-  solver unknowns, and dragging them moves the source chain. Corners:
+  solver unknowns, and dragging them moves the source chain. A
+  `coincident` of a point of the sketch with one of their curves or ends
+  (`sketch/offset_hold.rs`, mitcad#2278) is solved as the exact offset of
+  the source curve, `S(t) + d n(t)` (the solver's `PointOnOffset` and
+  `PointOnOffsetCorner`, `d` a known value), in the same solve as the
+  source; drawing tools given a computed point make a point of their own
+  held there. Corners:
   Round (mitcad#1774, `SketchOffset::round`) puts an arc about the
   source's corner at each outer corner of an exact offset where lines or
   arcs meet at an angle (mitcad#1786), held tangent by the offset's own
@@ -2342,6 +2488,15 @@ entities and constraints, shared by the UI and the imports.
   of a block remakes every instance where it is
   (`core/model/src/document/sketch_blocks.rs`), keeping the ids of what
   stays.
+- **Conics** (`sketch/conic.rs`, mitcad#2236): a `conic` entity of two
+  ends, the shoulder point where its end tangents meet and Rho; the solver
+  sees exactly its rational quadratic B-spline (control points start,
+  apex, end; middle weight `rho / (1 - rho)`, fixed while solving), so
+  tangents, regions, offsets, projections and the DXF export treat it as
+  that spline. Rho is a number of the entity or follows a parameter
+  (`SketchDef::conic_rhos`, applied before each solve). Trim, Break,
+  Split and Extend replace a conic by the conic of its piece (a new
+  shoulder and Rho from the blossom of the curve's homogeneous points).
 
 The solver works on its own ids; the sketch model maps entity ids to them.
 
@@ -2781,6 +2936,20 @@ The app uses the model only through JSON commands and queries
 `SharedPtr<Shape>` handles, so new commands need no bridge changes.
 A `preview` computes on a copy and leaves results in the cache, so OK does
 not recompute.
+
+Because every change is a JSON command, a sequence of them is a script
+(mitcad#2245, [Scripts from the
+timeline](../core/model-api/src/commands.md#scripts-from-the-timeline-mitcad2245)):
+the macro recorder keeps the commands `DocumentSession` sends while it
+records (`app/framework/MacroRecorder.hpp`), Run Script sends a file's
+steps as one `run_script` (one undo step, nothing kept when a step fails),
+and `export_script` writes a design's timeline as the commands that build
+it again on an empty one, each feature by `add_feature` with the uid it has
+in the design so that topological names and references hold in the replay
+(`Document::with_feature_uid`) and with what it remembers of its splits'
+pieces so that they keep their ids (`Document::with_feature_pieces`,
+mitcad#2268); `mitcad-cli export-script --check` replays
+it and compares the two.
 
 - **Commands** ([app/COMMANDS.md](../app/COMMANDS.md)): a UI command is a
   declarative definition; the framework builds the panel, selections,
@@ -3329,7 +3498,11 @@ not recompute.
   the window keeps an empty untitled document marked as no design
   (`MainWindow::hasDesign`), which New and Open reuse; with the
   `documents/quitOnLastClose` preference it closes the window and so
-  ends the process.
+  ends the process. Devices that a process can hold only once are the
+  application's, not a window's: the 3D mouse has one
+  `SpaceMouseConnection` for the process (mitcad#2297), shared by every
+  design's `SpaceMouseController`, its input going to the design that
+  `activeWindowChanged` made active last (app/COMMANDS.md, 3D mouse).
 - **Document owner** (`app/framework/DocumentSession`): owns the Rust
   document, model worker, active command, selection, mode and file/recovery
   state. `MainWindow` retains reference aliases for existing workflows.
@@ -3601,6 +3774,15 @@ not recompute.
   `create_component`, `import_file`, `set_property` (the part number) and
   `merge_undo` into one step, then Move/Copy
   ([app/COMMANDS.md](../app/COMMANDS.md#component-from-web-mitcad1579)).
+  A download, like a file dropped on the window, that arrives while a
+  command is open goes through one gate (`files/MainWindowArrivals.cpp`,
+  mitcad#2281): at once beside a command marked `CommandDef::changesNoDesign`
+  (the inspections), which then checks its picks again
+  (`CommandSession::designChangedBeside`), else queued with a kept copy
+  and brought in when the mode is back to Idle (`updateModeBanner` calls
+  `followArrivals` after every change of mode); the host tells the module
+  `Waiting` (`WebImportResult`, interface 4) and sets its note later
+  through the window's invokable `showHostNote`.
 - **In-app tutorials** (`app/tutorials/`, mitcad#2012,
   [tutorials.md](tutorials.md)): one guide-step engine
   (`TutorialGuide`, the step's JSON in `GuideStep`, plain Qt Core) for
@@ -3690,6 +3872,21 @@ not recompute.
   user) fails the attach as any other graphics failure does (mitcad#2125):
   the log's `3D view: no graphics:` line gives the reason, the user sees
   the single graphics message, and each frame tries again.
+  A window holding the view is composed by Qt with OpenGL, so a failing
+  context or window surface leaves the whole window black (mitcad#2292).
+  Before the first window `framework/GraphicsStart.hpp` checks a context
+  of the viewport's format made current on a window that is never shown,
+  with its EGL surface; where the driver refuses the 4.5 compatibility
+  format, the driver's highest compatibility version (a 2.0 request)
+  becomes the default, shared and viewport format; where none works,
+  MitCad starts again in the same process (exec) on the next platform of
+  `graphicsFallback()` not tried yet: in a Wayland session native Wayland
+  first (the reported black window, NVIDIA's driver under XWayland, had a
+  working context but nothing on the screen, while native Wayland drew),
+  then X11 with `xcb_egl`, then X11 with GLX, where the window draws and
+  the view says it cannot start. The
+  log's `Graphics check:` lines name each attempt and the EGL call that failed
+  ([app/COMMANDS.md](../app/COMMANDS.md#the-window-when-opengl-fails-at-start-mitcad2292)).
   Qt's platform is chosen before the application object
   (`framework/DisplayPlatform.hpp`): `xcb` (XWayland) in a Wayland session
   until the toolbar panel shows on Wayland (mitcad#2031), `wayland;xcb` there
@@ -4036,7 +4233,8 @@ Floating is a full-window 3D view with the panels over it:
   content up to a share of the view, laid out in one queued pass. A
   Command card taller than the room under the cube grows up to the top
   first, the cube moving to its left (the right inset), before it scrolls
-  (mitcad#655). The upper left cards (Projects, Configuration, Browser)
+  (mitcad#655). The upper left cards (Projects, Configuration, Favorite
+  Parameters when the user shows it (mitcad#2203), Browser)
   are one column (mitcad#1020): they share its height, each at most its
   content's, the rest evenly or by the user's split, which a drag of the
   gap between two of them sets (`shareColumn`, `floating/leftSplit`). It gives
@@ -4447,8 +4645,9 @@ commands ([commands.md](../core/model-api/src/commands.md), "Projects").
   chosen"), and Project Settings asks which, `remote_follow` setting the
   branch's upstream (no network).
 - **Folders and designs** (mitcad#144, `projects/listing.rs`,
-  `projects/operations.rs`): `project_tree` lists a project's folders and
-  designs without the network or writes, each design with its latest
+  `projects/operations.rs`; other files, mitcad#2204, `projects/files.rs`):
+  `project_tree` lists a project's folders, designs and other files
+  without the network or writes, each design with its latest
   version (counted in one walk of HEAD's first-parent history, renames
   followed as `history` follows them), whether it changed since, and its
   edit lock from the local copies of the last lock poll. `create_folder`,
@@ -4560,7 +4759,19 @@ just made).
   version base and edit lock along (`openDesignMoved`, the lock through
   `LockController::designSaved`); deleting it closes it. Renames and new
   names are typed in place (`QTreeWidget` editors), drags are the tree's
-  own mouse handling (no system drag and drop: nothing leaves the panel).
+  own mouse handling (no system drag and drop: nothing leaves the panel;
+  only files dropped from the file manager come in, below).
+  A project's **other files** (mitcad#2204: pictures, PDFs, spreadsheets,
+  archives; `projects/files.rs` in the core) are `project_tree`'s `files`,
+  rows after their folder's designs with the system's icon; the core lists
+  what is no design, no dot-name and not ignored by the project's
+  `.gitignore` (gix's exclude stack, the `excludes` feature), tells
+  `changed` by size, the index's file times and a streamed hash, and never
+  reads them otherwise. `add_files` copies files in and `record` records
+  the changes their own apps made, each one version like the folder
+  commands (a file over 100 MiB only with `allow_large`, after the
+  window's question); `move` and `delete` take them as designs. Open hands
+  one to the system's app (`QDesktopServices`), not to MitCad.
   In the Docked layout it is a dock split above the Configuration dock and
   the browser's (the view keeps its width); in the Floating one a card,
   which `FloatingLayout` stacks above the Configuration and browser cards

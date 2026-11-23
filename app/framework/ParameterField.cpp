@@ -230,6 +230,11 @@ public:
     // (mitcad#2181): Create stays disabled while the design would refuse it.
     connect(m_expression, &QLineEdit::textChanged, this, [this] { checkExpression(); });
     connect(m_unit, &QComboBox::currentTextChanged, this, [this] { checkExpression(); });
+    // The expression's fx opens Edit Formula with the field's text, never
+    // the list (mitcad#2179, mitcad#2290); typing a name lists the
+    // parameters that match it. Its kind follows the unit.
+    attachFormula();
+    connect(m_unit, &QComboBox::currentTextChanged, this, [this] { attachFormula(); });
     if (m_setup.name.isEmpty()) {
       m_name->setFocus();
     } else {
@@ -245,6 +250,44 @@ public:
   QString unit() const { return unitOfBox(m_unit); }
 
 private:
+  // The Expression field's suggestions and its fx (mitcad#2290), of the
+  // kind the chosen unit gives; no Add User Parameter… inside this one.
+  void attachFormula() {
+    ParameterFieldOptions options;
+    options.kind = kindOfUnit(unitOfBox(m_unit));
+    options.anyKind = true;
+    options.label = QStringLiteral("new parameter expression");
+    options.create = false;
+    options.formula = [this](const QString& text) {
+      QTimer::singleShot(0, this, [this, text] { editFormula(text); });
+    };
+    ParameterField::attach(m_expression, options);
+  }
+
+  // Edit Formula with the field's text, the chosen unit as its kind; the
+  // parameter is not made yet, so the window has no limits for it. OK puts
+  // the formula in the field, the dialog's Create still adds the
+  // parameter; Cancel leaves the field as it was.
+  void editFormula(const QString& text) {
+    if (m_setup.source == nullptr || !m_setup.source->query) {
+      return;
+    }
+    ParameterFieldOptions options;
+    options.kind = kindOfUnit(unitOfBox(m_unit));
+    options.anyKind = true;
+    options.label = m_name->text().trimmed();
+    FormulaEditor dialog(*m_setup.source, options, text, this);
+    qDebug().noquote() << QStringLiteral("Formula editor opened for a new parameter with: %1").arg(text);
+    if (execDialog(&dialog) == QDialog::Accepted) {
+      m_expression->setText(dialog.expression());
+      qDebug().noquote() << QStringLiteral("Add User Parameter expression from Edit Formula: %1")
+                                .arg(dialog.expression());
+    } else {
+      qDebug().noquote() << QStringLiteral("Formula editor for a new parameter canceled");
+    }
+    m_expression->setFocus(Qt::OtherFocusReason);
+  }
+
   void createParameter() {
     const QString name = m_name->text().trimmed();
     const QString unit = unitOfBox(m_unit);
@@ -434,17 +477,7 @@ ParameterField::ParameterField(QLineEdit* edit, ParameterFieldOptions options)
   updateFxTip();
   updateIcon();
   edit->addAction(m_fx, QLineEdit::TrailingPosition);
-  connect(m_fx, &QAction::triggered, this, [this] {
-    // Edit Formula through the field's owner (mitcad#2179), else the list.
-    if (m_options.formula) {
-      close();
-      qDebug().noquote() << QStringLiteral("Parameter fx %1: Edit Formula with %2").arg(m_options.label, m_edit->text());
-      const std::function<void(const QString&)> formula = m_options.formula;
-      formula(m_edit->text());
-      return;
-    }
-    openBrowser();
-  });
+  connect(m_fx, &QAction::triggered, this, &ParameterField::activateFx);
   connect(edit, &QLineEdit::textEdited, this, [this] { textEdited(); });
   // A name shown again (the field's undo, typed or set): Backspace no
   // longer took it off (mitcad#1614).
@@ -1321,6 +1354,19 @@ void ParameterField::insert(const QString& name, const QString& how, const Ancho
   qDebug().noquote() << QStringLiteral("Parameter %1 inserted %2 into %3: %4").arg(how, name, m_options.label, now);
   // insert() told the field's own reactions (the panel's value and
   // preview, a sketch tool's value) through textEdited, as typing does.
+}
+
+void ParameterField::activateFx() {
+  // Edit Formula through the field's owner (mitcad#2179), never the list
+  // then (mitcad#2290); else the list.
+  if (m_options.formula) {
+    close();
+    qDebug().noquote() << QStringLiteral("Parameter fx %1: Edit Formula with %2").arg(m_options.label, m_edit->text());
+    const std::function<void(const QString&)> formula = m_options.formula;
+    formula(m_edit->text());
+    return;
+  }
+  openBrowser();
 }
 
 void ParameterField::openBrowser() {

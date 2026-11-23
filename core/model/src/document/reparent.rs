@@ -10,7 +10,9 @@
 //! cut scopes, Envelopes' sources (mitcad#1276), joints and assembly
 //! constraints, section analyses,
 //! Isolate, the model's annotations and the drawings' views, dimensions
-//! and balloons (mitcad#743).
+//! and balloons (mitcad#743), and the point clouds placed in it or below
+//! it (mitcad#2265), which so stay where they are in the design and keep
+//! their Point Cloud Deviations measuring the same points.
 //!
 //! The timeline features that place the occurrence (mitcad#301) go with
 //! it in the same step: its joints, as-built joints, assembly constraint
@@ -553,6 +555,9 @@ fn rewrite_references(
                     }
                 }
             }
+            // A cloud by its name and a body by its uid (mitcad#2240): no
+            // occurrence path.
+            AnalysisDef::PointCloudDeviation(_) => {}
         }
     }
     for (i, item) in state.display.isolated.iter().enumerate() {
@@ -676,6 +681,17 @@ fn rewrite_references(
     });
     if commented {
         updates.push("Comments".to_owned());
+    }
+    // Point clouds placed in it or below it (mitcad#2265): their
+    // occurrence paths follow it, also when taken.
+    for cloud in &state.point_clouds {
+        if cloud
+            .occurrence
+            .as_ref()
+            .is_some_and(|path| through_any(&path.0[..]))
+        {
+            updates.push(cloud.name.clone());
+        }
     }
     // Occurrences made by Pattern at Points keep the paths they were made
     // from.
@@ -1253,6 +1269,7 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
             AnalysisDef::Section(section) => section.occurrence = Some(path.clone()),
             AnalysisDef::Print(_) => {}
             AnalysisDef::Draft(draft) => draft.occurrence = Some(path.clone()),
+            AnalysisDef::PointCloudDeviation(_) => {}
         }
     }
     for (i, text) in &plan.changes.isolated {
@@ -1278,7 +1295,8 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
     for (i, drawing) in &plan.changes.drawings {
         state.drawings[*i].clone_from(drawing);
     }
-    // Print plate items and comment targets (mitcad#1318).
+    // Print plate items and comment targets (mitcad#1318), selection set
+    // members and point clouds' occurrences (mitcad#2265).
     for moved in &plan.moved {
         let new = plan.path_of(moved);
         state.follow(&Follow::Moved {

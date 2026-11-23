@@ -79,22 +79,32 @@ CreateComponentBrowserFunction loadBrowserModule(const BrowserComponentInfo& com
     qWarning().noquote() << QStringLiteral("Component from Web: the browser module did not load: %1").arg(*error);
     return nullptr;
   }
+  // The interface first (mitcad#2289): a module of another one may lack
+  // this interface's entry points (interface 2 had no tutorial page), and
+  // is then named by its interface, in words, rather than by a missing
+  // symbol.
   const auto abi = reinterpret_cast<ComponentBrowserAbiFunction>(library->resolve(kComponentBrowserAbiSymbol));
-  const auto create =
-      reinterpret_cast<CreateComponentBrowserFunction>(library->resolve(kCreateComponentBrowserSymbol));
-  const auto createTutorial =
-      reinterpret_cast<CreateTutorialPageFunction>(library->resolve(kCreateTutorialPageSymbol));
-  if (abi == nullptr || create == nullptr || createTutorial == nullptr) {
+  if (abi == nullptr) {
     *error = library->errorString();
     qWarning().noquote() << QStringLiteral("Component from Web: the browser module did not load: %1").arg(*error);
     return nullptr;
   }
-  if (abi() != kComponentBrowserAbi) {
-    *error = browserInterfaceMessage(kComponentBrowserAbi, abi());
+  const int moduleAbi = abi();
+  if (moduleAbi != kComponentBrowserAbi) {
+    *error = browserModuleInterfaceMessage(kComponentBrowserAbi, moduleAbi);
     qWarning().noquote() << QStringLiteral("Component from Web: %1 has interface %2, not %3")
                                 .arg(QDir::toNativeSeparators(path))
-                                .arg(abi())
+                                .arg(moduleAbi)
                                 .arg(kComponentBrowserAbi);
+    return nullptr;
+  }
+  const auto create =
+      reinterpret_cast<CreateComponentBrowserFunction>(library->resolve(kCreateComponentBrowserSymbol));
+  const auto createTutorial =
+      reinterpret_cast<CreateTutorialPageFunction>(library->resolve(kCreateTutorialPageSymbol));
+  if (create == nullptr || createTutorial == nullptr) {
+    *error = library->errorString();
+    qWarning().noquote() << QStringLiteral("Component from Web: the browser module did not load: %1").arg(*error);
     return nullptr;
   }
   loaded.create = create;
@@ -111,11 +121,11 @@ CreateComponentBrowserFunction loadBrowserModule(const BrowserComponentInfo& com
 // Owned by the window (its child), so it lives as long as the window.
 class BrowserHost final : public QObject, public ComponentBrowserHost {
 public:
-  using Import = std::function<bool(const QString& path, WebFileKind kind, QString* error)>;
+  using Import = std::function<WebImportResult(const QString& path, WebFileKind kind, QString* note)>;
   BrowserHost(Import import, QString folder) : m_import(std::move(import)), m_folder(std::move(folder)) {}
 
-  bool importDownload(const QString& path, WebFileKind kind, QString* error) override {
-    return m_import(path, kind, error);
+  WebImportResult importDownload(const QString& path, WebFileKind kind, QString* note) override {
+    return m_import(path, kind, note);
   }
   QString zipList(const QString& zip, QString* error) override {
     try {
@@ -232,7 +242,10 @@ void MainWindow::registerComponentWebCommand() {
   test.icon = QStringLiteral("insert-component");
   test.tooltip = QStringLiteral("For tests: brings in MITCAD_TEST_WEB_FILE as Component from Web does");
   test.kind = CommandDef::Kind::Action;
-  test.mode = CommandDef::Mode::Model;
+  // Also while a command or a sketch is open, as a download arrives then
+  // (mitcad#2281: it comes in beside an inspection, else waits).
+  test.mode = CommandDef::Mode::Any;
+  test.duringCommands = true;
   test.run = [this, testFile] {
     const QString file = QFileInfo(testFile).fileName();
     const WebFileCheck check = checkWebFileName(file);
@@ -240,9 +253,13 @@ void MainWindow::registerComponentWebCommand() {
       qWarning().noquote() << QStringLiteral("Component from Web: the test file %1 is refused: %2").arg(file, check.note);
       return;
     }
-    QString error;
-    if (!importWebDownload(testFile, check.kind, &error)) {
-      qWarning().noquote() << QStringLiteral("Component from Web: the test file %1 was not imported: %2").arg(file, error);
+    QString note;
+    const WebImportResult result = importWebDownload(testFile, check.kind, &note);
+    if (result == WebImportResult::Failed) {
+      qWarning().noquote() << QStringLiteral("Component from Web: the test file %1 was not imported: %2").arg(file, note);
+    } else if (result == WebImportResult::Waiting) {
+      // The note the browser shows under its page.
+      qInfo().noquote() << QStringLiteral("Component from Web: the test file's note: %1").arg(note);
     }
   };
   m_registry->add(test);
@@ -276,8 +293,13 @@ void MainWindow::withBrowserComponent(const QString& title, const QString& quest
     return;
   }
   if (installed && installed->fromBuild) {
-    // A build's component (the tests'): never replaced by a download.
-    sheetWarning(this, title, browserInterfaceMessage(kComponentBrowserAbi, installed->abi));
+    // A build's component (the tests'): never replaced by a download, so
+    // the message promises none (mitcad#2289).
+    qInfo().noquote() << QStringLiteral("Component from Web: the build's component %1 has interface %2, not %3")
+                             .arg(QDir::toNativeSeparators(installed->folder))
+                             .arg(installed->abi)
+                             .arg(kComponentBrowserAbi);
+    sheetWarning(this, title, browserModuleInterfaceMessage(kComponentBrowserAbi, installed->abi));
     return;
   }
   if (installed) {
@@ -300,7 +322,7 @@ bool MainWindow::showComponentBrowser(const BrowserComponentInfo& component) {
     return false;
   }
   auto* host = new BrowserHost(
-      [this](const QString& path, WebFileKind kind, QString* reason) { return importWebDownload(path, kind, reason); },
+      [this](const QString& path, WebFileKind kind, QString* note) { return importWebDownload(path, kind, note); },
       loadedModule().folder);
   // A window of its own beside the design's, not kept above it, so that
   // the design's window comes to the front for Move; it ends with this
@@ -465,17 +487,10 @@ void MainWindow::updateBrowserComponent(const BrowserComponentInfo& component) {
   download->fetchManifest(source.manifestUrl);
 }
 
-bool MainWindow::importWebDownload(const QString& path, WebFileKind kind, QString* error) {
+bool MainWindow::insertWebDownload(const QString& path, QString* error) {
   const QString file = QFileInfo(path).fileName();
-  if (kind == WebFileKind::Document) {
-    qInfo().noquote() << QStringLiteral("Component from Web: %1 opens as a design of its own").arg(file);
-    openPath(path);
-    return true;
-  }
-  if (m_mode != Mode::Idle) {
-    *error = tr("Finish or cancel the open command first.");
-    return false;
-  }
+  // From Idle, or beside a command that changes nothing in the design
+  // (importWebDownload's gate, mitcad#2281).
   if (!canChangeModel()) {
     *error = changeBlockedReason();
     return false;
@@ -569,9 +584,10 @@ bool MainWindow::importWebDownload(const QString& path, WebFileKind kind, QStrin
                            .arg(storedNumber.isEmpty() ? QStringLiteral("none") : storedNumber);
   m_viewer->fitAll();
   // Placed with Move, started from the event loop (mitcad#1839): a zip's
-  // Import brings in its checked files one after another, each refused
-  // while a command is open, so Move waits until the last is in and then
-  // starts once, on it.
+  // Import brings in its checked files one after another (as do the files
+  // that waited for a command, mitcad#2281), and Move, a command itself,
+  // would make the next one wait; so Move waits until the last is in and
+  // then starts once, on it.
   m_webMoveComponent = component;
   m_webMoveOccurrence = occurrence;
   m_webMoveName = shownName;
@@ -586,7 +602,18 @@ void MainWindow::startWebDownloadMove() {
   if (!m_webMovePending || m_webImporting) {
     return;
   }
+  // Brought in beside an inspection (mitcad#2281): Move starts when it
+  // closes (followArrivals), on the last file brought in.
+  if (m_mode != Mode::Idle && arrivalGate() == ArrivalGate::Beside) {
+    if (!m_webMoveWaits) {
+      m_webMoveWaits = true;
+      qInfo().noquote() << QStringLiteral("Component from Web: Move on %1 waits until %2 closes")
+                               .arg(m_webMoveName, arrivalWaitsFor());
+    }
+    return;
+  }
   m_webMovePending = false;
+  m_webMoveWaits = false;
   // The design's window in front, the new occurrence selected.
   SelectionItem item;
   item.kind = SelectKind::Component;
@@ -594,6 +621,12 @@ void MainWindow::startWebDownloadMove() {
   item.occurrence = occurrencePath(
       queryObject({{QStringLiteral("query"), QStringLiteral("components")}}).value(QStringLiteral("occurrences")).toArray(),
       m_webMoveOccurrence);
+  if (item.occurrence.isEmpty()) {
+    // Taken back meanwhile (an undo before the inspection closed).
+    qInfo().noquote() << QStringLiteral("Component from Web: Move did not start for %1: it is no longer in the design")
+                             .arg(m_webMoveName);
+    return;
+  }
   if (m_mode != Mode::Idle) {
     qInfo().noquote() << QStringLiteral("Component from Web: Move did not start for %1").arg(m_webMoveName);
     return;

@@ -161,6 +161,14 @@ enum class ColorRole {
   DraftPositive,
   DraftUnder,
   DraftNegative,
+  // Point Cloud Deviation's diverging scale (mitcad#2240): a point inside
+  // the material, within tolerance of the faces, outside; with the legend.
+  DeviationInside,
+  DeviationNeutral,
+  DeviationOutside,
+  // The cloud's points it did not measure (mitcad#2265), dimmed towards the
+  // view's background.
+  DeviationUnmeasured,
   // A call to support the project (mitcad#1990): the top bar's Boost
   // development pill's outline and rocket (its label in the window's text);
   // a warm pink apart from the error's red and the accent's blue.

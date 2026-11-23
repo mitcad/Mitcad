@@ -238,15 +238,23 @@ bool SketchModel::load(const QJsonObject& sketch) {
     c.start = e.value(QStringLiteral("start")).toString();
     c.end = e.value(QStringLiteral("end")).toString();
     c.center = e.value(QStringLiteral("center")).toString();
-    for (const char* field : {"start", "end", "center", "major"}) {
+    for (const char* field : {"start", "end", "center", "major", "apex"}) {
       const QString id = e.value(QLatin1String(field)).toString();
       if (!id.isEmpty()) {
         c.points << id;
       }
     }
-    for (const char* field : {"control", "points"}) {
-      for (const QJsonValue& id : e.value(QLatin1String(field)).toArray()) {
-        c.points << id.toString();
+    // A conic (mitcad#2236) also lists its points as a spline's `control`
+    // (start, apex, end), which it has above already.
+    if (c.isConic()) {
+      c.apex = e.value(QStringLiteral("apex")).toString();
+      c.rho = e.value(QStringLiteral("rho")).toDouble(0.5);
+      c.rhoExpression = e.value(QStringLiteral("rho_expression")).toString();
+    } else {
+      for (const char* field : {"control", "points"}) {
+        for (const QJsonValue& id : e.value(QLatin1String(field)).toArray()) {
+          c.points << id.toString();
+        }
       }
     }
     c.closed = flag(e, "closed");
@@ -458,6 +466,23 @@ bool SketchModel::load(const QJsonObject& sketch) {
     o.round = flag(k, "round");
     offsets.push_back(o);
   }
+  // Equation curves' formulas (mitcad#2237).
+  equations.clear();
+  for (const QJsonValue& value : sketch.value(QStringLiteral("equations")).toArray()) {
+    const QJsonObject q = value.toObject();
+    EquationData e;
+    e.curve = q.value(QStringLiteral("curve")).toString();
+    e.mode = q.value(QStringLiteral("mode")).toString();
+    e.x = q.value(QStringLiteral("x")).toString();
+    e.y = q.value(QStringLiteral("y")).toString();
+    e.r = q.value(QStringLiteral("r")).toString();
+    e.start = q.value(QStringLiteral("start")).toString();
+    e.end = q.value(QStringLiteral("end")).toString();
+    e.tolerance = q.value(QStringLiteral("tolerance")).toDouble(0.01);
+    e.pointCount = q.value(QStringLiteral("point_count")).toInt();
+    e.variableUnit = q.value(QStringLiteral("variable_unit")).toString(QStringLiteral("none"));
+    equations.push_back(e);
+  }
 
   for (const QJsonValue& set : sketch.value(QStringLiteral("conflicts")).toArray()) {
     QStringList ids;
@@ -526,6 +551,15 @@ const OffsetData* SketchModel::offsetOf(const QString& curve) const {
   for (const OffsetData& o : offsets) {
     if (o.made.contains(curve)) {
       return &o;
+    }
+  }
+  return nullptr;
+}
+
+const EquationData* SketchModel::equationOf(const QString& curve) const {
+  for (const EquationData& e : equations) {
+    if (e.curve == curve) {
+      return &e;
     }
   }
   return nullptr;

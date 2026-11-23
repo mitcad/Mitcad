@@ -24,6 +24,8 @@ use super::pattern::{Binding, BindingKind};
 use super::{Constraint, ConstraintKind, ConstraintUid, DimensionKind, Entity, EntityKind, Ref};
 use super::{SpacingMode, spacing};
 use crate::ids::EntityUid;
+// Points held on derived offsets (mitcad#2278).
+use crate::offset_hold::{DerivedOffset, Holds, Ids};
 
 /// The tolerance of a second solve where the first did not converge
 /// (relative to the sketch size, as [`SolveOptions::tolerance`]; 1e-5 mm
@@ -161,6 +163,15 @@ impl Solved {
                         *minor_radius = *r;
                     }
                 }
+                // Rho as solved (a parameter's value, mitcad#2236).
+                EntityKind::Conic { rho, .. } => {
+                    // Middle weight 1 (a parabola) is stored without
+                    // weights.
+                    if let Some(Curve2::Nurbs(n)) = self.curves.get(&entity.id) {
+                        let w = n.weights.get(1).copied().unwrap_or(1.0);
+                        *rho = crate::conic::rho_of_weight(w);
+                    }
+                }
                 _ => {}
             }
         }
@@ -232,6 +243,10 @@ pub struct Extra<'a> {
     /// bindings and fixes alone is theirs, not redundant to the user (the
     /// closing corner of a closed chain of tangent arcs).
     pub restating: &'a BTreeSet<ConstraintUid>,
+    /// The derived offsets with their distances (mitcad#2278): a Coincident
+    /// of a point of the sketch with what one computes (in `skip`) holds the
+    /// point on the exact offset of its source ([`crate::offset_hold`]).
+    pub offsets: &'a [DerivedOffset<'a>],
 }
 
 static NOTHING: BTreeSet<EntityUid> = BTreeSet::new();
@@ -245,6 +260,7 @@ impl Default for Extra<'_> {
             oriented: None,
             left_out: &NONE_LEFT_OUT,
             restating: &NONE_LEFT_OUT,
+            offsets: &[],
         }
     }
 }
@@ -284,6 +300,7 @@ impl Built {
     ) -> Result<Self, String> {
         let mut system = System::new();
         let mut points = BTreeMap::new();
+        let all = entities;
         let entities: Vec<&Entity> = entities
             .iter()
             .filter(|e| !extra.skip.contains(&e.id))
@@ -381,6 +398,22 @@ impl Built {
                     };
                     system.add_fitted_spline(&fit, [end, end]).map_err(what)?
                 }
+                // A conic (mitcad#2236): the rational quadratic Bezier of
+                // its ends and apex, Rho fixed in its middle weight.
+                EntityKind::Conic {
+                    start,
+                    end,
+                    apex,
+                    rho,
+                } => {
+                    crate::conic::check_rho(*rho)
+                        .map_err(|error| format!("c{}: {error}", e.id.0))?;
+                    let control = [p(*start)?, p(*apex)?, p(*end)?];
+                    let weights = [1.0, crate::conic::weight(*rho), 1.0];
+                    system
+                        .add_bspline(2, &control, Some(&weights), None)
+                        .map_err(what)?
+                }
             };
             curves.insert(e.id, id);
         }
@@ -451,6 +484,9 @@ impl Built {
                 EntityKind::Line { start, end, .. } => all(&[*start, *end]),
                 EntityKind::Spline { control, .. } => all(control),
                 EntityKind::FittedSpline { points, .. } => all(points),
+                EntityKind::Conic {
+                    start, end, apex, ..
+                } => all(&[*start, *end, *apex]),
                 _ => false,
             }
         };
@@ -462,15 +498,78 @@ impl Built {
             };
             built.add(c, SolverItem::Fixed(e.as_ref()))?;
         }
+        // A Coincident of a point of the sketch with what a derived offset
+        // computes holds the point on the exact offset of its source
+        // (mitcad#2278).
+        let names_derived = |kind: &ConstraintKind| {
+            !extra.skip.is_empty() && kind.refs().iter().any(|r| extra.skip.contains(&r.uid()))
+        };
+        let holds = if constraints
+            .iter()
+            .any(|c| !extra.left_out.contains(&c.id) && names_derived(&c.kind))
+        {
+            let by_id: BTreeMap<EntityUid, &Entity> = entities.iter().map(|e| (e.id, *e)).collect();
+            let curve = |uid: EntityUid| {
+                let e = by_id.get(&uid)?;
+                let id = *built.curves.get(&uid)?;
+                built.curve_now(&e.kind, id).map(|(c, _)| c)
+            };
+            Some(Holds::new(extra.offsets, all, &curve)?)
+        } else {
+            None
+        };
+        // The points a held point may not be moved from where the solve
+        // starts: fixed ones and those of fixed curves, which their fixes
+        // keep where they start.
+        let pinned: BTreeSet<EntityUid> = entities
+            .iter()
+            .filter(|e| e.fixed)
+            .flat_map(|e| {
+                if e.is_point() {
+                    vec![e.id]
+                } else {
+                    e.kind.points()
+                }
+            })
+            .collect();
         for c in constraints
             .iter()
             .filter(|c| !extra.left_out.contains(&c.id))
         {
             let item = SolverItem::Constraint(c.id);
-            for s in built
-                .constraint(&c.kind)
-                .map_err(|e| format!("{}: {e}", c.id))?
-            {
+            let list = match &holds {
+                Some(holds) if names_derived(&c.kind) => {
+                    let (s, user, place) = {
+                        let point = |u: EntityUid| built.point(u);
+                        let curve = |u: EntityUid| built.curve(u);
+                        let at = |u: EntityUid| {
+                            built.points.get(&u).and_then(|p| built.system.point(*p))
+                        };
+                        let ids = Ids {
+                            point: &point,
+                            curve: &curve,
+                            at: &at,
+                        };
+                        holds.hold(&c.id, &c.kind, extra.skip, &ids)?
+                    };
+                    // The held point starts where the hold puts it, so that
+                    // the solve moves it there and leaves the source
+                    // (mitcad#2278, `Holds::hold`).
+                    if let (Some(place), false) = (place, pinned.contains(&user))
+                        && let Some(&p) = built.points.get(&user)
+                    {
+                        built
+                            .system
+                            .set_point(p, place)
+                            .map_err(|e| format!("{}: {e}", c.id))?;
+                    }
+                    vec![s]
+                }
+                _ => built
+                    .constraint(&c.kind)
+                    .map_err(|e| format!("{}: {e}", c.id))?,
+            };
+            for s in list {
                 built.add(s, item)?;
             }
         }
@@ -652,22 +751,52 @@ impl Built {
                 .points
                 .insert(*uid, s.point(*id).expect("live point"));
         }
-        let at = |u: &EntityUid| solved.points[u];
         let mut curves = BTreeMap::new();
         let mut radii = BTreeMap::new();
         for e in entities {
             let Some(&id) = self.curves.get(&e.id) else {
                 continue;
             };
-            let curve = match &e.kind {
-                EntityKind::Point { .. } => continue,
+            let Some((curve, radius)) = self.curve_now(&e.kind, id) else {
+                continue;
+            };
+            if let Some(r) = radius {
+                radii.insert(e.id, r);
+            }
+            curves.insert(e.id, curve);
+        }
+        solved.curves = curves;
+        solved.radii = radii;
+        for d in dimensions.iter().filter(|d| d.value.is_none()) {
+            if let Some(value) = measure_in(d.kind, &solved, constraints) {
+                solved.status.driven.insert(d.id, value);
+            }
+        }
+        solved
+    }
+
+    /// A curve of the system where its unknowns are now, with a circle's
+    /// radius or an ellipse's minor radius; None for a point.
+    fn curve_now(&self, kind: &EntityKind, id: EntityId) -> Option<(Curve2, Option<f64>)> {
+        let s = &self.system;
+        let at = |u: &EntityUid| {
+            self.points
+                .get(u)
+                .and_then(|p| s.point(*p))
+                .unwrap_or([0.0, 0.0])
+        };
+        let mut size = None;
+        let curve = {
+            let radii = &mut size;
+            match kind {
+                EntityKind::Point { .. } => return None,
                 EntityKind::Line { start, end, .. } => Curve2::Line {
                     a: at(start),
                     b: at(end),
                 },
                 EntityKind::Circle { center, start, .. } => {
                     let radius = s.radius(id).expect("a circle");
-                    radii.insert(e.id, radius);
+                    *radii = Some(radius);
                     Curve2::Circle {
                         center: at(center),
                         radius,
@@ -688,7 +817,7 @@ impl Built {
                 EntityKind::Ellipse { center, major, .. } => {
                     let (c, m) = (at(center), at(major));
                     let minor = s.minor_radius(id).expect("an ellipse");
-                    radii.insert(e.id, minor);
+                    *radii = Some(minor);
                     let axis = sub(m, c);
                     Curve2::Ellipse {
                         center: c,
@@ -706,7 +835,7 @@ impl Built {
                 } => {
                     let (c, m) = (at(center), at(major));
                     let minor = s.minor_radius(id).expect("an elliptical arc");
-                    radii.insert(e.id, minor);
+                    *radii = Some(minor);
                     let axis = sub(m, c);
                     let a = norm(axis);
                     let u = unit(axis);
@@ -724,7 +853,9 @@ impl Built {
                         end: angle_after(t0, param(at(end))),
                     }
                 }
-                EntityKind::Spline { .. } | EntityKind::FittedSpline { .. } => {
+                EntityKind::Spline { .. }
+                | EntityKind::FittedSpline { .. }
+                | EntityKind::Conic { .. } => {
                     let g = s.spline(id).expect("a spline");
                     let rational = g.weights.iter().any(|w| *w != 1.0);
                     Curve2::Nurbs(Nurbs {
@@ -734,17 +865,9 @@ impl Built {
                         knots: g.knots,
                     })
                 }
-            };
-            curves.insert(e.id, curve);
-        }
-        solved.curves = curves;
-        solved.radii = radii;
-        for d in dimensions.iter().filter(|d| d.value.is_none()) {
-            if let Some(value) = measure_in(d.kind, &solved, constraints) {
-                solved.status.driven.insert(d.id, value);
             }
-        }
-        solved
+        };
+        Some((curve, size))
     }
 
     fn analyze(&mut self, solved: &mut Solved) {

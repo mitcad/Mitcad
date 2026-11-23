@@ -162,9 +162,15 @@ QStringList toolKeywords(const QString& id);
 // and the `bodies` query: first the whole component ("design"), then each
 // occurrence in it ("occurrence:O2/O5", a path from the component, named
 // by its names "Arm:1/Pin:2"), then each body of its own ("body:F2.b0", by
-// its name). (value, label) pairs.
+// its name), then the Flat Pattern of each of its own sheet-metal bodies
+// (`sheetBodies`, the `sheet_bodies` query: "flat:F3.b0", "Plate Flat
+// Pattern", mitcad#2280). (value, label) pairs.
 QList<QPair<QString, QString>> subjectChoices(const QString& component, const QString& name,
-                                              const QJsonObject& components, const QJsonArray& bodies);
+                                              const QJsonObject& components, const QJsonArray& bodies,
+                                              const QJsonArray& sheetBodies = {});
+// A body's Flat Pattern as the Shows list and the view panel name it
+// (mitcad#2280): "Plate Flat Pattern".
+QString flatPatternLabel(const QString& body);
 // A Shows choice as the model's `subject`; empty for the whole component
 // (the model's default).
 QJsonObject subjectOf(const QString& choice);

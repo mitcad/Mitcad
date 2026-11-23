@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 # A project's folders and designs (mitcad#144) through mitcad-cli: folders
 # and designs made, listed, moved and deleted as versions, in text and
-# JSON; every refusal (a target that is there, a path outside the project
+# JSON; other files (mitcad#2204) added, listed, recorded, moved and
+# deleted; every refusal (a target that is there, a path outside the project
 # or hidden, a delete that would lose unrecorded work) with exit status 1
 # and nothing changed; usage errors with 2. Where git is installed, a Cloud
 # project (a bare repository as its remote) whose operations are pushed,
@@ -127,6 +128,48 @@ expect("\"folders\":\\[\"old\"," "the folder stays after its design is deleted")
 cli(ok project delete "${p}" old --author "${author}")
 expect("^Deleted old\n" "project delete of a folder")
 
+# Other files (mitcad#2204): added from outside, listed with their size and
+# state, a change made elsewhere recorded, moved and deleted, each one
+# version; refusals change nothing.
+set(outside "${WORK}/outside")
+file(WRITE "${outside}/photo.png" "not really a picture")
+file(WRITE "${outside}/datasheet.pdf" "%PDF-1.4 not really a datasheet")
+cli(ok project mkdir "${p}" docs --author "${author}")
+cli(ok project add-files "${p}" "${outside}/photo.png" --author "${author}")
+expect("^Added photo.png\nRecorded version [0-9a-f]+\n$" "project add-files")
+cli(ok project add-files "${p}" "${outside}/datasheet.pdf" --to docs --author "${author}" --json)
+expect("\"added\":\\[\"docs/datasheet.pdf\"\\]" "project add-files --to --json")
+expect("\"error\":null" "project add-files --to --json")
+expect("\"folder\":\"docs\"" "project add-files --to --json")
+cli(ok project tree "${p}" --json)
+expect("\"files\":\\[{\"changed\":false,\"modified\":\"[^\"]+\",\"path\":\"docs/datasheet.pdf\",\"recorded\":true,\"size\":31},{\"changed\":false,\"modified\":\"[^\"]+\",\"path\":\"photo.png\",\"recorded\":true,\"size\":20}\\]"
+       "project tree's files")
+cli(ok project tree "${p}")
+expect("\n  photo.png  20 bytes\n" "project tree's files as text")
+cli(fail project add-files "${p}" "${outside}/photo.png" --author "${author}")
+expect("photo.png is there already; nothing was replaced" "project add-files of a name that is there")
+file(READ "${p}/photo.png" kept)
+if(NOT kept STREQUAL "not really a picture")
+  message(FATAL_ERROR "a refused add-files replaced the file")
+endif()
+file(WRITE "${p}/photo.png" "a changed picture")
+cli(ok project tree "${p}")
+expect("\n  photo.png  17 bytes, changed\n" "a file changed elsewhere")
+cli(ok project record "${p}" photo.png --author "${author}")
+expect("^Recorded the changes of photo.png\nRecorded version [0-9a-f]+\n$" "project record")
+cli(ok project record "${p}" --author "${author}")
+expect("^No changes to record\n$" "project record without changes")
+cli(fail project record "${p}" missing.txt --author "${author}")
+expect("is neither in the project's folder nor in its latest version" "project record of nothing")
+cli(ok project move "${p}" photo.png docs/photo.png --author "${author}")
+expect("^Moved photo.png to docs/photo.png\nRecorded version [0-9a-f]+\n$" "project move of a file")
+cli(ok project delete "${p}" docs/photo.png --author "${author}")
+expect("^Deleted docs/photo.png\nRecorded version [0-9a-f]+\n$" "project delete of a file")
+cli(usage project add-files "${p}")
+cli(usage project record "${p}" a b)
+cli(usage project mkdir "${p}" more --allow-large)
+cli(usage project record "${p}" --to docs)
+
 # Remove Project (mitcad#1562): the plan without --yes, nothing changed;
 # then the project's files go and the designs stay as they were.
 set(r "${WORK}/removed")
@@ -177,6 +220,9 @@ git("${WORK}/remote.git" rev-parse refs/heads/main)
 if(NOT out STREQUAL head)
   message(FATAL_ERROR "the remote's main is ${out}, not ${head}")
 endif()
+# An added file is sent as well (mitcad#2204).
+cli(ok project add-files "${p}" "${outside}/photo.png" --to shared --author "${author}")
+expect("^Added shared/photo.png\nRecorded version [0-9a-f]+\nSent to origin\n" "project add-files in a Cloud project")
 cli(ok project new-design "${p}" shared/c.mitcad --author "${author}" --no-push --json)
 expect("\"push\":null" "project new-design --no-push")
 cli(ok project tree "${p}" --json)

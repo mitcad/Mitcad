@@ -45,10 +45,12 @@ JointSide sideOf(const QJsonObject& value, const QString& key, int row, const QS
   const QJsonObject overrideFields = value.value(QStringLiteral("frame_override")).toObject();
   side.frameOverride = value.value(QStringLiteral("frame_override")).isObject();
   // An override that only shifts the origin along the frame follows the
-  // geometry (BUILD's corners): the geometry is still shown.
+  // geometry (BUILD's corners): the geometry is still shown. `relative`
+  // gives the origin and axes in the frame's own axes (mitcad#2286).
   const bool moved = overrideFields.contains(QStringLiteral("origin")) ||
                      overrideFields.contains(QStringLiteral("z_axis")) ||
-                     overrideFields.contains(QStringLiteral("x_axis"));
+                     overrideFields.contains(QStringLiteral("x_axis")) ||
+                     overrideFields.contains(QStringLiteral("relative"));
   const bool ownGeometry = side.on != QStringLiteral("fixed") && side.on != QStringLiteral("mount") &&
                            side.on != QStringLiteral("occurrence");
   side.showsGeometry = ownGeometry && !moved;

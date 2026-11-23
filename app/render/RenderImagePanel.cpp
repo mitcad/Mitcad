@@ -47,6 +47,7 @@
 #include "framework/Theme.hpp"
 #include "render/RenderBatch.hpp"
 #include "render/RenderClient.hpp"
+#include "render/RenderDecals.hpp"
 #include "render/RenderDevice.hpp"
 #include "render/RenderScene.hpp"
 #include "render/RenderWorkerChoice.hpp"
@@ -809,8 +810,20 @@ void RenderImagePanel::renderScene() {
   // missing maps are left out (mitcad#314).
   const QStringList missing = render::missingTextures(looks);
   const QString scenePath = m_dir->filePath(QStringLiteral("scene.glb"));
+  render::SceneUpdate scene = render::sceneOf(bodies);
+  // Decals (mitcad#2244): what the view draws on the faces, as bodies of
+  // their own, their images beside the scene's file.
+  for (render::DecalBody& decal :
+       render::decalBodies(m_viewer.drawnDecals(), m_viewer.drawnDecalImages(), m_dir->path())) {
+    const bool held = std::any_of(scene.meshes.begin(), scene.meshes.end(),
+                                  [&decal](const auto& known) { return known.first == decal.body.mesh; });
+    if (!held) {
+      scene.meshes.emplace_back(decal.body.mesh, std::move(decal.mesh));
+    }
+    scene.bodies.push_back(std::move(decal.body));
+  }
   std::string error;
-  if (!render::writeSceneFile(render::sceneOf(bodies), QDir::toNativeSeparators(scenePath).toStdString(), error)) {
+  if (!render::writeSceneFile(scene, QDir::toNativeSeparators(scenePath).toStdString(), error)) {
     setRendering(false);
     m_message->setText(tr("The scene cannot be written: %1.").arg(QString::fromStdString(error)));
     if (!m_batchShot.isEmpty()) {

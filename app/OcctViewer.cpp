@@ -27,6 +27,7 @@
 #include "framework/Theme.hpp"
 #include "platform/MacChrome.hpp"
 #include "framework/Diagnostics.hpp"
+#include "framework/DisplayPlatform.hpp"
 #include "framework/OpeningEdges.hpp"
 #include "framework/TestSync.hpp"
 #include "framework/ViewGhosts.hpp"
@@ -8947,6 +8948,14 @@ void OcctViewer::reportGlFailure(const QString& reason) {
   if (m_glFailureTold) return;
   m_glFailureTold = true;
   qWarning().noquote() << QStringLiteral("3D view: no graphics: %1").arg(reason);
+  // A start that could not draw with OpenGL and started again where the
+  // window draws (mitcad#2292, framework/GraphicsStart.hpp): the view never
+  // had graphics, and a restart would not give it any.
+  if (!m_glAttached && !graphicsStartFailure().isEmpty()) {
+    emit glFailed(tr("The 3D view cannot start with this graphics driver. The rest of MitCad works; the user "
+                     "guide's Linux section says what to try."));
+    return;
+  }
   emit glFailed(tr("The 3D view lost its connection to the graphics card. Save your work and restart MitCad."));
 }
 
@@ -8955,15 +8964,13 @@ QString OcctViewer::attachGl() {
   const int viewWidth = qRound(width() * ratio);
   const int viewHeight = qRound(height() * ratio);
 
-  const occ::handle<OpenGl_Context> glContext = new OpenGl_Context();
-  if (!glContext->Init(context()->format().profile() == QSurfaceFormat::CoreProfile)) {
-    return QStringLiteral("OCCT could not attach to the OpenGL context");
-  }
 #ifdef MITCAD_OCCT_EGL
   // OCCT draws through EGL (mitcad#2031): its driver names Qt's context.
   // Qt on X11 with its GLX integration (QT_XCB_GL_INTEGRATION set by the
-  // user) has none: the reason goes to the log (reportGlFailure,
-  // mitcad#2125).
+  // user, or the start-up's fallback when EGL could not draw the window,
+  // mitcad#2292) has none: the reason goes to the log (reportGlFailure,
+  // mitcad#2125). Checked before OCCT's Init, which finds no current EGL
+  // context then and could only say it did not attach.
   auto* egl = context()->nativeInterface<QNativeInterface::QEGLContext>();
   const occ::handle<QtEglGraphicDriver> eglDriver = occ::handle<QtEglGraphicDriver>::DownCast(m_viewer->Driver());
   if (egl == nullptr || eglDriver.IsNull()) {
@@ -8971,6 +8978,12 @@ QString OcctViewer::attachGl() {
                           "OCCT draws through EGL")
         .arg(QGuiApplication::platformName(), qEnvironmentVariable("QT_XCB_GL_INTEGRATION"));
   }
+#endif
+  const occ::handle<OpenGl_Context> glContext = new OpenGl_Context();
+  if (!glContext->Init(context()->format().profile() == QSurfaceFormat::CoreProfile)) {
+    return QStringLiteral("OCCT could not attach to the OpenGL context");
+  }
+#ifdef MITCAD_OCCT_EGL
   eglDriver->useEglContext(egl->display(), egl->nativeContext());
 #endif
 
@@ -9212,7 +9225,34 @@ void OcctViewer::resizeGL(int width, int height) {
   navigationStep();
 }
 
+namespace {
+std::optional<QSurfaceFormat>& checkedViewportFormat() {
+  static std::optional<QSurfaceFormat> format;
+  return format;
+}
+} // namespace
+
+void useViewportSurfaceFormat(const QSurfaceFormat& format) {
+  checkedViewportFormat() = format;
+}
+
+QSurfaceFormat viewportFallbackSurfaceFormat() {
+  QSurfaceFormat format;
+  format.setDepthBufferSize(24);
+  format.setStencilBufferSize(8);
+  // Version 2.0 without a profile: the driver's highest compatibility
+  // version (Mesa and NVIDIA give it for a legacy request).
+  format.setVersion(2, 0);
+  format.setProfile(QSurfaceFormat::NoProfile);
+  format.setOption(QSurfaceFormat::DeprecatedFunctions);
+  format.setRenderableType(QSurfaceFormat::OpenGL);
+  return format;
+}
+
 QSurfaceFormat viewportSurfaceFormat() {
+  if (checkedViewportFormat()) {
+    return *checkedViewportFormat();
+  }
   QSurfaceFormat format;
   format.setDepthBufferSize(24);
   format.setStencilBufferSize(8);
@@ -9727,6 +9767,10 @@ bool OcctViewer::event(QEvent* event) {
     if (centerOfMassToolTip(help->pos(), help->globalPos())) {
       return true;
     }
+    // A Point Cloud Deviation's point: its distance (mitcad#2240).
+    if (deviationToolTip(help->pos(), help->globalPos())) {
+      return true;
+    }
   }
   const bool handled = QOpenGLWidget::event(event);
   if (event->type() == QEvent::DevicePixelRatioChange) {
@@ -9745,8 +9789,27 @@ bool OcctViewer::event(QEvent* event) {
   return handled;
 }
 
+bool OcctViewer::ignoresClickWithoutGraphics(const QMouseEvent* event, const char* what) const {
+  // A view whose graphics never attached (mitcad#2125) has no window:
+  // OCCT's picking (MoveTo) reads the null window and crashes
+  // (mitcad#2295). A click there does nothing; the hover and the
+  // orientation cube already return early without a window.
+  if (!m_view.IsNull() && !m_view->Window().IsNull()) {
+    return false;
+  }
+  const char* button = event->button() == Qt::LeftButton    ? "left"
+                       : event->button() == Qt::RightButton ? "right"
+                                                            : "other";
+  qDebug().noquote() << QStringLiteral("3D view: no graphics, the %1 %2 is ignored")
+                            .arg(QLatin1String(button), QLatin1String(what));
+  return true;
+}
+
 void OcctViewer::mousePressEvent(QMouseEvent* event) {
   QOpenGLWidget::mousePressEvent(event);
+  if (ignoresClickWithoutGraphics(event, "press")) {
+    return;
+  }
   m_pointerModifiers = event->modifiers();
   disarmPickList(); // another button too: a held left press lists nothing
   if (event->buttons() == event->button()) {
@@ -9906,6 +9969,9 @@ void OcctViewer::endOccurrenceDrag(const QPointF& position, bool cancelled) {
 
 void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   QOpenGLWidget::mouseReleaseEvent(event);
+  if (ignoresClickWithoutGraphics(event, "release")) {
+    return;
+  }
   m_pointerModifiers = event->modifiers();
   disarmPickList();
   if (m_pickListHeld && event->button() == Qt::LeftButton) {

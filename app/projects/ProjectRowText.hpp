@@ -8,6 +8,8 @@
 //   design   "v2"   version 2          "v2*"  changed since version 2
 //            "new"  no version yet     icon   lock (Editing elsewhere,
 //                                             Locked: Alex), edit (Editing)
+//   file     "new"  no version yet     "*"    changed since the latest
+//                                             version (mitcad#2204)
 //   project  icon   cloud-synced (Cloud, synced), cloud (Cloud, with "↑2 ↓1"
 //                   to send and newer), cloud-offline (Offline, "↑2"
 //                   waiting), warning (conflict, sign-in needed, missing,
@@ -24,6 +26,7 @@ class QFontMetrics;
 namespace mitcad {
 
 struct ProjectDesignRow;
+struct ProjectFileRow;
 struct ProjectRow;
 
 // A row's state column.
@@ -39,6 +42,10 @@ struct RowMarks {
 
 // A design row's marks: its version, Changed and its edit lock.
 RowMarks designMarks(const ProjectDesignRow& design);
+// Another file's marks (mitcad#2204): "new" when no version holds it, "*"
+// when it changed since the latest version, none when it is recorded as it
+// is.
+RowMarks fileMarks(const ProjectFileRow& file);
 
 // A project row's marks: Local or Cloud and its sync state as the project
 // indicator shows it. `ahead`, `behind` (-1 not known), `problem` (the

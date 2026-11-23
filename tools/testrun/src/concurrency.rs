@@ -12,11 +12,11 @@
 //! code: a **contention failure**.
 //!
 //! - **The machine's cap**: UI entries at once. It is the bound
-//!   (`--ui-max`, else `MITCAD_UI_JOBS`; `DEFAULT_BOUND` without either),
-//!   one number for the scheduler, `--ui-cap` and the run's report
-//!   (`machine_cap`), and exists for the memory budget only: the scheduler
-//!   admits a UI entry, as any test, only while its predicted memory fits
-//!   the budget beside the tests running (`schedule::admit`). Contention
+//!   (`--ui-max`, else `MITCAD_UI_JOBS`), one value for the scheduler,
+//!   `--ui-cap` and the run's report (`machine_cap`); without either there
+//!   is no cap. The scheduler admits a UI entry, as any test, only while
+//!   its predicted memory fits the budget beside the tests running
+//!   (`schedule::admit`). Contention
 //!   failures never lower it (mitcad#2124: a 12-core 30 GB VM with
 //!   `MITCAD_UI_JOBS=6` fell to 2 by a few load-sensitive tests and never
 //!   grew back). A cap that an older runner learnt lower into the profile
@@ -29,14 +29,18 @@
 //!
 //! The scheduler (`schedule::admit`) starts a UI entry only while the UI
 //! entries running are fewer than the cap and neither it nor any running UI
-//! entry would have more beside it than its room (`admits`). The cap holds
-//! on every machine, `DEFAULT_BOUND` without a bound (a follow-up of
-//! mitcad#2124: the Windows VM, with neither `--ui-max` nor
-//! `MITCAD_UI_JOBS`, ran 15 at once while its report named the cap 4). The
-//! rooms and the rerun alone are what a machine opts in to by giving the
-//! bound: without `--ui-max` and `MITCAD_UI_JOBS` the runs record and learn
-//! the rooms, but the scheduler holds UI entries to no room and reruns none
-//! alone (`scheduled_room`).
+//! entry would have more beside it than its room (`admits`). A machine
+//! opts in by giving the bound: without `--ui-max` and `MITCAD_UI_JOBS` the
+//! runs record and learn the rooms, but the scheduler holds UI entries to
+//! no count cap and no room (only the memory budget and the CPU rules, as
+//! every test) and reruns none alone (`scheduled_cap`, `scheduled_room`);
+//! the report says so, "no cap (memory budget)" (mitcad#2260: the Windows
+//! VM runs about 15 at once so).
+//!
+//! Owner 22.11.2026: do not change how many UI entries run at once (the
+//! default without a bound, the bound's handling, MITCAD_UI_JOBS) without
+//! the owner's explicit permission; 934331a20 capped the Windows VM at 4
+//! unasked and slowed every Windows round several times over (mitcad#2260).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -47,10 +51,6 @@ use crate::profile::{self, ResultKind, Run};
 
 /// Passes with its room full after which a test's room grows by one.
 pub const ROOM_GROW_PASSES: u32 = 3;
-/// The machine's cap when neither `--ui-max` nor `MITCAD_UI_JOBS` gives a
-/// bound (check-all's default): the scheduler holds UI entries to it, and
-/// `--ui-cap` and the run's report name it.
-pub const DEFAULT_BOUND: usize = 4;
 /// What a contention failure takes back of the failure's +10: it counts
 /// +2, as the other failures of the environment.
 pub const CONTENTION_REFUND: f64 = 8.0;
@@ -58,19 +58,36 @@ pub const CONTENTION_REFUND: f64 = 8.0;
 pub const PLATFORM: &str = std::env::consts::OS;
 
 /// The bound of the cap: `--ui-max`, else `MITCAD_UI_JOBS` (a number of at
-/// least 1); None without either, and then the cap is `DEFAULT_BOUND`.
+/// least 1); None without either, and then there is no cap.
+///
+/// Owner 22.11.2026: do not change how many UI entries run at once (the
+/// default without a bound, the bound's handling, MITCAD_UI_JOBS) without
+/// the owner's explicit permission; 934331a20 capped the Windows VM at 4
+/// unasked and slowed every Windows round several times over (mitcad#2260).
 pub fn bound(given: Option<usize>, variable: Option<&str>) -> Option<usize> {
     let from_variable = variable.and_then(|v| v.trim().parse::<usize>().ok());
     given.or(from_variable).filter(|&n| n > 0)
 }
 
-/// The machine's cap: the bound, else `DEFAULT_BOUND`, at least 1. The
-/// one number the scheduler holds UI entries to and `--ui-cap` and the
-/// run's report name. It follows the bound only (the memory budget holds
-/// UI entries further, as every test); contention failures lower the
-/// tests' rooms, never the cap (mitcad#2124).
-pub fn machine_cap(bound: Option<usize>) -> usize {
-    bound.unwrap_or(DEFAULT_BOUND).max(1)
+/// The machine's cap: the bound, at least 1; None without a bound, and
+/// then the scheduler holds UI entries to no count, only to the memory
+/// budget and the CPU rules, as every test (mitcad#2260). The one value
+/// the scheduler, `--ui-cap` and the run's report use. It follows the
+/// bound only; contention failures lower the tests' rooms, never the cap
+/// (mitcad#2124).
+pub fn machine_cap(bound: Option<usize>) -> Option<usize> {
+    bound.map(|b| b.max(1))
+}
+
+/// The UI entries at once the scheduler holds to (`Limits::ui_max`): the
+/// cap, or no limit (`usize::MAX`) without one.
+pub fn scheduled_cap(cap: Option<usize>) -> usize {
+    cap.unwrap_or(usize::MAX)
+}
+
+/// The cap as `--ui-cap` prints it: the number, or that there is none.
+pub fn cap_text(cap: Option<usize>) -> String {
+    cap.map_or_else(|| "no cap (memory budget)".to_owned(), |c| c.to_string())
 }
 
 /// The room the scheduler holds a test to: its learnt room, or none
@@ -177,9 +194,13 @@ pub fn run_facts(records: &[(String, Run)]) -> RunFacts {
 
 /// One line on what a run taught: the cap it ran at, the most UI entries
 /// at once, and the contention failures (whose rooms were lowered).
-pub fn summary(facts: &RunFacts, cap: usize) -> String {
+pub fn summary(facts: &RunFacts, cap: Option<usize>) -> String {
+    let cap = match cap {
+        Some(c) => format!("cap {c}"),
+        None => cap_text(None),
+    };
     format!(
-        "UI entries at once: cap {cap}; this run at most {}, {} failed beside others and passed with fewer beside them (their rooms lowered), {} failed beside others",
+        "UI entries at once: {cap}; this run at most {}, {} failed beside others and passed with fewer beside them (their rooms lowered), {} failed beside others",
         facts.at_once, facts.contended, facts.unresolved
     )
 }
@@ -250,7 +271,7 @@ pub fn command(o: &Options) -> Result<String, String> {
     let path = o.profiles.clone().or_else(profile::default_path);
     let Some(file) = &o.record_ui else {
         if !o.ui_rooms {
-            return Ok(cap.to_string());
+            return Ok(cap_text(cap));
         }
         let profiles = match &path {
             Some(path) => profile::load(path)?,
@@ -309,24 +330,25 @@ mod tests {
         assert_eq!(bound(None, Some("many")), None);
         assert_eq!(bound(None, Some("0")), None);
         assert_eq!(bound(None, None), None);
-        // The machine's cap is the bound; without one, the default.
-        assert_eq!(machine_cap(None), DEFAULT_BOUND);
-        assert_eq!(machine_cap(Some(12)), 12);
-        assert_eq!(machine_cap(Some(1)), 1);
-        assert_eq!(machine_cap(Some(0)), 1);
+        // The machine's cap is the bound; without one, none.
+        assert_eq!(machine_cap(None), None);
+        assert_eq!(machine_cap(Some(12)), Some(12));
+        assert_eq!(machine_cap(Some(1)), Some(1));
+        assert_eq!(machine_cap(Some(0)), Some(1));
     }
 
     #[test]
-    fn without_a_bound_the_cap_is_the_default_and_no_room_applies() {
-        // No --ui-max, no MITCAD_UI_JOBS: the default cap, no rooms.
-        assert_eq!(machine_cap(None), DEFAULT_BOUND);
+    fn without_a_bound_no_cap_and_no_room_applies() {
+        // No --ui-max, no MITCAD_UI_JOBS: no cap, no rooms (mitcad#2260).
+        let cap = scheduled_cap(machine_cap(None));
+        assert_eq!(cap, usize::MAX);
         assert_eq!(scheduled_room(Some(1), None), None);
-        let cap = machine_cap(None);
-        assert!(admits(3, None, scheduled_room(Some(0), None), cap));
-        assert!(!admits(4, None, scheduled_room(Some(0), None), cap));
+        assert!(admits(40, None, scheduled_room(Some(0), None), cap));
+        assert_eq!(cap_text(machine_cap(None)), "no cap (memory budget)");
         // With a bound: the bound itself, the rooms as learnt.
-        assert_eq!(machine_cap(Some(12)), 12);
-        assert_eq!(machine_cap(Some(6)), 6);
+        assert_eq!(scheduled_cap(machine_cap(Some(12))), 12);
+        assert_eq!(scheduled_cap(machine_cap(Some(6))), 6);
+        assert_eq!(cap_text(machine_cap(Some(6))), "6");
         assert_eq!(scheduled_room(Some(1), Some(12)), Some(1));
         assert_eq!(scheduled_room(None, Some(12)), None);
     }
@@ -523,8 +545,9 @@ mod tests {
         let saved = fs::read_to_string(&path).unwrap();
         assert!(!saved.contains("ui_caps"), "{saved}");
         // The scheduler holds UI entries to the bound and the rooms.
-        assert_eq!(machine_cap(Some(6)), 6);
-        assert!(admits(5, None, None, machine_cap(Some(6))));
+        let six = scheduled_cap(machine_cap(Some(6)));
+        assert_eq!(six, 6);
+        assert!(admits(5, None, None, six));
         assert!(!admits(
             3,
             None,

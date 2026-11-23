@@ -148,3 +148,12 @@ mod sketch_constraint_check_2184_tests;
 // Insert Points: a file's x y coordinates as one spline or as points, an
 // airfoil at its chord and angle of attack (mitcad#2232).
 mod sketch_import_points_2232_tests;
+// Conic curves: ends, a shoulder point and Rho, a parameter they may
+// follow, Trim keeping a conic (mitcad#2236).
+mod sketch_conic_2236_tests;
+// Equation Curve: formulas of the design's parameters placed as a fit
+// point spline that follows them (mitcad#2237).
+mod sketch_equation_curve_2237_tests;
+// Points held on derived offsets of splines and ellipses: on their curves,
+// at their ends and on their round corners (mitcad#2278).
+mod sketch_offset_points_2278_tests;

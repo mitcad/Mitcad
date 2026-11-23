@@ -12,9 +12,10 @@
 # and a square on XY over the block (Sketch3, F4; Extrude takes it first).
 #   1. Automatic: the square on the block's face is Join; Flip into the
 #      block makes it Cut, Flip back Join (mitcad#289); cancelled.
-#   2. Cut chosen by hand (out of the block it fails, and stays failing
-#      without a flip); Flip into the block: the Cut works and stays; Flip
-#      out again: the Cut fails, Join is tried and taken (logged "flipped
+#   2. Cut chosen by hand (out of the block it misses, so Flip turns on by
+#      itself and the Cut works going in, mitcad#2283; that turn tries no
+#      other operation); Flip out again by hand: the Cut fails, Join is
+#      tried and taken (logged "flipped
 #      out of the body"). Flip into the block with that Join: the preview
 #      works (the Join itself, or Cut when the Join fails, logged "flipped
 #      into the body"); Flip out: Join; OK joins.
@@ -91,16 +92,12 @@ ui_mark
 ui_step "Cut by hand (one down from Join)" ui_choose "Panel Extrude input operation" 1
 ui_expect_new "Extrude: Operation = Cut" "Cut chosen"
 ui_expect_new "Extrude: operation chosen by hand" "the automatic choice is off"
-ui_expect_new "Preview Extrude: failed" "a cut out of the block cuts nothing"
-ui_wait_idle
-no_new "Extrude: flipped" "without a flip the hand-chosen Cut stays, failing"
-ui_mark
-ui_step "flip into the block"            ui_click_logged "Panel Extrude input flip"
-ui_expect_new "Extrude: Flip = on" "flipped into the block"
+ui_expect_new "Extrude: Cut misses, flipped into the body, Flip = on" \
+  "a cut out of the block cuts nothing: Flip turns on by itself (mitcad#2283)"
 ui_expect_new "Preview Extrude: ok" "the hand-chosen Cut works going in"
 ui_wait_idle
-no_new "Extrude: flipped" "a flip that works keeps the hand-chosen Cut"
-no_new "Extrude: Operation = " "the Operation field stays Cut"
+no_new "Extrude: flipped" "the turn keeps the hand-chosen Cut (no retry of another operation)"
+no_new "Extrude: Operation = Join" "the Operation field stays Cut"
 ui_mark
 ui_step "flip back out"                  ui_click_logged "Panel Extrude input flip"
 ui_expect_new "Extrude: Flip = off" "flipped out of the block"

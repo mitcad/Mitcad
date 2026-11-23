@@ -41,9 +41,11 @@
 #include <GProp_GProps.hxx>
 #include <GeomAPI_PointsToBSplineSurface.hxx>
 #include <Geom_BSplineSurface.hxx>
+#include <Geom_Surface.hxx>
 #include <NCollection_Array2.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
@@ -51,6 +53,7 @@
 
 #include "bridge/analysis.hpp"
 #include "bridge/memory.hpp"
+#include "bridge/point_clouds.hpp"
 #include "mitcad/geometry/cancel.hpp"
 #include "mitcad/geometry/geometry.hpp"
 #include "mitcad/geometry/input_check.hpp"
@@ -1610,6 +1613,62 @@ void test_boundary_distances_off_free_form_faces() {
   }
 }
 
+// The boundary distances of a shape with a face whose surface was removed
+// (mitcad#2294: its projection was set up on the null surface and the
+// process crashed): the other faces measure, and a point only that face
+// could measure has the infinite distance.
+void test_boundary_distances_without_a_surface() {
+  TopoDS_Shape box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
+  // The top face (z = 10) loses its surface; its edges keep their curves.
+  TopoDS_Face top;
+  for (TopExp_Explorer it(box, TopAbs_FACE); it.More(); it.Next()) {
+    Bnd_Box face_box;
+    BRepBndLib::Add(it.Current(), face_box);
+    double x0 = 0.0;
+    double y0 = 0.0;
+    double z0 = 0.0;
+    double x1 = 0.0;
+    double y1 = 0.0;
+    double z1 = 0.0;
+    face_box.Get(x0, y0, z0, x1, y1, z1);
+    if (std::abs(z0 - 10.0) < 1e-3 && std::abs(z1 - 10.0) < 1e-3) {
+      top = TopoDS::Face(it.Current());
+    }
+  }
+  CHECK(!top.IsNull());
+  if (top.IsNull()) {
+    return;
+  }
+  BRep_Builder builder;
+  builder.UpdateFace(top, Handle(Geom_Surface)(), TopLoc_Location(), BRep_Tool::Tolerance(top));
+  CHECK(BRep_Tool::Surface(top).IsNull());
+  const mitcad::geometry::Shape body(box);
+  // On the bottom face, under it, on an edge of the top face (a side
+  // face's edge too), above the top face (nearest the side faces' top
+  // edges), in the middle of the top face (5 from each side face).
+  const std::vector<double> points{5.0, 5.0, 0.0,  5.0, 5.0, -2.0, 5.0, 0.0, 10.0,
+                                   5.0, 5.0, 12.0, 5.0, 5.0, 10.0};
+  const rust::Vec<double> d =
+      mitcad::bridge::analysis_boundary_distances(body, rust::Slice<const double>(points.data(), points.size()));
+  CHECK(d.size() == 5);
+  if (d.size() == 5) {
+    CHECK(d[0] <= 1e-9);
+    CHECK(std::abs(d[1] - 2.0) < 1e-7);
+    CHECK(d[2] <= 1e-6);
+    CHECK(std::abs(d[3] - std::sqrt(29.0)) < 1e-7);
+    CHECK(std::abs(d[4] - 5.0) < 1e-7);
+  }
+  // The face point query leaves the face to the distance query.
+  std::array<double, 3> point{};
+  std::array<double, 3> normal{};
+  CHECK(!mitcad::bridge::analysis_face_point(body, {body.face_index(top)}, {5.0, 5.0, 12.0}, point, normal));
+  // The face alone: nothing measures.
+  const mitcad::geometry::Shape face(top);
+  const rust::Vec<double> alone =
+      mitcad::bridge::analysis_boundary_distances(face, rust::Slice<const double>(points.data(), 3));
+  CHECK(alone.size() == 1 && std::isinf(alone[0]));
+}
+
 // A Rust panic's message reaches the application's sink (mitcad#62),
 // before the hook that prints it.
 std::string g_panic_note;
@@ -2413,6 +2472,101 @@ void test_assembly_cut_through_two_linked_plates() {
   std::filesystem::remove_all(dir, ignored);
 }
 
+// Standard base64 with padding, for a command's `data`.
+std::string base64_of(const std::string& bytes) {
+  static const char* const digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  for (std::size_t i = 0; i < bytes.size(); i += 3) {
+    const std::size_t left = std::min<std::size_t>(3, bytes.size() - i);
+    std::uint32_t n = 0;
+    for (std::size_t k = 0; k < 3; ++k) {
+      n = (n << 8) | (k < left ? static_cast<unsigned char>(bytes[i + k]) : 0U);
+    }
+    for (std::size_t k = 0; k < 4; ++k) {
+      out += k <= left ? digits[(n >> (18 - 6 * k)) & 63U] : '=';
+    }
+  }
+  return out;
+}
+
+// The number after `"key":` in a JSON text, NaN when it has none.
+double json_number(const std::string& text, const std::string& key) {
+  const std::size_t at = text.find("\"" + key + "\":");
+  if (at == std::string::npos) {
+    return std::nan("");
+  }
+  return std::strtod(text.c_str() + at + key.size() + 3, nullptr);
+}
+
+// Point Cloud Deviation with the kernel (mitcad#2240): points on the demo
+// block's faces (60 x 40 x 20) moved 0.5 mm out of the material on three
+// faces and 0.3 mm into it on the other three give those distances, signed,
+// within 1e-6 mm; the exact nearest points of a box's faces.
+void test_point_cloud_deviation_of_a_block() {
+  auto document = mitcad::new_demo_document();
+  std::string xyz;
+  int outside = 0;
+  int inside = 0;
+  const auto add = [&xyz](double x, double y, double z) {
+    char line[96];
+    std::snprintf(line, sizeof line, "%.6f %.6f %.6f\n", x, y, z);
+    xyz += line;
+  };
+  for (int i = 1; i < 5; ++i) {
+    for (int j = 1; j < 4; ++j) {
+      add(12.0 * i, 10.0 * j, 20.5); // top, out
+      add(12.0 * i, 10.0 * j, 0.3);  // bottom, in
+      add(12.0 * i, -0.5, 5.0 * j);  // front, out
+      add(12.0 * i, 39.7, 5.0 * j);  // back, in
+      outside += 2;
+      inside += 2;
+    }
+  }
+  for (int j = 1; j < 4; ++j) {
+    for (int k = 1; k < 4; ++k) {
+      add(60.5, 10.0 * j, 5.0 * k); // right, out
+      add(0.3, 10.0 * j, 5.0 * k);  // left, in
+      ++outside;
+      ++inside;
+    }
+  }
+  const std::string inserted = run(*document, R"({"cmd": "insert_point_cloud", "file_name": "scan.xyz", "data": ")" +
+                                                  base64_of(xyz) + R"("})");
+  CHECK(contains(inserted, R"("name":"PointCloud1")"));
+  std::string answer;
+  try {
+    answer = std::string(document->query(
+        R"({"query": "point_cloud_deviation", "cloud": "PointCloud1", "body": "F2.b0", "tolerance": 0.4})"));
+  } catch (const rust::Error& error) {
+    std::fprintf(stderr, "point_cloud_deviation failed: %s\n", error.what());
+    ++failures;
+    return;
+  }
+  const double n = outside + inside;
+  CHECK(std::abs(json_number(answer, "mean_signed_mm") - (0.5 * outside - 0.3 * inside) / n) < 1e-6);
+  CHECK(std::abs(json_number(answer, "mean_abs_mm") - (0.5 * outside + 0.3 * inside) / n) < 1e-6);
+  CHECK(std::abs(json_number(answer, "max_abs_mm") - 0.5) < 1e-6);
+  CHECK(std::abs(json_number(answer, "min_mm") + 0.3) < 1e-6);
+  CHECK(json_number(answer, "outside") == outside);
+  CHECK(json_number(answer, "inside") == inside);
+  CHECK(json_number(answer, "within_tolerance") == inside);
+  CHECK(contains(answer, R"("signed":true)"));
+  CHECK(contains(answer, R"("closest":)"));
+
+  // The nearest points of a box's faces, inside and outside it.
+  const mitcad::geometry::Shape box(BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape());
+  const std::array<double, 6> points{5.0, 5.0, 0.3, 12.0, 5.0, 5.0};
+  const rust::Vec<double> nearest = mitcad::bridge::boundary_nearest(
+      box, rust::Slice<const rust::String>(), rust::Slice<const double>(points.data(), points.size()));
+  CHECK(nearest.size() == 8);
+  if (nearest.size() == 8) {
+    CHECK(std::abs(nearest[0] - 0.3) < 1e-9);
+    CHECK(std::abs(nearest[3]) < 1e-9);
+    CHECK(std::abs(nearest[4] - 2.0) < 1e-9);
+    CHECK(std::abs(nearest[5] - 10.0) < 1e-9);
+  }
+}
+
 // A rigid transform as 4 rows of 4.
 using Placement = std::array<std::array<double, 4>, 4>;
 
@@ -2737,7 +2891,9 @@ int main(int argc, char** argv) {
   test_face_extruded_up_to_a_face_of_its_own_body();
   test_join_apart_warns();
   test_assembly_cut_through_two_linked_plates();
+  test_point_cloud_deviation_of_a_block();
   test_reported_screw_joint_keeps_earlier_joint();
+  test_boundary_distances_without_a_surface();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -347,6 +348,14 @@ void run_too_large(bool arc, double ratio) {
 } // namespace test
 
 int main() {
+  // The groove end's build says on the standard error why it gives up
+  // (MITCAD_TRACE_GROOVE_END), so that a failing row's log tells which
+  // check refused it.
+#ifdef _WIN32
+  _putenv_s("MITCAD_TRACE_GROOVE_END", "1");
+#else
+  setenv("MITCAD_TRACE_GROOVE_END", "1", 1);
+#endif
   for (const double ratio : {0.5, 0.99, 1.0}) {
     const std::string name = "straight groove, r = " + std::to_string(ratio) + " Rc";
     test::guarded(name.c_str(), [&] { test::run_row(false, ratio); });

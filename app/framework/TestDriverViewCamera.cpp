@@ -353,14 +353,16 @@ void TestDriver::runViewCameraStep(const QString& name, const QStringList& a, in
       fail(line, QStringLiteral("space-mouse requires the main window"));
       return;
     }
-    // Held for the time, then released, as a hand on the cap.
-    window->spaceMouse()->motion(axes, false);
+    // Held for the time, then released, as a hand on the cap. Given to the
+    // process's 3D mouse connection, as the backend gives the device's
+    // input (mitcad#2297): it reaches the active design's view only.
+    window->spaceMouse()->connection().motion(axes, false);
     const auto clock = std::make_shared<QElapsedTimer>();
     clock->start();
     whenReady([clock, milliseconds] { return clock->elapsed() >= milliseconds; }, milliseconds / 1000.0 + 5,
               QStringLiteral("space-mouse"), [this] {
                 if (auto* owner = qobject_cast<MainWindow*>(m_main.data()); owner && owner->spaceMouse()) {
-                  owner->spaceMouse()->motion(SpaceMouseAxes{}, false);
+                  owner->spaceMouse()->connection().motion(SpaceMouseAxes{}, false);
                 }
               });
   } else if (name == QLatin1String("space-mouse-button")) {
@@ -371,8 +373,8 @@ void TestDriver::runViewCameraStep(const QString& name, const QStringList& a, in
       fail(line, QStringLiteral("space-mouse-button <1..32> requires the main window"));
       return;
     }
-    window->spaceMouse()->button(number - 1, true);
-    window->spaceMouse()->button(number - 1, false);
+    window->spaceMouse()->connection().button(number - 1, true);
+    window->spaceMouse()->connection().button(number - 1, false);
 
     // --- The system
   }

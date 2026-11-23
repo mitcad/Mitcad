@@ -8,7 +8,11 @@
 // polynomial B-spline within 1e-8 mm of the edges), so its first
 // derivative is the same on both sides of every former join: the loft's
 // cross tangent, which blends the sections' derivatives, then turns
-// smoothly there and the side is tangent-continuous (G1). Sections smooth
+// smoothly there and the side is tangent-continuous (G1). Along each
+// former edge it is continuous in its second derivative too, so that only
+// the former joins are lines where the side's curvature may jump
+// (mitcad#2271), and a ring is continuous in its first derivative where it
+// closes, so that the side closes smoothly round it. Sections smooth
 // all round start at corresponding points (each where the ray from its
 // centre towards the neighbouring section's start meets it, as OCCT's
 // matching of closed sections relates their vertices) and run the same way

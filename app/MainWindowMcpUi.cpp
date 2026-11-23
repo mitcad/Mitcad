@@ -1370,18 +1370,12 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
         refuse(QStringLiteral("The sketch stays open: computing the features after it was canceled."));
       }
     } else if (m_mode == Mode::Sketch && finish == QStringLiteral("cancel")) {
-      // Every change made since it was opened taken back, then left.
+      // Every change made since it was opened taken back, then left: Cancel
+      // Sketch (mitcad#2225), whose one step Redo brings back.
       result.insert(QStringLiteral("command"), QStringLiteral("sketch.cancel"));
-      const QString name = m_sketch->model().name;
-      for (int step = 0; step < 10000 && m_mode == Mode::Sketch && undoDepth() > m_sketchEnterDepth; ++step) {
-        const int depth = undoDepth();
-        undo();
-        if (undoDepth() >= depth) {
-          break; // refused
-        }
-      }
-      if (m_mode == Mode::Sketch && !finishSketch()) {
-        refuse(QStringLiteral("The sketch stays open: computing the features after it was canceled."));
+      const QString name = editingSketchName();
+      if (!cancelSketch()) {
+        refuse(QStringLiteral("The sketch stays open: its changes could not be taken back (%1).").arg(m_lastError));
       }
       qInfo().noquote() << QStringLiteral("MCP: an agent cancelled the sketch %1").arg(name);
     } else {
@@ -1461,7 +1455,8 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
       waitUntil([this] { return !modelBusy(); }, 120000);
       // Entering and finishing sketches are the user's frame, not changes;
       // Undo and Redo move along the steps (a label would clear Redo).
-      changes = id != QStringLiteral("sketch.finish") && id != QStringLiteral("sketch.create") &&
+      changes = id != QStringLiteral("sketch.finish") && id != QStringLiteral("sketch.cancel") &&
+                id != QStringLiteral("sketch.create") &&
                 id != QStringLiteral("edit.undo") && id != QStringLiteral("edit.redo");
     }
   }

@@ -1,0 +1,23 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Constraint's Apply and OK (mitcad#2293), tools/ui-constraint-apply-test.sh: Base:1 (O1, grounded) with a 40 x 20 x 10 box (F1.b0) at the origin and a hole of diameter 6 through it at (30, 10) (F2); Block:1 (O2) placed at (60, 40, 30) with a 10 x 10 x 10 box (F3.b0) at its origin; Pin:1 (O3) placed at (100, 0, 0) with a cylinder of diameter 6 and height 20 (F4.b0) at its origin."},
+  {"cmd": "create_component", "name": "Base"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 40, "width": 20, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [30, 10],
+    "diameter": 6, "height": 10, "operation": "cut"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "create_component", "name": "Block", "transform": [[1, 0, 0, 60], [0, 1, 0, 40], [0, 0, 1, 30]]},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "create_component", "name": "Pin", "transform": [[1, 0, 0, 100], [0, 1, 0, 0], [0, 0, 1, 0]]},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0],
+    "diameter": 6, "height": 20, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "ground_occurrence", "occurrence": "Base:1"},
+  {"expect": {"feature": "F1", "status": "ok"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"expect": {"feature": "F3", "status": "ok"}},
+  {"expect": {"feature": "F4", "status": "ok"}}
+]

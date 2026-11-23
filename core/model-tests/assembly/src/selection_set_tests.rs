@@ -4,16 +4,18 @@
 //! deleted, each an undo step that leaves the timeline and the bill of
 //! materials as they were and recomputes nothing; a member's item renamed
 //! (its new name listed), suppressed or rolled back (inactive) and deleted
-//! (gone from every set); the design file read back.
+//! (gone from every set); the design file read back. A feature moved into
+//! another component and an occurrence reparented take their members along
+//! (mitcad#2219).
 
 use serde_json::{Value, json};
 
-use mitcad_model::Document;
-use mitcad_model::features::SketchPlane;
+use mitcad_model::features::{OccurrencePath, SketchPlane};
 use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid};
 use mitcad_model::test_support::{extrude, num};
 use mitcad_model::testing::MockKernel;
 use mitcad_model::transform::Transform;
+use mitcad_model::{Document, MoveGroup};
 use mitcad_model_api::DocumentApi;
 
 fn query(doc: &Document<MockKernel>, query: Value) -> Value {
@@ -500,4 +502,255 @@ fn members_not_in_the_design_are_refused() {
         assert!(error.contains(why), "{refused}: {error}");
     }
     assert_eq!(sets(&doc).len(), 1);
+}
+
+/// mitcad#2219: a feature (with its sketch and body) in a set, moved into
+/// a new component, is still a member, found under its new place (the new
+/// occurrence's path, the component it is in now), in the move's one undo
+/// step; another component's member stays as it was. Undo restores both
+/// the design and the members, Redo moves them again.
+#[test]
+fn members_follow_a_feature_moved_into_a_component() {
+    let Design {
+        mut doc,
+        sketch,
+        extrude,
+        body,
+        parts,
+    } = design();
+    command(
+        &mut doc,
+        json!({"cmd": "add_selection_set", "name": "Moved", "members": [
+            {"feature": sketch}, {"feature": extrude}, {"body": body},
+            {"body": parts[0], "occurrence": "O1"}
+        ]}),
+    );
+    let before = sets(&doc);
+    let depth = doc.undo_depth();
+
+    let moved = doc
+        .move_to_components(
+            ComponentUid::ROOT,
+            &[MoveGroup {
+                bodies: vec![body],
+                features: Vec::new(),
+            }],
+            &[],
+            false,
+        )
+        .unwrap();
+    assert_eq!(moved.len(), 1);
+    assert!(moved[0].features.contains(&extrude) && moved[0].features.contains(&sketch));
+    assert_eq!(doc.undo_depth(), depth + 1);
+    let place = json!(OccurrencePath(vec![moved[0].occurrence]));
+    let component = json!(moved[0].component);
+    let listed = sets(&doc);
+    let members = listed[0]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 4, "{listed:?}");
+    for member in &members[..3] {
+        assert_eq!(member["occurrence"], place, "{member}");
+        assert_eq!(member["component"], component, "{member}");
+        assert_eq!(member["exists"], true, "{member}");
+        assert_eq!(member["active"], true, "{member}");
+        assert!(member["path_name"].is_string(), "{member}");
+    }
+    assert_eq!(members[0]["feature"], json!(sketch));
+    assert_eq!(members[1]["feature"], json!(extrude));
+    assert_eq!(members[2]["body"], json!(body));
+    // Rail's body stays where it was.
+    assert_eq!(members[3], before[0]["members"][3]);
+    // Found under its new place: a member given there is the same one, and
+    // the old place no longer has the feature.
+    let reply = command(
+        &mut doc,
+        json!({"cmd": "set_selection_set_members", "name": "Moved", "add": [
+            {"feature": extrude, "occurrence": place}
+        ]}),
+    );
+    assert_eq!(reply["members"], 4);
+    let error = rejected(
+        &mut doc,
+        json!({"cmd": "set_selection_set_members", "name": "Moved", "add": [{"feature": extrude}]}),
+    );
+    assert!(error.contains("is not in"), "{error}");
+
+    // Undo: the features back in the root, the members with them.
+    doc.undo().unwrap();
+    assert_eq!(doc.undo_depth(), depth);
+    assert_eq!(doc.feature(extrude).unwrap().component, ComponentUid::ROOT);
+    assert_eq!(sets(&doc), before);
+    doc.redo().unwrap();
+    assert_eq!(sets(&doc)[0]["members"][1]["occurrence"], place);
+}
+
+/// mitcad#2219: an occurrence reparented takes its members along: the
+/// occurrence itself and a body it places, now under the new parent; Undo
+/// puts them back.
+#[test]
+fn members_follow_a_reparented_occurrence() {
+    let Design { mut doc, parts, .. } = design();
+    command(
+        &mut doc,
+        json!({"cmd": "add_selection_set", "name": "Rails", "members": [
+            {"occurrence": "O1"}, {"body": parts[0], "occurrence": "O1"}, {"occurrence": "O2"}
+        ]}),
+    );
+    let before = sets(&doc);
+    command(
+        &mut doc,
+        json!({"cmd": "reparent_occurrence", "occurrence": "O1", "parent": "O2"}),
+    );
+    let listed = sets(&doc);
+    let members = listed[0]["members"].as_array().unwrap();
+    assert_eq!(members[0]["occurrence"], "O2/O1", "{listed:?}");
+    assert_eq!(members[0]["exists"], true);
+    assert_eq!(members[1]["occurrence"], "O2/O1", "{listed:?}");
+    assert_eq!(members[1]["exists"], true);
+    assert_eq!(members[1]["active"], true);
+    assert_eq!(members[2]["occurrence"], "O2");
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(sets(&doc), before);
+}
+
+#[test]
+fn a_body_member_follows_a_transfer_across_the_marker_suppression_delete_and_undo() {
+    let Design { mut doc, body, .. } = design();
+    command(
+        &mut doc,
+        json!({"cmd": "add_selection_set", "name": "Travelling body", "members": [{"body": body}]}),
+    );
+    let original = sets(&doc);
+    let marker = doc.marker();
+    let transfer = doc
+        .transfer_bodies(&[body], Some(&[]), ComponentUid(1), None, None)
+        .unwrap()
+        .uid;
+    let transferred = sets(&doc);
+    let member = &transferred[0]["members"][0];
+    assert_eq!(member["body"], json!(body));
+    assert_eq!(member["occurrence"], "O1");
+    assert_eq!(member["component"], "C1");
+    assert_eq!(member["active"], true);
+
+    doc.set_marker(marker).unwrap();
+    assert_eq!(sets(&doc), original);
+    doc.set_marker(marker + 1).unwrap();
+    assert_eq!(sets(&doc), transferred);
+    doc.set_suppressed(transfer, true).unwrap();
+    assert_eq!(sets(&doc), original);
+    doc.set_suppressed(transfer, false).unwrap();
+    assert_eq!(sets(&doc), transferred);
+
+    let depth = doc.undo_depth();
+    command(&mut doc, json!({"cmd": "delete_feature", "uid": transfer}));
+    assert_eq!(doc.undo_depth(), depth + 1);
+    assert_eq!(sets(&doc), original);
+    doc.undo().unwrap();
+    assert_eq!(sets(&doc), transferred);
+    doc.redo().unwrap();
+    assert_eq!(sets(&doc), original);
+}
+
+#[test]
+fn a_move_into_a_shared_component_s_child_follows_both_placements() {
+    let mut doc = Document::new(MockKernel::default());
+    let (shared, first) = doc
+        .create_component(Some("Shared"), Transform::IDENTITY, true)
+        .unwrap();
+    let (_, feature, body) = block(&mut doc, 0.0);
+    let second = doc
+        .add_occurrence(
+            shared,
+            ComponentUid::ROOT,
+            Transform::translation([20.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "add_selection_set", "name": "Two blocks", "members": [
+            {"feature": feature, "occurrence": OccurrencePath(vec![second])},
+            {"feature": feature, "occurrence": OccurrencePath(vec![first])},
+        ]}),
+    );
+    let original = sets(&doc);
+    let depth = doc.undo_depth();
+    let moved = doc
+        .move_to_components(
+            shared,
+            &[MoveGroup {
+                bodies: vec![body],
+                features: Vec::new(),
+            }],
+            &[],
+            false,
+        )
+        .unwrap();
+    let child = moved[0].occurrence;
+    let moved_sets = sets(&doc);
+    assert_eq!(doc.undo_depth(), depth + 1);
+    let members = moved_sets[0]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    for (member, parent) in members.iter().zip([second, first]) {
+        assert_eq!(member["feature"], json!(feature));
+        assert_eq!(
+            member["occurrence"],
+            json!(OccurrencePath(vec![parent, child]))
+        );
+        assert_eq!(member["component"], json!(moved[0].component));
+        assert_eq!(member["active"], true);
+    }
+    doc.undo().unwrap();
+    assert_eq!(sets(&doc), original);
+}
+
+#[test]
+fn a_transfer_to_a_shared_component_s_child_preserves_each_members_placement() {
+    let mut doc = Document::new(MockKernel::default());
+    let (shared, first) = doc
+        .create_component(Some("Shared"), Transform::IDENTITY, true)
+        .unwrap();
+    let (_, _, body) = block(&mut doc, 0.0);
+    let (child, child_occurrence) = doc
+        .create_component(Some("Child"), Transform::IDENTITY, false)
+        .unwrap();
+    let second = doc
+        .add_occurrence(
+            shared,
+            ComponentUid::ROOT,
+            Transform::translation([20.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "add_selection_set", "name": "Both placements", "members": [
+            {"body": body, "occurrence": OccurrencePath(vec![first])},
+            {"body": body, "occurrence": OccurrencePath(vec![second])},
+        ]}),
+    );
+    let original = sets(&doc);
+    let transfer = doc
+        .transfer_bodies(
+            &[body],
+            Some(&[second]),
+            child,
+            Some(&[second, child_occurrence]),
+            None,
+        )
+        .unwrap()
+        .uid;
+    let transferred = sets(&doc);
+    let members = transferred[0]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    for (member, parent) in members.iter().zip([first, second]) {
+        assert_eq!(member["body"], json!(body));
+        assert_eq!(
+            member["occurrence"],
+            json!(OccurrencePath(vec![parent, child_occurrence]))
+        );
+        assert_eq!(member["active"], true);
+    }
+    doc.set_suppressed(transfer, true).unwrap();
+    assert_eq!(sets(&doc), original);
+    doc.undo().unwrap();
+    assert_eq!(sets(&doc), transferred);
 }

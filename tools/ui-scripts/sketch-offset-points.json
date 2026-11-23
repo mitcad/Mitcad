@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Sketch1 on XY for tools/ui-scripts/sketch-offset-points.mitcad-ui (mitcad#2278): two free points that frame the view's fit at (-40, -30) and (40, 30) (p1, p2); a cubic B-spline arch c3 on the control points p4 (-20, 0), p5 (-20, 10), p6 (20, 10), p7 (20, 0); its derived offset 4 mm outside the arch (to the left of its direction), which starts at (-24, 0) and ends at (24, 0)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-40, -30]},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [40, 30]},
+  {"cmd": "sketch.spline", "sketch": "F1", "degree": 3, "points": [[-20, 0], [-20, 10], [20, 10], [20, 0]]},
+  {"cmd": "sketch.offset", "sketch": "F1", "curves": ["c3"], "distance": -4}
+]

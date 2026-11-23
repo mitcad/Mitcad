@@ -225,3 +225,41 @@ fn colours_of_bytes_are_scaled() {
     let serp = read(&testfile::write(&scene)).unwrap();
     assert_eq!(serp.objects[0].color, Some([1.0, 0.0, 0.5]));
 }
+
+#[test]
+fn point_clouds_read_their_points_from_the_container() {
+    let points = [[1.0f32, 2.0, 3.0], [-0.5, 0.25, 8.0]];
+    let colors = [[255u8, 0, 0], [0, 128, 255]];
+    let (near, near_members) =
+        testfile::cloud("c1", "Scan", "default", None, &points, Some(&colors));
+    let (far, far_members) =
+        testfile::cloud("c2", "", "default", Some([5.0e6, 0.0, -1.0]), &points, None);
+    // Points without their member are left out and counted.
+    let lost = json!({"id": "c3", "name": "Lost", "blobs": {"xyz": "blobs/c3/xyz.f32"}});
+    let mut scene = TestScene {
+        version: 9,
+        members: near_members.into_iter().chain(far_members).collect(),
+        ..TestScene::default()
+    };
+    scene
+        .extra
+        .insert("pointclouds".to_owned(), json!([near, far, lost]));
+    let serp = read(&testfile::write(&scene)).unwrap();
+    assert_eq!(serp.clouds.len(), 2);
+    let scan = &serp.clouds[0];
+    assert_eq!(scan.name.as_deref(), Some("Scan"));
+    assert_eq!(scan.points, points.to_vec());
+    assert_eq!(scan.colors, Some(colors.to_vec()));
+    assert_eq!(scan.origin, [0.0; 3]);
+    assert!(serp.cloud_shown(scan));
+    let far = &serp.clouds[1];
+    assert_eq!(far.name, None);
+    assert_eq!(far.origin, [5.0e6, 0.0, -1.0]);
+    assert_eq!(far.colors, None);
+    assert_eq!(serp.skipped.parts(), ["1 point cloud"]);
+    // A bare scene keeps no points: every cloud is left out.
+    scene.version = 1;
+    let serp = read(&testfile::write(&scene)).unwrap();
+    assert!(serp.clouds.is_empty());
+    assert_eq!(serp.skipped.parts(), ["3 point clouds"]);
+}

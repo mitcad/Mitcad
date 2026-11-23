@@ -5,6 +5,7 @@
 # check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp app/view/SpaceMouseTiming.hpp
 # check-all sources: app/view/ViewController.cpp app/framework/TestDriverNavigation.cpp
 # check-all sources: app/platform/windows/SpaceMouse3DxWare.cpp app/platform/windows/SpaceMouse3DxWare.hpp app/platform/SpaceMouseDriverReports.hpp
+# check-all sources: app/framework/TestDriverViewCamera.cpp app/WindowManager.cpp app/DocumentFrame.cpp
 # A 3D mouse (mitcad#951) in the build VM, through the test driver's input
 # (tools/ui-scripts/space-mouse.mitcad-ui, the same script as the Linux
 # test's): no device logs "3D mouse: none" (Raw Input finds none in the
@@ -13,7 +14,10 @@
 # duration, frame rate, longest frame and grid rebuilds (mitcad#1023); the
 # 3D Mouse tab of Preferences has its Navigation mode and Lock horizon
 # (mitcad#978); Lock Rotation on the second button locks and frees the
-# rotation, also in a sketch, where it starts locked (mitcad#1910).
+# rotation, also in a sketch, where it starts locked (mitcad#1910); a
+# second design shares the process's one connection (Raw Input's one
+# registration), the input turning the active design's view only, the
+# first one's again after the second closes (mitcad#2297).
 param(
   [string]$App,
   [string]$Out = (Join-Path $env:TEMP 'mitcad-ui-windows-space-mouse'),

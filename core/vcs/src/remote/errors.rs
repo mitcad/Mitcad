@@ -38,7 +38,9 @@ pub enum ErrorClass {
     NotFound,
     /// The remote has versions this project lacks (not a fast-forward).
     Rejected,
-    /// The server refused a file that is too large (GitHub: 100 MiB).
+    /// The server refused a file that is too large (GitHub: 100 MiB); also
+    /// a project's other file over that size added or recorded without
+    /// `allow_large` (mitcad#2204).
     TooLarge,
     /// The repository uses Git LFS and git-lfs is not installed.
     LfsMissing,

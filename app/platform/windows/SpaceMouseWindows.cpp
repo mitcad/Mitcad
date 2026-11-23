@@ -7,7 +7,10 @@
 // reads them as Qt's event loop dispatches them. Input counts only while
 // Mitcad is the foreground application (RIM_INPUT). The reports' parsing
 // and their axes are SpaceMouseDevice.hpp's (SpaceMouseHidReader: where a
-// device sends its rotation, mitcad#1034).
+// device sends its rotation, mitcad#1034). Windows keeps one Raw Input
+// target per device class and process, and RIDEV_REMOVE removes it for the
+// whole process: the backend is the process's one (SpaceMouseConnection,
+// mitcad#2297), never one per design.
 //
 // The debug log (mitcad#1034): at a device's first report, its name with
 // its vendor and product ids, the size of its reports (dwSizeHid), its
@@ -375,7 +378,10 @@ public:
   }
 
   QString name() const override {
-    return m_backend ? m_backend->name() : QStringLiteral("Raw Input");
+    if (m_backend) {
+      return m_backend->name();
+    }
+    return m_driverOpen ? QStringLiteral("3DxWare") : QStringLiteral("Raw Input");
   }
 
   bool start(QString& device) override {
@@ -385,17 +391,27 @@ public:
     return startRaw(device);
   }
 
-  // A driver start that found no window (the design not yet in its shown
-  // frame, mitcad#2152) is tried again once there is one, whether the
-  // window is active or not, so that a 3DxWare user gets the driver and
-  // not only Raw Input; a window it was already tried with is not tried
-  // again (a design's tab shown again, its frame restored).
+  // The window of the active design (nativeWindow) was placed or is
+  // another one now: another design activated, or the active one closed
+  // or put in another frame (mitcad#2297). A driver start that found no
+  // window (the design not yet in its shown frame, mitcad#2152) is tried
+  // again once there is one, whether the window is active or not, so that
+  // a 3DxWare user gets the driver and not only Raw Input; a window it was
+  // already tried with is not tried again (a design's tab shown again, its
+  // frame restored). An open driver session follows a new top-level
+  // window: the driver sends its events to the window it was opened for.
   void windowPlaced() override {
-    if (!m_backend || m_driverOpen || !nativeWindow) {
+    if (!m_backend || !nativeWindow) {
       return;
     }
     const std::uintptr_t window = nativeWindow();
     if (window == 0 || window == m_triedWindow) {
+      return;
+    }
+    if (m_driverOpen) {
+      // Later, from the event loop: closing the session can destroy the
+      // native filter whose input led here.
+      QTimer::singleShot(0, &m_retry, [this] { rehome(); });
       return;
     }
     QString device;
@@ -439,8 +455,36 @@ private:
     }
     m_backend = std::move(driver);
     m_driverOpen = true;
+    m_driverDevice = device;
     m_retry.stop();
     return true;
+  }
+
+  // The driver's session closed for the window it was opened for and
+  // opened again for the active design's (mitcad#2297), the same device:
+  // no new "connected" line. A driver that does not open for it leaves
+  // Raw Input, the driver tried again every 5 s as at a start.
+  void rehome() {
+    const std::uintptr_t window = nativeWindow ? nativeWindow() : 0;
+    if (!m_driverOpen || !m_backend || window == 0 || window == m_triedWindow) {
+      return;
+    }
+    if (motion) {
+      motion({});
+    }
+    m_backend.reset(); // closes the session (name() still says 3DxWare)
+    QString device;
+    if (startDriver(device)) {
+      qInfo().noquote() << QStringLiteral("3D mouse: 3DxWare follows the active design's window");
+      return;
+    }
+    if (connection) {
+      connection(false, m_driverDevice);
+    }
+    QString rawDevice;
+    if (startRaw(rawDevice) && connection) {
+      connection(true, rawDevice);
+    }
   }
 
   bool startRaw(QString& device) {
@@ -456,6 +500,8 @@ private:
   QTimer m_retry;
   std::unique_ptr<SpaceMouseBackend> m_backend;
   bool m_driverOpen = false;
+  // The device the open driver session reported.
+  QString m_driverDevice;
   // The window the last driver start was given (0: none yet).
   std::uintptr_t m_triedWindow = 0;
 };

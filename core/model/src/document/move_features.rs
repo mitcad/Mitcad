@@ -1238,6 +1238,15 @@ fn follow_references(
         occurrence,
         bodies,
     });
+    // Selection set members of the moved features and bodies (mitcad#2219):
+    // placed in `source`, now through the new occurrence.
+    state.follow_set_members(moved, bodies, &|path: &OccurrencePath| {
+        ends_in_source(ComponentUid::ROOT, &path.0).then(|| {
+            let mut path = path.clone();
+            path.0.push(occurrence);
+            path
+        })
+    });
 }
 
 fn follow_origin(

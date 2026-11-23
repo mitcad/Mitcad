@@ -46,9 +46,13 @@ mod plastic;
 mod frames;
 #[cfg(test)]
 mod frames_tests;
+// Frame members' end caps (mitcad#2243).
+mod end_caps;
 mod spatial;
 #[cfg(test)]
 mod tests;
+// Point clouds as point cloud items (mitcad#2240).
+mod point_clouds;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -139,6 +143,7 @@ pub fn import_solidcraft_file<K: Kernel>(
         sheet_body_rules: HashMap::new(),
         plastic_rules: HashMap::new(),
         member_body: None,
+        member_lines: HashMap::new(),
     };
     importer.run(options)?;
     let Importer {
@@ -207,6 +212,9 @@ pub(crate) struct Importer<'d, 'f, K: Kernel> {
     /// The name of the body the next feature makes: a frame member's, as
     /// the file names it (mitcad#2157).
     pub member_body: Option<String>,
+    /// The body name of each frame member, by the file's member feature
+    /// and line (mitcad#2243: the members' end caps find them).
+    pub member_lines: HashMap<(u64, String), String>,
 }
 
 /// The result of mapping one feature.
@@ -271,16 +279,13 @@ impl<K: Kernel> Importer<'_, '_, K> {
         self.params.make_rest(self.doc, &mut self.report);
         assembly::joints(self);
         self.visibility();
-        // Point clouds (format 43): references only, which MitCad keeps none of.
-        let clouds = self.design.point_clouds.len();
-        if clouds > 0 {
-            // One and several as whole messages (mitcad#1284).
-            self.report.notes.push(if clouds == 1 {
-                "a point cloud (scanned reference points): not mapped".to_owned()
-            } else {
-                format!("{clouds} point clouds (scanned reference points): not mapped")
-            });
-        }
+        // Point clouds (format 43): point cloud items of the design
+        // (mitcad#2240).
+        point_clouds::import_clouds(
+            &mut *self.doc,
+            &self.design.point_clouds,
+            &mut self.report.notes,
+        );
         // Placements typed as expressions (formats 56 and 57): placed where
         // the file saved them.
         let expressed = self

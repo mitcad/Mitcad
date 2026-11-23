@@ -520,6 +520,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>%n point(s)</source>
+        <translation>
+            <numerusform>%n point</numerusform>
+            <numerusform>%n points</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>Block %1: %n instance(s)</source>
         <translation>
             <numerusform>Block %1: %n instance</numerusform>
@@ -574,6 +581,13 @@
 </context>
 <context>
     <name>mitcad::CamMachinesDialog</name>
+    <message numerus="yes">
+        <source>%1, a lathe, controller %2. Travel X %3 (a radius), Z %4; spindle %5 to %6 rpm; turret of %7 stations; chuck %8 across, %9 long. Used by %n setup(s).</source>
+        <translation>
+            <numerusform>%1, a lathe, controller %2. Travel X %3 (a radius), Z %4; spindle %5 to %6 rpm; turret of %7 stations; chuck %8 across, %9 long. Used by %n setup.</numerusform>
+            <numerusform>%1, a lathe, controller %2. Travel X %3 (a radius), Z %4; spindle %5 to %6 rpm; turret of %7 stations; chuck %8 across, %9 long. Used by %n setups.</numerusform>
+        </translation>
+    </message>
     <message numerus="yes">
         <source>%1, controller %2. Travel %3 × %4 × %5; spindle %6 to %7 rpm. Used by %n setup(s).</source>
         <translation>
@@ -729,6 +743,20 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>Delete the folder %1 and the %n design in it?</numerusform>
             <numerusform>Delete the folder %1 and the %n designs in it?</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Added %n file(s) to %1 as a new version.</source>
+        <translation>
+            <numerusform>Added %n file to %1 as a new version.</numerusform>
+            <numerusform>Added %n files to %1 as a new version.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Recorded the changes of %n file(s) as a new version.</source>
+        <translation>
+            <numerusform>Recorded the changes of %n file as a new version.</numerusform>
+            <numerusform>Recorded the changes of %n files as a new version.</numerusform>
         </translation>
     </message>
     <message numerus="yes">

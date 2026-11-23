@@ -5,6 +5,8 @@
 // their faces. Every operation leaves its inputs as they are (the input
 // check is on).
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -34,6 +36,30 @@
 #include <gp_Dir.hxx>
 #include <gp_Lin.hxx>
 #include <gp_Vec.hxx>
+
+// A loop through three sketches filled, measured against its curves
+// (mitcad#2220).
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Curve2d.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepTools.hxx>
+#include <GeomAdaptor_Curve.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_Circle.hxx>
+#include <Geom_Curve.hxx>
+#include <Geom_Line.hxx>
+#include <Geom_TrimmedCurve.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <ShapeAnalysis_Curve.hxx>
+#include <TopExp.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <TopoDS_Wire.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Pnt2d.hxx>
 
 #include "check.hpp"
 #include "mitcad/geometry/extrude.hpp"
@@ -781,6 +807,273 @@ void test_faces_are_faired() {
   CHECK(throws_with([&] { g::fair_surface(*box(), {}, fairing); }, "solid"));
 }
 
+// --- Fill a Loop through three sketches (mitcad#2220)
+
+// A curve of the loop as the model hands it over (one boundary entry per
+// sketch, mitcad#2198), with the same curve built here from its
+// definition, not by the kernel, to measure the filled face against.
+struct LoopCurve {
+  g::BoundaryCurve boundary;
+  occ::handle<Geom_Curve> curve;
+  bool planar = true; // a planar sketch's curve (the 3D sketch's is not)
+};
+
+// The two planar sketches' planes: the xy plane, and a plane parallel to
+// it with an origin and axes of its own.
+gp_Pln first_sketch_plane() { return gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)); }
+gp_Pln second_sketch_plane() { return gp_Pln(gp_Ax3(gp_Pnt(20, 0, 0), gp_Dir(0, 0, 1), gp_Dir(-0.6, 0.8, 0))); }
+
+g::BoundaryCurve planar_entry(const g::PathCurve& piece, const gp_Pln& plane, g::Continuity continuity) {
+  g::BoundaryCurve entry;
+  entry.kind = g::BoundaryCurve::Kind::Curves;
+  entry.curves = {piece};
+  entry.plane = plane;
+  entry.continuity = continuity;
+  return entry;
+}
+
+// The first sketch's arc, from (0, 0, 0) through (10, -4, 0) to (20, 0, 0):
+// centre (10, 10.5, 0), radius 14.5.
+LoopCurve loop_arc(g::Continuity continuity) {
+  const gp_Pnt center(10, 10.5, 0);
+  const double radius = 14.5;
+  g::PathCurve piece;
+  piece.name = "c1";
+  piece.curve.kind = g::ModelCurveKind::Conic;
+  piece.curve.center = center;
+  piece.curve.normal = gp_Dir(0, 0, 1);
+  piece.curve.x_axis = gp_Dir(1, 0, 0);
+  piece.curve.major = radius;
+  piece.curve.minor = radius;
+  piece.curve.first = std::atan2(-10.5, -10.0);
+  piece.curve.last = std::atan2(-10.5, 10.0);
+  const occ::handle<Geom_Circle> circle = new Geom_Circle(gp_Ax2(center, gp_Dir(0, 0, 1), gp_Dir(1, 0, 0)), radius);
+  const occ::handle<Geom_Curve> curve = new Geom_TrimmedCurve(circle, piece.curve.first, piece.curve.last);
+  return {planar_entry(piece, first_sketch_plane(), continuity), curve, true};
+}
+
+// The second sketch's line from (20, 0, 0) to (10, 15, 0), or run the
+// other way (a sketch's curve need not run with the loop); its first
+// corner `gap` off the arc's end (in y), as two sketches' curves the model
+// joins within its tolerance may end.
+LoopCurve loop_line(g::Continuity continuity, bool reversed, double gap = 0.0) {
+  const gp_Pnt corner(20, gap, 0);
+  const gp_Pnt a = reversed ? gp_Pnt(10, 15, 0) : corner;
+  const gp_Pnt b = reversed ? corner : gp_Pnt(10, 15, 0);
+  const occ::handle<Geom_Line> straight = new Geom_Line(a, gp_Dir(gp_Vec(a, b)));
+  const occ::handle<Geom_Curve> curve = new Geom_TrimmedCurve(straight, 0.0, a.Distance(b));
+  return {planar_entry(line("c1", a, b), second_sketch_plane(), continuity), curve, true};
+}
+
+// The 3D sketch's curve from (10, 15, 0) back to the origin over a hump 3
+// high: a quartic level at both ends, so that a surface tangent to the
+// planar sketches' plane along their curves can also meet it.
+LoopCurve loop_hump() {
+  const std::array<gp_Pnt, 5> poles = {{gp_Pnt(10, 15, 0), gp_Pnt(6.5, 11.85, 0), gp_Pnt(3.5, 8.5, 8),
+                                        gp_Pnt(1.5, 4.35, 0), gp_Pnt(0, 0, 0)}};
+  g::PathCurve piece;
+  piece.name = "c1";
+  piece.curve.kind = g::ModelCurveKind::BSpline;
+  piece.curve.degree = 4;
+  piece.curve.poles.assign(poles.begin(), poles.end());
+  piece.curve.knots = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1};
+  g::BoundaryCurve entry;
+  entry.kind = g::BoundaryCurve::Kind::Curves;
+  entry.curves = {piece};
+  entry.continuity = g::Continuity::G0; // a 3D sketch has no plane to be tangent to
+  NCollection_Array1<gp_Pnt> array(1, 5);
+  for (int i = 0; i < 5; ++i) {
+    array.SetValue(i + 1, poles[static_cast<std::size_t>(i)]);
+  }
+  NCollection_Array1<double> knots(1, 2);
+  knots(1) = 0.0;
+  knots(2) = 1.0;
+  NCollection_Array1<int> mults(1, 2);
+  mults(1) = 5;
+  mults(2) = 5;
+  const occ::handle<Geom_Curve> curve = new Geom_BSplineCurve(array, knots, mults, 4);
+  return {entry, curve, false};
+}
+
+// The distance from p to the curve (its ends included).
+double distance_to(const Adaptor3d_Curve& curve, const gp_Pnt& p) {
+  gp_Pnt projected;
+  double param = 0.0;
+  return ShapeAnalysis_Curve().Project(curve, p, 1.0e-9, projected, param);
+}
+
+// The farthest of points evenly along `from` (by its parameter, ends
+// included) from the curve `to`.
+double farthest(const Adaptor3d_Curve& from, const Adaptor3d_Curve& to) {
+  constexpr int kSamples = 64;
+  double result = 0.0;
+  for (int i = 0; i <= kSamples; ++i) {
+    const double t =
+        from.FirstParameter() + (from.LastParameter() - from.FirstParameter()) * static_cast<double>(i) / kSamples;
+    result = std::max(result, distance_to(to, from.Value(t)));
+  }
+  return result;
+}
+
+// The largest angle (radians) between the face's normal and the plane's
+// normal (either way) along the edge, inside its ends.
+double largest_tilt(const TopoDS_Face& face, const TopoDS_Edge& edge, const gp_Dir& normal) {
+  constexpr int kSamples = 64;
+  const BRepAdaptor_Curve2d pcurve(edge, face);
+  const BRepAdaptor_Surface surface(face);
+  double result = 0.0;
+  for (int i = 1; i < kSamples; ++i) {
+    const double t = pcurve.FirstParameter() +
+                     (pcurve.LastParameter() - pcurve.FirstParameter()) * static_cast<double>(i) / kSamples;
+    const gp_Pnt2d uv = pcurve.Value(t);
+    gp_Pnt p;
+    gp_Vec du;
+    gp_Vec dv;
+    surface.D1(uv.X(), uv.Y(), p, du, dv);
+    const gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1.0e-12) {
+      continue;
+    }
+    const double angle = n.Angle(gp_Vec(normal));
+    result = std::max(result, std::min(angle, kPi - angle));
+  }
+  return result;
+}
+
+// The loop filled and measured: one face whose outer wire closes through
+// three vertices at the curves' ends, each of its three edges on one of
+// the curves and along all of it within 0.000001 mm (sampled both ways).
+// Returns the largest tilt of the face against the planar sketches' plane
+// along their curves' edges (negative when the fill failed).
+double fill_and_measure(const std::vector<LoopCurve>& loop, const char* what) {
+  constexpr double kOnCurve = 1.0e-6;
+  std::vector<g::BoundaryCurve> entries;
+  for (const LoopCurve& curve : loop) {
+    entries.push_back(curve.boundary);
+  }
+  const g::ShapePtr filled = g::boundary_fill("F8", entries);
+  CHECK(named(*filled, "F8:boundary") == 1);
+  CHECK(filled->face_count() == 1);
+  const TopExp_Explorer faces(filled->occt(), TopAbs_FACE);
+  CHECK(faces.More());
+  if (!faces.More()) {
+    return -1.0;
+  }
+  const TopoDS_Face face = TopoDS::Face(faces.Current());
+  CHECK(BRepCheck_Analyzer(face, true, false, true).IsValid());
+  // The chains of the three sketches joined: one closed wire, three corners.
+  const TopoDS_Wire wire = BRepTools::OuterWire(face);
+  CHECK(!wire.IsNull() && BRep_Tool::IsClosed(wire));
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> vertices;
+  TopExp::MapShapes(face, TopAbs_VERTEX, vertices);
+  CHECK(vertices.Extent() == 3);
+  const std::array<gp_Pnt, 3> corners = {{gp_Pnt(0, 0, 0), gp_Pnt(20, 0, 0), gp_Pnt(10, 15, 0)}};
+  for (int i = 1; i <= vertices.Extent(); ++i) {
+    const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(vertices(i)));
+    double nearest = 1.0e9;
+    for (const gp_Pnt& corner : corners) {
+      nearest = std::min(nearest, p.Distance(corner));
+    }
+    CHECK(nearest <= kOnCurve);
+  }
+  // Each edge on the curve it lies nearest, each curve with one edge.
+  std::vector<TopoDS_Edge> edge_of(loop.size());
+  int edges = 0;
+  double face_gap = 0.0;
+  double edge_tolerance = 0.0;
+  double worst = 0.0;
+  for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+    ++edges;
+    const TopoDS_Edge edge = TopoDS::Edge(it.Current());
+    const BRepAdaptor_Curve along(edge);
+    std::size_t best = loop.size();
+    double best_distance = 1.0e9;
+    for (std::size_t k = 0; k < loop.size(); ++k) {
+      const double d = farthest(along, GeomAdaptor_Curve(loop[k].curve));
+      if (d < best_distance) {
+        best_distance = d;
+        best = k;
+      }
+    }
+    worst = std::max(worst, best_distance);
+    if (best == loop.size()) {
+      continue;
+    }
+    CHECK(edge_of[best].IsNull());
+    edge_of[best] = edge;
+    // All of the curve along the edge, not a part of it.
+    worst = std::max(worst, farthest(GeomAdaptor_Curve(loop[best].curve), along));
+    // Each edge's own tolerance must cover the mismatch, regardless of
+    // the tolerances of the other edges.
+    const BRepAdaptor_Curve on_face(edge, face);
+    constexpr int kSamples = 64;
+    double gap = 0.0;
+    CHECK(BRep_Tool::SameParameter(edge));
+    for (int i = 0; i <= kSamples; ++i) {
+      const double param = along.FirstParameter() +
+                           (along.LastParameter() - along.FirstParameter()) * static_cast<double>(i) / kSamples;
+      gap = std::max(gap, on_face.Value(param).Distance(along.Value(param)));
+    }
+    const double tolerance = BRep_Tool::Tolerance(edge);
+    if (gap > tolerance) {
+      std::fprintf(stderr, "  %s: edge %d gap %.9g mm exceeds its tolerance %.9g mm\n", what, edges, gap,
+                   tolerance);
+    }
+    CHECK(gap <= tolerance);
+    face_gap = std::max(face_gap, gap);
+    edge_tolerance = std::max(edge_tolerance, tolerance);
+  }
+  CHECK(edges == 3);
+  CHECK(worst <= kOnCurve);
+  // Sew a sheet to the straight side. A real seam forms one shell with
+  // two faces, and the joined body must pass the same geometric checks.
+  const auto side = g::extrude_sheet("F9", {loop[1].boundary.curves}, gp_Vec(), gp_Dir(0, 0, -1), 5.0, 0.0);
+  CHECK(BRepCheck_Analyzer(side->occt(), true, false, true).IsValid());
+  const auto sewn = g::stitch({filled.get(), side.get()}, 0.0);
+  CHECK(sewn->face_count() == 2);
+  CHECK(sewn->occt().ShapeType() == TopAbs_SHELL);
+  CHECK(BRepCheck_Analyzer(sewn->occt(), true, false, true).IsValid());
+  if (worst > kOnCurve) {
+    std::fprintf(stderr, "  %s: an edge lies %.3g mm from its curve\n", what, worst);
+  }
+  // The face against the sketches' plane along the planar curves' edges.
+  double tilt = 0.0;
+  for (std::size_t k = 0; k < loop.size(); ++k) {
+    CHECK(!edge_of[k].IsNull());
+    if (!edge_of[k].IsNull() && loop[k].planar) {
+      tilt = std::max(tilt, largest_tilt(face, edge_of[k], loop[k].boundary.plane.Axis().Direction()));
+    }
+  }
+  std::printf("  %s: edges within %.3g mm of the curves; the face along them within %.3g mm (edge tolerance %.3g), "
+              "tilted at most %.3g rad to the sketch plane\n",
+              what, worst, face_gap, edge_tolerance, tilt);
+  return tilt;
+}
+
+// mitcad#2220 (mitcad#2198's Done when): a loop of three curves of three
+// sketches, two planar (an arc and a line, on parallel planes with frames
+// of their own) and one 3D, filled to one face whose edges lie on the
+// curves within 0.000001 mm, without continuity and with Tangent to Sketch
+// Plane on the planar entries, also with a curve running against the loop
+// and with two sketches' curves ending 0.0000005 mm apart (within the
+// model's 0.00002 mm here, wider than the 0.0000001 mm the filling joined
+// edges of different sketches within before).
+void test_a_loop_through_three_sketches_fills_to_edges_on_its_curves() {
+  const g::Continuity g0 = g::Continuity::G0;
+  const g::Continuity g1 = g::Continuity::G1;
+  const double plain = fill_and_measure({loop_arc(g0), loop_line(g0, false), loop_hump()}, "G0");
+  const double tangent = fill_and_measure({loop_arc(g1), loop_line(g1, false), loop_hump()}, "G1");
+  const double reversed = fill_and_measure({loop_arc(g1), loop_line(g1, true), loop_hump()}, "G1, line reversed");
+  const double apart =
+      fill_and_measure({loop_arc(g1), loop_line(g1, false, 5.0e-7), loop_hump()}, "G1, ends 5e-7 mm apart");
+  // Without continuity the face rises off the plane towards the hump;
+  // tangent to it, it leaves the planar curves level.
+  CHECK(plain > 0.0);
+  CHECK(tangent >= 0.0 && tangent < 0.5 * plain);
+  CHECK(reversed >= 0.0 && reversed < 0.5 * plain);
+  CHECK(apart >= 0.0 && apart < 0.5 * plain);
+}
+
 } // namespace
 } // namespace test
 
@@ -810,6 +1103,8 @@ int main() {
   test::guarded("test_a_trimmed_plane_is_extended_round_a_corner", test::test_a_trimmed_plane_is_extended_round_a_corner);
   test::guarded("test_a_trimmed_plane_falls_back_to_square_sides",
                 test::test_a_trimmed_plane_falls_back_to_square_sides);
+  test::guarded("test_a_loop_through_three_sketches_fills_to_edges_on_its_curves",
+                test::test_a_loop_through_three_sketches_fills_to_edges_on_its_curves);
   for (const std::string& change : mitcad::geometry::input_changes()) {
     std::fprintf(stderr, "an input changed: %s\n", change.c_str());
     ++test::failures;

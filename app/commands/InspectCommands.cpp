@@ -74,6 +74,7 @@
 #include "../framework/Theme.hpp"
 #include "CommandSupport.hpp"
 #include "DraftAnalysis.hpp"
+#include "PointCloudDeviation.hpp"
 #include "PrintAnalysis.hpp"
 #include "PropertiesReport.hpp"
 #include "mitcad/geometry/datum.hpp"
@@ -682,6 +683,8 @@ CommandDef measureCommand() {
   def.tooltip = QObject::tr("Distances, angles, lengths, areas and positions of what is picked");
   def.shortcut = QKeySequence(Qt::Key_I);
   def.keywords = {QStringLiteral("distance"), QStringLiteral("angle"), QStringLiteral("dimension")};
+  // A download or a dropped file comes in beside it (mitcad#2281).
+  def.changesNoDesign = true;
   // Faces, edges and vertices, which Measure picks by default, or
   // whole bodies (the Selection Filter; a body would win over its faces
   // in the view, so it is a choice); datums that are shown (construction
@@ -905,6 +908,7 @@ CommandDef interferenceCommand(const CommandContext& context) {
   def.icon = QStringLiteral("interference");
   def.tooltip = QObject::tr("Where bodies overlap, and by how much");
   def.keywords = {QStringLiteral("clash"), QStringLiteral("overlap"), QStringLiteral("collision")};
+  def.changesNoDesign = true; // mitcad#2281
   def.inputs = {
       selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 0, 0)
           .withTooltip(QObject::tr("The bodies to check; none: all")),
@@ -1092,6 +1096,7 @@ CommandDef sectionCommand() {
   def.tooltip = QObject::tr("Shows the bodies cut at a plane, with the cut's area");
   def.keywords = {QStringLiteral("cut"), QStringLiteral("clip"), QStringLiteral("cross section")};
   def.keepsSection = true;
+  def.changesNoDesign = true; // mitcad#2281
   def.inputs = {
       // A face round about an axis, a circular or a straight edge places
       // the plane too (mitcad#1769).
@@ -1427,6 +1432,10 @@ QString printStage(const QJsonObject& request) {
   if (query == QStringLiteral("draft_analysis")) {
     return QObject::tr("Measuring the draft");
   }
+  // Point Cloud Deviation (mitcad#2240).
+  if (query == QStringLiteral("point_cloud_deviation")) {
+    return QObject::tr("Measuring the points");
+  }
   return query == QStringLiteral("print_thickness") ? QObject::tr("Measuring the walls")
                                                     : QObject::tr("Finding the overhangs");
 }
@@ -1489,6 +1498,7 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
                   QStringLiteral("print estimate"), QStringLiteral("gap"), QStringLiteral("print in place")};
   // OK keeps it in the document as an analysis, shown (mitcad#41).
   def.keepsSection = true;
+  def.changesNoDesign = true; // mitcad#2281
   const auto checked = [](const QString& key) {
     return [key](const CommandState& state) { return state.checked(key); };
   };
@@ -1731,6 +1741,174 @@ CommandDef draftAnalysisCommand(const CommandContext& model) {
     }
     state.setChecked(QStringLiteral("flip"), analysis.value(QStringLiteral("flip")).toBool());
     state.setText(QStringLiteral("angle"), QStringLiteral("%1 deg").arg(n(draftAngleOf(analysis))));
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Point Cloud Deviation (mitcad#2240; app/COMMANDS.md "Point Cloud
+// Deviation"): a point cloud's points by their distance from a body's
+// faces, kept in the document as Draft Analysis is.
+
+// The design's point clouds' names, kept in the panel's state for the
+// Point Cloud input's choices.
+void keepCloudNames(CommandState& state, const CommandContext& context) {
+  QJsonArray names;
+  try {
+    for (const QJsonValue& cloud : context.queryArray(QStringLiteral("point_clouds"))) {
+      names.append(cloud.toObject().value(QStringLiteral("name")).toString());
+    }
+  } catch (const std::exception&) {
+  }
+  state.setObject(QStringLiteral("clouds"), {{QStringLiteral("names"), names}});
+}
+
+// The panel's values as an analysis' definition, or what is wrong.
+Built deviationDefinition(const CommandState& state) {
+  const QString cloud = state.choice(QStringLiteral("cloud"));
+  if (cloud.isEmpty()) {
+    return Built::failure(QObject::tr("Insert a point cloud first (Insert › Point Cloud)."), QStringLiteral("cloud"));
+  }
+  const Selection& body = state.items(QStringLiteral("body"));
+  if (body.isEmpty()) {
+    return Built::failure(QObject::tr("Select the body to measure from."), QStringLiteral("body"));
+  }
+  const double tolerance = state.value(QStringLiteral("tolerance"));
+  if (!(tolerance > 0.0)) {
+    return Built::failure(QObject::tr("Tolerance: more than 0 mm."), QStringLiteral("tolerance"));
+  }
+  const double samples = state.value(QStringLiteral("samples"));
+  if (!(samples >= 1.0 && samples <= 2000000.0)) {
+    return Built::failure(QObject::tr("Points: from 1 to 2000000."), QStringLiteral("samples"));
+  }
+  const double limit = state.value(QStringLiteral("limit"));
+  if (!(limit >= 0.0)) {
+    return Built::failure(QObject::tr("Color Limit: 0 mm or more."), QStringLiteral("limit"));
+  }
+  // Some of the body's faces only (mitcad#2265); none: all of them. A face
+  // shown by two occurrences is one face of the body.
+  QJsonArray faces;
+  for (const SelectionItem& face : state.items(QStringLiteral("faces"))) {
+    if (face.owner != body.first().owner) {
+      return Built::failure(QObject::tr("Pick faces of the chosen body, or none to measure from all of them."),
+                            QStringLiteral("faces"));
+    }
+    if (!faces.contains(face.name)) {
+      faces.append(face.name);
+    }
+  }
+  return Built::of(pointCloudDeviationDef(cloud, body.first().owner, tolerance, static_cast<int>(std::lround(samples)),
+                                          state.checked(QStringLiteral("signed")), limit, faces));
+}
+
+CommandDef pointCloudDeviationCommand() {
+  CommandDef def;
+  def.id = QStringLiteral("inspect.point_cloud_deviation");
+  def.name = QObject::tr("Point Cloud Deviation");
+  def.icon = QStringLiteral("point-cloud-deviation");
+  def.tooltip = QObject::tr("A scan's points colored by their distance from a body's faces, with statistics");
+  def.keywords = {QStringLiteral("scan"), QStringLiteral("point cloud"), QStringLiteral("deviation"),
+                  QStringLiteral("inspection"), QStringLiteral("compare"), QStringLiteral("tolerance"),
+                  QStringLiteral("ply"), QStringLiteral("xyz")};
+  // OK keeps it in the document as an analysis, shown (mitcad#41).
+  def.keepsSection = true;
+  def.inputs = {
+      choiceInput(QStringLiteral("cloud"), QObject::tr("Point Cloud"), {}, QString())
+          .withChoices([](const CommandState& state) {
+            QVector<QPair<QString, QString>> choices;
+            for (const QJsonValue& name :
+                 state.object(QStringLiteral("clouds")).value(QStringLiteral("names")).toArray()) {
+              choices.append({name.toString(), name.toString()});
+            }
+            return choices;
+          })
+          .withTooltip(QObject::tr("The scanned points to compare with the body")),
+      selectionInput(QStringLiteral("body"), QObject::tr("Body"), SelectKind::Body, 1, 1)
+          .withTooltip(QObject::tr("The body whose faces the points are measured from")),
+      // mitcad#2265: some of its faces only.
+      selectionInput(QStringLiteral("faces"), QObject::tr("Faces"), SelectKind::Face, 0, 0)
+          .withTooltip(QObject::tr("Measure from these faces of the body only; none: from all of them")),
+      valueInput(QStringLiteral("tolerance"), QObject::tr("Tolerance"), ValueKind::Length, QStringLiteral("0.1 mm"))
+          .withTooltip(QObject::tr("A point at most this far from the faces is within tolerance")),
+      checkInput(QStringLiteral("signed"), QObject::tr("Signed"), true)
+          .withTooltip(QObject::tr("Tell points inside the material from those outside; a closed solid only")),
+      valueInput(QStringLiteral("limit"), QObject::tr("Color Limit"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withTooltip(QObject::tr("The colors reach their full strength at this distance; 0: at the farthest "
+                                   "point")),
+      valueInput(QStringLiteral("samples"), QObject::tr("Points"), ValueKind::Unitless, QStringLiteral("100000"))
+          .withTooltip(QObject::tr("At most this many points are measured: one in every few of a larger cloud")),
+  };
+  // The first point cloud, and the body the selection stands for, else the
+  // first shown body; faces selected of that body are the faces measured
+  // from (mitcad#2265), else all of them.
+  def.preselect = [](const Selection& before, CommandState& state, const CommandContext& context) {
+    keepCloudNames(state, context);
+    const QJsonArray names = state.object(QStringLiteral("clouds")).value(QStringLiteral("names")).toArray();
+    if (state.choice(QStringLiteral("cloud")).isEmpty() && !names.isEmpty()) {
+      state.setChoice(QStringLiteral("cloud"), names.first().toString());
+    }
+    bool selected = false;
+    const Selection start = printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected);
+    if (!start.isEmpty()) {
+      state.setItems(QStringLiteral("body"), {start.first()});
+      Selection faces;
+      for (const SelectionItem& item : before) {
+        if (item.kind == SelectKind::Face && item.owner == start.first().owner) {
+          faces.append(item);
+        }
+      }
+      state.setItems(QStringLiteral("faces"), faces);
+    }
+  };
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    Inspection result;
+    const Built built = deviationDefinition(state);
+    if (!built.error.isEmpty()) {
+      result.error = built.error;
+      return result;
+    }
+    QJsonObject answer;
+    std::vector<float> places;
+    const QString error = runPointCloudDeviation(
+        built.def, [&context](const QJsonObject& request, bool slow) { return printQuery(context, request, slow); },
+        answer, places);
+    if (!error.isEmpty()) {
+      result.error = error;
+      return result;
+    }
+    const QString body = context.bodyName(built.def.value(QStringLiteral("body")).toString());
+    // The legend's swatches in the panel's colors; the view draws the
+    // points in the view's (CommandHost::showPrintAnalysis).
+    const std::array<QColor, 3> colors = {themeColor(ColorRole::DeviationInside),
+                                          themeColor(ColorRole::DeviationNeutral),
+                                          themeColor(ColorRole::DeviationOutside)};
+    result.text = pointCloudDeviationText(built.def, answer, body, colors);
+    result.log = pointCloudDeviationLog(answer, body);
+    result.printOverlay = pointCloudDeviationOverlayJson(built.def, answer, places, QObject::tr("Point Cloud Deviation"));
+    return result;
+  };
+  // OK keeps it (add_analysis, or edit_analysis of the one edited;
+  // CommandSession::keepAnalysis).
+  def.build = [](const CommandState& state, const CommandContext&) { return deviationDefinition(state); };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    keepCloudNames(state, context);
+    state.setChoice(QStringLiteral("cloud"), analysis.value(QStringLiteral("cloud")).toString());
+    const QString body = analysis.value(QStringLiteral("body")).toString();
+    state.setItems(QStringLiteral("body"), bodiesOf(QJsonArray{body}));
+    // Its faces, when it measures from some only (mitcad#2265).
+    Selection faces;
+    for (const QJsonValue& face : deviationFacesOf(analysis)) {
+      const SelectionItem item =
+          itemOf(QJsonObject{{QStringLiteral("body"), body}, {QStringLiteral("face"), face.toString()}}, context);
+      if (item.isValid()) {
+        faces.append(item);
+      }
+    }
+    state.setItems(QStringLiteral("faces"), faces);
+    state.setText(QStringLiteral("tolerance"), QStringLiteral("%1 mm").arg(n(deviationToleranceOf(analysis))));
+    state.setChecked(QStringLiteral("signed"), analysis.value(QStringLiteral("signed")).toBool(true));
+    state.setText(QStringLiteral("limit"), QStringLiteral("%1 mm").arg(n(deviationLimitOf(analysis))));
+    state.setText(QStringLiteral("samples"), QString::number(deviationSamplesOf(analysis)));
   };
   return def;
 }
@@ -2166,6 +2344,7 @@ void registerInspectCommands(CommandRegistry& registry, const CommandContext& co
   registry.add(sectionCommand());
   registry.add(printAnalysisCommand(context));
   registry.add(draftAnalysisCommand(context)); // mitcad#2166
+  registry.add(pointCloudDeviationCommand()); // mitcad#2240
 
   CommandDef properties;
   properties.id = QStringLiteral("inspect.properties");

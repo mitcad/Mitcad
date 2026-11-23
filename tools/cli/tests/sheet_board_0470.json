@@ -1,0 +1,28 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Board (mitcad#2226): the FEFCO 0470 folder. First of C flute corrugated board (4 mm, crease deduction 4, crease radius 0.5: each crease develops 5; the seam gap 0.4), inside 300 x 200 x 150. The blank (sketch F2, its outline with two slots), its creases (sketch F3), the Face F4 and fourteen Folds F5 to F18: the end walls on the back wall's ends, each with a floor flap lying on the base and turned over with a tab into a slot in the floor flap, the front wall's end flaps between the end walls' layers, the lid on the back wall with its 20 mm tuck. Its blank from x = -152 (the front wall) to 579.6 (the tuck), y = -204 to 529.6 (the end walls)."},
+  {"cmd": "add_standard_box", "style": "fefco_0470", "length": 300, "width": 200, "height": 150, "board": "c_flute", "radius": 0.5},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"feature": "F5", "status": "ok"}},
+  {"expect": {"feature": "F12", "status": "ok"}},
+  {"expect": {"feature": "F18", "status": "ok", "bodies": 1}},
+  {"comment": "It unfolds to its blank with the crease allowances."},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"},
+    "result": {"status": "valid", "bounds": {"min": [-152, -204], "max": [579.6, 529.6]}}}},
+  {"comment": "Its die line: cut and crease layers for a cutting table, and as PDF."},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_0470.dxf"},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_0470.pdf"},
+
+  {"comment": "Edited to 180 high: the walls 30 higher, the blank from x = -182 to 609.6; its Face and Folds follow."},
+  {"cmd": "edit_standard_box", "rules": "F1", "height": 180},
+  {"expect": {"feature": "F18", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"},
+    "result": {"status": "valid", "bounds": {"min": [-182, -204], "max": [609.6, 529.6]}}}},
+
+  {"comment": "Then of 4 mm corrugated polypropylene (crease deduction 0.4: each crease develops 8.6), inside 160 x 90 x 60: its rules F19, Face F22 and Folds F23 to F36, a second sheet body."},
+  {"cmd": "add_standard_box", "style": "fefco_0470", "length": 160, "width": 90, "height": 60, "board": "polypropylene_4", "radius": 0.5},
+  {"expect": {"feature": "F22", "status": "ok"}},
+  {"expect": {"feature": "F36", "status": "ok", "bodies": 2}},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F22.b0"},
+    "result": {"status": "valid", "bounds": {"min": [-63.8, -97.6], "max": [282.2, 283.2]}}}},
+  {"cmd": "export_die_line", "body": "F22.b0", "path": "sheet_board_0470_polypropylene.dxf"}
+]

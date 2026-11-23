@@ -51,6 +51,7 @@
 #include "BuildMembers.hpp"
 #include "ConfigurationBindingsPage.hpp"
 #include "ConfigurationBar.hpp"
+#include "FavoriteParametersCard.hpp"
 #include "ConfigurationsDialog.hpp"
 #include "DesignPropertiesDialog.hpp"
 #include "FeatureStatus.hpp"
@@ -76,13 +77,23 @@ class Menu {
 public:
   explicit Menu(QWidget* parent) : m_menu(parent) {}
 
+  // The entries with this icon are left out, unlogged (mitcad#2219: a
+  // selection set's member row has none of its item's Delete entries).
+  void leaveOut(const QString& icon) { m_leftOut << icon; }
+
   void add(const QString& icon, const QString& text, std::function<void()> call) {
+    if (m_leftOut.contains(icon)) {
+      return;
+    }
     QAction* action = m_menu.addAction(themeIcon(icon), text);
     QObject::connect(action, &QAction::triggered, &m_menu, std::move(call));
     m_entries << text;
   }
   // An entry that cannot be chosen while `blocked` says why (its tooltip).
   void add(const QString& icon, const QString& text, std::function<void()> call, const QString& blocked) {
+    if (m_leftOut.contains(icon)) {
+      return;
+    }
     QAction* action = m_menu.addAction(themeIcon(icon), text);
     QObject::connect(action, &QAction::triggered, &m_menu, std::move(call));
     m_entries << text;
@@ -95,6 +106,9 @@ public:
   }
   // An entry with a tooltip that says what it leaves out (mitcad#863).
   void addWithTip(const QString& icon, const QString& text, std::function<void()> call, const QString& tip) {
+    if (m_leftOut.contains(icon)) {
+      return;
+    }
     QAction* action = m_menu.addAction(themeIcon(icon), text);
     QObject::connect(action, &QAction::triggered, &m_menu, std::move(call));
     m_entries << text;
@@ -108,6 +122,9 @@ public:
   // fx", mitcad#861), logged "Context menu fx: Appearance…"; the entry is
   // logged by its text alone either way.
   void addBound(const QString& icon, const QString& text, std::function<void()> call, bool bound) {
+    if (m_leftOut.contains(icon)) {
+      return;
+    }
     QAction* action = m_menu.addAction(bound ? boundIcon(themeIcon(icon)) : themeIcon(icon),
                                        bound ? text + QStringLiteral("\tfx") : text);
     QObject::connect(action, &QAction::triggered, &m_menu, std::move(call));
@@ -159,6 +176,7 @@ public:
 
 private:
   QMenu m_menu;
+  QStringList m_leftOut;
   QStringList m_entries;
   QStringList m_bound;
   QStringList m_checked;
@@ -260,6 +278,10 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
   // presents it natively) it is a hidden child of the browser, never a
   // window of its own.
   m_configurationBar = new ConfigurationBar(host, m_browser);
+  // The Favorite Parameters card's content (mitcad#2203): a hidden child of
+  // the browser until the main window puts it into its card or dock.
+  m_favoriteParameters = new FavoriteParametersCard(host, m_browser);
+  m_favoriteParameters->hide();
   // Show used sketches under their features (mitcad#1699): as Preferences
   // has it, and every window's rows rebuilt at once when it changes.
   m_browser->setConsumeSketches(browserConsumeSketches());
@@ -270,6 +292,11 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
               m_browser->rebuild(m_snapshot, m_originShown);
             }
           });
+  // The Activate radio button's and the Show eye's places (mitcad#2223):
+  // as Preferences has them, and every window's rows laid out again at once.
+  m_browser->setControlPlaces(browserActivatePlace(), browserEyePlace());
+  connect(&BrowserPreferencesNotifier::instance(), &BrowserPreferencesNotifier::controlPlacesChanged, this,
+          [this] { m_browser->setControlPlaces(browserActivatePlace(), browserEyePlace()); });
   m_timeline = new TimelineWidget(host.model(), window);
   m_failures = new QToolButton(window);
   m_failures->setObjectName(QStringLiteral("failuresBadge"));
@@ -452,6 +479,8 @@ void BrowserController::refresh(const DocumentSnapshot& snapshot) {
   }
   // Configurations (mitcad#807): the bar always, the window while shown.
   m_configurationBar->refresh();
+  // The Favorite Parameters card (mitcad#2203): read while it is shown.
+  m_favoriteParameters->refresh();
   if (m_configurations && m_configurations->isVisible()) {
     m_configurations->refresh();
   }
@@ -811,6 +840,10 @@ bool BrowserController::visibilityInEveryMode(const BrowserNode& node) {
   // mitcad#1263: a kept analysis and an image reference.
   case BrowserNode::Type::Analysis:
   case BrowserNode::Type::ImageReference:
+  // mitcad#2240: a point cloud, as an image reference.
+  case BrowserNode::Type::PointCloud:
+  // mitcad#2244: a decal, as an image reference.
+  case BrowserNode::Type::Decal:
   // mitcad#1013: a CAM setup's toolpaths, the window's display state.
   case BrowserNode::Type::CamSetup:
   // mitcad#1802: a folder of a Bodies folder, its bodies' light bulbs.
@@ -935,6 +968,13 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   case BrowserNode::Type::ImageReference: // mitcad#782, in every mode since mitcad#1263
     commands.append(cmd("set_image_reference_visible", {{QStringLiteral("name"), node.uid},
                                                         {QStringLiteral("visible"), show}}));
+    break;
+  case BrowserNode::Type::PointCloud: // mitcad#2240, in every mode as an image reference
+    commands.append(cmd("set_point_cloud_visible", {{QStringLiteral("name"), node.uid},
+                                                    {QStringLiteral("visible"), show}}));
+    break;
+  case BrowserNode::Type::Decal: // mitcad#2244, in every mode as an image reference
+    commands.append(cmd("set_decal_visible", {{QStringLiteral("name"), node.uid}, {QStringLiteral("visible"), show}}));
     break;
   default:
     return;
@@ -1324,6 +1364,12 @@ void BrowserController::rename(const BrowserNode& node, const QString& name) {
   case BrowserNode::Type::ImageReference: // mitcad#782
     command = cmd("rename_image_reference", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
     break;
+  case BrowserNode::Type::PointCloud: // mitcad#2240: its deviations follow it
+    command = cmd("rename_point_cloud", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
+    break;
+  case BrowserNode::Type::Decal: // mitcad#2244
+    command = cmd("rename_decal", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
+    break;
   case BrowserNode::Type::SketchBlock: // mitcad#2110
     command = cmd("rename_sketch_block", {{QStringLiteral("block"), node.uid}, {QStringLiteral("name"), name}});
     break;
@@ -1419,6 +1465,14 @@ void BrowserController::browserDoubleClicked(const BrowserNode& node) {
   case BrowserNode::Type::ImageReference: // mitcad#782: its panel
     m_host.editImageReference(node.uid);
     break;
+  case BrowserNode::Type::PointCloud: // mitcad#2240: Move Point Cloud's panel
+    if (canChange()) {
+      m_host.movePointCloud(node.uid);
+    }
+    break;
+  case BrowserNode::Type::Decal: // mitcad#2244: its panel
+    m_host.editDecal(node.uid);
+    break;
   case BrowserNode::Type::SketchBlock: // mitcad#2110: in a sketch of its own
     if (canChange()) {
       m_host.editSketchBlock(node.uid);
@@ -1472,12 +1526,27 @@ void BrowserController::deleteNode(const BrowserNode& node) {
   const QVector<BrowserNode> selected = m_browser->selectedNodes();
   const bool inSelection = std::any_of(selected.begin(), selected.end(), [&node](const BrowserNode& other) {
     return other.type == node.type && other.uid == node.uid && other.occurrence == node.occurrence &&
-           other.sketch == node.sketch && other.feature == node.feature;
+           other.sketch == node.sketch && other.feature == node.feature && other.selectionSet == node.selectionSet;
   });
-  deleteNodes(inSelection ? selected : QVector<BrowserNode>{node});
+  // Not the selection sets' links selected with an item's own row
+  // (mitcad#2219).
+  deleteNodes(inSelection ? BrowserPanel::rowsToDelete(selected, node) : QVector<BrowserNode>{node});
 }
 
-void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
+void BrowserController::deleteNodes(const QVector<BrowserNode>& allNodes) {
+  // A selection set's member rows (mitcad#2219): their links go, as Remove
+  // from Set, never their items; the other rows as they are.
+  QVector<BrowserNode> nodes;
+  QVector<BrowserNode> links;
+  for (const BrowserNode& node : allNodes) {
+    (node.isSetMember() ? links : nodes).append(node);
+  }
+  if (!links.isEmpty()) {
+    removeSetMembers(links);
+  }
+  if (nodes.isEmpty()) {
+    return;
+  }
   QStringList features, names, skipped, bodies;
   Selection bodyItems;
   QJsonArray commands;
@@ -1542,6 +1611,14 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
     case BrowserNode::Type::ImageReference: // mitcad#782
       command = cmd("delete_image_reference", {{QStringLiteral("name"), node.uid}});
       name = tr("image reference %1").arg(node.name);
+      break;
+    case BrowserNode::Type::PointCloud: // mitcad#2240
+      command = cmd("delete_point_cloud", {{QStringLiteral("name"), node.uid}});
+      name = tr("point cloud %1").arg(node.name);
+      break;
+    case BrowserNode::Type::Decal: // mitcad#2244
+      command = cmd("delete_decal", {{QStringLiteral("name"), node.uid}});
+      name = tr("decal %1").arg(node.name);
       break;
     case BrowserNode::Type::SketchBlock: // mitcad#2110: refused in words while it has instances
       command = cmd("remove_sketch_block", {{QStringLiteral("block"), node.uid}});
@@ -1832,14 +1909,40 @@ void BrowserController::changeSetMembers(const QString& name, bool replace) {
   }
 }
 
-void BrowserController::removeFromSet(const BrowserNode& member) {
-  const QJsonObject removed = setMemberOf(member);
-  if (removed.isEmpty() || !canChange()) {
+void BrowserController::removeFromSet(const BrowserNode& member) { removeSetMembers({member}); }
+
+void BrowserController::removeSetMembers(const QVector<BrowserNode>& members) {
+  const QJsonArray commands = setMemberRemovals(members);
+  if (commands.isEmpty() || !canChange()) {
     return;
   }
-  if (m_host.runModelCommand(cmd("set_selection_set_members", {{QStringLiteral("name"), member.selectionSet},
-                                                               {QStringLiteral("remove"), QJsonArray{removed}}}))) {
-    qDebug().noquote() << QStringLiteral("Removed %1 from selection set %2").arg(member.name, member.selectionSet);
+  // Each set's row names, for the log ("Removed Block, Sketch1 from
+  // selection set Favourites").
+  QStringList sets;
+  QVector<QStringList> names;
+  for (const BrowserNode& member : members) {
+    if (!member.isSetMember() || setMemberOf(member).isEmpty()) {
+      continue;
+    }
+    qsizetype at = sets.indexOf(member.selectionSet);
+    if (at < 0) {
+      at = sets.size();
+      sets << member.selectionSet;
+      names.append(QStringList());
+    }
+    if (!names[at].contains(member.name)) {
+      names[at] << member.name;
+    }
+  }
+  // One undo step, also for links in several sets.
+  const bool done = commands.size() == 1
+                        ? m_host.runModelCommand(commands.first().toObject())
+                        : m_host.runModelCommands(commands, tr("Change Selection Sets"));
+  if (done) {
+    for (qsizetype i = 0; i < sets.size(); ++i) {
+      qDebug().noquote() << QStringLiteral("Removed %1 from selection set %2")
+                                .arg(names.at(i).join(QStringLiteral(", ")), sets.at(i));
+    }
   }
 }
 
@@ -2225,6 +2328,12 @@ void BrowserController::renameDrawing(const QString& drawing, const QString& nam
 
 void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   Menu menu(m_window);
+  // A selection set's member row (mitcad#2219): its Remove from Set is the
+  // link's Delete, as the Delete key there; the item's own Delete, Delete
+  // Body, is on the item's own row.
+  if (node.isSetMember()) {
+    menu.leaveOut(QStringLiteral("delete"));
+  }
   const SelectionItem item = node.item();
   const bool isolated = !m_host.isolation().isEmpty();
   const auto visibility = [&] {
@@ -2920,13 +3029,20 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         m_host.startCommand(QStringLiteral("inspect.draft_analysis"), {}, nullptr);
       }
     });
+    // mitcad#2240
+    menu.add(QStringLiteral("point-cloud-deviation"), tr("New Point Cloud Deviation"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("inspect.point_cloud_deviation"), {}, nullptr);
+      }
+    });
     break;
   case BrowserNode::Type::Joints:
     // Joints (mitcad#55): in the component the folder is in, when active.
     for (const auto& [id, icon, text] : {std::tuple{"assemble.joint", "joint", tr("New Joint")},
                                          std::tuple{"assemble.as_built_joint", "as-built-joint", tr("New As-Built Joint")},
                                          std::tuple{"assemble.rigid_group", "rigid-group", tr("New Rigid Group")},
-                                         std::tuple{"assemble.constraint", "constraint", tr("New Constraint")}}) {
+                                         std::tuple{"assemble.constraint_one", "constraint-one", tr("New Constraint")},
+                                         std::tuple{"assemble.constraint", "constraint", tr("New Constraint Set")}}) {
       const QString command = QString::fromLatin1(id);
       menu.add(QString::fromLatin1(icon), text, [this, command] {
         if (canChange()) {
@@ -2970,7 +3086,8 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(QStringLiteral("edit"),
              node.featureType == QStringLiteral("print")   ? tr("Edit Print Analysis")
              : node.featureType == QStringLiteral("draft") ? tr("Edit Draft Analysis")
-                                                           : tr("Edit Section Analysis"),
+             : node.featureType == QStringLiteral("point_cloud_deviation") ? tr("Edit Point Cloud Deviation")
+                                                                           : tr("Edit Section Analysis"),
              [this, node] { m_host.editAnalysis(node.uid); });
     // A section's other side (mitcad#1975: here, no longer in the
     // toolbar's Inspect menu; its Hide is Remove Section Analysis).
@@ -3089,6 +3206,31 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       }
     });
     break;
+  // Point clouds (mitcad#2240): a new one; one moved, measured against a
+  // body, shown or hidden, renamed, deleted.
+  case BrowserNode::Type::PointClouds:
+    menu.add(QStringLiteral("point-cloud"), tr("Insert Point Cloud"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("insert.point_cloud"), {}, nullptr);
+      }
+    });
+    break;
+  case BrowserNode::Type::PointCloud:
+    menu.add(QStringLiteral("point-cloud"), tr("Move Point Cloud"), [this, node] {
+      if (canChange()) {
+        m_host.movePointCloud(node.uid);
+      }
+    });
+    menu.add(QStringLiteral("point-cloud-deviation"), tr("New Point Cloud Deviation"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("inspect.point_cloud_deviation"), {}, nullptr);
+      }
+    });
+    menu.separator();
+    visibility();
+    renameEntry();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    break;
   case BrowserNode::Type::ImageReference:
     menu.add(QStringLiteral("edit"), tr("Edit Image Reference"), [this, node] { m_host.editImageReference(node.uid); });
     menu.add(QStringLiteral("image-calibrate"), tr("Calibrate Image Reference"), [this, node] {
@@ -3096,6 +3238,22 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         m_host.calibrateImageReference(node.uid);
       }
     });
+    menu.separator();
+    visibility();
+    renameEntry();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    break;
+  // Decals (mitcad#2244): the folder inserts one; a decal is edited in its
+  // panel, shown or hidden, renamed and deleted.
+  case BrowserNode::Type::Decals:
+    menu.add(QStringLiteral("decal"), tr("Insert Decal"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("insert.decal"), {}, nullptr);
+      }
+    });
+    break;
+  case BrowserNode::Type::Decal:
+    menu.add(QStringLiteral("edit"), tr("Edit Decal"), [this, node] { m_host.editDecal(node.uid); });
     menu.separator();
     visibility();
     renameEntry();
@@ -3636,6 +3794,10 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
     return;
   }
   Menu menu(m_window);
+  // A selection set's member row (mitcad#2219): no Delete of the feature.
+  if (row.isSetMember()) {
+    menu.leaveOut(QStringLiteral("delete"));
+  }
   const bool suppressed = feature->suppressed;
   const int index = feature->index;
   menu.add(feature->isAnySketch() ? QStringLiteral("sketch") : QStringLiteral("edit"),

@@ -1,0 +1,21 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The synthetic steel tube of the End Cap UI test (mitcad#2243, tools/ui-build-end-cap-test.sh): a square tube 40 x 40 with a 3 mm wall, extruded by L from z = 0, with the end frames of a cut-to-length part (made on the solid bar), then its 34 x 34 bore cut through. Section 444 mm2."},
+  {"cmd": "add_parameter", "name": "L", "expression": "600 mm"},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-20, -20], "width": 40, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "L"}, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "mount:end_a", "def": {"type": "joint_origin", "geometry": "origin",
+    "frame_override": {"origin": [0, 0, 0], "z_axis": [0, 0, -1], "x_axis": [1, 0, 0]}}},
+  {"cmd": "add_feature", "name": "mount:end_b", "def": {"type": "joint_origin",
+    "geometry": {"body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}}},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F5", "corner": [-17, -17], "width": 34, "height": 34},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F5", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "L"}, "operation": "cut"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"total_volume": 266400, "tolerance": 1e-5}}
+]

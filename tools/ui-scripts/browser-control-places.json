@@ -1,0 +1,16 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The Browser rows' Activate radio button and Show eye places (mitcad#2223), tools/ui-browser-control-places-test.sh: a 40 x 40 x 5 box in the root; Frame placed in the root (Frame:1) with a 10 x 10 x 10 box, Pin placed in Frame (Frame:1/Pin:1) with a 4 x 4 x 20 box; an empty component with a long name placed in the root; the root active."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 40, "width": 40, "height": 5, "operation": "new_body"}},
+  {"cmd": "create_component", "name": "Frame", "transform": {"translation": [60, 0, 0]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "create_component", "name": "Pin", "transform": {"translation": [0, 20, 0]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 4, "width": 4, "height": 20, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "create_component", "name": "Bracket-for-the-left-side-motor-unit-with-the-mounting-plate-and-cover",
+    "activate": false},
+  {"cmd": "activate_component", "component": "Root"}
+]

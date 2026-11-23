@@ -11,7 +11,9 @@
 #   3. The set opened, its member rows: Find in Timeline on Extrude1's
 #      selects Extrude1 in the timeline; Find in Browser on Sketch1's
 #      selects Sketch1's own row.
-#   4. Remove from Set on Block's member row, and Undo.
+#   4. Remove from Set on Block's member row, and Undo; the Delete key on
+#      Block's member row removes the link the same way and leaves Block
+#      (mitcad#2219), and Undo. A member row's menu has no Delete.
 #   5. Delete on the set's row deletes the set alone, and Undo.
 #   6. Undo of the rename and of the creation, Redo of both; saved (the
 #      wrapper checks the file with selection-sets-check.json).
@@ -72,6 +74,8 @@ wait-idle
 mark
 context-menu-logged '^Browser Root/Selection Sets/Favourites/Extrude1 at ' 'Find in Timeline'
 expect-log '^Context menu: .*\| Find in Timeline \| .*\| Find in Browser \| Remove from Set \| Collapse All$'
+# No Delete of the item on its link's row (mitcad#2219).
+expect-no-log '^Context menu: (.* \| )?Delete( Body| Bodies)?( \||$)'
 wait-log '^Found F2 in the timeline$'
 wait-idle
 mark
@@ -91,6 +95,29 @@ mark
 command edit.undo
 wait-log '^Undo: Change Selection Set Favourites$'
 wait-log '^Browser Selection Sets: Favourites \[Block, Sketch1, Extrude1\]$'
+expect-undo-depth ${start} 2
+
+# 4b. The Delete key on Block's member row (mitcad#2219): the link goes, as
+# Remove from Set, one undo step; Block stays, although the click on its
+# link selected its own row too. Undo puts the link back.
+mark
+click-logged '^Browser Root/Selection Sets/Favourites/Block at '
+wait-idle
+focus-main
+focus-widget modelBrowserTree
+mark
+key Delete
+wait-log '^Removed Block from selection set Favourites$'
+wait-log '^Browser Selection Sets: Favourites \[Sketch1, Extrude1\]$'
+wait-idle
+expect-no-log '^Deleted |^Delete skipped'
+expect-model-bodies 2 7000
+expect-undo-depth ${start} 3
+mark
+command edit.undo
+wait-log '^Undo: Change Selection Set Favourites$'
+wait-log '^Browser Selection Sets: Favourites \[Block, Sketch1, Extrude1\]$'
+expect-model-bodies 2 7000
 expect-undo-depth ${start} 2
 
 # 5. Delete on the set's row: the set alone goes, its items stay; Undo.

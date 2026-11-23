@@ -347,6 +347,43 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
         &self,
         ctx: &mut super::EvalContext<'_, K>,
     ) -> Result<FeatureOutput<K::Shape>, String> {
+        if self.equations.is_empty() {
+            return EvaluatePlaced::<K>::evaluate_placed(self, ctx);
+        }
+        // Equation curves (mitcad#2237): their points where the formulas
+        // put them with the parameters now, before everything else; the
+        // parameters they name are read, so that a change of one evaluates
+        // the sketch again.
+        let mut placed = self.clone();
+        let warnings =
+            crate::sketch::equation::follow_formulas(&mut placed, ctx.env.params.table());
+        for name in crate::sketch::equation::used_parameters(self) {
+            if let Some(id) = ctx.env.params.find(&name) {
+                // A text parameter gives no number; the formula says so.
+                let _ = ctx.param(id);
+            }
+        }
+        for warning in warnings {
+            ctx.warn(warning);
+        }
+        EvaluatePlaced::<K>::evaluate_placed(&placed, ctx)
+    }
+}
+
+/// The sketch's evaluation once its equation curves are placed
+/// (mitcad#2237).
+trait EvaluatePlaced<K: Kernel> {
+    fn evaluate_placed(
+        &self,
+        ctx: &mut super::EvalContext<'_, K>,
+    ) -> Result<FeatureOutput<K::Shape>, String>;
+}
+
+impl<K: Kernel> EvaluatePlaced<K> for SketchDef {
+    fn evaluate_placed(
+        &self,
+        ctx: &mut super::EvalContext<'_, K>,
+    ) -> Result<FeatureOutput<K::Shape>, String> {
         // A sketch on a cylindrical or conical face (mitcad#1768): the
         // face's development, found again at every evaluation; its carrier
         // plane is the sketch's plane.

@@ -6,6 +6,7 @@
 # check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp app/view/SpaceMouseTiming.hpp
 # check-all sources: app/view/ViewController.cpp app/framework/TestDriverNavigation.cpp
 # check-all sources: app/platform/macos/SpaceMouse3DxWare.cpp app/platform/macos/SpaceMouse3DxWare.hpp
+# check-all sources: app/framework/TestDriverViewCamera.cpp app/WindowManager.cpp app/DocumentFrame.cpp
 # A 3D mouse (mitcad#951) in the macOS VM, through the test driver's input
 # (tools/ui-scripts/space-mouse.mitcad-ui, the same script as the Linux and
 # Windows tests'): no device logs "3D mouse: none" (IOKit HID finds none
@@ -13,7 +14,9 @@
 # the first button runs Fit, in Object mode; the 3D Mouse tab of Settings
 # has its Navigation mode and Lock horizon (mitcad#978); Lock Rotation on
 # the second button locks and frees the rotation, also in a sketch, where
-# it starts locked (mitcad#1910).
+# it starts locked (mitcad#1910); a second design shares the process's one
+# connection, the input turning the active design's view only, the first
+# one's again after the second closes (mitcad#2297).
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"

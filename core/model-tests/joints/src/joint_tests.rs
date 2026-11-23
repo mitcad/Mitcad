@@ -1396,6 +1396,47 @@ fn a_joint_says_when_other_joints_hold_a_side() {
 }
 
 #[test]
+fn a_joint_says_when_a_driven_slide_holds_a_side() {
+    // mitcad#2274: the plate slides on a grounded base (Plate:2) by a
+    // slider at its position (driven, no carriage BUILD placed): it is
+    // held there, which the message says in words, not as a rigid joint.
+    let mut rig = rig();
+    let o3 = rig
+        .doc
+        .copy_occurrence(rig.o1, Some(shift(0.0, 200.0, 0.0)))
+        .unwrap();
+    rig.ground(o3, true);
+    let plate_bottom = json!({"occurrence": "Plate:1",
+        "geometry": {"body": rig.plate_body, "face": rig.face(rig.plate_body, "start")}});
+    let base_top = json!({"occurrence": "Plate:2",
+        "geometry": {"body": rig.plate_body, "face": rig.face(rig.plate_body, "end")}});
+    let on_base = rig.run(json!({"cmd": "add_joint", "kind": "slider", "flip": true,
+                                 "a": plate_bottom, "b": base_top, "position": {"tz": 0}}));
+    assert_eq!(on_base["error"], Value::Null, "{on_base}");
+    let slider: FeatureUid = on_base["uid"].as_str().unwrap().parse().unwrap();
+    let slider_name = rig.doc.feature(slider).unwrap().name.clone();
+    assert_near(rig.placement(rig.o1).translation, [0.0, 200.0, 5.0]);
+    rig.ground(rig.o2, true);
+    let uid = failing_joint(&mut rig);
+    let notices = joint_notices(&rig, uid);
+    let (_, message, places) = &notices[0];
+    assert_eq!(
+        message,
+        &format!(
+            "neither side can move (Pin:1 is grounded, and Plate:1 is held at its driven \
+             position by {slider_name} on Plate:2, which cannot move) and the joint does not \
+             hold"
+        )
+    );
+    assert!(!message.contains("rigidly"), "{message}");
+    assert_eq!(
+        places,
+        &json!([{"kind": "occurrence", "path": "O2"}, {"kind": "occurrence", "path": "O1"},
+                {"kind": "occurrence", "path": format!("{o3}")}])
+    );
+}
+
+#[test]
 fn a_joint_warns_when_a_later_move_places_its_side() {
     // mitcad#1745: a move later in the timeline places the pin again, so
     // it does not stay where the joint put it: a warning on the joint, the

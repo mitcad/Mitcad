@@ -192,11 +192,12 @@ std::optional<QString> pathFrom(const SelectionItem& item, const QStringList& pa
 }
 
 // The picks that decide the component a new joint goes into (mitcad#1856):
-// Joint's origins, As-Built Joint's and Rigid Group's components, every
-// row's references of Assembly Constraint; not a motion origin.
+// Joint's origins, As-Built Joint's and Rigid Group's components,
+// Constraint's references and every row's of Constraint Set; not a motion
+// origin.
 Selection holderPicks(const CommandState& state) {
   Selection picks;
-  for (const char* id : {"a", "b", "occurrences"}) {
+  for (const char* id : {"a", "b", "b2", "occurrences"}) {
     picks += state.items(QString::fromLatin1(id));
   }
   const QString rows = QStringLiteral("rows");
@@ -1794,8 +1795,9 @@ CommandDef driveJointCommand(const CommandContext& context) {
 }
 
 // ---------------------------------------------------------------------------
-// Constraint (mitcad#148): rows of assembly constraints in one panel, each
-// geometry of one component held against geometry of another; one
+// Constraint Set (mitcad#148; renamed in mitcad#2293): rows of assembly
+// constraints in one panel, each geometry of one component held against
+// geometry of another; one
 // `constraint_set` feature. A row's type is inferred from its picks (the
 // model's `constraint_row` query) unless chosen.
 
@@ -1833,7 +1835,7 @@ std::optional<QJsonObject> rowOrigin(const CommandState& row, const QString& inp
   return withKeptOverride(originOf(items.first(), *path), row, input);
 }
 
-// Why the Constraint panel cannot hold a constraint set, in words
+// Why the Constraint Set panel cannot hold a constraint set, in words
 // (mitcad#1885); empty when it can.
 QString constraintRefusal(const QJsonObject& feature, const CommandContext& context) {
   for (const QJsonValue& value : feature.value(kRows).toArray()) {
@@ -1922,7 +1924,7 @@ std::function<bool(const CommandState&)> typeIn(const CommandContext& context, c
 
 bool limited(const CommandState& row) { return row.checked(QStringLiteral("limits")); }
 
-// The Assembly Constraint panel's motions (mitcad#1790): each row's value
+// The Constraint Set panel's motions (mitcad#1790): each row's value
 // that can move, an align's or an insert's offset or an angle row's
 // angle, by the row's index.
 Choices constraintMotionChoices(const CommandState& state, const CommandContext& context) {
@@ -2027,18 +2029,146 @@ QString constraintLine(const QJsonObject& set, const QJsonObject& joints) {
   return line;
 }
 
+// The whole state's key of an input of a constraint's inputs: a Constraint
+// Set row's, or the Constraint panel's own (mitcad#2293).
+using ConstraintKey = std::function<QString(const char*)>;
+
+ConstraintKey rowKeyOf(int index) {
+  return [index](const char* id) { return CommandState::rowKey(kRows, index, QString::fromLatin1(id)); };
+}
+
+QString ownKey(const char* id) { return QString::fromLatin1(id); }
+
+// The types whose planes or circles face each other unless flipped (a
+// tangent: outside unless flipped).
+const QStringList kFlippable = {QStringLiteral("align"), QStringLiteral("angle"), QStringLiteral("tangent"),
+                                QStringLiteral("insert")};
+
+// One row of a `constraint_set` from a constraint's inputs (`row`: a
+// Constraint Set row's state, or the Constraint panel's), `flip` its Flip
+// or Orientation; the failure names the input by `key`.
+Built buildConstraintRow(const CommandState& row, bool flip, const QStringList& paths, const QString& component,
+                         const CommandContext& context, const ConstraintKey& key) {
+  QJsonObject out;
+  for (const char* id : {"a", "b"}) {
+    const auto origin = rowOrigin(row, QString::fromLatin1(id), paths);
+    if (!origin) {
+      return Built::failure(QObject::tr("Select geometry inside %1, the component the constraint goes into.")
+                                .arg(componentName(component, context)),
+                            key(id));
+    }
+    out.insert(QString::fromLatin1(id), *origin);
+  }
+  const QString type = rowType(row, context);
+  if (type.isEmpty()) {
+    return Built::failure(QObject::tr("No constraint holds this geometry: choose another."), key("b"));
+  }
+  out.insert(QStringLiteral("type"), type);
+  if (type == QStringLiteral("center")) {
+    if (const auto b2 = rowOrigin(row, QStringLiteral("b2"), paths)) {
+      out.insert(QStringLiteral("b2"), *b2);
+    }
+  }
+  const bool withLimits =
+      row.checked(QStringLiteral("limits")) && (type == QStringLiteral("align") || type == QStringLiteral("angle"));
+  const bool isAngle = type == QStringLiteral("angle");
+  if (withLimits) {
+    QJsonObject limits{
+        {QStringLiteral("min"), row.expression(isAngle ? QStringLiteral("min_angle") : QStringLiteral("min"))},
+        {QStringLiteral("max"), row.expression(isAngle ? QStringLiteral("max_angle") : QStringLiteral("max"))}};
+    if (row.checked(QStringLiteral("rest_on"))) {
+      limits.insert(QStringLiteral("rest"), row.expression(isAngle ? QStringLiteral("rest_angle") : QStringLiteral("rest")));
+    }
+    out.insert(QStringLiteral("limits"), limits);
+  } else if ((type == QStringLiteral("align") || type == QStringLiteral("insert")) &&
+             nonZero(row, QStringLiteral("offset"))) {
+    out.insert(QStringLiteral("offset"), row.expression(QStringLiteral("offset")));
+  } else if (isAngle) {
+    out.insert(QStringLiteral("angle"), row.expression(QStringLiteral("angle")));
+  }
+  if (flip && kFlippable.contains(type)) {
+    out.insert(QStringLiteral("flip"), true);
+  }
+  if (row.checked(QStringLiteral("lock_rotation")) && type.startsWith(QStringLiteral("insert"))) {
+    out.insert(QStringLiteral("lock_rotation"), true);
+    // The turn where it is now, unless an edit keeps the recorded one.
+    QString angle = row.text(QStringLiteral("lock_angle"));
+    if (angle.isEmpty()) {
+      const QJsonValue twist =
+          rowQuery(row, context).value(QStringLiteral("measures")).toObject().value(QStringLiteral("twist"));
+      angle = degrees(twist.toDouble()) + QStringLiteral(" deg");
+    }
+    out.insert(QStringLiteral("angle"), angle);
+  }
+  return Built::of(out);
+}
+
+// A `constraint_set` row's fields into a constraint's inputs, by `key`
+// (Flip as the check "flip"); `prefix` is the path that places the set's
+// component.
+void loadConstraintRow(const QJsonObject& row, CommandState& state, const ConstraintKey& key, const QString& prefix,
+                       const QJsonObject& feature, const CommandContext& context) {
+  for (const char* id : {"a", "b", "b2"}) {
+    if (row.contains(QLatin1String(id))) {
+      const QJsonValue origin = row.value(QLatin1String(id));
+      const SelectionItem item = originItem(origin, prefix, context, true);
+      state.setItems(key(id), {item});
+      loadOverride(state, overrideInput(key(id)), origin, item);
+    }
+  }
+  const QString type = str(row, "type");
+  state.setChoice(key("type"), type);
+  const bool isAngle = type == QStringLiteral("angle");
+  const QJsonObject limits = row.value(QStringLiteral("limits")).toObject();
+  if (limits.contains(QStringLiteral("min")) || limits.contains(QStringLiteral("max"))) {
+    state.setChecked(key("limits"), true);
+    loadValue(state, key(isAngle ? "min_angle" : "min"), limits.value(QStringLiteral("min")), feature, context);
+    loadValue(state, key(isAngle ? "max_angle" : "max"), limits.value(QStringLiteral("max")), feature, context);
+    if (limits.contains(QStringLiteral("rest"))) {
+      state.setChecked(key("rest_on"), true);
+      loadValue(state, key(isAngle ? "rest_angle" : "rest"), limits.value(QStringLiteral("rest")), feature, context);
+    }
+  }
+  loadValue(state, key("offset"), row.value(QStringLiteral("offset")), feature, context);
+  state.setChecked(key("flip"), row.value(QStringLiteral("flip")).toBool());
+  const bool locked = row.value(QStringLiteral("lock_rotation")).toBool();
+  state.setChecked(key("lock_rotation"), locked);
+  if (locked) {
+    state.setText(key("lock_angle"), context.valueText(row.value(QStringLiteral("angle")), str(feature, "uid")));
+  } else if (isAngle) {
+    loadValue(state, key("angle"), row.value(QStringLiteral("angle")), feature, context);
+  }
+}
+
+// The log line after OK of Constraint Set or Constraint: "Added constraint
+// Constraint1: insert placed, moved O2; DOF 1".
+QString addedConstraintLine(const CommandContext& context) {
+  const QJsonObject joints = jointsOf(context);
+  const QJsonObject set =
+      newest(joints.value(QStringLiteral("constraints")).toArray(), [](const QJsonObject&) { return true; });
+  if (set.isEmpty()) {
+    return QStringLiteral("Added constraint");
+  }
+  return QStringLiteral("Added constraint %1").arg(constraintLine(set, joints)) +
+         madeInHolder(str(set, "name"), str(set, "component"),
+                      2 * static_cast<int>(set.value(QStringLiteral("rows")).toArray().size()), context);
+}
+
 } // namespace
 
 CommandDef constraintCommand(const CommandContext& context) {
   CommandDef def;
+  // Constraint Set (mitcad#2293, Constraint Set before it): several
+  // constraints in one feature, with limits and rest values; the
+  // Constraint panel adds one at a time.
   def.id = QStringLiteral("assemble.constraint");
-  def.name = QObject::tr("Assembly Constraint");
-  def.shortLabel = QCoreApplication::translate("RibbonLabel", "Constraint"); // under its button (mitcad#1936)
+  def.name = QObject::tr("Constraint Set");
   def.icon = QStringLiteral("constraint");
-  def.tooltip = QObject::tr("Holds components against each other: align, angle, center, tangent, insert");
-  def.keywords = {QStringLiteral("assembly"), QStringLiteral("mate"),    QStringLiteral("align"),
-                  QStringLiteral("insert"),   QStringLiteral("tangent"), QStringLiteral("concentric"),
-                  QStringLiteral("flush"),    QStringLiteral("angle")};
+  def.tooltip = QObject::tr("Several constraints that hold components together, with limits and rest values");
+  def.keywords = {QStringLiteral("assembly"), QStringLiteral("mate"),       QStringLiteral("align"),
+                  QStringLiteral("insert"),   QStringLiteral("tangent"),    QStringLiteral("concentric"),
+                  QStringLiteral("flush"),    QStringLiteral("angle"),      QStringLiteral("limits"),
+                  QStringLiteral("rows"),     QStringLiteral("constraints")};
   def.featureType = QStringLiteral("constraint_set");
   const auto lengthLimits = [&context](const CommandState& row) {
     return limited(row) && rowType(row, context) == QStringLiteral("align");
@@ -2144,62 +2274,12 @@ CommandDef constraintCommand(const CommandContext& context) {
     QJsonArray rows;
     for (int i = 0; i < state.rows(kRows); ++i) {
       const CommandState row = state.row(kRows, i);
-      const auto key = [i](const char* id) { return CommandState::rowKey(kRows, i, QString::fromLatin1(id)); };
-      QJsonObject out;
-      for (const char* id : {"a", "b"}) {
-        const auto origin = rowOrigin(row, QString::fromLatin1(id), paths);
-        if (!origin) {
-          return Built::failure(QObject::tr("Select geometry inside %1, the component the constraint goes into.")
-                                    .arg(componentName(component, context)),
-                                key(id));
-        }
-        out.insert(QString::fromLatin1(id), *origin);
+      const Built out =
+          buildConstraintRow(row, row.checked(QStringLiteral("flip")), paths, component, context, rowKeyOf(i));
+      if (!out.error.isEmpty()) {
+        return out;
       }
-      const QString type = rowType(row, context);
-      if (type.isEmpty()) {
-        return Built::failure(QObject::tr("No constraint holds this geometry: choose another."), key("b"));
-      }
-      out.insert(QStringLiteral("type"), type);
-      if (type == QStringLiteral("center")) {
-        if (const auto b2 = rowOrigin(row, QStringLiteral("b2"), paths)) {
-          out.insert(QStringLiteral("b2"), *b2);
-        }
-      }
-      const bool withLimits = row.checked(QStringLiteral("limits")) &&
-                              (type == QStringLiteral("align") || type == QStringLiteral("angle"));
-      const bool isAngle = type == QStringLiteral("angle");
-      if (withLimits) {
-        QJsonObject limits{
-            {QStringLiteral("min"), row.expression(isAngle ? QStringLiteral("min_angle") : QStringLiteral("min"))},
-            {QStringLiteral("max"), row.expression(isAngle ? QStringLiteral("max_angle") : QStringLiteral("max"))}};
-        if (row.checked(QStringLiteral("rest_on"))) {
-          limits.insert(QStringLiteral("rest"),
-                        row.expression(isAngle ? QStringLiteral("rest_angle") : QStringLiteral("rest")));
-        }
-        out.insert(QStringLiteral("limits"), limits);
-      } else if ((type == QStringLiteral("align") || type == QStringLiteral("insert")) &&
-                 nonZero(row, QStringLiteral("offset"))) {
-        out.insert(QStringLiteral("offset"), row.expression(QStringLiteral("offset")));
-      } else if (isAngle) {
-        out.insert(QStringLiteral("angle"), row.expression(QStringLiteral("angle")));
-      }
-      if (row.checked(QStringLiteral("flip")) &&
-          QStringList{QStringLiteral("align"), QStringLiteral("angle"), QStringLiteral("tangent"), QStringLiteral("insert")}
-              .contains(type)) {
-        out.insert(QStringLiteral("flip"), true);
-      }
-      if (row.checked(QStringLiteral("lock_rotation")) && type.startsWith(QStringLiteral("insert"))) {
-        out.insert(QStringLiteral("lock_rotation"), true);
-        // The turn where it is now, unless an edit keeps the recorded one.
-        QString angle = row.text(QStringLiteral("lock_angle"));
-        if (angle.isEmpty()) {
-          const QJsonValue twist =
-              rowQuery(row, context).value(QStringLiteral("measures")).toObject().value(QStringLiteral("twist"));
-          angle = degrees(twist.toDouble()) + QStringLiteral(" deg");
-        }
-        out.insert(QStringLiteral("angle"), angle);
-      }
-      rows.append(out);
+      rows.append(out.def);
     }
     return Built::of({{QStringLiteral("type"), QStringLiteral("constraint_set")}, {kRows, rows}});
   };
@@ -2211,56 +2291,144 @@ CommandDef constraintCommand(const CommandContext& context) {
     const QJsonArray rows = feature.value(kRows).toArray();
     state.setRows(kRows, static_cast<int>(rows.size()));
     for (int i = 0; i < rows.size(); ++i) {
-      const QJsonObject row = rows[i].toObject();
-      const auto key = [i](const char* id) { return CommandState::rowKey(kRows, i, QString::fromLatin1(id)); };
-      for (const char* id : {"a", "b", "b2"}) {
-        if (row.contains(QLatin1String(id))) {
-          const QJsonValue origin = row.value(QLatin1String(id));
-          const SelectionItem item = originItem(origin, prefix, context, true);
-          state.setItems(key(id), {item});
-          loadOverride(state, overrideInput(key(id)), origin, item);
-        }
-      }
-      const QString type = str(row, "type");
-      state.setChoice(key("type"), type);
-      const bool isAngle = type == QStringLiteral("angle");
-      const QJsonObject limits = row.value(QStringLiteral("limits")).toObject();
-      if (limits.contains(QStringLiteral("min")) || limits.contains(QStringLiteral("max"))) {
-        state.setChecked(key("limits"), true);
-        loadValue(state, key(isAngle ? "min_angle" : "min"), limits.value(QStringLiteral("min")), feature, context);
-        loadValue(state, key(isAngle ? "max_angle" : "max"), limits.value(QStringLiteral("max")), feature, context);
-        if (limits.contains(QStringLiteral("rest"))) {
-          state.setChecked(key("rest_on"), true);
-          loadValue(state, key(isAngle ? "rest_angle" : "rest"), limits.value(QStringLiteral("rest")), feature, context);
-        }
-      }
-      loadValue(state, key("offset"), row.value(QStringLiteral("offset")), feature, context);
-      state.setChecked(key("flip"), row.value(QStringLiteral("flip")).toBool());
-      const bool locked = row.value(QStringLiteral("lock_rotation")).toBool();
-      state.setChecked(key("lock_rotation"), locked);
-      if (locked) {
-        state.setText(key("lock_angle"), context.valueText(row.value(QStringLiteral("angle")), str(feature, "uid")));
-      } else if (isAngle) {
-        loadValue(state, key("angle"), row.value(QStringLiteral("angle")), feature, context);
-      }
+      loadConstraintRow(rows[i].toObject(), state, rowKeyOf(i), prefix, feature, context);
     }
   };
 
   def.canEdit = [&context](const QJsonObject& feature) { return constraintRefusal(feature, context).isEmpty(); };
   def.editRefusal = [&context](const QJsonObject& feature) { return constraintRefusal(feature, context); };
 
-  def.describe = [](const CommandState&, const CommandContext& context) {
-    const QJsonObject joints = jointsOf(context);
-    const QJsonObject set = newest(joints.value(QStringLiteral("constraints")).toArray(),
-                                   [](const QJsonObject&) { return true; });
-    if (set.isEmpty()) {
-      return QStringLiteral("Added constraint");
-    }
-    return QStringLiteral("Added constraint %1").arg(constraintLine(set, joints)) +
-           madeInHolder(str(set, "name"), str(set, "component"),
-                        2 * static_cast<int>(set.value(QStringLiteral("rows")).toArray().size()), context);
-  };
+  def.describe = [](const CommandState&, const CommandContext& context) { return addedConstraintLine(context); };
   withAnimate(def, constraintPanelMotion);
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Constraint (mitcad#2293): one assembly constraint at a time, beside
+// Constraint Set. The type first (Automatic from the picks), Geometry 1 and
+// Geometry 2, the type's own inputs (Second Face, Offset or Angle,
+// Orientation: Flip as a choice of two, Lock Rotation) and Suppress. OK or
+// Apply adds a `constraint_set` of that one row, the same feature and
+// solver as Constraint Set's; Apply keeps the panel open for the next one
+// with its type. A set of one row without limits is edited here, any other
+// with Constraint Set (registered after it: CommandRegistry::editorOf takes
+// the first that can edit).
+
+namespace {
+
+const QString kFacing = QStringLiteral("facing");
+const QString kSameWay = QStringLiteral("same_way");
+
+// Whether a set is one constraint the Constraint panel holds whole: one
+// row, no limits, nothing Constraint Set would refuse.
+bool singleConstraint(const QJsonObject& feature, const CommandContext& context) {
+  const QJsonArray rows = feature.value(kRows).toArray();
+  return rows.size() == 1 && !rows.first().toObject().contains(QStringLiteral("limits")) &&
+         constraintRefusal(feature, context).isEmpty();
+}
+
+} // namespace
+
+CommandDef singleConstraintCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("assemble.constraint_one");
+  def.name = QObject::tr("Constraint");
+  def.icon = QStringLiteral("constraint-one");
+  // The types and Apply are the user guide's ("Constraint").
+  def.tooltip = QObject::tr("Holds one component against another, one constraint at a time");
+  def.keywords = {QStringLiteral("assembly"), QStringLiteral("mate"),     QStringLiteral("align"),
+                  QStringLiteral("flush"),    QStringLiteral("angle"),    QStringLiteral("tangent"),
+                  QStringLiteral("insert"),   QStringLiteral("center"),   QStringLiteral("concentric"),
+                  QStringLiteral("symmetric")};
+  def.featureType = QStringLiteral("constraint_set");
+  def.inputs = {
+      choiceInput(QStringLiteral("type"), QObject::tr("Type"), {}, kAuto)
+          .withTooltip(QObject::tr("What the constraint holds; Automatic follows the picks"))
+          .withChoices([&context](const CommandState& state) {
+            Choices choices;
+            const QString inferred = inferredType(state, context);
+            choices.append({kAuto, inferred.isEmpty() ? QObject::tr("Automatic")
+                                                      : QObject::tr("Automatic (%1)").arg(typeLabel(inferred))});
+            choices += kConstraintTypes;
+            return choices;
+          }),
+      originInput(QStringLiteral("a"), QObject::tr("Geometry 1"),
+                  QObject::tr("A face, edge, point, axis or plane of the component that moves"))
+          .withGhosts(ghostUntilPicked(QStringLiteral("b"))),
+      originInput(QStringLiteral("b"), QObject::tr("Geometry 2"),
+                  QObject::tr("Geometry of another component that geometry 1 is held against")),
+      selectionInput(QStringLiteral("b2"), QObject::tr("Second Face"), SelectKind::Face, 0, 1)
+          .withTooltip(QObject::tr("Geometry 1 is centered between geometry 2 and this face"))
+          .withVisible(typeIn(context, {QStringLiteral("center")})),
+      valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withTooltip(QObject::tr("Along geometry 2's normal or axis"))
+          .withVisible(typeIn(context, {QStringLiteral("align"), QStringLiteral("insert")})),
+      valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("90 deg"))
+          .withTooltip(QObject::tr("Between the normals or axes, 0 to 180 degrees"))
+          .withVisible(typeIn(context, {QStringLiteral("angle")})),
+      // Flip as a choice of two: what each way does, in words.
+      choiceInput(QStringLiteral("orientation"), QObject::tr("Orientation"), {}, kFacing)
+          .withTooltip(QObject::tr("Faces facing each other or the same way; a tangent outside or inside"))
+          .withChoices([&context](const CommandState& state) {
+            // Disambiguated: "Inside" alone is a measurement's elsewhere.
+            if (rowType(state, context) == QStringLiteral("tangent")) {
+              return Choices{{kFacing, QObject::tr("Outside", "Constraint orientation: a tangent touching outside")},
+                             {kSameWay, QObject::tr("Inside", "Constraint orientation: a tangent touching inside")}};
+            }
+            return Choices{{kFacing, QObject::tr("Facing", "Constraint orientation: the faces face each other")},
+                           {kSameWay, QObject::tr("Same Way", "Constraint orientation: the faces point the same way")}};
+          })
+          .withVisible(typeIn(context, kFlippable)),
+      checkInput(QStringLiteral("lock_rotation"), QObject::tr("Lock Rotation"), false)
+          .withTooltip(QObject::tr("Holds the turn about the axis where it is now"))
+          .withVisible(typeIn(context, {QStringLiteral("insert"), QStringLiteral("insert_axis")})),
+      checkInput(QStringLiteral("suppressed"), QObject::tr("Suppress"), false)
+          .withTooltip(QObject::tr("Added suppressed: it holds nothing until it is unsuppressed")),
+      // A locked insert's turn as loaded: an edit keeps it.
+      hidden(QStringLiteral("lock_angle")),
+      // The origins' frame overrides as loaded (mitcad#1885).
+      hidden(overrideInput(QStringLiteral("a"))),
+      hidden(overrideInput(QStringLiteral("b"))),
+      hidden(overrideInput(QStringLiteral("b2"))),
+      hidden(QStringLiteral("component")),
+      // The component that holds the picks (mitcad#1856).
+      hidden(QStringLiteral("holder")),
+  };
+  def.suppressInput = QStringLiteral("suppressed");
+  def.addOptions = intoHolder(context);
+  def.enabled = [&context] { return occurrenceCount(context) > 1; };
+  // The picks on the component the preview moves are drawn where the
+  // preview puts it, as Constraint Set's and Joint's (mitcad#1813).
+  def.previewReported = keepPlacements;
+  def.pickMoved = pickMovedInPreview;
+
+  def.build = [](const CommandState& state, const CommandContext& context) {
+    const QString component = jointComponent(state, context);
+    const Built row = buildConstraintRow(state, state.choice(QStringLiteral("orientation")) == kSameWay,
+                                         placingPaths(component, context), component, context, ownKey);
+    if (!row.error.isEmpty()) {
+      return row;
+    }
+    return Built::of({{QStringLiteral("type"), QStringLiteral("constraint_set")}, {kRows, QJsonArray{row.def}}});
+  };
+
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+    const QString component = featureComponent(str(feature, "uid"), context);
+    state.setText(QStringLiteral("component"), component);
+    const QString prefix = placingPaths(component, context).value(0);
+    loadConstraintRow(feature.value(kRows).toArray().at(0).toObject(), state, ownKey, prefix, feature, context);
+    state.setChoice(QStringLiteral("orientation"), state.checked(QStringLiteral("flip")) ? kSameWay : kFacing);
+  };
+  // One row without limits; any other set opens in Constraint Set.
+  def.canEdit = [&context](const QJsonObject& feature) { return singleConstraint(feature, context); };
+
+  // Apply's next constraint: its type and the component chosen to hold the
+  // picks stay, the rest starts again.
+  def.applyNext = [](const CommandState& applied, CommandState& next, const CommandContext&) {
+    next.setChoice(QStringLiteral("type"), applied.choice(QStringLiteral("type")));
+    next.setText(QStringLiteral("holder"), applied.text(QStringLiteral("holder")));
+  };
+  def.describe = [](const CommandState&, const CommandContext& context) { return addedConstraintLine(context); };
   return def;
 }
 
@@ -2717,7 +2885,11 @@ void registerAssembleCommands(CommandRegistry& registry, const CommandContext& c
   registry.add(asBuiltJointCommand(context));
   registry.add(jointOriginCommand(context));
   registry.add(rigidGroupCommand(context));
-  registry.add(constraintCommand(context)); // assembly constraints (mitcad#148)
+  // One constraint (mitcad#2293) before Constraint Set (mitcad#148): a set
+  // of one row is edited with Constraint, any other with Constraint Set
+  // (CommandRegistry::editorOf takes the first that can edit it).
+  registry.add(singleConstraintCommand(context));
+  registry.add(constraintCommand(context));
   // How they move.
   registry.add(driveJointCommand(context));
   registry.add(motionLinkCommand(context)); // mitcad#466

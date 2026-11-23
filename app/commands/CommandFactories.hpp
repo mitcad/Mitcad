@@ -115,8 +115,10 @@ CommandDef asBuiltJointCommand(const CommandContext& context);
 CommandDef jointOriginCommand(const CommandContext& context);
 CommandDef rigidGroupCommand(const CommandContext& context);
 CommandDef driveJointCommand(const CommandContext& context);
-// Assembly constraints (mitcad#148).
+// Assembly constraints (mitcad#148): Constraint Set.
 CommandDef constraintCommand(const CommandContext& context);
+// One assembly constraint at a time (mitcad#2293): Constraint.
+CommandDef singleConstraintCommand(const CommandContext& context);
 // Contact sets (mitcad#454).
 CommandDef contactSetCommand(const CommandContext& context);
 // Motion links (mitcad#466).
@@ -185,5 +187,9 @@ CommandDef meshFitSurfaceCommand(const CommandContext& context);
 // BoundaryFillCommands.cpp (mitcad#2149): the space solids, surfaces and
 // planes close off filled, its cells clicked in the view.
 CommandDef boundaryFillCommand(const CommandContext& context);
+
+// CellGridCommands.cpp (mitcad#2238): sketch profiles filled with cells of
+// one shape and cut from bodies in one operation.
+CommandDef cellGridCommand(const CommandContext& context);
 
 } // namespace mitcad::cmd

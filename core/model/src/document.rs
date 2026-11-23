@@ -437,6 +437,11 @@ pub struct DocState {
     /// Selection sets (mitcad#2192), in the order they were added: named
     /// links to bodies, occurrences and features.
     pub selection_sets: Vec<SelectionSet>,
+    /// Point clouds (mitcad#2240), in the order they were inserted.
+    pub(crate) point_clouds: Vec<PointCloud>,
+    /// Decals (mitcad#2244), in the order they were inserted: images put
+    /// on faces of bodies.
+    pub(crate) decals: Vec<Decal>,
 }
 
 impl Default for DocState {
@@ -491,6 +496,8 @@ impl Default for DocState {
             sketch_blocks: Vec::new(),
             parameter_groups: Default::default(),
             selection_sets: Vec::new(),
+            point_clouds: Vec::new(),
+            decals: Vec::new(),
         }
     }
 }
@@ -705,6 +712,10 @@ impl DocState {
             crate::features::bound_length::settle_parameter(params, bound.parameter, owner)
                 .map_err(invalid)?;
         }
+        // So are an edge frame's miter angles (mitcad#2234).
+        if let FeatureDef::EdgeFrame(frame) = &resolved {
+            crate::features::edge_frame::settle_angles(params, frame, owner).map_err(invalid)?;
+        }
         // A Flex item's length is a reference parameter of its own
         // (mitcad#1713).
         if let FeatureDef::Flex(flex) = &mut resolved {
@@ -900,6 +911,10 @@ impl DocState {
                 Some(FeatureDef::BoundLength(def)) => BTreeSet::from([def.parameter]),
                 // A Flex item keeps its length (mitcad#1713).
                 Some(FeatureDef::Flex(def)) => def.length.into_iter().collect(),
+                // An edge frame keeps its miter angles (mitcad#2234).
+                Some(FeatureDef::EdgeFrame(def)) => {
+                    def.start_angle.into_iter().chain(def.end_angle).collect()
+                }
                 _ => BTreeSet::new(),
             };
             for id in self.parameters.owned_by(owner) {
@@ -2147,6 +2162,7 @@ impl<K: Kernel> Document<K> {
         self.state.take_measured(&result.measured);
         // Where the attached nodes of Flex items are now (mitcad#1713).
         self.state.take_flex_places(&result);
+        self.state.follow_set_body_transfers(None, &result);
         self.set_result(result);
         Ok(self.stats())
     }
@@ -2169,6 +2185,7 @@ impl<K: Kernel> Document<K> {
         let mut next = self.state.clone();
         next.take_measured(&result.measured);
         next.take_flex_places(&result);
+        next.follow_set_body_transfers(Some((&self.state, &self.result)), &result);
         let changed = next != self.state;
         if changed {
             self.commit("Recompute All".to_owned(), next);
@@ -3037,7 +3054,8 @@ impl<K: Kernel> Document<K> {
     /// Like [`Document::apply`]; `check` sees the result of the new state
     /// before it is taken and can still refuse it (mitcad#219: a hierarchy
     /// move must not make a feature fail).
-    pub(crate) fn apply_checked<T>(
+    #[doc(hidden)]
+    pub fn apply_checked<T>(
         &mut self,
         edit: impl FnOnce(&mut DocState) -> Result<(String, T), ModelError>,
         check: impl FnOnce(&DocState, &Recomputed<K::Shape>) -> Result<(), ModelError>,
@@ -3132,6 +3150,8 @@ impl<K: Kernel> Document<K> {
         if next.parameters != self.state.parameters {
             for (old, new) in renamed_parameters(&self.state.parameters, &next.parameters) {
                 next.rename_in_bindings(&old, &new);
+                // So do the formulas of equation curves (mitcad#2237).
+                next.rename_in_equation_curves(&old, &new);
             }
         }
         recompute |= next.settle_bindings();
@@ -3150,13 +3170,26 @@ impl<K: Kernel> Document<K> {
         // A sketch that got its first consumer hides, one that lost its
         // last shows (mitcad#7).
         next.follow_sketch_use(&self.state);
-        let result = if recompute {
+        // Carriages that move together (mitcad#2274): an edit of one's
+        // offset moves the others with it.
+        if next.parameters != self.state.parameters {
+            next.lead_followed_edits(&self.state, &self.result)?;
+        }
+        let mut result = if recompute {
             Some(self.compute_after(&next)?)
         } else {
             None
         };
+        // A carriage that follows another keeps its offset where the
+        // recompute left it, recomputed with it in this step.
+        if let Some(computed) = &result
+            && next.take_followed_offsets(computed)
+        {
+            result = Some(self.compute_after(&next)?);
+        }
         if let Some(result) = &result {
             check(&next, result)?;
+            next.follow_set_body_transfers(Some((&self.state, &self.result)), result);
             next.take_measured(&result.measured);
             // Where the attached nodes of Flex items are now (mitcad#1713).
             next.take_flex_places(result);
@@ -3516,6 +3549,7 @@ impl<K: Kernel> Document<K> {
         let mut next = self.state.clone();
         next.marker = position;
         let result = self.compute(&next)?;
+        next.follow_set_body_transfers(Some((&self.state, &self.result)), &result);
         self.state = next;
         self.preview = None;
         self.set_result(result);
@@ -5787,9 +5821,28 @@ pub use operation_follow::OperationFollow;
 // design, and which bodies a print service may take (mitcad#2214).
 mod print_service;
 pub use print_service::PrintServiceBlock;
+// Point clouds: scanned points kept as a reference, and Point Cloud
+// Deviation (mitcad#2240).
+mod point_clouds;
+pub use point_clouds::{
+    CloudColors, CloudData, CloudInsert, CloudPoints, CloudSource, DEFAULT_DEVIATION_TOLERANCE,
+    DEFAULT_MAX_SAMPLES, DEFAULT_WORST, Deviation, DeviationPoint, MAX_SAMPLES, PointCloud,
+    PointCloudDeviation, check_deviation_settings,
+};
 // A whole design linked with its components, joints, rigid groups and
 // grounding, read only (mitcad#2209).
 mod link_tree;
+// A feature added under a uid of the caller's: an exported script's
+// features keep their uids (mitcad#2245).
+mod feature_uids;
+// What a script made from the timeline does not make again (mitcad#2245).
+mod script_omissions;
+// Sketches' equation curves follow renamed parameters (mitcad#2237).
+mod equation_curves;
+// Decals: images put on planar, cylindrical and conical faces of bodies,
+// following the faces (mitcad#2244).
+mod decals;
+pub use decals::{DEFAULT_DECAL_OPACITY, Decal, DecalEdit, DecalMesh, DecalSurface, DecalTarget};
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

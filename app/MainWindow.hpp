@@ -49,13 +49,16 @@
 #include "view/CommandSketches.hpp"
 #include "view/CommentImages.hpp"
 #include "view/DatumHandles.hpp"
+#include "view/Decals.hpp"
 #include "view/ImageReferences.hpp"
+#include "view/PointClouds.hpp"
 #include "view/OriginPreference.hpp"
 
 class QAction;
 class QCloseEvent;
 class QDockWidget;
 class QDragEnterEvent;
+class QDragMoveEvent;
 class QDropEvent;
 class QElapsedTimer;
 class QLabel;
@@ -141,6 +144,8 @@ class NativeWidgetView;
 #endif
 struct BrowserNode;
 enum class WebFileKind;
+enum class WebImportResult; // a download's outcome (mitcad#2281)
+class WebDownloadFolders;
 struct BrowserComponentInfo;
 struct JointHighlight;
 struct FileVersion;
@@ -566,12 +571,17 @@ public:
   // Sketch blocks (mitcad#2110, MainWindowSketchBlocks.cpp).
   void editSketchBlock(const QString& name) override;
   void calibrateImageReference(const QString& name) override;
+  // Decals (mitcad#2244; MainWindowDecals.cpp): one in the Decal panel.
+  void editDecal(const QString& name) override;
 
 protected:
   void keyPressEvent(QKeyEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
   // Files dropped on the window are opened or imported (U6).
   void dragEnterEvent(QDragEnterEvent* event) override;
+  // Each move over the window accepted as the enter was (mitcad#2289): a
+  // move that nobody accepts refuses the drop where it is.
+  void dragMoveEvent(QDragMoveEvent* event) override;
   void dropEvent(QDropEvent* event) override;
   // A window whose size changes once it shows logs its layout again
   // ("Window layout: ...", mitcad#560): UI tests check that what the docks
@@ -1038,7 +1048,7 @@ private:
   // new pick replaces it (mitcad#1743: a hole moved from one component's
   // face to another's goes into the other). True when it activated.
   bool activateForPick(const CommandDef& def, const InputDef& input, const SelectionItem& item);
-  // Joint, As-Built Joint, Rigid Group and Assembly Constraint
+  // Joint, As-Built Joint, Rigid Group and Constraint Set
   // (mitcad#1856, MainWindowJointHolder.cpp): a pick after which the picks
   // lie under another component than the active one (the model's
   // `joint_holder` query) asks, by the preference (browser/
@@ -1092,6 +1102,23 @@ private:
   // False when sketch mode stays: the timeline's roll-forward after an
   // edit was cancelled (P7).
   bool finishSketch();
+  // Cancel Sketch (mitcad#2225, MainWindowSketchCancel.cpp): the running
+  // tool stopped without committing what it has pending, every step made
+  // since the sketch was entered merged into one and undone (a rolled-back
+  // timeline marker's move with them, so the marker returns; a new
+  // sketch's creation too), and sketch mode left; Redo brings the edit
+  // back. A block edited in its own sketch is cancelled as Cancel Block
+  // cancels it. False when the sketch stays open (the undo was refused).
+  bool cancelSketch();
+  // The steps made in the sketch since it was entered as one undo step
+  // (mitcad#2225): a new sketch's merged into its creation (under the
+  // creation's label, m_sketchCreation), an edited one's as "Edit <name>".
+  // Nothing when no step was made. The timeline marker's own roll-forward
+  // stays finishSketch's.
+  void mergeSketchSteps(const QString& name);
+  // The undo label of `uid`'s creation when it is the last undo step, else
+  // empty (m_sketchCreation).
+  QString sketchCreationStep(const QString& uid) const;
   void leaveSketchMode();
   // Esc in a sketch with nothing else to cancel, while the preference
   // "Esc leaves an unchanged sketch" is on (mitcad#1623): a sketch
@@ -1541,6 +1568,18 @@ private:
   void moveInProject(const QString& root, const QString& from, const QString& to, bool folder);
   void deleteInProject(const QString& root, const QString& path, bool folder);
   void openPanelDesign(const QString& path);
+  // Other files of a project (mitcad#2204): one opened with the system's
+  // app (a failure told in words); files copied into `folder` of the
+  // project at `root` (none given: asked with the file dialog), one
+  // version; the changes of the files at `path` ("" all) recorded, one
+  // version. A file over 100 MiB is recorded only after a question.
+  void openProjectFile(const QString& path);
+  void addFilesToProject(const QString& root, const QString& folder, QStringList files);
+  void recordProjectFiles(const QString& root, const QString& path);
+  // add_files or record with the large files' question: a `too_large`
+  // refusal asks, and Record Anyway sends the command again with
+  // `allow_large`.
+  std::optional<QJsonObject> projectWriteLarge(const QString& root, QJsonObject command, const QString& title);
   void panelVersionHistory(const QString& root, const QString& path);
   // Sync Now of a project: another project is opened first (as Open
   // Project).
@@ -1758,13 +1797,22 @@ private:
   // Move, or a design of another format opened as File › Open opens it.
   void registerComponentWebCommand();
   void openComponentBrowser();
-  bool importWebDownload(const QString& path, WebFileKind kind, QString* error);
+  // A download the browser hands over (ComponentBrowserHost::importDownload):
+  // brought in at once from Idle or beside a command that changes nothing
+  // in the design, else kept until the open command closes (mitcad#2281,
+  // files/MainWindowArrivals.cpp).
+  WebImportResult importWebDownload(const QString& path, WebFileKind kind, QString* note);
+  // The insert itself: a component of this design named and numbered from
+  // the file, Move to start on it; false with the reason in `error`.
+  bool insertWebDownload(const QString& path, QString* error);
   // Move on the last download brought in (mitcad#1839): started once from
   // the event loop, so that the files a zip's Import brings in one after
-  // another all come in first and Move starts once, on the last.
+  // another all come in first and Move starts once, on the last; beside an
+  // inspection it waits until that closes (m_webMoveWaits, mitcad#2281).
   void startWebDownloadMove();
   bool m_webImporting = false;
   bool m_webMovePending = false;
+  bool m_webMoveWaits = false;
   QString m_webMoveComponent;
   QString m_webMoveOccurrence;
   QString m_webMoveName;
@@ -1772,6 +1820,55 @@ private:
   // (mitcad#1995).
   QString m_webMoveNote;
   QPointer<QDialog> m_componentBrowser;
+  // Work that arrives while a command is open (mitcad#2281,
+  // files/MainWindowArrivals.cpp, docs/ui-conventions.md "Work that arrives
+  // while a command is open"): a Component from Web download, or files
+  // dropped on the window, come in at once from Idle (Now) and beside a
+  // command that changes nothing in the design (Beside:
+  // CommandDef::changesNoDesign, Measure), which stays open and checks its
+  // picks again; while a command that changes the design, a sketch or
+  // Create Sketch's plane pick is open they wait (Wait), said in words, and
+  // come in when it closes, in the order they arrived (a download as a copy
+  // of its own, kept until then). A design closed first drops them, said.
+  enum class ArrivalGate { Now, Beside, Wait };
+  ArrivalGate arrivalGate() const;
+  // What they wait for, as the note names it: the command's name, "the
+  // sketch", Create Sketch.
+  QString arrivalWaitsFor() const;
+  struct Arrival {
+    QStringList paths;  // the download's kept copy, or the files dropped
+    QString folder;     // the copy's folder (a download), removed once it came in
+    bool web = false;   // a download (else a drop)
+    std::optional<QPointF> onView; // a drop's place on the view
+    QString waitedFor;  // what it waited for (empty: only for the model or those before it)
+  };
+  QList<Arrival> m_arrivals;
+  // The kept copies' folders (WebDownloadFolders), while any waits.
+  std::shared_ptr<WebDownloadFolders> m_arrivalFolders;
+  bool m_arrivalsScheduled = false;
+  bool m_arrivalsRunning = false;
+  // An insert beside an open inspection: canChangeModel lets it change the
+  // design.
+  bool m_insertingBeside = false;
+  WebImportResult keepWebArrival(const QString& path, ArrivalGate gate, QString* note);
+  // The note of the downloads waiting now (the browser's, under its page).
+  QString waitingWebNote() const;
+  void scheduleArrivals();
+  void takeArrivals();
+  void bringIn(const Arrival& arrival, ArrivalGate gate);
+  void bringInBeside(const QString& what, const std::function<void()>& insert);
+  // The browser's note under its page, when its window is open.
+  void showWebNote(const QString& note, bool warning);
+  // Arrivals and a waiting Move go on when the window can take them again
+  // (updateModeBanner: after every change of mode).
+  void followArrivals();
+  // The design they waited for goes (another document in this window, or
+  // the window closing): they are dropped and it is said.
+  void dropArrivals(bool closing);
+  // Files dropped on the window (openDropped) by the gate: as from Idle, at
+  // once beside an inspection, or waiting.
+  void arriveDropped(const QStringList& paths, std::optional<QPointF> onView);
+  void openDroppedNow(const QStringList& paths, std::optional<QPointF> onView);
   // The web browser component (CEF and the module, BrowserComponent.hpp):
   // the installed one's window, the first download (asked once, with its
   // size), and the check for a newer one of this MitCad's interface.
@@ -1956,6 +2053,11 @@ private:
   SelectFilter m_pickPlacesFilter;
   bool m_pickPlacesQueued = false;
   bool m_pickPlacesDeferred = false;
+  // Create Sketch's "Pick places:" (logSketchPicks) asked for while the
+  // view could not try them (a navigation, such as an unexposed window's
+  // fit, not ended): logged once it can (the retry after navigationFinished
+  // and viewChanged), not as an empty list.
+  bool m_sketchPicksDeferred = false;
   QAction* m_cutLabelsAction = nullptr;
   // Esc (cancel) while a drawing is open and the keyboard is with no other
   // control: the drawing's Esc; false when it is not the drawing's.
@@ -2665,6 +2767,8 @@ private:
   // (mitcad#1623, escapeSketch).
   qint64& m_sketchEnterRevision = m_documentSession->state().sketchEnterRevision;
   bool& m_sketchEscHinted = m_documentSession->state().sketchEscHinted;
+  // A new sketch's creation step (mitcad#2225, mergeSketchSteps).
+  QString& m_sketchCreation = m_documentSession->state().sketchCreation;
 
   // Sketch selection filters (mitcad#217, MainWindowSelection.cpp): the
   // three-state filter of sketch mode, Project's context while it runs, the
@@ -2919,6 +3023,54 @@ private:
   std::optional<ImageReferencePanel> m_imageReferencePanel;
   QString m_imageReferencePanelSource; // what its picture was decoded from
   QImage m_imageReferencePanelPicture;
+
+  // Point clouds (mitcad#2240; MainWindowPointClouds.cpp): Insert > Point
+  // Cloud, Move Point Cloud, and the shown clouds drawn in the view.
+  void registerPointCloudCommands();
+  // Move Point Cloud's panel for a cloud: a turn about Z, then distances
+  // along the design's axes.
+  void movePointCloud(const QString& name) override;
+  // After a refresh: the shown clouds' points asked once per change (by
+  // their entries in the snapshot) and drawn.
+  void followPointClouds();
+  // The shown clouds in the view; of the one a shown deviation colours only
+  // the points it did not measure, dimmed (mitcad#2265).
+  void drawPointClouds();
+  QHash<QString, PointCloudDrawn> m_pointCloudPoints; // by name
+  QHash<QString, QByteArray> m_pointCloudKeys;        // the entry each was asked for
+  // The cloud a shown Point Cloud Deviation colours and what it measured
+  // of it (no cloud: none shown).
+  DeviationSample m_deviationSample;
+  // Decals (mitcad#2244; MainWindowDecals.cpp): Insert › Decal, a panel
+  // that puts an image file on a face and edits one put there.
+  void registerDecalCommands();
+  CommandDef decalCommand();
+  // After a refresh: the shown decals drawn on their faces (their pictures
+  // decoded once, by digest).
+  void followDecals();
+  // A decal's picture, decoded from the design's copy (none when it
+  // cannot be).
+  QImage decalPicture(const QString& name, const QString& sha256);
+  // The decal the Decal panel puts, drawn where its values put it while
+  // the panel is open: a new decal's from its file, an edited one's in
+  // place of the decal (`editing`: hidden where it was).
+  struct DecalPanel {
+    DecalShown decal; // `name`: the edited decal's, a new decal's file name
+    QString file;     // a new decal's file; empty when editing
+    bool editing = false;
+  };
+  // None: the panel closed (or has no place for it), the decals as they are.
+  void setDecalPanel(const std::optional<DecalPanel>& panel);
+  // The shown decals, with the panel's in place of the one it edits.
+  void drawDecals();
+  // The decal under a point of the view's model (a right click on its
+  // face, the view's menu: Edit Decal, Hide Decal, Delete Decal); empty
+  // when none lies there.
+  QString decalUnder(const SelectionItem& picked, const QPoint& globalPosition) const;
+  QHash<QString, QImage> m_decalImages; // by digest
+  std::optional<DecalPanel> m_decalPanel;
+  QString m_decalPanelSource; // what its picture was decoded from
+  QImage m_decalPanelPicture;
 
   // The Center of Mass marker (mitcad#1094; MainWindowCenterOfMass.cpp):
   // Center of Mass in the Inspect group, and after a refresh the marker
@@ -3250,6 +3402,36 @@ private:
   void showDocksAgain(const QStringList& names);
   QStringList m_drawingHiddenDocks; // the docks a drawing hid
   bool m_drawingDocksHidden = false; // a drawing holds the model's docks hidden
+
+  // Scripts and macros (mitcad#2245, files/MainWindowScripts.cpp, app/COMMANDS.md
+  // "Macros and scripts"): File › Export Timeline as Script…, Tools › Macro ›
+  // Record Macro, Stop Recording, Save Macro… and Run Script…; the
+  // recording indicator (the project indicator's neighbour: the top bar of
+  // Windows and Linux, the Docked status bar of macOS), which stops the
+  // recording when clicked.
+  void registerScriptCommands();
+  void createMacroIndicator();
+  void exportTimelineScript();
+  void startMacroRecording();
+  void stopMacroRecording();
+  void saveMacro();
+  void runScriptFile();
+  void updateMacroIndicator();
+  QToolButton* m_macroIndicator = nullptr;
+
+  // The Favorite Parameters panel (mitcad#2203, GitHub mitcad/Mitcad#547;
+  // browser/MainWindowFavoriteParameters.cpp): manage.favorite_parameters
+  // shows or hides it, its × hides it; the choice is kept per user. A card
+  // in the left column between the Configuration card and the browser's
+  // (Floating), or a dock of its own above the browser's (Docked).
+  void registerFavoriteParametersCommands();
+  void addFavoriteParametersCard();
+  void dockFavoriteParametersPanel(QDockWidget* browserDock);
+  void setFavoriteParametersShown(bool shown);
+  static bool favoriteParametersShownAtStart();
+  void followFavoriteParametersAction(bool shown);
+  QPointer<QWidget> m_favoriteParametersContainer;
+  bool m_favoriteParametersShown = false;
 };
 
 } // namespace mitcad

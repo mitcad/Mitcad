@@ -97,26 +97,14 @@ const ARRAY_NOTE: &str = "In a model_command array an entry may also name its re
 /// The restrictions of the live server's model_command, for every command.
 const LIVE: &str = "Live: one undo step labeled (agent); refused while the document is read-only; while a sketch is open, only sketch commands on it, edit_feature of it, undo and redo run, the others wait until it is finished.";
 
-/// The commands whose library form MCP refuses (`command_class_with` in
-/// `core/model-api/src/classes.rs`): a library named in `library` (or a
-/// `based_on` object) is read from or written to its folder.
-const LIBRARY_FORMS: &[&str] = &[
-    "create_material",
-    "edit_material",
-    "delete_material",
-    "merge_materials",
-    "import_materials",
-    "create_dataset_materials",
-    "set_component_material",
-    "set_body_material",
-    "create_print_profile",
-    "edit_print_profile",
-    "delete_print_profile",
-    "set_property",
-];
-
-/// The restriction of [`LIBRARY_FORMS`].
+/// The restriction of the library forms ([`crate::print_library::LIBRARY_FORMS`],
+/// `command_class_with` in `core/model-api/src/classes.rs`) in the
+/// headless server.
 const LIBRARY_FORM: &str = "MCP refuses its library form: library given as a library's name (or based_on as an object) reads or writes that library's folder; leave them out to work on the design's own items.";
+
+/// The restriction of the library forms in the live server (mitcad#2224):
+/// refused, as in the headless server, unless the user allows it.
+const LIVE_LIBRARY_FORM: &str = "MCP refuses its library form (library given as base, user or project, or based_on as a library's item {library, id}: it reads or writes that library's folder) unless the user allows agents to use the print libraries (Preferences › AI Assistants › Agents may use my print libraries); then it runs with the open design's own project (leave project out). Otherwise leave them out to work on the design's own items.";
 
 /// The restrictions of the headless server's model_command, for every
 /// command.
@@ -208,7 +196,9 @@ fn spec(name: &str) -> Option<Value> {
                 "after": feature_uid("Inserted just after this feature instead of at the marker"),
                 "index": {"type": "integer", "minimum": 0, "description": "Inserted at this timeline position (the number of features before it) instead of at the marker"},
                 "fit_faces": {"type": "boolean", "default": false, "description": "A thread whose faces do not fit it gets them fitted in the same undo step"},
-                "shared": {"type": "string", "enum": ["parameter", "own"], "description": "With fit_faces: change a named parameter used elsewhere too (parameter) or give the dimension its own value (own)"}
+                "shared": {"type": "string", "enum": ["parameter", "own"], "description": "With fit_faces: change a named parameter used elsewhere too (parameter) or give the dimension its own value (own)"},
+                "uid": feature_uid("The feature's uid instead of the next one (an exported script keeps its features' uids); refused when a feature has it, not with fit_faces"),
+                "pieces": {"type": "array", "items": {"type": "object"}, "description": "With uid: what the feature remembers of the pieces of its splits, as the design file keeps it (an exported script's split pieces keep their ids)"}
             },
             "required": ["def"],
             "examples": [
@@ -472,8 +462,12 @@ pub fn command_schema(name: &str, vocabulary: &Vocabulary, live: bool) -> Option
     let mut required = vec![json!("cmd")];
     required.extend(spec["required"].as_array().cloned().unwrap_or_default());
     let mut restrictions: Vec<Value> = spec["restrictions"].as_array().cloned().unwrap_or_default();
-    if LIBRARY_FORMS.contains(&name) {
-        restrictions.push(json!(LIBRARY_FORM));
+    if crate::print_library::LIBRARY_FORMS.contains(&name) {
+        restrictions.push(json!(if live {
+            LIVE_LIBRARY_FORM
+        } else {
+            LIBRARY_FORM
+        }));
     }
     restrictions.push(json!(if live { LIVE } else { HEADLESS }));
     restrictions.push(json!(ARRAY_NOTE));

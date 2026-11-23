@@ -165,6 +165,12 @@ public:
   // status line (statusLog()).
   void enter(const QString& uid);
   void leave();
+  // The window closes (mitcad#2263): the view's events and signals no
+  // longer reach the controller, a tool under way ends without a commit
+  // or a log, and the sketch is no longer active. The view is the window's
+  // first child and goes before the controller; a Leave it sent to the
+  // filter on its way out ran a tool's hover on the view's freed members.
+  void detachFromView();
   bool isActive() const { return !m_uid.isEmpty(); }
   const QString& uid() const { return m_uid; }
   const Sketch3dModel& model() const { return m_model; }
@@ -490,6 +496,9 @@ private:
   void commitShape();
   int shapeClicks() const;
   std::optional<Xyz> shapeHover(const Xyz& at) const;
+  // A size typed for the shape's next point: the pointer then gives only
+  // its direction, and no snap fixes its place.
+  bool shapeSizeTyped() const;
   void addShapePreview(Sketch3dPreview& out, const Xyz& at) const;
   QString shapeMeasured(const QString& id) const;
   QString shapeProblem(const Xyz& at) const;

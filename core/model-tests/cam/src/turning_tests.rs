@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use mitcad_model::Document;
 use mitcad_model::testing::MockKernel;
+use mitcad_model::testing::temp::{remove_temp, unique_temp_dir};
 use mitcad_model_api::DocumentApi;
 
 /// The region of a sketch's first rectangle.
@@ -316,4 +317,85 @@ fn a_controller_of_the_other_kind_says_which_kind_it_is_for() {
     // Each kind's own dialect is taken.
     command(&mut doc, mill("grbl"));
     command(&mut doc, turning("fanuc_turning"));
+}
+
+/// A lathe as Machines and Tools… makes it (mitcad#2230): New Machine's
+/// lathe defaults, a turning tool and a parting blade typed with their
+/// units, Edit Machine's turret and chuck; saved to the project's library
+/// and imported into another design with its turret and tools.
+#[test]
+fn a_lathe_made_in_the_dialog_goes_to_the_library_and_back() {
+    let project = unique_temp_dir("cam-lathe-project");
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!({"cmd": "cam_machine_put", "machine": {"id": "lathe", "machine": {
+            "name": "Lathe", "controller": "fanuc_turning",
+            "travel": {"min": [-5, 0, -300], "max": [150, 0, 200]},
+            "spindle": {"min_rpm": 50, "max_rpm": 3000, "spin_up_seconds": 2,
+                        "nose_diameter": 0, "nose_length": 0},
+            "max_feed": 5000, "rapid_feed": 20000,
+            "lathe": {"turret_stations": 12, "chuck_diameter": 160, "chuck_length": 50}}}}),
+    );
+    let turning = command(
+        &mut doc,
+        json!({"cmd": "cam_tool_put", "machine": "lathe", "tool": {
+            "number": 1, "shape": {"kind": "turning", "nose_radius": "0.4 mm"},
+            "diameter": "20 mm", "flute_length": "3 mm", "length": "30 mm"}}),
+    );
+    assert_eq!(turning["tool"]["name"], json!("20 mm turning tool"));
+    assert_eq!(turning["tool"]["shape"]["nose_radius"], json!(0.4));
+    let parting = command(
+        &mut doc,
+        json!({"cmd": "cam_tool_put", "machine": "lathe", "tool": {
+            "number": 2, "shape": {"kind": "parting", "width": "3 mm"}, "diameter": "20 mm"}}),
+    );
+    assert_eq!(parting["tool"]["name"], json!("20 mm parting tool"));
+    assert_eq!(parting["tool"]["flute_length"], json!(25.0));
+    // A milling tool is refused on the lathe, in words.
+    assert_eq!(
+        refused(
+            &mut doc,
+            json!({"cmd": "cam_tool_put", "machine": "lathe", "tool": {
+                "number": 3, "shape": {"kind": "flat"}, "diameter": "6 mm"}})
+        ),
+        "The lathe Lathe takes lathe tools only."
+    );
+    // Edit Machine's turret and chuck.
+    let mut machine = query(&doc, json!({"query": "cam_machines"}))["machines"][0].clone();
+    machine.as_object_mut().unwrap().remove("used_by");
+    machine["machine"]["lathe"]["turret_stations"] = json!(8);
+    machine["machine"]["lathe"]["chuck_diameter"] = json!(200);
+    command(
+        &mut doc,
+        json!({"cmd": "cam_machine_put", "machine": machine}),
+    );
+
+    let folder = project.display().to_string();
+    let saved = command(
+        &mut doc,
+        json!({"cmd": "cam_machine_to_library", "machine": "lathe", "library": "project",
+               "project": folder}),
+    );
+    assert_eq!(saved["version"], json!(1));
+    let mut other = Document::new(MockKernel::default());
+    command(
+        &mut other,
+        json!({"cmd": "cam_machine_from_library", "library": "project", "id": "lathe",
+               "project": folder}),
+    );
+    let machines = query(&other, json!({"query": "cam_machines"}));
+    let copied = &machines["machines"][0];
+    assert_eq!(copied["machine"]["controller"], json!("fanuc_turning"));
+    assert_eq!(copied["machine"]["lathe"]["turret_stations"], json!(8));
+    assert_eq!(copied["machine"]["lathe"]["chuck_diameter"], json!(200.0));
+    assert_eq!(copied["machine"]["lathe"]["chuck_length"], json!(50.0));
+    let kinds: Vec<&str> = copied["tools"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["shape"]["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["turning", "parting"]);
+    remove_temp(&project);
 }

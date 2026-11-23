@@ -17,10 +17,14 @@
 //!   the kernel finds the rigid motion ([`Kernel::rigid_copies`]). A placed
 //!   block that does not match (scaled, mirrored, or changed after it was
 //!   placed) comes in as a body where the file has it, with a warning.
+//! - Point clouds whose points the container holds come in as point cloud
+//!   items (mitcad#2240, [`crate::PointCloud`]) in the component the bodies
+//!   go into, named after the file's clouds, shown as the file shows them.
 //! - Curves and points (B-reps without faces), texts, hatches, dimensions,
-//!   pictures, point clouds, scan paths, layouts and history records are
-//!   left out: one warning line counts them by kind. An object whose data
-//!   cannot be read is left out with a warning naming it in words.
+//!   pictures, point clouds whose points cannot be read, scan paths,
+//!   layouts and history records are left out: one warning line counts
+//!   them by kind. An object whose data cannot be read is left out with a
+//!   warning naming it in words.
 //! - A version newer than the reader knows is refused in words.
 //!
 //! One undo step; nothing stays of a failed import.
@@ -135,11 +139,46 @@ struct PlannedBlock<S> {
     placements: Vec<Transform>,
 }
 
+/// A point cloud planned as a point cloud item (mitcad#2240): its name,
+/// its points in millimetres and whether it is shown.
+struct PlannedCloud {
+    name: String,
+    data: crate::CloudData,
+    visible: bool,
+}
+
 /// What reading the file planned, before anything changes.
 struct Plan<S> {
     top: Vec<PlannedBody<S>>,
     blocks: Vec<PlannedBlock<S>>,
+    clouds: Vec<PlannedCloud>,
     warnings: Vec<String>,
+}
+
+/// The file's point clouds as point cloud items, in millimetres
+/// (mitcad#2240): each point the origin plus the point, scaled.
+fn plan_clouds(serp: &Serp) -> Vec<PlannedCloud> {
+    let mm = serp.units.mm;
+    serp.clouds
+        .iter()
+        .enumerate()
+        .map(|(i, cloud)| PlannedCloud {
+            name: cloud
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Point cloud {}", i + 1)),
+            data: crate::CloudData {
+                points: cloud
+                    .points
+                    .iter()
+                    .map(|p| std::array::from_fn(|k| (cloud.origin[k] + f64::from(p[k])) * mm))
+                    .collect(),
+                colors: cloud.colors.clone(),
+                file_points: cloud.points.len(),
+            },
+            visible: serp.cloud_shown(cloud),
+        })
+        .collect()
 }
 
 /// Counts in words (`1 object`, `2 objects`).
@@ -307,6 +346,7 @@ fn plan<K: Kernel>(kernel: &K, serp: &Serp, source: &str) -> Plan<K::Shape> {
     Plan {
         top,
         blocks,
+        clouds: plan_clouds(serp),
         warnings,
     }
 }
@@ -323,14 +363,14 @@ impl<K: Kernel> Document<K> {
         let serp = read(path)?;
         let source = file_name(path);
         let plan = plan(self.kernel(), &serp, &source);
-        if plan.top.is_empty() && plan.blocks.is_empty() {
+        if plan.top.is_empty() && plan.blocks.is_empty() && plan.clouds.is_empty() {
             let why = if plan.warnings.is_empty() {
                 String::new()
             } else {
                 format!(": {}", plan.warnings.join("; "))
             };
             return Err(invalid(format!(
-                "{source} has no solids, surfaces or meshes to import{why}"
+                "{source} has no solids, surfaces, meshes or point clouds to import{why}"
             )));
         }
         let label = format!("Import {source}");
@@ -363,6 +403,7 @@ impl<K: Kernel> Document<K> {
         let Plan {
             top,
             blocks,
+            clouds,
             warnings,
         } = plan;
         if let Some(unit) = unit
@@ -430,7 +471,12 @@ impl<K: Kernel> Document<K> {
             });
         }
         let label = format!("Import {source}");
-        let mut added = self.add_base_features(&label, inputs)?;
+        // A file of point clouds only makes no base feature.
+        let mut added = if inputs.is_empty() {
+            Vec::new()
+        } else {
+            self.add_base_features(&label, inputs)?
+        };
         let loose = if has_top { added.pop() } else { None };
         for (component, imported) in components.iter_mut().zip(added) {
             component.feature = Some(imported);
@@ -454,7 +500,22 @@ impl<K: Kernel> Document<K> {
             }
         }
 
-        let file = if components.is_empty() {
+        // The point clouds (mitcad#2240) as point cloud items in the
+        // component the bodies went into, each under a free name.
+        let cloud_occurrence = self.component_cloud_occurrence(parent);
+        for cloud in clouds {
+            let name = self.free_point_cloud_name(&cloud.name);
+            self.add_point_cloud(
+                Some(&name),
+                source,
+                cloud.data,
+                cloud_occurrence.clone(),
+                Transform::IDENTITY,
+                cloud.visible,
+            )?;
+        }
+
+        let file = if components.is_empty() && loose.is_some() {
             let mut imported: Imported =
                 loose.ok_or_else(|| invalid("the import made no bodies"))?;
             imported.warnings = warnings;

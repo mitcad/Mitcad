@@ -153,6 +153,24 @@ QVector<BrowserEntry> folderContents(const ProjectRow& project, const QString& p
   std::sort(designs.begin(), designs.end(),
             [](const BrowserEntry& a, const BrowserEntry& b) { return byName(a.name, b.name); });
   entries << designs;
+  // Other files (mitcad#2204), after the designs.
+  QVector<BrowserEntry> files;
+  for (const ProjectFileRow& file : project.files) {
+    if (dirOf(file.path) == folder) {
+      BrowserEntry entry;
+      entry.kind = BrowserEntry::Kind::File;
+      entry.root = project.root;
+      entry.projectKey = projectKey;
+      entry.projectName = project.name;
+      entry.path = file.path;
+      entry.name = lastPart(file.path);
+      entry.file = file;
+      files << entry;
+    }
+  }
+  std::sort(files.begin(), files.end(),
+            [](const BrowserEntry& a, const BrowserEntry& b) { return byName(a.name, b.name); });
+  entries << files;
   return entries;
 }
 
@@ -205,6 +223,9 @@ BrowserPlace placeUp(const BrowserPlace& place) { return {place.root, dirOf(plac
 QString entryWords(const BrowserEntry& entry) {
   if (entry.kind == BrowserEntry::Kind::Folder) {
     return entry.name + QLatin1Char('/');
+  }
+  if (entry.kind == BrowserEntry::Kind::File) {
+    return QStringLiteral("%1 file, %2").arg(entry.name, fileMarks(entry.file).words);
   }
   return QStringLiteral("%1 %2").arg(lastPart(entry.path), designMarks(entry.design).words);
 }

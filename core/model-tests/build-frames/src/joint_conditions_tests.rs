@@ -4,13 +4,18 @@
 //! `false` still read), an end short of and one into another member's side
 //! set to Near Side and Far Side in Ends and following that member's line,
 //! an L changed in Ends either way, a T whose stem was placed first, and a
-//! box frame of twelve 3D-sketch lines with no overlapping members.
+//! box frame of twelve 3D-sketch lines with no overlapping members. Then
+//! (mitcad#2234) a miter whose corner turns from 90 to 60 degrees, a T
+//! whose through member swaps to a wider size, and the joints a removed
+//! member leaves.
 
-use std::f64::consts::FRAC_PI_4;
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_3, FRAC_PI_4};
 
 use serde_json::{Value, json};
 
 use mitcad_model::Document;
+use mitcad_model::features::derived_part::{Tilt, end_plane};
+use mitcad_model::kernel::BoundingBox;
 use mitcad_model::testing::MockKernel;
 use mitcad_model_build::prelude::*;
 use mitcad_model_tests_support::test_library::*;
@@ -537,4 +542,344 @@ fn a_box_frame_of_twelve_3d_sketch_lines_has_no_overlapping_members() {
     // origin; the upright there stops on top of it.
     assert!(close(end(&doc, &m[0], false), [-HALF, 0.0, 0.0]));
     assert!(close(end(&doc, &m[8], false), [0.0, 0.0, HALF]));
+}
+
+/// The cut of a member's end (`b`: end B): its angle and the plane it
+/// cuts along in the host, a point on it (the long point, on the
+/// section's outer edge at mid-height) and its outward normal, as the
+/// derived part cuts it (the test profile's section `HALF` every way).
+fn cut(doc: &Document<MockKernel>, member: &Value, b: bool) -> (f64, [f64; 3], [f64; 3]) {
+    let end = &row(doc, member)["ends"][if b { "b" } else { "a" }];
+    let angle = end["angle"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("no cut: {end}"));
+    let tilt: Tilt = serde_json::from_value(end["tilt"].clone()).unwrap_or_default();
+    let section = BoundingBox {
+        min: [-HALF, -HALF, 0.0],
+        max: [HALF, HALF, 1.0],
+    };
+    let (point, normal) =
+        end_plane(Some(&section), b, length(doc, member), angle, tilt).expect("a cut plane");
+    let occurrence = doc.placed_in_host(component(member)).unwrap();
+    let t = placed(doc, *occurrence.last().unwrap());
+    (angle, t.apply_point(point), t.apply_vector(normal))
+}
+
+/// Two ends cut on one plane from both sides, meeting at their long
+/// points: no overlap and no gap (0.000001 mm).
+fn flush(a: (f64, [f64; 3], [f64; 3]), b: (f64, [f64; 3], [f64; 3])) {
+    let (_, pa, na) = a;
+    let (_, pb, nb) = b;
+    for i in 0..3 {
+        assert!((na[i] + nb[i]).abs() < 1e-9, "normals {na:?} {nb:?}");
+    }
+    let gap: f64 = (0..3).map(|i| (pb[i] - pa[i]) * na[i]).sum();
+    assert!(gap.abs() < 1e-6, "{gap} mm apart");
+    assert!(close(pa, pb), "long points {pa:?} {pb:?}");
+}
+
+/// An L of two lines meeting at (1000, 0): the bottom one from the origin,
+/// the other going on at `angle` from the bottom one's direction.
+fn corner_points(angle: f64) -> Vec<[f64; 2]> {
+    vec![
+        [0.0, 0.0],
+        [1000.0, 0.0],
+        [1000.0 + 600.0 * angle.cos(), 600.0 * angle.sin()],
+    ]
+}
+
+#[test]
+fn a_miter_s_cuts_follow_the_corner_s_angle() {
+    let mut doc = design();
+    let lines = [(1, 2), (2, 3)];
+    let s = sketch(&mut doc, &corner_points(90f64.to_radians()), &lines);
+    let answer = place(
+        &mut doc,
+        json!({"part": part("p30"), "lines": {"curves": [line(&s, 4), line(&s, 5)], "corners": "mitre"}}),
+    );
+    all_ok(&doc);
+    let m = members(&answer);
+    let (bottom, other) = (&m[0], &m[1]);
+    assert_eq!(joint(&doc, bottom, "b")["condition"], "mitre");
+    let (a, b) = (cut(&doc, bottom, true), cut(&doc, other, false));
+    assert!((a.0 - FRAC_PI_4).abs() < 1e-9 && (b.0 - FRAC_PI_4).abs() < 1e-9);
+    flush(a, b);
+    // The other line turned so that the lines meet at 60 degrees: both
+    // cut on the new bisector, (180 - 60) / 2 degrees from square.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": s,
+               "def": sketch_def(&corner_points(120f64.to_radians()), &lines)}),
+    )
+    .unwrap_or_else(|e| panic!("edit: {e}"));
+    all_ok(&doc);
+    let (a, b) = (cut(&doc, bottom, true), cut(&doc, other, false));
+    assert!((a.0 - FRAC_PI_3).abs() < 1e-9, "{}", a.0.to_degrees());
+    assert!((b.0 - FRAC_PI_3).abs() < 1e-9, "{}", b.0.to_degrees());
+    flush(a, b);
+    assert_eq!(joint(&doc, bottom, "b")["condition"], "mitre");
+    assert_eq!(joint(&doc, bottom, "b")["warning"], Value::Null);
+    // The far ends stay square.
+    assert_eq!(row(&doc, bottom)["ends"]["a"], Value::Null);
+    // Undone: the old cuts.
+    assert!(doc.undo().is_some());
+    let (a, b) = (cut(&doc, bottom, true), cut(&doc, other, false));
+    assert!((a.0 - FRAC_PI_4).abs() < 1e-9 && (b.0 - FRAC_PI_4).abs() < 1e-9);
+    flush(a, b);
+    // An end cut set by hand in Ends stays the user's.
+    let tilt = row(&doc, bottom)["ends"]["b"]["tilt"].clone();
+    command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": bottom["component"],
+               "ends": {"b": {"angle": "30 deg", "tilt": tilt}}}),
+    )
+    .unwrap_or_else(|e| panic!("ends: {e}"));
+    command(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": s,
+               "def": sketch_def(&corner_points(120f64.to_radians()), &lines)}),
+    )
+    .unwrap_or_else(|e| panic!("edit: {e}"));
+    let by_hand = cut(&doc, bottom, true).0;
+    assert!((by_hand - 30f64.to_radians()).abs() < 1e-9, "{by_hand}");
+    assert!((cut(&doc, other, false).0 - FRAC_PI_3).abs() < 1e-9);
+}
+
+/// A T: a member along X from the origin and a stem coming down to its
+/// line at x 500.
+const TEE: [[f64; 2]; 4] = [[0.0, 0.0], [1000.0, 0.0], [500.0, 400.0], [500.0, 0.0]];
+
+#[test]
+fn a_t_s_stem_follows_a_size_swap_of_the_member_it_meets_in_one_undo_step() {
+    let mut doc = design();
+    let s = sketch(&mut doc, &TEE, &[(1, 2), (3, 4)]);
+    let answer = place(
+        &mut doc,
+        json!({"part": part("p20-rows"), "lines": {"curves": [line(&s, 5), line(&s, 6)]}}),
+    );
+    all_ok(&doc);
+    let m = members(&answer);
+    let (through, stem) = (&m[0], &m[1]);
+    assert_eq!(joint(&doc, stem, "b")["condition"], "near_side");
+    // At the 20x20's near side.
+    assert!(
+        near(end(&doc, stem, true)[1], 10.0),
+        "{:?}",
+        end(&doc, stem, true)
+    );
+    // Swapped to 20x40 (40 across its line): the stem stops at the new
+    // near side, in the swap's one undo step.
+    let depth = doc.undo_depth();
+    command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": through["component"], "config": "20x40"}),
+    )
+    .unwrap_or_else(|e| panic!("swap: {e}"));
+    all_ok(&doc);
+    assert_eq!(doc.undo_depth(), depth + 1, "one undo step");
+    assert_eq!(row(&doc, through)["config"], "20x40");
+    assert!(
+        near(end(&doc, stem, true)[1], 20.0),
+        "{:?}",
+        end(&doc, stem, true)
+    );
+    assert_eq!(joint(&doc, stem, "b")["condition"], "near_side");
+    // One undo restores both.
+    assert!(doc.undo().is_some());
+    assert_ne!(row(&doc, through)["config"], "20x40");
+    assert!(
+        near(end(&doc, stem, true)[1], 10.0),
+        "{:?}",
+        end(&doc, stem, true)
+    );
+}
+
+#[test]
+fn removing_a_member_leaves_the_ends_that_met_it_square() {
+    let (mut doc, m, _) = rectangle(json!("mitre"));
+    // The right member goes: the bottom one's end B and the top one's end A
+    // met it.
+    let (bottom, right, top) = (&m[0], &m[1], &m[2]);
+    let depth = doc.undo_depth();
+    let answer = command(
+        &mut doc,
+        json!({"cmd": "build_remove", "component": right["component"]}),
+    )
+    .unwrap_or_else(|e| panic!("remove: {e}"));
+    all_ok(&doc);
+    assert_eq!(doc.undo_depth(), depth + 1, "one undo step");
+    assert!(
+        answer["notices"].to_string().contains("is left square"),
+        "{answer}"
+    );
+    // Square, as drawn: at their lines' ends, no cut, no joint.
+    assert!(near(end(&doc, bottom, true)[0], 1000.0));
+    assert_eq!(row(&doc, bottom)["ends"]["b"], Value::Null);
+    assert!(near(end(&doc, top, false)[0], 1000.0));
+    assert_eq!(row(&doc, top)["ends"]["a"], Value::Null);
+    let report = &query(
+        &doc,
+        json!({"query": "build_end_meets", "component": bottom["component"]}),
+    )["ends"];
+    assert!(report.to_string().contains("\"joint\":null"), "{report}");
+    // The corners with the members left stay mitered.
+    assert!(near(end(&doc, bottom, false)[0], -HALF));
+    assert_eq!(joint(&doc, bottom, "a")["condition"], "mitre");
+    // Undone: the member and both miters back.
+    assert!(doc.undo().is_some());
+    assert!(near(end(&doc, bottom, true)[0], 1000.0 + HALF));
+    let (a, b) = (cut(&doc, bottom, true), cut(&doc, right, false));
+    assert!((a.0 - FRAC_PI_4).abs() < 1e-9);
+    flush(a, b);
+}
+
+#[test]
+fn a_kept_miter_tilts_to_the_other_side_when_its_corner_flips() {
+    let mut doc = design();
+    let lines = [(1, 2), (2, 3)];
+    let s = sketch(&mut doc, &corner_points(FRAC_PI_2), &lines);
+    let answer = place(
+        &mut doc,
+        json!({"part": part("p30"), "lines": {"curves": [line(&s, 4), line(&s, 5)], "corners": "mitre"}}),
+    );
+    let m = members(&answer);
+    let (bottom, other) = (&m[0], &m[1]);
+    let original = (cut(&doc, bottom, true), cut(&doc, other, false));
+    flush(original.0, original.1);
+    let original_tilts = [
+        row(&doc, bottom)["ends"]["b"]["tilt"].clone(),
+        row(&doc, other)["ends"]["a"]["tilt"].clone(),
+    ];
+    let flipped = sketch_def(&corner_points(-FRAC_PI_2), &lines);
+    command(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": s, "def": flipped}),
+    )
+    .unwrap();
+    all_ok(&doc);
+    let opposite = (cut(&doc, bottom, true), cut(&doc, other, false));
+    flush(opposite.0, opposite.1);
+    assert!(original.0.2[1] > 0.0 && opposite.0.2[1] < 0.0);
+    assert_ne!(row(&doc, bottom)["ends"]["b"]["tilt"], original_tilts[0]);
+    assert_ne!(row(&doc, other)["ends"]["a"]["tilt"], original_tilts[1]);
+    assert_eq!(joint(&doc, bottom, "b")["warning"], Value::Null);
+    assert_eq!(joint(&doc, other, "a")["warning"], Value::Null);
+    doc.undo().unwrap();
+    let restored = (cut(&doc, bottom, true), cut(&doc, other, false));
+    flush(restored.0, restored.1);
+    assert_eq!(restored, original);
+
+    // A hand-set tilt stays the same even if its angle equals the frame's.
+    command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": bottom["component"],
+        "ends": {"b": {"angle": "45 deg", "tilt": original_tilts[0]}}}),
+    )
+    .unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": s, "def": flipped}),
+    )
+    .unwrap();
+    assert_eq!(row(&doc, bottom)["ends"]["b"]["tilt"], original_tilts[0]);
+    assert_ne!(row(&doc, other)["ends"]["a"]["tilt"], original_tilts[1]);
+}
+
+#[test]
+fn ordinary_feature_edit_updates_a_tee_and_delete_reports_its_stale_end() {
+    let mut doc = design();
+    let s = sketch(&mut doc, &TEE, &[(1, 2), (3, 4)]);
+    let answer = place(
+        &mut doc,
+        json!({"part": part("p20-rows"), "lines": {"curves": [line(&s, 5), line(&s, 6)]}}),
+    );
+    let m = members(&answer);
+    let (through, stem) = (&m[0], &m[1]);
+    let part = row(&doc, through)["part"].clone();
+    assert!(near(end(&doc, stem, true)[1], 10.0));
+    let mut def = query(&doc, json!({"query": "feature", "uid": part}))["def"].clone();
+    def["config"] = json!("20x40");
+    let depth = doc.undo_depth();
+    command(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": part, "def": def}),
+    )
+    .unwrap();
+    all_ok(&doc);
+    assert_eq!(doc.undo_depth(), depth + 1);
+    assert!(near(end(&doc, stem, true)[1], 20.0));
+    assert_eq!(joint(&doc, stem, "b")["warning"], Value::Null);
+    command(
+        &mut doc,
+        json!({"cmd": "delete_feature", "uid": part, "dependents": true}),
+    )
+    .unwrap();
+    assert_eq!(doc.undo_depth(), depth + 2);
+    let ends = query(
+        &doc,
+        json!({"query": "build_end_meets", "component": stem["component"]}),
+    );
+    let end_b = ends["ends"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["component"] == stem["component"] && e["end"] == "b")
+        .unwrap();
+    assert_eq!(end_b["joint"], Value::Null);
+    assert!(
+        end_b["why"]
+            .as_str()
+            .is_some_and(|why| why.contains("stale")),
+        "{end_b}"
+    );
+    doc.undo().unwrap();
+    assert_eq!(joint(&doc, stem, "b")["condition"], "near_side");
+    assert!(near(end(&doc, stem, true)[1], 20.0));
+    doc.undo().unwrap();
+    assert_ne!(row(&doc, through)["config"], "20x40");
+    assert!(near(end(&doc, stem, true)[1], 10.0));
+}
+
+#[test]
+fn an_ordinary_edit_leaves_a_joint_stale_when_its_new_section_would_break_the_stem() {
+    let mut doc = design();
+    let mut short_tee = TEE;
+    short_tee[2][1] = 19.0;
+    let s = sketch(&mut doc, &short_tee, &[(1, 2), (3, 4)]);
+    let answer = place(
+        &mut doc,
+        json!({"part": part("p20-rows"), "lines": {"curves": [line(&s, 5), line(&s, 6)]}}),
+    );
+    all_ok(&doc);
+    let m = members(&answer);
+    let (through, stem) = (&m[0], &m[1]);
+    assert_eq!(joint(&doc, stem, "b")["condition"], "near_side");
+    let part = row(&doc, through)["part"].clone();
+    let mut def = query(&doc, json!({"query": "feature", "uid": part}))["def"].clone();
+    def["config"] = json!("20x40");
+    let depth = doc.undo_depth();
+    let edited = command(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": part, "def": def}),
+    )
+    .unwrap();
+    assert!(
+        edited["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings.iter().any(|warning| warning
+                .as_str()
+                .is_some_and(|text| text.contains("could not be refreshed")))),
+        "{edited}"
+    );
+    assert_eq!(doc.undo_depth(), depth + 1);
+    assert_eq!(row(&doc, through)["config"], "20x40");
+    assert!(
+        joint(&doc, stem, "b")["warning"]
+            .as_str()
+            .is_some_and(|warning| warning.contains("stale"))
+    );
+    all_ok(&doc);
+    doc.undo().unwrap();
+    assert_ne!(row(&doc, through)["config"], "20x40");
+    assert_eq!(joint(&doc, stem, "b")["warning"], Value::Null);
 }

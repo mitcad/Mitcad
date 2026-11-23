@@ -343,6 +343,7 @@ pub struct Output<S> {
     pub placements: Vec<PlacementChange>,
     /// A derived part's mount frames (mitcad#375).
     pub mounts: Option<crate::features::derived_part::Mounts>,
+    pub end_tilts: [Option<crate::features::derived_part::Tilt>; 2],
     /// Reference parameters it measured (a bound length, mitcad#375).
     pub measured: Vec<(ParamId, f64)>,
     /// What it remembers of the pieces it split bodies into, when it used
@@ -2484,6 +2485,7 @@ fn evaluate<K: Kernel>(
             }),
             placements: produced.placements,
             mounts: (!produced.mounts.is_empty()).then(|| std::sync::Arc::new(produced.mounts)),
+            end_tilts: produced.end_tilts,
             measured: produced.measured,
             split_pieces,
             changed_pieces,
@@ -2527,6 +2529,7 @@ fn evaluate<K: Kernel>(
             datum: None,
             placements: Vec::new(),
             mounts: None,
+            end_tilts: [None; 2],
             measured: Vec::new(),
             split_pieces: None,
             changed_pieces: Vec::new(),

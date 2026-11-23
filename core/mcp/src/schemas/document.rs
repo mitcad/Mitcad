@@ -90,7 +90,17 @@ fn set_members(description: &str) -> Value {
 }
 
 /// The standard box styles (mitcad#1939).
-const BOX_STYLES: &[&str] = &["fefco_0201", "ecma_a20"];
+const BOX_STYLES: &[&str] = &[
+    "fefco_0201",
+    "ecma_a20",
+    "fefco_0203",
+    "fefco_0206",
+    "fefco_0421",
+    "fefco_0426",
+    "fefco_0427",
+    "fefco_0470",
+    "fefco_0471",
+];
 
 /// A length in mm, or null to take it away.
 fn number_or_null(description: &str) -> Value {
@@ -100,7 +110,7 @@ fn number_or_null(description: &str) -> Value {
 /// The options of add_standard_box (mitcad#1939).
 fn standard_box_fields() -> Value {
     json!({
-        "style": choice(BOX_STYLES, "fefco_0201 (a slotted box) or ecma_a20 (a reverse tuck end carton)"),
+        "style": choice(BOX_STYLES, "fefco_0201 (a slotted box), ecma_a20 (a reverse tuck end carton), fefco_0203 (a full overlap slotted box), fefco_0206 (a slotted box with meeting end flaps and full overlap side flaps), or a folder with a hinged lid: fefco_0421 (double end walls, a tuck), fefco_0427 (double end walls, lid ears and a front flap with ears), fefco_0426 (a double front wall, corner flaps, lid ears and a front flap), fefco_0470 (end walls on the back wall with floor flaps, a tuck) or fefco_0471 (as 0470 with a front flap with ears)"),
         "length": {"type": "number", "description": "Inside length, mm"},
         "width": {"type": "number", "description": "Inside width, mm"},
         "height": {"type": "number", "description": "Inside height, mm"},
@@ -109,7 +119,8 @@ fn standard_box_fields() -> Value {
         "deduction": {"type": "number", "description": "The measured deduction of a 90 degree crease, mm"},
         "radius": {"type": "number", "description": "The creases' inside radius, mm; an eighth of the thickness when left out"},
         "glue_flap": {"type": "number", "description": "The glue flap's width, mm; 30 when left out"},
-        "tuck": {"type": "number", "description": "A tuck end's tuck depth, mm"},
+        "tuck": {"type": "number", "description": "A tuck end's tuck depth, or a folder lid's tuck or front flap depth below the lid, mm"},
+        "tabs": {"type": "integer", "minimum": 0, "maximum": 12, "description": "A folder's locking tabs on each turned over wall; the style's when left out (2; 3 for fefco_0426; 1 for fefco_0470 and fefco_0471)"},
         "flute": text("The board's flute"),
         "folded": flag(true, "Folded; false: the flat blank with its creases"),
         "component": flag(false, "In a new component of its own, activated: a part to save into a library")
@@ -205,10 +216,27 @@ fn analysis_def() -> Value {
         "required": ["type", "bodies"],
         "additionalProperties": false
     });
+    // Point Cloud Deviation (mitcad#2240).
+    let deviation = json!({
+        "type": "object",
+        "description": "A point cloud's points by their distance from a body's faces, signed for a closed solid (negative inside the material); the statistics come from the point_cloud_deviation query",
+        "properties": {
+            "type": {"const": "point_cloud_deviation"},
+            "cloud": text("The point cloud, by its name (point_clouds query)"),
+            "body": text("The body (uid, F2.b0)"),
+            "faces": {"type": "array", "items": {"type": "string"}, "description": "Measured from these faces only (F2:top); every face when left out"},
+            "tolerance": positive("A point at most this far from the faces is within tolerance, mm (default 0.1)"),
+            "max_samples": {"type": "integer", "minimum": 1, "maximum": 2000000, "default": 100000, "description": "At most this many points are measured: every n-th of a larger cloud"},
+            "signed": {"type": ["boolean", "null"], "description": "true asks for the sign (refused for an open body), false measures without it; left out: signed for a closed solid"},
+            "limit": positive("The colour scale runs from minus this to this, mm; left out: the largest distance")
+        },
+        "required": ["type", "cloud", "body"],
+        "additionalProperties": false
+    });
     json!({
         "type": "object",
-        "description": "What the analysis is, by its type: section, print or draft",
-        "oneOf": [section, print, draft]
+        "description": "What the analysis is, by its type: section, print, draft or point_cloud_deviation",
+        "oneOf": [section, print, draft, deviation]
     })
 }
 
@@ -468,10 +496,10 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "rename_group", "name": "Base", "new_name": "Housing"}]
         }),
         "add_analysis" => json!({
-            "description": "Adds a section, print or draft analysis, shown (the others hidden); no geometry changes. Result: name.",
+            "description": "Adds a section, print, draft or point cloud deviation analysis, shown (the others hidden); no geometry changes. Result: name.",
             "properties": {
                 "def": analysis_def(),
-                "name": text("Its name; the next free Section<n>, Print<n> or Draft<n> when left out")
+                "name": text("Its name; the next free Section<n>, Print<n>, Draft<n> or Deviation<n> when left out")
             },
             "required": ["def"],
             "examples": [
@@ -578,7 +606,7 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "add_standard_box", "style": "fefco_0201", "length": 300, "width": 200, "height": 150, "board": "c_flute"}]
         }),
         "edit_standard_box" => json!({
-            "description": "Changes a standard box's options: its rules, blank and creases are made again and its Face and Folds follow, in one undo step; null takes an option away (mitcad#1939). Result: rules, outline, creases, face.",
+            "description": "Changes a standard box's options: its rules, blank and creases are made again and its Face and Folds follow, in one undo step; null takes an option away (mitcad#1939). Result: rules, outline, creases, face, folds.",
             "properties": {
                 "rules": feature_uid("The box's sheet rules"),
                 "style": choice(BOX_STYLES, "Its style; another style is refused"),
@@ -590,7 +618,8 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "deduction": number_or_null("The measured deduction of a 90 degree crease, mm"),
                 "radius": number_or_null("The creases' inside radius, mm"),
                 "glue_flap": number_or_null("The glue flap's width, mm"),
-                "tuck": number_or_null("A tuck end's tuck depth, mm"),
+                "tuck": number_or_null("A tuck end's tuck depth, or a folder lid's tuck or front flap depth, mm"),
+                "tabs": {"type": ["integer", "null"], "minimum": 0, "maximum": 12, "description": "A folder's locking tabs on each turned over wall: the blank and creases are made again with them and the Face and Folds follow (mitcad#2285)"},
                 "flute": {"type": ["string", "null"], "description": "The board's flute"}
             },
             "required": ["rules"],

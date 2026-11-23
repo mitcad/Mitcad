@@ -307,29 +307,29 @@ key Escape
 wait-log '^Command As-Built Joint cancelled'
 wait-idle
 
-# Assembly Constraint: a row's Geometry 1 on Pin, Geometry 2 on Bush.
+# Constraint Set: a row's Geometry 1 on Pin, Geometry 2 on Bush.
 mark
 command assemble.constraint
-expect-log '^Command Assembly Constraint started'
+expect-log '^Command Constraint Set started'
 wait-log '^Pick places:' 20
 wait-idle
 click-pick 'face F14[.]b0/F14:end[(][^ ]* in O6/O7 at '
-wait-log '^Assembly Constraint Geometry 1: 1 face' 30
+wait-log '^Constraint Set Geometry 1: 1 face' 30
 wait-log '^View ghosts: only O6/O7 [(]1 body[)]$' 30
 wait-idle 30
 click-pick 'face F16[.]b0/F16:end[(][^ ]* in O6/O8 at '
-wait-log '^Assembly Constraint component asked: The two picks are in Pin and in Bush[.] .*Make it in Carrier, which holds both[?] ' 30
-focus-dialog '^Component for the Assembly Constraint$|^The two picks are in '
+wait-log '^Constraint Set component asked: The two picks are in Pin and in Bush[.] .*Make it in Carrier, which holds both[?] ' 30
+focus-dialog '^Component for the Constraint Set$|^The two picks are in '
 button '^Make it in Carrier$'
-wait-log '^Assembly Constraint component answer: make it in Carrier$'
+wait-log '^Constraint Set component answer: make it in Carrier$'
 focus-main
-wait-log '^Panel Assembly Constraint holder: C[0-9]+$'
-wait-log '^Assembly Constraint Geometry 2: 1 face' 30
-wait-log '^Preview Assembly Constraint: ok' 60
+wait-log '^Panel Constraint Set holder: C[0-9]+$'
+wait-log '^Constraint Set Geometry 2: 1 face' 30
+wait-log '^Preview Constraint Set: ok' 60
 wait-idle 30
 mark
 key Escape
-wait-log '^Command Assembly Constraint cancelled'
+wait-log '^Command Constraint Set cancelled'
 wait-idle
 expect-undo-depth ${root} 0
 expect-never 'TestDriver: FAIL'

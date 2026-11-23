@@ -315,7 +315,18 @@ const Choices kFilletSizes = {{QStringLiteral("constant"), QStringLiteral("Const
                               {QStringLiteral("chord_length"), QStringLiteral("Chord Length")},
                               {QStringLiteral("variable"), QStringLiteral("Variable")},
                               {QStringLiteral("asymmetric"), QStringLiteral("Asymmetric")},
-                              {QStringLiteral("spline"), QStringLiteral("Spline")}};
+                              {QStringLiteral("spline"), QStringLiteral("Spline")},
+                              {QStringLiteral("full_round"), QStringLiteral("Full Round")}};
+
+// Full Round (mitcad#2279): the radius follows from the face it rounds
+// away, so a set of it has no Radius, and it takes that face's two edges,
+// not the face.
+bool fullRound(const CommandState& row) { return row.choice(QStringLiteral("size")) == QStringLiteral("full_round"); }
+
+QString fullRoundTakesEdges() {
+  return QObject::tr("Full Round takes the two edges of the face it rounds away, not the face: pick the face's "
+                     "two edges.");
+}
 
 // Whether any set of the panel has a radius of this type (mid radii are
 // the variable ones', control radii the spline ones').
@@ -359,8 +370,17 @@ CommandDef filletCommand(const CommandContext& context) {
                 {allEdgesInput(QObject::tr("Round every edge of a body, also the edges a later edit adds")),
                  selectionInput(QStringLiteral("edges"), QObject::tr("Edges"),
                                 SelectKind::Edge | SelectKind::Face, 1, 0)
-                     .withTooltip(QObject::tr("Round edges or a face's edges; click a selected item to remove it; ✕ clears the input"))
+                     .withTooltip(QObject::tr("Edges or a face's edges; Full Round: the face's two edges; click "
+                                              "an item to remove it"))
                      .withHoverChain(SelectKind::Edge, QStringLiteral("tangent_chain"))
+                     // Full Round takes edges only (mitcad#2279).
+                     .withPickRule(nullptr,
+                                   [](const SelectionItem& item, const CommandState& row) {
+                                     return !(fullRound(row) && item.kind == SelectKind::Face);
+                                   })
+                     .withRefusedHint([](const SelectionItem& item, const CommandState&) {
+                       return item.kind == SelectKind::Face ? fullRoundTakesEdges() : QString();
+                     })
                      .withVisible(pickedEdges),
                  allEdgesBody(),
                  choiceInput(QStringLiteral("size"), QObject::tr("Radius Type"), kFilletSizes,
@@ -371,6 +391,8 @@ CommandDef filletCommand(const CommandContext& context) {
                      .withTooltip(QObject::tr("The radius, or the first size of the other radius types"))
                      // A new fillet starts with the radius of the last one (mitcad#1028).
                      .withRemembered()
+                     // Full Round works its radius out (mitcad#2279).
+                     .withVisible([](const CommandState& row) { return !fullRound(row); })
                      .withManipulator([](const CommandState& row,
                                          const CommandContext& model) -> std::optional<Manipulator> {
                        // A handle at the middle of the rounding of the set's
@@ -425,13 +447,16 @@ CommandDef filletCommand(const CommandContext& context) {
                  choiceInput(QStringLiteral("continuity"), QObject::tr("Continuity"),
                              {{QStringLiteral("tangent"), QStringLiteral("Tangent (G1)")},
                               {QStringLiteral("curvature"), QStringLiteral("Curvature (G2)")}},
-                             QStringLiteral("tangent")),
+                             QStringLiteral("tangent"))
+                     // A full round is a circle's arc (G1).
+                     .withVisible([](const CommandState& row) { return !fullRound(row); }),
                  valueInput(QStringLiteral("weight"), QObject::tr("Tangency Weight"), ValueKind::Unitless,
                             QStringLiteral("1"))
                      .withTooltip(QObject::tr("0.1 to 2: how far the curvature continuous rounding "
                                               "keeps to the faces before it turns"))
                      .withVisible([](const CommandState& row) {
-                       return row.choice(QStringLiteral("continuity")) == QStringLiteral("curvature");
+                       return !fullRound(row) &&
+                              row.choice(QStringLiteral("continuity")) == QStringLiteral("curvature");
                      })},
                 QObject::tr("Add Set"), QObject::tr("Set %1")),
       listInput(kMid, QObject::tr("Mid Radii"),
@@ -523,7 +548,18 @@ CommandDef filletCommand(const CommandContext& context) {
           !row.items(QStringLiteral("start_vertex")).isEmpty()) {
         return Built::failure(QObject::tr("All Edges has no start vertex: clear it."), rowKey(i, "start_vertex"));
       }
-      if (size == QStringLiteral("chord_length")) {
+      if (size == QStringLiteral("full_round")) {
+        // No values: the radius follows from the face (mitcad#2279).
+        if (allEdges(row) || !names(row.items(QStringLiteral("edges")), SelectKind::Face).isEmpty()) {
+          return Built::failure(fullRoundTakesEdges(), rowKey(i, "edges"));
+        }
+        // One edge picked: the panel waits for the face's other edge
+        // instead of failing a preview of one (asks, not a failure).
+        if (names(row.items(QStringLiteral("edges")), SelectKind::Edge).size() < 2) {
+          return Built::asking(QObject::tr("Full Round: pick the face's edge on its other side too."),
+                               rowKey(i, "edges"));
+        }
+      } else if (size == QStringLiteral("chord_length")) {
         sizeDef.insert(QStringLiteral("length"), row.expression(QStringLiteral("radius")));
       } else if (size == QStringLiteral("variable")) {
         sizeDef.insert(QStringLiteral("start"), row.expression(QStringLiteral("radius")));
@@ -588,7 +624,7 @@ CommandDef filletCommand(const CommandContext& context) {
       if (!chain) {
         set.insert(QStringLiteral("tangent_chain"), false);
       }
-      if (row.choice(QStringLiteral("continuity")) == QStringLiteral("curvature")) {
+      if (!fullRound(row) && row.choice(QStringLiteral("continuity")) == QStringLiteral("curvature")) {
         set.insert(QStringLiteral("continuity"), QStringLiteral("curvature"));
         set.insert(QStringLiteral("tangency_weight"), row.expression(QStringLiteral("weight")));
       }
@@ -686,7 +722,13 @@ CommandDef filletCommand(const CommandContext& context) {
       return QStringLiteral("Added fillet on all edges");
     }
     const int count = state.rows(kSets);
-    return QStringLiteral("Added fillet on %1 edge(s)%2")
+    // A full round (mitcad#2279) is named so where every set is one.
+    bool rounds = count > 0;
+    for (int i = 0; i < count; ++i) {
+      rounds = rounds && fullRound(state.row(kSets, i));
+    }
+    return QStringLiteral("Added %1 on %2 edge(s)%3")
+        .arg(rounds ? QStringLiteral("full round fillet") : QStringLiteral("fillet"))
         .arg(context.edgeCount(allItems(state)))
         .arg(count > 1 ? QStringLiteral(" in %1 sets").arg(count) : QString());
   };

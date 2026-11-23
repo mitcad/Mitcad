@@ -632,9 +632,14 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
         threads: &[ThreadOf],
         warnings: &mut Vec<String>,
     ) -> Vec<HoleInput> {
+        // A Flat Pattern's blank has its own holes, without the folded
+        // body's threads (mitcad#2280).
+        let no_threads: [ThreadOf; 0] = [];
+        let threads = if shown.flat { &no_threads[..] } else { threads };
         let mut fp = mitcad_model::internal::fingerprint::Fingerprint::new("drawing-holes-v1");
         fp.str(&shown.body.to_string())
-            .u128(self.body_version(shown.body).unwrap_or(0));
+            .u128(self.shown_version(shown))
+            .bool(shown.flat);
         for row in &shown.transform.linear {
             for v in row {
                 fp.f64(*v);

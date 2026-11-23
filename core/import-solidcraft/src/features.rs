@@ -209,19 +209,10 @@ fn map_kind<K: Kernel>(
                     .to_owned(),
             ));
         }
-        // Kinds of formats 52 to 57 (mitcad#1994).
-        "frame_end_cap" => {
-            return Err(NotMapped::Unmapped(
-                "MitCad has no frame member end cap (a plate closing a frame member's end)"
-                    .to_owned(),
-            ));
-        }
-        "cell_grid" => {
-            return Err(NotMapped::Unmapped(
-                "MitCad has no cell grid feature (a sketch's profiles filled with cells cut from bodies)"
-                    .to_owned(),
-            ));
-        }
+        // Frame members' end caps (mitcad#2243).
+        "frame_end_cap" => im.frame_end_cap(f, component)?,
+        // Cell grids (mitcad#2238).
+        "cell_grid" => cell_grid(im, f, component)?,
         other if im.report.newer.is_some() => {
             return Err(NotMapped::Unmapped(format!(
                 "saved by a newer SolidCraft: a `{other}` feature, which this import does not know"
@@ -2438,6 +2429,125 @@ fn rib<K: Kernel>(im: &mut Importer<'_, '_, K>, f: &Feature, component: Componen
     }
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(notes))
+}
+
+/// A cell grid (formats 56 and 57; mitcad#2238): MitCad's `cell_grid` with
+/// the file's profiles, shape, sides, rows of dots, size, web, angle,
+/// anchor (fixed where its expressions put it now), edge cells, margin,
+/// depth (a symmetric one, the file's total, half to each side) or through
+/// all, direction and targets. What differs is a note: snapped edge cells
+/// are cut along the cells' own lines where the file also moves straight
+/// edges onto the lattice's lines; one edge mode for the field and its
+/// keep-outs; no snap inset; a margin only with whole cells, as the file
+/// has it.
+fn cell_grid<K: Kernel>(
+    im: &mut Importer<'_, '_, K>,
+    f: &Feature,
+    component: ComponentUid,
+) -> MapResult {
+    let g: k::CellGrid = f.typed()?;
+    if let Some(mode) = g.mode.as_deref().filter(|m| *m != "cut") {
+        return Err(NotMapped::Unmapped(format!(
+            "its cells are not cut (mode `{mode}`), and MitCad's cell grid cuts"
+        )));
+    }
+    let mut notes = Vec::new();
+    let profiles = im.profiles(g.sketch, &g.profiles)?;
+    let mut def = json!({"type": "cell_grid", "profiles": profiles,
+        "size": im.slot(f, "/size")?, "web": im.slot(f, "/web")?});
+    let shape = g.shape.as_deref().unwrap_or("hexagon");
+    if !matches!(
+        shape,
+        "hexagon" | "square" | "triangle" | "circle" | "polygon"
+    ) {
+        return Err(NotMapped::Failed(format!("cell shape `{shape}`")));
+    }
+    def["shape"] = json!(shape);
+    if shape == "polygon" && g.sides.is_some() {
+        def["sides"] = json!(im.slot(f, "/sides")?);
+    }
+    match g.dot_grid.as_deref() {
+        None | Some("hexagonal") => {}
+        Some("square") => def["rows"] = json!("square"),
+        Some(other) => return Err(NotMapped::Failed(format!("dot grid `{other}`"))),
+    }
+    if g.angle.is_some() {
+        def["angle"] = json!(im.slot(f, "/angle")?);
+    }
+    let clip = g.clip.as_deref().unwrap_or("snap");
+    if !matches!(clip, "whole" | "snap" | "free") {
+        return Err(NotMapped::Failed(format!("edge cells `{clip}`")));
+    }
+    def["clip"] = json!(clip);
+    if clip == "snap" {
+        notes.push(
+            "snapped edge cells are cut along the cells' own lines; the field's straight edges \
+             are not moved onto the lattice's lines"
+                .to_owned(),
+        );
+    }
+    if let Some(own) = g.keepout_clip.as_deref().filter(|own| *own != clip) {
+        notes.push(format!(
+            "the keep-outs' edge cells are {clip} as the field's, not {own}"
+        ));
+    }
+    let nonzero = |e: &Option<k::Expr>| {
+        e.as_ref().is_some_and(|e| {
+            mitcad_solidcraft::expr::literal(e.as_str(), 1.0).is_none_or(|v| v != 0.0)
+        })
+    };
+    if nonzero(&g.snap_inset) {
+        notes.push(
+            "its snap inset is left out: MitCad does not move edges onto the lattice".to_owned(),
+        );
+    }
+    if g.margin.is_some() {
+        if clip == "whole" {
+            def["margin"] = json!(im.slot(f, "/margin")?);
+        } else if nonzero(&g.margin) {
+            notes.push(format!(
+                "its margin is left out: the file keeps one only with whole cells, not {clip}"
+            ));
+        }
+    }
+    if g.through_all {
+        def["through_all"] = json!(true);
+    } else if g.depth.is_some() {
+        def["depth"] = json!(if g.direction == Direction::Symmetric {
+            im.slot_of(f, "/depth", |e| format!("({e}) / 2"))?
+        } else {
+            im.slot(f, "/depth")?
+        });
+    } else {
+        return Err(NotMapped::Failed("a cell grid with no depth".to_owned()));
+    }
+    def["direction"] = json!(match g.direction {
+        Direction::Positive => "positive",
+        Direction::Negative => "negative",
+        Direction::Symmetric => "symmetric",
+    });
+    if let Some(anchor) = &g.anchor {
+        let mut point = [0.0; 3];
+        for (value, expr) in point.iter_mut().zip(anchor) {
+            *value = im.eval(expr.as_str(), Kind::Length)?;
+        }
+        if anchor
+            .iter()
+            .any(|e| mitcad_solidcraft::expr::literal(e.as_str(), 1.0).is_none())
+        {
+            notes.push("its anchor is fixed where its expressions put it now".to_owned());
+        }
+        def["anchor"] = json!({"type": "fixed", "point": point});
+    }
+    if !g.targets.is_empty() {
+        def["targets"] = json!(im.body_ids(&g.targets)?);
+    }
+    im.add(&def, Some(&f.name), component)?;
+    Ok(if notes.is_empty() {
+        Mapped::parametric()
+    } else {
+        Mapped::partial(notes)
+    })
 }
 
 /// An emboss (mitcad#458): Mitcad's emboss on the cylindrical wall the

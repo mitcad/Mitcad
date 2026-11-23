@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -10,30 +12,51 @@
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepFilletAPI_LocalOperation.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepGProp.hxx>
 #include <BRepLProp_CLProps.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTools_WireExplorer.hxx>
+#include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
 #include <ChFi3d.hxx>
+#include <ElCLib.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GC_MakeArcOfCircle.hxx>
+#include <GProp_GProps.hxx>
+#include <Geom_Curve.hxx>
 #include <Geom_TrimmedCurve.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_List.hxx>
 #include <NCollection_Map.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
+#include <gce_MakeCirc.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
@@ -44,7 +67,33 @@
 #include "util.hpp"
 
 namespace mitcad::geometry::detail {
+
+void runout_trace(const std::string& what) {
+  static const bool on = [] {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, "MITCAD_DEBUG_RUNOUT") != 0 || value == nullptr) {
+      return false;
+    }
+    std::free(value);
+    return true;
+#else
+    return std::getenv("MITCAD_DEBUG_RUNOUT") != nullptr;
+#endif
+  }();
+  if (on) {
+    std::fprintf(stderr, "runout: %s\n", what.c_str());
+  }
+}
+
 namespace {
+
+// Null, said on the trace.
+ShapePtr failed(const std::string& why) {
+  runout_trace(why);
+  return nullptr;
+}
 
 constexpr double kPi = 3.14159265358979323846;
 // How far below the full section the run-out's taper starts at the shared
@@ -65,6 +114,12 @@ constexpr int kSections = 9;
 // than that folds over itself on the inside of the bend).
 constexpr double kTubeMargin = 1.3;
 constexpr double kTubeLeast = 1.05;
+// A sector round an arc too tight for a tube reaches this much more than the
+// dressup's reach past the arc and on both sides of its plane: round such an
+// arc (as tight as the dressup is deep) the dressup's own contacts may lie
+// on curved faces past the plane faces' reach, and the sector cannot fold,
+// so it is made wide.
+constexpr double kSectorMargin = 2.0;
 
 // The dressup's cross-section at a point of an edge, in the plane normal
 // to the edge there.
@@ -349,6 +404,12 @@ struct Stretch {
   std::vector<double> lengths;   // of each section from the start
   double length = 0.0;
   double curvature = 0.0; // the largest
+  int prev_edge = -1;     // the chain's edge before it (the body's), -1 for none
+  int next_edge = -1;     // ... after it
+  bool circle = false;    // the edge is an arc of a circle
+  gp_Circ arc;            // that circle
+  double u0 = 0.0;        // the edge's parameters on it (radians)
+  double u1 = 0.0;
 };
 
 // The chain's measured face (0 or 1 of each edge's two faces) along the
@@ -409,6 +470,61 @@ std::vector<int> measured_sides(const Shape& body, const PartialChain& chain) {
   return side;
 }
 
+// A curve that lies on a circle, and its parameters on that circle
+// (radians, u0 < u1, the circle running the curve's way).
+struct CircleFit {
+  gp_Circ circle;
+  double u0 = 0.0;
+  double u1 = 0.0;
+};
+
+// The circle a curve the kernel gives in another form lies on (a B-spline
+// where a rounding ends on a plane, as the arc of a corner rounded before
+// along the face it ends on; mitcad#2193): the circle through its ends and
+// its middle, where seven more of its points lie on it within 1e-4 of its
+// radius (1e-6 mm at least). None for other curves.
+std::optional<CircleFit> circle_of(const BRepAdaptor_Curve& curve) {
+  const double first = curve.FirstParameter();
+  const double last = curve.LastParameter();
+  const gp_Pnt a = curve.Value(first);
+  const gp_Pnt m = curve.Value(0.5 * (first + last));
+  const gp_Pnt b = curve.Value(last);
+  const gce_MakeCirc made(a, m, b);
+  if (!made.IsDone()) {
+    return std::nullopt;
+  }
+  gp_Circ circle = made.Value();
+  const double tolerance = std::max(1.0e-6, 1.0e-4 * circle.Radius());
+  const gp_Vec axis(circle.Axis().Direction());
+  for (int i = 1; i < 8; ++i) {
+    const gp_Pnt p = curve.Value(first + (last - first) * i / 8.0);
+    const gp_Vec from_centre(circle.Location(), p);
+    if (std::abs(from_centre.Magnitude() - circle.Radius()) > tolerance ||
+        std::abs(from_centre.Dot(axis)) > tolerance) {
+      return std::nullopt;
+    }
+  }
+  // The parameters of the ends, the middle between them; else the circle
+  // runs the other way.
+  for (int turn = 0; turn < 2; ++turn) {
+    const double u0 = ElCLib::Parameter(circle, a);
+    double um = ElCLib::Parameter(circle, m);
+    double u1 = ElCLib::Parameter(circle, b);
+    while (um < u0) {
+      um += 2.0 * kPi;
+    }
+    while (u1 < u0) {
+      u1 += 2.0 * kPi;
+    }
+    if (um < u1) {
+      return CircleFit{circle, u0, u1};
+    }
+    circle = gp_Circ(gp_Ax2(circle.Location(), circle.Axis().Direction().Reversed(), circle.XAxis().Direction()),
+                     circle.Radius());
+  }
+  return std::nullopt;
+}
+
 // The unselected edges of the chain with their sections; nullopt where a
 // section cannot be made.
 std::optional<std::vector<Stretch>> stretches_of(const Shape& body, const PartialChain& chain) {
@@ -420,14 +536,17 @@ std::optional<std::vector<Stretch>> stretches_of(const Shape& body, const Partia
       continue;
     }
     const TopoDS_Edge& edge = body.edge(chain.edges[i]);
+    const std::string& named = body.edge_name(chain.edges[i]);
     const auto faces = two_faces(body, chain.edges[i]);
     if (!faces) {
+      runout_trace("unselected " + named + ": not between two faces");
       return std::nullopt;
     }
     const TopoDS_Face& a = body.face(faces->first);
     const TopoDS_Face& b = body.face(faces->second);
     const std::optional<bool> is_convex = convex(edge, a, b);
     if (!is_convex) {
+      runout_trace("unselected " + named + ": neither convex nor concave");
       return std::nullopt;
     }
     Stretch stretch;
@@ -454,11 +573,29 @@ std::optional<std::vector<Stretch>> stretches_of(const Shape& body, const Partia
     stretch.to_selected = has_next && n > 1 && chain.selected[next] != 0;
     stretch.open_start = !has_prev;
     stretch.open_end = !has_next;
+    stretch.prev_edge = has_prev && n > 1 ? chain.edges[prev] : -1;
+    stretch.next_edge = has_next && n > 1 ? chain.edges[next] : -1;
     const BRepAdaptor_Curve curve(edge);
     const double u0 = curve.FirstParameter();
     const double u1 = curve.LastParameter();
+    if (curve.GetType() == GeomAbs_Circle) {
+      stretch.circle = true;
+      stretch.arc = curve.Circle();
+      stretch.u0 = u0;
+      stretch.u1 = u1;
+    } else if (curve.GetType() != GeomAbs_Line) {
+      if (const std::optional<CircleFit> fit = circle_of(curve)) {
+        stretch.circle = true;
+        stretch.arc = fit->circle;
+        stretch.u0 = fit->u0;
+        stretch.u1 = fit->u1;
+      }
+    }
+    runout_trace("unselected " + named + ": curve type " + std::to_string(static_cast<int>(curve.GetType())) +
+                 (stretch.circle ? ", an arc of radius " + std::to_string(stretch.arc.Radius()) : std::string()));
     stretch.length = GCPnts_AbscissaPoint::Length(curve, u0, u1);
     if (!(stretch.length > 1.0e-7)) {
+      runout_trace("unselected " + named + ": too short");
       return std::nullopt;
     }
     std::vector<double> rel = section_parameters(edge);
@@ -468,6 +605,7 @@ std::optional<std::vector<Stretch>> stretches_of(const Shape& body, const Partia
     for (const double r : rel) {
       const std::optional<Section> s = section_at(edge, a, b, *is_convex, chain.size, measured[i], r, forward);
       if (!s) {
+        runout_trace("unselected " + named + ": no section at " + std::to_string(r));
         return std::nullopt;
       }
       stretch.sections.push_back(*s);
@@ -506,35 +644,178 @@ std::string vertex_or_edge(const Shape& body, const TopoDS_Vertex& vertex, int e
   return body.edge_name(edge);
 }
 
-// The region the result keeps the body's material in, for one convexity's
-// chains: the tubes round their unselected edges, less the run-outs'
-// tapers. Null when it cannot be built.
-ShapePtr kept_region(const std::string& feature, const Shape& body, const std::vector<const PartialChain*>& chains,
-                     bool run_out, const std::string& tool) {
-  ShapePtr region;
+// The point of a circle at parameter u (radians).
+gp_Pnt on_circle(const gp_Circ& circle, double u) {
+  return circle.Location().Translated(gp_Vec(circle.XAxis().Direction()) * (circle.Radius() * std::cos(u)) +
+                                      gp_Vec(circle.YAxis().Direction()) * (circle.Radius() * std::sin(u)));
+}
+
+// The region round an arc too tight for a tube (mitcad#2193): the sector of
+// a cylinder about the arc's axis between the planes normal to the arc at
+// its two vertices (the planes through the axis), out to `margin` past the
+// arc and as far on both sides of its plane. It reaches the axis, so that
+// it cannot fold over itself on the inside of the bend as a tube would.
+// Its faces in those planes are named `start` and `end` (at the stretch's
+// start and end vertex), the others `other`. Null when it cannot be made.
+ShapePtr sector(const Stretch& stretch, double margin, const std::string& start, const std::string& end,
+                const std::string& other) {
+  const gp_Circ& arc = stretch.arc;
+  const double angle = stretch.u1 - stretch.u0;
+  if (!stretch.circle || !(angle > 1.0e-6 && angle < 2.0 * kPi - 1.0e-6) || !(margin > 0.0)) {
+    return failed("sector: an arc of " + std::to_string(angle) + " rad");
+  }
+  const gp_Vec axis(arc.Axis().Direction());
+  const gp_Pnt at_u0 = on_circle(arc, stretch.u0);
+  const gp_Pnt at_u1 = on_circle(arc, stretch.u1);
+  const gp_Vec from(arc.Location(), at_u0);
+  const gp_Vec to(arc.Location(), at_u1);
+  BRepPrimAPI_MakeCylinder maker(gp_Ax2(arc.Location().Translated(-axis * margin), gp_Dir(axis), gp_Dir(from)),
+                                 arc.Radius() + margin, 2.0 * margin, angle);
+  build(maker);
+  if (!maker.IsDone()) {
+    return failed("sector: the cylinder's sector fails");
+  }
+  // The stretch's start vertex lies at u0 or at u1.
+  const gp_Pnt first = BRep_Tool::Pnt(stretch.start);
+  const bool start_at_u0 = first.Distance(at_u0) <= first.Distance(at_u1);
+  FaceNamer namer(maker.Shape());
+  for (TopExp_Explorer it(maker.Shape(), TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    std::string name = other;
+    const BRepAdaptor_Surface surface(face, false);
+    if (surface.GetType() == GeomAbs_Plane &&
+        std::abs(gp_Vec(surface.Plane().Axis().Direction()).Dot(axis)) < 1.0e-6) {
+      // A face through the axis: the one on the side of u0 or of u1.
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(face, props);
+      gp_Vec radial(arc.Location(), props.CentreOfMass());
+      radial -= axis * radial.Dot(axis);
+      const bool at_first = radial.Dot(from) >= radial.Dot(to);
+      name = at_first == start_at_u0 ? start : end;
+    }
+    if (namer.contains(face)) {
+      namer.add(face, name);
+    }
+  }
+  namer.finish();
+  return namer.shape();
+}
+
+// A vertex where a selected edge meets an unselected one, for the face end:
+// the name of the kept region's face there, in the plane normal to the edge.
+struct Transition {
+  int selected = -1; // the body's selected edge
+  TopoDS_Vertex vertex;
+  std::string cap;
+  std::size_t run = 0; // the kept region it bounds (kept_region's list)
+};
+
+// No regions, said on the trace.
+std::vector<ShapePtr> none(const std::string& why) {
+  runout_trace(why);
+  return {};
+}
+
+// The space on a selected edge's side of the plane normal to the chain at
+// the vertex between it and an unselected edge (point `p`, `toward` the
+// selected edge), near that vertex: a box `size` deep and twice `size`
+// across, its face in that plane named `name`, the others `other`. Null
+// when it cannot be made.
+ShapePtr selected_side(const gp_Pnt& p, const gp_Dir& toward, double size, const std::string& name,
+                       const std::string& other) {
+  const gp_Ax2 frame(p, toward);
+  const gp_Pnt corner =
+      p.Translated(gp_Vec(frame.XDirection()) * -size + gp_Vec(frame.YDirection()) * -size);
+  BRepPrimAPI_MakeBox maker(gp_Ax2(corner, toward, frame.XDirection()), 2.0 * size, 2.0 * size, size);
+  build(maker);
+  if (!maker.IsDone()) {
+    return nullptr;
+  }
+  const TopoDS_Face& in_plane = maker.BottomFace();
+  FaceNamer namer(maker.Shape());
+  for (TopExp_Explorer it(maker.Shape(), TopAbs_FACE); it.More(); it.Next()) {
+    if (namer.contains(it.Current())) {
+      namer.add(it.Current(), it.Current().IsSame(in_plane) ? name : other);
+    }
+  }
+  namer.finish();
+  return namer.shape();
+}
+
+// The regions the result keeps the body's material in, for one
+// convexity's chains: the tubes round their unselected edges (sectors
+// round arcs too tight for one), less the run-outs' tapers; one region for
+// each run of unselected edges that follow each other along a chain (an
+// open chain whose selected edge runs on at both its ends into rounded
+// corners has a run beyond each end, apart from each other; mitcad#2193).
+// With the face end, their faces at the selected edges are named after
+// `transitions`, which it lists. No region reaches back across the plane
+// normal to the chain at a selected edge's vertex near that vertex (the
+// tube round the edge after a corner as tight as the dressup is deep would,
+// and put back the body the selected edge's own dressup takes away beside
+// it). Empty when they cannot be built.
+std::vector<ShapePtr> kept_region(const std::string& feature, const Shape& body,
+                                  const std::vector<const PartialChain*>& chains, ChainEnd ending,
+                                  const std::string& tool, std::vector<Transition>& transitions) {
+  const bool run_out = ending == ChainEnd::RunOut;
+  std::vector<ShapePtr> regions; // the runs done
+  ShapePtr region;               // the run being built
+  // Each selected edge's side of a vertex where it meets a run, cleared of
+  // that run's region afterwards.
+  struct Side {
+    gp_Pnt p;
+    gp_Dir toward;
+    double size = 0.0;
+    std::string name;
+    std::size_t run = 0;
+  };
+  std::vector<Side> sides;
   for (const PartialChain* chain : chains) {
+    if (region) {
+      regions.push_back(region);
+      region = nullptr;
+    }
     const std::optional<std::vector<Stretch>> stretches = stretches_of(body, *chain);
     if (!stretches || stretches->empty()) {
-      return nullptr;
+      return none("kept region: no sections of the unselected edges");
     }
     // One tube radius for the chain: past every section's reach, inside
-    // every edge's bend.
+    // every edge's bend but those of the arcs too tight for a tube.
     double reach = 0.0;
-    double curvature = 0.0;
     double depth = 0.0;
     for (const Stretch& stretch : *stretches) {
-      curvature = std::max(curvature, stretch.curvature);
       for (const Section& s : stretch.sections) {
         reach = std::max(reach, s.reach);
         depth = std::max(depth, s.depth);
+      }
+    }
+    if (!(reach > 0.0)) {
+      return none("kept region: no reach");
+    }
+    // An arc whose radius leaves no tube radius between kTubeLeast times
+    // the reach and the middle of the reach and the arc's radius (the arc
+    // as tight as the dressup is deep, a rounding running into a corner
+    // rounded with its own radius, mitcad#2193) takes a sector instead;
+    // not under a run-out, whose taper folds over itself there the same
+    // way.
+    const auto tight = [&](const Stretch& stretch) {
+      return stretch.circle && 0.5 * (reach + stretch.arc.Radius()) < kTubeLeast * reach;
+    };
+    double curvature = 0.0;
+    for (const Stretch& stretch : *stretches) {
+      if (!tight(stretch)) {
+        curvature = std::max(curvature, stretch.curvature);
+      } else if (run_out) {
+        return none("kept region: no run-out over the tight arc " + body.edge_name(stretch.edge));
       }
     }
     double radius = kTubeMargin * reach;
     if (curvature > 0.0) {
       radius = std::min(radius, 0.5 * (reach + 1.0 / curvature));
     }
-    if (!(reach > 0.0) || radius < kTubeLeast * reach) {
-      return nullptr;
+    if (radius < kTubeLeast * reach) {
+      return none("kept region: no tube radius (reach " + std::to_string(reach) + ", curvature " +
+                    std::to_string(curvature) + ")");
     }
     // Past the ends of a taper: straight on by a quarter of the tube's
     // radius.
@@ -546,25 +827,72 @@ ShapePtr kept_region(const std::string& feature, const Shape& body, const std::v
     // there and leave a face of its own (up to 63 degrees of slant).
     const double open_beyond = 2.0 * radius;
     const double wide = 2.0 * (radius + depth);
-    const auto add = [&](const ShapePtr& part, BooleanOp op) {
+    // A tube or sector joined to the run being built.
+    const auto add = [&](const ShapePtr& part) {
       if (!part) {
         return false;
       }
       if (!region) {
-        if (op == BooleanOp::Cut) {
-          return false;
-        }
         region = part;
         return true;
       }
-      const BooleanResult made = boolean(op, {region.get()}, *part);
-      if (op == BooleanOp::Cut && !made.touched.empty() && !made.touched.front()) {
-        return true; // (the taper misses the tube: nothing to take out)
-      }
-      region = single(made);
+      region = single(boolean(BooleanOp::Join, {region.get()}, *part));
       return region != nullptr;
     };
+    // Each stretch's run: a new one after a selected edge.
+    std::vector<std::size_t> run_of;
     for (const Stretch& stretch : *stretches) {
+      if (region && stretch.from_selected) {
+        regions.push_back(region);
+        region = nullptr;
+      }
+      run_of.push_back(regions.size());
+      // The ends at selected edges: the flat end's face, or the face end's
+      // cap (one name each); under a run-out the tool's.
+      const auto end_name = [&](bool at_selected, const TopoDS_Vertex& vertex, int selected) {
+        if (!at_selected || run_out) {
+          return tool;
+        }
+        if (ending == ChainEnd::Flat) {
+          return face_name(feature, "runout_end", vertex_or_edge(body, vertex, stretch.edge));
+        }
+        Transition transition;
+        transition.selected = selected;
+        transition.vertex = vertex;
+        transition.cap = face_name(feature, "runout_cap", std::to_string(transitions.size()));
+        transition.run = regions.size();
+        transitions.push_back(transition);
+        return transition.cap;
+      };
+      const std::string at_start = end_name(stretch.from_selected, stretch.start, stretch.prev_edge);
+      const std::string at_end = end_name(stretch.to_selected, stretch.end, stretch.next_edge);
+      // (Past the farthest any tube or sector of the run reaches.)
+      const double side_size = (kSectorMargin + 1.0) * reach;
+      if (stretch.from_selected) {
+        const Section& s = stretch.sections.front();
+        sides.push_back({s.p, gp_Dir(-gp_Vec(s.t)), side_size, at_start, regions.size()});
+      }
+      if (stretch.to_selected) {
+        const Section& s = stretch.sections.back();
+        sides.push_back({s.p, s.t, side_size, at_end, regions.size()});
+      }
+      if (tight(stretch)) {
+        if (!add(sector(stretch, kSectorMargin * reach, at_start, at_end, tool))) {
+          return none("kept region: the sector round " + body.edge_name(stretch.edge) + " does not join");
+        }
+        // At an open chain's end, a straight tube on past it.
+        if (stretch.open_start && !add(lofted({tube_wire(shifted(stretch.sections.front(), -open_beyond), radius),
+                                               tube_wire(stretch.sections.front(), radius)},
+                                              tool, tool, tool, tool))) {
+          return none("kept region: the open start past " + body.edge_name(stretch.edge) + " does not join");
+        }
+        if (stretch.open_end && !add(lofted({tube_wire(stretch.sections.back(), radius),
+                                             tube_wire(shifted(stretch.sections.back(), open_beyond), radius)},
+                                            tool, tool, tool, tool))) {
+          return none("kept region: the open end past " + body.edge_name(stretch.edge) + " does not join");
+        }
+        continue;
+      }
       std::vector<TopoDS_Wire> wires;
       if (stretch.open_start) {
         wires.push_back(tube_wire(shifted(stretch.sections.front(), -open_beyond), radius));
@@ -575,21 +903,42 @@ ShapePtr kept_region(const std::string& feature, const Shape& body, const std::v
       if (stretch.open_end) {
         wires.push_back(tube_wire(shifted(stretch.sections.back(), open_beyond), radius));
       }
-      // The ends at selected edges: the flat end without a run-out.
-      const auto end_name = [&](bool at_selected, const TopoDS_Vertex& vertex) {
-        return at_selected && !run_out ? face_name(feature, "runout_end", vertex_or_edge(body, vertex, stretch.edge))
-                                       : tool;
-      };
-      const ShapePtr tube = lofted(wires, tool, tool, end_name(stretch.from_selected, stretch.start),
-                                   end_name(stretch.to_selected, stretch.end));
-      if (!add(tube, BooleanOp::Join)) {
-        return nullptr;
+      const ShapePtr tube = lofted(wires, tool, tool, at_start, at_end);
+      if (!add(tube)) {
+        return none(std::string("kept region: the tube round ") + body.edge_name(stretch.edge) +
+                      (tube ? " does not join" : " does not loft"));
       }
     }
+    if (region) {
+      regions.push_back(region);
+      region = nullptr;
+    }
+    // The selected edges' sides of their vertices cleared of the runs.
+    for (const Side& side : sides) {
+      if (side.run >= regions.size()) {
+        continue;
+      }
+      const ShapePtr box = selected_side(side.p, side.toward, side.size, side.name, tool);
+      if (!box) {
+        return none("kept region: no box on the selected edge's side of a vertex");
+      }
+      const BooleanResult cleared = boolean(BooleanOp::Cut, {regions[side.run].get()}, *box);
+      if (!cleared.touched.empty() && !cleared.touched.front()) {
+        continue;
+      }
+      const ShapePtr kept = single(cleared);
+      if (!kept) {
+        return none("kept region: clearing the selected edge's side of a vertex leaves more than one solid");
+      }
+      regions[side.run] = kept;
+    }
+    sides.clear();
     if (!run_out) {
       continue;
     }
-    for (const Stretch& stretch : *stretches) {
+    for (std::size_t k = 0; k < stretches->size(); ++k) {
+      const Stretch& stretch = (*stretches)[k];
+      ShapePtr& run = regions[run_of[k]];
       for (const bool from_start : {true, false}) {
         if (from_start ? !stretch.from_selected : !stretch.to_selected) {
           continue;
@@ -598,7 +947,7 @@ ShapePtr kept_region(const std::string& feature, const Shape& body, const std::v
         // end instead.
         const Section& at_vertex_section = from_start ? stretch.sections.front() : stretch.sections.back();
         if (stretch.length < at_vertex_section.c1.Distance(at_vertex_section.c2)) {
-          return nullptr;
+          return none("run-out: " + body.edge_name(stretch.edge) + " is shorter than the dressup is wide");
         }
         // Sections from the selected edge's vertex on: the profile moved
         // towards the edge linearly with the length, from kBelow of the
@@ -628,21 +977,29 @@ ShapePtr kept_region(const std::string& feature, const Shape& body, const std::v
           return wire.has_value();
         };
         bool made = push(shifted(sections.front(), -beyond), -beyond);
-        for (std::size_t k = 0; made && k < sections.size(); ++k) {
-          made = push(sections[k], lengths[k]);
+        for (std::size_t s = 0; made && s < sections.size(); ++s) {
+          made = push(sections[s], lengths[s]);
         }
         made = made && push(shifted(sections.back(), beyond), stretch.length + beyond);
         if (!made) {
-          return nullptr;
+          return none("run-out: no taper sections over " + body.edge_name(stretch.edge));
         }
         const ShapePtr taper = lofted(wires, face_name(feature, "runout", body.edge_name(stretch.edge)), tool, tool, tool);
-        if (!add(taper, BooleanOp::Cut)) {
-          return nullptr;
+        if (!taper) {
+          return none("run-out: the taper over " + body.edge_name(stretch.edge) + " does not loft");
+        }
+        const BooleanResult cut = boolean(BooleanOp::Cut, {run.get()}, *taper);
+        if (!cut.touched.empty() && !cut.touched.front()) {
+          continue; // (the taper misses the tube: nothing to take out)
+        }
+        run = single(cut);
+        if (!run) {
+          return none("run-out: the taper over " + body.edge_name(stretch.edge) + " does not cut");
         }
       }
     }
   }
-  return region;
+  return regions;
 }
 
 bool holds_role(const Shape& shape, const std::string& feature, const std::string& role) {
@@ -656,6 +1013,278 @@ bool holds_role(const Shape& shape, const std::string& feature, const std::strin
     }
   }
   return false;
+}
+
+using EdgeFaces = NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>;
+
+// True when one of the names is a face of the feature's own dressup: the
+// feature's, and none of the run-out's tools or ends.
+bool dressup_face(const NameList& names, const std::string& feature) {
+  const std::string prefix = feature + ":";
+  return std::any_of(names.begin(), names.end(), [&](const std::string& name) {
+    return name.compare(0, prefix.size(), prefix) == 0 && name.compare(prefix.size(), 6, "runout") != 0;
+  });
+}
+
+// The middle of an edge's curve.
+gp_Pnt middle_of_edge(const TopoDS_Edge& edge) {
+  const BRepAdaptor_Curve curve(edge);
+  return curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()));
+}
+
+// The face end at a transition's cap (its pieces, faces `caps` of `flat`,
+// the result with flat ends; mitcad#2193): the dressup's cross-section in
+// the plane normal to the edge at the vertex, exactly as the kernel built
+// it there (the cap's edges on the dressup's faces), closed round the edge
+// outside the body, and swept straight on past the vertex along the edge's
+// direction by `length`. The cross-section's ends go on out of the
+// material at right angles to the faces they lie on, so that the prism
+// crosses those faces there instead of touching them. Its face swept from
+// the cross-section is <feature>:face_end(<selected edge>), the others
+// `tool`. Null when it cannot be made (a concave edge, a cross-section that
+// is not one open curve between the edge's two faces).
+ShapePtr face_end_prism(const std::string& feature, const Shape& body, const Shape& flat,
+                        const std::vector<int>& caps, const Transition& transition, const EdgeFaces& faces_of,
+                        double length, const std::string& tool) {
+  if (caps.empty()) {
+    return failed("face end: no cap");
+  }
+  const TopoDS_Face& face = flat.face(caps.front());
+  const BRepAdaptor_Surface surface(face, false);
+  if (surface.GetType() != GeomAbs_Plane) {
+    return failed("face end: the cap " + transition.cap + " is not planar");
+  }
+  const gp_Pln plane = surface.Plane();
+  const gp_Vec normal(plane.Axis().Direction());
+  // The selected edge's faces at the vertex: their directions away from
+  // the edge in the plane normal to it (a section of any size gives them).
+  const TopoDS_Edge& edge = body.edge(transition.selected);
+  const auto faces = two_faces(body, transition.selected);
+  if (!faces) {
+    return failed("face end: the selected edge is not between two faces");
+  }
+  const TopoDS_Face& a = body.face(faces->first);
+  const TopoDS_Face& b = body.face(faces->second);
+  const std::optional<bool> is_convex = convex(edge, a, b);
+  if (!is_convex || !*is_convex) {
+    return failed("face end: the selected edge is not convex");
+  }
+  TopoDS_Vertex first;
+  TopoDS_Vertex last;
+  TopExp::Vertices(edge, first, last);
+  if (first.IsSame(last)) {
+    return failed("face end: the selected edge is closed");
+  }
+  RunOutSize one;
+  one.fillet = true;
+  one.radius = 1.0;
+  const std::optional<Section> s = section_at(edge, a, b, true, one, -1, at_vertex(edge, transition.vertex),
+                                              transition.vertex.IsSame(last));
+  if (!s) {
+    return failed("face end: no section of the selected edge at the vertex");
+  }
+  // Along the edge on past the vertex: the cap's normal, that way.
+  gp_Vec along = normal;
+  if (along.Dot(gp_Vec(s->t)) < 0.0) {
+    along.Reverse();
+  }
+  if (along.Dot(gp_Vec(s->t)) < 0.99) {
+    return failed("face end: the cap does not lie in the plane normal to the edge");
+  }
+  const gp_Vec ea = unit(gp_Vec(s->p, s->c1));
+  const gp_Vec eb = unit(gp_Vec(s->p, s->c2));
+  // The cross-section: the edges of the cap's pieces on the dressup's
+  // faces (the pieces may meet along the axis of a corner as tight as the
+  // dressup is deep, the region kept round it in two parts there), copied
+  // together so that they keep their common vertices.
+  TopoDS_Compound bundle;
+  BRep_Builder builder;
+  builder.MakeCompound(bundle);
+  int crossing = 0;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> taken;
+  for (const int cap : caps) {
+    for (TopExp_Explorer it(flat.face(cap), TopAbs_EDGE); it.More(); it.Next()) {
+      const int index = faces_of.FindIndex(it.Current());
+      if (index == 0 || taken.Contains(it.Current())) {
+        continue;
+      }
+      bool on_dressup = false;
+      for (const TopoDS_Shape& next : faces_of(index)) {
+        const int f = flat.face_index(next);
+        on_dressup = on_dressup || (f >= 0 && dressup_face(flat.face_names(f), feature));
+      }
+      if (on_dressup) {
+        taken.Add(it.Current());
+        builder.Add(bundle, it.Current());
+        ++crossing;
+      }
+    }
+  }
+  if (crossing == 0) {
+    std::string around;
+    for (const int cap : caps) {
+      for (TopExp_Explorer it(flat.face(cap), TopAbs_EDGE); it.More(); it.Next()) {
+        const int index = faces_of.FindIndex(it.Current());
+        for (const TopoDS_Shape& next : index == 0 ? NCollection_List<TopoDS_Shape>() : faces_of(index)) {
+          const int f = flat.face_index(next);
+          if (f >= 0 && !flat.face_names(f).empty()) {
+            around += " " + flat.face_names(f).front();
+          }
+        }
+      }
+    }
+    return failed("face end: no edge of the cap on the dressup's faces; the cap's neighbours:" + around);
+  }
+  BRepBuilderAPI_Copy copy(bundle);
+  const TopoDS_Shape cross = copy.Shape();
+  // Its two ends: the vertices of one edge each.
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> ends;
+  TopExp::MapShapesAndAncestors(cross, TopAbs_VERTEX, TopAbs_EDGE, ends);
+  std::vector<TopoDS_Vertex> loose;
+  for (int i = 1; i <= ends.Extent(); ++i) {
+    if (ends(i).Extent() == 1) {
+      loose.push_back(TopoDS::Vertex(ends.FindKey(i)));
+    }
+  }
+  if (loose.size() != 2) {
+    return failed("face end: the cross-section has " + std::to_string(loose.size()) + " ends (" +
+                  std::to_string(crossing) + " edges)");
+  }
+  const gp_Pnt head = BRep_Tool::Pnt(loose[0]);
+  const gp_Pnt tail = BRep_Tool::Pnt(loose[1]);
+  // Which end lies on which face: the one nearer to that face's line.
+  const auto off_line = [&](const gp_Pnt& q, const gp_Vec& on) {
+    const gp_Vec v(s->p, q);
+    return (v - on * v.Dot(on)).Magnitude();
+  };
+  const bool head_on_a = off_line(head, ea) < off_line(head, eb);
+  const bool tail_on_a = off_line(tail, ea) < off_line(tail, eb);
+  if (head_on_a == tail_on_a) {
+    return failed("face end: both ends of the cross-section lie on one face's side");
+  }
+  // Out of the material at right angles to each face's line, and round
+  // the edge outside the body.
+  const gp_Vec out_a = unit(ea * ea.Dot(eb) - eb);
+  const gp_Vec out_b = unit(eb * ea.Dot(eb) - ea);
+  const double reach = std::max(head.Distance(s->p), tail.Distance(s->p));
+  if (!(reach > 1.0e-6)) {
+    return failed("face end: the cross-section has no size");
+  }
+  const auto in_plane = [&](const gp_Pnt& q) {
+    return q.Translated(-normal * gp_Vec(plane.Location(), q).Dot(normal));
+  };
+  const gp_Pnt head_out = in_plane(head.Translated((head_on_a ? out_a : out_b) * reach));
+  const gp_Pnt tail_out = in_plane(tail.Translated((tail_on_a ? out_a : out_b) * reach));
+  const gp_Pnt far = in_plane(s->p.Translated(-unit(ea + eb) * (3.0 * reach)));
+  NCollection_List<TopoDS_Shape> curves;
+  for (TopExp_Explorer it(cross, TopAbs_EDGE); it.More(); it.Next()) {
+    curves.Append(it.Current());
+  }
+  const TopoDS_Vertex at_head_out = BRepBuilderAPI_MakeVertex(head_out).Vertex();
+  const TopoDS_Vertex at_tail_out = BRepBuilderAPI_MakeVertex(tail_out).Vertex();
+  const TopoDS_Vertex at_far = BRepBuilderAPI_MakeVertex(far).Vertex();
+  BRepBuilderAPI_MakeWire wire;
+  wire.Add(curves);
+  for (const auto& [from, to] : {std::make_pair(loose[1], at_tail_out), std::make_pair(at_tail_out, at_far),
+                                 std::make_pair(at_far, at_head_out), std::make_pair(at_head_out, loose[0])}) {
+    BRepBuilderAPI_MakeEdge side(from, to);
+    if (!side.IsDone()) {
+      return failed("face end: no side of the profile");
+    }
+    wire.Add(side.Edge());
+  }
+  if (!wire.IsDone()) {
+    return failed("face end: the profile's wire does not close");
+  }
+  BRepBuilderAPI_MakeFace profile(plane, wire.Wire(), true);
+  if (!profile.IsDone()) {
+    return failed("face end: no profile face");
+  }
+  BRepPrimAPI_MakePrism prism(profile.Face(), along * length);
+  build(prism);
+  if (!prism.IsDone()) {
+    return failed("face end: no prism");
+  }
+  // The cross-section's edges in the profile, by their middles.
+  std::vector<gp_Pnt> middles;
+  for (TopExp_Explorer it(cross, TopAbs_EDGE); it.More(); it.Next()) {
+    middles.push_back(middle_of_edge(TopoDS::Edge(it.Current())));
+  }
+  const std::string continued = face_name(feature, "face_end", body.edge_name(transition.selected));
+  FaceNamer namer(prism.Shape());
+  for (TopExp_Explorer it(profile.Face(), TopAbs_EDGE); it.More(); it.Next()) {
+    const gp_Pnt middle = middle_of_edge(TopoDS::Edge(it.Current()));
+    const bool on_cross = std::any_of(middles.begin(), middles.end(),
+                                      [&](const gp_Pnt& m) { return m.Distance(middle) < 1.0e-6 * (1.0 + reach); });
+    namer.generated(prism, it.Current(), on_cross ? continued : tool);
+  }
+  for (TopExp_Explorer it(prism.Shape(), TopAbs_FACE); it.More(); it.Next()) {
+    if (!namer.named(it.Current())) {
+      namer.add(it.Current(), tool);
+    }
+  }
+  namer.finish();
+  return namer.shape();
+}
+
+// The result with flat ends (`flat`) with each transition's flat end
+// carried on as its face end: the face ends' prisms, each clipped to the
+// region kept round the unselected edges it runs on into (`regions`, its
+// transition's run: the prism takes away the body's material only there),
+// cut away. Null when one cannot be made.
+ShapePtr face_ends(const std::string& feature, const Shape& body, const ShapePtr& flat,
+                   const std::vector<ShapePtr>& regions, const std::vector<Transition>& transitions,
+                   const std::string& tool) {
+  // The prisms run on past the regions.
+  Bnd_Box box;
+  for (const ShapePtr& region : regions) {
+    BRepBndLib::Add(region->occt(), box);
+  }
+  if (box.IsVoid()) {
+    return failed("face end: an empty region");
+  }
+  const double length = std::sqrt(box.SquareExtent()) + 1.0;
+  EdgeFaces faces_of;
+  TopExp::MapShapesAndAncestors(flat->occt(), TopAbs_EDGE, TopAbs_FACE, faces_of);
+  std::vector<std::pair<ShapePtr, std::size_t>> prisms; // with their runs
+  for (const Transition& transition : transitions) {
+    if (transition.run >= regions.size()) {
+      return failed("face end: a vertex without its region");
+    }
+    std::vector<int> caps; // the cap's pieces
+    for (int f = 0; f < flat->face_count(); ++f) {
+      if (face_matches(flat->face_names(f), transition.cap)) {
+        caps.push_back(f);
+      }
+    }
+    if (caps.empty()) {
+      return failed("face end: the cap " + transition.cap + " is not in the result with flat ends");
+    }
+    const ShapePtr prism = face_end_prism(feature, body, *flat, caps, transition, faces_of, length, tool);
+    if (!prism) {
+      return nullptr;
+    }
+    prisms.emplace_back(prism, transition.run);
+  }
+  ShapePtr result = flat;
+  for (const auto& [prism, run] : prisms) {
+    const BooleanResult clipped = boolean(BooleanOp::Intersect, {prism.get()}, *regions[run]);
+    if (clipped.pieces.empty()) {
+      return failed("face end: the prism misses the region");
+    }
+    for (const BooleanPiece& piece : clipped.pieces) {
+      const BooleanResult made = boolean(BooleanOp::Cut, {result.get()}, *piece.shape);
+      if (!made.touched.empty() && !made.touched.front()) {
+        continue;
+      }
+      result = single(made);
+      if (!result) {
+        return failed("face end: cutting the clipped prism away gives " + std::to_string(made.pieces.size()) +
+                      " pieces");
+      }
+    }
+  }
+  return result;
 }
 
 } // namespace
@@ -722,62 +1351,115 @@ std::vector<PartialChain> partial_chains(const Shape& body, const std::vector<in
 }
 
 ShapePtr over_selected_edges(const std::string& feature, const Shape& body, const Shape& full,
-                             const std::vector<PartialChain>& chains, bool run_out) {
+                             const std::vector<PartialChain>& chains, ChainEnd end) {
   const std::string tool = face_name(feature, "runout_tool");
   std::vector<const PartialChain*> convex_chains;
   std::vector<const PartialChain*> concave_chains;
   for (const PartialChain& chain : chains) {
     const std::optional<bool> is_convex = chain_convex(body, chain);
     if (!is_convex) {
-      return nullptr;
+      return failed("a chain's selected edge is neither convex nor concave");
     }
     (*is_convex ? convex_chains : concave_chains).push_back(&chain);
   }
+  // The face end takes material away: convex chains only.
+  if (end == ChainEnd::Face && !concave_chains.empty()) {
+    return failed("face end: a concave chain");
+  }
+  const bool run_out = end == ChainEnd::RunOut;
+  std::vector<Transition> transitions;
   ShapePtr result = std::make_shared<Shape>(full);
-  // Convex: the body's material inside the region put back into the
+  std::vector<ShapePtr> convex_regions;
+  // Convex: the body's material inside the regions put back into the
   // dressup's result.
   if (!convex_chains.empty()) {
-    const ShapePtr region = kept_region(feature, body, convex_chains, run_out, tool);
-    if (!region) {
+    convex_regions = kept_region(feature, body, convex_chains, end, tool, transitions);
+    if (convex_regions.empty()) {
       return nullptr;
     }
-    const BooleanResult kept = boolean(BooleanOp::Intersect, {&body}, *region);
-    if (kept.pieces.empty()) {
-      return nullptr;
-    }
-    for (const BooleanPiece& piece : kept.pieces) {
-      result = single(boolean(BooleanOp::Join, {result.get()}, *piece.shape));
-      if (!result) {
-        return nullptr;
+    for (const ShapePtr& region : convex_regions) {
+      const BooleanResult kept = boolean(BooleanOp::Intersect, {&body}, *region);
+      if (kept.pieces.empty()) {
+        return failed("the body has nothing inside a region kept");
+      }
+      for (const BooleanPiece& piece : kept.pieces) {
+        result = single(boolean(BooleanOp::Join, {result.get()}, *piece.shape));
+        if (!result) {
+          return failed("putting the body back inside a region kept gives more than one solid");
+        }
       }
     }
   }
-  // Concave: the dressup's material inside the region outside the body
+  // Concave: the dressup's material inside the regions outside the body
   // taken away again.
   if (!concave_chains.empty()) {
-    const ShapePtr region = kept_region(feature, body, concave_chains, run_out, tool);
-    if (!region) {
+    const std::vector<ShapePtr> regions = kept_region(feature, body, concave_chains, end, tool, transitions);
+    if (regions.empty()) {
       return nullptr;
     }
-    const BooleanResult outside = boolean(BooleanOp::Cut, {region.get()}, body);
-    for (const BooleanPiece& piece : outside.pieces) {
-      const BooleanResult made = boolean(BooleanOp::Cut, {result.get()}, *piece.shape);
-      if (!made.touched.empty() && !made.touched.front()) {
-        continue;
+    for (const ShapePtr& region : regions) {
+      const BooleanResult outside = boolean(BooleanOp::Cut, {region.get()}, body);
+      for (const BooleanPiece& piece : outside.pieces) {
+        const BooleanResult made = boolean(BooleanOp::Cut, {result.get()}, *piece.shape);
+        if (!made.touched.empty() && !made.touched.front()) {
+          continue;
+        }
+        result = single(made);
+        if (!result) {
+          return failed("taking the dressup away outside the body gives more than one solid");
+        }
       }
-      result = single(made);
-      if (!result) {
-        return nullptr;
-      }
+    }
+  }
+  // The flat ends carried on past their vertices as the face ends.
+  if (end == ChainEnd::Face) {
+    if (convex_regions.empty() || transitions.empty()) {
+      return failed("face end: no vertex to end at");
+    }
+    result = face_ends(feature, body, result, convex_regions, transitions, tool);
+    if (!result) {
+      return nullptr;
     }
   }
   // The tools' own faces lie past the dressup: none is left. With the
-  // run-out the flat end's face is inside the taper too.
-  if (holds_role(*result, feature, "runout_tool") || (run_out && holds_role(*result, feature, "runout_end"))) {
-    return nullptr;
+  // run-out the flat end's face is inside the taper too, and with the face
+  // end the caps it carried on are gone (a face end that would cut on into
+  // the material past the region, where the faces beyond the vertex turn
+  // towards the dressup, leaves the region's or the prism's faces).
+  for (const char* role : {"runout_tool", "runout_end", "runout_cap"}) {
+    if (std::string(role) == "runout_end" && !run_out) {
+      continue;
+    }
+    if (holds_role(*result, feature, role)) {
+      // (For the trace: where each such piece lies, the middle of its box.)
+      const std::string prefix = feature + ":" + role;
+      for (int f = 0; f < result->face_count(); ++f) {
+        const NameList& names = result->face_names(f);
+        if (std::none_of(names.begin(), names.end(),
+                         [&](const std::string& name) { return name.compare(0, prefix.size(), prefix) == 0; })) {
+          continue;
+        }
+        Bnd_Box box;
+        BRepBndLib::Add(result->face(f), box);
+        if (box.IsVoid()) {
+          continue;
+        }
+        double x0 = 0.0;
+        double y0 = 0.0;
+        double z0 = 0.0;
+        double x1 = 0.0;
+        double y1 = 0.0;
+        double z1 = 0.0;
+        box.Get(x0, y0, z0, x1, y1, z1);
+        runout_trace(std::string("left over, ") + role + " from x " + std::to_string(x0) + " y " +
+                     std::to_string(y0) + " z " + std::to_string(z0) + " to x " + std::to_string(x1) + " y " +
+                     std::to_string(y1) + " z " + std::to_string(z1));
+      }
+      return failed(std::string("the result still shows the role ") + role);
+    }
   }
   if (!is_valid(result->occt())) {
-    return nullptr;
+    return failed("the result is not valid");
   }
   result->copy_notes(full);
   return result;

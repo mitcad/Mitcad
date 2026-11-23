@@ -499,6 +499,19 @@ pub fn spatial_from_planar(def: &SketchDef, solved: Option<&Solved>) -> Result<C
                 ends: [SpatialSplineEnd::Natural; 2],
                 tangents: [None, None],
             },
+            // A 3D sketch has no conics (mitcad#2236): the same curve as a
+            // rational quadratic spline of its points.
+            EntityKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => SpatialCurveKind::Spline {
+                degree: 2,
+                control: vec![*start, *apex, *end],
+                weights: vec![1.0, crate::conic::weight(*rho), 1.0],
+                knots: Vec::new(),
+            },
         };
         out.curves.push(SpatialCurve::new(e.id, kind, construction));
     }
@@ -573,6 +586,18 @@ pub fn spatial_from_planar(def: &SketchDef, solved: Option<&Solved>) -> Result<C
                 },
             });
             continue;
+        }
+        // A point held on a derived offset (mitcad#2278): the 3D sketch
+        // keeps the offset's curves planar, computed only.
+        if let Some(r) = c.kind.refs().iter().find(|r| derived.contains(&r.uid())) {
+            return Err(crate::said(
+                "a point is held on an offset of a spline or an ellipse, whose curves a 3D sketch \
+                 only computes: remove that Coincident before the conversion",
+                format!(
+                    "{} holds a point at {r}, which a derived offset computes",
+                    c.id
+                ),
+            ));
         }
         let kind = match &c.kind {
             ConstraintKind::Coincident {
@@ -763,6 +788,9 @@ pub fn spatial_from_planar(def: &SketchDef, solved: Option<&Solved>) -> Result<C
             EntityKind::Line { start, end, .. } => all(&[*start, *end]),
             EntityKind::Spline { control, .. } => all(control),
             EntityKind::FittedSpline { points, .. } => all(points),
+            EntityKind::Conic {
+                start, end, apex, ..
+            } => all(&[*start, *end, *apex]),
             _ => false,
         };
         if held_by_points {

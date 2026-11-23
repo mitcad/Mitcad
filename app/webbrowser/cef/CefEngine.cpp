@@ -26,6 +26,7 @@
 #include <QtLogging>
 
 #include "CefView.hpp"
+#include "framework/ShutdownModuleStep.hpp"
 #include "webbrowser/BrowserDiagnostics.hpp"
 #include "include/cef_app.h"
 #include "include/cef_command_line.h"
@@ -453,8 +454,11 @@ bool startEngine(const QString& componentFolder, const QString& profileFolder, Q
       utf8(QDir::toNativeSeparators(QDir(profileFolder).filePath(QStringLiteral("MitCad"))));
   contextSettings.persist_session_cookies = true;
   state.context = CefRequestContext::CreateContext(contextSettings, nullptr);
-  QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, QCoreApplication::instance(),
-                   [] { shutDown(); });
+  QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, QCoreApplication::instance(), [] {
+    // A step of the shutdown's log (mitcad#2275), timed by the application.
+    const shutdown::ModuleStep step(QStringLiteral("component browser: CEF shuts down"));
+    shutDown();
+  });
   qInfo().noquote() << QStringLiteral("Component browser: CEF %1 started from %2, profile %3")
                            .arg(QStringLiteral(CEF_VERSION), QDir::toNativeSeparators(folder),
                                 QDir::toNativeSeparators(profileFolder));

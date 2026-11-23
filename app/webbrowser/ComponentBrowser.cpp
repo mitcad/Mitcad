@@ -47,6 +47,7 @@
 #include "cef/CefEngine.hpp"
 #include "cef/CefView.hpp"
 #include "framework/PanelTree.hpp"
+#include "framework/ShutdownModuleStep.hpp"
 
 namespace mitcad {
 namespace {
@@ -215,7 +216,11 @@ ComponentBrowser::ComponentBrowser(ComponentBrowserHost* host, QWidget* parent) 
   connect(this, &QDialog::finished, this, [] { qDebug().noquote() << QStringLiteral("Component browser closed"); });
   // The temporary files go as MitCad ends, even when its windows are not
   // taken down one by one.
-  connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] { m_folders.removeAll(); });
+  connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
+    // A step of the shutdown's log (mitcad#2275).
+    const shutdown::ModuleStep step(QStringLiteral("component browser: downloads removed"));
+    m_folders.removeAll();
+  });
 
   m_host->fitWindow(this, QSize(1100, 780));
   showStartPage();
@@ -322,6 +327,11 @@ void ComponentBrowser::showNote(const QString& text, bool warning) {
   m_note->setPalette(colors);
   m_note->setText(text);
   m_note->setVisible(!text.isEmpty());
+}
+
+void ComponentBrowser::showHostNote(const QString& note, bool warning) {
+  qInfo().noquote() << QStringLiteral("Component browser note: %1").arg(note);
+  showNote(note, warning);
 }
 
 void ComponentBrowser::clickLink(const QString& text) {
@@ -546,10 +556,21 @@ bool ComponentBrowser::importFile(const QString& path, bool* keep) {
   const QString name = QFileInfo(path).fileName();
   QByteArray head;
   QFile file(path);
-  if (file.open(QIODevice::ReadOnly)) {
+  // A file that cannot be read (gone, or held by another program) is no
+  // empty file (mitcad#2281): "... is empty." is said only of a file of no
+  // bytes.
+  const bool opened = file.open(QIODevice::ReadOnly);
+  if (opened) {
     head = file.read(kWebFileHeadSize);
   }
+  const QString readError = file.errorString();
   file.close();
+  if (!opened || (head.isEmpty() && QFileInfo(path).size() > 0)) {
+    qInfo().noquote() << QStringLiteral("Component browser could not read %1: %2")
+                             .arg(name, QFileInfo::exists(path) ? readError : QStringLiteral("the file is gone"));
+    showNote(tr("MitCad could not read the downloaded file %1.").arg(name), true);
+    return false;
+  }
   const WebFileCheck check = checkWebFileContent(path, head);
   if (check.kind == WebFileKind::Refused || check.kind == WebFileKind::Zip) {
     const QString note = check.kind == WebFileKind::Zip ? tr("%1 is a zip inside a zip: unpack it first.").arg(name)
@@ -558,12 +579,19 @@ bool ComponentBrowser::importFile(const QString& path, bool* keep) {
     showNote(note, true);
     return false;
   }
-  QString error;
-  const bool ok = m_host->importDownload(path, check.kind, &error);
-  if (!ok) {
-    qInfo().noquote() << QStringLiteral("Component browser could not import %1: %2").arg(name, error);
-    showNote(tr("Could not import %1: %2").arg(name, error), true);
+  QString note;
+  const WebImportResult result = m_host->importDownload(path, check.kind, &note);
+  if (result == WebImportResult::Failed) {
+    qInfo().noquote() << QStringLiteral("Component browser could not import %1: %2").arg(name, note);
+    showNote(tr("Could not import %1: %2").arg(name, note), true);
     return false;
+  }
+  if (result == WebImportResult::Waiting) {
+    // The host has its own copy until the open command closes
+    // (mitcad#2281): the download's file may go.
+    qInfo().noquote() << QStringLiteral("Component browser: %1 waits: %2").arg(name, note);
+    showNote(note, false);
+    return true;
   }
   // A design of its own is imported by a process that still reads the file.
   if (check.kind == WebFileKind::Document) {
@@ -577,10 +605,19 @@ void ComponentBrowser::importZip(const QString& path, const QString& folder, boo
   const QString zipName = QFileInfo(path).fileName();
   QByteArray head;
   QFile file(path);
-  if (file.open(QIODevice::ReadOnly)) {
+  // Not read is not empty (mitcad#2281), as importFile says it.
+  const bool opened = file.open(QIODevice::ReadOnly);
+  if (opened) {
     head = file.read(kWebFileHeadSize);
   }
+  const QString openError = file.errorString();
   file.close();
+  if (!opened || (head.isEmpty() && QFileInfo(path).size() > 0)) {
+    qInfo().noquote() << QStringLiteral("Component browser could not read %1: %2")
+                             .arg(zipName, QFileInfo::exists(path) ? openError : QStringLiteral("the file is gone"));
+    showNote(tr("MitCad could not read the downloaded file %1.").arg(zipName), true);
+    return;
+  }
   const WebFileCheck check = checkWebFileContent(path, head);
   if (check.kind != WebFileKind::Zip) {
     qInfo().noquote() << QStringLiteral("Component browser refused %1: %2").arg(zipName, check.note);

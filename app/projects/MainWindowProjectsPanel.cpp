@@ -2,8 +2,10 @@
 // The Projects panel in the window (mitcad#145): its dock (Docked) or card
 // (Floating), View > Projects, File > New Design, and what the panel asks
 // for: opening a design, New Design, New Folder, renaming, moving and
-// deleting designs and folders (the core's new_design, create_folder,
-// move and delete, each a version, sent as Save's versions are), Version
+// deleting designs, other files and folders (the core's new_design,
+// create_folder, move and delete, each a version, sent as Save's versions
+// are), other files opened with the system's app, added and their changes
+// recorded (add_files, record; mitcad#2204), Version
 // History, Project Settings and Sync Now of a project, Add Existing Project
 // Folder and Remove from List. The panel itself is projects/ProjectsPanel.
 #include "../MainWindow.hpp"
@@ -16,6 +18,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDockWidget>
 #include <QEvent>
@@ -179,6 +182,16 @@ void MainWindow::createProjectsPanel() {
   });
   connect(panel, &ProjectsPanel::removeProjectRequested, this,
           [this](const QString& root) { removeProject(root); }, queued);
+  // Other files of a project (mitcad#2204).
+  connect(panel, &ProjectsPanel::openFileRequested, this, [this](const QString& path) { openProjectFile(path); },
+          queued);
+  connect(panel, &ProjectsPanel::addFilesRequested, this,
+          [this](const QString& root, const QString& folder, const QStringList& files) {
+            addFilesToProject(root, folder, files);
+          },
+          queued);
+  connect(panel, &ProjectsPanel::recordRequested, this,
+          [this](const QString& root, const QString& path) { recordProjectFiles(root, path); }, queued);
   connect(panel, &ProjectsPanel::statusMessage, this, [this](const QString& message, bool error) {
     if (error) {
       showError(message);
@@ -836,6 +849,13 @@ void MainWindow::deleteInProject(const QString& root, const QString& path, bool 
           }
         }
       }
+      // Other files (mitcad#2204): new or changed ones are lost too.
+      for (const ProjectFileRow& file : row->files) {
+        if ((file.path == path || (folder && file.path.startsWith(path + QLatin1Char('/')))) &&
+            (!file.recorded || file.changed)) {
+          unrecorded << file.path;
+        }
+      }
     }
   }
   const QString name = folder ? path : QFileInfo(path).fileName();
@@ -894,6 +914,106 @@ void MainWindow::deleteInProject(const QString& root, const QString& path, bool 
     showHint(tr("Deleted %1: the project's history keeps it.").arg(name));
   }
   refreshProjectsPanel();
+}
+
+// ---------------------------------------------------------------------------
+// Other files of a project (mitcad#2204)
+
+void MainWindow::openProjectFile(const QString& path) {
+  bool opened = false;
+  if (qEnvironmentVariableIntValue("MITCAD_TEST_LOG_URLS") != 0) {
+    // UI tests: handed over and logged, nothing opened on the desktop;
+    // MITCAD_TEST_OPEN_FILE_FAILS=1 stands for a system without an app.
+    opened = qEnvironmentVariableIntValue("MITCAD_TEST_OPEN_FILE_FAILS") == 0;
+    qInfo().noquote() << QStringLiteral("Open file with the system's app (test, not opened): %1").arg(path);
+  } else {
+    opened = QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+  }
+  if (opened) {
+    qInfo().noquote() << QStringLiteral("Projects panel: %1 handed to the system's app").arg(path);
+    return;
+  }
+  qWarning().noquote() << QStringLiteral("Projects panel: the system could not open %1").arg(path);
+  sheetWarning(this, tr("Open"),
+               tr("%1 could not be opened: the system has no app for files of this type, or the app did not "
+                  "start.")
+                   .arg(QDir::toNativeSeparators(path)));
+}
+
+std::optional<QJsonObject> MainWindow::projectWriteLarge(const QString& root, QJsonObject command,
+                                                         const QString& title) {
+  QJsonObject refused;
+  std::optional<QJsonObject> answer = projectWrite(root, command, title, &refused);
+  if (answer) {
+    return answer;
+  }
+  const QString cls = errorClassOf(refused);
+  if (cls != QLatin1String("too_large")) {
+    if (!cls.isEmpty()) {
+      sheetWarning(this, title, errorMessageOf(refused));
+    }
+    return std::nullopt;
+  }
+  // The core names the files first ("scan.zip is larger than 100 MiB: ...").
+  const QString names = errorMessageOf(refused).section(QLatin1Char(':'), 0, 0);
+  QMessageBox box(QMessageBox::Warning, title, names + QLatin1Char('.'), QMessageBox::Cancel, this);
+  box.setInformativeText(tr("Hosting services such as GitHub refuse files over 100 MiB, so a Cloud project may not "
+                            "be able to send this version, and the project's history keeps every copy of a file "
+                            "for good. Record it anyway?"));
+  QPushButton* anyway = box.addButton(tr("Record Anyway"), QMessageBox::AcceptRole);
+  box.setDefaultButton(QMessageBox::Cancel);
+  qInfo().noquote() << QStringLiteral("Large files dialog: %1").arg(names);
+  prepareModal(&box);
+  execDialog(&box);
+  if (box.clickedButton() != anyway) {
+    qInfo().noquote() << QStringLiteral("Large files: not recorded");
+    return std::nullopt;
+  }
+  qInfo().noquote() << QStringLiteral("Large files: recorded anyway");
+  command.insert(QStringLiteral("allow_large"), true);
+  return projectWrite(root, command, title);
+}
+
+void MainWindow::addFilesToProject(const QString& root, const QString& folder, QStringList files) {
+  if (files.isEmpty()) {
+    files = dialogOpenFileNames(this, tr("Add Files"));
+    if (files.isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Add Files cancelled");
+      return;
+    }
+  }
+  QJsonArray list;
+  for (const QString& file : std::as_const(files)) {
+    list.append(QFileInfo(file).absoluteFilePath());
+  }
+  qInfo().noquote() << QStringLiteral("Add Files: %1 to %2").arg(files.join(QStringLiteral(", ")),
+                                                                  joinPath(root, folder));
+  const std::optional<QJsonObject> answer =
+      projectWriteLarge(root,
+                        {{QStringLiteral("cmd"), QStringLiteral("add_files")},
+                         {QStringLiteral("folder"), folder},
+                         {QStringLiteral("files"), list}},
+                        tr("Add Files"));
+  refreshProjectsPanel();
+  if (answer) {
+    const QJsonArray added = answer->value(QStringLiteral("added")).toArray();
+    showHint(tr("Added %n file(s) to %1 as a new version.", nullptr, static_cast<int>(added.size()))
+                 .arg(folder.isEmpty() ? QFileInfo(root).fileName() : folder));
+  }
+}
+
+void MainWindow::recordProjectFiles(const QString& root, const QString& path) {
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("record")}};
+  if (!path.isEmpty()) {
+    command.insert(QStringLiteral("path"), path);
+  }
+  const std::optional<QJsonObject> answer = projectWriteLarge(root, command, tr("Record Changes"));
+  refreshProjectsPanel();
+  if (answer) {
+    const int recorded = static_cast<int>(answer->value(QStringLiteral("recorded")).toArray().size());
+    showHint(recorded == 0 ? tr("No changes to record.")
+                           : tr("Recorded the changes of %n file(s) as a new version.", nullptr, recorded));
+  }
 }
 
 void MainWindow::openPanelDesign(const QString& path) {

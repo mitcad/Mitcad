@@ -67,6 +67,8 @@ private:
   QString m_gapLabel;
   QColor m_gapColor;
   std::array<QColor, 3> m_draftColors; // Draft Analysis' classes (mitcad#2166)
+  std::array<QColor, 3> m_deviationColors; // Point Cloud Deviation's scale (mitcad#2240)
+  QColor m_unmeasuredColor;                // its points not measured (mitcad#2265)
   QString m_title;
   std::vector<std::pair<QColor, QString>> m_entries; // the legend's
   QColor m_markerColor;

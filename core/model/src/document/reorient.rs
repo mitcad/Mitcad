@@ -924,6 +924,10 @@ fn turn_state(
     for comment in &mut state.comments {
         crate::reorient::turn_comment(comment, &context);
     }
+    // Point clouds' placements (mitcad#2240).
+    for cloud in &mut state.point_clouds {
+        crate::reorient::turn_point_cloud(cloud, &context);
+    }
     // What split features remember of their pieces (centres of mass).
     crate::reorient::turn_split_pieces(state, turn, turned);
     Ok(())

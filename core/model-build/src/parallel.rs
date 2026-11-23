@@ -139,6 +139,7 @@ pub(crate) fn contact_override(
         z_axis: Some(n),
         x_axis: Some(crate::geometry::Z),
         shift: None,
+        relative: None,
     }
 }
 

@@ -101,10 +101,21 @@ struct ParameterFieldOptions {
   ValueStepLimit stepLimit;
   // The fx button opens Edit Formula through the field's owner with the
   // field's text as it is now, instead of listing the parameters
-  // (mitcad#2179): Edit Parameters' Expression cells, which end their
-  // editing first, and Add User Parameter's Expression field. Typing still
-  // lists the parameters, and the right-click menu keeps Insert Parameter….
+  // (mitcad#2179): Edit Parameters' Expression cells on every row, the
+  // empty row's too, which end their editing first, and Add User
+  // Parameter's Expression field (mitcad#2290). Such a field's fx never
+  // opens the list; typing a name still lists the parameters that match
+  // it (only once something is typed), and the right-click menu keeps
+  // Insert Parameter….
   std::function<void(const QString& text)> formula;
+  // An equation curve's formula (mitcad#2237): the name of its variable
+  // (`x`, `t`), which Edit Formula gives its `formula_help` queries so that
+  // the name is no unknown one and the value is the formula's at 1.
+  QString variable;
+  // What that variable is (mitcad#2264): `length` or `angle` (its value at
+  // 1 then 1 in the design's length or angle unit); empty or `none`: a
+  // plain number.
+  QString variableUnit;
 };
 
 // The parameter suggestions of an expression field (mitcad#567): typing
@@ -156,6 +167,11 @@ public:
   bool isOpen() const;
   // The fx button: every parameter, to be searched.
   void openBrowser();
+  // What the fx button does (also Edit Parameters' Edit Formula… button
+  // while an Expression cell is edited, mitcad#2290): Edit Formula through
+  // the field's owner where ParameterFieldOptions::formula is set, else
+  // openBrowser.
+  void activateFx();
   void openCreateEditor();
   void openFormulaEditor();
   // Reads the design's parameters again (the last ones read while a job

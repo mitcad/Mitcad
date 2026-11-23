@@ -71,6 +71,10 @@ pub(super) const COMMANDS: &[&str] = &[
     "sketch.explode_text",
     "sketch.extend_to_meet",
     "sketch.import_points",
+    "sketch.conic",
+    "sketch.set_rho",
+    "sketch.equation_curve",
+    "sketch.edit_equation_curve",
     "sketch3d.create",
     "sketch3d.add_point",
     "sketch3d.add_line",
@@ -987,6 +991,67 @@ fn planar(name: &str) -> Option<Value> {
             "required": ["sketch"],
             "restrictions": ["MCP refuses path (a file read): give the points as text."],
             "examples": [{"cmd": "sketch.import_points", "sketch": "F1", "text": "0 0\n10 5\n20 0\n30 5\n"}]
+        }),
+        // Conic Curve and its Rho (mitcad#2236).
+        "sketch.conic" => json!({
+            "description": "A conic curve from start to end whose end tangents meet at the shoulder apex (an ordinary point that constraints and dimensions hold), shaped by rho between 0 and 1: 0.5 a parabola, less an elliptical arc, more a hyperbolic one. Exactly the rational quadratic Bezier of start, apex and end with middle weight rho / (1 - rho). Refused in words for rho outside (0, 1), two of the points at one place and the apex on the line through the ends. Result: made (the conic, c<n>).",
+            "properties": {
+                "sketch": sketch(),
+                "start": point("Where it starts"),
+                "end": point("Where it ends"),
+                "apex": point("The shoulder: where its end tangents meet"),
+                "rho": value_input("Its Rho, 0.5 by default: a number, a parameter's name or an expression (then the conic follows it)"),
+                "construction": flag(false, "A construction conic")
+            },
+            "required": ["sketch", "start", "end", "apex"],
+            "examples": [{"cmd": "sketch.conic", "sketch": "F1", "start": [0, 0], "end": [20, 0], "apex": [10, 10], "rho": 0.7}]
+        }),
+        "sketch.set_rho" => json!({
+            "description": "Changes a conic's Rho: a number between 0 and 1, a parameter's name or an expression of parameters (the conic follows it); an empty text stops it following a parameter.",
+            "properties": {
+                "sketch": sketch(),
+                "curve": id("The conic (c<n>)"),
+                "rho": value_input("Its Rho")
+            },
+            "required": ["sketch", "curve", "rho"],
+            "examples": [{"cmd": "sketch.set_rho", "sketch": "F1", "curve": "c4", "rho": "shoulder_rho"}]
+        }),
+        // Equation curves (mitcad#2237).
+        "sketch.equation_curve" => json!({
+            "description": "Equation Curve: a curve given by formulas in the design's expression language with its parameters, drawn as a fit point spline through fixed points the formulas place, as many as keep it within the tolerance (at most 200; a warning names the deviation reached). Inside a formula the variable (x of an explicit curve, t otherwise) is a plain number unless variable_unit makes it a length or an angle: x in the design's length unit, a polar curve's t in radians, and sin, cos and tan take plain numbers in radians; a formula gives a length or a plain number in the length unit. The points follow the parameters the formulas name before every solve; other curves may share its end points. A curve that returns to its start is closed and smooth there. Refused in words: a formula that does not read or names an unknown parameter, a value that is not finite inside the range, an empty or reversed range, a profile curve that crosses itself (a construction one gets a warning). Result: the editing commands' fields, made (the curve), curve, points, point_count, closed, deviation (mm), capped.",
+            "properties": {
+                "sketch": sketch(),
+                "mode": choice(&["explicit", "parametric", "polar"], "explicit (the default): y of x; parametric: x and y of t; polar: r of the angle t"),
+                "x": text("A parametric curve's x(t)"),
+                "y": text("An explicit curve's y(x), a parametric curve's y(t)"),
+                "r": text("A polar curve's r(t)"),
+                "start": value_input("The start of the range: an explicit curve's x (a length), a polar curve's angle, a parametric curve's t (a plain number, or what variable_unit makes it)"),
+                "end": value_input("The end of the range, greater than the start"),
+                "tolerance": number("How far the spline may be from the formulas, mm (0.01 when left out)"),
+                "construction": flag(false, "Construction geometry (left out of profiles)"),
+                "variable_unit": choice(&["none", "length", "angle"], "What the variable is inside the formulas and the range: none (the default) a plain number; length (an explicit x or a parametric t) a length, so t^2 / (10 mm) is a length and the range reads as lengths (numbers mm); angle (a parametric or polar t) an angle, the range as angles (numbers radians)")
+            },
+            "required": ["sketch", "start", "end"],
+            "examples": [{"cmd": "sketch.equation_curve", "sketch": "F1", "mode": "parametric", "x": "r*(cos(t)+t*sin(t))", "y": "r*(sin(t)-t*cos(t))", "start": 0, "end": 2},
+                         {"cmd": "sketch.equation_curve", "sketch": "F1", "y": "x^2/20", "start": -10, "end": 10}]
+        }),
+        "sketch.edit_equation_curve" => json!({
+            "description": "Edit Equation Curve: changes an equation curve's mode, formulas, range, tolerance or construction; each field left out stays as it is. Its points are placed again, as many as the tolerance needs; the start point, and the end point of an open curve, keep their ids, so geometry joined there stays joined. Refused as sketch.equation_curve refuses. Result: as sketch.equation_curve's.",
+            "properties": {
+                "sketch": sketch(),
+                "curve": id("The equation curve (c<n>, the sketch query's equations)"),
+                "mode": choice(&["explicit", "parametric", "polar"], "explicit: y of x; parametric: x and y of t; polar: r of the angle t"),
+                "x": text("A parametric curve's x(t)"),
+                "y": text("An explicit curve's y(x), a parametric curve's y(t)"),
+                "r": text("A polar curve's r(t)"),
+                "start": value_input("The start of the range"),
+                "end": value_input("The end of the range"),
+                "tolerance": number("How far the spline may be from the formulas, mm"),
+                "construction": flag(false, "Construction geometry (left out of profiles)"),
+                "variable_unit": choice(&["none", "length", "angle"], "What the variable is: none a plain number, length or angle (as sketch.equation_curve's)")
+            },
+            "required": ["sketch", "curve"],
+            "examples": [{"cmd": "sketch.edit_equation_curve", "sketch": "F1", "curve": "c9", "y": "x^2/10"}]
         }),
         _ => return None,
     };

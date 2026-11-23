@@ -332,7 +332,10 @@ fn unreadable_objects_are_named_in_words_and_the_rest_comes_in() {
     empty.objects.retain(|o| o.name.as_deref() == Some("Note"));
     let path = written(&empty, "notes only.serp");
     let error = command(&mut doc, json!({"cmd": "import_file", "path": path})).unwrap_err();
-    assert!(error.contains("no solids, surfaces or meshes"), "{error}");
+    assert!(
+        error.contains("no solids, surfaces, meshes or point clouds"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -348,4 +351,84 @@ fn into_a_design_with_content_a_serp_file_comes_in_its_own_component() {
     );
     let result = command(&mut doc, json!({"cmd": "import_file", "path": path})).unwrap();
     assert_eq!(result["component"]["name"], "vase", "{result}");
+}
+
+/// The file's point clouds come in as point cloud items (mitcad#2240): in
+/// the file's units, a far cloud from its origin, hidden by its layer, a
+/// cloud without its points still left out in words; a file of clouds
+/// only imports too.
+#[test]
+fn point_clouds_come_in_as_point_cloud_items() {
+    let mut scene = layered();
+    scene.units = Some("cm".to_owned());
+    scene.layers[3].visible = false;
+    let points = [[1.0f32, 2.0, 3.0], [-1.0, 0.0, 0.5]];
+    let (near, near_members) = testfile::cloud(
+        "c1",
+        "Scan",
+        "l1",
+        None,
+        &points,
+        Some(&[[1, 2, 3], [4, 5, 6]]),
+    );
+    let (far, far_members) =
+        testfile::cloud("c2", "Far", "l3", Some([1000.0, 0.0, 0.0]), &points, None);
+    let lost = json!({"id": "c3", "name": "Lost", "count": 3});
+    scene
+        .extra
+        .insert("pointclouds".to_owned(), json!([near, far, lost]));
+    scene.members = near_members.into_iter().chain(far_members).collect();
+    let path = written(&scene, "clouds.serp");
+    let mut doc = Document::new(MockKernel::default());
+    let result = command(&mut doc, json!({"cmd": "import_file", "path": path})).unwrap();
+    let clouds = query(&doc, json!({"query": "point_clouds"}));
+    let clouds = clouds.as_array().unwrap();
+    assert_eq!(clouds.len(), 2, "{clouds:?}");
+    assert_eq!(clouds[0]["name"], "Scan");
+    assert_eq!(clouds[0]["count"], 2);
+    assert_eq!(clouds[0]["colored"], true);
+    assert_eq!(clouds[0]["visible"], true);
+    assert_eq!(clouds[0]["file_name"], "clouds.serp");
+    // Centimetres: 1, 2, 3 cm is 10, 20, 30 mm.
+    assert_eq!(
+        clouds[0]["bounds"],
+        json!([[-10.0, 0.0, 5.0], [10.0, 20.0, 30.0]])
+    );
+    assert_eq!(clouds[1]["name"], "Far");
+    assert_eq!(clouds[1]["visible"], false);
+    assert_eq!(clouds[1]["bounds"][1][0], 10010.0);
+    // The cloud without points is still named as left out.
+    let warnings = result["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(
+        warnings
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|w| w.starts_with("not imported:") && w.contains("1 point cloud")),
+        "{warnings:?}"
+    );
+    // One undo step takes the clouds back with the bodies.
+    doc.undo();
+    assert!(
+        query(&doc, json!({"query": "point_clouds"}))
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Clouds only.
+    let (only, only_members) = testfile::cloud("c1", "Scan", "default", None, &points, None);
+    let mut scene = TestScene {
+        version: 9,
+        members: only_members,
+        ..TestScene::default()
+    };
+    scene.extra.insert("pointclouds".to_owned(), json!([only]));
+    let path = written(&scene, "clouds only.serp");
+    let mut doc = Document::new(MockKernel::default());
+    command(&mut doc, json!({"cmd": "import_file", "path": path})).unwrap();
+    assert_eq!(
+        query(&doc, json!({"query": "point_clouds"}))[0]["name"],
+        "Scan"
+    );
+    assert!(doc.bodies().is_empty());
 }

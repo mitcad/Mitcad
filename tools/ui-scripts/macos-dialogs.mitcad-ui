@@ -138,9 +138,9 @@ type 'width + 5 mm'
 key Return
 expect-log '^Parameter d1 expression: width \+ 5 mm = 40 mm$'
 expect-model-bodies 1 32000
-click-parameter width 0
-button '^Delete$'
-expect-log '^Delete parameter width refused: '
+# width's own delete button is disabled while d1 uses it (mitcad#2202).
+expect-ever '^Parameters in use: width [(]'
+expect-widget-property parameterDelete_width enabled false
 expect-parameter-cell width 2 '^35 mm$' visible
 click-parameter d1 2
 key F2
@@ -149,9 +149,11 @@ type '60 mm'
 key Return
 expect-log '^Parameter d1 expression: 60 mm = 60 mm$'
 expect-model-bodies 1 48000
-click-parameter width 0
-button '^Delete$'
-expect-log '^Deleted parameter width$'
+# Show the rightmost table column after the compact-layout checks.
+dialog-resize 1040 440
+expect-widget-property parameterDelete_width enabled true
+dialog-click-logged '^Parameters width delete at '
+wait-log '^Deleted user parameter width by its row button$'
 expect-parameter-cell width 0 '.*' absent
 button '^OK$'
 focus-main

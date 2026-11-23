@@ -39,6 +39,10 @@ public:
   // For the tests (TestDriver's invoke-widget): follows the first link of
   // the page whose text or address contains `text`, as a click would.
   Q_INVOKABLE void clickLink(const QString& text);
+  // The host's note under the page (interface 4, mitcad#2281): a download
+  // that waits for the open command, comes in when it closes, or is
+  // dropped with the design.
+  Q_INVOKABLE void showHostNote(const QString& note, bool warning);
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;

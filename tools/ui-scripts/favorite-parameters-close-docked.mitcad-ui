@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Favorite Parameters (mitcad#2203) in the Docked layout, after
+# favorite-parameters.mitcad-ui left the dock shown: the next start shows
+# it as chosen; the dock's own close button hides it, and the choice is
+# saved. Run by tools/ui-favorite-parameters-test.sh,
+# tools/ui-windows-favorite-parameters-test.ps1 and
+# tools/ui-macos-favorite-parameters-test.sh. ASCII only.
+expect-ever 'View area' 600
+wait-idle 600
+expect-ever '^Favorite parameters panel at the start: shown [(]as chosen[)]$'
+expect-ever '^Favorite parameters card: none$' 20
+expect-ever '^Favorite parameters open at ' 20
+wait-idle
+mark
+dock-close favoriteParametersDock
+wait-log '^Favorite parameters: closed by its button$' 20
+wait-log '^Favorite parameters panel: hidden$' 20
+expect-setting favoriteParameters/shown false
+wait-idle
+expect-never 'TestDriver: FAIL'

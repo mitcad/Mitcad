@@ -22,6 +22,7 @@
 #include <BRepCheck_Solid.hxx>
 #include <TopExp_Explorer.hxx>
 #include <BRepGProp.hxx>
+#include <BRepLib_CheckCurveOnSurface.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_TVertex.hxx>
 #include <BRep_Tool.hxx>
@@ -79,6 +80,15 @@ void require_surfaces(const TopoDS_Shape& shape, const char* operation) {
                                 ": a mesh body (faces without surfaces) cannot be used; the operation "
                                 "works on solid and surface bodies");
   }
+}
+
+std::optional<double> curve_on_surface_gap(const TopoDS_Edge& edge, const TopoDS_Face& face) {
+  BRepLib_CheckCurveOnSurface check(edge, face);
+  check.Perform();
+  if (!check.IsDone() || !std::isfinite(check.MaxDistance())) {
+    return std::nullopt;
+  }
+  return check.MaxDistance();
 }
 
 namespace {

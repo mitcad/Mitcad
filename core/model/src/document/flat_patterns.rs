@@ -145,6 +145,13 @@ impl<K: Kernel> Document<K> {
                 format!("body {body} has no Flat Pattern"),
             )));
         };
+        self.flat_pattern_with(body, def)
+    }
+
+    /// A body's Flat Pattern evaluated with these settings, kept as
+    /// [`Document::flat_pattern`] keeps its item's (the last one per body,
+    /// by everything it is made of).
+    fn flat_pattern_with(&self, body: BodyUid, def: &FlatPatternDef) -> FlatOutcome<K::Shape> {
         let result = self.last_result();
         let name = |feature: FeatureUid| self.flat_feature_name(feature);
         let key = flat::fingerprint(result, body, def, &name);
@@ -321,6 +328,12 @@ impl<K: Kernel> Document<K> {
         }
         let outcome = if own {
             self.flat_pattern(body)
+        } else if reference_side.is_none() && !self.state.flat_patterns.contains_key(&body) {
+            // A body without an item, as the Sheet Metal list, cut sheets
+            // and drawings' Flat Pattern views take it (mitcad#2280: a view
+            // asks for it many times each time it is drawn): kept as an
+            // item's evaluation is.
+            self.flat_pattern_with(body, &def)
         } else {
             Arc::new(flat::evaluate(
                 &self.kernel,

@@ -13,8 +13,9 @@
 #   - A body, a used sketch and a feature selected, Create Selection Set,
 #     renamed Favourites in place; a click on the set selects all three;
 #     Find in Timeline on the feature's member row and Find in Browser on
-#     the sketch's reveal the originals; Remove from Set; Delete the set;
-#     Undo of each step.
+#     the sketch's reveal the originals; Remove from Set; the Delete key on
+#     a member row removes the link and leaves the body (mitcad#2219);
+#     Delete the set; Undo of each step.
 #   - Saved: the design keeps the set (selection-sets-check.json).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).

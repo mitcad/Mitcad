@@ -17,6 +17,7 @@ use mitcad_model::kernel::Kernel;
 use mitcad_model::notice::{self, Notice};
 use mitcad_model::sketch::cleanup::Removal;
 use mitcad_model::sketch::edit::{EditReport, Freedom, PointInput, SketchEdit};
+use mitcad_model::sketch::equation::{EquationInput, EquationMade};
 use mitcad_model::sketch::geometry::Curve2;
 use mitcad_model::sketch::inputs::{DrawnInputs, InputPoints};
 use mitcad_model::sketch::modify::{DragTarget, Item, Map2, point_input};
@@ -872,6 +873,76 @@ named_enum! {
             #[serde(default = "yes")]
             close_trailing_edge: bool,
         },
+        // Conic Curve (mitcad#2236, `conic.rs` of the sketch crate): from
+        // `start` to `end`, its end tangents meeting at the shoulder
+        // `apex` (point inputs), shaped by `rho` (0.5 by default; a number,
+        // a parameter's name or an expression).
+        "sketch.conic" => Conic {
+            sketch: FeatureUid,
+            start: Value,
+            end: Value,
+            apex: Value,
+            #[serde(default)]
+            rho: Option<ValueInput>,
+            #[serde(default)]
+            construction: bool,
+        },
+        // A conic's Rho changed (mitcad#2236): a number, a parameter's name
+        // or an expression; an empty text stops it following a parameter.
+        "sketch.set_rho" => SetRho {
+            sketch: FeatureUid,
+            #[serde(with = "mitcad_model::internal::ids::curve_serde")]
+            curve: EntityUid,
+            rho: ValueInput,
+        },
+        // Equation Curve (mitcad#2237, `equation.rs` of the sketch crate):
+        // a curve of formulas of the design's parameters, a fit point
+        // spline through the points they place.
+        "sketch.equation_curve" => EquationCurve {
+            sketch: FeatureUid,
+            /// `explicit` (the default), `parametric` or `polar`.
+            #[serde(default)]
+            mode: Option<mitcad_model::sketch::equation::EquationMode>,
+            #[serde(default)]
+            x: Option<String>,
+            #[serde(default)]
+            y: Option<String>,
+            #[serde(default)]
+            r: Option<String>,
+            start: ValueInput,
+            end: ValueInput,
+            #[serde(default)]
+            tolerance: Option<f64>,
+            #[serde(default)]
+            construction: bool,
+            /// What the variable is (mitcad#2264): `none` (a plain
+            /// number, the default), `angle` or `length`.
+            #[serde(default)]
+            variable_unit: Option<mitcad_model::sketch::equation::VariableUnit>,
+        },
+        "sketch.edit_equation_curve" => EditEquationCurve {
+            sketch: FeatureUid,
+            #[serde(with = "mitcad_model::internal::ids::curve_serde")]
+            curve: EntityUid,
+            #[serde(default)]
+            mode: Option<mitcad_model::sketch::equation::EquationMode>,
+            #[serde(default)]
+            x: Option<String>,
+            #[serde(default)]
+            y: Option<String>,
+            #[serde(default)]
+            r: Option<String>,
+            #[serde(default)]
+            start: Option<ValueInput>,
+            #[serde(default)]
+            end: Option<ValueInput>,
+            #[serde(default)]
+            tolerance: Option<f64>,
+            #[serde(default)]
+            construction: Option<bool>,
+            #[serde(default)]
+            variable_unit: Option<mitcad_model::sketch::equation::VariableUnit>,
+        },
     }
 }
 
@@ -1433,6 +1504,25 @@ fn pattern_made(def: &SketchDef, id: ConstraintUid) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// What an equation curve made or edited is (mitcad#2237): the curve, its
+/// points in order, how many, whether it closed, and the largest deviation
+/// of the spline from the formulas, mm.
+fn equation_made_json(made: &EquationMade) -> Value {
+    let points: Vec<String> = made
+        .points
+        .iter()
+        .map(|p| Ref::Point(*p).to_string())
+        .collect();
+    json!({
+        "curve": Ref::Curve(made.curve),
+        "points": points,
+        "point_count": made.points.len(),
+        "closed": made.closed,
+        "deviation": made.deviation,
+        "capped": made.capped,
+    })
+}
+
 /// The change a sketch edit makes, as its refusal for conflicting
 /// constraints names it ("the Equal between two lines can't hold with the
 /// fillet", mitcad#1566).
@@ -1459,6 +1549,7 @@ fn refused_change(command: &SketchCommand) -> &'static str {
         C::Move { .. } => "the move",
         C::Scale { .. } => "the scale",
         C::BlendCurve { .. } => "the blend curve",
+        C::EquationCurve { .. } | C::EditEquationCurve { .. } => "the equation curve",
         _ => "the change",
     }
 }
@@ -1600,8 +1691,9 @@ pub(super) fn step_kind(command: &Value) -> Option<String> {
 
 /// The curves a `sketch.*` command changes that its work step names as
 /// `changed` (mitcad#1750): a `sketch.trim`'s or `sketch.extend`'s
-/// `curve`, a `sketch.extend_to_meet`'s `a` and `b` (mitcad#2178). They
-/// stay with the step that made them.
+/// `curve`, a `sketch.extend_to_meet`'s `a` and `b` (mitcad#2178), a
+/// `sketch.edit_equation_curve`'s `curve` (mitcad#2237). They stay with
+/// the step that made them.
 pub(super) fn step_changes(command: &Value) -> Vec<EntityUid> {
     let name = command["cmd"].as_str().unwrap_or_default();
     // Extend to Meet (mitcad#2178) changes both its curves.
@@ -1612,7 +1704,11 @@ pub(super) fn step_changes(command: &Value) -> Vec<EntityUid> {
             .filter_map(|curve| EntityUid::parse_curve(curve).ok())
             .collect();
     }
-    if name != "sketch.trim" && name != "sketch.extend" && name != "sketch.break" {
+    if name != "sketch.trim"
+        && name != "sketch.extend"
+        && name != "sketch.break"
+        && name != "sketch.edit_equation_curve"
+    {
         return Vec::new();
     }
     command["curve"]
@@ -2123,9 +2219,19 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
         // or not the sketch evaluated: the evaluation's own solve while it
         // is that of this definition and these values (mitcad#679), else
         // solved here.
+        // Equation curves where their formulas put them now (mitcad#2237).
+        let placed;
+        let solving = if def.equations.is_empty() {
+            def
+        } else {
+            let mut copy = def.clone();
+            let _ = mitcad_model::sketch::equation::follow_formulas(&mut copy, params.table());
+            placed = copy;
+            &placed
+        };
         let solved = match self.evaluated_solve(uid) {
             Some(solved) => Ok(solved),
-            None => def
+            None => solving
                 .solve_with(
                     &mut |id| {
                         params
@@ -2155,6 +2261,33 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                 let mut value = serde_json::to_value(e).expect("serializes");
                 if derived.contains(&e.id) {
                     value["derived"] = json!(true);
+                }
+                // A conic (mitcad#2236) also as the spline it is, for a
+                // reader that wants one, and the parameter of its Rho.
+                if let EntityKind::Conic {
+                    start,
+                    end,
+                    apex,
+                    rho,
+                } = &e.kind
+                {
+                    let rho = def
+                        .conic_rho(e.id)
+                        .and_then(|id| params.value(id))
+                        .unwrap_or(*rho);
+                    value["rho"] = json!(rho);
+                    value["degree"] = json!(2);
+                    value["control"] = json!(
+                        [start, apex, end]
+                            .iter()
+                            .map(|p| Ref::Point(**p).to_string())
+                            .collect::<Vec<_>>()
+                    );
+                    value["weights"] = json!([1.0, mitcad_model::sketch::conic::weight(rho), 1.0]);
+                    if let Some(param) = def.conic_rho(e.id).and_then(|id| params.get(id)) {
+                        value["rho_parameter"] = json!(param.name());
+                        value["rho_expression"] = json!(param.expression());
+                    }
                 }
                 if let Some(solved) = &solved {
                     match &e.kind {
@@ -2653,6 +2786,27 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                 })
                 .collect();
             result["blocks"] = json!(blocks);
+        }
+        // Its equation curves' formulas (mitcad#2237), each with its curve
+        // and the number of points it has: Edit Equation Curve opens with
+        // them.
+        if !def.equations.is_empty() {
+            let equations: Vec<Value> = def
+                .equations
+                .iter()
+                .map(|q| {
+                    let mut value = json!(q);
+                    let count = match def.entity(q.curve).map(|e| &e.kind) {
+                        Some(EntityKind::FittedSpline { points, .. }) => points.len(),
+                        _ => 0,
+                    };
+                    value["point_count"] = json!(count);
+                    value["variable"] = json!(q.mode.variable());
+                    value["variable_unit"] = json!(q.variable_unit.name());
+                    value
+                })
+                .collect();
+            result["equations"] = json!(equations);
         }
         // The inactive constraints and dimensions the geometry does not
         // meet (mitcad#721).
@@ -3320,6 +3474,10 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             C::Scale { sketch, .. } => (*sketch, "Scale {sketch}"),
             C::BlendCurve { sketch, .. } => (*sketch, "Blend Curve in {sketch}"),
             C::ExtendToMeet { sketch, .. } => (*sketch, "Extend to Meet in {sketch}"),
+            C::Conic { sketch, .. } => (*sketch, "Add Conic to {sketch}"),
+            C::SetRho { sketch, .. } => (*sketch, "Change Rho in {sketch}"),
+            C::EquationCurve { sketch, .. } => (*sketch, "Add Equation Curve to {sketch}"),
+            C::EditEquationCurve { sketch, .. } => (*sketch, "Edit Equation Curve in {sketch}"),
             C::Create { .. }
             | C::AddRectangle { .. }
             | C::AddCircle { .. }
@@ -4443,6 +4601,77 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         "result": met.result,
                     }));
                 }
+                C::Conic {
+                    start,
+                    end,
+                    apex,
+                    rho,
+                    construction,
+                    ..
+                } => {
+                    let start = drawn.read(edit, "start", &start)?;
+                    let end = drawn.read(edit, "end", &end)?;
+                    let apex = drawn.read(edit, "apex", &apex)?;
+                    let id = edit.conic(start, end, apex, rho.as_ref(), construction)?;
+                    made_ref.push(Ref::Curve(id).to_string());
+                }
+                C::SetRho { curve, rho, .. } => {
+                    edit.set_conic_rho(curve, &rho)?;
+                }
+                C::EquationCurve {
+                    mode,
+                    x,
+                    y,
+                    r,
+                    start,
+                    end,
+                    tolerance,
+                    construction,
+                    variable_unit,
+                    ..
+                } => {
+                    let input = EquationInput {
+                        mode,
+                        x,
+                        y,
+                        r,
+                        start: Some(start),
+                        end: Some(end),
+                        tolerance,
+                        construction: Some(construction),
+                        variable_unit,
+                    };
+                    let curve = edit.equation_curve(&input)?;
+                    made_ref.push(Ref::Curve(curve.curve).to_string());
+                    *joined_ref = Some(equation_made_json(&curve));
+                }
+                C::EditEquationCurve {
+                    curve,
+                    mode,
+                    x,
+                    y,
+                    r,
+                    start,
+                    end,
+                    tolerance,
+                    construction,
+                    variable_unit,
+                    ..
+                } => {
+                    let input = EquationInput {
+                        mode,
+                        x,
+                        y,
+                        r,
+                        start,
+                        end,
+                        tolerance,
+                        construction,
+                        variable_unit,
+                    };
+                    let edited = edit.edit_equation_curve(curve, &input)?;
+                    *joined_ref = Some(equation_made_json(&edited));
+                }
                 C::Create { .. }
                 | C::AddRectangle { .. }
                 | C::AddCircle { .. }
@@ -5355,6 +5584,7 @@ mod notice_tests {
             helpers: Vec::new(),
             derived: false,
             round: false,
+            shifts: Vec::new(),
         });
         def.constraints.push(Constraint::new(
             ConstraintUid(3),

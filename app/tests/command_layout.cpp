@@ -192,6 +192,11 @@ void shippedDefaultTests() {
   CHECK(home("inspect.print_analysis") == QStringLiteral("MAKE_PRINT/PREPARE"));
   // Draft Analysis in the Inspect group after Print Analysis (mitcad#2166).
   CHECK(home("inspect.draft_analysis") == QStringLiteral("SOLID/INSPECT"));
+  // Point Cloud Deviation after Draft Analysis, Point Cloud in Insert after
+  // Image Reference; Move Point Cloud from a cloud's row only (mitcad#2240).
+  CHECK(home("inspect.point_cloud_deviation") == QStringLiteral("SOLID/INSPECT"));
+  CHECK(home("insert.point_cloud") == QStringLiteral("SOLID/INSERT"));
+  CHECK(layout.unplaced.contains(QStringLiteral("insert.move_point_cloud")));
   // The Make workspace's tabs (the owner, 18.11.2026): each method's
   // commands at home on its own tab, every command of 3D Print's own groups
   // and of Laser's Export a button of its own; Materials, Annotate and

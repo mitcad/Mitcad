@@ -37,12 +37,25 @@ struct ComponentBrowserColors {
   QColor warning;
 };
 
+// What became of a downloaded file the host was given (interface 4,
+// mitcad#2281).
+enum class WebImportResult {
+  Imported, // in the design (or opened as a design of its own)
+  Waiting,  // the host keeps a copy of its own until the open command closes
+  Failed,   // not brought in
+};
+
 class ComponentBrowserHost {
 public:
   virtual ~ComponentBrowserHost() = default;
   // Brings a downloaded file into the design (MainWindow::importWebDownload):
-  // false with the reason in `error` when it did not.
-  virtual bool importDownload(const QString& path, WebFileKind kind, QString* error) = 0;
+  // Imported; Waiting with the note to show under the page (the file comes
+  // in when the open command closes: the host has taken its own copy, the
+  // download's file may go); Failed with the reason in `note`. While a file
+  // waits, and when it comes in or is dropped later, the host sets the
+  // window's note through its invokable `showHostNote(QString note, bool
+  // warning)` (ComponentBrowser).
+  virtual WebImportResult importDownload(const QString& path, WebFileKind kind, QString* note) = 0;
   // A zip's files as JSON [{"name", "size"}] (the bridge's zip_list); empty
   // with the reason in `error` when it cannot be read.
   virtual QString zipList(const QString& zip, QString* error) = 0;
@@ -100,7 +113,9 @@ public:
 // (component.json's "abi", the update manifest's browser packages): a
 // MitCad loads only a component of its own interface. Raise it with every
 // change of this file. (CMake reads it from here: keep the line's form.)
-constexpr int kComponentBrowserAbi = 3;
+// Interface 4 (mitcad#2281): importDownload's WebImportResult and the
+// window's showHostNote.
+constexpr int kComponentBrowserAbi = 4;
 using ComponentBrowserAbiFunction = int (*)();
 using CreateComponentBrowserFunction = QDialog* (*)(ComponentBrowserHost* host, QWidget* parent);
 inline constexpr char kComponentBrowserAbiSymbol[] = "mitcad_component_browser_abi";

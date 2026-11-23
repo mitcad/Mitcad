@@ -20,7 +20,8 @@
 //!   (`hostkeys.rs`).
 //! - A project's folders and designs (mitcad#144): `project_tree`
 //!   (`listing.rs`), and `create_folder`, `new_design`, `move` and
-//!   `delete`, each one version (`operations.rs`).
+//!   `delete`, each one version (`operations.rs`); its other files
+//!   (mitcad#2204): `add_files` and `record` (`files.rs`).
 //!
 //! What a remote or a server sends is untrusted: names shown to people are
 //! cleaned ([`clean_text`]) and host keys are parsed and checked here; the
@@ -42,6 +43,9 @@ mod links;
 mod listing;
 mod operations;
 pub use listing::FOLDER_PLACEHOLDER;
+// Other files of a project (mitcad#2204).
+mod files;
+pub use files::LARGE_FILE;
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};

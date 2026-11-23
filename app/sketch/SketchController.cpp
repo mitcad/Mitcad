@@ -131,6 +131,7 @@ QString kindKey(FieldSpec::Kind kind) {
   case FieldSpec::Kind::Angle:
     return QStringLiteral("angle");
   case FieldSpec::Kind::Count:
+  case FieldSpec::Kind::Ratio:
     return QStringLiteral("unitless");
   case FieldSpec::Kind::Length:
   case FieldSpec::Kind::Text:
@@ -4323,16 +4324,18 @@ void SketchController::setFields(const QVector<FieldSpec>& fields) {
     if (spec.kind != FieldSpec::Kind::Text) {
       // Parameter suggestions and the fx browser (mitcad#567).
       ParameterFieldOptions suggest;
-      suggest.kind = spec.kind == FieldSpec::Kind::Angle   ? ParameterKind::Angle
-                     : spec.kind == FieldSpec::Kind::Count ? ParameterKind::Unitless
-                                                           : ParameterKind::Length;
+      suggest.kind = spec.kind == FieldSpec::Kind::Angle                                        ? ParameterKind::Angle
+                     : spec.kind == FieldSpec::Kind::Count || spec.kind == FieldSpec::Kind::Ratio ? ParameterKind::Unitless
+                                                                                                : ParameterKind::Length;
       suggest.sketch = m_uid;
       suggest.label = QStringLiteral("sketch %1").arg(spec.id);
       // Up, Down and the wheel step a plain value (mitcad#1254), down to
       // the tool's minimum: a size the tool refuses at 0 (a circle's
       // diameter, core/sketch/src/tools.rs) above 0; the one count a tool
       // asks for is a polygon's sides, 3 to 256 (tools.rs, polygon).
-      suggest.steps = true;
+      // Not a ratio between 0 and 1 (a conic's Rho), whose steps of 1
+      // would leave its range at once.
+      suggest.steps = spec.kind != FieldSpec::Kind::Ratio;
       suggest.stepLimit.minimum = spec.stepMinimum;
       suggest.stepLimit.above = spec.stepAboveMinimum;
       if (spec.kind == FieldSpec::Kind::Count) {
@@ -4672,6 +4675,9 @@ void SketchController::setLive(const QString& id, double value) {
   case FieldSpec::Kind::Count:
     text = QString::number(static_cast<int>(std::lround(value)));
     break;
+  case FieldSpec::Kind::Ratio:
+    text = QString::number(value, 'g', 6);
+    break;
   case FieldSpec::Kind::Length:
     text = QString::number(value / m_unitScale, 'f', 2);
     break;
@@ -4729,9 +4735,9 @@ void SketchController::openValueEditor(const QPointF& at, const QString& text, F
     // Parameter suggestions, the fx browser, name = value and Create User
     // Parameter (mitcad#567, mitcad#568).
     ParameterFieldOptions suggest;
-    suggest.kind = kind == FieldSpec::Kind::Angle   ? ParameterKind::Angle
-                   : kind == FieldSpec::Kind::Count ? ParameterKind::Unitless
-                                                    : ParameterKind::Length;
+    suggest.kind = kind == FieldSpec::Kind::Angle                                   ? ParameterKind::Angle
+                   : kind == FieldSpec::Kind::Count || kind == FieldSpec::Kind::Ratio ? ParameterKind::Unitless
+                                                                                      : ParameterKind::Length;
     suggest.own = name;
     suggest.sketch = m_uid;
     suggest.label = name.isEmpty() ? QStringLiteral("sketch dimension") : QStringLiteral("dimension %1").arg(name);
@@ -4937,7 +4943,9 @@ bool SketchController::evaluate(const QString& text, FieldSpec::Kind kind, QStri
     const QString typed = answer.value(QStringLiteral("expression")).toString(text);
     const bool isNumber = parsePlainNumber(text).has_value();
     const int space = static_cast<int>(shown.lastIndexOf(QLatin1Char(' ')));
-    expression = isNumber && space > 0 && kind != FieldSpec::Kind::Count ? typed + shown.mid(space) : typed;
+    expression = isNumber && space > 0 && kind != FieldSpec::Kind::Count && kind != FieldSpec::Kind::Ratio
+                     ? typed + shown.mid(space)
+                     : typed;
     return true;
   } catch (const std::exception& e) {
     problem = errorText(e);

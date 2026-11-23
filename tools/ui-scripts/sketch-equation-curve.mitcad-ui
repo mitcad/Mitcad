@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: MIT
+# Equation Curve (mitcad#2237) on sketch-equation-curve.json's Sketch1 (the
+# user parameter r = 3 mm; two fixed framing points at (-10, -5) and
+# (30, 25), a fixed point p3 at the origin):
+#   1. Equation Curve, Mode Parametric, the involute x = r*(cos(t)+t*sin(t)),
+#      y = r*(sin(t)-t*cos(t)) for t from 0 to 2: the preview runs from
+#      (3, 0) to r*(cos 2 + 2 sin 2, sin 2 - 2 cos 2) = (4.207, 5.225); OK.
+#   2. Lines from its end to the origin and from the origin to its start
+#      close a profile whose area is r^2 * 2^3 / 6 = 12 mm^2 (the radial
+#      lines add nothing to the area integral), extruded 12 mm: 144 mm^3.
+#   3. r set to 12 mm: the curve follows, the profile is 192 mm^2 and the
+#      body 2304 mm^3; a double-click on the curve (midway along its last,
+#      longest piece, clear of its points) opens Edit Equation Curve, whose
+#      log has it from (12, 0) to (16.829, 20.899).
+#   4. The formula x edited to r*(cos(t)+t*sin(t)) + 1: the curve moves 1 mm
+#      along x, its ends keep their points and the lines stay on them; the
+#      area grows by half the end's y, 20.899 / 2, to 202.450 mm^2.
+# The wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation. The framing points keep the fit close around the curve: in
+# session 0's 1024x768 window on Windows the view is 460 x 497 px, and with
+# the earlier frame of (-40, -30) to (40, 30) the fit showed 5 px per mm,
+# so the double-click 1.7 mm (8.5 px) from the curve's points took the end
+# point p17 (8 px reach) instead of the curve. Run by tools/ui-sketch-equation-curve-test.sh (Linux),
+# tools/ui-windows-sketch-equation-curve-test.ps1 (Windows) and
+# tools/ui-macos-sketch-equation-curve-test.sh (macOS).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. The involute of the base radius r.
+mark
+command sketch.equation_curve
+wait-log '^Command Equation Curve started'
+mark
+qt-choice input_mode 'Parametric: x(t), y(t)'
+wait-log '^Panel Equation Curve input xt at '
+type-in '^Panel Equation Curve input xt at ' 'r*(cos(t)+t*sin(t))'
+type-in '^Panel Equation Curve input yt at ' 'r*(sin(t)-t*cos(t))'
+type-in '^Panel Equation Curve input end_t at ' '2'
+wait-log '^Preview Equation Curve curve: c[0-9]+, [0-9]+ points from p[0-9]+ \(3\.000, 0\.000\) to p[0-9]+ \(4\.207, 5\.225\), open, deviation '
+wait-idle
+capture first '^Preview Equation Curve curve: c[0-9]+, [0-9]+ points from (p[0-9]+) \(3\.000, 0\.000\) '
+capture last '^Preview Equation Curve curve: c[0-9]+, [0-9]+ points from p[0-9]+ \(3\.000, 0\.000\) to (p[0-9]+) \(4\.207, 5\.225\)'
+screenshot '${MITCAD_TEST_WORK}/sketch-equation-curve-preview.png'
+key Return
+wait-log '^Added equation curve, parametric x = r\*\(cos\(t\)\+t\*sin\(t\)\), y = r\*\(sin\(t\)-t\*cos\(t\)\), t from '
+wait-log '^Added Equation Curve'
+wait-idle
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+
+# 2. The profile closed through the origin, extruded 12 mm (not the 10 mm
+# Extrude starts with, so that the typed distance makes a new preview).
+model-command '{"cmd":"sketch.add_line","sketch":"F1","start":"${last}","end":"p3"}'
+model-command '{"cmd":"sketch.add_line","sketch":"F1","start":"p3","end":"${first}"}'
+wait-idle
+capture-model-number area '{"query":"profiles","sketch":"F1","point":[2,1],"measures":true}' 0.area
+expect-near ${area} 12 0.02
+mark
+command solid.extrude
+expect-log 'Extrude Profiles: 1 profile '
+expect-log 'Preview Extrude: ok' 30
+wait-idle
+mark
+focus-widget input_distance
+key ctrl+a
+type 12
+expect-log 'Extrude Distance: 12 = 12 mm'
+expect-log 'Preview Extrude: ok' 30
+wait-idle
+button '^OK$'
+expect-log 'Added extrude' 30
+wait-idle
+capture-model-number volume '{"query":"properties"}' total.volume
+expect-near ${volume} 144 0.02
+
+# 3. r to 12 mm: the curve, the profile and the body follow.
+model-command '{"cmd":"set_parameter","name":"r","expression":"12 mm"}'
+wait-idle
+capture-model-number area '{"query":"profiles","sketch":"F1","point":[8,4],"measures":true}' 0.area
+expect-near ${area} 192 0.02
+capture-model-number volume '{"query":"properties"}' total.volume
+expect-near ${volume} 2304 0.02
+mark
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+mark
+# The curve midway along its last piece, at t = 27/14 (its 15 points are at
+# t = i/7): r*(cos t + t sin t, sin t - t cos t), 1.7 mm from its points
+# and from the line to the origin (about 15 px at the fit of the framing
+# points in the smallest view).
+sketch-dblclick 17.475 19.345
+wait-log '^Command Edit Equation Curve started'
+wait-log '^Edit Equation Curve opened on parametric: c[0-9]+, [0-9]+ points from p[0-9]+ \(12\.000, 0\.000\) to p[0-9]+ \(16\.829, 20\.899\), open$'
+expect-input-text xt '^r\*\(cos\(t\)\+t\*sin\(t\)\)$'
+
+# 4. The formula x moved 1 mm along x.
+mark
+type-in '^Panel Edit Equation Curve input xt at ' 'r*(cos(t)+t*sin(t)) + 1'
+wait-log "^Preview Edit Equation Curve curve: c[0-9]+, [0-9]+ points from ${first} \(13\.000, 0\.000\) to ${last} \(17\.829, 20\.899\), open, deviation "
+wait-idle
+key Return
+wait-log '^Edited equation curve c[0-9]+, parametric x = r\*\(cos\(t\)\+t\*sin\(t\)\) \+ 1, '
+wait-log '^Added Edit Equation Curve'
+wait-idle
+expect-no-log '^Sketch conflict painted: k'
+screenshot '${MITCAD_TEST_WORK}/sketch-equation-curve-edited.png'
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+capture-model-number area '{"query":"profiles","sketch":"F1","point":[10,4],"measures":true}' 0.area
+expect-near ${area} 202.45 0.02
+capture-model-number volume '{"query":"properties"}' total.volume
+expect-near ${volume} 2429.4 0.02
+
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

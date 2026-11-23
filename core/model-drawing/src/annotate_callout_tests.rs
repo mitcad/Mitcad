@@ -185,6 +185,7 @@ fn a_hole_callout_saved_before_keeps_its_text_where_it_was_drawn() {
         side: None,
         outline: None,
         extreme: None,
+        bend: None,
     };
     let mut kept = callout();
     kept.picks = vec![pick.clone()];

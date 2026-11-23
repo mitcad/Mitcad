@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: MIT
+# mitcad#2204: a project's other files in the Projects panel. The runner
+# (tools/ui-project-files-test.sh, the Windows
+# tools/ui-windows-project-files-test.ps1) made the Local project
+# ${MITCAD_TEST_PROJECT} (${MITCAD_TEST_PROJECT_DIR}) with the design
+# plate.mitcad, a PNG and a PDF recorded beside it, the PDF changed since
+# (as by its own app), and the files notes.txt and drop.csv in
+# ${MITCAD_TEST_WORK}/outside; it runs this script once in the Floating
+# layout and once in the Docked one, each on a project of its own. The
+# system's app is a stub (MITCAD_TEST_LOG_URLS: nothing opens on the
+# desktop). All files are synthetic.
+wait-idle
+expect-ever '^Projects row ${MITCAD_TEST_PROJECT} at ' 30
+mark
+click-logged '^Projects row ${MITCAD_TEST_PROJECT} at '
+focus-widget projectsTree
+key Right
+wait-log '^Projects row ${MITCAD_TEST_PROJECT}/photo\.png at ' 10
+
+# 1. The PNG and the PDF are listed after the design, with their marks:
+# none for the recorded PNG, "*" for the changed PDF; the tooltip has the
+# path, the state, the size and what opens it.
+expect-ever '^Projects tree: ${MITCAD_TEST_PROJECT} \(.*\): plate\.mitcad v1 \| datasheet\.pdf file, changed \| photo\.png file, recorded$' 10
+wait-log '^Projects text ${MITCAD_TEST_PROJECT}/photo\.png: "photo\.png" none; tooltip: photo\.png / .*photo\.png / Recorded / Size: [0-9]+ bytes / Opens with the system.s app$' 10
+wait-log '^Projects text ${MITCAD_TEST_PROJECT}/datasheet\.pdf: "datasheet\.pdf" \*; tooltip: datasheet\.pdf / .* / Changed / Size: ' 10
+
+# 2. A double-click hands the PNG to the system's app (the stub logs it).
+mark
+dblclick-logged '^Projects row ${MITCAD_TEST_PROJECT}/photo\.png at '
+wait-log '^Open file with the system.s app \(test, not opened\): .*/${MITCAD_TEST_PROJECT}/photo\.png$' 10
+wait-log '^Projects panel: .*/photo\.png handed to the system.s app$' 10
+expect-no-log '^Projects panel: the system could not open '
+
+# 3. Record Changes on the changed PDF: one version, the "*" goes.
+mark
+context-menu-logged '^Projects row ${MITCAD_TEST_PROJECT}/datasheet\.pdf at ' 'Record Changes'
+wait-log '^Projects panel: record recorded as [0-9a-f]{7}$' 30
+wait-log '^Projects tree: ${MITCAD_TEST_PROJECT} \(.*datasheet\.pdf file, recorded \| photo\.png file, recorded$' 30
+
+# 4. Add Files… on the project's row: the file chosen in the file dialog
+# is copied in and recorded as one version.
+mark
+context-menu-logged '^Projects row ${MITCAD_TEST_PROJECT} at ' 'Add Files'
+focus-dialog '^Add Files$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/outside/notes.txt"
+sleep 300
+key Return
+focus-main
+wait-log '^Projects panel: add_files recorded as [0-9a-f]{7}$' 30
+wait-log '^Projects tree: ${MITCAD_TEST_PROJECT} \(.*notes\.txt file, recorded' 30
+expect-file '${MITCAD_TEST_PROJECT_DIR}/notes.txt'
+
+# 5. A file dropped from the file manager onto the project's row: the same.
+mark
+drop-files-logged '^Projects row ${MITCAD_TEST_PROJECT} at ' '${MITCAD_TEST_WORK}/outside/drop.csv'
+wait-log '^Projects panel: 1 file\(s\) dropped on ${MITCAD_TEST_PROJECT}$' 10
+wait-log '^Projects panel: add_files recorded as [0-9a-f]{7}$' 30
+wait-log '^Projects tree: ${MITCAD_TEST_PROJECT} \(.*drop\.csv file, recorded' 30
+expect-file '${MITCAD_TEST_PROJECT_DIR}/drop.csv'
+
+# 6. Renamed in place (F2): its whole name, its type too; one version.
+mark
+click-logged '^Projects row ${MITCAD_TEST_PROJECT}/photo\.png at '
+focus-widget projectsTree
+key F2
+wait-log '^Projects panel: name editor on ${MITCAD_TEST_PROJECT}/photo\.png: "photo\.png", focused, all selected, in sight$' 10
+type front.png
+key Return
+wait-log '^Projects panel: rename photo\.png to front\.png$' 10
+wait-log '^Projects panel: move recorded as [0-9a-f]{7}$' 30
+wait-log '^Projects tree: ${MITCAD_TEST_PROJECT} \(.*front\.png file, recorded' 30
+expect-file '${MITCAD_TEST_PROJECT_DIR}/front.png'
+
+# 7. Deleted (Delete, then the dialog's Delete): one version.
+# The renamed row's place may be logged before the mark (rows' places are
+# logged only when they change): looked for in the whole log.
+expect-ever '^Projects row ${MITCAD_TEST_PROJECT}/front\.png at ' 10
+mark
+click-logged '^Projects row ${MITCAD_TEST_PROJECT}/front\.png at '
+focus-widget projectsTree
+key Delete
+focus-dialog '^Delete$'
+wait-log '^Delete dialog: front\.png \(0 designs\)$' 10
+button '^Delete$'
+focus-main
+wait-log '^Projects panel: delete recorded as [0-9a-f]{7}$' 30
+expect-no-log '^Delete: changes no version holds'
+expect-never 'TestDriver: FAIL'

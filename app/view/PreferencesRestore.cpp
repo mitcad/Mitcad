@@ -204,6 +204,9 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     // default too.
     clearBrowserBackground();
     saveBrowserRowsShare(kDefaultBrowserRowsShare);
+    // The Browser rows' controls where they always were (mitcad#2223).
+    setBrowserActivatePlace(BrowserControlPlace::Classic);
+    setBrowserEyePlace(BrowserControlPlace::Classic);
     drawings::saveCornerDots(drawings::CornerDots());
     saveSmallCircles(SmallCircles::Adaptive);
     saveOriginDisplay(OriginDisplay());

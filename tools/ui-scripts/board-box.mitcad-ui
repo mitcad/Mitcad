@@ -8,6 +8,19 @@
 #   1b. Its rules edited from the timeline open in Standard Box: 200 mm
 #      high, the box's blank and creases made again, its folds following.
 #   3. Undo takes the edit and the whole box back, one step each.
+#   4. Standard Box with FEFCO 0203 chosen from the Style list (mitcad#2226):
+#      a full overlap box folded without a failed feature, one undo step.
+#   5. The same with the FEFCO 0427 folder: its double end walls, dust
+#      flaps, lid with ears and front flap folded; Tuck and Tabs empty,
+#      the style's.
+#   6. A FEFCO 0421 folder with Tuck 25 mm and Tabs 3 (mitcad#2269): the
+#      values kept in its rules and shown by Edit Standard Box, a 30 mm
+#      tuck there followed by the box; Tabs 4 there makes the blank again
+#      with four tabs, the box following without a failed feature, one
+#      undo step, the four tabs shown when it opens again (mitcad#2285);
+#      another style there is
+#      refused by the model in words in the panel's own message area, the
+#      panel open and the box kept (mitcad#2285).
 # Run by tools/ui-board-box-test.sh (Linux),
 # tools/ui-windows-board-box-test.ps1 (Windows) and
 # tools/ui-macos-board-box-test.sh (macOS).
@@ -56,6 +69,125 @@ wait-idle
 
 # 3. One undo step each.
 mark
+command edit.undo
+wait-idle
+command edit.undo
+wait-idle
+expect-undo-depth ${start} 0
+
+# 4. Another slotted style from the Style list (mitcad#2226): a FEFCO 0203
+#    full overlap box, folded, one undo step.
+mark
+command sheet.standard_box
+wait-log '^Command Standard Box started' 30
+wait-idle
+qt-choice input_style 'FEFCO 0203 Full Overlap Slotted Box'
+wait-idle
+expect-choice-text style '^FEFCO 0203 '
+mark
+button '^OK$'
+wait-log '^Standard box fefco_0203, ' 120
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-undo-depth ${start} 1
+command edit.undo
+wait-idle
+expect-undo-depth ${start} 0
+
+# 5. A folder from the Style list (mitcad#2226): a FEFCO 0427 with its end
+#    walls turned over, folded, one undo step.
+mark
+command sheet.standard_box
+wait-log '^Command Standard Box started' 30
+wait-idle
+qt-choice input_style 'FEFCO 0427 Folder with Lid Ears'
+wait-idle
+expect-choice-text style '^FEFCO 0427 '
+expect-input-text tuck '^$'
+expect-input-text tabs '^$'
+mark
+button '^OK$'
+wait-log '^Standard box fefco_0427, .*, tuck by the style, tabs by the style$' 180
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-undo-depth ${start} 1
+command edit.undo
+wait-idle
+expect-undo-depth ${start} 0
+
+# 6. A folder's Tuck and Tabs (mitcad#2269): a FEFCO 0421 with a 25 mm tuck
+#    and three tabs on each turned over wall, kept in its rules; Edit
+#    Standard Box shows them and a 30 mm tuck follows; another number of
+#    tabs makes the blank again and the box follows (mitcad#2285); another
+#    style is the model's refusal, shown in the panel, the box kept.
+mark
+command sheet.standard_box
+wait-log '^Command Standard Box started' 30
+wait-idle
+qt-choice input_style 'FEFCO 0421 Folder with Tuck Lid'
+wait-idle
+expect-choice-text style '^FEFCO 0421 '
+type-in '^Panel Standard Box input tuck at [-0-9]+,[-0-9]+$' '25'
+wait-idle
+type-in '^Panel Standard Box input tabs at [-0-9]+,[-0-9]+$' '3'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Standard box fefco_0421, .*, tuck 25 mm, tabs 3$' 180
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-undo-depth ${start} 1
+mark
+dblclick-logged '^Timeline SheetRules[0-9]+ at '
+wait-log '^Editing F[0-9]+ with Standard Box$' 30
+wait-idle
+expect-choice-text style '^FEFCO 0421 '
+expect-input-text tuck '^25( mm)?$'
+expect-input-text tabs '^3$'
+type-in '^Panel Standard Box input tuck at [-0-9]+,[-0-9]+$' '30'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited standard box fefco_0421, .*, tuck 30 mm, tabs 3$' 180
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-undo-depth ${start} 2
+mark
+dblclick-logged '^Timeline SheetRules[0-9]+ at '
+wait-log '^Editing F[0-9]+ with Standard Box$' 30
+wait-idle
+expect-input-text tuck '^30( mm)?$'
+type-in '^Panel Standard Box input tabs at [-0-9]+,[-0-9]+$' '4'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited standard box fefco_0421, .*, tuck 30 mm, tabs 4$' 180
+wait-idle
+expect-no-log 'OK refused'
+expect-never 'Failed features: [^n]'
+expect-undo-depth ${start} 3
+# The model's refusal in the panel's own message area (mitcad#2285):
+# another style makes another box.
+mark
+dblclick-logged '^Timeline SheetRules[0-9]+ at '
+wait-log '^Editing F[0-9]+ with Standard Box$' 30
+wait-idle
+expect-input-text tabs '^4$'
+qt-choice input_style 'FEFCO 0427 Folder with Lid Ears'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Panel Standard Box error: .*nother style changes the shape of the box.s blank: make the box again' 120
+expect-log '^Standard Box: OK refused by the model: '
+wait-idle
+mark
+button '^Cancel$'
+wait-log '^Command Standard Box cancelled' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-undo-depth ${start} 3
+command edit.undo
+wait-idle
 command edit.undo
 wait-idle
 command edit.undo

@@ -13,7 +13,9 @@
 // the device's reach and Dominant axis only's hold, which keeps each of a
 // user's logged SpaceNavigator motions on its own axis (mitcad#1720); Lock
 // Rotation in and out of a sketch and a device's
-// default button for its rotation lock key (mitcad#1910).
+// default button for its rotation lock key (mitcad#1910); two designs on
+// the process's one connection, the input reaching the active one only
+// (mitcad#2297).
 #include "UnitTests.hpp"
 #include <algorithm>
 #include <array>
@@ -1820,6 +1822,119 @@ void windowPlacedTests() {
   qInstallMessageHandler(previous);
 }
 
+// Two designs on the process's one connection (mitcad#2297, GitHub
+// mitcad/Mitcad#587): one backend is made, not two; the device's motion
+// and buttons reach the active design only, and a held motion of the
+// design left stops; the backend's window is the active design's and it
+// hears each change; turned off in one design the device runs on for the
+// other; after the newer design is destroyed the first still gets motion
+// on the same backend; the last design gone, the connection goes with it.
+void twoDesignTests() {
+  using namespace mitcad;
+  FakeBackend* backend = nullptr;
+  int created = 0;
+  const SpaceMouseConnection::Factory factory = [&backend, &created]() -> std::unique_ptr<SpaceMouseBackend> {
+    auto made = std::make_unique<FakeBackend>(true);
+    backend = made.get();
+    ++created;
+    return made;
+  };
+  struct Design {
+    SpaceMouseSettings settings;
+    SpaceMouseRates last;
+    QStringList commands;
+    SpaceMouseController::Hooks hooks(std::uintptr_t window) {
+      SpaceMouseController::Hooks made;
+      made.settings = [this] { return settings; };
+      made.flat = [] { return false; };
+      made.rates = [this](const SpaceMouseRates& rates) { last = rates; };
+      made.runCommand = [this](const QString& id) { commands.append(id); };
+      made.nativeWindow = [window] { return window; };
+      return made;
+    }
+  };
+  Design first;
+  Design second;
+  const QtMessageHandler previous = qInstallMessageHandler(catchMessage);
+  caught().clear();
+  {
+    std::shared_ptr<SpaceMouseConnection> shared = SpaceMouseConnection::shared(factory);
+    CHECK(SpaceMouseConnection::shared(factory) == shared); // the live one
+    SpaceMouseController a(first.hooks(1), shared);
+    shared.reset();
+    a.refresh();
+    CHECK(created == 1 && a.running() && backend != nullptr && backend->starts == 1);
+    CHECK(caught().count(QStringLiteral("3D mouse: Fake connected (Test device)")) == 1);
+    {
+      // The second design: the same connection, no second backend.
+      SpaceMouseController b(second.hooks(2), SpaceMouseConnection::shared(factory));
+      b.refresh();
+      CHECK(&a.connection() == &b.connection());
+      CHECK(created == 1 && backend->starts == 1 && b.running());
+      CHECK(caught().count(QStringLiteral("3D mouse: Fake connected (Test device)")) == 1);
+      // The window manager activates the design it opened: its view moves,
+      // the first one's not; the backend's window is its.
+      const int placed = backend->placed;
+      b.activate();
+      CHECK(a.connection().current() == &b && backend->placed == placed + 1);
+      CHECK(backend->nativeWindow && backend->nativeWindow() == 2);
+      backend->motion({1.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+      CHECK(second.last.moving() && !first.last.moving());
+      backend->button(0, true);
+      backend->button(0, false);
+      CHECK(second.commands == QStringList(QStringLiteral("view.fit")) && first.commands.isEmpty());
+      // Back to the first while the cap is held: the second stops, the
+      // first moves from the next input on.
+      a.activate();
+      CHECK(!second.last.moving() && backend->placed == placed + 2 && backend->nativeWindow() == 1);
+      backend->motion({0.0, 0.0, 0.0, 0.0, 1.0, 0.0});
+      CHECK(first.last.moving() && first.last.turning() && !second.last.moving());
+      backend->button(1, true);
+      CHECK(first.commands == QStringList(QStringLiteral("view.home")) && second.commands.size() == 1);
+      backend->motion({});
+      CHECK(!first.last.moving());
+      // A test's input (the test driver's) goes the same way.
+      a.connection().motion({0.0, 0.0, 1.0, 0.0, 0.0, 0.0}, false);
+      CHECK(first.last.zoom > 0.0 && !second.last.moving());
+      a.connection().motion({}, false);
+      // Turned off in the second design: the device runs on for the first.
+      caught().clear();
+      second.settings.enabled = false;
+      b.refresh();
+      CHECK(!b.running() && a.running() && created == 1 && !caught().contains(QStringLiteral("3D mouse: off")));
+      second.settings.enabled = true;
+      b.refresh();
+      CHECK(b.running() && created == 1 && backend->starts == 1);
+      // The second active again when it closes.
+      b.activate();
+    }
+    // The newer design destroyed: the first gets the input, on the same
+    // backend, which follows its window.
+    CHECK(created == 1 && a.running() && a.connection().current() == &a && backend->nativeWindow() == 1);
+    backend->motion({1.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+    CHECK(first.last.moving());
+    backend->motion({});
+    CHECK(!first.last.moving());
+    // The device goes: one line for the process.
+    caught().clear();
+    backend->connection(false, QStringLiteral("Test device"));
+    CHECK(caught().count(QStringLiteral("3D mouse: Fake disconnected")) == 1);
+    // Off in the last design that had it on: the backend stops, logged once.
+    first.settings.enabled = false;
+    a.refresh();
+    CHECK(!a.running() && caught().count(QStringLiteral("3D mouse: off")) == 1);
+  }
+  // The last design gone: so is its connection; the next one makes a new
+  // backend.
+  {
+    SpaceMouseController c(first.hooks(3), SpaceMouseConnection::shared(factory));
+    first.settings.enabled = true;
+    c.refresh();
+    CHECK(created == 2 && c.running());
+  }
+  qInstallMessageHandler(previous);
+}
+
 } // namespace
 
 int spaceMouseTests() {
@@ -1842,6 +1957,7 @@ int spaceMouseTests() {
   rotationLockTests();
   deviceButtonTests();
   windowPlacedTests();
+  twoDesignTests();
   return failures;
 }
 MITCAD_UNIT_TEST(spaceMouseTests);

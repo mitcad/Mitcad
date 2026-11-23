@@ -2012,3 +2012,48 @@ pub enum MemberProfile {
         profiles: ProfileSel,
     },
 }
+
+/// A cell grid (formats 56 and 57; mitcad#2238): the profiles of a sketch
+/// filled with cells of one shape, cut from the targets.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CellGrid {
+    pub sketch: u64,
+    #[serde(default)]
+    pub profiles: ProfileSel,
+    /// `cut`, the only mode.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// `hexagon` (default), `square`, `triangle`, `circle` or `polygon`.
+    #[serde(default)]
+    pub shape: Option<String>,
+    #[serde(default)]
+    pub sides: Option<Expr>,
+    /// `hexagonal` (default) or `square`.
+    #[serde(default)]
+    pub dot_grid: Option<String>,
+    pub size: Expr,
+    pub web: Expr,
+    #[serde(default)]
+    pub angle: Option<Expr>,
+    /// A point of the component a cell's centre sits on.
+    #[serde(default)]
+    pub anchor: Option<[Expr; 3]>,
+    /// `whole`, `snap` (default) or `free`.
+    #[serde(default)]
+    pub clip: Option<String>,
+    #[serde(default)]
+    pub keepout_clip: Option<String>,
+    #[serde(default)]
+    pub snap_inset: Option<Expr>,
+    #[serde(default)]
+    pub margin: Option<Expr>,
+    #[serde(default)]
+    pub depth: Option<Expr>,
+    #[serde(default)]
+    pub through_all: bool,
+    /// A symmetric depth is the total, half to each side.
+    #[serde(default)]
+    pub direction: Direction,
+    #[serde(default)]
+    pub targets: Vec<String>,
+}

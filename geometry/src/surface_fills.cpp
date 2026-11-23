@@ -19,7 +19,9 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepLib.hxx>
 #include <BRepOffsetAPI_MakeFilling.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepTools.hxx>
@@ -42,11 +44,14 @@
 #include <NCollection_Array2.hxx>
 #include <NCollection_HArray1.hxx>
 #include <NCollection_List.hxx>
+#include <Precision.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Shell.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
@@ -431,16 +436,59 @@ std::vector<TopoDS_Edge> wire_edges(const TopoDS_Wire& wire) {
   return edges;
 }
 
+// The model joins a loop's chains of sketch curves (one per sketch, or
+// more) where their ends lie within 1e-6 of the largest coordinate of
+// those ends, at least 1e-6 mm (boundary_surface.rs, `loop_order`); the
+// filling joins the edges it is given where their ends lie within both end
+// vertices' tolerances, 1e-7 mm on fresh edges. Each chain's two ends get
+// the model's tolerance, so that chains of two sketches whose ends lie
+// apart by less still close one loop and the face's edges share their
+// corners (mitcad#2220). The wires are the fill's own, made from the
+// curves.
+void join_within_model_tolerance(const std::vector<TopoDS_Wire>& wires) {
+  std::vector<TopoDS_Vertex> ends;
+  double size = 1.0;
+  for (const TopoDS_Wire& wire : wires) {
+    if (wire.IsNull()) {
+      continue;
+    }
+    TopoDS_Vertex first;
+    TopoDS_Vertex last;
+    TopExp::Vertices(wire, first, last);
+    for (const TopoDS_Vertex& end : {first, last}) {
+      if (end.IsNull()) {
+        continue;
+      }
+      const gp_Pnt p = BRep_Tool::Pnt(end);
+      size = std::max({size, std::abs(p.X()), std::abs(p.Y()), std::abs(p.Z())});
+      ends.push_back(end);
+    }
+  }
+  BRep_Builder builder;
+  for (const TopoDS_Vertex& end : ends) {
+    builder.UpdateVertex(end, 1.0e-6 * size);
+  }
+}
+
 ShapePtr fill(const std::string& feature, const std::vector<BoundaryCurve>& loop) {
   BRepOffsetAPI_MakeFilling filling(3, 15, 2, false, 1.0e-5, 1.0e-4, 1.0e-2, 0.1, 8, 9);
   std::vector<Chain> chains; // their copies stay while the filling runs
   chains.reserve(loop.size());
-  for (const BoundaryCurve& curve : loop) {
+  // The chains of sketch curves' wires, null for the other boundaries.
+  std::vector<TopoDS_Wire> wires(loop.size());
+  for (std::size_t i = 0; i < loop.size(); ++i) {
+    if (loop[i].kind == BoundaryCurve::Kind::Curves) {
+      wires[i] = detail::path_wire(loop[i].curves);
+    }
+  }
+  join_within_model_tolerance(wires);
+  for (std::size_t i = 0; i < loop.size(); ++i) {
+    const BoundaryCurve& curve = loop[i];
     switch (curve.kind) {
     case BoundaryCurve::Kind::Point:
       throw std::invalid_argument("boundary surface: a boundary loop is made of curves, not points");
     case BoundaryCurve::Kind::Curves: {
-      const TopoDS_Wire wire = detail::path_wire(curve.curves);
+      const TopoDS_Wire& wire = wires[i];
       const TopoDS_Face support = plane_face(curve.plane, wire);
       for (const TopoDS_Edge& edge : wire_edges(wire)) {
         if (curve.continuity == Continuity::G0) {
@@ -470,7 +518,38 @@ ShapePtr fill(const std::string& feature, const std::vector<BoundaryCurve>& loop
   if (!filling.IsDone()) {
     throw std::runtime_error("boundary surface: the loop could not be filled");
   }
-  return one_face(feature, "boundary", TopoDS::Face(filling.Shape()));
+  const TopoDS_Face face = TopoDS::Face(filling.Shape());
+  // Filling sets its first tolerance from the plate constraint error
+  // before the plate is approximated by the final B-spline surface. On
+  // that surface an edge's pcurve can be farther from its 3D curve.
+  // Check the resulting curves over their shared parameter range, keeping
+  // the original 3D boundary and updating only the filling's new edges.
+  BRep_Builder builder;
+  for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+    const TopoDS_Edge edge = TopoDS::Edge(it.Current());
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    if (!BRep_Tool::SameParameter(edge) || !BRep_Tool::SameRange(edge)) {
+      BRepLib::SameParameter(edge, Precision::Confusion(), true);
+    }
+    if (!BRep_Tool::SameParameter(edge) || !BRep_Tool::SameRange(edge)) {
+      throw std::runtime_error("boundary surface: the filled face's edge could not be matched to the surface");
+    }
+    const auto gap = detail::curve_on_surface_gap(edge, face);
+    if (!gap) {
+      throw std::runtime_error("boundary surface: the distance from an edge to the filled face could not be checked");
+    }
+    if (*gap > BRep_Tool::Tolerance(edge)) {
+      // Allow for one modelling precision unit when the check is repeated.
+      builder.UpdateEdge(edge, *gap + Precision::Confusion());
+    }
+  }
+  BRepLib::UpdateTolerances(face);
+  if (!BRepCheck_Analyzer(face, true, false, true).IsValid()) {
+    throw std::runtime_error("boundary surface: the filled face is not valid");
+  }
+  return one_face(feature, "boundary", face);
 }
 
 // One B-spline curve along a wire's edges in order.

@@ -6,8 +6,10 @@
 // General › Extrude starts with: New Body keeps a new one's New Body
 // (mitcad#2164, ExtrudeStartPreference); a new feature's direction flip
 // whose preview fails with an operation chosen by hand tries the model's
-// other one (mitcad#2216). The rest of the session is in
-// CommandSession.cpp.
+// other one (mitcad#2216); Cut or Join chosen by hand that misses one way
+// and works the other turns Flip once (mitcad#2283). The rest of the
+// session is in CommandSession.cpp.
+#include <optional>
 #include <utility>
 
 #include <QDebug>
@@ -30,6 +32,17 @@ QStringList ownersOf(const Selection& items) {
     owners << item.owner;
   }
   return owners;
+}
+
+// Works as acceptFeaturePreview draws it: an ok status, and a cut's
+// targets that can be committed.
+bool previewWorks(const QJsonObject& report) {
+  bool works = report.value(QStringLiteral("status")).toString() == QStringLiteral("ok");
+  const QJsonObject targets = report.value(QStringLiteral("cut_targets")).toObject();
+  if (!targets.isEmpty()) {
+    works = works && targets.value(QStringLiteral("can_commit")).toBool();
+  }
+  return works;
 }
 
 } // namespace
@@ -142,13 +155,7 @@ bool CommandSession::retryFlippedOperation(const QJsonObject& report) {
     m_autoOperation.cancelFlip();
     return false;
   }
-  // Works as acceptFeaturePreview draws it: an ok status, and a cut's
-  // targets that can be committed.
-  bool works = report.value(QStringLiteral("status")).toString() == QStringLiteral("ok");
-  const QJsonObject targets = report.value(QStringLiteral("cut_targets")).toObject();
-  if (!targets.isEmpty()) {
-    works = works && targets.value(QStringLiteral("can_commit")).toBool();
-  }
+  const bool works = previewWorks(report);
   const QString current = m_state.choice(kOperation);
   const QJsonObject choice = report.value(QStringLiteral("auto_operation")).toObject();
   const QString suggested = choice.value(kOperation).toString();
@@ -199,6 +206,68 @@ bool CommandSession::retryFlippedOperation(const QJsonObject& report) {
   return true;
 }
 
+bool CommandSession::turnMissedOperation(const QJsonObject& report) {
+  if (m_done || !m_autoOperation.turnWaiting()) {
+    return false;
+  }
+  const auto flip = slotOf(m_def.toolFlip);
+  const auto operation = slotOf(kOperation);
+  if (!flip || !operation) {
+    m_autoOperation.cancelFlip();
+    return false;
+  }
+  const QString current = m_state.choice(kOperation);
+  // The model's answer for the other direction: a scoped Cut's (mitcad#1676);
+  // a Join's and an unscoped Cut's is the turned preview's.
+  std::optional<bool> otherWay;
+  const QJsonObject targets = report.value(QStringLiteral("cut_targets")).toObject();
+  if (current == QStringLiteral("cut") && !targets.isEmpty()) {
+    otherWay = targets.value(QStringLiteral("flip_would_cut")).toBool();
+  }
+  const AutoOperationPolicy::TurnAction action = m_autoOperation.operationPreviewed(previewWorks(report), otherWay);
+  QString label;
+  for (const auto& [value, text] : operation->def->choicesIn(m_state)) {
+    if (value == current) {
+      label = text;
+    }
+  }
+  const bool on = m_state.checked(m_def.toolFlip);
+  const auto onOff = [](bool checked) { return checked ? QStringLiteral("on") : QStringLiteral("off"); };
+  switch (action) {
+  case AutoOperationPolicy::TurnAction::Keep:
+    return false;
+  case AutoOperationPolicy::TurnAction::Taken:
+    // What the UI tests read: the turned direction stays.
+    qDebug().noquote() << QStringLiteral("%1: the flipped %2 works, %3 = %4 stays")
+                              .arg(m_def.name, label, flip->def->label, onOff(on));
+    return false;
+  case AutoOperationPolicy::TurnAction::Restore:
+    // Neither direction works: the user's own and its failure, as before.
+    qDebug().noquote() << QStringLiteral("%1: %2 misses both ways, %3 = %4 again")
+                              .arg(m_def.name, label, flip->def->label, onOff(!on));
+    break;
+  case AutoOperationPolicy::TurnAction::Turn:
+    qDebug().noquote() << QStringLiteral("%1: %2 misses, flipped %3, %4 = %5")
+                              .arg(m_def.name, label,
+                                   current == QStringLiteral("cut") ? QStringLiteral("into the body")
+                                                                    : QStringLiteral("toward the bodies"),
+                                   flip->def->label, onOff(!on));
+    break;
+  }
+  // As the user's own click on it does (the panel shows it, the arrow
+  // follows), without arming a flip's retry: the policy kept the direction.
+  m_state.setChecked(m_def.toolFlip, !on);
+  if (flip->def->onChange) {
+    flip->def->onChange(m_state, m_host);
+  }
+  if (m_presenter) {
+    m_presenter->refresh(m_state);
+  }
+  updateManipulators();
+  runPreview();
+  return true;
+}
+
 void CommandSession::autoOperationOverruled(const QString& key) {
   const auto slot = slotOf(key);
   const bool targets = slot && slot->def->type == InputDef::Type::CutTargets;
@@ -207,6 +276,12 @@ void CommandSession::autoOperationOverruled(const QString& key) {
   }
   // A flip's retry ends too (mitcad#2216): the user's own choice stays.
   m_autoOperation.cancelFlip();
+  // Cut or Join chosen by hand: its preview may turn the direction once
+  // (mitcad#2283).
+  if (key == kOperation && !m_done && m_def.toolDirection && !m_def.toolFlip.isEmpty() &&
+      slotOf(m_def.toolFlip).has_value()) {
+    m_autoOperation.operationChosen(m_state.choice(kOperation).toStdString(), m_def.toolDirection(m_state));
+  }
   if (!m_autoOperation.active()) {
     return;
   }

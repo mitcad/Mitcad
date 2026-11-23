@@ -19,3 +19,30 @@ expect-never '^3D mouse: test 3DxWare runtime got no window$'
 wait-idle
 expect-design-native no
 expect-screen-beside-cards browserDock navigationBar messageBandCard
+# Two designs on the process's one connection (mitcad#2297, GitHub
+# mitcad/Mitcad#587): a second design opened in a tab of the same frame,
+# the first one's tab clicked again and the second one closed with its
+# tab's ×, the driver's input (the space-mouse step, given to the
+# connection as the backend gives it) still turns the first design's view,
+# and the driver session stays as it was: the stand-in opened its device
+# once (the runner counts it) and nothing disconnected.
+mark
+command file.new_design
+wait-log '^Document window created: ' 30
+wait-idle
+expect-document-windows 2
+expect-no-log '^3D mouse: (none|off|.+ connected \(.*)$'
+mark
+document-tab-click 0
+wait-idle
+mark
+document-tab-close 1
+wait-log '^Document tab closed: ' 10
+wait-idle
+expect-document-windows 1
+capture-view-orientation first
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), .*turned [0-9.]+ degrees, '
+expect-view-orientation ${first} changed
+expect-never '^3D mouse: (off|.+ disconnected)$'

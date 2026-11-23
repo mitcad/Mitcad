@@ -3,10 +3,12 @@
 
 // What File > Open from Project lists (mitcad#530): the projects of the
 // Projects panel (readProjects, `project_tree`) as places, folders inside
-// them, and designs, never the file system's raw folders: `.mitcad/`
-// internals and files that are no designs are not in `project_tree`'s
-// answer and are not listed. A place's contents are its sub-folders first,
-// then its designs, each sorted by name; a search finds designs by part of
+// them, designs and the project's other files (mitcad#2204: pictures,
+// PDFs, ... as `project_tree`'s `files`), never the file system's raw
+// folders: `.mitcad/` internals and the files a project's `.gitignore`
+// leaves out are not in `project_tree`'s answer and are not listed. A
+// place's contents are its sub-folders first, then its designs, then its
+// other files, each sorted by name; a search finds designs by part of
 // their name in every project or in one. Plain Qt Core, for app.unit; the
 // window is projects/ProjectBrowser.
 //
@@ -35,14 +37,17 @@ struct BrowserPlace {
 
 // A row of a place's contents or of a search's results.
 struct BrowserEntry {
-  enum class Kind { Folder, Design };
+  // File: another file of the project (mitcad#2204), opened with the
+  // system's app.
+  enum class Kind { Folder, Design, File };
   Kind kind = Kind::Design;
   QString root;        // the project's folder
   QString projectKey;  // the project's key in the logs
   QString projectName; // the project's name as the panel shows it
-  QString path;        // relative to the project, '/': the folder's, or the design's file
-  QString name;        // shown: the folder's name, the design's without .mitcad
+  QString path;        // relative to the project, '/': the folder's, or the design's or other file's
+  QString name;        // shown: the folder's name, the design's without .mitcad, another file's whole name
   ProjectDesignRow design; // a design's version, changes and edit lock
+  ProjectFileRow file;     // another file's size and state
 
   // The folder the entry is in (relative; "" the project's top).
   QString folder() const;
@@ -71,7 +76,8 @@ QStringList subFolders(const ProjectRow& project, const QString& folder);
 // Whether a place is listed (a remembered one may have gone).
 bool placeExists(const QVector<ProjectRow>& projects, const BrowserPlace& place);
 
-// A place's contents: its sub-folders first, then its designs, each by name.
+// A place's contents: its sub-folders first, then its designs, then its
+// other files (mitcad#2204), each by name.
 QVector<BrowserEntry> folderContents(const ProjectRow& project, const QString& projectKey, const QString& folder);
 
 // The designs whose name (the file's without .mitcad) holds `text`, case
@@ -96,7 +102,8 @@ QString placeKey(const QString& projectKey, const QString& folder);
 BrowserPlace placeUp(const BrowserPlace& place);
 
 // An entry's state in the log's words: "sub/", "gear.mitcad v2, changed,
-// editing elsewhere" (designMarks' words).
+// editing elsewhere" (designMarks' words), "photo.png file, changed"
+// (fileMarks' words).
 QString entryWords(const BrowserEntry& entry);
 
 } // namespace mitcad

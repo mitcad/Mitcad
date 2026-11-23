@@ -1640,6 +1640,40 @@ std::vector<Matched> match_along_rails(const std::vector<SkinSection>& sections,
   return matched;
 }
 
+// A side surface that closes on itself round the sections, continuous in
+// its first derivative where it closes (within 1e-6 mm), made periodic
+// there, its knot where it closes kept once less than its degree; as it
+// was where it does not close, or closes with a crease. The kernel's
+// offset takes a closed surface so: a clamped one that only closes on
+// itself was intersected wrongly where it closes (mitcad#2141: a rim's
+// wire crossing itself, Round, the other end open, and the closed surface
+// not offset at all; mitcad#2271: a merged circle-to-slot loft not shelled
+// Inside). Whatever the sections, as long as the side is one surface all
+// round them.
+Surface periodic_where_closed(const Surface& surface) {
+  constexpr double kClosing = 1.0e-6;
+  if (surface->IsUPeriodic() || surface->UDegree() < 2) {
+    return surface;
+  }
+  // Its first and last rows of poles (and weights) the same within
+  // kClosing: the pieces of a chain round the section meet within that.
+  const int last = surface->NbUPoles();
+  for (int l = 1; l <= surface->NbVPoles(); ++l) {
+    if (surface->Pole(1, l).Distance(surface->Pole(last, l)) > kClosing ||
+        std::abs(surface->Weight(1, l) - surface->Weight(last, l)) > 1.0e-12 * std::abs(surface->Weight(1, l))) {
+      return surface;
+    }
+  }
+  const Surface periodic = Handle(Geom_BSplineSurface)::DownCast(surface->Copy());
+  periodic->SetUPeriodic();
+  const int closing = periodic->FirstUKnotIndex();
+  const int smooth = periodic->UDegree() - 1;
+  if (periodic->UMultiplicity(closing) > smooth) {
+    periodic->RemoveUKnot(closing, smooth, kClosing);
+  }
+  return periodic->UMultiplicity(closing) <= smooth ? periodic : surface;
+}
+
 // The side faces' surfaces at the loft's parameters `v`: each edge
 // index's curves made compatible (polynomial ones when `plain`), its pole
 // rows interpolated in homogeneous coordinates with the derivatives the
@@ -1958,26 +1992,6 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
   }
   std::vector<Surface> surfaces =
       skin_surfaces(chains ? chained : matched, sections, start, end, v, false, closed, hermite_free);
-  if (chains && chains->round && surfaces.size() == 1) {
-    // A chain round the whole section closes smoothly: its surface made
-    // periodic, its knot where it closes kept once less than its degree
-    // (continuous in the first derivative), as the kernel's offset takes a
-    // closed surface (a clamped one that only closes on itself was
-    // intersected wrongly where it closes: a rim's wire crossing itself,
-    // Round, the other end open, and the closed surface not offset at
-    // all).
-    const Surface periodic = Handle(Geom_BSplineSurface)::DownCast(surfaces.front()->Copy());
-    periodic->SetUPeriodic();
-    const int closing = periodic->FirstUKnotIndex();
-    const int smooth = periodic->UDegree() - 1;
-    if (periodic->UMultiplicity(closing) > smooth) {
-      periodic->RemoveUKnot(closing, smooth, 1.0e-6);
-    }
-    if (periodic->UMultiplicity(closing) <= smooth) {
-      surfaces.front() = periodic;
-    }
-  }
-
   // Rails: each face bent by the rails' distances from it along the
   // vertex lines they run through, in shares that fall from 1 at a rail's
   // own vertex to 0 at the neighbouring rails along the section,
@@ -2121,6 +2135,14 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     }
   }
 
+  // One surface all round the sections (a chain round the whole section,
+  // mitcad#2141; one closed edge per section, as merged tangent edges are,
+  // mitcad#2271): periodic where it closes smoothly.
+  const bool one_round = surfaces.size() == 1 && (chains ? chains->round : edge_count == 1);
+  if (one_round) {
+    surfaces.front() = periodic_where_closed(surfaces.front());
+  }
+
   // The faces, sewn with the caps.
   std::vector<std::string> names(edge_count);
   const auto named_section = std::find_if(matched.begin(), matched.end(), [](const Matched& m) { return !m.point; });
@@ -2179,10 +2201,10 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
   }
   detail::interruptible([&](const Message_ProgressRange& range) { sewing.Perform(range); });
   const TopoDS_Shape sewn_shape = solid ? oriented_solid(sewing.SewedShape(), "the loft") : sewing.SewedShape();
-  if (seams_only) {
-    // The faces tangent along their lines are marked so, as OCCT's
-    // through-sections marks its own (the offsets take such edges as
-    // smooth all along).
+  if (seams_only || one_round) {
+    // The faces tangent along their lines (and a side all round the
+    // sections along its seam) are marked so, as OCCT's through-sections
+    // marks its own (the offsets take such edges as smooth all along).
     BRepLib::EncodeRegularity(sewn_shape, 1.0e-8);
   }
   FaceNamer namer(sewn_shape);

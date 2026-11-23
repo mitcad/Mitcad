@@ -495,8 +495,8 @@ pub enum Want {
     /// type or a body (its faces).
     Surface,
     /// A face, or a plane (an origin plane, a construction plane or a fixed
-    /// plane: a planar face is its whole plane): what an axis normal to a
-    /// face at a point is measured from.
+    /// plane: a planar face is its whole plane): what an axis or a plane at
+    /// a point of a face is measured from (mitcad#2282).
     FaceOrPlane,
 }
 
@@ -845,6 +845,12 @@ impl GeomRef {
                     super::FeatureDef::EdgeFrame(_) => Err(format!(
                         "an edge frame's frames are {}",
                         super::edge_frame::MOUNTS.join(", ")
+                    )),
+                    // An end cap's seat on its member's end (mitcad#2243).
+                    super::FeatureDef::EndCap(_) if name == super::end_cap::SEAT => Ok(()),
+                    super::FeatureDef::EndCap(_) => Err(format!(
+                        "an end cap has one mount frame, {}",
+                        super::end_cap::SEAT
                     )),
                     _ => Err(format!(
                         "{} ({feature}) is not a derived part: it has no mount frames",

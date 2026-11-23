@@ -81,7 +81,7 @@ use crate::datum::{Datum, Vec3};
 use crate::document::DocState;
 use crate::features::constraint_set::row_label;
 use crate::features::geom_ref::{self, GeomRef, Resolver};
-use crate::features::joint::{FrameOverride, JointOrigin};
+use crate::features::joint::{FrameOverride, JointOrigin, RelativeFrame};
 use crate::features::{FeatureDef, FeatureEntry, PlacementChange, SketchOutput};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
@@ -367,6 +367,7 @@ pub fn motion_values(
 /// z, or the default when it is along z.
 #[doc(hidden)]
 pub fn apply_override(frame_in: &Transform, o: &FrameOverride) -> Result<Transform, String> {
+    let o = &absolute_override(frame_in, o);
     let [origin, x, _, z] = frame_parts(frame_in);
     let origin = o.origin.unwrap_or(origin);
     let z = match o.z_axis {
@@ -386,6 +387,90 @@ pub fn apply_override(frame_in: &Transform, o: &FrameOverride) -> Result<Transfo
         Some(shift) => frame(turned.apply_point(shift), x, z),
         None => turned,
     })
+}
+
+// Overrides relative to the frame (mitcad#2286).
+
+/// The frame an override's relative parts are measured in
+/// ([`RelativeFrame`]): the resolved frame, or with `nearest` the point of
+/// its x-y plane nearest to the component's origin with its axes.
+fn relative_anchor(frame_in: &Transform, nearest: bool) -> Transform {
+    if !nearest {
+        return *frame_in;
+    }
+    let [origin, x, _, z] = frame_parts(frame_in);
+    let along = dot(origin, z);
+    frame(std::array::from_fn(|i| z[i] * along), x, z)
+}
+
+/// An override with its relative parts ([`RelativeFrame`], mitcad#2286)
+/// given in the component's coordinates for the resolved frame
+/// `frame_in`, as `origin`, `z_axis` and `x_axis` (each relative part
+/// taking the place of the absolute one); an override without them as it
+/// is.
+#[doc(hidden)]
+pub fn absolute_override(frame_in: &Transform, o: &FrameOverride) -> FrameOverride {
+    let Some(r) = o.relative else {
+        return *o;
+    };
+    let anchor = relative_anchor(frame_in, r.nearest);
+    FrameOverride {
+        origin: r.origin.map(|p| anchor.apply_point(p)).or(o.origin),
+        z_axis: r.z_axis.map(|v| anchor.apply_vector(v)).or(o.z_axis),
+        x_axis: r.x_axis.map(|v| anchor.apply_vector(v)).or(o.x_axis),
+        shift: o.shift,
+        relative: None,
+    }
+}
+
+/// An override with its origin and axes measured in the resolved frame
+/// `frame_in` instead (mitcad#2286; with `nearest` from the point of its
+/// plane nearest to the component's origin): the same frame while the
+/// geometry stays, moving and turning with it when it moves. Its shift is
+/// kept; one without an origin or axes stays as it is.
+#[doc(hidden)]
+pub fn relative_override(frame_in: &Transform, o: &FrameOverride, nearest: bool) -> FrameOverride {
+    let a = absolute_override(frame_in, o);
+    if a.origin.is_none() && a.z_axis.is_none() && a.x_axis.is_none() {
+        return a;
+    }
+    let back = inverse(&relative_anchor(frame_in, nearest));
+    FrameOverride {
+        origin: None,
+        z_axis: None,
+        x_axis: None,
+        shift: a.shift,
+        relative: Some(RelativeFrame {
+            origin: a.origin.map(|p| back.apply_point(p)),
+            z_axis: a.z_axis.map(|v| back.apply_vector(v)),
+            x_axis: a.x_axis.map(|v| back.apply_vector(v)),
+            nearest,
+        }),
+    }
+}
+
+/// Whether an override on `geometry` is kept relative to its frame
+/// (mitcad#2286), and how: `Some(false)` from the frame of an origin
+/// plane, axis or point, construction geometry or a fixed plane;
+/// `Some(true)` from the point of a planar face's plane nearest to the
+/// component's origin (the face's frame is at its middle, which moves
+/// when the face grows); None for other geometry, whose override stays
+/// in the component's coordinates.
+#[doc(hidden)]
+pub fn relative_form(r: &mut impl Resolver, geometry: &GeomRef) -> Option<bool> {
+    match geometry {
+        GeomRef::Origin(_) | GeomRef::Datum(_) | GeomRef::FixedPlane { .. } => Some(false),
+        GeomRef::Face { body, face } => {
+            let shape = r.shape(*body).ok()?;
+            let face = crate::features::renamed::face_for(r, &shape, face).ok()?;
+            matches!(
+                r.kernel().face_geometry(&shape, &face).ok()?,
+                crate::datum::SurfaceGeometry::Plane { .. }
+            )
+            .then_some(true)
+        }
+        _ => None,
+    }
 }
 
 /// The frame of a joint origin's geometry in its component's coordinates:
@@ -1542,6 +1627,8 @@ pub(crate) fn apply<K: Kernel>(
         done.joints
             .groups
             .push((entry.uid, component, group.occurrences.clone()));
+        // The carriages after the first follow it (mitcad#2274).
+        release_followers(state, entry.uid, &mut done.joints);
         return Ok(Vec::new());
     }
     // What the geometry found under other names after a sketch change
@@ -1768,7 +1855,24 @@ pub(crate) fn apply<K: Kernel>(
         parts: None,
         under: Vec::new(),
     };
-    let (state_now, changes) = solve_new(state, entry, std::slice::from_ref(&joint), &[], done)?;
+    // A Rigid joint between two carriages: side b's carriage follows side
+    // a's (mitcad#2274), its slide no longer driven by its own offset; kept
+    // driven when the joint does not hold.
+    let released = if kind == JointKind::Rigid && matches!(entry.def, FeatureDef::Joint(_)) {
+        release_followers(state, entry.uid, &mut done.joints)
+    } else {
+        Vec::new()
+    };
+    let (state_now, changes) =
+        match solve_new(state, entry, std::slice::from_ref(&joint), &[], done) {
+            Ok(solved) => solved,
+            Err(e) => {
+                for (i, was) in released {
+                    done.joints.active[i] = was;
+                }
+                return Err(e);
+            }
+        };
     if let JointState::Placed(moved) = &state_now {
         renamed
             .borrow_mut()
@@ -1797,6 +1901,34 @@ pub(crate) fn apply<K: Kernel>(
         },
     );
     Ok(renamed.take())
+}
+
+/// The carriages the Rigid joint or Rigid Group `by` makes follow another
+/// (mitcad#2274, `build/follow.rs`): their slides' driven motions in effect
+/// are released (free within their limits) from its point of the timeline
+/// on. Returns each released joint's index in `joints.active` and what it
+/// was.
+fn release_followers(
+    state: &DocState,
+    by: FeatureUid,
+    joints: &mut JointsState,
+) -> Vec<(usize, ActiveJoint)> {
+    let mut released = Vec::new();
+    for f in crate::build::follow::follows_by(state, by) {
+        let Some(i) = joints.active.iter().position(|j| {
+            j.uid == f.joint && j.row.is_none() && j.under.is_empty() && j.component == f.component
+        }) else {
+            continue;
+        };
+        if joints.active[i].motions.iter().all(|s| s.target.is_none()) {
+            continue;
+        }
+        released.push((i, joints.active[i].clone()));
+        for s in &mut joints.active[i].motions {
+            s.target = None;
+        }
+    }
+    released
 }
 
 /// After recompute: each joint's frames and values where the occurrences
@@ -3505,9 +3637,10 @@ fn held_side(
                 .any(|l| l.a.0 == j.uid || l.b.0 == j.uid)
         })
         .collect();
+    // Each occurrence reached with the joints that join it to this side.
     let mut seen: Vec<OccurrenceUid> = vec![first];
-    let mut queue: Vec<OccurrenceUid> = vec![first];
-    while let Some(at) = queue.pop() {
+    let mut queue: Vec<(OccurrenceUid, Vec<&ActiveJoint>)> = vec![(first, Vec::new())];
+    while let Some((at, via)) = queue.pop() {
         let unit = group_of(groups, component, at);
         for j in &still {
             let (a, b) = (j.a.first().copied(), j.b.first().copied());
@@ -3516,15 +3649,19 @@ fn held_side(
                 (x, Some(y)) if unit.contains(&y) => x,
                 _ => continue,
             };
+            let mut path = via.clone();
+            path.push(*j);
+            let driven = driven_by(state, &path);
             let Some(other) = other else {
-                // Joined rigidly to the component's own geometry.
-                return Some((
-                    format!(
-                        "{name} is joined rigidly to {}'s own geometry",
-                        assembly.name(component)
+                // Joined to the component's own geometry.
+                let host = assembly.name(component);
+                let why = match &driven {
+                    None => format!("{name} is joined rigidly to {host}'s own geometry"),
+                    Some(by) => format!(
+                        "{name} is held at its driven position by {by} on {host}'s own geometry"
                     ),
-                    place(first).into_iter().collect(),
-                ));
+                };
+                return Some((why, place(first).into_iter().collect()));
             };
             if seen.contains(&other) {
                 continue;
@@ -3533,16 +3670,34 @@ fn held_side(
                 let to = assembly.occurrence_name(other);
                 let mut all: Vec<_> = place(first).into_iter().collect();
                 all.extend(places);
-                return Some((
-                    format!("{name} is joined rigidly to {to}, which cannot move"),
-                    all,
-                ));
+                let why = match &driven {
+                    None => format!("{name} is joined rigidly to {to}, which cannot move"),
+                    Some(by) => format!(
+                        "{name} is held at its driven position by {by} on {to}, which cannot move"
+                    ),
+                };
+                return Some((why, all));
             }
             seen.push(other);
-            queue.push(other);
+            queue.push((other, path));
         }
     }
     None
+}
+
+/// The joints of `path` (that let nothing move, from a side outward) whose
+/// motions are driven, by name (`Joint1`, `Joint1 and Joint2`;
+/// mitcad#2274): a slider at its position holds its side, but is not
+/// rigid. None when all of them are rigid.
+fn driven_by(state: &DocState, path: &[&ActiveJoint]) -> Option<String> {
+    let mut driven: Vec<String> = Vec::new();
+    for j in path.iter().filter(|j| !j.motions.is_empty()) {
+        let name = relation_name(state, j.uid, None);
+        if !driven.contains(&name) {
+            driven.push(name);
+        }
+    }
+    (!driven.is_empty()).then(|| listed(&driven))
 }
 
 fn names(assembly: &Assembly, occurrences: &BTreeSet<OccurrenceUid>) -> String {
@@ -3817,6 +3972,62 @@ pub(crate) fn poses(
 /// have it (mitcad#1805): the joint, the chain (empty: its component's
 /// own) and the motion.
 type Freed = (FeatureUid, Vec<OccurrenceUid>, Motion);
+
+/// Where `joint`'s `motion` at `value` puts the carriages that move with
+/// it (mitcad#2274, `build/follow.rs`): the joints of its component solved
+/// from where the occurrences are, that motion driven to the value and the
+/// motions of the joints `freed` free, without limits (the caller checks
+/// them). The component's own joints' values; None when the joints do not
+/// hold so.
+pub(crate) fn coupled_values(
+    assembly: &Assembly,
+    joints: &JointsState,
+    placements: &BTreeMap<OccurrenceUid, Transform>,
+    joint: FeatureUid,
+    motion: Motion,
+    value: f64,
+    freed: &BTreeSet<FeatureUid>,
+) -> Option<BTreeMap<FeatureUid, BTreeMap<Motion, f64>>> {
+    let own = |j: &ActiveJoint| j.row.is_none() && j.under.is_empty();
+    let component = joints
+        .active
+        .iter()
+        .find(|j| j.uid == joint && own(j))?
+        .component;
+    let mut active: Vec<ActiveJoint> = joints
+        .active
+        .iter()
+        .filter(|j| j.component == component)
+        .cloned()
+        .collect();
+    for j in active.iter_mut().filter(|j| own(j)) {
+        if j.uid == joint {
+            for s in j.motions.iter_mut().filter(|s| s.motion == motion) {
+                s.target = Some(value);
+            }
+        } else if freed.contains(&j.uid) {
+            for s in &mut j.motions {
+                (s.target, s.min, s.max) = (None, None, None);
+            }
+        }
+    }
+    let refs: Vec<&ActiveJoint> = active.iter().collect();
+    let links = links_of(joints, component);
+    let mut mechanism = Mechanism::new(
+        assembly,
+        joints,
+        component,
+        &refs,
+        &links,
+        placements,
+        &joints.flexed,
+        false,
+        &[],
+    )
+    .ok()?;
+    let result = mechanism.system.solve(&RigidOptions::default());
+    result.is_ok().then(|| mechanism.values(&refs))
+}
 
 // Degrees of freedom.
 

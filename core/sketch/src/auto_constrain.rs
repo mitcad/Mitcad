@@ -516,9 +516,13 @@ impl SketchEdit<'_> {
             if let Some(curve) = solved.curves.get(&e.id) {
                 let (low, high) = curve.bounds();
                 view.cover(low, high);
+                // A conic's apex is off the curve, as a spline's control
+                // points are (mitcad#2236).
                 let spline = matches!(
                     e.kind,
-                    EntityKind::Spline { .. } | EntityKind::FittedSpline { .. }
+                    EntityKind::Spline { .. }
+                        | EntityKind::FittedSpline { .. }
+                        | EntityKind::Conic { .. }
                 );
                 if !spline {
                     view.curves.push(CurveView {

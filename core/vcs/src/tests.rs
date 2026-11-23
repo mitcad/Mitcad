@@ -43,6 +43,8 @@ mod library_https;
 mod tutorials_tests;
 // Components not for print services (mitcad#2214).
 mod library_print;
+// Other files of a project (mitcad#2204).
+mod project_files;
 
 /// A fresh folder in the temporary directory, removed afterwards.
 struct Scratch(PathBuf);

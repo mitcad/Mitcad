@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The design of tools/ui-scripts/decal.mitcad-ui (mitcad#2244): a 40 x 40 x 20 box (Body1, F1), a rod of diameter 20 and height 30 at (80, 20) (Body2, F2) and a 30 x 30 x 6 plate standing on the box's top (Body3, F3), hidden."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [80, 20],
+    "diameter": 20, "height": 30, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"body": "F1.b0", "face": "F1:top"}, "corner": [5, 5],
+    "length": 30, "width": 30, "height": 6, "operation": "new_body"}},
+  {"cmd": "set_body_visible", "uid": "F3.b0", "visible": false}
+]

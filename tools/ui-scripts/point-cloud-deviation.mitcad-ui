@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: MIT
+# Point Cloud Deviation (mitcad#2240), the shared input script of
+# tools/ui-point-cloud-deviation-test.sh (Linux),
+# tools/ui-windows-point-cloud-deviation-test.ps1 (Windows) and
+# tools/ui-macos-point-cloud-deviation-test.sh (macOS), on
+# point-cloud-deviation.json saved as deviation-part.mitcad in the work
+# folder: a block 20 x 20 x 10 mm from the origin (Body1), and scan.xyz the
+# runner writes there: 16 points 0.5 mm above the top face (outside the
+# material) and 16 points 0.3 mm above the bottom face (inside it). ASCII
+# only: the Windows runner copies it as ASCII.
+#   1. Insert > Point Cloud reads scan.xyz: PointCloud1 of 32 points, drawn,
+#      in the Browser's Point Clouds folder.
+#   2. Inspect > Point Cloud Deviation with the cloud and the block: signed,
+#      mean 0.1 mm, mean absolute 0.4 mm, RMS 0.412 mm, max 0.5 mm, 16
+#      outside, 16 inside; the view draws the 32 points coloured with the
+#      legend in place of the cloud. The tooltip at a point above the top
+#      tells its distance (mitcad#2265).
+#   3. Tolerance 0.4 mm: the 16 points inside are within it.
+#   4. Faces: the top face only (mitcad#2265): the inner points are 9.7 mm
+#      from it, still inside; mean -4.6 mm, mean absolute 5.1 mm, RMS 6.868
+#      mm, max 9.7 mm.
+#   5. Points 11: every 3rd point measured (6 above the top, 5 inside); the
+#      other 21 drawn dimmed, the legend says 11 of 32 were measured; the
+#      tooltips at a measured point above the top and one inside.
+#   6. OK keeps it as Deviation1 with its face, shown; saved (the runner
+#      checks the file).
+# The scan's points in the file's order: for x 4, 8, 12, 16 and y 4, 8, 12,
+# 16, (x, y, 10.5) then (x, y, 0.3); so point 2k is above the top, 2k + 1
+# inside.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+
+# --- 1. The scan inserted beside the block.
+mark
+command insert.point_cloud
+wait-log '^Command Point Cloud started' 20
+wait-idle
+type-in '^Panel Point Cloud input file at ' '${MITCAD_TEST_WORK}/scan.xyz'
+key Return
+wait-log '^Inserted point cloud from scan[.]xyz' 30
+wait-log '^Point clouds drawn: PointCloud1 32 points$' 30
+expect-ever '^Browser Root/Point Clouds/PointCloud1 at ' 30
+wait-idle 60
+
+# --- 2. The deviation of the scan from the block.
+mark
+command inspect.point_cloud_deviation
+wait-log '^Command Point Cloud Deviation started' 20
+wait-log '^Inspect Point Cloud Deviation: PointCloud1 to \S+: 32 of 32 points, signed, mean 0[.]100 mm, mean absolute 0[.]400 mm, RMS 0[.]412 mm, max 0[.]500 mm, within 0[.]1 mm 0 [(]0[.]0 %[)], outside 16, inside 16, on the faces 0$' 60
+wait-log '^Print overlay: .*deviation 32 point[(]s[)] #[0-9a-f]{6} #[0-9a-f]{6} #[0-9a-f]{6}; legend Point Cloud Deviation: ' 30
+wait-log '^Point clouds drawn: none$' 30
+expect-ever 'marker Farthest 0[.]500 mm at [(]' 10
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/point-cloud-deviation.png'
+
+# The tooltip at a measured point: its distance (mitcad#2265). The view
+# turned to the standard isometric one, so no two points share a place.
+command view.iso
+wait-idle 30
+mark
+tooltip-view-point 4,4,10.5
+wait-log '^Deviation hover: Distance 0[.]500 mm [(]outside[)]$' 10
+wait-idle
+
+# --- 3. A tolerance of 0.4 mm takes in the points 0.3 mm inside.
+mark
+type-in '^Panel Point Cloud Deviation input tolerance at ' '0.4 mm'
+wait-log '^Inspect Point Cloud Deviation: PointCloud1 to \S+: 32 of 32 points, signed, .* within 0[.]4 mm 16 [(]50[.]0 %[)], outside 16, inside 16, on the faces 0$' 60
+wait-idle 60
+
+# --- 4. From the top face only (mitcad#2265): the points inside, 0.3 mm
+# above the bottom, are 9.7 mm from it and stay signed inside.
+mark
+click-logged '^Panel Point Cloud Deviation input faces at '
+wait-idle
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Point Cloud Deviation Faces: 1 face' 30
+wait-log '^Inspect Point Cloud Deviation: PointCloud1 to \S+: 32 of 32 points, signed, mean -4[.]600 mm, mean absolute 5[.]100 mm, RMS 6[.]868 mm, max 9[.]700 mm, within 0[.]4 mm 0 [(]0[.]0 %[)], outside 16, inside 16, on the faces 0$' 60
+# The farthest point is one inside: its distance signed.
+wait-log 'marker Farthest -9[.]700 mm at [(]' 30
+wait-idle 60
+
+# --- 5. 11 points at most: every 3rd one measured, the other 21 drawn
+# dimmed, the legend tells how many were measured (mitcad#2265).
+mark
+type-in '^Panel Point Cloud Deviation input samples at ' '11'
+wait-log '^Inspect Point Cloud Deviation: PointCloud1 to \S+: 11 of 32 points, signed, .* outside 6, inside 5, on the faces 0$' 60
+wait-log '^Print overlay: .*deviation 11 point[(]s[)] #[0-9a-f]{6} #[0-9a-f]{6} #[0-9a-f]{6}; legend Point Cloud Deviation: .*#[0-9a-f]{6} Measured 11 of 32 points; the others dimmed' 30
+wait-log '^Point clouds drawn: PointCloud1 21 points not measured$' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/point-cloud-deviation-sampled.png'
+# Point 0 above the top and point 3, (4, 8) inside, are measured.
+mark
+tooltip-view-point 4,4,10.5
+wait-log '^Deviation hover: Distance 0[.]500 mm [(]outside[)]$' 10
+mark
+tooltip-view-point 4,8,0.3
+wait-log '^Deviation hover: Distance 9[.]700 mm [(]inside[)]$' 10
+wait-idle
+
+# --- 6. Kept as Deviation1 in the Analysis folder, shown, and saved.
+capture-undo-depth before_ok
+mark
+button '^OK$'
+wait-log '^Kept Point Cloud Deviation as Deviation1' 30
+wait-log '^Browser Root/Analysis/Deviation1 at ' 30
+wait-log '^Point cloud deviation Deviation1: PointCloud1 to \S+: 11 of 32 points, signed, ' 60
+wait-log 'legend Deviation1: .*Measured 11 of 32 points' 30
+wait-idle 60
+expect-undo-depth ${before_ok} 1
+mark
+command file.save
+wait-log 'Saved .*deviation-part[.]mitcad' 30
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

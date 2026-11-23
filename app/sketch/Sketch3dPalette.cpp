@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QDialogButtonBox>
 #include <QEvent>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -35,6 +36,7 @@
 #include "Sketch3dController.hpp"
 #include "Sketch3dEdit.hpp"
 #include "Sketch3dModel.hpp"
+#include "SketchPalette.hpp" // finishButtons (mitcad#2225)
 
 namespace mitcad::sketch {
 namespace {
@@ -117,19 +119,10 @@ Sketch3dPalette::Sketch3dPalette(Sketch3dController& controller, CommandRegistry
                       "apply to the selection, and the relations and dimensions above (Parallel, Perpendicular, "
                       "Angle, Symmetric, Concentric, Curvature, On Plane among them); the other 2D sketch tools do "
                       "not apply to a 3D sketch. Drag a point, a curve or a tangent handle to move it."));
-  if (QAction* finish = registry.action(QStringLiteral("sketch.finish"))) {
-    if (chromeStyle() == ChromeStyle::Floating) {
-      m_finish = new CapsuleButton(finish->text(), true);
-      m_finish->setDefaultAction(finish); // text and state follow the action
-      m_finish->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    } else {
-      m_finish = new QToolButton;
-      m_finish->setDefaultAction(finish);
-      m_finish->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-      m_finish->setFocusPolicy(Qt::NoFocus);
-    }
-    m_finish->setObjectName(QStringLiteral("sketch3dFinish"));
-    layout->addWidget(m_finish, 0, Qt::AlignRight);
+  // Finish Sketch and Cancel Sketch, as the 2D palette has them
+  // (mitcad#2225).
+  if (QDialogButtonBox* buttons = finishButtons(registry, QStringLiteral("sketch3d"), m_finish, m_cancel)) {
+    layout->addWidget(buttons, 0, Qt::AlignRight);
   }
   layout->addStretch();
   connect(&m_c, &Sketch3dController::changed, this, &Sketch3dPalette::refresh);
@@ -1616,6 +1609,10 @@ void Sketch3dPalette::logLayout() const {
   if (m_finish != nullptr && m_finish->isVisible()) {
     const QPoint center = GlassCard::mapToHost(m_finish, m_finish->rect().center());
     qDebug().noquote() << QStringLiteral("3D Sketch Palette Finish Sketch at %1,%2").arg(center.x()).arg(center.y());
+  }
+  if (m_cancel != nullptr && m_cancel->isVisible()) {
+    const QPoint center = GlassCard::mapToHost(m_cancel, m_cancel->rect().center());
+    qDebug().noquote() << QStringLiteral("3D Sketch Palette Cancel Sketch at %1,%2").arg(center.x()).arg(center.y());
   }
   // The 3D Sketch box (mitcad#1544, mitcad#1550): checked, enabled when
   // unchecking it turns the sketch back into 2D, with why.

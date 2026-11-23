@@ -1,0 +1,7 @@
+{
+  "comment": "Worked out by hand: a 100 x 60 x 10 plate about the origin; hexagons of size 8 and web 2 (pitch 10) on the origin, whole cells only: the columns -5..5 at 8.660 apart, the even ones with 5 cells (y 0, ±10, ±20), the odd ones with 6 (y ±5, ±15, ±25), 61 cells of 32 sqrt(3) = 55.425626 mm2 each, cut 4 deep from the bottom: 60000 - 61 * 4 * 32 sqrt(3) = 46476.1473.",
+  "body_count": 1,
+  "total": {"volume_mm3": 46476.1473},
+  "bbox": {"min": [-50, -30, 0], "max": [50, 30, 10]},
+  "parametric": 2
+}

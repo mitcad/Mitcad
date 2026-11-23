@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #553's design (mitcad#2193; opened with --open, never committed; tools/cli/fillet-face-end-reported-test.cmake): a block 200 x 50 x 50.3 (Extrude1 F2) with two pockets cut through it from one long side (Extrude2 F4, x 20 to 50 and -50 to -20, 30 high) and a profile cut along it (Extrude3 F6) that leaves a lip 3 high at the bottom of that side (its outer face F2:side(c1[c4,c2]) on y = -25, its underside F6:side(c13[c11,c15]) on z = 5.5) above a groove. Fillet3 (F27) rounds the lip's top edges with 10, Fillet4 (F28) the pocket walls' edges with the slanted face above the lip with 2, running down the lip's outer face to its underside: at x = 20 the lip's outer face turns into the pocket wall through a rounding of radius 2."},
+  {"expect": {"feature": "Fillet4", "status": "ok", "bodies": 1}},
+  {"comment": "The lip's bottom edge between the pockets (x -20 to 18; the pieces #1 of both faces, the middle ones along x) rounded with 2, Tangent Chain off. The geometry kernel's chain runs on from x = 18 round the pocket wall's rounding (an arc of radius 2 on the underside) and along the wall's edges. Before, the fillet was refused ('… could neither run out over that edge nor end flat at it'): the region kept round that arc, a tube, had to be wider than the rounding (2.1) and narrower than the arc's radius (2). Now the region round an arc that tight is a sector about its axis, and the rounding ends against the pocket wall's rounding: its cross-section at x = 18 carried straight on to where it leaves the lip, in a sharp edge, as the face F29:face_end(<edge>). One valid solid, no note, none of the end's tools left."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "sets": [
+    {"edges": ["E{F2:side(c1[c4,c2])#1|F6:side(c13[c11,c15])#1}"], "size": {"type": "constant", "radius": 2}, "tangent_chain": false}]}},
+  {"expect": {"feature": "F29", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F29"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "F2.b0", "has_face": "F29:face_end(E{F2:side(c1[c4,c2])#1|F6:side(c13[c11,c15])#1})"}},
+  {"expect": {"body": "F2.b0", "has_face": "F29:fillet(E{F2:side(c1[c4,c2])#1|F6:side(c13[c11,c15])#1})"}},
+  {"expect": {"body": "F2.b0", "no_face": "F29:runout_tool"}}
+]

@@ -32,7 +32,11 @@ expect-formula-token length name
 expect-formula-token 0.5 number
 expect-formula-token '*' operator
 focus-widget formulaText
+# The caret to the end: Ctrl+End on Linux and Windows; macOS binds no
+# Command+End (its end of the document is End), and End after Ctrl+End
+# stays at the end elsewhere (the one-line formula has a single block).
 key ctrl+End
+key End
 type ' + spacing'
 expect-formula-token spacing unknown
 key Backspace Backspace Backspace Backspace Backspace Backspace Backspace

@@ -417,8 +417,16 @@ when there are none; earlier versions of MitCad ignore it):
   `app/webbrowser/ComponentBrowserHost.hpp`). A MitCad takes only a
   package of its own interface, the highest `version` among them, and
   says that MitCad needs an update when the manifest has packages only
-  for other interfaces. A manifest may list several interfaces, so that
+  for other interfaces (with only older ones, that its package is not
+  published yet). A manifest may list several interfaces, so that
   the latest release serves older versions of MitCad too.
+- **Raising the interface** (mitcad#2289, interface 4 by mitcad#2281):
+  nothing to do by hand. The interface is part of the package's
+  fingerprint and `mitcad-release browser --abi` finds no package of the
+  new interface in the latest manifest, so the release's
+  `browser-package.sh` / `browser-package.ps1` build a new package on
+  every platform, and `--keep-browser` keeps the older interface's
+  packages in the manifest for the versions of MitCad before it.
 - `version` is the package's own semantic version (the build's date and
   time, `YYYY.MDD.HMM`); `cef` the CEF version inside; `fingerprint` the
   SHA-256 of what the package is built from (the CEF version, the

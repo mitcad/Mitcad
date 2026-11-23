@@ -250,6 +250,29 @@ void CommandSession::visibilityChanged(bool sketchPreviewTakenBack) {
   }
 }
 
+void CommandSession::designChangedBeside(const QString& why) {
+  if (m_done) {
+    return;
+  }
+  // The bodies shown now, the new ones too, as after a light bulb; nothing
+  // computed of the design before stays.
+  QSet<QString> shown;
+  for (const BodyDisplay& body : m_host.modelBodies()) {
+    shown.insert(bodyKey(QString::fromStdString(body.uid), QString::fromStdString(body.occurrence)));
+  }
+  m_shownBodies = shown;
+  m_cache.clear();
+  m_cacheOrder.clear();
+  m_shownKey.clear();
+  qDebug().noquote() << QStringLiteral("%1 checks its picks again after %2").arg(m_def.name, why);
+  refreshInputs();
+  updateHighlights();
+  if (const InputDef* input = activeInput()) {
+    showActiveKinds(input);
+  }
+  schedulePreview(0);
+}
+
 bool CommandSession::redrawPreview() {
   if (m_def.sketchCommand || m_def.modelCommand || m_def.accept || m_def.inspect || m_shownKey.isEmpty() ||
       (!m_previewOk && m_rowsLeftOut.isEmpty()) || m_previewCancelled) {

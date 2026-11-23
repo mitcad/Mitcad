@@ -18,6 +18,7 @@
 #include "AppSettings.hpp"
 #include "CommandSession.hpp"
 #include "Diagnostics.hpp"
+#include "ShutdownSteps.hpp"
 #include "DisplayMeshes.hpp"
 #include "Json.hpp"
 #include "ResultCache.hpp"
@@ -158,9 +159,12 @@ DocumentSession::DocumentSession(bool demo, QObject* parent)
 }
 
 DocumentSession::~DocumentSession() {
+  // The shutdown's steps (mitcad#2275): lines only once MitCad quits.
+  shutdown::step(QStringLiteral("document session: background evaluation stops"));
   m_progressTimer.stop();
   // The run holds a fork of the document: it stops before the document goes.
   stopBackgroundEvaluation(QStringLiteral("closing"), false);
+  shutdown::step(QStringLiteral("document session: the job cancelled, the model worker stops"));
   cancelJob();
   // The worker must release the document before the owned job and model
   // are destroyed. Queued completions cannot run during this destruction.
@@ -170,6 +174,9 @@ DocumentSession::~DocumentSession() {
   delete m_state.activeCommand;
   documentSessions().removeAll(this);
   refreshMemoryCacheBudgets();
+  // Then its members: the background worker's thread ends, the document
+  // is freed.
+  shutdown::step(QStringLiteral("document session: background worker and document freed"));
 }
 
 qint64 DocumentSession::memoryCacheMegabytes() const {
@@ -408,7 +415,15 @@ QJsonObject DocumentSession::command(const QJsonObject& request) {
   }
   timing.finish();
   logDisplayMeshing(meshing, name);
-  return parseObject(answer);
+  QJsonObject result = parseObject(answer);
+  noteForMacro(request);
+  return result;
+}
+
+void DocumentSession::noteForMacro(const QJsonObject& request) {
+  if (m_macro.note(request)) {
+    emit macroStepRecorded(request.value(QStringLiteral("cmd")).toString(), m_macro.count());
+  }
 }
 
 QJsonObject DocumentSession::preview(const QByteArray& request, const QString& name) {
@@ -456,8 +471,10 @@ bool DocumentSession::commandAsync(const QJsonObject& request, QObject* context,
     if (display) {
       *meshing = meshForDisplay(shownBodyShapes(*document), job, DisplayTier::Final, before);
     }
-  }, result, context, [meshing, name, completion = std::move(completion)](const AsyncResult& outcome) {
+  }, result, context, [this, request, meshing, name, completion = std::move(completion)](const AsyncResult& outcome) {
     logDisplayMeshing(*meshing, name);
+    // The macro being recorded (mitcad#2245): what the model accepted.
+    if (outcome.succeeded()) { noteForMacro(request); }
     if (completion) { completion(outcome); }
   });
 }

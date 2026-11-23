@@ -223,14 +223,21 @@ impl<K: Kernel> DrawingLinesOps<K> for Document<K> {
             ));
         }
         if let (Some(body), Some(edge)) = (style.body, &style.edge) {
-            let shape = self.body_shape(body).ok_or_else(|| {
-                ApiError(
-                    notice::FeatureError::new("the body is gone")
-                        .with_detail(format!("the body {body} is gone"))
-                        .text(),
-                )
-            })?;
-            self.kernel().edge_geometry(shape, edge).map_err(|_| {
+            // On a Flat Pattern view, an edge of its developed solid
+            // (mitcad#2280).
+            let shape = shown
+                .iter()
+                .find(|s| s.body == body && s.path.as_slice() == style.path())
+                .and_then(|s| self.shown_shape(s).ok())
+                .or_else(|| self.body_shape(body).cloned())
+                .ok_or_else(|| {
+                    ApiError(
+                        notice::FeatureError::new("the body is gone")
+                            .with_detail(format!("the body {body} is gone"))
+                            .text(),
+                    )
+                })?;
+            self.kernel().edge_geometry(&shape, edge).map_err(|_| {
                 ApiError(
                     notice::FeatureError::new("the body has no such edge")
                         .at(notice::NoticePlace::edge(edge.to_string()).in_body(&body.to_string()))
@@ -330,9 +337,11 @@ impl<K: Kernel> DrawingLinesOps<K> for Document<K> {
                 );
                 continue;
             };
+            // Of a Flat Pattern's developed solid on its view (mitcad#2280).
             let curve = self
-                .body_shape(body)
-                .and_then(|shape| self.kernel().edge_geometry(shape, edge).ok());
+                .shown_shape(&shown[i])
+                .ok()
+                .and_then(|shape| self.kernel().edge_geometry(&shape, edge).ok());
             let Some(curve) = curve else {
                 warnings.push(format!(
                     "{} is gone: its line style is kept",

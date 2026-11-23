@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands/JointCommands.cpp app/framework/CommandSession.cpp app/framework/Command.hpp app/framework/TestDriver.cpp tools/cli tools/ui-scripts/constraint-rows-preview.mitcad-ui tools/ui-scripts/constraint-rows-preview.json
-# Assembly Constraint's preview with more than one row (mitcad#1813) in the
+# Constraint Set's preview with more than one row (mitcad#1813) in the
 # build VM, as tools/ui-constraint-rows-preview-test.sh on Linux: the
 # shared steps tools/ui-scripts/constraint-rows-preview.mitcad-ui on the
 # design that mitcad-cli makes (tools/ui-scripts/constraint-rows-preview.json):
@@ -33,11 +33,11 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "constraint rows preview driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'Preview Assembly Constraint moves O2' 'row 1 previewed: the block moved'
-Ui-ExpectLog 'Preview Assembly Constraint without its incomplete rows (rows row 2: Select geometry 1.): ok' 'the empty row left out, row 1 still previewed'
-Ui-ExpectLog 'Preview Assembly Constraint without its incomplete rows (rows row 2: Select geometry 2.): ok' 'the row with only its Geometry 1 left out, row 1 still previewed'
-Ui-ExpectLog 'Assembly Constraint picks drawn where the preview places them: 2' 'the picks on the block where the preview puts it'
+Ui-ExpectLog 'Preview Constraint Set moves O2' 'row 1 previewed: the block moved'
+Ui-ExpectLog 'Preview Constraint Set without its incomplete rows (rows row 2: Select geometry 1.): ok' 'the empty row left out, row 1 still previewed'
+Ui-ExpectLog 'Preview Constraint Set without its incomplete rows (rows row 2: Select geometry 2.): ok' 'the row with only its Geometry 1 left out, row 1 still previewed'
+Ui-ExpectLog 'Constraint Set picks drawn where the preview places them: 2' 'the picks on the block where the preview puts it'
 Ui-ExpectLog 'Added constraint Constraint1: align, align placed, moved O2' 'OK added the set'
 Ui-ExpectLog 'TestDriver: done' 'the rows'' preview'
 Ui-StopApp
-Write-Host 'PASS: Assembly Constraint previews its complete rows and draws a moved part once'
+Write-Host 'PASS: Constraint Set previews its complete rows and draws a moved part once'

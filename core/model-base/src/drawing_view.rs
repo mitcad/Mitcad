@@ -126,6 +126,11 @@ pub enum ViewEdgeKind {
     /// place of a thread's crests and helices
     /// (`mitcad_model_drawing::convention`).
     ThreadRoot,
+    /// A bend line of a Flat Pattern view (mitcad#2280): `up` when the
+    /// bend's inside is on the side the pattern is seen from. Never from
+    /// the kernel: the drawing adds it on the developed blank, thin, up
+    /// bends in one pattern and down bends in another.
+    Bend { up: bool },
 }
 
 #[derive(Debug, Clone, PartialEq)]

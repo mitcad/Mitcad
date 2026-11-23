@@ -57,22 +57,63 @@ pub struct FrameOverride {
     pub x_axis: Option<Vec3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shift: Option<Vec3>,
+    /// The origin and the axes in the resolved frame's own axes instead
+    /// (mitcad#2286), so that they move and turn with the plane or face
+    /// the frame is on; given, it takes the place of `origin`, `z_axis`
+    /// and `x_axis`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative: Option<RelativeFrame>,
+}
+
+/// A frame override's origin and axes in the resolved frame's own axes
+/// (mitcad#2286: BUILD's parts on a plane or a face): `origin` (mm),
+/// `z_axis` and `x_axis` (directions) as [`FrameOverride`]'s, measured from
+/// the resolved frame, or with `nearest` from the point of its x-y plane
+/// nearest to the component's origin (with the frame's axes), which stays
+/// where it is when a planar face, whose frame is at its middle, grows in
+/// its plane.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelativeFrame {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Vec3>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z_axis: Option<Vec3>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_axis: Option<Vec3>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub nearest: bool,
 }
 
 impl FrameOverride {
     fn check(&self) -> Result<(), String> {
-        let numbers: Vec<f64> = [self.origin, self.z_axis, self.x_axis, self.shift]
-            .into_iter()
-            .flatten()
-            .flatten()
-            .collect();
+        let relative = self.relative.unwrap_or_default();
+        let numbers: Vec<f64> = [
+            self.origin,
+            self.z_axis,
+            self.x_axis,
+            self.shift,
+            relative.origin,
+            relative.z_axis,
+            relative.x_axis,
+        ]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
         if !numbers.iter().all(|v| v.is_finite()) {
             return Err("the frame override's numbers must be finite".to_owned());
         }
-        if self.z_axis.is_some_and(|z| mitcad_vec3::unit(z).is_none()) {
+        let zero = |a: Option<Vec3>, b: Option<Vec3>| {
+            [a, b]
+                .into_iter()
+                .flatten()
+                .any(|v| mitcad_vec3::unit(v).is_none())
+        };
+        if zero(self.z_axis, relative.z_axis) {
             return Err("the frame override's z axis is zero".to_owned());
         }
-        if self.x_axis.is_some_and(|x| mitcad_vec3::unit(x).is_none()) {
+        if zero(self.x_axis, relative.x_axis) {
             return Err("the frame override's x axis is zero".to_owned());
         }
         Ok(())

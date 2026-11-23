@@ -148,6 +148,10 @@ void MainWindow::applyFollowedDockVisibility() {
     const QAction* action = m_registry->action(QStringLiteral("view.projects"));
     dock->setVisible(action != nullptr && action->isChecked());
   }
+  // As MANAGE › Favorite Parameters is checked (mitcad#2203).
+  if (auto* dock = qobject_cast<QDockWidget*>(m_favoriteParametersContainer.data())) {
+    dock->setVisible(m_favoriteParametersShown);
+  }
   // View › Chat checked as the Chat dock is shown.
   if (auto* dock = qobject_cast<QDockWidget*>(m_chatContainer.data())) {
     if (QAction* action = m_registry->action(QStringLiteral("view.chat"))) {
@@ -243,7 +247,7 @@ void MainWindow::restoreDefaultDocks() {
 
 QStringList MainWindow::drawingHiddenDockNames() {
   return {QStringLiteral("commandDock"), QStringLiteral("timelineDock"), QStringLiteral("projectsDock"),
-          QStringLiteral("configurationDock")};
+          QStringLiteral("configurationDock"), QStringLiteral("favoriteParametersDock")};
 }
 
 void MainWindow::updateDrawingDocks(bool open) {

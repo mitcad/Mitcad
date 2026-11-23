@@ -1619,7 +1619,27 @@ void DrawingWorkspace::fillViewPanel(int id) {
     setWarningStyleSheet(gone);
     m_form->addRow(gone);
   }
-  if (type == QStringLiteral("base")) {
+  const QJsonObject subject = json.value(QStringLiteral("subject")).toObject();
+  const bool flat = subject.value(QStringLiteral("type")).toString() == QStringLiteral("flat_pattern");
+  if (type == QStringLiteral("base") && flat) {
+    // A Flat Pattern's view (mitcad#2280): square onto the blank, its
+    // orientation the pattern's; what it shows by name, and its bend
+    // notes on or off.
+    const QJsonObject pattern = json.value(QStringLiteral("flat_pattern")).toObject();
+    QString body = pattern.value(QStringLiteral("name")).toString();
+    if (body.isEmpty()) {
+      body = subject.value(QStringLiteral("body")).toString();
+    }
+    auto* shows = new QLabel(flatPatternLabel(body));
+    shows->setWordWrap(true);
+    m_form->addRow(tr("Shows"), named(shows, "drawingViewShowsFlat"));
+    auto* notes = new QCheckBox;
+    notes->setChecked(subject.value(QStringLiteral("bend_notes")).toBool(true));
+    notes->setToolTip(tr("Each bend line's direction, angle and inside radius"));
+    connect(notes, &QCheckBox::toggled, this,
+            [edit](bool on) { edit(QStringLiteral("bend_notes"), on ? QStringLiteral("true") : QStringLiteral("false")); });
+    m_form->addRow(tr("Bend Notes"), named(notes, "drawingViewBendNotes"));
+  } else if (type == QStringLiteral("base")) {
     const DrawingToolDef& base = *drawingTool(QStringLiteral("drawing.base_view"));
     const QJsonValue direction = json.value(QStringLiteral("direction"));
     QList<QPair<QString, QString>> directions;
@@ -1800,6 +1820,11 @@ void DrawingWorkspace::fillViewPanel(int id) {
         std::tuple{"retrieved_dimensions", QT_TR_NOOP("Sketch Dimensions"), "drawingViewRetrievedDimensions"},
         std::tuple{"model_annotations", QT_TR_NOOP("Model Annotations"), "drawingViewModelAnnotations"}}) {
     const QString flagName = QString::fromLatin1(flag);
+    // A Flat Pattern's blank retrieves nothing of the model's
+    // (mitcad#2280).
+    if (flat && flagName != QStringLiteral("center_marks")) {
+      continue;
+    }
     auto* flagBox = new QCheckBox;
     flagBox->setChecked(json.value(flagName).toBool());
     connect(flagBox, &QCheckBox::toggled, this,
@@ -1863,13 +1888,17 @@ QList<QPair<QString, QString>> DrawingWorkspace::subjects() const {
   const QString name = root && !title.isEmpty() ? title : m_answer.value(QStringLiteral("component_name")).toString();
   QJsonObject components;
   QJsonArray bodies;
+  // The sheet-metal bodies, whose Flat Patterns are listed too
+  // (mitcad#2280).
+  QJsonArray sheets;
   try {
     components = m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("components")}});
     bodies = m_host.model().queryArray(QStringLiteral("bodies"));
+    sheets = m_host.model().queryArray(QStringLiteral("sheet_bodies"));
   } catch (const std::exception& e) {
     qDebug().noquote() << QStringLiteral("Drawing subjects not listed: %1").arg(QString::fromUtf8(e.what()));
   }
-  return subjectChoices(component, name, components, bodies);
+  return subjectChoices(component, name, components, bodies, sheets);
 }
 
 QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {

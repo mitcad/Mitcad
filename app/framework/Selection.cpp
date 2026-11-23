@@ -640,6 +640,7 @@ QString curveWord(const QString& type) {
   if (type == QStringLiteral("ellipse")) return selectionText("Ellipse");
   if (type == QStringLiteral("elliptical_arc")) return selectionText("Elliptical arc");
   if (type == QStringLiteral("spline") || type == QStringLiteral("fitted_spline")) return selectionText("Spline");
+  if (type == QStringLiteral("conic")) return selectionText("Conic");
   return selectionText("Curve");
 }
 

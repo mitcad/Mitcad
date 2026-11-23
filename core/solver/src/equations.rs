@@ -302,6 +302,101 @@ pub(crate) enum EqKind {
     /// (`|c1 c2|^2 = r1^2 + r2^2`), written as a length so that it is held
     /// to the same tolerance as the other rows.
     PerpCircles { c1: P, r1: Rad, c2: P, r2: Rad },
+    // Points on offsets of curves (mitcad#2278).
+    /// `(p - S(t) - left n(t))[axis]`: the point on the offset of the curve
+    /// `src` by `left` along its unit left normal `n`.
+    OnOffset {
+        p: P,
+        src: OffsetSrc,
+        t: OffsetT,
+        left: f64,
+        axis: usize,
+    },
+    /// `(p - corner - |a.2| unit((1 - x[s]) a.2 n_a + x[s] b.2 n_b))[axis]`:
+    /// the point on a round corner of an offset, between the offset
+    /// directions of the curves `a.0` (at `a.1`) and `b.0` (at `b.1`).
+    OnOffsetCorner {
+        p: P,
+        corner: P,
+        a: (OffsetSrc, OffsetT, f64),
+        b: (OffsetSrc, OffsetT, f64),
+        s: usize,
+        axis: usize,
+    },
+}
+
+// Points on offsets of curves (mitcad#2278).
+/// A curve an offset is taken of, by its local unknowns.
+#[derive(Clone, Debug)]
+pub(crate) enum OffsetSrc {
+    /// `a + t (b - a)`.
+    Line { a: P, b: P },
+    /// A circle or an arc: `c + r (cos t, sin t)`, counter-clockwise.
+    Round { c: P, r: Rad },
+    /// `c + A cos t + B sin t` as [`EqKind::Ellipse`].
+    Ellipse { c: P, a: P, b: usize },
+    Spline {
+        basis: Arc<SplineBasis>,
+        ctrl: Vec<P>,
+    },
+}
+
+/// The parameter of a point on an [`OffsetSrc`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OffsetT {
+    Const(f64),
+    Var(usize),
+    /// At the point (an end of the curve): a round's end, whose angle is
+    /// the direction from the centre; a line's end.
+    At(P),
+}
+
+/// The point of `src` at `t` and the curve's unit left normal there.
+fn offset_frame<T: Scalar>(x: &[T], src: &OffsetSrc, t: OffsetT) -> (V2<T>, V2<T>) {
+    let value = |t: OffsetT| match t {
+        OffsetT::Const(v) => T::cst(v),
+        OffsetT::Var(i) => x[i],
+        OffsetT::At(_) => T::cst(0.0),
+    };
+    match src {
+        OffsetSrc::Line { a, b } => {
+            let (a, b) = (pt(x, *a), pt(x, *b));
+            let d = b.sub(a);
+            let at = match t {
+                OffsetT::At(p) => pt(x, p),
+                _ => a.add(d.mul(value(t))),
+            };
+            (at, d.unit().perp())
+        }
+        OffsetSrc::Round { c, r } => {
+            let c = pt(x, *c);
+            let dir = match t {
+                OffsetT::At(p) => pt(x, p).sub(c).unit(),
+                _ => {
+                    let a = value(t);
+                    V2::new(a.cos(), a.sin())
+                }
+            };
+            // The left of a counter-clockwise circle is its centre's side.
+            (c.add(dir.mul(rad(x, r))), dir.mulf(-1.0))
+        }
+        OffsetSrc::Ellipse { c, a, b } => {
+            // An ellipse's point is by its parameter (an unknown or a
+            // constant), never `At`.
+            let cv = pt(x, *c);
+            let av = pt(x, *a).sub(cv);
+            let bv = av.perp().mul(x[*b] / av.norm());
+            let tt = value(t);
+            let at = cv.add(av.mul(tt.cos())).add(bv.mul(tt.sin()));
+            let d1 = av.mul(-tt.sin()).add(bv.mul(tt.cos()));
+            (at, d1.unit().perp())
+        }
+        OffsetSrc::Spline { basis, ctrl } => {
+            let cp: Vec<V2<T>> = ctrl.iter().map(|p| pt(x, *p)).collect();
+            let e = basis.eval(&cp, value(t), 1);
+            (e.p, e.d1.unit().perp())
+        }
+    }
 }
 
 fn pt<T: Scalar>(x: &[T], p: P) -> V2<T> {
@@ -597,6 +692,36 @@ impl EqKind {
                 let (a, b) = (rad(x, r1), rad(x, r2));
                 d - (a * a + b * b).sqrt()
             }
+            // Points on offsets of curves (mitcad#2278).
+            OnOffset {
+                p,
+                src,
+                t,
+                left,
+                axis,
+            } => {
+                let (at, n) = offset_frame(x, src, *t);
+                pt(x, *p).sub(at.add(n.mulf(*left))).get(*axis)
+            }
+            OnOffsetCorner {
+                p,
+                corner,
+                a,
+                b,
+                s,
+                axis,
+            } => {
+                let (_, na) = offset_frame(x, &a.0, a.1);
+                let (_, nb) = offset_frame(x, &b.0, b.1);
+                let sv = x[*s];
+                let dir = na
+                    .mulf(a.2)
+                    .mul(T::cst(1.0) - sv)
+                    .add(nb.mulf(b.2).mul(sv))
+                    .unit();
+                let at = pt(x, *corner).add(dir.mulf(a.2.abs()));
+                pt(x, *p).sub(at).get(*axis)
+            }
         }
     }
 }
@@ -854,7 +979,7 @@ mod tests {
                     sign: -1.0,
                 },
                 b: CurvTerm::Spline {
-                    basis,
+                    basis: basis.clone(),
                     ctrl: vec![[0, 1], [2, 3], [4, 5], [6, 7], [10, 11]],
                     t: 1.0,
                     sign: -1.0,
@@ -916,6 +1041,70 @@ mod tests {
                 r1: Rad::Param(8),
                 c2: [2, 3],
                 r2: Rad::Dist([2, 3], [4, 5]),
+            },
+            // Points on offsets of curves (mitcad#2278).
+            EqKind::OnOffset {
+                p: [0, 1],
+                src: OffsetSrc::Line {
+                    a: [2, 3],
+                    b: [4, 5],
+                },
+                t: OffsetT::Var(12),
+                left: -0.6,
+                axis: 0,
+            },
+            EqKind::OnOffset {
+                p: [0, 1],
+                src: OffsetSrc::Round {
+                    c: [2, 3],
+                    r: Rad::Dist([2, 3], [4, 5]),
+                },
+                t: OffsetT::At([6, 7]),
+                left: 0.4,
+                axis: 1,
+            },
+            EqKind::OnOffset {
+                p: [12, 13],
+                src: OffsetSrc::Ellipse {
+                    c: [0, 1],
+                    a: [2, 3],
+                    b: 9,
+                },
+                t: OffsetT::Var(11),
+                left: 0.3,
+                axis: 0,
+            },
+            EqKind::OnOffset {
+                p: [10, 11],
+                src: OffsetSrc::Spline {
+                    basis,
+                    ctrl: vec![[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]],
+                },
+                t: OffsetT::Var(12),
+                left: -0.5,
+                axis: 1,
+            },
+            EqKind::OnOffsetCorner {
+                p: [10, 11],
+                corner: [4, 5],
+                a: (
+                    OffsetSrc::Line {
+                        a: [0, 1],
+                        b: [4, 5],
+                    },
+                    OffsetT::Const(1.0),
+                    0.5,
+                ),
+                b: (
+                    OffsetSrc::Round {
+                        c: [6, 7],
+                        r: Rad::Dist([6, 7], [4, 5]),
+                    },
+                    OffsetT::At([4, 5]),
+                    -0.5,
+                ),
+                s: 12,
+                axis: 0,
             },
         ];
         let n = x0.len();

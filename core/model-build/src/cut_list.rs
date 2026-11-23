@@ -151,6 +151,8 @@ pub struct CutList {
     pub cut: Vec<ComponentUid>,
     /// The totals when the design has timber.
     pub timber: Option<TimberTotals>,
+    /// The end caps' plates (mitcad#2243).
+    pub plates: Vec<PlateRow>,
 }
 
 /// The document's BUILD methods of this block, as an extension trait
@@ -276,6 +278,14 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
             else {
                 continue;
             };
+            // Cut back by inward end caps (mitcad#2243): the piece is that
+            // much shorter.
+            let length = length
+                - [def.cut_back.a, def.cut_back.b]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| params.value(id))
+                    .sum::<f64>();
             cut.push(info.component);
             let ends = [&def.ends.a, &def.ends.b].map(|e| {
                 e.as_ref().and_then(|cut| {
@@ -563,13 +573,77 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
                 .filter_map(|r| r.timber.as_ref()?.board.as_ref().map(|b| b.area))
                 .reduce(|a, b| a + b),
         });
+        // End caps' plates (mitcad#2243), by their outline and thickness.
+        let mut plates: BTreeMap<String, PlateRow> = BTreeMap::new();
+        for cap in crate::end_cap::EndCapBuild::end_caps(self) {
+            let Some(made) = self.end_cap_plate(cap.component) else {
+                continue;
+            };
+            cut.push(cap.component);
+            let member = self.part_info(cap.member);
+            let density = member.as_ref().and_then(|m| m.meta.density());
+            let material = member
+                .as_ref()
+                .and_then(|m| m.meta.material.as_ref())
+                .map(|m| m.species.clone())
+                .filter(|s| !s.is_empty());
+            let designation = made.designation();
+            let key = format!(
+                "{designation}|{}|{:?}|{material:?}",
+                made.plate.shape_key(),
+                density.map(|d| format!("{d:.6}"))
+            );
+            let quantity = quantities.get(&cap.component).copied().unwrap_or(1).max(1);
+            let row = plates.entry(key).or_insert_with(|| PlateRow {
+                designation,
+                width: made.plate.width(),
+                height: made.plate.height(),
+                thickness: made.thickness,
+                area: made.plate.area(),
+                disc: made.plate.is_disc(),
+                material: material.clone(),
+                quantity: 0,
+                mass: density.map(|d| d * made.volume() / 1e9),
+                components: Vec::new(),
+                members: Vec::new(),
+            });
+            row.quantity += quantity;
+            row.components.push(cap.component);
+            if !row.members.contains(&cap.member) {
+                row.members.push(cap.member);
+            }
+        }
         CutList {
             rows,
             stock,
             cut,
             timber,
+            plates: plates.into_values().collect(),
         }
     }
+}
+
+/// A group of identical end cap plates (mitcad#2243).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlateRow {
+    /// `Plate 40 x 40 x 5`.
+    pub designation: String,
+    /// The outline's width and height across the member, mm.
+    pub width: f64,
+    pub height: f64,
+    pub thickness: f64,
+    /// The outline's area, mm².
+    pub area: f64,
+    /// A round plate (a round tube's): `width` is its diameter.
+    pub disc: bool,
+    /// The members' material (their library's species), when it names one.
+    pub material: Option<String>,
+    pub quantity: usize,
+    /// Each, kg, by the members' density.
+    pub mass: Option<f64>,
+    pub components: Vec<ComponentUid>,
+    /// The members the plates close.
+    pub members: Vec<ComponentUid>,
 }
 
 /// The document's BUILD methods of this block, as an extension trait

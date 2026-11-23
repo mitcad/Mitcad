@@ -42,6 +42,7 @@ const std::pair<const char*, const char*> kShortLabels[] = {
     {"solid.configurations", QT_TRANSLATE_NOOP("RibbonLabel", "Configs")},
     {"manage.recompute_all", QT_TRANSLATE_NOOP("RibbonLabel", "Recompute")},
     {"manage.plastic_rules", QT_TRANSLATE_NOOP("RibbonLabel", "Plastic")},
+    {"manage.favorite_parameters", QT_TRANSLATE_NOOP("RibbonLabel", "Favorites")},
     // Sketch
     {"sketch.rectangle", QT_TRANSLATE_NOOP("RibbonLabel", "Rectangle")},
     {"sketch.circle", QT_TRANSLATE_NOOP("RibbonLabel", "Circle")},
@@ -52,6 +53,7 @@ const std::pair<const char*, const char*> kShortLabels[] = {
     {"sketch.constraint.perpendicular", QT_TRANSLATE_NOOP("RibbonLabel", "Perpend.")},
     {"sketch.insert_dxf", QT_TRANSLATE_NOOP("RibbonLabel", "DXF")},
     {"sketch.finish", QT_TRANSLATE_NOOP("RibbonLabel", "Finish")},
+    {"sketch.cancel", QT_TRANSLATE_NOOP("RibbonLabel", "Cancel")},
     // Drawing and Cut Sheet
     {"drawing.close", QT_TRANSLATE_NOOP("RibbonLabel", "Close")},
     {"drawing.projected_view", QT_TRANSLATE_NOOP("RibbonLabel", "Projected")},

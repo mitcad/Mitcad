@@ -22,6 +22,7 @@
 //! ends follow when the lines move. Each end reports the joint it is in,
 //! an L or a T, with its condition (`joint`).
 
+use crate::conditions::ConditionsCrateOps;
 use crate::geometry::{
     V3, Z, add, angle_between, cross, dot, inverse, norm, parts, scale, sub, unit,
 };
@@ -456,12 +457,17 @@ impl<K: Kernel> EndMeetsBuild<K> for Document<K> {
                 let leans = [Tilt::X, Tilt::MinusX, Tilt::Y, Tilt::MinusY]
                     .map(|t| p.world.apply_vector(t.lean()));
                 let asked = with_meets && only.is_none_or(|c| c == p.info.component);
-                let joint = if asked {
-                    crate::conditions::ConditionsCrateOps::joint_now(self, &profiles, p, pb)
+                let missing = asked
+                    .then(|| self.missing_joint_member(&profiles, p, pb))
+                    .flatten();
+                let joint = if asked && missing.is_none() {
+                    self.joint_now(&profiles, p, pb)
                 } else {
                     None
                 };
-                let meets = if !asked {
+                let meets = if let Some(problem) = missing {
+                    Err(problem)
+                } else if !asked {
                     Err(String::new())
                 } else {
                     let found = profiles

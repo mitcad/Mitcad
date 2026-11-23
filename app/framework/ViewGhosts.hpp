@@ -40,7 +40,7 @@ inline QString ghostLabel(const QString& ghost) {
 }
 
 // The ghost of a joint's side A until B is picked (Joint, As-Built Joint,
-// Assembly Constraint). `pick` is the pick's occurrence from the root,
+// Constraint Set). `pick` is the pick's occurrence from the root,
 // `inComponent` its path from the occurrence that places the joint's
 // component (none: outside it; empty: the component's own geometry),
 // `chosen` whether that component is chosen (a holder, mitcad#1856, or an

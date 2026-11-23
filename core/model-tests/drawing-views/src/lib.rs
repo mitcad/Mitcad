@@ -30,3 +30,5 @@ mod silhouette_tests;
 mod standard_tests;
 // A drawing's own hole callouts (mitcad#2054).
 mod hole_callout_tests;
+// A base view of a sheet-metal body's Flat Pattern (mitcad#2280).
+mod flat_pattern_view_tests;

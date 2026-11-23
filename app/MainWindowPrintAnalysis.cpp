@@ -13,13 +13,16 @@
 #include <array>
 #include <exception>
 #include <memory>
+#include <vector>
 
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QObject>
 #include <QtLogging>
 
 #include "commands/DraftAnalysis.hpp"
+#include "commands/PointCloudDeviation.hpp"
 #include "commands/PrintAnalysis.hpp"
 #include "framework/Json.hpp"
 #include "framework/ModelWorker.hpp"
@@ -33,15 +36,31 @@ bool isDraft(const QJsonObject& analysis) {
   return analysis.value(QStringLiteral("type")).toString() == QStringLiteral("draft");
 }
 
-// The kinds of analysis drawn over the bodies (mitcad#620, mitcad#2166).
-bool drawnOverBodies(const QJsonObject& analysis) {
-  const QString type = analysis.value(QStringLiteral("type")).toString();
-  return type == QStringLiteral("print") || type == QStringLiteral("draft");
+// Point Cloud Deviation (mitcad#2240).
+bool isDeviation(const QJsonObject& analysis) {
+  return analysis.value(QStringLiteral("type")).toString() == QStringLiteral("point_cloud_deviation");
 }
 
-// The log's words of the kind: "Print analysis", "Draft analysis".
+// The kinds of analysis drawn over the bodies (mitcad#620, mitcad#2166),
+// and Point Cloud Deviation's points (mitcad#2240).
+bool drawnOverBodies(const QJsonObject& analysis) {
+  const QString type = analysis.value(QStringLiteral("type")).toString();
+  return type == QStringLiteral("print") || type == QStringLiteral("draft") || isDeviation(analysis);
+}
+
+// The log's words of the kind: "Print analysis", "Draft analysis",
+// "Point cloud deviation".
 QString kindOf(const QJsonObject& analysis) {
-  return isDraft(analysis) ? QStringLiteral("Draft analysis") : QStringLiteral("Print analysis");
+  return isDraft(analysis)       ? QStringLiteral("Draft analysis")
+         : isDeviation(analysis) ? QStringLiteral("Point cloud deviation")
+                                 : QStringLiteral("Print analysis");
+}
+
+// The panel's and the progress' words of the kind.
+QString titleOf(const QJsonObject& analysis) {
+  return isDraft(analysis)       ? QObject::tr("Draft Analysis")
+         : isDeviation(analysis) ? QObject::tr("Point Cloud Deviation")
+                                 : QObject::tr("Print Analysis");
 }
 
 // The shown analysis' numbers in the log's words and its overlay, or its
@@ -49,6 +68,17 @@ QString kindOf(const QJsonObject& analysis) {
 Inspection analyseShown(const QJsonObject& shown, const QString& name, const BodyNames& bodyName,
                         const PrintQuery& query) {
   Inspection result;
+  if (isDeviation(shown)) {
+    QJsonObject answer;
+    std::vector<float> places;
+    result.error = runPointCloudDeviation(shown, query, answer, places);
+    if (result.error.isEmpty()) {
+      const QString body = bodyName(shown.value(QStringLiteral("body")).toString());
+      result.log = pointCloudDeviationLog(answer, body);
+      result.printOverlay = pointCloudDeviationOverlayJson(shown, answer, places, name);
+    }
+    return result;
+  }
   if (isDraft(shown)) {
     QJsonObject answer;
     result.error = runDraftAnalysis(shown, query, answer);
@@ -104,9 +134,21 @@ void MainWindow::showPrintOverlay(const QJsonObject& overlay) {
   const std::array<QColor, 3> draft = {viewColor(ColorRole::DraftPositive, dark),
                                        viewColor(ColorRole::DraftUnder, dark),
                                        viewColor(ColorRole::DraftNegative, dark)};
+  // Point Cloud Deviation's scale (mitcad#2240).
+  const std::array<QColor, 3> deviation = {viewColor(ColorRole::DeviationInside, dark),
+                                           viewColor(ColorRole::DeviationNeutral, dark),
+                                           viewColor(ColorRole::DeviationOutside, dark)};
   m_viewer->setPrintOverlay(printOverlayOf(overlay, viewColor(ColorRole::PrintOverhang, dark),
                                            viewColor(ColorRole::PrintThin, dark),
-                                           viewColor(ColorRole::PrintGap, dark), draft));
+                                           viewColor(ColorRole::PrintGap, dark), draft, deviation,
+                                           viewColor(ColorRole::DeviationUnmeasured, dark)));
+  // A point cloud a shown deviation colours: its measured points are the
+  // deviation's (mitcad#2240), the others drawn dimmed (mitcad#2265).
+  const DeviationSample sample = deviationSampleOf(overlay);
+  if (sample != m_deviationSample) {
+    m_deviationSample = sample;
+    drawPointClouds();
+  }
 }
 
 void MainWindow::followPrintAnalysis() {
@@ -118,7 +160,12 @@ void MainWindow::followPrintAnalysis() {
   QByteArray key;
   if (drawn) {
     key = compactJson(shown) + m_snapshot.key;
-    for (const QJsonValue& uid : shown.value(QStringLiteral("bodies")).toArray()) {
+    QJsonArray uids = shown.value(QStringLiteral("bodies")).toArray();
+    // A deviation's one body (mitcad#2240).
+    if (shown.value(QStringLiteral("body")).isString()) {
+      uids.append(shown.value(QStringLiteral("body")));
+    }
+    for (const QJsonValue& uid : uids) {
       std::shared_ptr<geometry::Shape> shape;
       try {
         shape = bodyShape(uid.toString());
@@ -169,13 +216,15 @@ void MainWindow::computePrintAnalysis(quint64 generation) {
     names.insert(body.key(), body->name);
   }
   const BodyNames bodyName = [names](const QString& uid) { return names.value(uid, uid); };
-  const QString stage = isDraft(shown) ? tr("Draft analysis of %1").arg(name) : tr("Print analysis of %1").arg(name);
+  const QString stage = isDraft(shown)       ? tr("Draft analysis of %1").arg(name)
+                        : isDeviation(shown) ? tr("Point cloud deviation %1").arg(name)
+                                             : tr("Print analysis of %1").arg(name);
 
   if (asynchronousCommands()) {
     // The native window: the whole analysis as one job on the model's
     // worker, which the progress cancels.
     const bool started = modelInspectionAsync(
-        isDraft(shown) ? tr("Draft Analysis") : tr("Print Analysis"), this,
+        titleOf(shown), this,
         [shown, name, bodyName](const Document& document) {
           return analyseShown(shown, name, bodyName, [&document](const QJsonObject& request, bool) {
             return parseObject(document.query(rustStr(compactJson(request))));

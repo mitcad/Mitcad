@@ -38,9 +38,15 @@ struct PointData {
 
 struct CurveData {
   QString id;   // c4
-  QString type; // line, circle, arc, ellipse, elliptical_arc, spline, fitted_spline
+  QString type; // line, circle, arc, ellipse, elliptical_arc, spline, fitted_spline, conic
   Curve2 curve;
   QString start, end, center; // point ids, where the curve has them
+  // A conic (mitcad#2236): its shoulder point, where its end tangents
+  // meet, its Rho, and the expression of the parameter Rho follows (empty:
+  // a plain number).
+  QString apex;
+  double rho = 0.5;
+  QString rhoExpression;
   QStringList points;         // every point it refers to
   // A closed fitted spline (mitcad#783): no start or end, its points listed
   // once.
@@ -64,6 +70,7 @@ struct CurveData {
   bool isSpline() const {
     return type == QStringLiteral("spline") || type == QStringLiteral("fitted_spline");
   }
+  bool isConic() const { return type == QStringLiteral("conic"); }
 };
 
 struct ConstraintData {
@@ -188,6 +195,21 @@ struct OffsetData {
   bool round = false; // Corners: Round (mitcad#1774)
 };
 
+// An equation curve's formulas (the `sketch` query's `equations`,
+// mitcad#2237): Edit Equation Curve opens with them.
+struct EquationData {
+  QString curve; // c9, its fit point spline
+  QString mode;  // explicit, parametric or polar
+  QString x;     // parametric x(t)
+  QString y;     // explicit y(x), parametric y(t)
+  QString r;     // polar r(t)
+  QString start; // the range, expressions in the design's units
+  QString end;
+  double tolerance = 0.01; // mm
+  int pointCount = 0;
+  QString variableUnit = QStringLiteral("none"); // none, length or angle (mitcad#2264)
+};
+
 // An edge that could have taken the place of a lost projection's source
 // (the query's `candidates` and `candidate_curves`, mitcad#1794): Project
 // Again offers each by its kind and size, never its name.
@@ -266,6 +288,8 @@ public:
   std::vector<TextData> texts;
   std::vector<PatternData> patterns;
   std::vector<OffsetData> offsets;
+  // Equation curves' formulas (mitcad#2237).
+  std::vector<EquationData> equations;
   // Instances of the design's sketch blocks (mitcad#2110).
   std::vector<BlockInstanceData> blocks;
   std::vector<ProjectionData> projections;
@@ -323,6 +347,8 @@ public:
   // The block instance an entity is part of, open ones too (mitcad#2110).
   const BlockInstanceData* instanceOf(const QString& entity) const;
   const OffsetData* offsetOf(const QString& curve) const;
+  // The formulas of an equation curve (mitcad#2237); null for another.
+  const EquationData* equationOf(const QString& curve) const;
   const ConstraintData* constraint(const QString& id) const;
   const DimensionData* dimension(const QString& id) const;
   std::optional<V2> pointAt(const QString& id) const;

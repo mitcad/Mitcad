@@ -387,7 +387,11 @@ impl SketchEdit<'_> {
                     });
                 }
             }
-            EntityKind::Spline { .. } | EntityKind::FittedSpline { .. } => {
+            // A conic's pieces (mitcad#2236) as a spline's: smooth where
+            // they meet.
+            EntityKind::Spline { .. }
+            | EntityKind::FittedSpline { .. }
+            | EntityKind::Conic { .. } => {
                 for pair in pieces.windows(2) {
                     self.add_tangent_if_safe(pair[0].id, pair[1].id);
                 }

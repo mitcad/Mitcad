@@ -2924,6 +2924,160 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Conic Curve (mitcad#2236)
+
+// Three clicks: the start, the end and the shoulder, where the conic's end
+// tangents meet. Its Rho (0.5 a parabola, less an ellipse, more a
+// hyperbola) is a field from the start, kept from one conic to the next; a
+// typed expression of parameters makes the conic follow them. The preview
+// is the conic itself, the rational quadratic Bezier of the three points
+// with the middle weight Rho / (1 - Rho), with dashed lines from its ends
+// to the shoulder.
+class ConicTool : public StepTool {
+public:
+  using StepTool::StepTool;
+
+  QString name() const override { return QObject::tr("Conic Curve"); }
+
+  void start() override {
+    StepTool::start();
+    showRho();
+  }
+
+  void press(const Snap& snap) override {
+    keepRho();
+    StepTool::press(snap);
+    // Made (or not): the next conic starts with the same Rho field.
+    if (clicked() == 0) {
+      showRho();
+    }
+  }
+
+  bool cancel() override {
+    const bool handled = StepTool::cancel();
+    if (handled && clicked() == 0) {
+      showRho();
+    }
+    return handled;
+  }
+
+  void fieldsEdited() override {
+    StepTool::fieldsEdited();
+    keepRho();
+  }
+
+  void paint(ToolPreview& preview) const override {
+    if (clicked() == 0) {
+      return;
+    }
+    if (clicked() == 1) {
+      preview.line(click(0), cursor(), Style::Guide);
+      return;
+    }
+    const V2 apex = cursor();
+    preview.line(click(0), apex, Style::Guide);
+    preview.line(click(1), apex, Style::Guide);
+    if (const auto conic = conicThrough(apex)) {
+      preview.curve(*conic, step());
+    }
+  }
+
+protected:
+  int clicks() const override { return 3; }
+
+  QString prompt(int clicked) const override {
+    return clicked == 0   ? QObject::tr("Conic Curve: click the start (Tab: Rho).")
+           : clicked == 1 ? QObject::tr("Conic Curve: click the end.")
+                          : QObject::tr("Conic Curve: click the shoulder, where the end tangents meet.");
+  }
+
+  QVector<FieldSpec> fields(int clicked) const override {
+    Q_UNUSED(clicked);
+    return {{QStringLiteral("rho"), QObject::tr("Rho"), FieldSpec::Kind::Ratio}};
+  }
+
+  void live() override {
+    if (const auto typed = m_c.fieldValue(QStringLiteral("rho")); typed && *typed > 0.0 && *typed < 1.0) {
+      return;
+    }
+    m_c.setLive(QStringLiteral("rho"), m_rho);
+  }
+
+  // The Rho the preview and the conic take: the typed one when it lies
+  // between 0 and 1, else the last.
+  double rho() const {
+    if (const auto typed = m_c.fieldValue(QStringLiteral("rho")); typed && *typed > 0.0 && *typed < 1.0) {
+      return *typed;
+    }
+    return m_rho;
+  }
+
+  // The conic from the first two clicks to `apex`; none while the apex is
+  // on the line through the ends or at one of them.
+  std::optional<Curve2> conicThrough(const V2& apex) const {
+    const V2 a = click(0);
+    const V2 b = click(1);
+    const double chord = dist(a, b);
+    if (chord <= 1e-9 || std::abs(cross(b - a, apex - a)) <= 1e-9 * chord * std::max(1.0, chord)) {
+      return std::nullopt;
+    }
+    const double r = rho();
+    Curve2 conic;
+    conic.type = Curve2::Type::Spline;
+    conic.degree = 2;
+    conic.control = {a, apex, b};
+    conic.weights = {1.0, r / (1.0 - r), 1.0};
+    conic.knots = {0.0, 0.0, 0.0, 1.0, 1.0, 1.0};
+    return conic;
+  }
+
+  void commit() override {
+    SketchOp op(m_c);
+    QJsonObject cmd = op.command(QStringLiteral("sketch.conic"));
+    cmd.insert(QStringLiteral("start"), op.pointInput(snapOf(0)));
+    cmd.insert(QStringLiteral("end"), op.pointInput(snapOf(1)));
+    cmd.insert(QStringLiteral("apex"), op.pointInput(snapOf(2)));
+    const QJsonValue rhoInput = m_rhoText.isEmpty() ? QJsonValue(m_rho) : conicRhoValue(m_rhoText);
+    cmd.insert(QStringLiteral("rho"), rhoInput);
+    cmd.insert(QStringLiteral("construction"), m_c.construction());
+    QJsonObject result;
+    if (!op.run(cmd, &result)) {
+      refuse(m_c, op, name());
+      return;
+    }
+    const QString id = made(result).value(0);
+    // The clicks that snapped onto geometry are held there (mitcad#353).
+    for (int i = 0; i < 3; ++i) {
+      holdPoint(op, result, click(i), snapOf(i), true);
+    }
+    op.commit();
+    // "Added conic c6, Rho 0.7", for the UI tests.
+    qDebug().noquote() << QStringLiteral("Added conic %1, Rho %2")
+                              .arg(id, rhoInput.isDouble() ? QString::number(rhoInput.toDouble(), 'g', 6)
+                                                           : rhoInput.toString());
+  }
+
+private:
+  // The Rho field again, showing the Rho kept.
+  void showRho() {
+    m_c.setFields(fields(0));
+    m_c.setLive(QStringLiteral("rho"), m_rho);
+  }
+
+  // What was typed in the Rho field, kept before its field is made again
+  // at the next click.
+  void keepRho() {
+    if (const auto typed = m_c.fieldValue(QStringLiteral("rho")); typed && *typed > 0.0 && *typed < 1.0) {
+      m_rho = *typed;
+      m_rhoText = m_c.fieldExpression(QStringLiteral("rho"));
+    }
+  }
+
+  double m_rho = 0.5;
+  QString m_rhoText; // as typed: a number or an expression of parameters
+};
+
+// ---------------------------------------------------------------------------
 // Spline
 
 class SplineTool : public SketchTool {
@@ -3329,6 +3483,13 @@ std::unique_ptr<SketchTool> slotTool(SketchController& c, const QString& mode) {
 }
 
 std::unique_ptr<SketchTool> ellipseTool(SketchController& c) { return std::make_unique<EllipseTool>(c); }
+std::unique_ptr<SketchTool> conicTool(SketchController& c) { return std::make_unique<ConicTool>(c); }
+
+QJsonValue conicRhoValue(const QString& text) {
+  bool number = false;
+  const double value = QString(text).replace(QLatin1Char(','), QLatin1Char('.')).trimmed().toDouble(&number);
+  return number ? QJsonValue(value) : QJsonValue(text.trimmed());
+}
 
 std::unique_ptr<SketchTool> splineTool(SketchController& c, bool controlPoints) {
   return std::make_unique<SplineTool>(c, controlPoints);

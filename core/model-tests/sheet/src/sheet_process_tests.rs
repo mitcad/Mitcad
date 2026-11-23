@@ -219,3 +219,90 @@ fn only_a_standard_boxs_rules_are_edited_as_a_box() {
         .to_string();
     assert!(error.contains("unknown board"), "{error}");
 }
+
+/// A FEFCO 0421 folder of C flute board with `tabs` locking tabs on each
+/// turned over wall: its rules are F1.
+fn folder(tabs: u32) -> Document<MockKernel> {
+    let mut doc = Document::new(MockKernel::default());
+    doc.command(
+        &json!({"cmd":"add_standard_box","style":"fefco_0421","length":300,"width":200,
+                "height":100,"board":"c_flute","radius":0.5,"tabs":tabs})
+        .to_string(),
+    )
+    .unwrap();
+    doc
+}
+
+/// The box's features after its rules as the `feature` query gives their
+/// definitions: its outline and creases sketches, its Face and its Folds
+/// (a Fold's angle, a parameter of its own, left out).
+fn box_defs(doc: &Document<MockKernel>) -> Vec<Value> {
+    use mitcad_model::features::FeatureDef;
+    let uids: Vec<FeatureUid> = doc
+        .features()
+        .filter(|entry| !matches!(entry.def, FeatureDef::SheetRules(_)))
+        .map(|entry| entry.uid)
+        .collect();
+    uids.into_iter()
+        .map(|uid| {
+            let mut def = query(doc, json!({"query":"feature","uid":uid}))["def"].take();
+            assert!(def.is_object(), "{uid}: {def}");
+            if let Some(fields) = def.as_object_mut() {
+                fields.remove("angle");
+            }
+            def
+        })
+        .collect()
+}
+
+/// Another number of locking tabs is the folder's blank of other lines
+/// (mitcad#2285): Edit Standard Box makes its outline and creases again,
+/// the Face naming the new outline's region and the Folds following, as a
+/// box made with those tabs has them, in one undo step that brings the
+/// first number back. Another style stays refused in words, the box kept.
+#[test]
+fn another_number_of_tabs_makes_the_folders_blank_again() {
+    let mut doc = folder(3);
+    let three = box_defs(&doc);
+    let four = box_defs(&folder(4));
+    assert_ne!(three, four, "four tabs make another blank");
+    let depth = doc.undo_depth();
+    let answer: Value = serde_json::from_str(
+        &doc.command(&json!({"cmd":"edit_standard_box","rules":"F1","tabs":4}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(answer["face"], "F4", "{answer}");
+    assert_eq!(
+        answer["folds"].as_array().map(Vec::len),
+        Some(14),
+        "{answer}"
+    );
+    assert_eq!(doc.undo_depth(), depth + 1, "one undo step");
+    // The Face's region has a new key and keeps its panel slot 0 (its body
+    // F4.b0, which the Folds name), no tombstone of the old key beside it.
+    let edited = box_defs(&doc);
+    let face = &edited[2];
+    assert_eq!(face["type"], "sheet_face", "{face}");
+    assert_eq!(
+        face["panel_slots"],
+        json!([{"profile": face["profiles"][0], "slot": 0}]),
+        "{face}"
+    );
+    assert_eq!(edited, four);
+    let rules = query(&doc, json!({"query":"feature","uid":"F1"}));
+    assert_eq!(rules["def"]["standard_box"]["tabs"], 4, "{rules}");
+    // Undo brings the three tabs back.
+    doc.undo();
+    assert_eq!(doc.undo_depth(), depth);
+    assert_eq!(box_defs(&doc), three);
+    // Another style makes another box: refused, nothing changed.
+    let error = doc
+        .command(&json!({"cmd":"edit_standard_box","rules":"F1","style":"fefco_0427"}).to_string())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("another style"), "{error}");
+    assert!(error.contains("make the box again"), "{error}");
+    assert_eq!(doc.undo_depth(), depth);
+    assert_eq!(box_defs(&doc), three);
+}

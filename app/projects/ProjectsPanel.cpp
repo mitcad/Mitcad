@@ -11,7 +11,12 @@
 #include <QDateTime>
 #include <QDir>
 #include <QDockWidget>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
+#include <QFileIconProvider>
 #include <QFileInfo>
 #include <QFont>
 #include <QGuiApplication>
@@ -19,9 +24,11 @@
 #include <QHideEvent>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMainWindow>
 #include <QMetaObject>
 #include <QMenu>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
@@ -33,6 +40,7 @@
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QtLogging>
 
@@ -143,6 +151,37 @@ QString designTip(const QString& root, const ProjectDesignRow& design) {
                                    : ProjectsPanel::tr("%1 is editing it: it opens read-only").arg(design.lockOwner));
   }
   return tip.join(QLatin1Char('\n'));
+}
+
+// Another file's tooltip (mitcad#2204): its name and path, its state in
+// full words, its size, and what records it.
+QString fileTip(const QString& root, const ProjectFileRow& file) {
+  QStringList tip{lastPart(file.path), QDir::toNativeSeparators(QDir(root).filePath(file.path)),
+                  fileMarks(file).full,
+                  ProjectsPanel::tr("Size: %1").arg(QLocale().formattedDataSize(file.size))};
+  if (!file.recorded) {
+    tip << ProjectsPanel::tr("No version holds it yet: Record Changes records one");
+  } else if (file.changed) {
+    tip << ProjectsPanel::tr("Changed since its latest version: Record Changes records it");
+  }
+  tip << ProjectsPanel::tr("Opens with the system's app");
+  return tip.join(QLatin1Char('\n'));
+}
+
+// The local files of a drag from the file manager; empty when it holds
+// anything else (mitcad#2204).
+QStringList droppedFiles(const QMimeData* data) {
+  QStringList paths;
+  if (data == nullptr || !data->hasUrls()) {
+    return paths;
+  }
+  for (const QUrl& url : data->urls()) {
+    if (!url.isLocalFile()) {
+      return {};
+    }
+    paths << url.toLocalFile();
+  }
+  return paths;
 }
 
 // A context menu whose entries are logged ("Context menu: A | B") for the
@@ -319,8 +358,10 @@ protected:
 
   void mouseDoubleClickEvent(QMouseEvent* event) override {
     QTreeWidgetItem* item = itemAt(event->position().toPoint());
+    // A design opens here, another file with the system's app (mitcad#2204).
     if (item != nullptr && event->button() == Qt::LeftButton &&
-        m_panel.typeOf(item) == ProjectsPanel::RowType::Design) {
+        (m_panel.typeOf(item) == ProjectsPanel::RowType::Design ||
+         m_panel.typeOf(item) == ProjectsPanel::RowType::File)) {
       setCurrentItem(item);
       m_panel.openCurrent();
       return;
@@ -342,7 +383,8 @@ protected:
       const QPoint pressed = event->position().toPoint();
       QTreeWidgetItem* item = itemAt(pressed);
       const ProjectsPanel::RowType type = m_panel.typeOf(item);
-      if (item != nullptr && (type == ProjectsPanel::RowType::Design || type == ProjectsPanel::RowType::Folder)) {
+      if (item != nullptr && (type == ProjectsPanel::RowType::Design || type == ProjectsPanel::RowType::Folder ||
+                              type == ProjectsPanel::RowType::File)) {
         m_drag.press(indexFromItem(item), pressed);
       }
     }
@@ -383,7 +425,70 @@ protected:
     QTreeWidget::mouseReleaseEvent(event);
   }
 
+  // Files dragged from the file manager onto a project or folder row are
+  // copied there (mitcad#2204); not onto other rows, and nothing but local
+  // files.
+  void dragEnterEvent(QDragEnterEvent* event) override {
+    if (droppedFiles(event->mimeData()).isEmpty()) {
+      event->ignore();
+      return;
+    }
+    // Taken here, so that the moves below decide row by row.
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+  }
+
+  void dragMoveEvent(QDragMoveEvent* event) override {
+    QTreeWidgetItem* over = itemAt(event->position().toPoint());
+    if (droppedFiles(event->mimeData()).isEmpty() || !m_panel.fileDropTarget(over, nullptr)) {
+      setFileOver(nullptr);
+      event->ignore();
+      return;
+    }
+    setFileOver(over);
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+  }
+
+  void dragLeaveEvent(QDragLeaveEvent* event) override {
+    setFileOver(nullptr);
+    event->accept();
+  }
+
+  void dropEvent(QDropEvent* event) override {
+    setFileOver(nullptr);
+    QTreeWidgetItem* over = itemAt(event->position().toPoint());
+    const QStringList paths = droppedFiles(event->mimeData());
+    if (paths.isEmpty() || !m_panel.fileDropTarget(over, nullptr)) {
+      event->ignore();
+      return;
+    }
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+    m_panel.filesDropped(over, paths);
+  }
+
 private:
+  // The row files from the file manager would go into, highlighted as a
+  // row's drag highlights its target.
+  void setFileOver(QTreeWidgetItem* item) {
+    QTreeWidgetItem* over = itemFromIndex(m_fileOver);
+    if (item == over) {
+      return;
+    }
+    for (int column = 0; over != nullptr && column < columnCount(); ++column) {
+      over->setData(column, Qt::BackgroundRole, QVariant());
+    }
+    m_fileOver = item != nullptr ? QPersistentModelIndex(indexFromItem(item)) : QPersistentModelIndex();
+    if (item != nullptr) {
+      QColor color = palette().color(QPalette::Highlight);
+      color.setAlpha(80);
+      for (int column = 0; column < columnCount(); ++column) {
+        item->setBackground(column, color);
+      }
+    }
+  }
+
   void setOver(QTreeWidgetItem* item) {
     QTreeWidgetItem* over = itemFromIndex(m_over);
     if (item == over) {
@@ -412,6 +517,7 @@ private:
   ProjectsPanel& m_panel;
   ProjectRowDrag m_drag;
   QPersistentModelIndex m_over;
+  QPersistentModelIndex m_fileOver; // files from the file manager go here (mitcad#2204)
 };
 
 // ---------------------------------------------------------------------------
@@ -451,6 +557,10 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
   // Only a click gives the tree the keyboard, so that the view keeps the
   // single-letter shortcuts.
   m_tree->setFocusPolicy(Qt::ClickFocus);
+  // Files from the file manager dropped onto a project or folder row
+  // (mitcad#2204); the rows' own drags are the tree's mouse events.
+  m_tree->setAcceptDrops(true);
+  m_tree->viewport()->setAcceptDrops(true);
   // The names get the width (mitcad#529): one line per row, a name that
   // does not fit elided in the middle (the delegate), the state as compact
   // marks; no horizontal scrolling, also for deep trees, whose levels
@@ -519,7 +629,7 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
   m_newFolder->setObjectName(QStringLiteral("projectsNewFolder"));
   // Rename has no button (a crowded toolbar): F2 and the rows' context menu.
   m_delete = action("delete", tr("Delete"),
-                    tr("Deletes the selected design or folder as a new version: the history keeps it (Del)"),
+                    tr("Deletes the selected design, file or folder as a new version: the history keeps it (Del)"),
                     [this] { deleteCurrent(); });
   m_delete->setObjectName(QStringLiteral("projectsDelete"));
   m_history = action("version-history", tr("Version History"), tr("The selected design's versions"), [this] {
@@ -555,6 +665,23 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
   entry("remote-open", tr("Open from Cloud…"), [this] { emit commandRequested(QStringLiteral("file.open_remote")); });
   entry("folder", tr("Add Existing Project Folder…"), [this] { emit addFolderRequested(); });
   more->addSeparator();
+  // Other files (mitcad#2204): into the selected project or folder, and the
+  // changes of the selected file or of the files in the selected folder.
+  QAction* addFiles = entry("add", tr("Add Files…"), [this] {
+    QTreeWidgetItem* item = m_tree->currentItem();
+    if (!settingsRoot(item).isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Projects panel: add files to %1").arg(keyOf(item));
+      emit addFilesRequested(rootOf(item), folderFor(item), {});
+    }
+  });
+  QAction* record = entry(nullptr, tr("Record Changes"), [this] {
+    QTreeWidgetItem* item = m_tree->currentItem();
+    const QString path = typeOf(item) == RowType::File ? pathOf(item) : folderFor(item);
+    if (!settingsRoot(item).isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Projects panel: record the changes of %1").arg(keyOf(item));
+      emit recordRequested(rootOf(item), path);
+    }
+  });
   QAction* show = entry(nullptr, tr("Show in Folder"), [this] {
     QTreeWidgetItem* item = m_tree->currentItem();
     if (!rootOf(item).isEmpty()) {
@@ -575,8 +702,11 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
       emit removeProjectRequested(rootOf(item));
     }
   });
-  connect(more, &QMenu::aboutToShow, this, [this, show, remove, removeEntry] {
+  connect(more, &QMenu::aboutToShow, this, [this, show, remove, removeEntry, addFiles, record] {
     QTreeWidgetItem* item = m_tree->currentItem();
+    addFiles->setEnabled(!settingsRoot(item).isEmpty());
+    const QString changesAt = typeOf(item) == RowType::File ? pathOf(item) : folderFor(item);
+    record->setEnabled(!settingsRoot(item).isEmpty() && hasFileChanges(rootOf(item), changesAt));
     show->setEnabled(!rootOf(item).isEmpty() && project(rootOf(item)) != nullptr &&
                      project(rootOf(item))->kind != ProjectRow::Kind::Missing);
     remove->setEnabled(typeOf(item) == RowType::Project);
@@ -585,7 +715,8 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
                             row->kind != ProjectRow::Kind::Unreadable);
   });
   m_more = m_toolbar->addAction(themeIcon(QStringLiteral("new-project")), tr("Projects"));
-  m_more->setToolTip(tr("New, open or add a project; Show in Folder, Remove from List, Remove Project"));
+  m_more->setToolTip(
+      tr("New, open or add a project; Add Files, Record Changes, Show in Folder, Remove from List or Project"));
   m_more->setMenu(more);
   if (auto* button = qobject_cast<QToolButton*>(m_toolbar->widgetForAction(m_more))) {
     button->setPopupMode(QToolButton::InstantPopup);
@@ -920,6 +1051,23 @@ QTreeWidgetItem* ProjectsPanel::addProjectRow(const ProjectRow& row, const QStri
     item->setToolTip(kName, designTip(row.root, design));
     item->setToolTip(kState, designTip(row.root, design));
   }
+  // Other files (mitcad#2204): after the designs of their folder, with the
+  // system's icon for their type.
+  const QFileIconProvider icons;
+  for (const ProjectFileRow& file : row.files) {
+    const QString absolute = QDir(row.root).filePath(file.path);
+    auto* item = new QTreeWidgetItem(ensure(dirOf(file.path)));
+    item->setText(kName, lastPart(file.path));
+    item->setIcon(kName, icons.icon(QFileInfo(absolute)));
+    item->setData(kName, kTypeRole, static_cast<int>(RowType::File));
+    item->setData(kName, kRootRole, row.root);
+    item->setData(kName, kPathRole, file.path);
+    item->setData(kName, kKeyRole, QStringLiteral("%1/%2").arg(projectKey, file.path));
+    item->setData(kName, NativeControlIdentifierRole, QStringLiteral("projects.row.%1/%2").arg(projectKey, file.path));
+    item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable);
+    item->setToolTip(kName, fileTip(row.root, file));
+    item->setToolTip(kState, fileTip(row.root, file));
+  }
   for (auto it = folders.cbegin(); it != folders.cend(); ++it) {
     if (!it.key().isEmpty()) {
       it.value()->setExpanded(m_expanded.value(keyOf(it.value()), true));
@@ -976,6 +1124,14 @@ void ProjectsPanel::applyMarks() {
         item->setFont(kName, font);
         item->setFont(kState, font);
       }
+    } else if (type == RowType::File) {
+      // Other files (mitcad#2204): "new" and "*" as a design's.
+      if (const ProjectFileRow* file = fileOf(item)) {
+        const RowMarks marks = fileMarks(*file);
+        item->setData(kName, kMarksRole, marks.logged());
+        item->setText(kState, marks.text);
+        item->setIcon(kState, QIcon());
+      }
     }
   }
   logTree();
@@ -1014,6 +1170,10 @@ void ProjectsPanel::logTree() {
         entry += QStringLiteral(", open");
       }
       entries << entry;
+    }
+    // Other files (mitcad#2204): "<path> file, <state>".
+    for (const ProjectFileRow& file : row->files) {
+      entries << QStringLiteral("%1 file, %2").arg(file.path, fileMarks(file).words);
     }
     if (entries.isEmpty()) {
       entries << QStringLiteral("no designs");
@@ -1171,7 +1331,7 @@ void ProjectsPanel::updateActions() {
   const bool anyProject = healthy || (m_host.currentRoot && !m_host.currentRoot().isEmpty());
   m_newDesign->setEnabled(anyProject && (healthy || row == nullptr));
   m_newFolder->setEnabled(anyProject && (healthy || row == nullptr));
-  m_delete->setEnabled(healthy && (type == RowType::Design || type == RowType::Folder));
+  m_delete->setEnabled(healthy && (type == RowType::Design || type == RowType::Folder || type == RowType::File));
   m_history->setEnabled(healthy && type == RowType::Design);
   m_sync->setEnabled(healthy && row->kind == ProjectRow::Kind::Cloud);
   m_settings->setEnabled(!settingsRoot(item).isEmpty());
@@ -1278,6 +1438,55 @@ const ProjectDesignRow* ProjectsPanel::designOf(const QTreeWidgetItem* item) con
   return nullptr;
 }
 
+const ProjectFileRow* ProjectsPanel::fileOf(const QTreeWidgetItem* item) const {
+  const ProjectRow* row = project(rootOf(item));
+  if (row == nullptr || typeOf(item) != RowType::File) {
+    return nullptr;
+  }
+  const QString path = pathOf(item);
+  for (const ProjectFileRow& file : row->files) {
+    if (file.path == path) {
+      return &file;
+    }
+  }
+  return nullptr;
+}
+
+bool ProjectsPanel::hasFileChanges(const QString& root, const QString& path) const {
+  const ProjectRow* row = project(root);
+  if (row == nullptr) {
+    return false;
+  }
+  for (const ProjectFileRow& file : row->files) {
+    const bool within = path.isEmpty() || file.path == path || file.path.startsWith(path + QLatin1Char('/'));
+    if (within && (!file.recorded || file.changed)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ProjectsPanel::fileDropTarget(const QTreeWidgetItem* over, QString* folder) const {
+  const RowType type = typeOf(over);
+  if (over == nullptr || (type != RowType::Project && type != RowType::Folder) || settingsRoot(over).isEmpty() ||
+      m_isEditing) {
+    return false;
+  }
+  if (folder != nullptr) {
+    *folder = folderFor(over);
+  }
+  return true;
+}
+
+void ProjectsPanel::filesDropped(QTreeWidgetItem* over, const QStringList& paths) {
+  QString folder;
+  if (!fileDropTarget(over, &folder) || paths.isEmpty()) {
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Projects panel: %1 file(s) dropped on %2").arg(paths.size()).arg(keyOf(over));
+  emit addFilesRequested(rootOf(over), folder, paths);
+}
+
 QString ProjectsPanel::folderFor(const QTreeWidgetItem* item) const {
   switch (typeOf(item)) {
   case RowType::Folder:
@@ -1285,6 +1494,7 @@ QString ProjectsPanel::folderFor(const QTreeWidgetItem* item) const {
   case RowType::Message: // its path is the folder it is in
     return pathOf(item);
   case RowType::Design:
+  case RowType::File:
     return dirOf(pathOf(item));
   case RowType::Project:
     break;
@@ -1398,20 +1608,21 @@ QString ProjectsPanel::freeName(bool folder, const QString& root, const QString&
 
 QTreeWidgetItem* ProjectsPanel::addNewRow(QTreeWidgetItem* host, bool folder, const QString& parent,
                                           const QString& name) {
-  // A folder before the designs, a design after them.
+  // A folder before the designs, a design after them and before the other
+  // files (mitcad#2204).
   int firstDesign = host->childCount();
-  for (int i = 0; i < host->childCount(); ++i) {
-    if (typeOf(host->child(i)) == RowType::Design) {
+  int firstFile = host->childCount();
+  for (int i = host->childCount() - 1; i >= 0; --i) {
+    const RowType type = typeOf(host->child(i));
+    if (type == RowType::Design || type == RowType::File) {
       firstDesign = i;
-      break;
+    }
+    if (type == RowType::File) {
+      firstFile = i;
     }
   }
   auto* item = new QTreeWidgetItem;
-  if (folder) {
-    host->insertChild(firstDesign, item);
-  } else {
-    host->addChild(item);
-  }
+  host->insertChild(folder ? firstDesign : firstFile, item);
   item->setText(kName, name);
   item->setIcon(kName, themeIcon(folder ? QStringLiteral("folder") : QStringLiteral("project")));
   item->setData(kName, kTypeRole, static_cast<int>(RowType::NewItem));
@@ -1540,7 +1751,7 @@ void ProjectsPanel::logEditor(QTreeWidgetItem* item) {
 
 void ProjectsPanel::startRename(QTreeWidgetItem* item) {
   const RowType type = typeOf(item);
-  if (type != RowType::Design && type != RowType::Folder) {
+  if (type != RowType::Design && type != RowType::Folder && type != RowType::File) {
     return;
   }
   if (m_isEditing) {
@@ -1551,6 +1762,7 @@ void ProjectsPanel::startRename(QTreeWidgetItem* item) {
   m_editing = Editing();
   m_editing.kind = type;
   m_editing.folder = type == RowType::Folder;
+  m_editing.file = type == RowType::File;
   m_editing.root = rootOf(item);
   m_editing.parent = dirOf(pathOf(item));
   m_editing.from = pathOf(item);
@@ -1621,14 +1833,16 @@ void ProjectsPanel::editingClosed(bool accepted) {
     end();
     qInfo().noquote() << QStringLiteral("Projects panel: %1 cancelled").arg(what);
     if (editing.kind != RowType::NewItem && editing.item != nullptr) {
-      editing.item->setText(kName, editing.folder ? lastPart(editing.from) : designName(editing.from));
+      editing.item->setText(kName, editing.folder || editing.file ? lastPart(editing.from) : designName(editing.from));
     }
     applyWaitingRows();
     scheduleNamingEnd();
     return;
   }
   QString name = typed;
-  if (!editing.folder && name.endsWith(kSuffix, Qt::CaseInsensitive)) {
+  // A design's name without .mitcad; another file's whole name, its type
+  // too (mitcad#2204).
+  if (!editing.folder && !editing.file && name.endsWith(kSuffix, Qt::CaseInsensitive)) {
     name.chop(kSuffix.size());
     name = name.trimmed();
   }
@@ -1651,7 +1865,7 @@ void ProjectsPanel::editingClosed(bool accepted) {
                QStringLiteral("Projects panel: %1 refused at %2: %3").arg(what, keyOf(editing.item), message));
     return;
   }
-  const QString file = editing.folder ? name : name + kSuffix;
+  const QString file = editing.folder || editing.file ? name : name + kSuffix;
   const QString path = joinPath(editing.parent, file);
   end();
   if (editing.kind != RowType::NewItem && path == editing.from) {
@@ -1672,6 +1886,7 @@ void ProjectsPanel::editingClosed(bool accepted) {
   m_request.path = path;
   m_request.from = editing.kind == RowType::NewItem ? QString() : editing.from;
   m_request.folder = editing.folder;
+  m_request.file = editing.file;
   m_hasRequest = true;
   if (editing.kind != RowType::NewItem) {
     emit moveRequested(editing.root, editing.from, path, editing.folder);
@@ -1694,9 +1909,10 @@ bool ProjectsPanel::nameRefused(const QString& root, const QString& path, const 
     cancelEditing();
   }
   const QString parent = dirOf(path);
-  const QString name = request.folder ? lastPart(path) : designName(path);
+  const QString name = request.folder || request.file ? lastPart(path) : designName(path);
   Editing editing;
   editing.folder = request.folder;
+  editing.file = request.file;
   QTreeWidgetItem* item = nullptr;
   if (from.isEmpty()) {
     QTreeWidgetItem* host = folderItem(root, parent);
@@ -1713,7 +1929,8 @@ bool ProjectsPanel::nameRefused(const QString& root, const QString& path, const 
   } else {
     for (QTreeWidgetItemIterator it(m_tree); *it != nullptr && item == nullptr; ++it) {
       const RowType type = typeOf(*it);
-      if ((type == RowType::Design || type == RowType::Folder) && sameRoot(rootOf(*it), root) && pathOf(*it) == from) {
+      if ((type == RowType::Design || type == RowType::Folder || type == RowType::File) &&
+          sameRoot(rootOf(*it), root) && pathOf(*it) == from) {
         item = *it;
       }
     }
@@ -1761,6 +1978,11 @@ void ProjectsPanel::openCurrent() {
   case RowType::Folder:
     item->setExpanded(!item->isExpanded());
     break;
+  case RowType::File:
+    // With the system's app (mitcad#2204).
+    qInfo().noquote() << QStringLiteral("Projects panel: open %1").arg(keyOf(item));
+    emit openFileRequested(QDir::cleanPath(QDir(rootOf(item)).filePath(pathOf(item))));
+    break;
   case RowType::NewItem:
   case RowType::Message:
     break;
@@ -1780,7 +2002,7 @@ void ProjectsPanel::deleteCurrent() {
   const RowType type = typeOf(item);
   const ProjectRow* row = project(rootOf(item));
   if (row == nullptr || (row->kind != ProjectRow::Kind::Local && row->kind != ProjectRow::Kind::Cloud) ||
-      (type != RowType::Design && type != RowType::Folder)) {
+      (type != RowType::Design && type != RowType::Folder && type != RowType::File)) {
     return;
   }
   qInfo().noquote() << QStringLiteral("Projects panel: delete %1").arg(keyOf(item));
@@ -1801,6 +2023,34 @@ void ProjectsPanel::contextMenu(const QPoint& at) {
   const ProjectRow* row = project(root);
   const bool healthy = row != nullptr && (row->kind == ProjectRow::Kind::Local || row->kind == ProjectRow::Kind::Cloud);
   const QString folder = folderFor(item);
+  // Other files (mitcad#2204): Add Files… into a project or folder, Record
+  // Changes of a file, a folder or a project (enabled when there are some).
+  const auto addFiles = [&](const QString& into) {
+    menu.add(QStringLiteral("add"), tr("Add Files…"), [this, root, into] {
+      qInfo().noquote() << QStringLiteral("Projects panel: add files to %1").arg(joinPath(root, into));
+      emit addFilesRequested(root, into, {});
+    });
+  };
+  const auto recordChanges = [&](const QString& changed) {
+    if (hasFileChanges(root, changed)) {
+      menu.add(QString(), tr("Record Changes"), [this, root, changed] {
+        qInfo().noquote() << QStringLiteral("Projects panel: record the changes of %1").arg(joinPath(root, changed));
+        emit recordRequested(root, changed);
+      });
+    }
+  };
+  if (item != nullptr && type == RowType::File && healthy) {
+    menu.add(QString(), tr("Open"), [this] { openCurrent(); });
+    menu.add(QStringLiteral("edit"), tr("Rename"), [this] { renameCurrent(); });
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this] { deleteCurrent(); });
+    recordChanges(pathOf(item));
+    menu.add(QString(), tr("Show in Folder"),
+             [this, root, folder] { emit showInFolderRequested(QDir(root).filePath(folder)); });
+    menu.separator();
+    addFiles(folder);
+    menu.exec(m_tree->viewport()->mapToGlobal(at));
+    return;
+  }
   if (item != nullptr && type == RowType::Design && healthy) {
     menu.add(QString(), tr("Open"), [this] { openCurrent(); });
     menu.add(QStringLiteral("edit"), tr("Rename"), [this] { renameCurrent(); });
@@ -1818,6 +2068,9 @@ void ProjectsPanel::contextMenu(const QPoint& at) {
     menu.add(QStringLiteral("delete"), tr("Delete"), [this] { deleteCurrent(); });
     menu.add(QString(), tr("Show in Folder"),
              [this, root, folder] { emit showInFolderRequested(QDir(root).filePath(folder)); });
+    menu.separator();
+    addFiles(folder);
+    recordChanges(folder);
     menu.exec(m_tree->viewport()->mapToGlobal(at));
     return;
   }
@@ -1831,6 +2084,8 @@ void ProjectsPanel::contextMenu(const QPoint& at) {
     if (healthy) {
       menu.add(QStringLiteral("new-design"), tr("New Design"), [this, root] { startNewDesign(root, QString()); });
       menu.add(QStringLiteral("folder"), tr("New Folder"), [this, root] { startNewFolder(root, QString()); });
+      addFiles(QString());
+      recordChanges(QString());
       menu.add(QString(), tr("Show in Folder"), [this, root] { emit showInFolderRequested(root); });
       menu.add(QStringLiteral("settings"), tr("Project Settings…"), [this, root] { emit projectSettingsRequested(root); });
       if (row->kind == ProjectRow::Kind::Cloud) {
@@ -1862,7 +2117,7 @@ bool ProjectsPanel::dropTarget(const QTreeWidgetItem* dragged, const QTreeWidget
     return false;
   }
   const RowType type = typeOf(dragged);
-  if (type != RowType::Design && type != RowType::Folder) {
+  if (type != RowType::Design && type != RowType::Folder && type != RowType::File) {
     return false;
   }
   const QString root = rootOf(dragged);
@@ -1877,6 +2132,7 @@ bool ProjectsPanel::dropTarget(const QTreeWidgetItem* dragged, const QTreeWidget
     target = pathOf(over);
     break;
   case RowType::Design:
+  case RowType::File:
     target = dirOf(pathOf(over));
     break;
   case RowType::NewItem:
@@ -1903,7 +2159,7 @@ void ProjectsPanel::dropped(QTreeWidgetItem* dragged, QTreeWidgetItem* over) {
                              .arg(keyOf(dragged), over != nullptr ? QStringLiteral(" on %1").arg(keyOf(over))
                                                                   : QString());
     if (over != nullptr && dragged != nullptr && !rootOf(over).isEmpty() && !sameRoot(rootOf(over), rootOf(dragged))) {
-      emit statusMessage(tr("Designs and folders move only within their project."), false);
+      emit statusMessage(tr("Designs, files and folders move only within their project."), false);
     }
     return;
   }
@@ -1956,7 +2212,7 @@ void ProjectsPanel::finishNativeEditing(const QString& text, bool accepted) {
 
 bool ProjectsPanel::canDragRow(const QModelIndex& index) const {
   const RowType type = typeOf(m_tree->itemOf(index));
-  return !m_isEditing && (type == RowType::Design || type == RowType::Folder);
+  return !m_isEditing && (type == RowType::Design || type == RowType::Folder || type == RowType::File);
 }
 
 bool ProjectsPanel::canDropRow(const QModelIndex& dragged, const QModelIndex& over) const {

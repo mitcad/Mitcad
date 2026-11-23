@@ -536,6 +536,13 @@ pub(crate) fn mapped(kind: &EntityKind, map: &BTreeMap<EntityUid, EntityUid>) ->
                 *p = m(p);
             }
         }
+        EntityKind::Conic {
+            start, end, apex, ..
+        } => {
+            *start = m(start);
+            *end = m(end);
+            *apex = m(apex);
+        }
     }
     kind
 }

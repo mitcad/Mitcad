@@ -54,6 +54,11 @@ struct SkinSection {
 // point matching its neighbour's, running the same way round (merged
 // tangent edges, mitcad#2162): lofted as they are, without OCCT's matching
 // of the sections.
+//
+// A side that is one surface all round the sections (one closed edge per
+// section, or a chain of `seams_only` round the whole section) is made
+// periodic where it closes smoothly, as the kernel's offset takes a
+// closed surface (mitcad#2141, mitcad#2271).
 ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& start, const LoftEnd& end,
                       const std::vector<Path>& rails, const NamedWire& named, const NameList& first,
                       const NameList& last, bool closed = false, bool solid = true, bool seams_only = false,

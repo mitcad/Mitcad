@@ -12,7 +12,9 @@
 // too (rotateBasisToKeep, rotateRingAxis; mitcad#854); Free Move's
 // handles meeting at the moved middle (freeArrowOrigin, freeMovedMiddle;
 // mitcad#1580) and its matrix split about a pivot and made again
-// (freeMoveOf, freeMatrixOf; mitcad#1583). No
+// (freeMoveOf, freeMatrixOf; mitcad#1583); Translate's and Free Move's
+// handles along the axes of a turned parent, where a drag moves the part
+// (moveAxisOf; mitcad#2305). No
 // window and no model: the tools are OCCT boxes meshed here.
 #include <algorithm>
 #include <array>
@@ -680,6 +682,82 @@ void testFreeHandles() {
   }
 }
 
+// A move in a parent component turned a quarter about Z and placed at
+// (100, 50, 0) (mitcad#2305): Translate's X arrow and Free Move's handles
+// go along the parent's axes (moveAxisOf, the frame given to
+// freeArrowOrigin and freeMovedMiddle), and a drag of the X distance moves
+// the part along that arrow (the motion taken into the design by the
+// frame, draggedPlacement), not along the design's X.
+void testTurnedParentArrows() {
+  using mitcad::MotionSide;
+  using mitcad::draggedPlacement;
+  using mitcad::cmd::freeArrowOrigin;
+  using mitcad::cmd::freeMovedMiddle;
+  using mitcad::cmd::moveAxisOf;
+  const gp_Trsf frame = moved(100, 50, 0) * quarter(gp_Pnt(0, 0, 0));
+  // The parent's X, Y and Z in the design: Y, -X and Z.
+  const gp_Dir x = moveAxisOf(frame, 0);
+  const gp_Dir y = moveAxisOf(frame, 1);
+  const gp_Dir z = moveAxisOf(frame, 2);
+  CHECK(x.IsEqual(gp_Dir(0, 1, 0), 1e-12));
+  CHECK(y.IsEqual(gp_Dir(-1, 0, 0), 1e-12));
+  CHECK(z.IsEqual(gp_Dir(0, 0, 1), 1e-12));
+  // The identity: the design's axes, as before.
+  CHECK(moveAxisOf(gp_Trsf(), 0).IsEqual(gp_Dir(1, 0, 0), 1e-12));
+  CHECK(moveAxisOf(gp_Trsf(), 1).IsEqual(gp_Dir(0, 1, 0), 1e-12));
+
+  // Translate's X arrow from the part's middle, the parent's (5, 0, 0),
+  // the design's (100, 55, 0); X Distance dragged from 0 to 40 mm.
+  CommandState translate;
+  translate.setChoice(QStringLiteral("type"), QStringLiteral("translate"));
+  translate.setValue(QStringLiteral("x"), 0.0);
+  translate.setValue(QStringLiteral("y"), 0.0);
+  translate.setValue(QStringLiteral("z"), 0.0);
+  const gp_Pnt middle = gp_Pnt(5, 0, 0).Transformed(frame);
+  CHECK(at(middle, 100, 55, 0));
+  CommandState dragged = translate;
+  dragged.setValue(QStringLiteral("x"), 40.0);
+  const auto from = mitcad::cmd::moveMotion(translate, gp_Pnt());
+  const auto to = mitcad::cmd::moveMotion(dragged, gp_Pnt());
+  CHECK(from && to);
+  if (from && to) {
+    // The part, placed in the parent at its origin, drawn through the
+    // parent's placement: its middle goes 40 mm along the arrow, where the
+    // arrow's knob is (origin + 40 along it).
+    const gp_Trsf placed = draggedPlacement(frame, MotionSide::Occurrence, *from, *to, frame);
+    const gp_Pnt there = gp_Pnt(5, 0, 0).Transformed(placed);
+    const gp_Pnt knob = middle.Translated(gp_Vec(x) * 40.0);
+    CHECK(there.Distance(knob) < 1e-9);
+    CHECK(at(there, 100, 95, 0));
+  }
+
+  // Free Move's handles about the same middle with X Distance 40 mm: the
+  // Y and Z arrows and the rings at the middle moved 40 mm along the
+  // parent's X, the X arrow from the middle itself.
+  CommandState freeMove;
+  freeMove.setChoice(QStringLiteral("type"), QStringLiteral("free"));
+  for (const char* id : {"tx", "ty", "tz", "rx", "ry", "rz"}) {
+    freeMove.setValue(QString::fromLatin1(id), 0.0);
+  }
+  freeMove.setValue(QStringLiteral("tx"), 40.0);
+  const auto movedMiddle = freeMovedMiddle(freeMove, middle, frame);
+  CHECK(movedMiddle && at(*movedMiddle, 100, 95, 0));
+  const auto xOrigin = freeArrowOrigin(freeMove, middle, 0, frame);
+  const auto yOrigin = freeArrowOrigin(freeMove, middle, 1, frame);
+  CHECK(xOrigin && at(*xOrigin, 100, 55, 0));
+  CHECK(xOrigin && at(xOrigin->Translated(gp_Vec(x) * 40.0), 100, 95, 0));
+  CHECK(yOrigin && at(*yOrigin, 100, 95, 0));
+  // Its motion, about the pivot in the parent's coordinates (inMoveFrame),
+  // taken into the design by the frame: the part's middle there too.
+  const gp_Pnt pivot = middle.Transformed(frame.Inverted());
+  const auto motion = mitcad::cmd::moveMotion(freeMove, pivot);
+  CHECK(motion.has_value());
+  if (motion) {
+    const gp_Trsf placed = draggedPlacement(frame, MotionSide::Occurrence, gp_Trsf(), *motion, frame);
+    CHECK(at(gp_Pnt(5, 0, 0).Transformed(placed), 100, 95, 0));
+  }
+}
+
 // A free move's matrix split into the panel's values about a pivot and
 // made again (freeMoveOf, freeMatrixOf; mitcad#1583): any pivot gives the
 // same matrix back, so an edit that splits it about the middle of what
@@ -753,6 +831,7 @@ int main() {
   testRingAxis();
   testMoveFaceRing();
   testFreeHandles();
+  testTurnedParentArrows();
   testFreeSplit();
   if (failures > 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);

@@ -1,0 +1,45 @@
+{
+  "format": "solidcraft/57",
+  "name": "Cell grid vents",
+  "units": "mm",
+  "params": [
+    {"name": "cell", "expr": "8 mm", "unit": "mm"}
+  ],
+  "features": [
+    {
+      "id": 1, "name": "Field", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [-50.0, -30.0], "fixed": true},
+          {"id": "p2", "pos": [50.0, -30.0], "fixed": true},
+          {"id": "p3", "pos": [50.0, 30.0], "fixed": true},
+          {"id": "p4", "pos": [-50.0, 30.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2},
+          {"id": "l2", "type": "line", "a": 2, "b": 3},
+          {"id": "l3", "type": "line", "a": 3, "b": 4},
+          {"id": "l4", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 2, "name": "Plate", "type": "extrude", "body_names": ["Plate"],
+      "param_names": ["d1"],
+      "sketch": 1, "profiles": {"type": "all"},
+      "extent": {"distance": "10 mm", "direction": "positive"},
+      "operation": "new_body"
+    },
+    {
+      "id": 3, "name": "Vents", "type": "cell_grid",
+      "param_names": ["d2", "d3", "d4"],
+      "sketch": 1, "profiles": {"type": "all"},
+      "shape": "hexagon", "size": "cell", "web": "2 mm", "clip": "whole",
+      "depth": "4 mm", "direction": "positive", "targets": ["Plate"]
+    }
+  ],
+  "next_id": 4
+}

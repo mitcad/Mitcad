@@ -53,7 +53,9 @@ pub enum AxisDefinition {
     /// Axis Through Cylinder/Cone/Torus.
     CircularFace { face: GeomRef },
     /// Axis Perpendicular at Point: normal to a face, through the face
-    /// point nearest to the point.
+    /// point nearest to the point. The face may be a plane (an origin,
+    /// construction or fixed plane, mitcad#2282): the axis goes through the
+    /// point's projection onto it, along its normal.
     PerpendicularAtPoint { face: GeomRef, point: GeomRef },
     /// Axis Through Two Planes: their intersection.
     TwoPlanes { plane1: GeomRef, plane2: GeomRef },
@@ -98,7 +100,7 @@ impl<P> ConstructionAxisDef<P> {
         match &self.definition {
             D::CircularFace { face } => vec![(face, Want::Face)],
             D::PerpendicularAtPoint { face, point } => {
-                vec![(face, Want::Face), (point, Want::Point)]
+                vec![(face, Want::FaceOrPlane), (point, Want::Point)]
             }
             D::NormalToFaceAtPoint { face, point } => {
                 vec![(face, Want::FaceOrPlane), (point, Want::Point)]

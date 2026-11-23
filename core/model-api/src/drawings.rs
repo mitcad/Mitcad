@@ -308,6 +308,9 @@ pub(super) struct EditViewCommand {
     /// (mitcad#729).
     #[serde(default)]
     rotation: Option<f64>,
+    /// A Flat Pattern view's bend notes on or off (mitcad#2280).
+    #[serde(default)]
+    bend_notes: Option<bool>,
 }
 
 named_enum! {
@@ -401,6 +404,10 @@ pub(super) struct Shown {
     /// The occurrences from the drawing's component down to the body's
     /// (empty: drawn where it is).
     pub(super) path: Vec<OccurrenceUid>,
+    /// Its Flat Pattern's developed blank in place of the body
+    /// (mitcad#2280, [`Subject::FlatPattern`]): what the view projects,
+    /// and what its picks, holes and lines are of.
+    pub(super) flat: bool,
 }
 
 /// A body placed under a drawing's component.
@@ -1365,10 +1372,45 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             name: p.name.clone(),
             transform: p.transform,
             path: p.path.clone(),
+            flat: false,
         };
         let mut out: Vec<Shown> = Vec::new();
         let mut gone: Vec<String> = Vec::new();
         match subject {
+            // A body's Flat Pattern (mitcad#2280): the body where its
+            // occurrence places it, as a chosen body's; its developed blank
+            // in its place. A body whose pattern cannot be made keeps the
+            // view, not drawn, with the reason in words.
+            Subject::FlatPattern {
+                body, occurrence, ..
+            } => {
+                let placed = all.iter().find(|(p, _)| {
+                    p.body == *body && occurrence.as_ref().is_none_or(|o| p.path == o.0)
+                });
+                let mut one = match (placed, occurrence) {
+                    (Some((p, _)), _) => shown(p),
+                    (None, None) if self.body_shape(*body).is_some() => Shown {
+                        body: *body,
+                        name: self.body_name(*body),
+                        transform: Transform::IDENTITY,
+                        path: Vec::new(),
+                        flat: false,
+                    },
+                    (None, Some(o)) if !o.is_empty() && !path_from(assembly, component, &o.0) => {
+                        return Err(notice::FeatureError::new("an occurrence is gone")
+                            .with_detail(format!("the occurrence {o} is gone"))
+                            .text());
+                    }
+                    _ => {
+                        return Err(notice::FeatureError::new("a body is gone")
+                            .with_detail(format!("the body {body} is gone"))
+                            .text());
+                    }
+                };
+                self.flat_pattern_of(*body)?;
+                one.flat = true;
+                out.push(one);
+            }
             // What the 3D view shows now: a command's `design` (mitcad#1293;
             // a view records it as its bodies).
             Subject::Design => {
@@ -1423,6 +1465,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                             name: self.body_name(b.body),
                             transform: Transform::IDENTITY,
                             path: Vec::new(),
+                            flat: false,
                         }),
                         // Its occurrence deleted (mitcad#1293): named once.
                         Some(o) if !o.is_empty() && !path_from(assembly, component, &o.0) => {
@@ -1474,7 +1517,10 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             std::collections::HashSet::new();
         for subject in subjects {
             if let Ok((shown, _)) = self.subject_shown(drawing.component, subject) {
-                for s in shown {
+                for mut s in shown {
+                    // A Flat Pattern view's body is the drawing's body
+                    // (mitcad#2280): its name, material and mass.
+                    s.flat = false;
                     if seen.insert((s.body, s.path.clone())) {
                         out.push(s);
                     }
@@ -1510,13 +1556,13 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
     }
 
     fn placed_shapes(&self, shown: &[Shown]) -> Result<Vec<K::Shape>, String> {
-        let shapes: Vec<&K::Shape> = shown
+        // A Flat Pattern's developed solid in place of its body
+        // (mitcad#2280).
+        let owned: Vec<K::Shape> = shown
             .iter()
-            .map(|s| {
-                self.body_shape(s.body)
-                    .ok_or_else(|| format!("the body {} is gone", s.body))
-            })
+            .map(|s| self.shown_shape(s))
             .collect::<Result<_, _>>()?;
+        let shapes: Vec<&K::Shape> = owned.iter().collect();
         // The bodies an occurrence moves are transformed beside each other
         // where the kernel can (mitcad#2021: 884 bodies one after another
         // took 3 s), each the copy made alone; else, and to name the body
@@ -1638,7 +1684,11 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
     fn evaluate_views(&self, drawing: &Drawing, si: usize) -> Evaluated {
         let started = std::time::Instant::now();
         let before = PROJECTIONS.with(std::cell::Cell::get);
-        let sheet = &drawing.sheets[si];
+        // Each Flat Pattern view along its pattern's frame now
+        // (mitcad#2280).
+        let current = self.current_sheet(drawing.component, &drawing.sheets[si]);
+        let sheet: &DrawingSheet = &current;
+        let notes_units = self.notes_units(drawing, sheet);
         let mut out = Evaluated {
             views: Vec::new(),
             index_of: BTreeMap::new(),
@@ -1701,14 +1751,40 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 }
                 let mut projection = projection?;
                 // The threads of its bodies by convention, before a
-                // detail's circle or a break cuts the lines.
-                let placed = super::drawing::placed_threads(&threads, &shown);
+                // detail's circle or a break cuts the lines; a Flat
+                // Pattern's blank has none drawn.
+                let folded: Vec<Shown> = shown.iter().filter(|s| !s.flat).cloned().collect();
+                let placed = super::drawing::placed_threads(&threads, &folded);
                 if !placed.is_empty() {
                     projection = Arc::new(mitcad_model_drawing::convention::with_threads(
                         &projection,
                         &spec,
                         &placed,
                     ));
+                }
+                // A Flat Pattern's bend lines and their notes (mitcad#2280),
+                // cut by a detail's circle and breaks as its edges are.
+                let bend_notes = matches!(
+                    sheet.subject(view.id),
+                    Subject::FlatPattern {
+                        bend_notes: true,
+                        ..
+                    }
+                );
+                let mut notes = Vec::new();
+                for s in shown.iter().filter(|s| s.flat) {
+                    let (lines, written) = self.flat_lines(s, &spec, bend_notes, notes_units)?;
+                    if !lines.is_empty() {
+                        let mut with = (*projection).clone();
+                        with.edges.extend(lines);
+                        projection = Arc::new(with);
+                    }
+                    notes.extend(written);
+                }
+                if let ViewKind::Detail { center, radius, .. } = &view.kind {
+                    notes.retain(|n: &compose::ViewNote| {
+                        (n.at[0] - center[0]).hypot(n.at[1] - center[1]) <= *radius
+                    });
                 }
                 let mut shading = if style.shaded {
                     Some(self.shaded(&shown, &spec)?)
@@ -1785,6 +1861,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                         shading: shading_shown,
                         holes: None,
                         pens,
+                        notes,
                     },
                     own,
                 ))
@@ -2102,6 +2179,9 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             .enumerate()
             .map(|(si, sheet)| {
                 let (width, height) = sheet.dimensions();
+                // A Flat Pattern view's direction as it is drawn
+                // (mitcad#2280).
+                let current = self.current_sheet(drawing.component, sheet);
                 let mut value = json!({
                     "name": sheet.name,
                     "size": sheet.size.key(),
@@ -2118,7 +2198,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     })),
                     "units": sheet.units,
                     "annotations": sheet.annotations,
-                    "views": sheet.views.iter().map(|v| view_json(sheet, v)).collect::<Vec<_>>(),
+                    "views": current.views.iter().map(|v| view_json(&current, v)).collect::<Vec<_>>(),
                 });
                 if si == query.sheet
                     && let Some(drawn) = &drawn
@@ -2157,6 +2237,31 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                                 if let Some(label) = evaluated.views[*i].label_group() {
                                     let b = mitcad_model_drawing::annotate::group_bounds(&label);
                                     view["label_box"] = json!([b.min, b.max]);
+                                }
+                                // A Flat Pattern view's blank, bends and
+                                // bend lines (mitcad#2280).
+                                let flat = evaluated.view_shown.get(&id).and_then(|own| {
+                                    own.iter()
+                                        .filter_map(|k| evaluated.shown.get(*k))
+                                        .find(|s| s.flat)
+                                });
+                                if let Some(s) = flat {
+                                    let placed = &evaluated.views[*i];
+                                    let notes = matches!(
+                                        sheet.subject(id),
+                                        Subject::FlatPattern {
+                                            bend_notes: true,
+                                            ..
+                                        }
+                                    );
+                                    view["flat_pattern"] = self.flat_view_json(
+                                        s,
+                                        &placed.spec,
+                                        &placed.map,
+                                        [placed.bounds.width(), placed.bounds.height()],
+                                        notes,
+                                        self.notes_units(drawing, sheet),
+                                    );
                                 }
                             }
                         }
@@ -2429,10 +2534,24 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                 // (mitcad#1293), so that hiding, showing or adding
                 // components later leaves the view as it is.
                 let subject = c.subject.clone().unwrap_or_default();
-                (
-                    ViewKind::Base { direction },
-                    Some(self.recorded_subject(old.component, &subject, false)?),
-                )
+                let subject = self.recorded_subject(old.component, &subject, false)?;
+                // A Flat Pattern's view looks along its pattern's frame
+                // (mitcad#2280), whatever direction is given; a body whose
+                // pattern cannot be made is refused with the reason.
+                let direction = match &subject {
+                    Subject::FlatPattern { .. } => {
+                        let (shown, _) = self
+                            .subject_shown(old.component, &subject)
+                            .map_err(ApiError)?;
+                        let s = shown
+                            .first()
+                            .ok_or_else(|| ApiError(format!("view {id} would show nothing")))?;
+                        let (toward_eye, x_axis) = self.flat_axes(s).map_err(ApiError)?;
+                        ViewDirection::Given { toward_eye, x_axis }
+                    }
+                    _ => direction,
+                };
+                (ViewKind::Base { direction }, Some(subject))
             }
             ViewType::Projected => {
                 let parent = parent_of(c.parent)?;
@@ -2774,7 +2893,32 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                 if !matches!(view.kind, ViewKind::Base { .. }) {
                     return Err(ApiError("only a base view has a subject".to_owned()));
                 }
+                // A Flat Pattern's view looks along its pattern's frame
+                // (mitcad#2280).
+                if let Subject::FlatPattern { .. } = &subject {
+                    let (shown, _) = self
+                        .subject_shown(old.component, &subject)
+                        .map_err(ApiError)?;
+                    let s = shown
+                        .first()
+                        .ok_or_else(|| ApiError(format!("view {id} would show nothing")))?;
+                    let (toward_eye, x_axis) = self.flat_axes(s).map_err(ApiError)?;
+                    view.kind = ViewKind::Base {
+                        direction: ViewDirection::Given { toward_eye, x_axis },
+                    };
+                }
                 view.subject = Some(subject);
+            }
+            // A Flat Pattern view's bend notes (mitcad#2280).
+            if let Some(on) = c.bend_notes {
+                match &mut view.subject {
+                    Some(Subject::FlatPattern { bend_notes, .. }) => *bend_notes = on,
+                    _ => {
+                        return Err(ApiError(
+                            "only a Flat Pattern view has bend notes".to_owned(),
+                        ));
+                    }
+                }
             }
             if let Some(aligned) = c.aligned {
                 view.aligned = aligned;
@@ -2788,11 +2932,20 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             if let Some(on) = c.model_annotations {
                 view.model_annotations = on;
             }
+            // A Flat Pattern view's direction is its pattern's (mitcad#2280).
+            let flat = matches!(view.subject, Some(Subject::FlatPattern { .. }));
             // A view turned another way takes the views from it and their
             // annotations along (`follow_turns` below, mitcad#729).
             match &mut view.kind {
                 ViewKind::Base { direction } => {
                     if let Some(d) = &c.direction {
+                        if flat {
+                            return Err(ApiError(
+                                "a Flat Pattern view looks square onto its blank: its \
+                                 orientation follows the Flat Pattern"
+                                    .to_owned(),
+                            ));
+                        }
                         *direction = direction_value(d)?;
                     }
                 }
@@ -3029,7 +3182,8 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
     fn keyed(&self, shown: &[Shown]) -> Vec<(BodyUid, u128, Transform)> {
         shown
             .iter()
-            .map(|s| (s.body, self.body_version(s.body).unwrap_or(0), s.transform))
+            // A Flat Pattern's blank by what it is made of (mitcad#2280).
+            .map(|s| (s.body, self.shown_version(s), s.transform))
             .collect()
     }
 
@@ -3050,10 +3204,9 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         let eye = spec.toward_eye;
         let mut faces: Vec<(f64, Vec<P2>, f64)> = Vec::new();
         for s in shown {
-            let shape = self
-                .body_shape(s.body)
-                .ok_or_else(|| format!("the body {} is gone", s.body))?;
-            let mesh = match self.kernel().triangle_mesh(shape, &tolerance) {
+            // A Flat Pattern's developed solid (mitcad#2280).
+            let shape = self.shown_shape(s)?;
+            let mesh = match self.kernel().triangle_mesh(&shape, &tolerance) {
                 Ok(mesh) => mesh,
                 Err(mitcad_model::kernel::KernelError::Unsupported(_)) => continue,
                 Err(e) => return Err(format!("{}: {e}", s.name)),
@@ -3119,7 +3272,8 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         if !matches!(view.kind, ViewKind::Base { .. }) || !view.breaks.is_empty() {
             return None;
         }
-        let spec = sheet.spec(id).ok()?;
+        // A Flat Pattern view along its pattern's frame now (mitcad#2280).
+        let spec = self.current_sheet(drawing.component, sheet).spec(id).ok()?;
         let (shown, _) = self
             .subject_shown(drawing.component, &sheet.subject(id))
             .ok()?;
@@ -3128,10 +3282,11 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         // bodies' boxes measured beside each other where the kernel can
         // (mitcad#1997: 884 bodies one after another took 5 s), else body
         // by body.
-        let shapes: Vec<&K::Shape> = shown
+        let owned: Vec<K::Shape> = shown
             .iter()
-            .map(|s| self.body_shape(s.body))
+            .map(|s| self.shown_shape(s).ok())
             .collect::<Option<_>>()?;
+        let shapes: Vec<&K::Shape> = owned.iter().collect();
         let boxes = match self.kernel().bounding_boxes(&shapes) {
             Ok(boxes) if boxes.len() == shapes.len() => boxes,
             _ => shapes

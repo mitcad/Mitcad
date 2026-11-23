@@ -37,7 +37,10 @@ With --worker the design is imported by the application's import worker
 instead (`mitcad --import-worker`, the process the Import command starts,
 with its import threads and trace; mitcad#2085, where it stopped in the
 application while the CLI imported the design), and the same checks run on
-the design and the report it writes.
+the design and the report it writes. The worker imports with the
+application's hang limit: every run prints whether the import's watchdog
+gave a try up (the report's warnings), and a design that came in as its
+stored bodies without the timeline fails.
 
 The failures name the bodies by their ids in the import and in the file
 (their names stay in the private files). Skipped when the folder, the
@@ -83,7 +86,10 @@ def find(folder, suffix, wanted):
 
 
 def run(args, env=None):
-    done = subprocess.run(args, capture_output=True, text=True, env=env)
+    # (The processes write UTF-8; on Windows the locale's code page would
+    # not decode every line of the worker's trace.)
+    done = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", env=env)
     return done.returncode, done.stdout + done.stderr
 
 
@@ -142,6 +148,20 @@ def main():
     with open(saved, encoding="utf-8") as f:
         doc = json.load(f)
     failures = []
+
+    # Whether the import's watchdog gave a try up (mitcad#2085): the worker
+    # imports with the application's hang limit, so a step that runs longer
+    # without progress (on a loaded machine) gives its try up and runs the
+    # import again. Every run says whether it did; a design that came in
+    # as its stored bodies without the timeline fails.
+    given_up = [w for w in report.get("warnings", []) if "did not return for" in w]
+    if given_up:
+        print(f"note the import's watchdog gave up {len(given_up)} tries: " + "; ".join(given_up))
+    else:
+        print("note the import's watchdog gave up no try")
+    if any("without the timeline" in w for w in given_up):
+        failures.append("the design came in as its stored bodies without the timeline "
+                        "(the watchdog gave the import up)")
 
     def fail(what, items):
         if items:

@@ -679,13 +679,27 @@ fn ellipse_and_spline_offsets_follow_their_source() {
         .as_str()
         .unwrap()
         .to_owned();
+    // A point of the sketch is held on the exact offset (mitcad#2278); other
+    // constraints on what the offset computes are refused.
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_constraint", "sketch": "F1",
+               "constraint": {"type": "coincident", "point": free, "entity": inner}}),
+    );
+    let s = sketch(&d);
+    let held = at(&s, &free);
+    assert!(
+        (curve(&s, "c1").closest(held).1 - 1.5).abs() < 1e-6,
+        "{held:?}"
+    );
+    assert!(curve(&s, &inner).closest(held).1 < 2e-4, "{held:?}");
     assert!(
         rejected(
             &mut d,
             json!({"cmd": "sketch.add_constraint", "sketch": "F1",
-                   "constraint": {"type": "coincident", "point": free, "entity": inner}})
+                   "constraint": {"type": "coincident", "point": point, "entity": "c1"}})
         )
-        .contains("follows an offset")
+        .contains("takes only a Coincident")
     );
 
     // An open spline through points, offset to its left.

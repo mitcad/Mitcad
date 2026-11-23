@@ -2682,6 +2682,20 @@ fn fold_panel<K: Kernel>(
     let transform = moving_transform(frame, far_tangent, 0.0, &constructed);
     // Classify existing ports using their original material boundaries. A
     // port crossing the new strip cannot be silently assigned to one branch.
+    // What the fold cuts out along the line: the line's extent and an
+    // inside end's relief past it.
+    let reach = [
+        if ends[0] == FoldEnd::Inside {
+            low - relief.width
+        } else {
+            low
+        },
+        if ends[1] == FoldEnd::Inside {
+            high + relief.width
+        } else {
+            high
+        },
+    ];
     let mut moving_neighbors = Vec::new();
     for port in &mut state.joins {
         for (first, second) in [(&mut port.first, &mut port.second)] {
@@ -2714,7 +2728,15 @@ fn fold_panel<K: Kernel>(
             {
                 own.boundary.domain = moving_domain;
                 moving_neighbors.push(other.boundary.domain);
-            } else if a[0] > tangent + TOLERANCE || b[0] > tangent + TOLERANCE {
+            } else if (a[0] > tangent + TOLERANCE || b[0] > tangent + TOLERANCE)
+                && a[1].max(b[1]) > reach[0] - TOLERANCE
+                && a[1].min(b[1]) < reach[1] + TOLERANCE
+            {
+                // A port wholly beside the line's extent and its reliefs
+                // (past its ends, where nothing is cut out) stays on the
+                // stationary material it is on (mitcad#2226: a folder
+                // blank's flaps fold one by one, each beside the seams of
+                // others).
                 return Err("fold strip crosses an existing tangent port".into());
             }
         }

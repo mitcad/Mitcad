@@ -145,9 +145,23 @@ pub fn run_mcp_raytraced(
 pub struct LiveMcpSession(LiveSession);
 
 pub fn new_live_mcp_session() -> Box<LiveMcpSession> {
-    Box::new(LiveMcpSession(LiveSession::with_vocabulary(
-        vocabulary().clone(),
-    )))
+    // The print libraries' queries and commands, which the live server runs
+    // when the user allows it (mitcad#2224): model_reference gives them
+    // with what says when they run.
+    let mut names = vocabulary().clone();
+    names.commands.extend(
+        mitcad_mcp::print_library::COMMANDS
+            .iter()
+            .map(|name| (*name).to_owned()),
+    );
+    names.commands.sort();
+    names.queries.extend(
+        mitcad_mcp::print_library::QUERIES
+            .iter()
+            .map(|name| (*name).to_owned()),
+    );
+    names.queries.sort();
+    Box::new(LiveMcpSession(LiveSession::with_vocabulary(names)))
 }
 
 /// The names MCP permits (mitcad#714), by their classes: what
@@ -214,6 +228,12 @@ impl LiveMcpSession {
         self.0.set_may_resolve_comments(may_resolve);
     }
 
+    /// Preferences › AI Assistants › Agents may use my print libraries
+    /// (mitcad#2224).
+    pub fn set_mcp_print_library_policy(&mut self, allowed: bool) {
+        self.0.set_may_use_print_libraries(allowed);
+    }
+
     /// Clicks, keys and dialogs for viewing (mitcad#1735): the application
     /// allows them only in a run started with --mcp-folder.
     pub fn set_mcp_input_tools(&mut self, allowed: bool) {
@@ -228,19 +248,51 @@ pub fn validate_mcp_command(request: &str) -> Result<(), crate::ApiError> {
     validate_command(&request).map_err(crate::ApiError)
 }
 
-/// Validate one model query before reading the GUI's idle document.
-pub fn validate_mcp_query(request: &str) -> Result<(), crate::ApiError> {
-    let request = serde_json::from_str(request)
+/// Validate one model query before reading the GUI's idle document: the
+/// query to run. With `print_libraries` (the live application's
+/// preference, mitcad#2224) `library_items` and `print_library` run too,
+/// bound to the design's project folder `project` (empty: none).
+pub fn validate_mcp_query(
+    request: &str,
+    print_libraries: bool,
+    project: &str,
+) -> Result<String, crate::ApiError> {
+    let request: Value = serde_json::from_str(request)
         .map_err(|error| crate::ApiError(format!("invalid MCP query JSON: {error}")))?;
-    validate_query(&request).map_err(crate::ApiError)
+    if print_libraries && mitcad_mcp::print_library::query_uses(&request) {
+        return mitcad_mcp::print_library::bind_project(&request, project)
+            .map(|bound| bound.to_string())
+            .map_err(crate::ApiError);
+    }
+    validate_query(&request).map_err(crate::ApiError)?;
+    Ok(request.to_string())
+}
+
+/// Whether a command uses the print libraries in a form the live
+/// preference permits (mitcad#2224): the application's managers read the
+/// libraries again after an agent's call. False for text that is not a
+/// command object.
+pub fn mcp_uses_print_library(request: &str) -> bool {
+    serde_json::from_str::<Value>(request)
+        .is_ok_and(|request| mitcad_mcp::print_library::command_uses(&request))
 }
 
 fn validate_command(request: &Value) -> Result<(), String> {
+    validate_command_with(request, false)
+}
+
+/// [`validate_command`], with the print libraries' forms permitted when
+/// `print_libraries` (the live application's preference, mitcad#2224):
+/// nothing else of the file IO class.
+fn validate_command_with(request: &Value, print_libraries: bool) -> Result<(), String> {
     if !request.is_object() {
         return Err("MCP commands must be single JSON objects".to_owned());
     }
     // The form of a command when its name is missing (mitcad#714).
     let kind = string(request, "cmd").map_err(|_| mitcad_mcp::missing_name(request, "cmd"))?;
+    if print_libraries && mitcad_mcp::print_library::command_uses(request) {
+        return Ok(());
+    }
     // By the command's class (mitcad#265): the model's own commands only.
     match classes::command_class_with(request) {
         Some(ApiClass::Model) => {}
@@ -586,12 +638,29 @@ impl Document {
     }
 
     /// The live document can already hold a text whose stored font file
-    /// would be read again by an otherwise model-only edit.
-    pub fn validate_mcp_document_command(&self, request: &str) -> Result<(), crate::ApiError> {
+    /// would be read again by an otherwise model-only edit. The command to
+    /// run: with `print_libraries` (the live application's preference,
+    /// mitcad#2224) the print libraries' commands and library forms run
+    /// too, bound to the design's project folder `project` (empty: none).
+    pub fn validate_mcp_document_command(
+        &self,
+        request: &str,
+        print_libraries: bool,
+        project: &str,
+    ) -> Result<String, crate::ApiError> {
         let request: Value = serde_json::from_str(request)
             .map_err(|error| crate::ApiError(format!("invalid MCP command JSON: {error}")))?;
-        validate_command(&request).map_err(crate::ApiError)?;
-        opened_document_validation(&self.0, &request)
+        validate_command_with(&request, print_libraries).map_err(crate::ApiError)?;
+        if print_libraries && mitcad_mcp::print_library::command_uses(&request) {
+            // It edits no feature: the design's stored fonts are checked as
+            // for a recompute.
+            opened_document_validation(&self.0, &json!({"cmd": "recompute"}))?;
+            return mitcad_mcp::print_library::bind_project(&request, project)
+                .map(|bound| bound.to_string())
+                .map_err(crate::ApiError);
+        }
+        opened_document_validation(&self.0, &request)?;
+        Ok(request.to_string())
     }
 }
 

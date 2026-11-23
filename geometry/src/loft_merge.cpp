@@ -9,7 +9,6 @@
 
 #include <Adaptor3d_Curve.hxx>
 #include <Approx_CurvilinearParameter.hxx>
-#include <BRepAdaptor_CompCurve.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -18,12 +17,16 @@
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAbs_Shape.hxx>
+#include <GeomConvert_CompCurveToBSplineCurve.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Plane.hxx>
 #include <Geom_Surface.hxx>
+#include <NCollection_Array1.hxx>
+#include <Precision.hxx>
 #include <TopExp.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
@@ -93,28 +96,110 @@ bool tangent_join(const TopoDS_Edge& a, const TopoDS_Edge& b) {
   return out.Angle(in) <= kTangentJoinAngle;
 }
 
-// The edges, as they run one after another (a closed ring when `closed`),
-// as one curve by arc length: a polynomial B-spline within kJoinTolerance
-// of them, its first derivative continuous across their joins (each piece
-// of the approximation meets the next with the unit tangent there times
-// the length).
-occ::handle<Geom_BSplineCurve> joined_curve(const std::vector<TopoDS_Edge>& edges, bool closed) {
-  BRep_Builder builder;
-  TopoDS_Wire wire;
-  builder.MakeWire(wire);
-  for (const TopoDS_Edge& edge : edges) {
-    builder.Add(wire, edge);
+// Consecutive edges of a section meet within this distance (mm).
+constexpr double kJoinGap = 1.0e-6;
+
+// The edge as its wire runs it, by arc length from 0: a polynomial
+// B-spline within kJoinTolerance of it, continuous in its second
+// derivative (an edge is smooth along itself), leaving and arriving with
+// the edge's unit tangent at its ends (the approximation keeps the
+// derivatives at the ends of its range). The approximation runs over
+// [0, 1], at the edge's length as its speed: its knots are scaled to
+// [0, length], so that every piece runs at unit speed and the joins'
+// derivatives are the edges' unit tangents (mitcad#2271: left over
+// [0, 1], a join's mean of a long line's and a short arc's derivatives
+// bent both by half a millimetre).
+occ::handle<Geom_BSplineCurve> by_length(const TopoDS_Edge& edge) {
+  const occ::handle<Adaptor3d_Curve> along = new BRepAdaptor_Curve(edge);
+  const double length = GCPnts_AbscissaPoint::Length(*along);
+  if (!(length > Precision::Confusion())) {
+    throw std::runtime_error("the tangent edges of a loft section could not be joined into one curve");
   }
-  wire.Closed(closed);
-  const occ::handle<Adaptor3d_Curve> along = new BRepAdaptor_CompCurve(wire);
-  const Approx_CurvilinearParameter approximation(along, kJoinTolerance, GeomAbs_C1, 9, 1000);
+  const Approx_CurvilinearParameter approximation(along, kJoinTolerance, GeomAbs_C2, 9, 1000);
   if (!approximation.HasResult() || approximation.MaxError3d() > 10 * kJoinTolerance) {
     throw std::runtime_error("the tangent edges of a loft section could not be joined into one curve");
   }
   occ::handle<Geom_BSplineCurve> curve = approximation.Curve3d();
+  if (reversed(edge)) {
+    curve->Reverse();
+  }
+  NCollection_Array1<double> knots(curve->Knots());
+  const double first = knots(knots.Lower());
+  const double last = knots(knots.Upper());
+  for (int i = knots.Lower(); i <= knots.Upper(); ++i) {
+    knots(i) = (knots(i) - first) / (last - first) * length;
+  }
+  curve->SetKnots(knots);
+  return curve;
+}
+
+// The clamped curve's first derivative where it starts (`start`) or ends
+// set to `d`: the pole next to that end moved along, the rest as they
+// were (the derivative there is that pole's offset from the end pole over
+// a factor of the knots).
+void set_end_derivative(Geom_BSplineCurve& curve, bool start, const gp_Vec& d) {
+  const int poles = curve.NbPoles();
+  if (poles < 4) {
+    return;
+  }
+  const int end = start ? 1 : poles;
+  const int next = start ? 2 : poles - 1;
+  const gp_Vec now = curve.DN(start ? curve.FirstParameter() : curve.LastParameter(), 1);
+  if (now.Magnitude() <= 1.0e-12) {
+    return;
+  }
+  const double factor = curve.Pole(end).Distance(curve.Pole(next)) / now.Magnitude();
+  const gp_Vec move = (start ? d - now : now - d) * factor;
+  curve.SetPole(next, curve.Pole(next).Translated(move));
+}
+
+// The edges, as they run one after another (a closed ring when `closed`),
+// as one curve by arc length: a polynomial B-spline within kJoinTolerance
+// of them (mitcad#2162), continuous in its second derivative along each
+// edge and in its first across their joins and where a ring closes, each
+// join leaving and arriving with the mean of the two edges' unit tangents
+// there (mitcad#2271: approximated whole at C1, every knot of the curve
+// was only C1, and an offset of the lofted surface creased at each one).
+occ::handle<Geom_BSplineCurve> joined_curve(const std::vector<TopoDS_Edge>& edges, bool closed) {
+  std::vector<occ::handle<Geom_BSplineCurve>> pieces;
+  int degree = 1;
+  for (const TopoDS_Edge& edge : edges) {
+    pieces.push_back(by_length(edge));
+    degree = std::max(degree, pieces.back()->Degree());
+  }
+  for (const occ::handle<Geom_BSplineCurve>& piece : pieces) {
+    if (piece->Degree() < degree) {
+      piece->IncreaseDegree(degree);
+    }
+  }
+  const std::size_t n = pieces.size();
+  for (std::size_t k = 0; k < n; ++k) {
+    if (k + 1 == n && !closed) {
+      break;
+    }
+    const occ::handle<Geom_BSplineCurve>& before = pieces[k];
+    const occ::handle<Geom_BSplineCurve>& after = pieces[(k + 1) % n];
+    const gp_Vec mean =
+        (before->DN(before->LastParameter(), 1) + after->DN(after->FirstParameter(), 1)) / 2.0;
+    set_end_derivative(*before, false, mean);
+    set_end_derivative(*after, true, mean);
+  }
+  // Each piece after the one before, by arc length on from its end, the
+  // knot between them once less than the degree (both have the same
+  // derivative there).
+  GeomConvert_CompCurveToBSplineCurve joining(pieces.front());
+  for (std::size_t k = 1; k < n; ++k) {
+    if (!joining.Add(pieces[k], kJoinGap, true, false, degree - 1)) {
+      throw std::runtime_error("the tangent edges of a loft section could not be joined in order");
+    }
+  }
+  occ::handle<Geom_BSplineCurve> curve = joining.BSplineCurve();
+  if (curve->Continuity() < GeomAbs_C1) {
+    throw std::runtime_error("the tangent edges of a loft section could not be joined into one smooth curve");
+  }
   const gp_Pnt start = end_of(edges.front(), true).first;
   const gp_Pnt end = end_of(edges.back(), false).first;
-  if (curve->StartPoint().Distance(start) > 1.0e-6 || curve->EndPoint().Distance(end) > 1.0e-6) {
+  if (curve->StartPoint().Distance(start) > kJoinGap || curve->EndPoint().Distance(end) > kJoinGap) {
     throw std::runtime_error("the tangent edges of a loft section could not be joined in order");
   }
   if (closed) {
@@ -260,6 +345,10 @@ std::optional<std::pair<std::size_t, double>> crossing(const std::vector<TopoDS_
   return best;
 }
 
+// A cut this close to an end of its edge (mm) is made at that end: the
+// piece between would be a sliver of the joined curve.
+constexpr double kShortestPiece = 1.0e-4;
+
 // The ring from the point at parameter u of its edge k round to that point
 // again, the edge cut there (not cut at its ends).
 std::vector<TopoDS_Edge> from_point(const std::vector<TopoDS_Edge>& ring, std::size_t k, double u) {
@@ -278,10 +367,14 @@ std::vector<TopoDS_Edge> from_point(const std::vector<TopoDS_Edge>& ring, std::s
     }
     return out;
   };
-  if (curve.IsNull() || std::abs(u - start) <= slack) {
+  const auto close_to = [&](double end_parameter) {
+    return std::abs(u - end_parameter) <= slack ||
+           curve->Value(u).Distance(curve->Value(end_parameter)) <= kShortestPiece;
+  };
+  if (curve.IsNull() || close_to(start)) {
     return rotated(k);
   }
-  if (std::abs(u - end) <= slack) {
+  if (close_to(end)) {
     return rotated((k + 1) % n);
   }
   const TopoDS_Vertex at = BRepBuilderAPI_MakeVertex(curve->Value(u)).Vertex();

@@ -467,12 +467,15 @@ impl<K: Kernel> Document<K> {
         let occurrence = *path.last().expect("a path to drag");
         let mut edits = Vec::new();
         let changed = |v: f64, was: f64| (v - was).abs() > 1e-12 * (1.0 + v.abs());
+        // A carriage that follows another (mitcad#2274) takes its offset
+        // from its leader's in this step (`build/follow.rs`).
+        let released = crate::build::follow::released_joints(&self.state, &self.result.joints);
         for joint in self
             .result
             .joints
             .active
             .iter()
-            .filter(|j| j.under.is_empty())
+            .filter(|j| j.under.is_empty() && !released.contains(&j.uid))
         {
             let Some(values) = dragged.values.get(&joint.uid) else {
                 continue;

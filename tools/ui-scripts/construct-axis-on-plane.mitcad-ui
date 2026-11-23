@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# Axis Perpendicular at Point takes a plane in its Face field (mitcad#2282),
+# on construct-axis-on-plane.json (Plane1, F1, 10 above XY; Point1, F2, a
+# construction point at (20, 0, 5)):
+#   1. Axis Perpendicular at Point, Plane1 picked in the browser for Face
+#      and Point1 for Point: the axis goes through the point's projection
+#      onto the plane, (20, 0, 10), along its normal +Z.
+#   2. Again with the origin plane XY: through (20, 0, 0), along +Z.
+# Run by tools/ui-construct-axis-on-plane-test.sh (Linux),
+# tools/ui-windows-construct-axis-on-plane-test.ps1 (Windows) and
+# tools/ui-macos-construct-axis-on-plane-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle 30
+# The browser's Origin folder opens collapsed, its Construction folder open
+# (Plane1 and Point1 shown): open Origin, and wait for the rows' places,
+# the Construction rows moved down below Origin's.
+expect-ever '^Browser Root/Construction/Point1 at ' 30
+expect-ever 'Browser arrow Root/Origin at' 30
+mark
+click-logged '^Browser arrow Root/Origin at '
+wait-log '^Browser Root/Origin/XY at ' 30
+wait-log '^Browser Root/Construction/Point1 at ' 30
+wait-idle
+
+# 1. On the construction plane.
+mark
+command construct.axis_perpendicular
+wait-log '^Command Axis Perpendicular at Point started' 30
+wait-idle
+click-logged '^Browser Root/Construction/Plane1 at '
+wait-log '^Axis Perpendicular at Point Face: 1 ' 30
+wait-idle
+click-logged '^Browser Root/Construction/Point1 at '
+wait-log '^Axis Perpendicular at Point Point: 1 ' 30
+wait-log '^Preview Axis Perpendicular at Point: ok' 30
+wait-log '^Preview datum in the design: origin \(20, 0, 10\), direction \(0, 0, 1\)$' 30
+wait-idle 30
+mark
+button '^OK$'
+wait-log '^Added axis Axis1: origin \(20, 0, 10\), direction \(0, 0, 1\)$' 30
+wait-idle 30
+
+# 2. On the origin plane XY.
+mark
+command construct.axis_perpendicular
+wait-log '^Command Axis Perpendicular at Point started' 30
+wait-idle
+click-logged '^Browser Root/Origin/XY at '
+wait-log '^Axis Perpendicular at Point Face: 1 ' 30
+wait-idle
+click-logged '^Browser Root/Construction/Point1 at '
+wait-log '^Axis Perpendicular at Point Point: 1 ' 30
+wait-log '^Preview Axis Perpendicular at Point: ok' 30
+wait-log '^Preview datum in the design: origin \(20, 0, 0\), direction \(0, 0, 1\)$' 30
+wait-idle 30
+mark
+button '^OK$'
+wait-log '^Added axis Axis2: origin \(20, 0, 0\), direction \(0, 0, 1\)$' 30
+wait-idle 30
+expect-never 'Recompute failed|TestDriver: FAIL'

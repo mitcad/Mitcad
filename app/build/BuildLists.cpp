@@ -361,7 +361,29 @@ QVector<ListTable> cutListTables(const QJsonObject& answer) {
                        text(row, "designation").isEmpty() ? text(row, "name") : text(row, "designation"),
                        text(row, "supplier"), text(row, "part_number")});
   }
-  return {rows, stock, other};
+  QVector<ListTable> tables{rows, stock, other};
+  // End caps' plates (mitcad#2243): a fourth table, only when the design
+  // has them.
+  const QJsonArray plates = answer.value(QStringLiteral("plates")).toArray();
+  if (!plates.isEmpty()) {
+    ListTable plate{QObject::tr("End Cap Plates"),
+                    {QObject::tr("Quantity"), QObject::tr("Plate"), QObject::tr("Width (mm)"),
+                     QObject::tr("Height (mm)"), QObject::tr("Thickness (mm)"), QObject::tr("Area (mm²)"),
+                     QObject::tr("Material"), QObject::tr("Mass Each (kg)")},
+                    {}};
+    plate.nameColumn = 1;
+    for (const QJsonValue& value : plates) {
+      const QJsonObject row = value.toObject();
+      plate.rows.append({countText(row.value(QStringLiteral("quantity"))), text(row, "designation"),
+                         millimetresText(lengthOf(row.value(QStringLiteral("width")))),
+                         millimetresText(lengthOf(row.value(QStringLiteral("height")))),
+                         millimetresText(lengthOf(row.value(QStringLiteral("thickness")))),
+                         QString::number(row.value(QStringLiteral("area")).toDouble(), 'f', 1), text(row, "material"),
+                         massText(row.value(QStringLiteral("mass")))});
+    }
+    tables.append(plate);
+  }
+  return tables;
 }
 
 QStringList propertyKeys(const QString& typed) {
@@ -514,6 +536,16 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
     m_cutTables.append(table);
     cut->addWidget(table, i == 0 ? 3 : 1);
   }
+  // End caps' plates (mitcad#2243), shown when the design has them.
+  m_platesBox = new QWidget;
+  auto* platesLayout = new QVBoxLayout(m_platesBox);
+  platesLayout->setContentsMargins(0, 0, 0, 0);
+  platesLayout->addWidget(new QLabel(QStringLiteral("<b>%1</b>").arg(tr("End cap plates"))));
+  QTableWidget* platesTable = newTable(QStringLiteral("cutListPlates"));
+  m_cutTables.append(platesTable);
+  platesLayout->addWidget(platesTable);
+  cut->addWidget(m_platesBox, 1);
+  m_platesBox->setVisible(false);
   m_tabs->addTab(cutPage, tr("Cut List"));
 
   auto* partsPage = new QWidget;
@@ -728,6 +760,19 @@ void BuildListsDialog::load() {
   fill(m_sheetTable, m_sheets.first());
   for (int i = 0; i < m_cut.size() && i < m_cutTables.size(); ++i) {
     fill(m_cutTables[i], m_cut[i]);
+  }
+  // End caps' plates (mitcad#2243): the fourth table, when there are any.
+  const bool plates = m_cut.size() > 3;
+  if (!plates && m_cutTables.size() > 3) {
+    fill(m_cutTables[3], ListTable{});
+  }
+  if (m_platesBox != nullptr) {
+    m_platesBox->setVisible(plates);
+  }
+  if (plates) {
+    for (const QStringList& row : std::as_const(m_cut[3].rows)) {
+      qInfo().noquote() << QStringLiteral("Cut list plates: %1 x %2, %3 mm, %4").arg(row[0], row[1], row[4], row[6]);
+    }
   }
   fill(m_partsTable, m_parts.first());
   // For UI tests: what the lists hold; a frame's members with their frame

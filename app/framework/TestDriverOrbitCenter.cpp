@@ -4,13 +4,17 @@
 // and the last orbit's point (capture-view-orbit-center,
 // expect-view-orbit-center), a model point's place in the view
 // (capture-view-point, expect-view-point, capture-view-place) and input at
-// it (click-view-point, drag-view-point); see TestDriver.hpp.
+// it (click-view-point, drag-view-point, tooltip-view-point); see
+// TestDriver.hpp.
 #include "TestDriver.hpp"
 
 #include <cmath>
 #include <memory>
 #include <optional>
 
+#include <QCoreApplication>
+#include <QEvent>
+#include <QHelpEvent>
 #include <QPoint>
 #include <QPointF>
 #include <QRectF>
@@ -105,7 +109,7 @@ bool TestDriver::runOrbitCenterStep(const QString& name, const QStringList& a, i
                        name == QLatin1String("expect-view-orbit-center") ||
                        name == QLatin1String("capture-view-point") || name == QLatin1String("expect-view-point") ||
                        name == QLatin1String("capture-view-place") || name == QLatin1String("click-view-point") ||
-                       name == QLatin1String("drag-view-point");
+                       name == QLatin1String("drag-view-point") || name == QLatin1String("tooltip-view-point");
   if (!matches) {
     return false;
   }
@@ -240,6 +244,29 @@ bool TestDriver::runOrbitCenterStep(const QString& name, const QStringList& a, i
     return true;
   }
 
+  if (name == QLatin1String("tooltip-view-point")) {
+    // tooltip-view-point <x,y,z>: the tooltip request a pointer resting at
+    // the model point's place in the view brings (mitcad#2265: a Point
+    // Cloud Deviation's point tells its distance), sent to the view as
+    // Qt sends it after the hover delay.
+    const std::optional<gp_Pnt> point = pointArg(a.at(0));
+    if (!point) {
+      fail(line, QStringLiteral("tooltip-view-point <x,y,z>"));
+      return true;
+    }
+    view->settleCamera();
+    const QPointF place = view->toWidgetF(*point);
+    if (!QRectF(view->rect()).contains(place)) {
+      fail(line, QStringLiteral("%1 is outside the view (at %2)").arg(a.at(0), placeText(place)));
+      return true;
+    }
+    const QPoint at = place.toPoint();
+    qDebug().noquote() << QStringLiteral("TestDriver: %1 at %2").arg(name, placeText(place));
+    QHelpEvent help(QEvent::ToolTip, at, view->mapToGlobal(at));
+    QCoreApplication::sendEvent(view, &help);
+    return true;
+  }
+
   // click-view-point <x,y,z> [button] [mods], drag-view-point <x,y,z> <dx>
   // <dy> [button] [mods]: at the model point's place in the view.
   const bool drag = name == QLatin1String("drag-view-point");
@@ -288,6 +315,8 @@ const TestDriver::StepSpec kStepSpecs[] = {
     {"expect-view-point", 4, 4, TestDriver::kIdle},
     {"click-view-point", 1, 3, TestDriver::kInputOfMain},
     {"drag-view-point", 3, 5, TestDriver::kInputOfMain},
+    // A tooltip at a model point (mitcad#2265).
+    {"tooltip-view-point", 1, 1, TestDriver::kInputOfMain},
 };
 
 } // namespace

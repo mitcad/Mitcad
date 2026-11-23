@@ -32,24 +32,44 @@ pub(super) struct FormulaHelpQuery {
     /// Only `tokens`, for colouring the text on each key (mitcad#2179).
     #[serde(default)]
     tokens_only: bool,
+    /// An equation curve's formula (mitcad#2237): the name of its
+    /// variable (`x`, `t`), a plain number, evaluated at
+    /// `variable_value` (1 when left out) as the curve evaluates its
+    /// formulas: plain numbers given to `sin`, `cos` and `tan` in radians,
+    /// the result a length or a plain number in the design's length unit.
+    #[serde(default)]
+    variable: Option<String>,
+    #[serde(default)]
+    variable_value: Option<f64>,
+    /// What the variable is (mitcad#2264): `none` (a plain number, the
+    /// default), `length` or `angle`, `variable_value` then in the
+    /// design's length or angle unit.
+    #[serde(default)]
+    variable_unit: Option<mitcad_model::sketch::equation::VariableUnit>,
 }
 
 /// The formula's pieces with their kinds (mitcad#2179): byte ranges, and a
 /// name no parameter of the design has, or a table it has none of, as
 /// `unknown`.
-fn tokens_json<K: Kernel>(doc: &Document<K>, text: &str) -> Value {
+fn tokens_json<K: Kernel>(doc: &Document<K>, text: &str, variable: Option<&str>) -> Value {
     let params = doc.parameters();
     Value::Array(
         assistance::tokens(text)
             .into_iter()
             .map(|token| {
                 let source = &text[token.span.start..token.span.end];
+                // An equation curve's variable (mitcad#2237) is a name
+                // the formula binds, as a `LET` binds one.
+                let local = token.kind == TokenKind::Name && Some(source) == variable;
                 let unknown = match token.kind {
+                    _ if local => false,
                     TokenKind::Name => params.find(source).is_none(),
                     TokenKind::Table => doc.table(source).is_none(),
                     _ => false,
                 };
-                let kind = if unknown {
+                let kind = if local {
+                    TokenKind::Local.name()
+                } else if unknown {
                     "unknown"
                 } else {
                     token.kind.name()
@@ -70,7 +90,9 @@ pub(super) trait FormulaHelpOps<K: Kernel> {
 impl<K: Kernel> FormulaHelpOps<K> for Document<K> {
     fn formula_help_json(&self, query: &FormulaHelpQuery) -> Result<Value, ApiError> {
         if query.tokens_only {
-            return Ok(json!({"tokens": tokens_json(self, &query.expression)}));
+            return Ok(
+                json!({"tokens": tokens_json(self, &query.expression, query.variable.as_deref())}),
+            );
         }
         let catalog: Vec<Value> = assistance::function_catalog()
             .map(|help| {
@@ -86,7 +108,7 @@ impl<K: Kernel> FormulaHelpOps<K> for Document<K> {
         result["tables"] = self.table_names_json();
         // The units and the text's pieces (mitcad#2179).
         result["units"] = json!(assistance::unit_names().collect::<Vec<_>>());
-        result["tokens"] = tokens_json(self, &query.expression);
+        result["tokens"] = tokens_json(self, &query.expression, query.variable.as_deref());
         if let Some((function, argument)) =
             assistance::signature_at(&query.expression, query.cursor)
         {
@@ -123,6 +145,22 @@ impl<K: Kernel> FormulaHelpOps<K> for Document<K> {
                 return Ok(result);
             }
         };
+        // An equation curve's formula (mitcad#2237).
+        if let Some(variable) = &query.variable {
+            equation_formula_help(
+                &mut result,
+                &expression,
+                params.table(),
+                variable,
+                mitcad_model::sketch::equation::variable_value(
+                    query.variable_value.unwrap_or(1.0),
+                    query.variable_unit.unwrap_or_default(),
+                    &context,
+                ),
+                query,
+            );
+            return Ok(result);
+        }
         // A text (mitcad#664): its text as the result; no number to inspect.
         if unit.is_text() {
             match expression.eval_text(params.table(), &context) {
@@ -184,6 +222,77 @@ impl<K: Kernel> FormulaHelpOps<K> for Document<K> {
             }
         }
         Ok(result)
+    }
+}
+
+/// `result` and `selection` of an equation curve's formula (mitcad#2237):
+/// its variable `value` (a plain number, a length or an angle,
+/// mitcad#2264), evaluated as the curve evaluates it
+/// ([`mitcad_model::sketch::equation`]); the result a length in the
+/// design's length unit.
+fn equation_formula_help(
+    result: &mut Value,
+    expression: &Expr,
+    table: &expr::ParameterTable,
+    variable: &str,
+    value: expr::Quantity,
+    query: &FormulaHelpQuery,
+) {
+    use mitcad_model::sketch::equation::{WithVariable, formula_context, formula_length};
+    let design = table.context();
+    let context = formula_context(design);
+    let lookup = WithVariable {
+        table,
+        name: variable,
+        value,
+    };
+    let whole = Span::new(0, query.expression.len());
+    match expression.eval(&lookup, &context) {
+        Ok(q) => match formula_length(q, &context) {
+            Some(mm) => {
+                let unit = Unit::of_length(design.default_length_unit);
+                result["result"] = json!({"value": mm, "text": expr::format_value(mm, unit, expr::DEFAULT_DECIMALS)});
+            }
+            None => {
+                let message = format!(
+                    "the formula gives a value with units {}: it is to give a length or a plain number",
+                    q.dims
+                );
+                result["error"] = formula_error(message.clone(), message, whole);
+            }
+        },
+        Err(error) => {
+            let span = error.span().unwrap_or(whole);
+            result["error"] =
+                formula_error(table.eval_message(&error, ""), error.to_string(), span);
+        }
+    }
+    let selected = Span::new(
+        query.cursor,
+        query
+            .selection_end
+            .unwrap_or(query.cursor)
+            .max(query.cursor),
+    );
+    let (span, value) = assistance::inspect(expression, selected, &lookup, &context);
+    match value {
+        Ok(value) => {
+            let shown = unit_for(value.dims, &design)
+                .map(|u| expr::format_value(value.value, u, expr::DEFAULT_DECIMALS))
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} {}",
+                        expr::format_number(value.value, expr::DEFAULT_DECIMALS),
+                        value.dims
+                    )
+                });
+            result["selection"] =
+                json!({"start":span.start,"end":span.end,"text":shown,"value":value.value});
+        }
+        Err(error) => {
+            let at = error.span().unwrap_or(span);
+            result["selection"] = json!({"start":at.start,"end":at.end,"error":error.message(),"detail":error.to_string()});
+        }
     }
 }
 
@@ -319,5 +428,61 @@ mod tests {
             json!({"query":"formula_help","expression":"Width","cursor":0,"kind":"text"}),
         );
         assert!(error["error"]["message"].is_string());
+    }
+    /// An equation curve's formula (mitcad#2237): its variable is a
+    /// local name, a plain number, and trigonometry takes radians.
+    #[test]
+    fn an_equation_curve_s_variable_is_known() {
+        let mut doc = Document::new(MockKernel::default());
+        doc.command(r#"{"cmd":"add_parameter","name":"r","expression":"5 mm"}"#)
+            .unwrap();
+        let text = "r*(cos(t)+t*sin(t))";
+        let value = help(
+            &doc,
+            json!({"query":"formula_help","expression":text,"cursor":0,"variable":"t","variable_value":2}),
+        );
+        assert!(value.get("error").is_none(), "{value}");
+        let want = 5.0 * (2f64.cos() + 2.0 * 2f64.sin());
+        assert!((value["result"]["value"].as_f64().unwrap() - want).abs() < 1e-9);
+        let kinds: Vec<&str> = value["tokens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["start"].as_u64() == Some(7))
+            .map(|t| t["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["local"]);
+        // Without the variable, t is unknown.
+        let unknown = help(
+            &doc,
+            json!({"query":"formula_help","expression":text,"cursor":0}),
+        );
+        assert!(unknown["error"]["message"].is_string());
+        // A plain number result is in the design's length unit.
+        let plain = help(
+            &doc,
+            json!({"query":"formula_help","expression":"x^2/20","cursor":0,"variable":"x","variable_value":10}),
+        );
+        assert_eq!(plain["result"]["value"], 5.0);
+    }
+
+    /// A variable with a unit (mitcad#2264): `variable_value` in the
+    /// design's length unit, the variable a length inside the formula.
+    #[test]
+    fn an_equation_curve_s_variable_may_be_a_length() {
+        let doc = Document::new(MockKernel::default());
+        let text = "t^2 / (10 mm)";
+        let length = help(
+            &doc,
+            json!({"query":"formula_help","expression":text,"cursor":0,"variable":"t","variable_value":4,"variable_unit":"length"}),
+        );
+        assert!(length.get("error").is_none(), "{length}");
+        assert!((length["result"]["value"].as_f64().unwrap() - 1.6).abs() < 1e-12);
+        // A plain t gives no length.
+        let plain = help(
+            &doc,
+            json!({"query":"formula_help","expression":text,"cursor":0,"variable":"t","variable_value":4}),
+        );
+        assert!(plain["error"]["message"].is_string(), "{plain}");
     }
 }

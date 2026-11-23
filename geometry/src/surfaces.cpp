@@ -33,10 +33,15 @@
 #include <Geom_Curve.hxx>
 #include <Geom_OffsetSurface.hxx>
 #include <Geom_Surface.hxx>
+#include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
+#include <Precision.hxx>
+#include <ShapeBuild_ReShape.hxx>
+#include <ShapeUpgrade_ShapeDivideContinuity.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Iterator.hxx>
@@ -69,6 +74,37 @@ constexpr double kCurveGap = 1.0e-2;
 // one edge gives.
 constexpr double kBoundaryStep = 0.25;
 constexpr int kMostBoundaryPoints = 4000;
+
+// Sewing can rebuild a shared edge with a tolerance from sampled pcurve
+// deviations. Measure the new seam against both output faces and carry a
+// tolerance increase onto its vertices (mitcad#2257).
+void update_sewn_edge_tolerances(const BRepBuilderAPI_Sewing& sewing, const TopoDS_Shape& sewn) {
+  if (sewing.NbContigousEdges() == 0) {
+    return;
+  }
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndUniqueAncestors(sewn, TopAbs_EDGE, TopAbs_FACE, faces);
+  BRep_Builder builder;
+  for (int i = 1; i <= sewing.NbContigousEdges(); ++i) {
+    const TopoDS_Edge& edge = sewing.ContigousEdge(i);
+    if (!faces.Contains(edge) || BRep_Tool::Degenerated(edge) ||
+        !BRep_Tool::SameParameter(edge) || !BRep_Tool::SameRange(edge)) {
+      continue;
+    }
+    const double tolerance = BRep_Tool::Tolerance(edge);
+    double gap = tolerance;
+    for (const TopoDS_Shape& face : faces.FindFromKey(edge)) {
+      const auto deviation = detail::curve_on_surface_gap(edge, TopoDS::Face(face));
+      if (deviation) {
+        gap = std::max(gap, *deviation);
+      }
+    }
+    if (gap > tolerance) {
+      builder.UpdateEdge(edge, gap + Precision::Confusion());
+      BRepLib::UpdateTolerances(edge, false);
+    }
+  }
+}
 
 // A shell of one face.
 TopoDS_Shell shell_of(const TopoDS_Face& face) {
@@ -613,6 +649,43 @@ ShapePtr on_own_ranges(const Shape& sheet) {
   return std::make_shared<Shape>(shell, faces);
 }
 
+// The sheet with each face whose surface is still only C0 continuous over
+// the face itself split at its creases into C1 pieces that keep the face's
+// names; null when no face has one. One face can be smooth (tangent-
+// continuous) and continuous only in its first derivative along lines
+// inside it, its offset then only C0 there, which the kernel's offset
+// refuses: the side of a loft through sections merged into one smooth edge
+// each, along its sections' former joins (a slot's lines and arcs,
+// mitcad#2271), offset by half a symmetric thicken. Each piece offsets on
+// its own, which gives the same wall (as the shell's split_at_creases).
+ShapePtr split_at_creases(const Shape& sheet) {
+  bool creased = false;
+  for (int i = 0; i < sheet.face_count() && !creased; ++i) {
+    const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(sheet.face(i));
+    creased = !surface.IsNull() && surface->Continuity() == GeomAbs_C0;
+  }
+  if (!creased) {
+    return nullptr;
+  }
+  ShapeUpgrade_ShapeDivideContinuity divide(sheet.occt());
+  divide.SetSurfaceCriterion(GeomAbs_C1);
+  if (!divide.Perform()) {
+    return nullptr;
+  }
+  const TopoDS_Shape split = divide.Result();
+  if (split.IsNull()) {
+    return nullptr;
+  }
+  const occ::handle<ShapeBuild_ReShape> context = divide.GetContext();
+  std::vector<Shape::NamedFace> faces;
+  for (int i = 0; i < sheet.face_count(); ++i) {
+    for (TopExp_Explorer it(context->Apply(sheet.face(i)), TopAbs_FACE); it.More(); it.Next()) {
+      faces.push_back({it.Current(), sheet.face_names(i)});
+    }
+  }
+  return std::make_shared<Shape>(split, faces);
+}
+
 // The solid between the sheet and its offset by `wall` along the faces'
 // normals (against them when negative), named as thicken() says.
 ShapePtr thick_solid(const std::string& feature, const Shape& sheet, double wall) {
@@ -918,6 +991,7 @@ ShapePtr stitch(const std::vector<const Shape*>& shapes, double tolerance) {
     if (sewn.IsNull()) {
       throw std::runtime_error("the faces could not be sewn");
     }
+    update_sewn_edge_tolerances(sewing, sewn);
     // Closed shells become solids; open shells and loose faces stay.
     BRep_Builder builder;
     TopoDS_Compound all;
@@ -1004,7 +1078,9 @@ ShapePtr thicken(const std::string& feature, const Shape& sheet, double thicknes
     const double half = std::abs(thickness) / 2;
     const ShapePtr back = offset_sheet(sheet, -half);
     const ShapePtr smooth = on_own_ranges(*back);
-    return thick_solid(feature, smooth ? *smooth : *back, 2 * half);
+    const Shape& ranged = smooth ? *smooth : *back;
+    const ShapePtr pieces = split_at_creases(ranged);
+    return thick_solid(feature, pieces ? *pieces : ranged, 2 * half);
   });
 }
 

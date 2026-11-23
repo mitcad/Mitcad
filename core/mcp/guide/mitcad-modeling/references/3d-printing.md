@@ -163,6 +163,12 @@ Distinguish modeled ears from a slicer's brim when estimating plate space.
 - Use `printable_bearing` for its supported bearing geometry and explicit
   radial, axial and element clearances. Preserve the feature's own
   defaults unless the task supplies a tested alternative.
+- For vents, grilles and lightening patterns, sketch the field's outline
+  (a loop inside it is kept clear, as around a screw boss) and cut it
+  with one `cell_grid` (hexagons by default; `size`, `web`, `depth`), not
+  hole by hole; its remark gives the cell count and open area. Keep the
+  web at least two extrusion widths (about 0.8 mm) and print the cells'
+  walls upright where you can.
 - Make zip-tie channels with a constrained sketch and an `extrude` cut,
   or a `sweep` cut for a bent passage. Check the tie's insertion route,
   bend space and the remaining walls.

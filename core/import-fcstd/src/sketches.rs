@@ -2937,7 +2937,7 @@ fn kind_of(kind: &mitcad_model::sketch::EntityKind) -> Option<Kind> {
         E::Arc { .. } => Kind::Arc,
         E::Ellipse { .. } => Kind::Ellipse,
         E::EllipticalArc { .. } => Kind::EllipticalArc,
-        E::Spline { .. } | E::FittedSpline { .. } => Kind::Spline,
+        E::Spline { .. } | E::FittedSpline { .. } | E::Conic { .. } => Kind::Spline,
         E::Point { .. } => return None,
     })
 }

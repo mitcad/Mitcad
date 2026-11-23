@@ -284,8 +284,11 @@ public:
     if (m_badge) {
       paintBadge(painter, eye);
     }
-    m_icon.paint(painter, QRect(rect.right() + 1 - side, rect.top(), side, side), Qt::AlignCenter, mode,
-                 state);
+    // Without a row icon: the eye alone, in the right column (mitcad#2223).
+    if (!m_icon.isNull()) {
+      m_icon.paint(painter, QRect(rect.right() + 1 - side, rect.top(), side, side), Qt::AlignCenter, mode,
+                   state);
+    }
   }
 
   QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override {
@@ -444,7 +447,9 @@ private:
 
 // Draws a row: the style's item with the light bulb in its decoration,
 // and the radio button right after the name, whose text is elided early
-// enough to leave room for it.
+// enough to leave room for it. Either of the two may be in a column at the
+// right edge of the visible row instead (mitcad#2223, setPlaces): the eye
+// left of the radio button when both are, the name elided before them.
 class BrowserDelegate : public TreeItemDelegate {
 public:
   // Where a row's parts are, in the view's coordinates.
@@ -455,7 +460,18 @@ public:
     QRect fx;    // the fx badge of a bound row (mitcad#862; empty without one)
     QRect make;  // the Make tab's marker (mitcad#1049; empty without one)
     bool elided = false; // the name cut short for the room (mitcad#1932)
+    // Where the row's parts end: after the last of them, or at the right
+    // column's edge when the row has a part there (mitcad#2223).
+    int end = 0;
   };
+
+  // The Activate radio button and the Show eye in the right column
+  // (mitcad#2223; false: Classic, their places before it).
+  void setPlaces(bool activateRight, bool eyeRight) {
+    m_activateRight = activateRight;
+    m_eyeRight = eyeRight;
+  }
+  bool anyRight() const { return m_activateRight || m_eyeRight; }
 
   // A row's tooltip while its name is cut short (mitcad#1932): the name in
   // full, then the row's own tooltip, if any.
@@ -469,16 +485,19 @@ public:
   using TreeItemDelegate::TreeItemDelegate;
 
   // The parts of a row whose option the view gave (its rect, font, state).
-  Parts parts(const QStyleOptionViewItem& option, const QModelIndex& index) const {
+  // `natural`: the right column (mitcad#2223) right after the row's other
+  // parts and the name in full, where it would be if the visible row ended
+  // there (the Rows background's widest row, BrowserTree::fullBoxEnd).
+  Parts parts(const QStyleOptionViewItem& option, const QModelIndex& index, bool natural = false) const {
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
-    return layout(opt, index);
+    return layout(opt, index, natural);
   }
 
   QRect nameTextRect(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
-    const Parts at = layout(opt, index);
+    const Parts at = layout(opt, index, false);
     return QRect(at.name.left(), opt.rect.top() + (opt.rect.height() - opt.fontMetrics.height()) / 2,
                  at.name.width(), opt.fontMetrics.height());
   }
@@ -486,13 +505,23 @@ public:
   void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
-    const Parts at = layout(opt, index);
+    const Parts at = layout(opt, index, false);
     hideEditedText(opt, index);
     style(opt)->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
     if (!editing(index) && !at.radio.isEmpty()) {
       const bool active = index.data(kRadioRole).toBool();
       themeIcon(active ? QStringLiteral("radio-on") : QStringLiteral("radio-off"))
           .paint(painter, at.radio, Qt::AlignCenter,
+                 opt.state & QStyle::State_Selected ? QIcon::Selected : QIcon::Normal);
+    }
+    // The eye in the right column (mitcad#2223): the same bulb as in the
+    // decoration, alone; under a rename editor it waits, as the radio does.
+    if (m_eyeRight && !editing(index) && !at.eye.isEmpty()) {
+      const int side = opt.decorationSize.height();
+      const QRect bulb(at.eye.left() + (at.eye.width() - side) / 2, at.eye.top() + (at.eye.height() - side) / 2,
+                       side, side);
+      QIcon(eyeEngine(opt, index, QIcon()))
+          .paint(painter, bulb, Qt::AlignCenter,
                  opt.state & QStyle::State_Selected ? QIcon::Selected : QIcon::Normal);
     }
     // The fx badge (mitcad#862): a solid pill with the count of the
@@ -525,6 +554,10 @@ public:
   QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     QSize size = QStyledItemDelegate::sizeHint(option, index);
     if (index.data(kRadioRole).isValid()) {
+      size.rwidth() += kGap + option.decorationSize.height();
+    }
+    // The eye in the right column (mitcad#2223) is not in the decoration.
+    if (m_eyeRight && index.data(kEyeRole).isValid()) {
       size.rwidth() += kGap + option.decorationSize.height();
     }
     if (const int count = index.data(kBindingsRole).toInt(); count > 0) {
@@ -592,27 +625,11 @@ protected:
       option->icon = QIcon(new SharedIconEngine(option->icon, accentColor(option->palette),
                                                 option->palette.color(QPalette::Base)));
     }
-    const QVariant eye = index.data(kEyeRole);
-    if (eye.isValid()) {
+    // The light bulb before the icon, as one decoration; in the right
+    // column (mitcad#2223) paint() draws it alone and the icon stays as is.
+    if (index.data(kEyeRole).isValid() && !m_eyeRight) {
       const int side = option->decorationSize.height();
-      // Two states, shown or hidden; shown and transparent (mitcad#1093) is
-      // the half-open eye.
-      const QString bulb = !eye.toBool()                                ? QStringLiteral("eye-off")
-                           : index.data(kEyeTransparentRole).toBool() ? QStringLiteral("eye-half")
-                                                                       : QStringLiteral("eye");
-      auto* engine = new EyeIconEngine(themeIcon(bulb), option->icon, bulb);
-      // Shown by its light bulb, left out by Isolate (mitcad#1700) or
-      // hidden with an occurrence above it (mitcad#1995).
-      if (index.data(kEyeIsolatedRole).toBool() || index.data(kEyeParentRole).isValid()) {
-        engine->setDimmed();
-      }
-      // A row that follows a condition: the fx corner badge (mitcad#863).
-      if (index.data(kEyeBoundRole).toBool()) {
-        const QColor accent = accentColor(option->palette);
-        const QColor base = option->palette.color(QPalette::Base);
-        engine->setBadge(accent, base, base.lightness() > 128 ? accent.darker(160) : accent.lighter(160));
-      }
-      option->icon = QIcon(engine);
+      option->icon = QIcon(eyeEngine(*option, index, option->icon));
       option->decorationSize = QSize(2 * side + kGap, side);
       option->features |= QStyleOptionViewItem::HasDecoration;
     }
@@ -623,9 +640,45 @@ private:
     return option.widget != nullptr ? option.widget->style() : QApplication::style();
   }
 
+  // The light bulb of a row with one, before `icon` (none: the bulb alone),
+  // in the theme of the option's palette.
+  static EyeIconEngine* eyeEngine(const QStyleOptionViewItem& option, const QModelIndex& index, const QIcon& icon) {
+    // Two states, shown or hidden; shown and transparent (mitcad#1093) is
+    // the half-open eye.
+    const QString bulb = !index.data(kEyeRole).toBool()                ? QStringLiteral("eye-off")
+                         : index.data(kEyeTransparentRole).toBool() ? QStringLiteral("eye-half")
+                                                                     : QStringLiteral("eye");
+    auto* engine = new EyeIconEngine(themeIcon(bulb), icon, bulb);
+    // Shown by its light bulb, left out by Isolate (mitcad#1700) or
+    // hidden with an occurrence above it (mitcad#1995).
+    if (index.data(kEyeIsolatedRole).toBool() || index.data(kEyeParentRole).isValid()) {
+      engine->setDimmed();
+    }
+    // A row that follows a condition: the fx corner badge (mitcad#863).
+    if (index.data(kEyeBoundRole).toBool()) {
+      const QColor accent = accentColor(option.palette);
+      const QColor base = option.palette.color(QPalette::Base);
+      engine->setBadge(accent, base, base.lightness() > 128 ? accent.darker(160) : accent.lighter(160));
+    }
+    return engine;
+  }
+
+  // Where the right column ends (mitcad#2223): at the visible right edge
+  // of the row, the view's viewport, whatever the row's width or the
+  // horizontal scroll, less the Rows background's box padding, so that a
+  // row's box widened to the edge ends that far after the column.
+  static int columnRight(const QStyleOptionViewItem& option) {
+    int visible = option.rect.right();
+    if (const auto* view = qobject_cast<const QAbstractItemView*>(option.widget)) {
+      visible = view->viewport()->width() - 1;
+    }
+    return visible - kBoxPadding;
+  }
+
   // The parts of a row whose option is set up; elides its text where the
-  // radio button needs the room.
-  Parts layout(QStyleOptionViewItem& opt, const QModelIndex& index) const {
+  // radio button, the badges and the right column (mitcad#2223) need the
+  // room. `natural`: see parts().
+  Parts layout(QStyleOptionViewItem& opt, const QModelIndex& index, bool natural) const {
     QStyle* style = BrowserDelegate::style(opt);
     const QRect decoration = style->subElementRect(QStyle::SE_ItemViewItemDecoration, &opt, opt.widget);
     const QRect text = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, opt.widget);
@@ -633,26 +686,46 @@ private:
     const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, opt.widget) + 1;
     const int side = opt.decorationSize.height();
     const bool radio = index.data(kRadioRole).isValid();
+    const bool eye = index.data(kEyeRole).isValid();
+    // Right after the name (Classic) or in the right column.
+    const bool radioAfterName = radio && !m_activateRight;
+    const bool radioRight = radio && m_activateRight;
+    const bool eyeRight = eye && m_eyeRight;
     Parts parts;
-    if (index.data(kEyeRole).isValid()) {
+    if (eye && !eyeRight) {
       parts.eye = QRect(decoration.left(), opt.rect.top(), side + kGap / 2, opt.rect.height());
+    }
+    // The right column's room on this row, from the column's right edge to
+    // its leftmost part: the radio button's place, which every row keeps
+    // while the radio button is on the right so that the eyes line up
+    // whether a row has a radio button or not, then the eye's left of it.
+    int column = radioRight ? side : 0;
+    if (eyeRight) {
+      column = (m_activateRight ? side + kGap : 0) + side;
+    }
+    int columnEnd = 0;
+    int textWidth = text.width();
+    if (column > 0 && !natural) {
+      columnEnd = columnRight(opt);
+      // The text ends a gap before the column's leftmost part.
+      textWidth = std::min(textWidth, columnEnd - column + 1 - kGap - text.left());
     }
     const int bound = index.data(kBindingsRole).toInt();
     const int badge = bound > 0 ? bindingsWidth(opt.font, bound) : 0;
     const int mark = index.data(kMakeRole).toString().isEmpty() ? 0 : makeMarkSide(side);
-    const int room = qMax(0, text.width() - 2 * margin - (radio ? kGap + side : 0) - (badge > 0 ? kGap + badge : 0) -
-                                 (mark > 0 ? kGap + mark : 0));
+    const int room = qMax(0, textWidth - 2 * margin - (radioAfterName ? kGap + side : 0) -
+                                 (badge > 0 ? kGap + badge : 0) - (mark > 0 ? kGap + mark : 0));
     if (opt.fontMetrics.horizontalAdvance(opt.text) > room) {
       opt.text = opt.fontMetrics.elidedText(opt.text, Qt::ElideRight, room);
       parts.elided = true;
     }
     const int width = qMin(opt.fontMetrics.horizontalAdvance(opt.text), room);
     parts.name = QRect(text.left() + margin, opt.rect.top(), width, opt.rect.height());
-    if (radio) {
+    if (radioAfterName) {
       parts.radio = QRect(parts.name.right() + 1 + kGap, opt.rect.top() + (opt.rect.height() - side) / 2,
                           side, side);
     }
-    int right = radio ? parts.radio.right() : parts.name.right();
+    int right = radioAfterName ? parts.radio.right() : parts.name.right();
     if (mark > 0) {
       parts.make = QRect(right + 1 + kGap, opt.rect.top() + (opt.rect.height() - mark) / 2, mark, mark);
       right = parts.make.right();
@@ -661,9 +734,29 @@ private:
       const int height = std::min(opt.rect.height() - 4, QFontMetrics(bindingsFont(opt.font)).height() + 3);
       const int left = right + 1 + kGap;
       parts.fx = QRect(left, opt.rect.top() + (opt.rect.height() - height) / 2, badge, height);
+      right = parts.fx.right();
+    }
+    parts.end = right;
+    if (column > 0) {
+      if (natural) {
+        // The column a gap (and the text's margin) after the last part: the
+        // room the name in full needs before it.
+        columnEnd = right + margin + kGap + column;
+      }
+      if (radioRight) {
+        parts.radio = QRect(columnEnd - side + 1, opt.rect.top() + (opt.rect.height() - side) / 2, side, side);
+      }
+      if (eyeRight) {
+        const int eyeEnd = columnEnd - (m_activateRight ? side + kGap : 0);
+        parts.eye = QRect(eyeEnd - side + 1, opt.rect.top(), side, opt.rect.height());
+      }
+      parts.end = std::max(parts.end, columnEnd);
     }
     return parts;
   }
+
+  bool m_activateRight = false;
+  bool m_eyeRight = false;
 };
 
 // The rows of the tree in a floating card: like a macOS sidebar, a selected
@@ -905,7 +998,9 @@ QString jointTooltip(const DocumentSnapshot& snapshot, const DocumentSnapshot::F
 QString analysisIcon(const QString& type) {
   return type == QStringLiteral("print")   ? QStringLiteral("print-analysis")
          : type == QStringLiteral("draft") ? QStringLiteral("draft-analysis")
-                                           : QStringLiteral("section-analysis");
+         // Point Cloud Deviation (mitcad#2240).
+         : type == QStringLiteral("point_cloud_deviation") ? QStringLiteral("point-cloud-deviation")
+                                                           : QStringLiteral("section-analysis");
 }
 
 } // namespace
@@ -1006,6 +1101,14 @@ public:
     return m_delegate->parts(option, index);
   }
 
+  // The Activate radio button and the Show eye in the right column
+  // (mitcad#2223): the rows laid out and painted again.
+  void setPlaces(bool activateRight, bool eyeRight) {
+    m_delegate->setPlaces(activateRight, eyeRight);
+    scheduleDelayedItemsLayout(); // the rows' size hints changed
+    viewport()->update();
+  }
+
   // The Rows background (mitcad#419): each row on a box of its own.
   void setRows(bool rows) {
     m_rows = rows;
@@ -1037,27 +1140,30 @@ public:
   // A row's box with the Rows background, in the viewport's coordinates:
   // from its arrow's place before it to the end of its name or radio
   // button, a little shorter than the row so that the view shows between
-  // rows. Empty for a row not laid out.
+  // rows. With the radio button or the eye in the right column
+  // (mitcad#2223) every row's box reaches the column's edge at the card's
+  // right. Empty for a row not laid out.
   QRect rowBox(const QModelIndex& index) const {
     const QRect cell = visualRect(index);
     if (cell.isEmpty()) {
       return QRect();
     }
     const int left = cell.left() - indentation() + 2;
-    const int right = std::min(boxEnd(index, cell), viewport()->width() - 1);
+    const int edge = viewport()->width() - 1;
+    const int right = m_delegate->anyRight() ? edge : std::min(boxEnd(index, cell, false), edge);
     return QRect(QPoint(left, cell.top() + 2), QPoint(std::max(left, right), cell.bottom() - 2));
   }
 
   // Where a row's box would end with its whole name (mitcad#1932: the bare
-  // card widens to it), in the viewport's coordinates; -1 for a row not laid
-  // out.
+  // card widens to it), in the viewport's coordinates, the right column
+  // (mitcad#2223) right after it; -1 for a row not laid out.
   int fullBoxEnd(const QModelIndex& index) const {
     QRect cell = visualRect(index);
     if (cell.isEmpty()) {
       return -1;
     }
     cell.setWidth(kUnboundedWidth); // room for any name
-    return boxEnd(index, cell);
+    return boxEnd(index, cell, true);
   }
 
 protected:
@@ -1288,7 +1394,9 @@ protected:
         return;
       }
       if (isDeleteKey(event->key())) {
-        emit m_panel.deleteRequested(m_panel.selectedNodes());
+        // On a selection set's member row its link, not the item
+        // (mitcad#2219).
+        emit m_panel.deleteRequested(BrowserPanel::rowsToDelete(m_panel.selectedNodes(), m_panel.nodeOf(item)));
         return;
       }
     }
@@ -1300,23 +1408,17 @@ private:
   static constexpr int kUnboundedWidth = 1 << 16;
 
   // The end of a row's box when the row is laid out in `cell`: after its
-  // name, radio button, fx badge and Make marker, with the box's padding.
-  int boxEnd(const QModelIndex& index, const QRect& cell) const {
+  // name, radio button, fx badge (mitcad#862) and Make marker
+  // (mitcad#1049), or its part in the right column (mitcad#2223; `natural`:
+  // see BrowserDelegate::parts), with the box's padding.
+  int boxEnd(const QModelIndex& index, const QRect& cell, bool natural) const {
     QStyleOptionViewItem option;
     initViewItemOption(&option);
     option.rect = cell;
     if (selectionModel() != nullptr && selectionModel()->isSelected(index)) {
       option.state |= QStyle::State_Selected; // its name in semibold is wider
     }
-    const BrowserDelegate::Parts parts = m_delegate->parts(option, index);
-    int end = std::max(parts.name.right(), parts.radio.isEmpty() ? parts.name.right() : parts.radio.right());
-    if (!parts.fx.isEmpty()) {
-      end = std::max(end, parts.fx.right()); // the fx badge (mitcad#862)
-    }
-    if (!parts.make.isEmpty()) {
-      end = std::max(end, parts.make.right()); // the Make tab's marker (mitcad#1049)
-    }
-    return end + kBoxPadding;
+    return m_delegate->parts(option, index, natural).end + kBoxPadding;
   }
 
   // A row's box (rowBox): the card's material, tinted with the accent colour
@@ -1653,6 +1755,38 @@ void BrowserPanel::setRowsBackground(bool rows) {
   queueRowsRegion();
   // The place beside the rows is logged, or logged out of sight.
   TestSync::singleShot(0, this, [this] { logLayout(); });
+}
+
+void BrowserPanel::setControlPlaces(BrowserControlPlace activate, BrowserControlPlace eye) {
+  if (activate == m_activatePlace && eye == m_eyePlace) {
+    return;
+  }
+  m_activatePlace = activate;
+  m_eyePlace = eye;
+  m_tree->setPlaces(activate == BrowserControlPlace::Right, eye == BrowserControlPlace::Right);
+  // The Rows background's boxes and the card's width follow, and the
+  // places are logged again.
+  queueRowsRegion();
+  TestSync::singleShot(0, this, [this] { logLayout(); });
+}
+
+BrowserPanel::RowPlaces BrowserPanel::rowPlaces(const QString& path) const {
+  RowPlaces found;
+  for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+    if (nodeOf(*it).path != path) {
+      continue;
+    }
+    if (m_tree->visualItemRect(*it).isEmpty()) {
+      break;
+    }
+    const BrowserDelegate::Parts parts = m_tree->partsOf(*it);
+    found.name = parts.name;
+    found.eye = parts.eye;
+    found.radio = parts.radio;
+    found.elided = parts.elided;
+    break;
+  }
+  return found;
 }
 
 QRegion BrowserPanel::rowsRegion() const {
@@ -2134,6 +2268,14 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("images");
   case BrowserNode::Type::ImageReference:
     return QStringLiteral("image:") + node.uid;
+  case BrowserNode::Type::PointClouds: // mitcad#2240
+    return QStringLiteral("point-clouds");
+  case BrowserNode::Type::PointCloud:
+    return QStringLiteral("point-cloud:") + node.uid;
+  case BrowserNode::Type::Decals: // mitcad#2244
+    return QStringLiteral("decals");
+  case BrowserNode::Type::Decal:
+    return QStringLiteral("decal:") + node.uid;
   case BrowserNode::Type::CenterOfMass:
     return QStringLiteral("center-of-mass");
   case BrowserNode::Type::Features:
@@ -2339,12 +2481,14 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                          node.type == BrowserNode::Type::ContactSet ||
                          node.type == BrowserNode::Type::Drawing ||
                          node.type == BrowserNode::Type::ImageReference ||
+                         node.type == BrowserNode::Type::Decal || // mitcad#2244
                          node.type == BrowserNode::Type::SketchBlock ||
                          node.type == BrowserNode::Type::CamSetup || node.type == BrowserNode::Type::CamOperation ||
                          // A folder of bodies or of components (mitcad#2103).
                          node.type == BrowserNode::Type::BodyFolder ||
                          node.type == BrowserNode::Type::ComponentFolder ||
                          node.type == BrowserNode::Type::SelectionSet || // mitcad#2192
+                         node.type == BrowserNode::Type::PointCloud ||   // mitcad#2240
                          (node.type == BrowserNode::Type::NamedView &&
                           node.uid.startsWith(QStringLiteral("named:")));
   if (renamable) {
@@ -2360,7 +2504,8 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                     node.type == BrowserNode::Type::Measurements || node.type == BrowserNode::Type::Drawings ||
                     node.type == BrowserNode::Type::ImageReferences || node.type == BrowserNode::Type::Features ||
                     node.type == BrowserNode::Type::CamFolder || node.type == BrowserNode::Type::CamSetup ||
-                    node.type == BrowserNode::Type::SelectionSets;
+                    node.type == BrowserNode::Type::SelectionSets || node.type == BrowserNode::Type::PointClouds ||
+                    node.type == BrowserNode::Type::Decals;
   item->setExpanded(m_expanded.value(key, open));
   return item;
 }
@@ -3403,6 +3548,74 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
     }
   }
 
+  // Point clouds (mitcad#2240): the root's Point Clouds folder, a row per
+  // cloud with its light bulb; its tooltip names the file and the points.
+  if (!snapshot.pointClouds.isEmpty()) {
+    BrowserNode folder;
+    folder.type = BrowserNode::Type::PointClouds;
+    folder.component = rootNode.uid;
+    folder.name = tr("Point Clouds");
+    QTreeWidgetItem* clouds = addRow(rootItem, folder, QStringLiteral("folder"));
+    for (const QJsonValue& value : snapshot.pointClouds) {
+      const QJsonObject cloud = value.toObject();
+      BrowserNode row;
+      row.type = BrowserNode::Type::PointCloud;
+      row.component = rootNode.uid;
+      row.uid = cloud.value(QStringLiteral("name")).toString();
+      row.name = row.uid;
+      row.visible = cloud.value(QStringLiteral("visible")).toBool(true);
+      row.hasEye = true;
+      const int count = cloud.value(QStringLiteral("count")).toInt();
+      const int filePoints = cloud.value(QStringLiteral("file_points")).toInt(count);
+      const QString file = cloud.value(QStringLiteral("file_name")).toString();
+      QString about = tr("%n point(s)", nullptr, count);
+      if (filePoints > count) {
+        about = tr("%1 of the file's %2").arg(about).arg(filePoints);
+      }
+      const QString tooltip = file.isEmpty() ? QStringLiteral("%1: %2").arg(row.name, about)
+                                             : QStringLiteral("%1: %2, %3").arg(row.name, file, about);
+      QTreeWidgetItem* item = addRow(clouds, row, QStringLiteral("point-cloud"), tooltip);
+      if (!row.visible) {
+        setNameRole(item, ColorRole::TextHidden);
+      }
+    }
+  }
+
+  // Decals (mitcad#2244): the root's Decals folder, a row per decal with
+  // its light bulb; its tooltip names the file and the size, or why its
+  // face is not there.
+  if (!snapshot.decals.isEmpty()) {
+    BrowserNode folder;
+    folder.type = BrowserNode::Type::Decals;
+    folder.component = rootNode.uid;
+    folder.name = tr("Decals");
+    QTreeWidgetItem* decals = addRow(rootItem, folder, QStringLiteral("folder"));
+    for (const QJsonValue& value : snapshot.decals) {
+      const QJsonObject decal = value.toObject();
+      BrowserNode row;
+      row.type = BrowserNode::Type::Decal;
+      row.component = rootNode.uid;
+      row.uid = decal.value(QStringLiteral("name")).toString();
+      row.name = row.uid;
+      row.visible = decal.value(QStringLiteral("visible")).toBool(true);
+      row.hasEye = true;
+      const QString error = mitcad::modelMessage(decal.value(QStringLiteral("error")).toString());
+      const QString file = decal.value(QStringLiteral("file_name")).toString();
+      const QString about = tr("%1 × %2 mm")
+                                .arg(QString::number(decal.value(QStringLiteral("width")).toDouble(), 'f', 1),
+                                     QString::number(decal.value(QStringLiteral("height")).toDouble(), 'f', 1));
+      const QString tooltip = !error.isEmpty() ? QStringLiteral("%1: %2").arg(row.name, error)
+                              : file.isEmpty() ? QStringLiteral("%1: %2").arg(row.name, about)
+                                               : QStringLiteral("%1: %2, %3").arg(row.name, file, about);
+      QTreeWidgetItem* item = addRow(decals, row, QStringLiteral("decal"), tooltip);
+      if (!error.isEmpty()) {
+        setNameRole(item, ColorRole::ErrorText);
+      } else if (!row.visible) {
+        setNameRole(item, ColorRole::TextHidden);
+      }
+    }
+  }
+
   // Sketch blocks (mitcad#2110): the root's Sketch Blocks folder, a row per
   // block; its tooltip and the log say how many instances it has.
   if (!snapshot.sketchBlocks.isEmpty()) {
@@ -3670,7 +3883,8 @@ void BrowserPanel::styleAnalysisRow(QTreeWidgetItem* item, const QJsonObject& an
   const QString error = mitcad::modelMessage(analysis.value(QStringLiteral("error")).toString());
   const QString kind = type == QStringLiteral("print")   ? tr("Print Analysis")
                        : type == QStringLiteral("draft") ? tr("Draft Analysis")
-                                                         : tr("Section Analysis");
+                       : type == QStringLiteral("point_cloud_deviation") ? tr("Point Cloud Deviation") // mitcad#2240
+                                                                         : tr("Section Analysis");
   const QIcon icon = themeIcon(analysisIcon(type));
   // A plane that cannot be found stays the error it is (mitcad#1230).
   const AnalysisNote note = error.isEmpty() ? m_analysisNotes.value(name) : AnalysisNote{};
@@ -4167,6 +4381,16 @@ QVector<BrowserNode> BrowserPanel::setMemberNodes(const QString& set) const {
   return nodes;
 }
 
+QVector<BrowserNode> BrowserPanel::rowsToDelete(const QVector<BrowserNode>& selected, const BrowserNode& asked) {
+  QVector<BrowserNode> rows;
+  for (const BrowserNode& node : selected) {
+    if (node.selectionSet == asked.selectionSet) {
+      rows.append(node);
+    }
+  }
+  return rows;
+}
+
 bool BrowserPanel::reveal(const QString& feature) {
   QSet<QString> keys;
   for (const BrowserNode& node : nodesOfFeature(feature)) {
@@ -4369,6 +4593,19 @@ void BrowserPanel::logLayout() {
     lines << QStringLiteral("%1 at %2,%3").arg(what).arg(point.x()).arg(point.y());
     places.insert(what);
   };
+  // Where the Activate radio button and the Show eye are (mitcad#2223),
+  // and while either is in the right column, the visible right edge of the
+  // rows it lines up at: the viewport's last pixel column.
+  // (The words of the settings' values, without BrowserPreferences.cpp,
+  // which the panel's unit tests do not link.)
+  const auto placeWord = [](BrowserControlPlace at) {
+    return at == BrowserControlPlace::Right ? QStringLiteral("right") : QStringLiteral("classic");
+  };
+  lines << QStringLiteral("Browser controls: activate %1, eye %2")
+               .arg(placeWord(m_activatePlace), placeWord(m_eyePlace));
+  if (m_activatePlace == BrowserControlPlace::Right || m_eyePlace == BrowserControlPlace::Right) {
+    place(QStringLiteral("Browser right edge"), QRect(viewport.right(), viewport.top(), 1, viewport.height()));
+  }
   int elided = 0;
   for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
     QTreeWidgetItem* item = *it;

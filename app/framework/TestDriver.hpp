@@ -271,6 +271,8 @@
 //   click-view-point <x,y,z> [button] [mods]  a click at a model point's
 //                           place
 //   drag-view-point <x,y,z> <dx> <dy> [button] [mods]  a drag from it
+//   tooltip-view-point <x,y,z>  the tooltip request of a pointer resting at
+//                           a model point's place (mitcad#2265)
 //   expect-navigation-runtime       saved navigation bindings and camera gestures
 //   expect-assistant-setup <mode>    isolated real setup controls and config results
 //   agent-menu <row> on|off         the agent indicator's menu filled as it opens,
@@ -864,7 +866,16 @@
 //   expect-clipboard-file <path> [seconds]   the file holds exactly the
 //                           clipboard's text, in UTF-8: a list's Save as
 //                           Text… against its Copy as Text (mitcad#1641)
-//   screenshot <png>        the main window (the 3D view composed in, and an
+//   drop-files-logged <regex> <path>...  files dropped from the file
+//                           manager onto the place the last line matching
+//                           regex logs ("at x,y"): a drag enter, a move and
+//                           a drop with the files' URLs, sent to the widget
+//                           there that takes drops (mitcad#2204: onto a
+//                           Projects panel row); fails when it refuses them
+//   drop-files-on-widget <objectName> <path>...  the same at the middle of
+//                           the main window's shown widget of that name
+//                           (mitcad#2281: modelView, the 3D view)
+//   screenshot <png>       the main window (the 3D view composed in, and an
 //                           open popup menu drawn over it at its place)
 //   screenshot-view <png>   the 3D view's framebuffer, as --screenshot
 //   screenshot-screen <png> macOS: what the window server shows of the

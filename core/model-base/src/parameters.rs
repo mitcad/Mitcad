@@ -526,6 +526,8 @@ pub fn slot_unit(slot: &str) -> Unit {
         || slot == "press_fit.ribs"
         // A mortise and tenon's tenons (mitcad#1063).
         || slot == "count"
+        // A cell grid's polygon sides (mitcad#2238).
+        || slot == "sides"
         // Every count, factor and fraction (mitcad#662): pattern quantities,
         // a pattern's or mirror's scale factors and their runs, a scale's
         // factors, a boss's ribs (construction paths' fractions are
@@ -571,6 +573,8 @@ pub fn one_turn_slot(feature: &str, slot: &str) -> bool {
         "coordinate_system" => slot == "angle",
         // A press pull's draft taper (mitcad#1850).
         "press_pull" => slot == "taper_angle",
+        // A cell grid's turn about its anchor (mitcad#2238).
+        "cell_grid" => slot == "angle",
         _ => false,
     }
 }

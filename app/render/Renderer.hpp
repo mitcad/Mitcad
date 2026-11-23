@@ -68,6 +68,10 @@ struct MaterialData {
   // their image's channels); 1: the maps' values as they are.
   float roughnessFactor = 1.0f;
   float metalnessFactor = 1.0f;
+  // The base colour image's alpha times `opacity` is the surface's alpha
+  // (a decal, mitcad#2244: the image's transparent pixels show what lies
+  // behind); otherwise its alpha is not read.
+  bool textureAlpha = false;
   // The appearance's name, for files that keep it (glTF's materials,
   // mitcad#1826); the renderer does not read it.
   std::string name;

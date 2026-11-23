@@ -1,0 +1,14 @@
+{
+  "comment": "Worked out by hand (mitcad#2243), SolidCraft's frame_end_cap: a plate of the member's outer section on each end face. Tube: a round tube 20 x 2 along a 3D line of 100 (as frame-members): 36 pi 100 = 11309.7336; its cap outward past the end at x = 100, a disc of 20 3 thick: 100 pi 3 = 942.4778, x 100 to 103. Beam: a 10 x 6 bar along a sketch line at y -100, its top middle on the line (as frame-members), its cap inward 4 thick with its corners chamfered 1: the bar cut back to x 96, 60 x 96 = 5760; the plate (60 - 2 x 1) x 4 = 232, x 96 to 100. Total 18244.2113.",
+  "volume_tolerance": 1e-9,
+  "bbox_tolerance": 1e-6,
+  "body_count": 4,
+  "total": {"volume_mm3": 18244.211349000193},
+  "bbox": {"min": [0, -105, -10], "max": [103, 10, 10]},
+  "bodies": [
+    {"name": "Tube", "volume_mm3": 11309.733552923255, "bbox": {"min": [0, -10, -10], "max": [100, 10, 10]}},
+    {"name": "Tube End Cap", "volume_mm3": 942.4777960769379, "bbox": {"min": [100, -10, -10], "max": [103, 10, 10]}},
+    {"name": "Bar 10x6", "volume_mm3": 5760, "bbox": {"min": [0, -105, -6], "max": [96, -95, 0]}},
+    {"name": "Bar 10x6 End Cap", "volume_mm3": 232, "bbox": {"min": [96, -105, -6], "max": [100, -95, 0]}}
+  ]
+}

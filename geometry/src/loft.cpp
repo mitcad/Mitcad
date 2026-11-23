@@ -296,16 +296,27 @@ ShapePtr loft(const LoftSpec& spec) {
       // slot), OCCT's faces meet at a crease between them that no offset
       // closes; skinned with the faces tangent there instead. Ruled and
       // smooth alike (mitcad#2191): two sections are straight either way,
-      // and the eased faces are still straight between them. Sections
-      // merged into one smooth edge each (mitcad#2162) have no such
-      // vertices: their one face is tangent-continuous as it is.
-      if (count == 2 && !spec.closed && !aligned) {
+      // and the eased faces are still straight between them.
+      //
+      // (mitcad#2271) Sections merged into one smooth closed edge each
+      // (mitcad#2162) have no such vertices, and their one side face is
+      // tangent-continuous; but OCCT's through-sections makes its surface a
+      // clamped one that only closes on itself, which the kernel's offset
+      // does not take (Shell failed Inside): skinned here as they are, the
+      // side's surface periodic where it closes (skinned_loft).
+      if (count == 2 && !spec.closed) {
         std::vector<detail::SkinSection> skin;
         for (const Prepared& section : sections) {
           skin.push_back({section.shape, section.point, section.normal, section.body, section.face, section.sources});
         }
-        result = detail::skinned_loft(skin, spec.start, spec.end, {}, named->named, first, last, false, spec.solid,
-                                      true);
+        const bool rings = aligned && !sections.front().point && !sections.back().point;
+        if (rings) {
+          result = detail::skinned_loft(skin, spec.start, spec.end, {}, named->named, first, last, false, spec.solid,
+                                        false, true);
+        } else if (!aligned) {
+          result = detail::skinned_loft(skin, spec.start, spec.end, {}, named->named, first, last, false,
+                                        spec.solid, true);
+        }
       }
       if (!result) {
         std::vector<TopoDS_Shape> shapes;

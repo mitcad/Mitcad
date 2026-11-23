@@ -1,0 +1,15 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub mitcad/Mitcad#557 (mitcad#2279; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): a profile extruded 25 (Body1, F2.b0), one corner of its side face F2:side(c18[c16,c1]) cut off at a slant through all by Extrude2 (F4). Fillet1 (F6) rounds the side face's two edges, one with the slanted cut face, one with the extrusion's end cap, with a radius typed by hand (11.4704). As a Full Round the radius is worked out from the three faces: the circle touching the end cap (at a right angle), the side face and the cut face (at 131.13 degrees) has radius 11.4696131 (the side face 16.6804 wide between its edges); both roundings meet on the side face, which is gone, its names on the rounding."},
+  {"cmd": "edit_feature", "uid": "F6", "def": {"type": "fillet", "body": "F2.b0", "sets": [
+    {"edges": ["E{F2:side(c18[c16,c1])|F4:side(c6[c1,c4])}",
+               "E{F2:end(r{c1[c18,c7],c7[c1,c9],c9[c7,c11],c11[c9,c14],c14[c11,c16],c16[c14,c18],c18[c16,c1]})|F2:side(c18[c16,c1])}"],
+     "size": {"type": "full_round"}}]}},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F6"}, "result": {"status": "ok", "level": null}}},
+  {"comment": "A cylinder of the worked-out radius; the side face's name on the rounding."},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "some": {"surface": "cylinder", "radius": 11.469613091297893}}},
+  {"expect": {"body": "Body1", "has_face": "F2:side(c18[c16,c1])"}},
+  {"comment": "The volume: the profile (2608.88625 mm2) times 25, less the cut's triangle (39.62 mm2) times the side face's height 29.2334, less the two roundings' corners (r^2 (1 - pi / 4) at the end cap, r^2 (cot(theta / 2) - (pi - theta) / 2) at the cut face, theta = 131.134 degrees) times that height, integrated in the section."},
+  {"expect": {"body": "Body1", "volume": 63131.30371392524}}
+]

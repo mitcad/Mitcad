@@ -2939,6 +2939,91 @@ impl Kernel for MockKernel {
             .collect())
     }
 
+    /// With `copies_by_bounds` (Point Cloud Deviation, mitcad#2240):
+    /// whether each point lies strictly inside the bounds of a solid (a
+    /// sheet or mesh body is refused, as it encloses nothing).
+    fn points_inside(
+        &self,
+        shape: &MockShape,
+        points: &[[f64; 3]],
+    ) -> Result<Vec<bool>, KernelError> {
+        if !self.copies_by_bounds.get() {
+            return Err(KernelError::Unsupported("point classification"));
+        }
+        let b = shape.bounds.ok_or(KernelError::failed("no bounds"))?;
+        Ok(points
+            .iter()
+            .map(|p| (0..3).all(|i| p[i] > b.min[i] && p[i] < b.max[i]))
+            .collect())
+    }
+
+    /// With `copies_by_bounds` (mitcad#2240): each point's distance from
+    /// the surface of the bounds and the nearest point of it. Faces named
+    /// (mitcad#2265) are the bounds' sides they lie on: an end cap the top
+    /// or bottom, a box's face its side (`box_side`); the nearest point is
+    /// then on the nearest of those rectangles. A name the shape lacks, or
+    /// one on no side of the bounds, is an error.
+    fn boundary_nearest(
+        &self,
+        shape: &MockShape,
+        faces: &[FaceName],
+        points: &[[f64; 3]],
+    ) -> Result<Vec<(f64, [f64; 3])>, KernelError> {
+        if !self.copies_by_bounds.get() {
+            return Err(KernelError::Unsupported("closest points on faces"));
+        }
+        let b = shape.bounds.ok_or(KernelError::failed("no bounds"))?;
+        if !faces.is_empty() {
+            let mut sides = Vec::with_capacity(faces.len());
+            for face in faces {
+                if !shape.has_face(face) {
+                    return Err(KernelError::failed(format!("the body has no face {face}")));
+                }
+                let side = match plain_role(face) {
+                    "end" | "end_b" => Some((2, true)),
+                    "start" | "end_a" => Some((2, false)),
+                    role => box_side(role),
+                };
+                sides.push(side.ok_or_else(|| {
+                    KernelError::failed(format!("face {face} lies on no side of the bounds"))
+                })?);
+            }
+            return Ok(points
+                .iter()
+                .map(|p| {
+                    sides
+                        .iter()
+                        .map(|&(axis, high)| {
+                            let mut q: [f64; 3] =
+                                std::array::from_fn(|i| p[i].clamp(b.min[i], b.max[i]));
+                            q[axis] = if high { b.max[axis] } else { b.min[axis] };
+                            let d = (0..3).map(|i| (p[i] - q[i]).powi(2)).sum::<f64>().sqrt();
+                            (d, q)
+                        })
+                        .min_by(|a, c| a.0.total_cmp(&c.0))
+                        .expect("a face")
+                })
+                .collect());
+        }
+        Ok(points
+            .iter()
+            .map(|p| {
+                let inside = (0..3).all(|i| p[i] >= b.min[i] && p[i] <= b.max[i]);
+                let mut q: [f64; 3] = std::array::from_fn(|i| p[i].clamp(b.min[i], b.max[i]));
+                if inside {
+                    // Onto the nearest face of the box.
+                    let (axis, to) = (0..3)
+                        .flat_map(|i| [(i, b.min[i]), (i, b.max[i])])
+                        .min_by(|a, c| (p[a.0] - a.1).abs().total_cmp(&(p[c.0] - c.1).abs()))
+                        .expect("six faces");
+                    q[axis] = to;
+                }
+                let d = (0..3).map(|i| (p[i] - q[i]).powi(2)).sum::<f64>().sqrt();
+                (d, q)
+            })
+            .collect())
+    }
+
     /// With `box_faces` (mitcad#524): where the segment enters and leaves
     /// the bounds.
     fn segment_crossings(

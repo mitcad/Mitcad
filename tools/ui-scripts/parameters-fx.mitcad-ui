@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: MIT
+# Edit Parameters' Expression cells: their fx opens Edit Formula on every
+# row, never the function list (mitcad#2290), on parameters-new-row.json
+# (the user parameters used = 20 mm, spare = 5 mm and slide = 30 mm):
+#   1. Entering an existing row's Expression cell opens no list; its fx
+#      opens Edit Formula with the text typed so far; Cancel leaves the
+#      parameter as it was.
+#   2. The empty row: entering its Expression cell opens no list; its fx
+#      opens Edit Formula for the parameter not yet made with the text
+#      typed so far; OK makes the parameter with the window's formula.
+#   3. The bottom Edit Formula… while an existing row's Expression cell is
+#      edited: Edit Formula with the text typed in the cell.
+#   4. The bottom Edit Formula… on the empty row: Edit Formula for a new
+#      parameter; Cancel makes nothing.
+# Run by tools/ui-parameters-fx-test.sh (Linux),
+# tools/ui-windows-parameters-fx-test.ps1 (Windows) and
+# tools/ui-macos-parameters-fx-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+set-setting parameters/sort none
+mark
+command solid.parameters
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+wait-log '^Parameters new name at '
+wait-idle
+
+# 1. An existing row: no list on entering; fx is Edit Formula.
+mark
+click-parameter spare 2
+key F2
+wait-log '^Editing parameter spare expression$'
+wait-log '^Parameter fx spare expression at '
+expect-no-log '^Parameter browser opened for '
+expect-no-log '^Parameter suggestions for spare expression'
+key ctrl+a
+type '7'
+mark
+dialog-click-logged '^Parameter fx spare expression at '
+wait-log '^Parameter fx spare expression: Edit Formula with 7$'
+wait-log '^Formula editor opened for parameter spare with: 7$'
+focus-dialog '^Formula Editor$'
+button '^Cancel$'
+focus-dialog '^Parameters$'
+wait-log '^Formula editor for parameter spare canceled$'
+expect-no-log '^Parameter browser opened for '
+wait-idle
+expect-model-parameter spare 5
+
+# 2. The empty row: no list on entering; fx is Edit Formula for the new
+# parameter, whose OK makes it with the window's formula.
+mark
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
+type b1
+key Tab
+wait-log '^Editing new parameter expression$'
+wait-log '^Parameter fx new parameter expression at '
+expect-no-log '^Parameter browser opened for '
+expect-no-log '^Parameter suggestions for new parameter expression'
+type '8'
+mark
+dialog-click-logged '^Parameter fx new parameter expression at '
+wait-log '^Parameter fx new parameter expression: Edit Formula with 8$'
+wait-log '^Formula editor opened for new parameter b1 with: 8$'
+focus-dialog '^Formula Editor$'
+focus-widget formulaText
+key ctrl+a
+type '9'
+button '^OK$'
+focus-dialog '^Parameters$'
+wait-log '^New parameter b1 expression from Edit Formula: 9$'
+wait-log '^Created user parameter b1 = 9 mm [(]mm[)] in the new row$'
+expect-no-log '^Parameter browser opened for '
+expect-no-log '^Created user parameter b1 = 8'
+wait-idle
+expect-model-parameter b1 9
+
+# 3. The bottom Edit Formula… while a cell is edited: the text typed in it.
+# (The new empty row's Name, which has the keyboard, is left by the click.)
+mark
+click-parameter used 2
+key F2
+wait-log '^Editing parameter used expression$'
+key ctrl+a
+type '21'
+mark
+button '^Edit Formula'
+wait-log '^Formula editor opened for parameter used with: 21$'
+focus-dialog '^Formula Editor$'
+button '^Cancel$'
+focus-dialog '^Parameters$'
+wait-log '^Formula editor for parameter used canceled$'
+wait-idle
+expect-model-parameter used 20
+
+# 4. The bottom Edit Formula… on the empty row: Cancel makes nothing.
+mark
+dialog-click-logged '^Parameters new name at '
+wait-log '^Editing new parameter name$'
+mark
+button '^Edit Formula'
+wait-log '^Formula editor opened for new parameter [(]no name[)] with:'
+focus-dialog '^Formula Editor$'
+button '^Cancel$'
+focus-dialog '^Parameters$'
+wait-log '^Formula editor for new parameter [(]no name[)] canceled$'
+expect-no-log '^Created user parameter'
+expect-no-log '^Parameter browser opened for '
+wait-idle
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+expect-never '^Parameter browser opened for '
+expect-never 'TestDriver: FAIL'

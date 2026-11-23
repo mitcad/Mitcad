@@ -1074,8 +1074,8 @@ fn an_unknown_change_opens_with_a_warning_naming_it() {
 }
 
 /// The kinds and options of formats 51 to 57 without a MitCad counterpart
-/// are placeholders with their reasons, and the timeline goes on: a cell
-/// grid, a frame member's end cap, a patch of 3D sketch loops, a flange
+/// are placeholders with their reasons, and the timeline goes on: a
+/// patch of 3D sketch loops, a flange
 /// whose edge is split into stretches, a move whose copies take their
 /// sources' placements in another component (mitcad#1994). Notes anchored
 /// in the model are named in the report.
@@ -1085,8 +1085,6 @@ fn format_57_kinds_without_a_counterpart_are_placeholders() {
     let v = json!({"format": "solidcraft/57", "name": "K", "params": [], "features": [
         {"id": 1, "name": "Box1", "type": "box", "corner": [0, 0, 0], "length": "40", "width": "40", "height": "10",
          "body_names": ["B"]},
-        {"id": 2, "name": "Grid", "type": "cell_grid", "sketch": 9, "profiles": {"type": "all"},
-         "size": "5", "web": "1", "depth": "2", "targets": ["B"]},
         {"id": 3, "name": "Cap", "type": "frame_end_cap", "ends": [], "thickness": "3", "chamfer": "1"},
         {"id": 4, "name": "Patch3d", "type": "patch", "sketch": 9, "profiles_3d": [0]},
         {"id": 5, "name": "Flange", "type": "sheet_flange", "height": "10", "angle": "90 deg",
@@ -1105,16 +1103,15 @@ fn format_57_kinds_without_a_counterpart_are_placeholders() {
         &SolidcraftOptions::default(),
     )
     .unwrap();
-    for name in ["Grid", "Cap", "Patch3d", "Flange", "Copy"] {
+    for name in ["Patch3d", "Flange", "Copy"] {
         assert_eq!(outcome(&report, name), Outcome::Unmapped, "{name}");
     }
+    // An end cap of no member's end fails in words (mitcad#2243: end caps
+    // come in as `end_cap` features).
+    assert_eq!(outcome(&report, "Cap"), Outcome::Failed);
     assert_eq!(outcome(&report, "Box2"), Outcome::Parametric);
-    let grid = doc.features().find(|f| f.name == "Grid").unwrap();
-    assert!(
-        doc.import_note(grid.uid)
-            .unwrap()
-            .contains("no cell grid feature")
-    );
+    let cap = doc.features().find(|f| f.name == "Cap").unwrap();
+    assert!(doc.import_note(cap.uid).unwrap().contains("end cap"));
     assert!(
         report.notes.iter().any(|n| n.starts_with("a note (text")),
         "{:?}",
@@ -1339,6 +1336,32 @@ fn a_fillet_of_edge_radii_comes_in_as_a_set_per_edge() {
     );
 }
 
+/// Cell grids come in as MitCad's `cell_grid` (mitcad#2238): the field's
+/// profiles, the shape, size (its user parameter), web, edge cells, depth,
+/// direction and targets the file has.
+#[test]
+fn cell_grids_come_in() {
+    use mitcad_model::features::cell_grid::{CellClip, CellDirection, CellShape};
+    let (doc, report) = import("cell-grid.solidcraft.json", &SolidcraftOptions::default());
+    assert!(report.unmapped.is_empty(), "{:?}", report.unmapped);
+    assert_eq!(outcome(&report, "Vents"), Outcome::Parametric);
+    let entry = doc.features().find(|f| f.name == "Vents").unwrap();
+    let FeatureDef::CellGrid(grid) = &entry.def else {
+        panic!("Vents is not a cell grid: {:?}", entry.def)
+    };
+    assert_eq!(grid.shape, CellShape::Hexagon);
+    assert_eq!(grid.clip, CellClip::Whole);
+    assert_eq!(grid.direction, CellDirection::Positive);
+    assert!(!grid.through_all);
+    assert_eq!(grid.profiles.len(), 1);
+    assert_eq!(grid.targets.len(), 1);
+    let p = doc.parameters();
+    assert_eq!(p.value(grid.size), Some(8.0));
+    assert_eq!(p.value(grid.web), Some(2.0));
+    assert_eq!(grid.depth.and_then(|d| p.value(d)), Some(4.0));
+    assert!(p.get(grid.size).unwrap().expression().contains("cell"));
+}
+
 /// Cones and frustums (format 40) are MitCad's Cone (mitcad#2239), each on
 /// the plane across its axis through its base point: a full cone ending in
 /// an apex (no top face), a frustum along X sized by a parameter and
@@ -1373,11 +1396,12 @@ fn cones_come_in_as_cones() {
             p.value(def.height),
         )
     };
-    // The body's faces of the cone itself: the mock kernel's cut adds the
-    // countersink's faces to every body, which a real cut does not.
-    let faces = |body: &str, of: mitcad_model::FeatureUid| -> Vec<String> {
+    // A body's faces of its own cone: the countersink cuts every body of
+    // the component (the file gives it no targets), and the mock kernel
+    // adds the tool's faces to each body it cuts, near or not.
+    let faces = |body: &str, feature: mitcad_model::FeatureUid| -> Vec<String> {
         let view = doc.bodies().into_iter().find(|b| b.name == body).unwrap();
-        let own = format!("{of}:");
+        let own = format!("{feature}:");
         view.shape
             .faces
             .iter()
@@ -1415,4 +1439,158 @@ fn cones_come_in_as_cones() {
     assert_eq!(def.operation, mitcad_model::features::Operation::Cut);
     assert_eq!(values(&def), (Some(4.0), Some(1.0), Some(3.0)));
     assert_eq!(doc.bodies().len(), 3);
+}
+
+/// A conic comes in as MitCad's conic with its ends, shoulder and Rho
+/// (mitcad#2236), and its profile with the line extrudes.
+#[test]
+fn a_conic_comes_in_with_its_rho() {
+    let (doc, report) = import("conic.solidcraft.json", &SolidcraftOptions::default());
+    assert_eq!(outcome(&report, "Sketch1"), Outcome::Parametric);
+    assert_eq!(outcome(&report, "Extrude1"), Outcome::Parametric);
+    let s1 = report
+        .sketches
+        .iter()
+        .find(|s| s.name == "Sketch1")
+        .unwrap();
+    assert!(s1.dropped.is_empty(), "{:?}", s1.dropped);
+    let sketch = doc.features().find(|f| f.name == "Sketch1").unwrap();
+    let FeatureDef::Sketch(def) = &sketch.def else {
+        panic!("Sketch1 is not a sketch")
+    };
+    let at = |id| match def.entity(id).map(|e| &e.kind) {
+        Some(mitcad_model::sketch::EntityKind::Point { at }) => *at,
+        other => panic!("{id:?} is {other:?}"),
+    };
+    let conic = def
+        .entities
+        .iter()
+        .find_map(|e| match &e.kind {
+            mitcad_model::sketch::EntityKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => Some((*start, *end, *apex, *rho)),
+            _ => None,
+        })
+        .expect("a conic");
+    let (start, end, apex, rho) = conic;
+    assert!((rho - 0.7).abs() < 1e-12, "{rho}");
+    assert_eq!(at(start), [0.0, 0.0]);
+    assert_eq!(at(end), [20.0, 0.0]);
+    assert_eq!(at(apex), [10.0, 10.0]);
+    assert_eq!(doc.bodies().len(), 1);
+}
+
+/// Equation curves keep their formulas as the sketch's equation curves
+/// (mitcad#2237): explicit without `x`, parametric with it, closed on a
+/// periodic spline, their points fixed and placed by the formulas; one
+/// whose variable is a length keeps them too, its variable a length
+/// (mitcad#2264).
+#[test]
+fn equation_curves_keep_their_formulas() {
+    use mitcad_model::sketch::EntityKind;
+    use mitcad_model::sketch::equation::{EquationMode, VariableUnit};
+    let (doc, report) = import(
+        "equation-curves.solidcraft.json",
+        &SolidcraftOptions::default(),
+    );
+    let sketch = doc.features().find(|f| f.name == "Curves").unwrap();
+    let FeatureDef::Sketch(def) = &sketch.def else {
+        panic!("Curves is not a sketch: {:?}", sketch.def)
+    };
+    assert_eq!(def.equations.len(), 3, "{:?}", def.equations);
+    let (parabola, circle, lengthwise) = (&def.equations[0], &def.equations[1], &def.equations[2]);
+    // The import writes expressions in its own spacing (`x^2 / a`).
+    let bare = |text: &str| text.split_whitespace().collect::<String>();
+    assert_eq!(parabola.mode, EquationMode::Explicit);
+    assert_eq!(
+        (
+            bare(&parabola.y),
+            bare(&parabola.start),
+            bare(&parabola.end)
+        ),
+        ("x^2/a".to_owned(), "-10".to_owned(), "10".to_owned())
+    );
+    assert_eq!(circle.mode, EquationMode::Parametric);
+    assert_eq!(
+        (bare(&circle.x), bare(&circle.y), circle.tolerance),
+        ("30+rr*cos(t)".to_owned(), "rr*sin(t)".to_owned(), 0.02)
+    );
+    match &def.entity(circle.curve).unwrap().kind {
+        EntityKind::FittedSpline { points, closed } => {
+            assert!(*closed);
+            assert_eq!(points.len(), 4);
+            for p in points {
+                assert!(def.entity(*p).unwrap().fixed);
+            }
+        }
+        other => panic!("not a fit point spline: {other:?}"),
+    }
+    assert_eq!(parabola.variable_unit, VariableUnit::Plain);
+    assert_eq!(circle.variable_unit, VariableUnit::Plain);
+    // The curve whose variable is a length keeps the file's formulas, its
+    // variable a length.
+    assert_eq!(lengthwise.mode, EquationMode::Parametric);
+    assert_eq!(lengthwise.variable_unit, VariableUnit::Length);
+    assert_eq!(
+        (
+            bare(&lengthwise.x),
+            bare(&lengthwise.y),
+            bare(&lengthwise.start),
+            bare(&lengthwise.end),
+            lengthwise.tolerance
+        ),
+        (
+            "t".to_owned(),
+            "20mm+t/5".to_owned(),
+            "0mm".to_owned(),
+            "10mm".to_owned(),
+            0.01
+        )
+    );
+    let curves = report.sketches.iter().find(|s| s.name == "Curves").unwrap();
+    assert!(
+        !curves.dropped.iter().any(|d| d.contains("equation curve")),
+        "{:?}",
+        curves.dropped
+    );
+    assert!(
+        !curves.dropped.iter().any(|d| d.contains("periodic")),
+        "{:?}",
+        curves.dropped
+    );
+    // The sketch solves with the circle where its formulas put it.
+    let output = doc.sketch_output(sketch.uid).expect("the sketch evaluates");
+    let solved = &output.solved;
+    let (points, _) = match &def.entity(circle.curve).unwrap().kind {
+        EntityKind::FittedSpline { points, closed } => (points.clone(), *closed),
+        _ => unreachable!(),
+    };
+    for p in points {
+        let at = solved.points[&p];
+        assert!(((at[0] - 30.0).hypot(at[1]) - 10.0).abs() < 1e-9, "{at:?}");
+    }
+    // The length curve's points where the file's spline has them (within
+    // its tolerance), on its formulas, fixed: x = t, y = 20 mm + t / 5.
+    let points = match &def.entity(lengthwise.curve).unwrap().kind {
+        EntityKind::FittedSpline { points, closed } => {
+            assert!(!*closed);
+            points.clone()
+        }
+        other => panic!("not a fit point spline: {other:?}"),
+    };
+    let file = [[0.0, 20.0], [5.0, 21.0], [10.0, 22.0]];
+    assert_eq!(points.len(), file.len());
+    for (p, want) in points.iter().zip(file) {
+        assert!(def.entity(*p).unwrap().fixed);
+        let at = solved.points[p];
+        assert!(
+            (at[0] - want[0]).hypot(at[1] - want[1]) <= lengthwise.tolerance,
+            "{at:?} against {want:?}"
+        );
+        assert!((at[1] - (20.0 + at[0] / 5.0)).abs() < 1e-9, "{at:?}");
+    }
+    assert!(def.entity(lengthwise.curve).unwrap().construction);
 }

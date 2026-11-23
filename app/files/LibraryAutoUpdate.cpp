@@ -8,6 +8,7 @@
 
 #include "Libraries.hpp"
 #include "RemoteTask.hpp"
+#include "framework/ShutdownSteps.hpp"
 
 namespace mitcad {
 namespace {
@@ -51,7 +52,10 @@ LibraryAutoUpdate& LibraryAutoUpdate::instance() {
 
 LibraryAutoUpdate::LibraryAutoUpdate(QObject* parent) : QObject(parent) {
   if (QCoreApplication* app = QCoreApplication::instance()) {
-    connect(app, &QCoreApplication::aboutToQuit, this, [this] { cancel(); });
+    connect(app, &QCoreApplication::aboutToQuit, this, [this] {
+      const shutdown::Step step(QStringLiteral("library auto-update cancelled"));
+      cancel();
+    });
   }
 }
 

@@ -32,8 +32,8 @@ use crate::steps::SketchSteps;
 use crate::text::{self, TextOutline};
 use crate::topo::{FaceName, RegionKey};
 use crate::{
-    Constraint, ConstraintKind, ConstraintUid, Dimension, DimensionKind, Entity, EntityIndex,
-    EntityKind, Projection, Ref, SketchText, TextValue, ValueRange,
+    ConicRho, Constraint, ConstraintKind, ConstraintUid, Dimension, DimensionKind, Entity,
+    EntityIndex, EntityKind, Projection, Ref, SketchText, TextValue, ValueRange,
 };
 use mitcad_vec3::dot;
 
@@ -339,6 +339,13 @@ pub struct SketchDef<P = ParamId> {
     /// Instances of the design's sketch blocks (mitcad#2110, `block.rs`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub blocks: Vec<crate::block::BlockInstance>,
+    /// Conics whose Rho is a parameter (mitcad#2236, [`ConicRho`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub conic_rhos: Vec<ConicRho<P>>,
+    /// The formulas of its equation curves, each beside its fit point
+    /// spline (mitcad#2237, `equation.rs`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub equations: Vec<crate::equation::EquationCurve>,
 }
 
 impl<P> Default for SketchDef<P> {
@@ -358,6 +365,8 @@ impl<P> Default for SketchDef<P> {
             placement: None,
             steps: SketchSteps::default(),
             blocks: Vec::new(),
+            conic_rhos: Vec::new(),
+            equations: Vec::new(),
         }
     }
 }
@@ -403,6 +412,10 @@ struct SketchDefIn<P> {
     steps: SketchSteps,
     #[serde(default)]
     blocks: Vec<crate::block::BlockInstance>,
+    #[serde(default = "Vec::new")]
+    conic_rhos: Vec<ConicRho<P>>,
+    #[serde(default)]
+    equations: Vec<crate::equation::EquationCurve>,
 }
 
 impl<'de, P: Deserialize<'de>> Deserialize<'de> for SketchDef<P> {
@@ -424,6 +437,8 @@ impl<'de, P: Deserialize<'de>> Deserialize<'de> for SketchDef<P> {
             placement: def.placement.filter(|p| !p.is_empty()),
             steps: def.steps,
             blocks: def.blocks,
+            conic_rhos: def.conic_rhos,
+            equations: def.equations,
         };
         if !def.shapes.is_empty() {
             if !sketch.entities.is_empty() || !sketch.dimensions.is_empty() {
@@ -765,6 +780,12 @@ impl<P> SketchDef<P> {
             },
             steps: self.steps.clone(),
             blocks: self.blocks.clone(),
+            conic_rhos: self
+                .conic_rhos
+                .iter()
+                .map(|r| r.map_value(f))
+                .collect::<Result<_, _>>()?,
+            equations: self.equations.clone(),
         })
     }
 
@@ -859,6 +880,36 @@ impl SketchDef {
             }
         }
         Ok(def)
+    }
+
+    /// The parameter a conic's Rho follows (mitcad#2236), if it has one.
+    pub fn conic_rho(&self, curve: EntityUid) -> Option<ParamId> {
+        self.conic_rhos
+            .iter()
+            .find(|r| r.curve == curve)
+            .map(|r| r.value)
+    }
+
+    /// `entities` with the Rho of each conic that follows a parameter
+    /// (mitcad#2236) set from it, checked to lie between 0 and 1.
+    pub fn with_conic_rhos(
+        &self,
+        entities: &mut [Entity],
+        value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+        name: &dyn Fn(ParamId) -> String,
+    ) -> Result<(), String> {
+        for r in &self.conic_rhos {
+            let v = value(r.value)?;
+            crate::conic::check_rho(v).map_err(|e| format!("{}: {e}", name(r.value)))?;
+            if let Some(EntityKind::Conic { rho, .. }) = entities
+                .iter_mut()
+                .find(|e| e.id == r.curve)
+                .map(|e| &mut e.kind)
+            {
+                *rho = v;
+            }
+        }
+        Ok(())
     }
 
     /// The parameter a text follows (mitcad#664), if it follows one.
@@ -1079,34 +1130,61 @@ impl SketchDef {
         // are now (mitcad#641: a source moved farther than the distance
         // before the solve flipped them); in the geometry the orientation
         // comes from too, as they are there.
+        // A result's free end goes by the shift a drag stored for it
+        // (mitcad#2277); one a constraint or dimension names is theirs.
         let seeds = self.offsets.iter().any(|o| !o.derived);
+        let held = if seeds {
+            offset::held_points(&self.constraints, &self.dimensions)
+        } else {
+            BTreeSet::new()
+        };
         let seeded = seeds.then(|| {
             let mut entities = self.entities.clone();
-            offset::seed(&self.offsets, &mut entities, value);
+            offset::seed(&self.offsets, &mut entities, &held, value);
             entities
         });
         let entities = seeded.as_deref().unwrap_or(&self.entities);
+        // Conics take their Rho from their parameters (mitcad#2236).
+        let rhoed = if self.conic_rhos.is_empty() {
+            None
+        } else {
+            let mut list = entities.to_vec();
+            self.with_conic_rhos(&mut list, value, name)
+                .map_err(SolveError::new)?;
+            Some(list)
+        };
+        let entities = rhoed.as_deref().unwrap_or(entities);
         let seeded_oriented = oriented.filter(|_| seeds).map(|o| {
             let mut entities = o.to_vec();
-            offset::seed(&self.offsets, &mut entities, value);
+            offset::seed(&self.offsets, &mut entities, &held, value);
             entities
         });
         let oriented = seeded_oriented.as_deref().or(oriented);
+        // The derived offsets at their distances, for the points held on
+        // them (mitcad#2278); the distance is a known value of the solve.
+        let mut derived = Vec::new();
+        for o in self.offsets.iter().filter(|o| o.derived) {
+            derived.push(crate::offset_hold::DerivedOffset {
+                offset: o,
+                distance: value(o.distance).map_err(SolveError::new)?,
+            });
+        }
         let extra = Extra {
             bindings: &bindings,
             skip: &skip,
             oriented,
             left_out: &left_out,
             restating: &restating,
+            offsets: &derived,
         };
-        let run = |extra: &Extra<'_>| {
+        let run = |entities: &[Entity], extra: &Extra<'_>| {
             if goals.is_empty() {
                 solve_extra(entities, &self.constraints, &inputs, extra)
             } else {
                 drag_extra(entities, &self.constraints, &inputs, extra, goals)
             }
         };
-        let mut solved = match run(&extra) {
+        let mut solved = match run(entities, &extra) {
             Ok(solved) => solved,
             // A sketch that fails says why as it did without the corners
             // held (mitcad#890): their tangencies restate what the offsets'
@@ -1121,12 +1199,33 @@ impl SketchDef {
                     bindings: &bindings[..patterns],
                     skip: &skip,
                     oriented,
+                    offsets: &derived,
                     ..Extra::default()
                 };
-                return Err(run(&plain).err().unwrap_or(error));
+                return Err(run(entities, &plain).err().unwrap_or(error));
             }
             Err(error) => return Err(error),
         };
+        // A free end of an offset's result follows its source's end in this
+        // very solve (mitcad#2277): the seed placed it by the source as
+        // stored, and a source the solve moved (a parameter changed its
+        // span) left it behind, as nothing ties a free end to its source.
+        // Placed again from the solved source, by its shift, and solved
+        // once more from there when one lagged. Not in a drag, whose goals
+        // may be those ends: the next solve places them.
+        let followed = (seeds && goals.is_empty())
+            .then(|| {
+                let mut again = entities.to_vec();
+                solved.store(&mut again);
+                offset::place_free_ends(&self.offsets, &mut again, &held, value).then_some(again)
+            })
+            .flatten();
+        if let Some(again) = &followed
+            && let Ok(second) = run(again, &extra)
+        {
+            solved = second;
+        }
+        let entities = followed.as_deref().unwrap_or(entities);
         // What of the inactive constraints and dimensions the solution does
         // not meet (mitcad#721).
         if self.has_inactive() {
@@ -1144,6 +1243,7 @@ impl SketchDef {
                 .collect();
             let plain = Extra {
                 skip: &skip,
+                offsets: &derived,
                 ..Extra::default()
             };
             solved.status.unmet_inactive =
@@ -1373,6 +1473,7 @@ fn not_perpendicular(kind: &EntityKind) -> Option<&'static str> {
         EntityKind::FittedSpline { .. } => {
             "Perpendicular takes lines, circles and arcs, not a fitted spline"
         }
+        EntityKind::Conic { .. } => "Perpendicular takes lines, circles and arcs, not a conic",
     })
 }
 
@@ -1425,23 +1526,39 @@ impl<P> SketchDef<P> {
         self.constraints.iter().any(|c| !c.active) || self.dimensions.iter().any(|d| !d.active)
     }
 
-    /// Derived offset curves are computed, not solved: nothing may
-    /// constrain or pattern them.
+    /// Derived offset curves are computed, not solved: nothing may pattern
+    /// them, and of the constraints and dimensions only a Coincident of a
+    /// point of the sketch with one of their curves or points names them,
+    /// which holds the point on the exact offset of the source
+    /// (mitcad#2278, [`crate::offset_hold`]; that refuses a trimmed inner
+    /// corner).
     fn check_derived(&self, derived: &BTreeSet<EntityUid>) -> Result<(), String> {
         if derived.is_empty() {
             return Ok(());
         }
-        let refs = self
-            .constraints
-            .iter()
-            .map(|c| (c.id, c.kind.refs()))
-            .chain(self.dimensions.iter().map(|d| (d.id, d.kind.refs())));
-        for (id, refs) in refs {
-            if let Some(r) = refs.iter().find(|r| derived.contains(&r.uid())) {
-                return Err(format!(
-                    "{id}: {r} follows an offset of a spline or an ellipse and cannot be \
-                     constrained; constrain its source"
-                ));
+        let is = |u: EntityUid| derived.contains(&u);
+        for c in &self.constraints {
+            let refs = c.kind.refs();
+            let Some(r) = refs.iter().find(|r| is(r.uid())) else {
+                continue;
+            };
+            let held = match c.kind {
+                // A point of the sketch on a computed curve or at a
+                // computed point, either way round; not a computed point
+                // on a curve of the sketch.
+                ConstraintKind::Coincident { point, entity } => match entity {
+                    Ref::Curve(e) => is(e) && !is(point),
+                    Ref::Point(q) => is(q) != is(point),
+                },
+                _ => false,
+            };
+            if !held {
+                return Err(crate::offset_hold::refusal(&c.id, *r));
+            }
+        }
+        for d in &self.dimensions {
+            if let Some(r) = d.kind.refs().iter().find(|r| is(r.uid())) {
+                return Err(crate::offset_hold::refusal(&d.id, *r));
             }
         }
         for p in &self.patterns {
@@ -1530,6 +1647,26 @@ impl<P> SketchDef<P> {
                 return Err(format!("text_values: text t{} has two values", v.text.0));
             }
         }
+        // Conics' Rho parameters (mitcad#2236): one per conic.
+        let mut rhoed = BTreeSet::new();
+        for r in &self.conic_rhos {
+            match index.get(r.curve) {
+                Some(e) if matches!(e.kind, EntityKind::Conic { .. }) => {}
+                Some(e) => {
+                    return Err(format!(
+                        "conic_rhos: c{} is a {}, not a conic",
+                        r.curve.0,
+                        e.kind.type_name()
+                    ));
+                }
+                None => {
+                    return Err(format!("conic_rhos: curve c{} does not exist", r.curve.0));
+                }
+            }
+            if !rhoed.insert(r.curve) {
+                return Err(format!("conic_rhos: c{} has two values", r.curve.0));
+            }
+        }
         let point = |what: &str, id: EntityUid| -> Result<(), String> {
             match index.get(id) {
                 Some(e) if e.is_point() => Ok(()),
@@ -1593,6 +1730,17 @@ impl<P> SketchDef<P> {
                 }
                 EntityKind::FittedSpline { points, .. } if points.len() < 2 => {
                     return Err(format!("{what}: a spline needs two fit points"));
+                }
+                EntityKind::Conic {
+                    start,
+                    end,
+                    apex,
+                    rho,
+                } => {
+                    crate::conic::check_rho(*rho).map_err(|e| format!("{what}: {e}"))?;
+                    if start == end || start == apex || end == apex {
+                        return Err(format!("{what}: a conic needs three points"));
+                    }
                 }
                 EntityKind::FittedSpline {
                     points,
@@ -1803,6 +1951,20 @@ impl<P> SketchDef<P> {
         self.check_derived(&derived_entities(&self.offsets, &index))?;
         if let Some(frame) = &self.frame {
             frame.check()?;
+        }
+        // Equation curves (mitcad#2237): each a fit point spline, once.
+        let mut equation_curves = BTreeSet::new();
+        for q in &self.equations {
+            let what = format!("equation curve c{}", q.curve.0);
+            match self.entity(q.curve).map(|e| &e.kind) {
+                Some(EntityKind::FittedSpline { .. }) => {}
+                Some(_) => return Err(format!("{what}: not a fit point spline")),
+                None => return Err(format!("{what}: the curve does not exist")),
+            }
+            if !equation_curves.insert(q.curve) {
+                return Err(format!("{what}: its formulas are there more than once"));
+            }
+            q.check_fields().map_err(|e| format!("{what}: {e}"))?;
         }
         Ok(())
     }

@@ -91,6 +91,8 @@ pub mod joints {
     };
     // A planar face's longest straight edge (mitcad#2000).
     pub use crate::joints::face_edge_axis;
+    // Overrides relative to the plane or face (mitcad#2286).
+    pub use crate::joints::{absolute_override, relative_form, relative_override};
 }
 
 /// Links to other components' geometry.

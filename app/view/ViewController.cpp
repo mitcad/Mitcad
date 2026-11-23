@@ -1887,6 +1887,33 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     connect(dialog.get(), &QDialog::accepted, agentsResolve, applyAgentsResolve);
   }
   agentsColumn->addWidget(commentsBox);
+  // The print libraries for AI agents (mitcad#2224): whether an agent may
+  // read My library and the project's library, choose an item for the
+  // design and create, edit, delete or save items there (the MCP bridge
+  // refuses those calls otherwise). Saved when the dialog is accepted, at
+  // once in the Settings window.
+  QWidget* librariesBox = section(tr("Print libraries"));
+  auto* librariesForm = new QFormLayout(librariesBox);
+  auto* agentsLibraries = new QCheckBox(tr("Agents may use my &print libraries"));
+  agentsLibraries->setObjectName(QStringLiteral("agentsMayUsePrintLibraries"));
+  agentsLibraries->setChecked(mcp::agentsMayUsePrintLibraries());
+  agentsLibraries->setToolTip(
+      tr("Lets an AI agent read and change My library and the project's library of materials and profiles"));
+  control(librariesForm, agentsLibraries);
+  const auto applyAgentsLibraries = [agentsLibraries] {
+    const bool on = agentsLibraries->isChecked();
+    if (on == mcp::agentsMayUsePrintLibraries()) {
+      return;
+    }
+    mcp::saveAgentsMayUsePrintLibraries(on);
+    qDebug().noquote() << QStringLiteral("Preferences: agents may use print libraries %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(agentsLibraries, &QCheckBox::toggled, host, saving(applyAgentsLibraries));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, agentsLibraries, applyAgentsLibraries);
+  }
+  agentsColumn->addWidget(librariesBox);
   // The chat's API endpoints make the page taller than a 1366 x 768 screen
   // shows: it scrolls instead of growing the window.
   auto* agentsScroll = new QScrollArea;
@@ -2018,7 +2045,7 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   }
   groups.insert(QStringLiteral("suppliers"), suppliersBox);
   // Assembly (mitcad#1856): where Joint, As-Built Joint, Rigid Group and
-  // Assembly Constraint go when their picks lie under another component
+  // Constraint Set go when their picks lie under another component
   // than the active one: Ask (the question after the pick), the component
   // that holds the picks, or the active one. The question's Don't ask
   // again sets it; Ask asks again. Saved when the dialog is accepted, at
@@ -2923,6 +2950,42 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   // the layout and the background are chosen in one visit.
   QComboBox* browserBackground = nullptr;
   QSpinBox* browserRowsShare = nullptr;
+  // Where the Browser rows' Activate radio button and Show eye are
+  // (mitcad#2223): Classic (where they always were) or Right (a column at
+  // the row's right edge), in every layout. On the background's row when
+  // there is one, so that the page grows no higher; else on a row of their
+  // own.
+  const auto placeChoice = [](const char* name, BrowserControlPlace saved, const QString& tip) {
+    auto* choice = new QComboBox;
+    choice->setObjectName(QLatin1String(name));
+    choice->addItem(tr("Classic"), browserControlPlaceId(BrowserControlPlace::Classic));
+    choice->addItem(tr("Right"), browserControlPlaceId(BrowserControlPlace::Right));
+    choice->setCurrentIndex(std::max(0, choice->findData(browserControlPlaceId(saved))));
+    choice->setToolTip(tip);
+    return choice;
+  };
+  QComboBox* browserActivatePlaceChoice =
+      placeChoice("browserActivatePlace", browserActivatePlace(),
+                  tr("Classic: the radio button after the component's name; Right: in a column at the row's right "
+                     "edge"));
+  QComboBox* browserEyePlaceChoice =
+      placeChoice("browserEyePlace", browserEyePlace(),
+                  tr("Classic: the eye before the row's icon; Right: in a column at the row's right edge"));
+  auto* browserControls = new QWidget;
+  {
+    auto* controlsLayout = new QHBoxLayout(browserControls);
+    controlsLayout->setContentsMargins(0, 0, 0, 0);
+    auto* activateLabel = new QLabel(tr("Browser Activate button:"));
+    activateLabel->setBuddy(browserActivatePlaceChoice);
+    auto* eyeLabel = new QLabel(tr("Browser Show eye:"));
+    eyeLabel->setBuddy(browserEyePlaceChoice);
+    controlsLayout->addWidget(activateLabel);
+    controlsLayout->addWidget(browserActivatePlaceChoice);
+    controlsLayout->addSpacing(12);
+    controlsLayout->addWidget(eyeLabel);
+    controlsLayout->addWidget(browserEyePlaceChoice);
+    controlsLayout->addStretch(1);
+  }
   if (chromeStyle() == ChromeStyle::Floating || layoutChoosable()) {
     browserBackground = new QComboBox;
     browserBackground->setObjectName(QStringLiteral("browserBackground"));
@@ -2951,12 +3014,14 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     browserRowLayout->addSpacing(12);
     browserRowLayout->addWidget(browserRowsLabel);
     browserRowLayout->addWidget(browserRowsShare);
-    browserRowLayout->addStretch(1);
+    browserRowLayout->addSpacing(12);
+    browserRowLayout->addWidget(browserControls, 1); // mitcad#2223
     auto* browserBackgroundLabel = new QLabel(tr("&Browser background:"));
     browserBackgroundLabel->setBuddy(browserBackground);
     display->addRow(browserBackgroundLabel, browserRow);
     if (chromeStyle() != ChromeStyle::Floating) {
-      auto* note = new QLabel(tr("Applies in the Floating layout."));
+      // The controls' places beside it apply in every layout.
+      auto* note = new QLabel(tr("The background applies in the Floating layout."));
       note->setObjectName(QStringLiteral("browserBackgroundNote"));
       note->setEnabled(false); // the quiet colour of a hint
       display->addRow(QString(), note);
@@ -2971,6 +3036,8 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
         }
       });
     }
+  } else {
+    display->addRow(QString(), browserControls);
   }
   // Everything outside the active component as ghosts (mitcad#420): saved
   // and applied when the dialog is accepted, at once in the Settings window.
@@ -3438,6 +3505,25 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     };
     connect(browserRowsShare, &QSpinBox::valueChanged, host, changed);
   }
+  // The Browser rows' Activate radio button and Show eye (mitcad#2223), with
+  // the rest: saved when they changed, and every window's rows follow at
+  // once.
+  *commit = [rest = *commit, browserActivatePlaceChoice, browserEyePlaceChoice] {
+    rest();
+    const BrowserControlPlace activate = browserControlPlaceFromId(browserActivatePlaceChoice->currentData().toString());
+    const BrowserControlPlace eye = browserControlPlaceFromId(browserEyePlaceChoice->currentData().toString());
+    if (activate != browserActivatePlace()) {
+      qDebug().noquote()
+          << QStringLiteral("Preferences: browser activate button %1").arg(browserControlPlaceId(activate));
+      setBrowserActivatePlace(activate);
+    }
+    if (eye != browserEyePlace()) {
+      qDebug().noquote() << QStringLiteral("Preferences: browser show eye %1").arg(browserControlPlaceId(eye));
+      setBrowserEyePlace(eye);
+    }
+  };
+  connect(browserActivatePlaceChoice, &QComboBox::currentIndexChanged, host, changed);
+  connect(browserEyePlaceChoice, &QComboBox::currentIndexChanged, host, changed);
 
   // Restore Defaults (mitcad#1887, GitHub mitcad/Mitcad#357): beside OK in
   // the dialog, at the left of the Settings window's footer. Its menu puts

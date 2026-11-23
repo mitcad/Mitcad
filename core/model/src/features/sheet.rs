@@ -630,7 +630,23 @@ impl<P> SheetFaceDef<P> {
 
     pub(crate) fn settle(&mut self, old: Option<&Self>) {
         if let Some(old) = old {
+            // A reference the edit renames keeps its panel (mitcad#2285:
+            // Edit Standard Box gives the blank's region a new key when its
+            // outline has another number of lines): a slot given with the
+            // number of a settled slot and a profile of this definition
+            // takes that slot's place, so the panel's identity, its body
+            // and what names them stay. Other given slots are ignored: no
+            // slot is made up, and every settled slot stays.
+            let given: Vec<PanelSlot> = std::mem::take(&mut self.panel_slots)
+                .into_iter()
+                .filter(|s| self.profiles.contains(&s.profile))
+                .collect();
             self.panel_slots = old.panel_slots.clone();
+            for renamed in given {
+                if let Some(slot) = self.panel_slots.iter_mut().find(|s| s.slot == renamed.slot) {
+                    slot.profile = renamed.profile;
+                }
+            }
         }
         let mut missing: Vec<_> = self
             .profiles

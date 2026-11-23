@@ -113,6 +113,9 @@ std::shared_ptr<geometry::Shape> fillet(rust::Str feature, const geometry::Shape
       out.knots.assign(set.knots.begin(), set.knots.end());
       out.radii.assign(set.radii.begin(), set.radii.end());
       break;
+    case FilletKind::FullRound:
+      out.size = geometry::FilletSize::FullRound;
+      break;
     default:
       throw std::invalid_argument("unknown fillet size");
     }

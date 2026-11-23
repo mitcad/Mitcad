@@ -18,14 +18,18 @@
 //! across their lines. The edge frame works its end out from the lines at
 //! every evaluation, so that an end follows when the member it meets moves
 //! with its line, and each member still follows its own line. A member
-//! edited (its alignment, turn, row or offsets) gets its sections kept
-//! anew ([`ConditionsCrateOps::refresh_joints`]).
+//! edited with `build_edit` (its alignment, turn, offsets, row or option
+//! values) gets its sections kept anew in the edit's undo step
+//! ([`ConditionsCrateOps::refresh_joints`], mitcad#2234). A shared miter's
+//! angle and tilt follow both lines. A member removed with
+//! `build_remove` leaves the ends that met it square
+//! ([`ConditionsCrateOps::orphaned_joints`]).
 //!
 //! The joint refers to the other member's sketch line, not to the other
 //! member: so no member binds to one placed later, and the timeline's order
 //! of the members does not matter.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -36,7 +40,7 @@ use crate::lines::Line;
 use crate::place::{edit_part, refuse};
 use crate::prelude::*;
 use crate::{EndFrom, NEAR};
-use mitcad_model::features::derived_part::EndCut;
+use mitcad_model::features::derived_part::{EndCut, Tilt};
 use mitcad_model::features::edge_frame::{
     EdgeFrameDef, EdgeMeet, LineFrame, MeetSide, line_frame, meet_offset,
 };
@@ -154,6 +158,8 @@ pub struct JointNow {
     /// Why the condition cannot be kept and changed, in words; none when it
     /// can.
     pub problem: Option<String>,
+    /// The stored sections are out of date, in words.
+    pub warning: Option<String>,
 }
 
 /// A joint of the lines Along sketch lines picked, before anything is
@@ -332,6 +338,16 @@ pub(crate) struct EndWrite {
     pub cut: Option<EndCut<ValueInput>>,
 }
 
+/// What [`ConditionsCrateOps::write_joints`] writes into a member's derived
+/// part: its edge frame, each end's cut when written (none: square) and
+/// whether that cut takes the angle the edge frame measures (a shared
+/// miter, mitcad#2234).
+struct PartWrite {
+    frames: FeatureUid,
+    cuts: [Option<Option<EndCut<ValueInput>>>; 2],
+    linked: [bool; 2],
+}
+
 /// A member along a sketch line: its edge frame and its line in the BUILD
 /// host's coordinates.
 struct MemberLine {
@@ -453,11 +469,37 @@ fn side_meet(p: &Profile, pb: bool, q: &Profile) -> Option<f64> {
     (s >= -far_side / sin - NEAR && s <= near_side / sin + NEAR).then_some(s.abs())
 }
 
+/// A shared miter's cut of an end of `p` meeting an end of `q` in an L
+/// (mitcad#2234), from their axes alone: the angle from square (half the
+/// turn from `p`'s way out into `q`), the same for both ends, and each
+/// end's tilt, leaning towards the other member, as [`meet`]'s. Unlike
+/// [`meet`] it does not ask that the ends meet as placed: a joint kept
+/// with its lines is one even where a sharp miter's long points run past.
+/// None for axes in line.
+fn mitre_cut(p: &Profile, pb: bool, q: &Profile, qb: bool) -> Option<(f64, [Tilt; 2])> {
+    let (_, _, u) = p.end(pb);
+    let (_, _, v) = q.end(qb);
+    let local = |r: &Profile, w: V3| inverse(&r.world).apply_vector(w);
+    let tilts = [
+        Tilt::towards(local(p, scale(v, -1.0)))?,
+        Tilt::towards(local(q, scale(u, -1.0)))?,
+    ];
+    let into = scale(v, -1.0);
+    let sin = norm(cross(u, into));
+    if sin < 1e-6 {
+        return None;
+    }
+    Some((sin.atan2(dot(u, into)) / 2.0, tilts))
+}
+
 /// The document's BUILD methods of joint conditions, used inside the crate.
 pub(crate) trait ConditionsCrateOps<K: Kernel> {
     /// The joint an end of a profile is in now (an L first, else a T), of
     /// the profiles given.
     fn joint_now(&self, profiles: &[Profile], p: &Profile, pb: bool) -> Option<JointNow>;
+
+    /// Why the member a kept joint refers to can no longer be found.
+    fn missing_joint_member(&self, profiles: &[Profile], p: &Profile, end: bool) -> Option<String>;
 
     /// Writes the ends' conditions in one undo step named `label`.
     fn write_joints(&mut self, writes: &[EndWrite], label: &str) -> Result<(), ModelError>;
@@ -484,7 +526,17 @@ pub(crate) trait ConditionsCrateOps<K: Kernel> {
     /// The sections the joints keep of a member worked out again after it
     /// changed (its alignment, turn, row or offsets), in one undo step;
     /// nothing when no joint keeps them.
-    fn refresh_joints(&mut self, component: ComponentUid) -> Result<(), ModelError>;
+    fn refresh_joints(
+        &mut self,
+        component: ComponentUid,
+        preserve_working_features: bool,
+    ) -> Result<(), ModelError>;
+
+    /// The ends of the other members whose joints meet the line of a
+    /// member of `removed` that no member left goes along (mitcad#2234):
+    /// each written square (no joint, no cut), with what happened to it
+    /// in words. Worked out before they go.
+    fn orphaned_joints(&self, removed: &[ComponentUid]) -> Vec<(EndWrite, String)>;
 }
 
 /// The document's BUILD methods of joint conditions inside this module.
@@ -552,18 +604,59 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
                 .iter()
                 .filter(|q| q.info.component != p.info.component)
         };
-        // An L: the nearest end it meets in a corner.
-        let l = others()
-            .flat_map(|q| [false, true].map(|qb| (q, qb)))
-            .filter_map(|(q, qb)| meet(p, pb, q, qb).map(|(d, _)| (d, q, qb)))
-            .min_by(|a, b| a.0.total_cmp(&b.0));
-        let (kind, q, qb) = match l {
-            Some((_, q, qb)) => (JointKind::L, q, Some(qb)),
+        // A joint kept at the end (mitcad#2234): the member along the line
+        // it meets, an L when that member keeps a joint with this one's
+        // line at an end (the one nearer), else a T. So a joint whose lines
+        // moved stays the joint it is, also where the ends no longer meet
+        // as drawn (a sharp miter's long points).
+        let kept = self.kept(p.info.component, pb).and_then(|m| {
+            let mine = self.member_line(p.info.component).ok()?;
+            let (_, at, _) = p.end(pb);
+            others()
+                .filter(|q| {
+                    self.member_line(q.info.component).is_ok_and(|line| {
+                        line.def.edge == m.edge && line.def.occurrence == mine.def.occurrence
+                    })
+                })
+                .map(|q| {
+                    let back = [false, true]
+                        .into_iter()
+                        .filter(|qb| {
+                            self.kept(q.info.component, *qb)
+                                .is_some_and(|k| k.edge == mine.def.edge)
+                        })
+                        .min_by(|a, b| {
+                            let d = |qb: bool| norm(sub(q.end(qb).1, at));
+                            d(*a).total_cmp(&d(*b))
+                        });
+                    (q, back)
+                })
+                .min_by(|a, b| {
+                    let d = |(q, back): &(&Profile, Option<bool>)| match back {
+                        Some(qb) => norm(sub(q.end(*qb).1, at)),
+                        None => f64::INFINITY,
+                    };
+                    d(a).total_cmp(&d(b))
+                })
+        });
+        let (kind, q, qb) = match kept {
+            Some((q, Some(qb))) => (JointKind::L, q, Some(qb)),
+            Some((q, None)) => (JointKind::T, q, None),
             None => {
-                let (_, q) = others()
-                    .filter_map(|q| side_meet(p, pb, q).map(|d| (d, q)))
-                    .min_by(|a, b| a.0.total_cmp(&b.0))?;
-                (JointKind::T, q, None)
+                // An L: the nearest end it meets in a corner.
+                let l = others()
+                    .flat_map(|q| [false, true].map(|qb| (q, qb)))
+                    .filter_map(|(q, qb)| meet(p, pb, q, qb).map(|(d, _)| (d, q, qb)))
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                match l {
+                    Some((_, q, qb)) => (JointKind::L, q, Some(qb)),
+                    None => {
+                        let (_, q) = others()
+                            .filter_map(|q| side_meet(p, pb, q).map(|d| (d, q)))
+                            .min_by(|a, b| a.0.total_cmp(&b.0))?;
+                        (JointKind::T, q, None)
+                    }
+                }
             }
         };
         let (pc, qc) = (p.info.component, q.info.component);
@@ -603,13 +696,30 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
                     _ => (Condition::Square, None),
                 }
             }
-            JointKind::T => match own.map(|m| m.to) {
+            JointKind::T => match own.as_ref().map(|m| m.to) {
                 Some(MeetSide::NearSide) => (Condition::NearSide, None),
                 Some(MeetSide::FarSide) => (Condition::FarSide, None),
                 Some(MeetSide::Corner) => (Condition::Mitre, None),
                 None => (Condition::Square, None),
             },
         };
+        let warning = own.as_ref().and_then(|kept| {
+            let (mine, theirs) = (self.member_line(pc).ok()?, self.member_line(qc).ok()?);
+            let changed = |stored: [f64; 4], current: [f64; 4]| {
+                stored
+                    .into_iter()
+                    .zip(current)
+                    .any(|(a, b)| (a - b).abs() > 1e-6)
+            };
+            (changed(kept.own, section_of(self, p, &mine.host))
+                || changed(kept.section, section_of(self, q, &theirs.host)))
+            .then(|| {
+                format!(
+                    "the joint of {} and {} is stale: a section changed; set the joint again",
+                    p.info.name, q.info.name
+                )
+            })
+        });
         Some(JointNow {
             kind,
             other: qc,
@@ -617,6 +727,25 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
             condition,
             through,
             problem,
+            warning,
+        })
+    }
+
+    fn missing_joint_member(&self, profiles: &[Profile], p: &Profile, end: bool) -> Option<String> {
+        let kept = self.kept(p.info.component, end)?;
+        let own = self.member_line(p.info.component).ok()?;
+        let found = profiles.iter().any(|q| {
+            q.info.component != p.info.component
+                && self.member_line(q.info.component).is_ok_and(|line| {
+                    line.def.edge == kept.edge && line.def.occurrence == own.def.occurrence
+                })
+        });
+        (!found).then(|| {
+            format!(
+                "the joint of {} at end {} is stale: no profile remains along the line it meets",
+                p.info.name,
+                if end { "B" } else { "A" },
+            )
         })
     }
 
@@ -629,8 +758,11 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
                 .ok_or_else(|| refuse(format!("{c} is not a profile cut to length")))
         };
         let mut frames: BTreeMap<FeatureUid, (EdgeFrameDef, f64)> = BTreeMap::new();
-        let mut parts: BTreeMap<FeatureUid, [Option<Option<EndCut<ValueInput>>>; 2]> =
-            BTreeMap::new();
+        let mut parts: BTreeMap<FeatureUid, PartWrite> = BTreeMap::new();
+        // Each frame's ends written: whether the end is a shared miter
+        // whose cut angle the frame measures (mitcad#2234), and that cut's
+        // first angle.
+        let mut mitres: BTreeMap<FeatureUid, [Option<Option<f64>>; 2]> = BTreeMap::new();
         for w in writes {
             let mine = self.member_line(w.component).map_err(refuse)?;
             let p = find(w.component)?;
@@ -666,11 +798,29 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
                 .info
                 .part
                 .ok_or_else(|| refuse(format!("{} has no derived part", p.info.name)))?;
-            parts.entry(part).or_default()[usize::from(w.end_b)] = Some(w.cut.clone());
+            let end = usize::from(w.end_b);
+            // A shared miter's cut follows the lines: its angle is the edge
+            // frame's, measured at every recompute.
+            let mitre = match (&w.to, &w.cut) {
+                (Some((MeetSide::Corner, _)), Some(cut)) => Some(match cut.angle {
+                    ValueInput::Number(angle) => angle,
+                    _ => 0.0,
+                }),
+                _ => None,
+            };
+            mitres.entry(mine.frames).or_default()[end] = Some(mitre);
+            let entry = parts.entry(part).or_insert_with(|| PartWrite {
+                frames: mine.frames,
+                cuts: [None, None],
+                linked: [false; 2],
+            });
+            entry.cuts[end] = Some(w.cut.clone());
+            entry.linked[end] = mitre.is_some();
         }
         // Each member keeps a length: its ends worked out as the edge frame
         // will.
         let mut defs = Vec::new();
+        let mut drops: Vec<(FeatureUid, [bool; 2])> = Vec::new();
         for (uid, (def, length)) in frames {
             let mut resolver = self.resolver();
             let mut offsets = [0.0; 2];
@@ -709,6 +859,26 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
             if def.end.is_none() {
                 input.end = None;
             }
+            // A new shared miter's angle: its first value, measured from
+            // then on; one kept stays. An end no longer a shared miter lets
+            // its angle go once its part no longer takes it (below).
+            let written = mitres.get(&uid).copied().unwrap_or_default();
+            let mut drop = [false; 2];
+            for (end, slot) in [&mut input.start_angle, &mut input.end_angle]
+                .into_iter()
+                .enumerate()
+            {
+                match written[end] {
+                    Some(Some(angle)) if slot.is_none() => {
+                        *slot = Some(ValueInput::Number(angle));
+                    }
+                    Some(None) if slot.is_some() => drop[end] = true,
+                    _ => {}
+                }
+            }
+            if drop.iter().any(|d| *d) {
+                drops.push((uid, drop));
+            }
             defs.push((uid, FeatureDef::EdgeFrame(input)));
         }
         let label = label.to_owned();
@@ -716,15 +886,45 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
             for (uid, def) in &defs {
                 state.edit_feature(*uid, def)?;
             }
-            for (part, [a, b]) in parts {
+            for (part, write) in parts {
+                // The angles the edge frame measures, by name.
+                let names = match state.entry(write.frames).map(|e| &e.def) {
+                    Some(FeatureDef::EdgeFrame(f)) => [f.start_angle, f.end_angle]
+                        .map(|id| id.map(|id| state.parameters.name(id))),
+                    _ => [None, None],
+                };
                 edit_part(state, part, |def| {
-                    if let Some(a) = a {
-                        def.ends.a = a;
-                    }
-                    if let Some(b) = b {
-                        def.ends.b = b;
+                    for (end, slot) in [&mut def.ends.a, &mut def.ends.b].into_iter().enumerate() {
+                        let Some(cut) = write.cuts[end].clone() else {
+                            continue;
+                        };
+                        *slot = cut.map(|mut cut| {
+                            if write.linked[end]
+                                && let Some(name) = &names[end]
+                            {
+                                cut.angle = ValueInput::Name(name.clone());
+                            }
+                            cut
+                        });
                     }
                 })?;
+            }
+            for (uid, drop) in &drops {
+                let Some(entry) = state.entry(*uid) else {
+                    continue;
+                };
+                let FeatureDef::EdgeFrame(mut input) =
+                    crate::parts::as_input(&entry.def, &state.parameters)
+                else {
+                    continue;
+                };
+                if drop[0] {
+                    input.start_angle = None;
+                }
+                if drop[1] {
+                    input.end_angle = None;
+                }
+                state.edit_feature(*uid, &FeatureDef::EdgeFrame(input))?;
             }
             Ok((label, ()))
         })
@@ -881,14 +1081,16 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
         let writes = match (joint.kind, edit.condition) {
             (JointKind::L, Condition::Mitre) => {
                 let qb = joint.other_end_b.unwrap_or(false);
-                let (_, m) = meet(p, end_b, q, qb).ok_or_else(|| {
+                // From the axes (mitcad#2234): the L joint_now found, also a
+                // kept one whose sharp miter runs past the ends as drawn.
+                let (angle, tilts) = mitre_cut(p, end_b, q, qb).ok_or_else(|| {
                     refuse(format!(
                         "{} and {} do not meet in a corner",
                         p.info.name, q.info.name
                     ))
                 })?;
                 let cut = |tilt| EndCut {
-                    angle: ValueInput::Number(m.angle),
+                    angle: ValueInput::Number(angle),
                     tilt: Some(tilt),
                 };
                 vec![
@@ -896,13 +1098,13 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
                         component,
                         end_b,
                         to: Some((MeetSide::Corner, other)),
-                        cut: Some(cut(m.tilts[0])),
+                        cut: Some(cut(tilts[0])),
                     },
                     EndWrite {
                         component: other,
                         end_b: qb,
                         to: Some((MeetSide::Corner, component)),
-                        cut: Some(cut(m.tilts[1])),
+                        cut: Some(cut(tilts[1])),
                     },
                 ]
             }
@@ -1020,7 +1222,11 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
         Ok(changed)
     }
 
-    fn refresh_joints(&mut self, component: ComponentUid) -> Result<(), ModelError> {
+    fn refresh_joints(
+        &mut self,
+        component: ComponentUid,
+        preserve_working_features: bool,
+    ) -> Result<(), ModelError> {
         let Ok(mine) = self.member_line(component) else {
             return Ok(());
         };
@@ -1072,11 +1278,87 @@ impl<K: Kernel> ConditionsCrateOps<K> for Document<K> {
         if defs.is_empty() {
             return Ok(());
         }
-        self.apply(|state| {
-            for (uid, def) in &defs {
-                state.edit_feature(*uid, def)?;
+        let worked: BTreeSet<_> = if preserve_working_features {
+            self.features()
+                .filter(|entry| self.status(entry.uid).is_some_and(|status| status.is_ok()))
+                .map(|entry| entry.uid)
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        self.apply_checked(
+            |state| {
+                for (uid, def) in &defs {
+                    state.edit_feature(*uid, def)?;
+                }
+                Ok(("Joints kept anew".to_owned(), ()))
+            },
+            |state, result| {
+                for feature in &result.results {
+                    if worked.contains(&feature.uid)
+                        && let Some(error) = feature.status.failure()
+                    {
+                        let name = state.entry(feature.uid).map(|entry| entry.name.as_str());
+                        let name = name.map_or_else(|| feature.uid.to_string(), str::to_owned);
+                        return Err(refuse(format!("{name} would fail: {}", error.agent_text())));
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+
+    fn orphaned_joints(&self, removed: &[ComponentUid]) -> Vec<(EndWrite, String)> {
+        // The lines the members that go are along, with their names.
+        let going: Vec<(MemberLine, String)> = removed
+            .iter()
+            .filter_map(|c| {
+                let line = self.member_line(*c).ok()?;
+                let name = self.part_info(*c).map_or_else(|| c.to_string(), |i| i.name);
+                Some((line, name))
+            })
+            .collect();
+        if going.is_empty() {
+            return Vec::new();
+        }
+        let staying: Vec<(ComponentUid, MemberLine)> = self
+            .end_profiles()
+            .iter()
+            .map(|p| p.info.component)
+            .filter(|c| !removed.contains(c))
+            .filter_map(|c| Some((c, self.member_line(c).ok()?)))
+            .collect();
+        let mut out = Vec::new();
+        for (c, mine) in &staying {
+            for end_b in [false, true] {
+                let Some(m) = self.kept(*c, end_b) else {
+                    continue;
+                };
+                let same_line = |line: &MemberLine| {
+                    line.def.edge == m.edge && line.def.occurrence == mine.def.occurrence
+                };
+                // Another member still goes along the line: the joint stays.
+                if staying.iter().any(|(_, other)| same_line(other)) {
+                    continue;
+                }
+                let Some((_, gone)) = going.iter().find(|(line, _)| same_line(line)) else {
+                    continue;
+                };
+                let name = self.part_info(*c).map_or_else(|| c.to_string(), |i| i.name);
+                out.push((
+                    EndWrite {
+                        component: *c,
+                        end_b,
+                        to: None,
+                        cut: None,
+                    },
+                    format!(
+                        "{name}'s end {} is left square: {gone}, which it met, is removed.",
+                        if end_b { "B" } else { "A" }
+                    ),
+                ));
             }
-            Ok(("Joints kept anew".to_owned(), ()))
-        })
+        }
+        out
     }
 }

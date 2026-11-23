@@ -43,3 +43,6 @@ mod import_stopped_2032_tests;
 mod sketch_pattern_last_copy_reported_2058_tests;
 // 3MF files as mesh bodies, a part placed twice as a component (mitcad#2156).
 mod threemf_import_2156_tests;
+// The reporter's designs of GitHub mitcad/Mitcad#570: an offset arc's free
+// ends stay where they are dragged (mitcad#2277).
+mod sketch_offset_free_ends_reported_2277_tests;

@@ -604,8 +604,9 @@ fn turn_fields(
     Ok(())
 }
 
-/// A frame override's origin and axes (its shift is along the frame's own
-/// axes).
+/// A frame override's origin and axes (its shift, and its relative parts
+/// of mitcad#2286, are along the frame's own axes, which turn with the
+/// geometry).
 fn turn_override(o: &mut FrameOverride, turn: Turn) {
     for p in [&mut o.origin, &mut o.z_axis, &mut o.x_axis]
         .into_iter()
@@ -794,7 +795,23 @@ pub(crate) fn turn_analysis(def: &mut AnalysisDef, ctx: &Turned<'_>) -> bool {
             *pull = turned;
             changed
         }
+        // A cloud by its name, a body and its faces by their names
+        // (mitcad#2240): the cloud turns with its component.
+        AnalysisDef::PointCloudDeviation(_) => false,
     }
+}
+
+/// A point cloud's placement in its component (mitcad#2240): the points
+/// stay as they are, the placement turns with the component's coordinates,
+/// so the cloud stays where it was on the turned bodies.
+pub(crate) fn turn_point_cloud(cloud: &mut crate::document::PointCloud, ctx: &Turned<'_>) {
+    let component = match &cloud.occurrence {
+        Some(path) => ctx
+            .end(ComponentUid::ROOT, path)
+            .unwrap_or(ComponentUid::ROOT),
+        None => ComponentUid::ROOT,
+    };
+    cloud.placement = ctx.of(component).before(&cloud.placement);
 }
 
 /// An image reference's plane, in the component its occurrence ends in, as

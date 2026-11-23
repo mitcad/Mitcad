@@ -19,7 +19,8 @@
 //! frame on MitCad's plane; after an edit of the line the section keeps
 //! that turn from the plane's own x axis. Bodies are named as the file
 //! names them (`names` by line, else `body_name` or the profile's
-//! description, made unique). End caps stay placeholders.
+//! description, made unique). Their end caps are `end_cap` features
+//! (`end_caps.rs`, mitcad#2243).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -860,6 +861,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 ));
             } else {
                 made += 1;
+                // Its end caps find it by the line (mitcad#2243).
+                self.member_lines
+                    .insert((f.id, line.id.clone()), body.clone());
             }
         }
         if made == 0 {
@@ -1141,7 +1145,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 (
                     json!({"type": "sketch", "plane": plane.to_string(),
                         "entities": t.entities, "constraints": t.constraints,
-                        "dimensions": t.dimensions}),
+                        "dimensions": t.dimensions, "equations": t.equations}),
                     matches!(profiles, ProfileSel::All),
                 )
             }

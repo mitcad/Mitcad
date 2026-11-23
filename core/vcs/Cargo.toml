@@ -14,8 +14,11 @@ publish.workspace = true
 # the revision walk and the index are all P12 needs. The default features
 # are not allowed: one of them pulls in an MPL-2.0 crate (cargo deny).
 # The blocking HTTP client fetches libraries over https and http without
-# the git program (mitcad#1224): reqwest, its TLS chosen below.
-gix = { version = "=0.88.0", default-features = false, features = ["sha1", "index", "blocking-http-transport-reqwest"] }
+# the git program (mitcad#1224): reqwest, its TLS chosen below. `excludes`
+# reads the project's .gitignore files, so the Projects panel leaves ignored
+# files out of a project's other files (mitcad#2204; gix-ignore and
+# gix-worktree, MIT OR Apache-2.0).
+gix = { version = "=0.88.0", default-features = false, features = ["sha1", "index", "excludes", "blocking-http-transport-reqwest"] }
 # The TLS of gix's HTTP client: rustls with no crypto provider of its own
 # (reqwest's `rustls` feature brings aws-lc-rs, whose C library needs CMake
 # and NASM and carries the OpenSSL licence); remote/https.rs installs ring,

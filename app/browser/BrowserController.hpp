@@ -36,6 +36,7 @@ class AppearanceDialog;
 class BindingsCard;
 class ConfigurationBar;
 class ConfigurationsDialog;
+class FavoriteParametersCard;
 class FindDialog;
 class DocumentHost;
 class ParametersDialog;
@@ -105,6 +106,9 @@ public:
   // The Configuration bar (mitcad#807), the content of the Configuration
   // panel above the browser (mitcad#1020).
   ConfigurationBar* configurationBar() const { return m_configurationBar; }
+  // The Favorite Parameters card's content (mitcad#2203), the content of
+  // its left panel (MainWindowFavoriteParameters.cpp); it follows the model.
+  FavoriteParametersCard* favoriteParameters() const { return m_favoriteParameters; }
   // Appearance… of the context menus: the Appearance tool (mitcad#1059)
   // started with the targets (bodies, and faces: mitcad#53); none: the
   // Appearances window (Edit Appearances, mitcad#46), which only manages
@@ -358,6 +362,10 @@ private:
   void selectSet(const QString& name);
   void changeSetMembers(const QString& name, bool replace);
   void removeFromSet(const BrowserNode& member);
+  // Delete on member rows (mitcad#2219): their links leave their sets
+  // (setMemberRemovals), one undo step; their items stay. Logged per set
+  // "Removed Block, Sketch1 from selection set Favourites".
+  void removeSetMembers(const QVector<BrowserNode>& members);
   // The members of a row's menu: the selected rows a set takes when the
   // row is one of them, else the row's own.
   QJsonArray menuSetMembers(const BrowserNode& node) const;
@@ -529,6 +537,7 @@ private:
   QPointer<ParametersDialog> m_parameters;
   QPointer<ConfigurationsDialog> m_configurations; // mitcad#807
   ConfigurationBar* m_configurationBar = nullptr;   // mitcad#807
+  FavoriteParametersCard* m_favoriteParameters = nullptr; // mitcad#2203
   QPointer<AppearanceDialog> m_appearances;
   QPointer<PropertySetsDialog> m_propertySets;
   QPointer<MaterialsDialog> m_materials;     // mitcad#655

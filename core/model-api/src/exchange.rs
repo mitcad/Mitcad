@@ -858,7 +858,24 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             print_colors: command.print_colors,
             print_materials,
         };
-        let exported = self.export_bodies(&command.path, &bodies, &options, &colors, &placement)?;
+        let mut exported =
+            self.export_bodies(&command.path, &bodies, &options, &colors, &placement)?;
+        // Decals (mitcad#2244): the formats that carry appearances do not
+        // write them yet, and the report says so.
+        if matches!(format, ExportFormat::ThreeMf | ExportFormat::Usdz) {
+            let left_out = super::decals::left_out(self, &exported.bodies);
+            if !left_out.is_empty() {
+                exported.warnings.push(format!(
+                    "decals are not written to {} files: {} left out",
+                    if format == ExportFormat::Usdz {
+                        "USDZ"
+                    } else {
+                        "3MF"
+                    },
+                    left_out.join(", ")
+                ));
+            }
+        }
         let mut result =
             json!({"path": command.path, "format": format.as_str(), "bodies": exported.bodies});
         if format == ExportFormat::ThreeMf {

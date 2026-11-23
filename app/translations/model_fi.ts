@@ -724,6 +724,10 @@
         <translation>&quot;feature&quot; on piirteen uid, kuten &quot;F5&quot;</translation>
     </message>
     <message>
+        <source>&quot;files&quot; are paths (text)</source>
+        <translation>&quot;files&quot; ovat polkuja (tekstiä)</translation>
+    </message>
+    <message>
         <source>&quot;format&quot; must be a string</source>
         <translation>&quot;format&quot; on oltava merkkijono</translation>
     </message>
@@ -1016,6 +1020,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 %2 / %3 on arvoltaan %4, jota %5 ei sallisi</translation>
     </message>
     <message>
+        <source>%1 %2 and %3 more files</source>
+        <translation>%1 %2 ja %3 muuta tiedostoa</translation>
+    </message>
+    <message>
         <source>%1 %2 at this distance, and the offsets of %3 and %4 on either side do not meet</source>
         <translation>%1 %2 tällä etäisyydellä, eivätkä kohteiden %3 ja %4 siirtymät kummallakin puolella kohtaa</translation>
     </message>
@@ -1078,6 +1086,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 %2 is used more than once</source>
         <translation>%1 %2 on käytetty useammin kuin kerran</translation>
+    </message>
+    <message>
+        <source>%1 %2 larger than 100 MiB: hosting services such as GitHub refuse files that large, and the history keeps every copy of a file for good; record %3 anyway only if this project stays on this computer or on a server that takes them (allow_large)</source>
+        <translation>%1 %2 yli 100 MiB: GitHubin kaltaiset palvelut eivät ota vastaan niin suuria tiedostoja, ja historia säilyttää tiedoston jokaisen kopion pysyvästi; kirjaa %3 silti vain, jos tämä projekti pysyy tällä tietokoneella tai palvelimella, joka ottaa ne vastaan (allow_large)</translation>
     </message>
     <message>
         <source>%1 %2 leads to %3, not to %4</source>
@@ -1878,6 +1890,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>Käyrä %2 (%1) jätettiin pois luonnoksestaan</translation>
     </message>
     <message>
+        <source>%1 curve has no formula %2: it has %3</source>
+        <translation>%1 käyrä ei käytä kaavaa %2: sen kaavat ovat %3</translation>
+    </message>
+    <message>
+        <source>%1 curve needs the formula %2</source>
+        <translation>%1 käyrä tarvitsee kaavan %2</translation>
+    </message>
+    <message>
         <source>%1 curves collapsed (a line of no length or a circle or arc of no radius) and make no region</source>
         <translation>%1 käyrää surkastui (pituudeton viiva tai säteetön ympyrä tai kaari) eikä muodosta aluetta</translation>
     </message>
@@ -2030,6 +2050,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 ei nyt tarjoa tätä avainta (%2): katso sen avaimet uudelleen ja vertaa niiden sormenjälkiä</translation>
     </message>
     <message>
+        <source>%1 does not read: %2</source>
+        <translation>lauseketta %1 ei voi tulkita: %2</translation>
+    </message>
+    <message>
         <source>%1 does not stand on the slot with an end: it cannot tilt</source>
         <translation>%1 ei lepää uralla päänsä varassa: se ei voi kallistua</translation>
     </message>
@@ -2168,6 +2192,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 gives %2 where FreeCAD has %3</source>
         <translation>%1 antaa arvon %2, FreeCADissa %3</translation>
+    </message>
+    <message>
+        <source>%1 gives a value with units (%2): a parametric curve&apos;s t is a plain number</source>
+        <translation>lauseke %1 antaa yksiköllisen arvon (%2): parametrisen käyrän t on pelkkä luku</translation>
     </message>
     <message>
         <source>%1 gives no curve</source>
@@ -2748,6 +2776,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 has no slot frames to place on</source>
         <translation>%1: ei urakehyksiä sijoittamiseen</translation>
+    </message>
+    <message>
+        <source>%1 has no solids, surfaces, meshes or point clouds to import%2</source>
+        <translation>%1: ei tuotavia solideja, pintoja, verkkoja eikä pistepilviä%2</translation>
     </message>
     <message>
         <source>%1 has no source at the distance</source>
@@ -3930,6 +3962,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 ei ole äärellinen arvo</translation>
     </message>
     <message>
+        <source>%1 is not a folder of the project</source>
+        <translation>%1 ei ole projektin kansio</translation>
+    </message>
+    <message>
+        <source>%1 is not a folder style</source>
+        <translation>%1 ei ole taittokotelon tyyli</translation>
+    </message>
+    <message>
         <source>%1 is not a frame of %2</source>
         <translation>%1 ei ole kohteen %2 kehys</translation>
     </message>
@@ -4132,6 +4172,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 is not a sphere or a torus (%2)</source>
         <translation>%1 ei ole pallo eikä torus (%2)</translation>
+    </message>
+    <message>
+        <source>%1 is not a spline through fit points</source>
+        <translation>%1 ei ole sovituspisteiden kautta kulkeva splini</translation>
     </message>
     <message>
         <source>%1 is not a standard bearing size (60, 62, 63, 68, 69 and 160 series, MR, R and F sizes)</source>
@@ -4458,6 +4502,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 ei ole kohteen %2 sijoitus</translation>
     </message>
     <message>
+        <source>%1 is not there or cannot be read</source>
+        <translation>%1 puuttuu, tai sitä ei voi lukea</translation>
+    </message>
+    <message>
         <source>%1 is not translated yet</source>
         <translation>%1 ei ole vielä muunnettu</translation>
     </message>
@@ -4688,6 +4736,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 is there already: the new design needs another name</source>
         <translation>%1 on jo olemassa: uusi malli tarvitsee toisen nimen</translation>
+    </message>
+    <message>
+        <source>%1 is there already; nothing was replaced</source>
+        <translation>%1 on jo olemassa; mitään ei korvattu</translation>
     </message>
     <message>
         <source>%1 is there twice</source>
@@ -5394,12 +5446,16 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 alustaa (joilla objektit ovat)</translation>
     </message>
     <message>
-        <source>%1 point clouds (scanned reference points): not mapped</source>
-        <translation>%1 pistepilveä (skannatut viitepisteet): ei vastinetta</translation>
+        <source>%1 point clouds&apos; colouring, filters and segments: not mapped (MitCad keeps the points and their colours)</source>
+        <translation>%1 pistepilven väritys, suodattimet ja segmentit: ei vastinetta (MitCad säilyttää pisteet ja niiden värit)</translation>
     </message>
     <message>
         <source>%1 points classified for %2 asked</source>
         <translation>%1 pistettä luokiteltu, pyydettiin %2</translation>
+    </message>
+    <message>
+        <source>%1 points that are not three finite numbers were left out</source>
+        <translation>%1 pistettä, jotka eivät ole kolme äärellistä lukua, jätettiin pois</translation>
     </message>
     <message>
         <source>%1 position floats</source>
@@ -6454,10 +6510,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: %2 seuraa siirtymää, eikä siitä voi tehdä kuviota</translation>
     </message>
     <message>
-        <source>%1: %2 follows an offset of a spline or an ellipse and cannot be constrained; constrain its source</source>
-        <translation>%1: %2 seuraa splinin tai ellipsin siirtymää, eikä sitä voi rajoittaa; rajoita sen lähdettä</translation>
-    </message>
-    <message>
         <source>%1: %2 gives %3, the file %4</source>
         <translation>%1: %2 antaa %3, tiedosto %4</translation>
     </message>
@@ -6926,6 +6978,18 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: käyrä häviää, mutta sitä ei ole siirretty</translation>
     </message>
     <message>
+        <source>%1: a decal goes on a face of a body</source>
+        <translation>%1: tarra sijoitetaan kappaleen tahkolle</translation>
+    </message>
+    <message>
+        <source>%1: a design is not added as a file; open it and save it into the project, so its geometry comes along</source>
+        <translation>%1: mallia ei lisätä tiedostona; avaa se ja tallenna se projektiin, jotta sen geometria tulee mukaan</translation>
+    </message>
+    <message>
+        <source>%1: a design&apos;s changes are recorded when it is saved</source>
+        <translation>%1: mallin muutokset kirjataan, kun se tallennetaan</translation>
+    </message>
+    <message>
         <source>%1: a design&apos;s name ends with .mitcad</source>
         <translation>%1: mallin nimen pääte on .mitcad</translation>
     </message>
@@ -6976,6 +7040,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1: a linked curve known only by its points (projected onto a face)</source>
         <translation>%1: linkitetty käyrä, joka tunnetaan vain pisteistään (projisoitu tahkolle)</translation>
+    </message>
+    <message>
+        <source>%1: a name every system can hold is needed</source>
+        <translation>%1: tarvitaan nimi, joka kelpaa kaikissa järjestelmissä</translation>
     </message>
     <message>
         <source>%1: a note needs a text</source>
@@ -7786,6 +7854,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: sen muoto ei ole %2</translation>
     </message>
     <message>
+        <source>%1: its formulas are there more than once</source>
+        <translation>%1: sen kaavat ovat mukana useammin kuin kerran</translation>
+    </message>
+    <message>
         <source>%1: its geometry on %2, %3</source>
         <translation>%1: sen geometria kohteessa %2, %3</translation>
     </message>
@@ -8058,6 +8130,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: ei äärellinen arvo</translation>
     </message>
     <message>
+        <source>%1: not a fit point spline</source>
+        <translation>%1: ei sovituspistesplini</translation>
+    </message>
+    <message>
         <source>%1: not a part of a placement</source>
         <translation>%1: ei sijoituksen osa</translation>
     </message>
@@ -8098,6 +8174,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: ei luettu</translation>
     </message>
     <message>
+        <source>%1: not whole x, y, z triples</source>
+        <translation>%1: ei kokonaisia x, y, z -kolmikoita</translation>
+    </message>
+    <message>
         <source>%1: nothing placed to ground</source>
         <translation>%1: ei mitään paikalleen kiinnitettävää</translation>
     </message>
@@ -8126,6 +8206,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: vain peruskuvannolla on kohde</translation>
     </message>
     <message>
+        <source>%1: only a design&apos;s name ends with .mitcad</source>
+        <translation>%1: vain mallin nimen pääte on .mitcad</translation>
+    </message>
+    <message>
         <source>%1: only a plane can be offset, not %2</source>
         <translation>%1: vain tasoa voi siirtää, ei kohdetta %2</translation>
     </message>
@@ -8138,12 +8222,16 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: vain käyrää pitkin olevalla välityksellä on suunta (c%2)</translation>
     </message>
     <message>
-        <source>%1: only designs and folders are deleted here</source>
-        <translation>%1: täällä poistetaan vain malleja ja kansioita</translation>
+        <source>%1: only designs, other files and folders are deleted here</source>
+        <translation>%1: tässä poistetaan vain malleja, muita tiedostoja ja kansioita</translation>
     </message>
     <message>
-        <source>%1: only designs and folders are moved here</source>
-        <translation>%1: täällä siirretään vain malleja ja kansioita</translation>
+        <source>%1: only designs, other files and folders are moved here</source>
+        <translation>%1: tässä siirretään vain malleja, muita tiedostoja ja kansioita</translation>
+    </message>
+    <message>
+        <source>%1: only files are added, not folders</source>
+        <translation>%1: vain tiedostoja lisätään, ei kansioita</translation>
     </message>
     <message>
         <source>%1: only quantities and numbers have a unit, not %2</source>
@@ -8324,6 +8412,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1: the colour is the material&apos;s own; a filament whose colours print differently is a material per colour</source>
         <translation>%1: väri on materiaalin oma; filamentti, jonka värit tulostuvat eri tavoin, on oma materiaalinsa kutakin väriä kohden</translation>
+    </message>
+    <message>
+        <source>%1: the curve does not exist</source>
+        <translation>%1: käyrää ei ole olemassa</translation>
     </message>
     <message>
         <source>%1: the default %2 is not one of its values</source>
@@ -8576,6 +8668,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1: the profile has no slot frames: nothing can be placed on its sides</source>
         <translation>%1: profiililla ei ole urakehyksiä: sen sivuille ei voi sijoittaa mitään</translation>
+    </message>
+    <message>
+        <source>%1: the project&apos;s .gitignore leaves this file out of its versions</source>
+        <translation>%1: projektin .gitignore jättää tämän tiedoston pois versioista</translation>
+    </message>
+    <message>
+        <source>%1: the project&apos;s .gitignore leaves this name out of its versions</source>
+        <translation>%1: projektin .gitignore jättää tämän nimen pois versioista</translation>
     </message>
     <message>
         <source>%1: the radius must be positive</source>
@@ -9082,6 +9182,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>, lukinnut %1</translation>
     </message>
     <message>
+        <source>, not recorded</source>
+        <translation>, ei kirjattu</translation>
+    </message>
+    <message>
         <source>, reached the stored design</source>
         <translation>, saavutti tallennetun mallin</translation>
     </message>
@@ -9276,10 +9380,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>A curve is a %1: Sketch Fillet rounds corners of lines</source>
         <translation>Käyrä on tyyppiä %1: Sketch Fillet pyöristää viivojen kulmia</translation>
-    </message>
-    <message>
-        <source>A curve is a %1: Sketch Fillet rounds corners of lines and circular arcs</source>
-        <translation>Käyrä on tyyppiä %1: Sketch Fillet pyöristää viivojen ja ympyränkaarten kulmia</translation>
     </message>
     <message>
         <source>A curve is a %1: points are inserted into splines only</source>
@@ -12778,10 +12878,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>MitCadissa ei ole Korjaa osa -piirrettä (tahkot rakennetaan uudelleen, vapaat särmät ommellaan, reiät paikataan)</translation>
     </message>
     <message>
-        <source>MitCad has no frame member end cap (a plate closing a frame member&apos;s end)</source>
-        <translation>MitCadissa ei ole runko-osan päätykantta (levy, joka sulkee runko-osan pään)</translation>
-    </message>
-    <message>
         <source>MitCad has no path flange (edge flanges along a chain of sketch lines, a bend at each corner)</source>
         <translation>MitCadissa ei ole polkulaippaa (reunalaipat luonnosviivojen ketjua pitkin, taivutus jokaisessa kulmassa)</translation>
     </message>
@@ -15526,6 +15622,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Lisää lohko %1</translation>
     </message>
     <message>
+        <source>%1 End Cap</source>
+        <translation>%1 päätykansi</translation>
+    </message>
+    <message>
         <source>%1 and %2 do not meet in a corner</source>
         <translation>%1 ja %2 eivät kohtaa nurkassa</translation>
     </message>
@@ -15540,6 +15640,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 bodies of %2 are not for print services and are left out: %3. The other %4 may be sent to a print service.</source>
         <translation>Kohteen %2 kappaleista %1 ei ole tulostuspalveluille, ja ne jätetään pois: %3. Muut %4 voi lähettää tulostuspalveluun.</translation>
+    </message>
+    <message>
+        <source>%1 cannot follow %2 there: the joints do not hold</source>
+        <translation>%1 ei voi seurata kohdetta %2 sinne: liitokset eivät pidä</translation>
+    </message>
+    <message>
+        <source>%1 cells%2, open area %3 mm² (%4% of the field)</source>
+        <translation>%1 solua%2, avointa pinta-alaa %3 mm² (%4 % kentästä)</translation>
     </message>
     <message>
         <source>%1 from the library %2: not for print services</source>
@@ -15566,6 +15674,22 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Kohteella %1 ei ole uraa sillä kyljellä</translation>
     </message>
     <message>
+        <source>%1 is %2 mm long: an inward end cap of %3 mm leaves nothing of it</source>
+        <translation>%1 on %2 mm pitkä: %3 mm:n sisäänpäin oleva päätykansi ei jätä siitä mitään</translation>
+    </message>
+    <message>
+        <source>%1 is cut back at an end for its end cap: make the cap outward or remove it first</source>
+        <translation>Kohdetta %1 on lyhennetty päästään päätykantta varten: tee kannesta ensin ulospäin oleva tai poista se</translation>
+    </message>
+    <message>
+        <source>%1 is held at its driven position by %2 on %3&apos;s own geometry</source>
+        <translation>%2 pitää kohteen %1 sen ohjatussa asemassa kohteen %3 omalla geometrialla</translation>
+    </message>
+    <message>
+        <source>%1 is held at its driven position by %2 on %3, which cannot move</source>
+        <translation>%2 pitää kohteen %1 sen ohjatussa asemassa kohteella %3, joka ei voi liikkua</translation>
+    </message>
+    <message>
         <source>%1 is neither a plane nor a line</source>
         <translation>%1 ei ole taso eikä viiva</translation>
     </message>
@@ -15576,6 +15700,22 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 is no longer on a side</source>
         <translation>%1 ei ole enää kyljellä</translation>
+    </message>
+    <message>
+        <source>%1 is no part of the Build tab</source>
+        <translation>%1 ei ole Rakenna-välilehden osa</translation>
+    </message>
+    <message>
+        <source>%1 is no profile cut to length: an end cap closes a profile&apos;s or a tube&apos;s end</source>
+        <translation>%1 ei ole mittaan katkaistu profiili: päätykansi sulkee profiilin tai putken pään</translation>
+    </message>
+    <message>
+        <source>%1 is no profile placed by the Build tab</source>
+        <translation>%1 ei ole Rakenna-välilehden sijoittama profiili</translation>
+    </message>
+    <message>
+        <source>%1 is no profile placed by the Build tab: an end cap closes a profile&apos;s end</source>
+        <translation>%1 ei ole Rakenna-välilehden sijoittama profiili: päätykansi sulkee profiilin pään</translation>
     </message>
     <message>
         <source>%1 is not a parameter</source>
@@ -15598,8 +15738,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1 ei ole käyttäjäparametri: vain käyttäjäparametrit voivat kuulua ryhmiin</translation>
     </message>
     <message>
+        <source>%1 is not cut to length: its ends cannot be cut back</source>
+        <translation>%1 ei ole katkaistu mittaan: sen päitä ei voi lyhentää</translation>
+    </message>
+    <message>
         <source>%1 is not cut to length: only a profile lies along another in parallel</source>
         <translation>%1 ei ole mittaan katkaistu: vain profiili voi olla rinnakkain toisen suuntainen</translation>
+    </message>
+    <message>
+        <source>%1 is not in %2, where the Build tab places components</source>
+        <translation>%1 ei ole komponentissa %2, johon Rakenna-välilehti sijoittaa komponentit</translation>
+    </message>
+    <message>
+        <source>%1 is not in the design</source>
+        <translation>%1 ei ole mallissa</translation>
     </message>
     <message>
         <source>%1 is not in the joint: a butt runs %2 or %3 through</source>
@@ -15628,6 +15780,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 is part of %2, which is linked from %3; it changes only with that file</source>
         <translation>%1 on osa kohdetta %2, joka on linkitetty tiedostosta %3; se muuttuu vain sen tiedoston mukana</translation>
+    </message>
+    <message>
+        <source>%1 is placed on end %2 of %3: an end cap needs a free end</source>
+        <translation>%1 on sijoitettu kohteen %3 päähän %2: päätykansi tarvitsee vapaan pään</translation>
     </message>
     <message>
         <source>%1 keeps the components of its design, so it is not shown by its envelope</source>
@@ -15662,6 +15818,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Kohteelle %1 ei jäisi pituutta liitoksissaan: jätä jokin pää suoraksi</translation>
     </message>
     <message>
+        <source>%1: a Flat Pattern is shown by a base view</source>
+        <translation>%1: levitystä näyttää peruskuvanto</translation>
+    </message>
+    <message>
+        <source>%1: a Flat Pattern view has no projected or section views</source>
+        <translation>%1: levityskuvannolla ei ole projektio- eikä leikkauskuvantoja</translation>
+    </message>
+    <message>
         <source>%1: its corner is left as it is</source>
         <translation>%1: sen nurkka jätetään ennalleen</translation>
     </message>
@@ -15672,6 +15836,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1: its own value of %2 is dropped, as %3 no longer has the joint</source>
         <translation>%1: sen oma arvo kohteelle %2 hylätään, koska kohteella %3 ei ole enää liitosta</translation>
+    </message>
+    <message>
+        <source>%1: its pieces: %2</source>
+        <translation>%1: sen osat: %2</translation>
     </message>
     <message>
         <source>%1: its validity was not checked (the kernel cannot check it)</source>
@@ -15702,8 +15870,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Käyrä on tyyppiä %1, ei viiva eikä kaari</translation>
     </message>
     <message>
+        <source>A curve is a %1: Sketch Fillet rounds corners of lines, circular arcs and conics</source>
+        <translation>Käyrä on tyyppiä %1. Luonnoksen pyöristys pyöristää viivojen, ympyränkaarien ja kartioleikkausten kulmia</translation>
+    </message>
+    <message>
         <source>A curve was picked twice</source>
         <translation>Käyrä poimittiin kahdesti</translation>
+    </message>
+    <message>
+        <source>A point is not the corner of two lines, arcs or conics (%1 curves end there)</source>
+        <translation>Pisteeseen päättyy %1 käyrää. Viivojen, kaarien tai kartioleikkausten kulma edellyttää kahta käyrää</translation>
+    </message>
+    <message>
+        <source>A point is not the corner of two lines, arcs or conics (no curve ends there)</source>
+        <translation>Pisteeseen ei pääty käyriä. Viivojen, kaarien tai kartioleikkausten kulma edellyttää kahta käyrää</translation>
+    </message>
+    <message>
+        <source>A point is not the corner of two lines, arcs or conics (one curve ends there)</source>
+        <translation>Pisteeseen päättyy yksi käyrä. Viivojen, kaarien tai kartioleikkausten kulma edellyttää kahta käyrää</translation>
     </message>
     <message>
         <source>Add Parameter Group %1</source>
@@ -15732,6 +15916,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Delete Selection Set %1</source>
         <translation>Poista valintajoukko %1</translation>
+    </message>
+    <message>
+        <source>End Cap %1</source>
+        <translation>Päätykansi %1</translation>
+    </message>
+    <message>
+        <source>End Caps x%1</source>
+        <translation>Päätykannet x%1</translation>
     </message>
     <message>
         <source>Explode Text</source>
@@ -16986,6 +17178,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>levitysosa on tasossa: se ei ota tahkoa</translation>
     </message>
     <message>
+        <source>a Flat Pattern view looks square onto its blank: its orientation follows the Flat Pattern</source>
+        <translation>levityksen kuvanto katsoo aihiota kohtisuoraan: sen suunta seuraa levitystä</translation>
+    </message>
+    <message>
         <source>a JPEG file of %1 colour components</source>
         <translation>JPEG-tiedosto, jossa on värikomponentteja %1</translation>
     </message>
@@ -17212,6 +17408,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a bend is selected more than once</source>
         <translation>taivutus on valittu useammin kuin kerran</translation>
+    </message>
+    <message>
+        <source>a bend line is picked alone: no edge or face with it</source>
+        <translation>taivutusviiva valitaan yksin: ei reunaa tai pintaa sen kanssa</translation>
     </message>
     <message>
         <source>a bend lost its chart</source>
@@ -17766,6 +17966,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>nokan seuraaja liukuu liukuliitoksella tai kääntyy kiertoliitoksella (%1 ei ole kumpikaan)</translation>
     </message>
     <message>
+        <source>a cell grid needs a depth, or through all</source>
+        <translation>soluruudukko tarvitsee syvyyden, tai sen on mentävä kaiken läpi</translation>
+    </message>
+    <message>
+        <source>a cell grid with no depth</source>
+        <translation>soluruudukko ilman syvyyttä</translation>
+    </message>
+    <message>
         <source>a center between two faces takes two planar faces</source>
         <translation>kahden tahkon välinen keskikohta ottaa kaksi tasotahkoa</translation>
     </message>
@@ -17812,6 +18020,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a chamfer has either `edges`, `size` and `flip` or `sets`</source>
         <translation>viisteellä on joko `edges`, `size` ja `flip` tai `sets`</translation>
+    </message>
+    <message>
+        <source>a chamfer of %1 mm leaves no straight side of the %2 x %3 mm plate</source>
+        <translation>%1 mm:n viiste ei jätä %2 x %3 mm:n levyyn suoraa sivua</translation>
+    </message>
+    <message>
+        <source>a chamfer of %1 mm leaves nothing of a curved side of the %2 x %3 mm plate</source>
+        <translation>%1 mm:n viiste ei jätä mitään %2 x %3 mm:n levyn kaarevasta sivusta</translation>
     </message>
     <message>
         <source>a chamfer of type %1 is not translated</source>
@@ -18406,6 +18622,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>sen kohteen %1 käyrällä ei ole tunnistetta</translation>
     </message>
     <message>
+        <source>a curve of the section&apos;s outline</source>
+        <translation>poikkileikkauksen ääriviivan käyrä</translation>
+    </message>
+    <message>
         <source>a curve of the selection ends on the sketch&apos;s origin, which cannot go into a block: move it off the origin first</source>
         <translation>jokin valinnan käyrä päättyy luonnoksen origoon, jota ei voi lisätä lohkoon: siirrä käyrä ensin pois origosta</translation>
     </message>
@@ -18600,6 +18820,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a datum&apos;s letter is written without spaces</source>
         <translation>perusteen kirjain kirjoitetaan ilman välilyöntejä</translation>
+    </message>
+    <message>
+        <source>a decal goes on a face of a body</source>
+        <translation>tarra sijoitetaan kappaleen tahkolle</translation>
+    </message>
+    <message>
+        <source>a decal goes on a planar, cylindrical or conical face; a face is a %1</source>
+        <translation>tarra sijoitetaan taso-, sylinteri- tai kartiotahkolle; tahko on tyyppiä %1</translation>
+    </message>
+    <message>
+        <source>a decal goes on a planar, cylindrical or conical face; face %1 is a %2</source>
+        <translation>tarra sijoitetaan taso-, sylinteri- tai kartiotahkolle; tahko %1 on tyyppiä %2</translation>
     </message>
     <message>
         <source>a degenerate circle</source>
@@ -19060,6 +19292,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a face of %1 (not a sketch) is not translated</source>
         <translation>kohteen %1 tahkoa (ei luonnos) ei muunneta</translation>
+    </message>
+    <message>
+        <source>a face of %1 is not there at the timeline marker: %2</source>
+        <translation>kohteen %1 tahkoa ei ole aikajanan merkin kohdalla: %2</translation>
     </message>
     <message>
         <source>a face of %1, near its copies and those of %2, may split</source>
@@ -19596,6 +19832,38 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a free move must be a rotation and a translation</source>
         <translation>vapaan siirron on oltava kierto ja siirto</translation>
+    </message>
+    <message>
+        <source>a full round is tangent continuous (G1): its cross-section is the circle that touches the three faces</source>
+        <translation>täysi pyöristys on tangenttijatkuva (G1): sen poikkileikkaus on ympyrä, joka sivuaa kolmea tahkoa</translation>
+    </message>
+    <message>
+        <source>a full round takes the two edges of the face it rounds away, an only edge is picked: pick the face&apos;s edge on its other side too</source>
+        <translation>täysi pyöristys ottaa sen tahkon kaksi särmää, jonka se pyöristää pois, valittuna on vain yksi särmä: valitse myös tahkon toisen puolen särmä</translation>
+    </message>
+    <message>
+        <source>a full round takes the two edges of the face it rounds away, not a face: pick its two edges</source>
+        <translation>täysi pyöristys ottaa sen tahkon kaksi särmää, jonka se pyöristää pois, ei tahkoa: valitse sen kaksi särmää</translation>
+    </message>
+    <message>
+        <source>a full round takes the two edges of the face it rounds away, not every edge of the body</source>
+        <translation>täysi pyöristys ottaa sen tahkon kaksi särmää, jonka se pyöristää pois, ei kappaleen jokaista särmää</translation>
+    </message>
+    <message>
+        <source>a full round takes the two edges of the face it rounds away, not face %1: pick its two edges</source>
+        <translation>täysi pyöristys ottaa sen tahkon kaksi särmää, jonka se pyöristää pois, ei tahkoa %1: valitse sen kaksi särmää</translation>
+    </message>
+    <message>
+        <source>a full round takes the two edges of the face it rounds away, not the face: pick the face&apos;s two edges</source>
+        <translation>täysi pyöristys ottaa sen tahkon kaksi särmää, jonka se pyöristää pois, ei tahkoa: valitse tahkon kaksi särmää</translation>
+    </message>
+    <message>
+        <source>a full round takes the two edges of the face it rounds away, only edge %1 is picked: pick the face&apos;s edge on its other side too</source>
+        <translation>täysi pyöristys ottaa sen tahkon kaksi särmää, jonka se pyöristää pois, valittuna on vain särmä %1: valitse myös tahkon toisen puolen särmä</translation>
+    </message>
+    <message>
+        <source>a full round takes the two edges of the face it rounds away: pick the face&apos;s edge on its other side too</source>
+        <translation>täysi pyöristys ottaa sen tahkon kaksi särmää, jonka se pyöristää pois: valitse myös tahkon toisen puolen särmä</translation>
     </message>
     <message>
         <source>a gable roof stands on walls of one height: %1 is %2 mm high, %3 %4 mm</source>
@@ -21022,6 +21290,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>koordinaatiston %1 osa</translation>
     </message>
     <message>
+        <source>a part of the outline narrower than twice the inset vanishes</source>
+        <translation>ääriviivan osa, joka on kapeampi kuin kaksi kertaa sisennys, katoaa</translation>
+    </message>
+    <message>
         <source>a part too small for this distance</source>
         <translation>osa, joka on liian pieni tälle etäisyydelle</translation>
     </message>
@@ -21490,10 +21762,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piste ei voi olla käyrällä, jonka se määrittää</translation>
     </message>
     <message>
-        <source>a point cloud (scanned reference points): not mapped</source>
-        <translation>pistepilvi (skannatut viitepisteet): ei vastinetta</translation>
-    </message>
-    <message>
         <source>a point does not exist</source>
         <translation>pistettä ei ole</translation>
     </message>
@@ -21652,6 +21920,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a pointer to class tag %1</source>
         <translation>osoitin luokkatunnisteeseen %1</translation>
+    </message>
+    <message>
+        <source>a polar curve&apos;s variable t is its angle: a plain number or an angle, not a length</source>
+        <translation>polaarisen käyrän muuttuja t on sen kulma: pelkkä luku tai kulma, ei pituus</translation>
+    </message>
+    <message>
+        <source>a polygon cell has 3 to %1 sides, a whole number, got %2</source>
+        <translation>monikulmiosolussa on 3–%1 sivua, kokonaisluku, annettiin %2</translation>
+    </message>
+    <message>
+        <source>a polygon cell has 3 to %1 sides, got %2</source>
+        <translation>monikulmiosolussa on 3–%1 sivua, annettiin %2</translation>
     </message>
     <message>
         <source>a polygon has 3 to 256 sides, got %1</source>
@@ -22324,6 +22604,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a round corner of the offset is not at a vertex of its chain</source>
         <translation>siirtymän pyöreä kulma ei ole sen ketjun kärkipisteessä</translation>
+    </message>
+    <message>
+        <source>a round section has no corners to chamfer</source>
+        <translation>pyöreässä poikkileikkauksessa ei ole viistettäviä nurkkia</translation>
     </message>
     <message>
         <source>a round tube whose wall fills it</source>
@@ -24770,6 +25054,30 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tyhjä teksti</translation>
     </message>
     <message>
+        <source>an end cap has one mount frame, %1</source>
+        <translation>päätykannella on yksi kiinnityskehys, %1</translation>
+    </message>
+    <message>
+        <source>an end cap is on a profile&apos;s end (member and end) or on a face, one of them</source>
+        <translation>päätykansi on profiilin päässä (rakenneosa ja pää) tai tahkolla, jommassakummassa</translation>
+    </message>
+    <message>
+        <source>an end cap is on a profile&apos;s end or on a planar face</source>
+        <translation>päätykansi on profiilin päässä tai tasotahkolla</translation>
+    </message>
+    <message>
+        <source>an end cap on a profile names its end (a or b)</source>
+        <translation>profiilin päätykansi nimeää päänsä (a tai b)</translation>
+    </message>
+    <message>
+        <source>an end cap&apos;s face is a planar face of a body</source>
+        <translation>päätykannen tahko on kappaleen tasotahko</translation>
+    </message>
+    <message>
+        <source>an end cap&apos;s inset is a length or a ratio, not both</source>
+        <translation>päätykannen sisennys on pituus tai suhde, ei molempia</translation>
+    </message>
+    <message>
         <source>an end cut along the wall</source>
         <translation>seinän suuntainen päätyleikkaus</translation>
     </message>
@@ -24836,6 +25144,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an excluded body is no longer in component %1</source>
         <translation>pois jätetty kappale ei ole enää komponentissa %1</translation>
+    </message>
+    <message>
+        <source>an explicit curve&apos;s variable x is a plain number or a length, not an angle</source>
+        <translation>eksplisiittisen käyrän muuttuja x on pelkkä luku tai pituus, ei kulma</translation>
     </message>
     <message>
         <source>an explicit destination accepts one group of features</source>
@@ -24996,6 +25308,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an insert&apos;s b is a circle, not a %1 (insert_axis takes a hole&apos;s face)</source>
         <translation>upotusliitoksen b on ympyrä, ei kohde (%1) (insert_axis ottaa reiän tahkon)</translation>
+    </message>
+    <message>
+        <source>an inset of %1 mm leaves nothing of the %2 x %3 mm section</source>
+        <translation>%1 mm:n sisennys ei jätä mitään %2 x %3 mm:n poikkileikkauksesta</translation>
+    </message>
+    <message>
+        <source>an inset of %1 mm splits the outline of the %2 x %3 mm section: %4</source>
+        <translation>%1 mm:n sisennys jakaa %2 x %3 mm:n poikkileikkauksen ääriviivan: %4</translation>
     </message>
     <message>
         <source>an instance</source>
@@ -25344,6 +25664,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>another history</source>
         <translation>toinen historia</translation>
+    </message>
+    <message>
+        <source>another style changes the shape of the box&apos;s blank: make the box again</source>
+        <translation>toinen tyyli muuttaa laatikon aihion muotoa: tee laatikko uudelleen</translation>
     </message>
     <message>
         <source>appearance %1 of this design is now %2: the library has an appearance %3</source>
@@ -26418,10 +26742,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>c%1 on tyyppiä %2: Sketch Fillet pyöristää viivojen kulmia</translation>
     </message>
     <message>
-        <source>c%1 is a %2: Sketch Fillet rounds corners of lines and circular arcs</source>
-        <translation>c%1 on tyyppiä %2: Sketch Fillet pyöristää viivojen ja ympyränkaarten kulmia</translation>
-    </message>
-    <message>
         <source>c%1 is a %2: points are inserted into splines only</source>
         <translation>c%1 on tyyppiä %2: pisteitä lisätään vain splineihin</translation>
     </message>
@@ -26506,6 +26826,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kohteen %1 kopiota ei voi kirjoittaa projektiin: %2</translation>
     </message>
     <message>
+        <source>cell grid</source>
+        <translation>soluruudukko</translation>
+    </message>
+    <message>
+        <source>cell shape `%1`</source>
+        <translation>solun muoto `%1`</translation>
+    </message>
+    <message>
         <source>choose at least one occurrence or body of the design to link</source>
         <translation>valitse linkitettävästä mallista vähintään yksi esiintymä tai kappale</translation>
     </message>
@@ -26546,6 +26874,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>käyrällä %1 ei ole ratkaistua geometriaa</translation>
     </message>
     <message>
+        <source>curve %1 of the section&apos;s outline</source>
+        <translation>poikkileikkauksen ääriviivan käyrä %1</translation>
+    </message>
+    <message>
+        <source>decals are not written to %1 files: %2 left out</source>
+        <translation>tarroja ei kirjoiteta %1-tiedostoihin: %2 jätetty pois</translation>
+    </message>
+    <message>
+        <source>decals[%1]: decal %2 is listed more than once</source>
+        <translation>decals[%1]: tarra %2 on luettelossa useammin kuin kerran</translation>
+    </message>
+    <message>
         <source>decimation needs a triangle count or a tolerance</source>
         <translation>harvennus tarvitsee kolmiomäärän tai toleranssin</translation>
     </message>
@@ -26558,12 +26898,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>vapausastetta jäljellä</translation>
     </message>
     <message>
+        <source>dot grid `%1`</source>
+        <translation>pisteruudukko `%1`</translation>
+    </message>
+    <message>
         <source>each edge at its own radius is a constant round of the picked edges alone: it takes a constant radius, an exact fit, rolling corners, no setbacks, mitred turns and no tangent chains (SolidCraft refuses it too)</source>
         <translation>kukin särmä omalla säteellään on pelkkien poimittujen särmien vakiopyöristys: se vaatii vakiosäteen, tarkan sovituksen, vierivät nurkat, ei sisäänvetoja, jiiratut käännökset eikä tangenttiketjuja (SolidCraftkin hylkää sen)</translation>
     </message>
     <message>
         <source>each row of a crease table needs an allowance or a deduction, not both</source>
         <translation>nuuttaustaulukon jokaisella rivillä on oltava joko lisä tai vähennys, ei molempia</translation>
+    </message>
+    <message>
+        <source>edge cells `%1`</source>
+        <translation>reunasolut `%1`</translation>
     </message>
     <message>
         <source>edge: %1 is no edge and no sketch line</source>
@@ -26594,8 +26942,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>edit_render_shot vaatii kuvakulman tunnisteen</translation>
     </message>
     <message>
+        <source>end %1 of %2 has an end cap: it goes on a square end (remove the cap first)</source>
+        <translation>kohteen %2 päässä %1 on päätykansi: se edellyttää suoraa päätä (poista kansi ensin)</translation>
+    </message>
+    <message>
+        <source>end %1 of %2 is mitered: an end cap goes on a square end</source>
+        <translation>kohteen %2 pää %1 on jiirattu: päätykansi tulee suoraan päähän</translation>
+    </message>
+    <message>
+        <source>end %1 of %2 is mitered: an end cap goes on a square end (square it with Ends first)</source>
+        <translation>kohteen %2 pää %1 on jiirattu: päätykansi tulee suoraan päähän (suorista se ensin Päät-toiminnolla)</translation>
+    </message>
+    <message>
         <source>end %1 of %2 meets no other profile within %3 mm</source>
         <translation>kohteen %2 pää %1 ei kohtaa muuta profiilia %3 mm:n etäisyydellä</translation>
+    </message>
+    <message>
+        <source>end %1&apos;s cut back must be zero or more</source>
+        <translation>pään %1 lyhennyksen on oltava nolla tai enemmän</translation>
     </message>
     <message>
         <source>explode text: %1</source>
@@ -26612,6 +26976,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>face %1 is not planar: panels are made of planar faces</source>
         <translation>tahko %1 ei ole tasomainen: paneelit tehdään tasomaisista tahkoista</translation>
+    </message>
+    <message>
+        <source>face %1 of %2 is not there at the timeline marker: %3</source>
+        <translation>kohteen %2 tahkoa %1 ei ole aikajanan merkin kohdalla: %3</translation>
     </message>
     <message>
         <source>face: missing for an edge</source>
@@ -26770,18 +27138,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>vaihtoehto %1 on avoin, mutta avoimia vaihtoehtoja voi olla vain taulukossa, jossa on Vain nämä rivit (suljettu)</translation>
     </message>
     <message>
-        <source>p%1 is not the corner of two lines or arcs (%2 curves end there)</source>
-        <translation>p%1 ei ole kahden viivan tai kaaren kulma (siihen päättyy %2 käyrää)</translation>
-    </message>
-    <message>
-        <source>p%1 is not the corner of two lines or arcs (no curve ends there)</source>
-        <translation>p%1 ei ole kahden viivan tai kaaren kulma (siihen ei pääty käyrää)</translation>
-    </message>
-    <message>
-        <source>p%1 is not the corner of two lines or arcs (one curve ends there)</source>
-        <translation>p%1 ei ole kahden viivan tai kaaren kulma (siihen päättyy yksi käyrä)</translation>
-    </message>
-    <message>
         <source>part %1 of %2 is a Flat Pattern: it takes no face</source>
         <translation>kohteen %2 osa %1 on levitys: se ei ota tahkoa</translation>
     </message>
@@ -26864,6 +27220,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the opening crosses the symmetry plane: take the symmetry away to fill it</source>
         <translation>aukko ylittää symmetriatason: poista symmetria, jotta aukon voi täyttää</translation>
+    </message>
+    <message>
+        <source>the section&apos;s outline has no corners to chamfer: its curves all run on into each other without a corner</source>
+        <translation>poikkileikkauksen ääriviivassa ei ole viistettäviä nurkkia: sen käyrät jatkuvat kaikki toisiinsa ilman nurkkaa</translation>
+    </message>
+    <message>
+        <source>the selection has no corner where two lines, arcs or conics end together</source>
+        <translation>valinnassa ei ole kulmaa, jossa kaksi viivaa, kaarta tai kartioleikkausta kohtaa</translation>
     </message>
     <message>
         <source>the sketch curve is %1: members go along straight lines only</source>
@@ -29894,10 +30258,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>anna tulostussuunta joko suuntana down tai alustaa vasten olevana tahkona</translation>
     </message>
     <message>
-        <source>give tracks (poses per occurrence or body) or study (a motion study&apos;s name)</source>
-        <translation>anna tracks (asennot esiintymittäin tai kappaleittain) tai study (liiketutkimuksen nimi)</translation>
-    </message>
-    <message>
         <source>give tracks (poses per occurrence or body) or study, not both</source>
         <translation>anna tracks (asennot esiintymittäin tai kappaleittain) tai study, ei molempia</translation>
     </message>
@@ -31034,12 +31394,32 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tapahtuman aputasoa ei enää ole</translation>
     </message>
     <message>
+        <source>the faces of %1 have other names: the design&apos;s %2 are not there, %3 are new</source>
+        <translation>kohteen %1 tahkoilla on muut nimet: mallin %2 puuttuvat, %3 ovat uusia</translation>
+    </message>
+    <message>
+        <source>the feature was edited, but its BUILD joints could not be refreshed: %1</source>
+        <translation>Piirre muokattiin. Rakenneosien liitosten päivitys epäonnistui (%1)</translation>
+    </message>
+    <message>
         <source>the file has no points: a point is a line that starts with two numbers, x and y</source>
         <translation>tiedostossa ei ole pisteitä: piste on rivi, joka alkaa kahdella luvulla, x ja y</translation>
     </message>
     <message>
         <source>the file has only one point: at least two lines that start with two numbers, x and y, are needed</source>
         <translation>tiedostossa on vain yksi piste: tarvitaan vähintään kaksi riviä, jotka alkavat kahdella luvulla, x ja y</translation>
+    </message>
+    <message>
+        <source>the file holds %1 points: every %2 kept, %3 in all</source>
+        <translation>tiedostossa on %1 pistettä: joka %2. säilytetty, yhteensä %3</translation>
+    </message>
+    <message>
+        <source>the file holds no points</source>
+        <translation>tiedostossa ei ole pisteitä</translation>
+    </message>
+    <message>
+        <source>the file is %1 MB, more than the %2 MB a point cloud is read from</source>
+        <translation>tiedosto on %1 MB, enemmän kuin %2 MB, jota suuremmasta tiedostosta pistepilveä ei lueta</translation>
     </message>
     <message>
         <source>the file is not an airfoil: %1</source>
@@ -31050,8 +31430,40 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tiedosto vaatii kohteen %1, jota MitCad ei lue</translation>
     </message>
     <message>
+        <source>the fillet radius %1 mm does not fit at the conic corner</source>
+        <translation>pyöristyssäde %1 mm ei mahdu kartioleikkauksen kulmaan</translation>
+    </message>
+    <message>
         <source>the fitted spline stops at %1 control points %2 mm from the farthest point, more than the tolerance of %3 mm</source>
         <translation>sovitettu splini pysähtyy %1 ohjauspisteeseen %2 mm:n päähän kaukaisimmasta pisteestä, mikä on enemmän kuin toleranssi %3 mm</translation>
+    </message>
+    <message>
+        <source>the formula %1 cannot be evaluated at %2: %3</source>
+        <translation>kaavaa %1 ei voi laskea kohdassa %2: %3</translation>
+    </message>
+    <message>
+        <source>the formula %1 does not read: %2</source>
+        <translation>kaavaa %1 ei voi tulkita: %2</translation>
+    </message>
+    <message>
+        <source>the formula %1 gives a value with units %2 at %3: it is to give a length or a plain number</source>
+        <translation>kaava %1 antaa kohdassa %3 arvon, jonka yksikkö on %2: sen pitää antaa pituus tai pelkkä luku</translation>
+    </message>
+    <message>
+        <source>the formula %1 gives no finite value at %2</source>
+        <translation>kaava %1 ei anna äärellistä arvoa kohdassa %2</translation>
+    </message>
+    <message>
+        <source>the formula gives a value with units %1: it is to give a length or a plain number</source>
+        <translation>kaava antaa arvon, jonka yksikkö on %1: sen pitää antaa pituus tai pelkkä luku</translation>
+    </message>
+    <message>
+        <source>the formula of an equation curve: %1 (it stays the spline it placed)</source>
+        <translation>yhtälökäyrän kaava: %1 (käyrä pysyy jo sijoitettuna splininä)</translation>
+    </message>
+    <message>
+        <source>the formulas give the same point at %1 = %2 and %3 = %4: a curve through it twice in a row cannot be drawn; change the range or the formulas</source>
+        <translation>kaavat antavat saman pisteen kohdissa %1 = %2 ja %3 = %4: käyrää, joka kulkee sen kautta kahdesti peräkkäin, ei voi piirtää; muuta arvoväliä tai kaavoja</translation>
     </message>
     <message>
         <source>the gap is the rule&apos;s (%1: `%2`)</source>
@@ -31070,12 +31482,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>geometriaydin sijoitti pisteen yhdelle %1 alueesta</translation>
     </message>
     <message>
+        <source>the grid has %1 cells, more than the %2 one Cell Grid cuts: use larger cells or a smaller field</source>
+        <translation>ruudukossa on %1 solua, enemmän kuin Soluruudukon enimmäismäärä %2: käytä suurempia soluja tai pienempää kenttää</translation>
+    </message>
+    <message>
         <source>the hold %1 was left out: %2</source>
         <translation>kiinnitys %1 jätettiin pois: %2</translation>
     </message>
     <message>
         <source>the holes are cut through the sheet; the grid starts at the corner of %1 in its first panel&apos;s axes</source>
         <translation>reiät leikataan levyn läpi; ruudukko alkaa kohteen %1 nurkasta sen ensimmäisen paneelin akseleiden mukaan</translation>
+    </message>
+    <message>
+        <source>the joint of %1 and %2 is stale: a section changed; set the joint again</source>
+        <translation>osien %1 ja %2 liitos on vanhentunut poikkileikkauksen muututtua. Aseta liitos uudelleen</translation>
+    </message>
+    <message>
+        <source>the joint of %1 at end %2 is stale: no profile remains along the line it meets</source>
+        <translation>osan %1 liitos päässä %2 on vanhentunut, koska vastaviivalla ei enää ole profiilia</translation>
     </message>
     <message>
         <source>the lines&apos; sketch did not come in</source>
@@ -31100,6 +31524,26 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the model refers to more than %1 model parts</source>
         <translation>malli viittaa useampaan kuin %1 malliosaan</translation>
+    </message>
+    <message>
+        <source>the offset must be finite</source>
+        <translation>siirtymän on oltava äärellinen</translation>
+    </message>
+    <message>
+        <source>the offset of a round corner must be finite and not zero</source>
+        <translation>pyöreän kulman siirtymän on oltava äärellinen eikä nolla</translation>
+    </message>
+    <message>
+        <source>the outline set in falls into %1 parts</source>
+        <translation>sisennetty ääriviiva hajoaa %1 osaan</translation>
+    </message>
+    <message>
+        <source>the parameter on an offset must be finite</source>
+        <translation>siirtymän parametrin on oltava äärellinen</translation>
+    </message>
+    <message>
+        <source>the parameter on an offset must be finite, its range lower first</source>
+        <translation>siirtymän parametrin on oltava äärellinen ja sen alueen pienempi arvo ensin</translation>
     </message>
     <message>
         <source>the print bed face of %1 is not found before the hole: %2</source>
@@ -32208,18 +32652,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Move CAM Setup</source>
         <translation>Siirrä CAM-kiinnitystä</translation>
-    </message>
-    <message>
-        <source>A point is not the corner of two lines or arcs (%1 curves end there)</source>
-        <translation>Piste ei ole kahden viivan tai kaaren kulma (siihen päättyy %1 käyrää)</translation>
-    </message>
-    <message>
-        <source>A point is not the corner of two lines or arcs (no curve ends there)</source>
-        <translation>Piste ei ole kahden viivan tai kaaren kulma (siihen ei pääty käyrää)</translation>
-    </message>
-    <message>
-        <source>A point is not the corner of two lines or arcs (one curve ends there)</source>
-        <translation>Piste ei ole kahden viivan tai kaaren kulma (siihen päättyy yksi käyrä)</translation>
     </message>
     <message>
         <source>An inside corner beside a bend cannot be rounded or chamfered: that would add material across the bend.</source>
@@ -34090,10 +34522,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kohteella %1 ei ole laajuutta, jota kääntää</translation>
     </message>
     <message>
-        <source>%1 has no solids, surfaces or meshes to import%2</source>
-        <translation>kohteessa %1 ei ole tuotavia kappaleita, pintoja eikä verkkoja%2</translation>
-    </message>
-    <message>
         <source>%1 must be a body (a uid or name, or {&quot;body&quot;, &quot;occurrence&quot;}), got %2</source>
         <translation>%1 on oltava kappale (uid tai nimi, tai {&quot;body&quot;, &quot;occurrence&quot;}), saatiin %2</translation>
     </message>
@@ -35026,16 +35454,54 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>löydetty, mutta osa sen kappaleista puuttuu tai ei ole kelvollinen</translation>
     </message>
     <message>
+        <source>A curve is no longer a fit point spline</source>
+        <translation>Käyrä ei ole enää sovituspistesplini</translation>
+    </message>
+    <message>
+        <source>A curve is not an equation curve</source>
+        <translation>Käyrä ei ole yhtälökäyrä</translation>
+    </message>
+    <message>
+        <source>Add Equation Curve to %1</source>
+        <translation>Lisää yhtälökäyrä luonnokseen %1</translation>
+    </message>
+    <message>
         <source>Edge radius</source>
         <translation>Särmän säde</translation>
     </message>
     <message>
-        <source>MitCad has no cell grid feature (a sketch&apos;s profiles filled with cells cut from bodies)</source>
-        <translation>MitCadissa ei ole soluruudukkopiirrettä (luonnoksen profiilit täytettynä kappaleista leikatuilla soluilla)</translation>
+        <source>Edit Equation Curve in %1</source>
+        <translation>Muokkaa yhtälökäyrää kohteessa %1</translation>
     </message>
     <message>
         <source>MitCad has no conversion of a whole body to sheet metal from its faces (every face a panel of the rule&apos;s thickness, no fixed face)</source>
         <translation>MitCadissa ei ole koko kappaleen muuntamista ohutlevyksi sen tahkoista (jokainen tahko säännön paksuinen paneeli, ei kiinteää tahkoa)</translation>
+    </message>
+    <message>
+        <source>No changes to record
+</source>
+        <translation>Ei kirjattavia muutoksia
+</translation>
+    </message>
+    <message>
+        <source>Point cloud %1</source>
+        <translation>Pistepilvi %1</translation>
+    </message>
+    <message>
+        <source>Record changes</source>
+        <translation>Kirjaa muutokset</translation>
+    </message>
+    <message>
+        <source>Record changes in %1</source>
+        <translation>Kirjaa muutokset kansiossa %1</translation>
+    </message>
+    <message>
+        <source>Recorded the changes of %1</source>
+        <translation>Kirjattiin muutokset: %1</translation>
+    </message>
+    <message>
+        <source>a PLY property comes before its element</source>
+        <translation>PLY-ominaisuus tulee ennen elementtiään</translation>
     </message>
     <message>
         <source>a drawing: not mapped</source>
@@ -35046,12 +35512,164 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>reunataitos on 180 asteen laippa, jonka sisäsäde on puolet reunataitoksen välistä</translation>
     </message>
     <message>
+        <source>a point cloud %1 exists</source>
+        <translation>pistepilvi %1 on jo olemassa</translation>
+    </message>
+    <message>
+        <source>a point cloud cannot be read: left out (%1)</source>
+        <translation>pistepilveä ei voi lukea: jätetty pois (%1)</translation>
+    </message>
+    <message>
+        <source>a point cloud is moved by a rigid motion only</source>
+        <translation>pistepilveä siirretään vain jäykällä liikkeellä</translation>
+    </message>
+    <message>
+        <source>a point cloud&apos;s colouring, filters and segments: not mapped (MitCad keeps the points and their colours)</source>
+        <translation>pistepilven väritys, suodattimet ja segmentit: ei vastinetta (MitCad säilyttää pisteet ja niiden värit)</translation>
+    </message>
+    <message>
+        <source>a point of the cloud is not a finite place in range</source>
+        <translation>pilven piste ei ole äärellinen kohta sallitulla alueella</translation>
+    </message>
+    <message>
+        <source>a point that is not three finite numbers was left out</source>
+        <translation>piste, joka ei ole kolme äärellistä lukua, jätettiin pois</translation>
+    </message>
+    <message>
+        <source>a point&apos;s coordinates are not finite</source>
+        <translation>pisteen koordinaatit eivät ole äärellisiä</translation>
+    </message>
+    <message>
+        <source>a wall takes at most 12 locking tabs, got %1</source>
+        <translation>seinässä voi olla enintään 12 lukituskielekettä, annettiin %1</translation>
+    </message>
+    <message>
+        <source>add_files needs &quot;files&quot; (a list of files)</source>
+        <translation>add_files tarvitsee kentän &quot;files&quot; (tiedostoluettelo)</translation>
+    </message>
+    <message>
+        <source>an equation curve</source>
+        <translation>yhtälökäyrä</translation>
+    </message>
+    <message>
+        <source>an equation curve crosses itself</source>
+        <translation>yhtälökäyrä leikkaa itsensä</translation>
+    </message>
+    <message>
+        <source>an equation curve crosses itself, so it bounds no simple profile there</source>
+        <translation>yhtälökäyrä leikkaa itsensä, joten se ei rajaa siinä yksinkertaista profiilia</translation>
+    </message>
+    <message>
+        <source>an equation curve deviates up to %1 mm from its formulas with its %2 points (tolerance %3 mm): sketch.edit_equation_curve places more</source>
+        <translation>yhtälökäyrä poikkeaa %2 pisteellään kaavoistaan jopa %1 mm (toleranssi %3 mm): sketch.edit_equation_curve sijoittaa pisteitä lisää</translation>
+    </message>
+    <message>
+        <source>an equation curve deviates up to %1 mm from its formulas with its %2 points, more than its tolerance of %3 mm: edit it to place more points</source>
+        <translation>yhtälökäyrä poikkeaa %2 pisteellään kaavoistaan jopa %1 mm, enemmän kuin sen toleranssi %3 mm: sijoita pisteitä lisää muokkaamalla sitä</translation>
+    </message>
+    <message>
+        <source>an equation curve keeps its last shape: %1</source>
+        <translation>yhtälökäyrä säilyttää viimeisimmän muotonsa: %1</translation>
+    </message>
+    <message>
+        <source>an explicit</source>
+        <translation>eksplisiittinen</translation>
+    </message>
+    <message>
+        <source>back wall</source>
+        <translation>takaseinä</translation>
+    </message>
+    <message>
+        <source>c%1 is no longer a fit point spline</source>
+        <translation>c%1 ei ole enää sovituspistesplini</translation>
+    </message>
+    <message>
+        <source>c%1 is not an equation curve</source>
+        <translation>c%1 ei ole yhtälökäyrä</translation>
+    </message>
+    <message>
+        <source>cannot copy %1 to %2: %3</source>
+        <translation>kohdetta %1 ei voi kopioida kohteeseen %2: %3</translation>
+    </message>
+    <message>
+        <source>closest points on faces</source>
+        <translation>tahkojen lähimmät pisteet</translation>
+    </message>
+    <message>
+        <source>corner flap</source>
+        <translation>kulmaläppä</translation>
+    </message>
+    <message>
+        <source>design container: a damaged point cloud blob</source>
+        <translation>mallisäiliö: vaurioitunut pistepilven blob</translation>
+    </message>
+    <message>
+        <source>dust flap</source>
+        <translation>pölyläppä</translation>
+    </message>
+    <message>
+        <source>end flap</source>
+        <translation>päätyläppä</translation>
+    </message>
+    <message>
+        <source>end wall</source>
+        <translation>päätyseinä</translation>
+    </message>
+    <message>
+        <source>end wall top</source>
+        <translation>päätyseinän yläosa</translation>
+    </message>
+    <message>
+        <source>equation curve %1 crosses itself</source>
+        <translation>yhtälökäyrä %1 leikkaa itsensä</translation>
+    </message>
+    <message>
+        <source>equation curve %1 deviates up to %2 mm from its formulas with its %3 points (tolerance %4 mm): sketch.edit_equation_curve places more</source>
+        <translation>yhtälökäyrä %1 poikkeaa %3 pisteellään kaavoistaan jopa %2 mm (toleranssi %4 mm): sketch.edit_equation_curve sijoittaa pisteitä lisää</translation>
+    </message>
+    <message>
+        <source>equation curve %1 keeps its last shape: %2</source>
+        <translation>yhtälökäyrä %1 säilyttää viimeisimmän muotonsa: %2</translation>
+    </message>
+    <message>
+        <source>equation curve c%1</source>
+        <translation>yhtälökäyrä c%1</translation>
+    </message>
+    <message>
+        <source>floor flap</source>
+        <translation>pohjaläppä</translation>
+    </message>
+    <message>
         <source>found; some of its features came in partly or as fixed bodies</source>
         <translation>löydetty; osa sen piirteistä tuotiin osittain tai kiinteinä kappaleina</translation>
     </message>
     <message>
         <source>freecad&apos;s result is the shape before it</source>
         <translation>FreeCADin tulos on sitä edeltävä muoto</translation>
+    </message>
+    <message>
+        <source>front flap</source>
+        <translation>etuläppä</translation>
+    </message>
+    <message>
+        <source>front flap ear</source>
+        <translation>etuläpän korva</translation>
+    </message>
+    <message>
+        <source>front wall</source>
+        <translation>etuseinä</translation>
+    </message>
+    <message>
+        <source>front wall top</source>
+        <translation>etuseinän yläosa</translation>
+    </message>
+    <message>
+        <source>give the point cloud&apos;s `path` or its `data`</source>
+        <translation>anna pistepilven `path` tai sen `data`</translation>
+    </message>
+    <message>
+        <source>give the point cloud&apos;s `path` or its `data`, not both</source>
+        <translation>anna pistepilven `path` tai sen `data`, ei molempia</translation>
     </message>
     <message>
         <source>glTF material %1</source>
@@ -35122,6 +35740,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>lohkossa %1</translation>
     </message>
     <message>
+        <source>inner end wall</source>
+        <translation>sisempi päätyseinä</translation>
+    </message>
+    <message>
+        <source>inner front wall</source>
+        <translation>sisempi etuseinä</translation>
+    </message>
+    <message>
         <source>invalid Form command: %1</source>
         <translation>virheellinen Form-komento: %1</translation>
     </message>
@@ -35148,6 +35774,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>it has %1 fonts, not a font number %2</source>
         <translation>siinä on %1 fonttia, ei fonttia numero %2</translation>
+    </message>
+    <message>
+        <source>it has no end</source>
+        <translation>siltä puuttuu loppu</translation>
+    </message>
+    <message>
+        <source>it has no formula y</source>
+        <translation>siltä puuttuu kaava y</translation>
+    </message>
+    <message>
+        <source>it has no start</source>
+        <translation>siltä puuttuu alku</translation>
     </message>
     <message>
         <source>it has one font, not a font number %1</source>
@@ -35208,6 +35846,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>it must start with mqtts:// or mqtt://</source>
         <translation>sen on alettava mqtts:// tai mqtt://</translation>
+    </message>
+    <message>
+        <source>it names no curve</source>
+        <translation>se ei nimeä käyrää</translation>
+    </message>
+    <message>
+        <source>it names no xyz member</source>
+        <translation>siinä ei ole xyz-jäsentä</translation>
     </message>
     <message>
         <source>it needs %1 mm in the inner corner, which has %2 mm</source>
@@ -35320,6 +35966,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>items of type %1 are not read</source>
         <translation>tyypin %1 kohteita ei lueta</translation>
+    </message>
+    <message>
+        <source>its %1 are no base64: %2</source>
+        <translation>sen tiedot (%1) eivät ole base64-muotoa: %2</translation>
     </message>
     <message>
         <source>its %1 attached to %2</source>
@@ -35656,6 +36306,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>its change is in the bodies before it already </source>
         <translation>sen muutos on jo sitä edeltävissä kappaleissa </translation>
+    </message>
+    <message>
+        <source>its colours do not match its points</source>
+        <translation>sen värit eivät vastaa sen pisteitä</translation>
     </message>
     <message>
         <source>its comment</source>
@@ -36418,6 +37072,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>sen aukkoa seinään %1 ei leikattu: %2</translation>
     </message>
     <message>
+        <source>its origin is not three numbers</source>
+        <translation>sen origo ei ole kolme lukua</translation>
+    </message>
+    <message>
+        <source>its origin is out of range</source>
+        <translation>sen origo on sallitun alueen ulkopuolella</translation>
+    </message>
+    <message>
         <source>its own %1 links are not followed</source>
         <translation>sen omia linkkejä (%1) ei seurata</translation>
     </message>
@@ -36526,6 +37188,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>sen paikka ei ole piste</translation>
     </message>
     <message>
+        <source>its placement is not a 4 x 4 matrix</source>
+        <translation>sen sijoitus ei ole 4 x 4 -matriisi</translation>
+    </message>
+    <message>
+        <source>its placement is not a rigid motion</source>
+        <translation>sen sijoitus ei ole jäykkä liike</translation>
+    </message>
+    <message>
         <source>its placement is not rigid</source>
         <translation>sen sijoitus ei ole jäykkä</translation>
     </message>
@@ -36560,6 +37230,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>its point was not imported</source>
         <translation>sen pistettä ei tuotu</translation>
+    </message>
+    <message>
+        <source>its points are not whole x, y, z triples</source>
+        <translation>sen pisteet eivät ole kokonaisia x, y, z -kolmikoita</translation>
     </message>
     <message>
         <source>its points were not decoded</source>
@@ -37384,6 +38058,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>library_sources[%1]: source %2 is listed more than once</source>
         <translation>library_sources[%1]: lähde %2 on luettelossa useammin kuin kerran</translation>
+    </message>
+    <message>
+        <source>lid ear</source>
+        <translation>kannen korva</translation>
     </message>
     <message>
         <source>lies %1 mm from the reference&apos;s box</source>
@@ -38822,6 +39500,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>ei taittoviivaa</translation>
     </message>
     <message>
+        <source>no fold order suits the box&apos;s blank at these sizes</source>
+        <translation>mikään taittojärjestys ei sovi laatikon aihiolle näillä mitoilla</translation>
+    </message>
+    <message>
         <source>no form</source>
         <translation>ei muotoa</translation>
     </message>
@@ -39322,6 +40004,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>mikään piste ei poimi säilytettäviä osia</translation>
     </message>
     <message>
+        <source>no point was measured</source>
+        <translation>yhtään pistettä ei mitattu</translation>
+    </message>
+    <message>
         <source>no points are given</source>
         <translation>pisteitä ei ole annettu</translation>
     </message>
@@ -39528,6 +40214,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>no spine</source>
         <translation>ei ohjauskäyrää</translation>
+    </message>
+    <message>
+        <source>no spline runs through the curve&apos;s points</source>
+        <translation>mikään splini ei kulje käyrän pisteiden kautta</translation>
+    </message>
+    <message>
+        <source>no spline runs through the curve&apos;s points: %1</source>
+        <translation>mikään splini ei kulje käyrän pisteiden kautta: %1</translation>
     </message>
     <message>
         <source>no stair run</source>
@@ -40870,10 +41564,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>vain arvauksia, joiden tarkistamiseen tarvitaan tiedoston historiaa</translation>
     </message>
     <message>
-        <source>only lines and arcs can be extended</source>
-        <translation>vain viivoja ja kaaria voi jatkaa</translation>
-    </message>
-    <message>
         <source>only new bodies can replace bodies</source>
         <translation>vain uudet kappaleet voivat korvata kappaleita</translation>
     </message>
@@ -41346,8 +42036,140 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation> ennen sitä</translation>
     </message>
     <message>
+        <source>%1 %2 where the design has %3 %4</source>
+        <translation>%1 %2, kun mallissa on %3 %4</translation>
+    </message>
+    <message>
         <source>%1 (the overlay of %2)</source>
         <translation>%1 (kohteen %2 päällys)</translation>
+    </message>
+    <message>
+        <source>%1 bodies, the design has %2</source>
+        <translation>%1 kappaletta, mallissa on %2</translation>
+    </message>
+    <message>
+        <source>%1 comes from a component library</source>
+        <translation>%1 on peräisin komponenttikirjastosta</translation>
+    </message>
+    <message>
+        <source>%1 features, the design has %2</source>
+        <translation>%1 piirrettä, mallissa on %2</translation>
+    </message>
+    <message>
+        <source>%1 has the volume %2, in the design %3</source>
+        <translation>kohteen %1 tilavuus on %2, mallissa %3</translation>
+    </message>
+    <message>
+        <source>%1 holds a point at %2, which a derived offset computes</source>
+        <translation>%1 pitää pisteen kohdassa %2, jonka johdettu siirtymä laskee</translation>
+    </message>
+    <message>
+        <source>%1 is %2, in the design %3</source>
+        <translation>%1 on %2, mallissa %3</translation>
+    </message>
+    <message>
+        <source>%1 is another feature than the design&apos;s</source>
+        <translation>%1 on eri piirre kuin mallissa</translation>
+    </message>
+    <message>
+        <source>%1 is linked from another design file</source>
+        <translation>%1 on linkitetty toisesta mallitiedostosta</translation>
+    </message>
+    <message>
+        <source>%1 is not a feature uid a design can use</source>
+        <translation>%1 ei ole piirteen tunniste, jota malli voi käyttää</translation>
+    </message>
+    <message>
+        <source>%1 is placed by a Pattern at Points, whose occurrences a script cannot make again</source>
+        <translation>%1 on sijoitettu pisteisiin tehdyllä kuviolla, jonka esiintymiä komentosarja ei voi tehdä uudelleen</translation>
+    </message>
+    <message>
+        <source>%1 is placed nowhere</source>
+        <translation>kohdetta %1 ei ole sijoitettu mihinkään</translation>
+    </message>
+    <message>
+        <source>%1 parameters, the design has %2</source>
+        <translation>%1 parametria, mallissa on %2</translation>
+    </message>
+    <message>
+        <source>%1 was made by BUILD</source>
+        <translation>%1 on BUILDin tekemä</translation>
+    </message>
+    <message>
+        <source>%1&apos;s end %2 is left square: %3, which it met, is removed.</source>
+        <translation>kohteen %1 pää %2 jätetään suoraksi: %3, jonka se kohtasi, on poistettu.</translation>
+    </message>
+    <message>
+        <source>%1: %2 is a trimmed inner corner of an offset, where two of its curves cross and are cut: it moves along both as the source changes, so a point cannot be held there; use a point on one of the offset&apos;s curves or at its end</source>
+        <translation>%1: %2 on siirtymän katkaistu sisänurkka, jossa kaksi sen käyrää leikkaavat toisensa ja katkaistaan: se liikkuu kumpaakin pitkin lähteen muuttuessa, joten pistettä ei voi pitää siinä; käytä pistettä jollakin siirtymän käyrällä tai sen päässä</translation>
+    </message>
+    <message>
+        <source>%1: %2 is a trimmed inner corner of offset %3, where two of its curves cross and are cut: it moves along both as the source changes, so a point cannot be held there; use a point on one of the offset&apos;s curves or at its end</source>
+        <translation>%1: %2 on siirtymän %3 katkaistu sisänurkka, jossa kaksi sen käyrää leikkaavat toisensa ja katkaistaan: se liikkuu kumpaakin pitkin lähteen muuttuessa, joten pistettä ei voi pitää siinä; käytä pistettä jollakin siirtymän käyrällä tai sen päässä</translation>
+    </message>
+    <message>
+        <source>%1: %2 is an inner control point of a spline that an offset of a spline or an ellipse computes: hold the point on the offset&apos;s curve or at its end instead</source>
+        <translation>%1: %2 on sisempi ohjauspiste splinissä, jonka splinin tai ellipsin siirtymä laskee: pidä piste sen sijaan siirtymän käyrällä tai sen päässä</translation>
+    </message>
+    <message>
+        <source>%1: %2 is computed from an offset of a spline or an ellipse: it takes only a Coincident of a point of the sketch (on its curve or at its end); constrain its source for the rest</source>
+        <translation>%1: %2 lasketaan splinin tai ellipsin siirtymästä: siihen käy vain luonnoksen pisteen Yhtenevä-rajoite (sen käyrällä tai sen päässä); rajoita muuten sen lähdettä</translation>
+    </message>
+    <message>
+        <source>%1: a conic needs three points</source>
+        <translation>%1: kartioleikkaus tarvitsee kolme pistettä</translation>
+    </message>
+    <message>
+        <source>%1: a curve is computed by another offset; a point cannot be held on an offset of it</source>
+        <translation>%1: käyrän laskee toinen siirtymä; pistettä ei voi pitää sen siirtymällä</translation>
+    </message>
+    <message>
+        <source>%1: a value&apos;s parameter does not exist</source>
+        <translation>%1: arvon parametria ei ole olemassa</translation>
+    </message>
+    <message>
+        <source>%1: an edge frame measures a miter&apos;s angle in a parameter of its own; give its first value as a number, not “%2”</source>
+        <translation>%1: särmäkehys mittaa jiirin kulman omaan parametriinsa; anna sen ensimmäinen arvo lukuna, ei “%2”</translation>
+    </message>
+    <message>
+        <source>%1: c%2 is computed by another offset; a point cannot be held on an offset of it</source>
+        <translation>%1: käyrän c%2 laskee toinen siirtymä; pistettä ei voi pitää sen siirtymällä</translation>
+    </message>
+    <message>
+        <source>%1: imported bodies, whose source is only in the design file</source>
+        <translation>%1: tuodut kappaleet, joiden lähde on vain mallitiedostossa</translation>
+    </message>
+    <message>
+        <source>%1: it uses imported bodies the script leaves out</source>
+        <translation>%1: se käyttää tuotuja kappaleita, jotka komentosarja jättää pois</translation>
+    </message>
+    <message>
+        <source>%1: its Rho %2 is outside (0, 1) (taken as %3)</source>
+        <translation>%1: sen Rho %2 on välin (0, 1) ulkopuolella (käytetään arvoa %3)</translation>
+    </message>
+    <message>
+        <source>%1: its definition: %2</source>
+        <translation>%1: sen määrittely: %2</translation>
+    </message>
+    <message>
+        <source>%1: the parameter has no value</source>
+        <translation>%1: parametrilla ei ole arvoa</translation>
+    </message>
+    <message>
+        <source>A curve is not a curve of an offset</source>
+        <translation>Käyrä ei ole siirtymän käyrä</translation>
+    </message>
+    <message>
+        <source>A curve is not solved as a conic</source>
+        <translation>Käyrää ei ole ratkaistu kartioleikkauksena</translation>
+    </message>
+    <message>
+        <source>A curve: no conic piece between %1 and %2</source>
+        <translation>Käyrä: ei kartioleikkauksen osaa kohteiden %1 ja %2 välillä</translation>
+    </message>
+    <message>
+        <source>Add Conic to %1</source>
+        <translation>Lisää kartioleikkaus luonnokseen %1</translation>
     </message>
     <message>
         <source>Beam Lattice</source>
@@ -41356,6 +42178,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Boolean Operations</source>
         <translation>Boolen operaatiot</translation>
+    </message>
+    <message>
+        <source>CAM setups</source>
+        <translation>CAM-kiinnitykset</translation>
+    </message>
+    <message>
+        <source>Change Rho in %1</source>
+        <translation>Muuta Rho-arvoa luonnoksessa %1</translation>
     </message>
     <message>
         <source>Could not mirror %1: %2</source>
@@ -41398,8 +42228,28 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>MitCadin 3D-luonnokset suhteuttavat viivat kehyksen akseleihin ja toisiinsa, eivät tason suuntaan (käyrät pysyvät siellä, mihin tiedosto ne ratkaisi)</translation>
     </message>
     <message>
+        <source>No expectations: the design could not be computed at the script&apos;s marker.</source>
+        <translation>Ei odotuksia: mallia ei voitu laskea komentosarjan merkin kohdalla.</translation>
+    </message>
+    <message>
+        <source>No expectations: the script leaves out imported bodies, so its bodies differ from the design&apos;s.</source>
+        <translation>Ei odotuksia: komentosarja jättää pois tuodut kappaleet, joten sen kappaleet eroavat mallin kappaleista.</translation>
+    </message>
+    <message>
+        <source>Not made again by this script: %1.</source>
+        <translation>Tämä komentosarja ei tee uudelleen: %1.</translation>
+    </message>
+    <message>
+        <source>Perpendicular takes lines, circles and arcs, not a conic</source>
+        <translation>Kohtisuoruus koskee viivoja, ympyröitä ja kaaria, ei kartioleikkausta</translation>
+    </message>
+    <message>
         <source>Rect Tube %1</source>
         <translation>Suorakaideputki %1</translation>
+    </message>
+    <message>
+        <source>Rho must be between 0 and 1 (0.5 a parabola, less an ellipse, more a hyperbola), got %1</source>
+        <translation>Rho-arvon on oltava välillä 0–1 (0,5 paraabeli, pienempi ellipsi, suurempi hyperbeli), saatiin %1</translation>
     </message>
     <message>
         <source>Round Bar %1</source>
@@ -41410,8 +42260,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Pyöröputki %1</translation>
     </message>
     <message>
+        <source>Round trip: %1 features, %2 parameters, %3 bodies and %4 faces the same</source>
+        <translation>Edestakainen muunnos: %1 piirrettä, %2 parametria, %3 kappaletta ja %4 tahkoa samat</translation>
+    </message>
+    <message>
+        <source>Run Script</source>
+        <translation>Suorita komentosarja</translation>
+    </message>
+    <message>
         <source>Secure Content (encrypted parts)</source>
         <translation>Suojattu sisältö (salatut osat)</translation>
+    </message>
+    <message>
+        <source>The joints that met the removed members are kept: %1</source>
+        <translation>Poistettuja rakenneosia kohdanneet liitokset säilytetään: %1</translation>
+    </message>
+    <message>
+        <source>The timeline of a design as a script, made by MitCad&apos;s export_script: %1 features. Run it on an empty design (mitcad-cli run, or Run Script in the application).</source>
+        <translation>Mallin aikajana komentosarjana, tehty MitCadin export_scriptillä: %1 piirrettä. Suorita se tyhjässä mallissa (mitcad-cli run tai sovelluksen Suorita komentosarja).</translation>
     </message>
     <message>
         <source>`%1` is not a straight line (members run along lines)</source>
@@ -41442,8 +42308,112 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kappale on verkko: sillä ei ole pintoja, jotka rajaisivat alueen</translation>
     </message>
     <message>
+        <source>a body is named %1, in the design %2</source>
+        <translation>kappaleen nimi on %1, mallissa %2</translation>
+    </message>
+    <message>
         <source>a build item</source>
         <translation>koontikohde</translation>
+    </message>
+    <message>
+        <source>a circle or an ellipse has no ends to hold an offset point at</source>
+        <translation>ympyrällä tai ellipsillä ei ole päitä, joissa siirtymän pistettä voisi pitää</translation>
+    </message>
+    <message>
+        <source>a command is open; finish or cancel it before running a script</source>
+        <translation>komento on auki; lopeta tai peruuta se ennen komentosarjan suorittamista</translation>
+    </message>
+    <message>
+        <source>a feature has the uid %1 already; give a free uid or none</source>
+        <translation>piirteellä on jo tunniste %1; anna vapaa tunniste tai ei mitään</translation>
+    </message>
+    <message>
+        <source>a point is held on an offset of a spline or an ellipse, whose curves a 3D sketch only computes: remove that Coincident before the conversion</source>
+        <translation>piste pidetään splinin tai ellipsin siirtymällä, jonka käyriä 3D-luonnos vain laskee: poista se Yhtenevä-rajoite ennen muunnosta</translation>
+    </message>
+    <message>
+        <source>a round corner is between fixed places of its curves</source>
+        <translation>pyöreä kulma on käyriensä kiinteiden kohtien välissä</translation>
+    </message>
+    <message>
+        <source>a round corner of an offset is gone</source>
+        <translation>siirtymän pyöreä kulma on poistunut</translation>
+    </message>
+    <message>
+        <source>a round corner of offset %1 is gone</source>
+        <translation>siirtymän %1 pyöreä kulma on poistunut</translation>
+    </message>
+    <message>
+        <source>acknowledged warnings</source>
+        <translation>kuitatut varoitukset</translation>
+    </message>
+    <message>
+        <source>an offset curve has no parts</source>
+        <translation>siirtymäkäyrällä ei ole osia</translation>
+    </message>
+    <message>
+        <source>bodies&apos; visibility, materials and appearances</source>
+        <translation>kappaleiden näkyvyys, materiaalit ja ulkoasut</translation>
+    </message>
+    <message>
+        <source>body %1 is named %2, in the design %3</source>
+        <translation>kappaleen %1 nimi on %2, mallissa %3</translation>
+    </message>
+    <message>
+        <source>c%1 is a %2: Sketch Fillet rounds corners of lines, circular arcs and conics</source>
+        <translation>c%1 on tyyppiä %2. Luonnoksen pyöristys pyöristää viivojen, ympyränkaarien ja kartioleikkausten kulmia</translation>
+    </message>
+    <message>
+        <source>c%1 is not a curve of offset %2</source>
+        <translation>c%1 ei ole siirtymän %2 käyrä</translation>
+    </message>
+    <message>
+        <source>c%1 is not solved as a conic</source>
+        <translation>käyrää c%1 ei ole ratkaistu kartioleikkauksena</translation>
+    </message>
+    <message>
+        <source>c%1: no conic piece between %2 and %3</source>
+        <translation>c%1: ei kartioleikkauksen osaa kohteiden %2 ja %3 välillä</translation>
+    </message>
+    <message>
+        <source>cannot export the timeline as a script: %1</source>
+        <translation>aikajanaa ei voi viedä komentosarjana: %1</translation>
+    </message>
+    <message>
+        <source>cannot export the timeline as a script: %1 uses %2, a parameter of a feature the script leaves out</source>
+        <translation>aikajanaa ei voi viedä komentosarjana: %1 käyttää parametria %2, joka kuuluu piirteeseen, jonka komentosarja jättää pois</translation>
+    </message>
+    <message>
+        <source>components&apos; materials and appearances</source>
+        <translation>komponenttien materiaalit ja ulkoasut</translation>
+    </message>
+    <message>
+        <source>conic_rhos: a curve does not exist</source>
+        <translation>conic_rhos: käyrää ei ole olemassa</translation>
+    </message>
+    <message>
+        <source>conic_rhos: a curve has two values</source>
+        <translation>conic_rhos: käyrällä on kaksi arvoa</translation>
+    </message>
+    <message>
+        <source>conic_rhos: c%1 has two values</source>
+        <translation>conic_rhos: käyrällä c%1 on kaksi arvoa</translation>
+    </message>
+    <message>
+        <source>conic_rhos: curve c%1 does not exist</source>
+        <translation>conic_rhos: käyrää c%1 ei ole olemassa</translation>
+    </message>
+    <message>
+        <source>filament changes</source>
+        <translation>filamentin vaihdot</translation>
+    </message>
+    <message>
+        <source>fit_faces adds more than the feature: no uid</source>
+        <translation>fit_faces lisää enemmän kuin piirteen: ei tunnistetta</translation>
+    </message>
+    <message>
+        <source>flexible occurrences</source>
+        <translation>joustavat esiintymät</translation>
     </message>
     <message>
         <source>give the points&apos; file as path or their text as text, one of the two</source>
@@ -41452,6 +42422,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>give tool bodies or planes</source>
         <translation>anna työkalukappaleita tai tasoja</translation>
+    </message>
+    <message>
+        <source>give tracks (poses per occurrence or body) or study (a motion study&apos;s name)</source>
+        <translation>anna tracks (asennot esiintymittäin tai kappaleittain) tai study (liiketutkimuksen nimi)</translation>
+    </message>
+    <message>
+        <source>image references</source>
+        <translation>kuvaviitteet</translation>
+    </message>
+    <message>
+        <source>import notes</source>
+        <translation>tuontihuomautukset</translation>
     </message>
     <message>
         <source>it came in as a mesh body, which Convert Mesh cannot make a solid</source>
@@ -41466,6 +42448,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>siinä on alle viisi pistettä</translation>
     </message>
     <message>
+        <source>it has no body</source>
+        <translation>sillä ei ole kappaletta</translation>
+    </message>
+    <message>
+        <source>it has no body %1</source>
+        <translation>sillä ei ole kappaletta %1</translation>
+    </message>
+    <message>
+        <source>it has no parameter %1</source>
+        <translation>sillä ei ole parametria %1</translation>
+    </message>
+    <message>
         <source>it has no points</source>
         <translation>siinä ei ole pisteitä</translation>
     </message>
@@ -41476,6 +42470,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>it is to a world plane, and the component is placed elsewhere</source>
         <translation>se on suhteessa maailman tasoon, ja komponentti on sijoitettu muualle</translation>
+    </message>
+    <message>
+        <source>it undoes a change made before the script</source>
+        <translation>se kumoaa muutoksen, joka tehtiin ennen komentosarjaa</translation>
     </message>
     <message>
         <source>its 3D curves did not come in: %1</source>
@@ -41496,6 +42494,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>its bends&apos; slot holds no face</source>
         <translation>sen taivutusten paikassa ei ole tahkoa</translation>
+    </message>
+    <message>
+        <source>its components and occurrences cannot be made again with the ids they have (some were deleted, or made in another order than the timeline keeps)</source>
+        <translation>sen komponentteja ja esiintymiä ei voi tehdä uudelleen niiden nykyisillä tunnisteilla (osa poistettiin tai tehtiin eri järjestyksessä kuin aikajana säilyttää)</translation>
     </message>
     <message>
         <source>its coordinates follow parameters in world coordinates, and the component is placed elsewhere</source>
@@ -41626,8 +42628,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>rivit ilman kahta lukua, ohitettu: %1 (ensimmäinen: rivi %2)</translation>
     </message>
     <message>
+        <source>motion studies and contact sets</source>
+        <translation>liiketutkimukset ja kosketusjoukot</translation>
+    </message>
+    <message>
         <source>no Unfold of its sheet body was replayed before it (the file&apos;s Refold closes the bends of the Unfold it is paired with)</source>
         <translation>sen levykappaleen avausta ei toistettu ennen sitä (tiedoston takaisintaivutus sulkee sen avauksen taivutukset, jonka pari se on)</translation>
+    </message>
+    <message>
+        <source>no conic continuation past the end</source>
+        <translation>ei kartioleikkauksen jatketta pään yli</translation>
     </message>
     <message>
         <source>no spline fits the points: the fit&apos;s equations are singular</source>
@@ -41646,8 +42656,40 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>objekti %1 (%2): kolmio %3 viittaa kärkipisteeseen, joka on %4 kärkipisteen ulkopuolella</translation>
     </message>
     <message>
+        <source>occurrence folders</source>
+        <translation>esiintymäkansiot</translation>
+    </message>
+    <message>
         <source>offset distance</source>
         <translation>siirtymäetäisyys</translation>
+    </message>
+    <message>
+        <source>only a conic has a Rho</source>
+        <translation>vain kartioleikkauksella on Rho</translation>
+    </message>
+    <message>
+        <source>only lines, arcs and conics can be extended</source>
+        <translation>vain viivoja, kaaria ja kartioleikkauksia voi jatkaa</translation>
+    </message>
+    <message>
+        <source>p%1 is not the corner of two lines, arcs or conics (%2 curves end there)</source>
+        <translation>Pisteeseen p%1 päättyy %2 käyrää. Viivojen, kaarien tai kartioleikkausten kulma edellyttää kahta käyrää</translation>
+    </message>
+    <message>
+        <source>p%1 is not the corner of two lines, arcs or conics (no curve ends there)</source>
+        <translation>Pisteeseen p%1 ei pääty käyriä. Viivojen, kaarien tai kartioleikkausten kulma edellyttää kahta käyrää</translation>
+    </message>
+    <message>
+        <source>p%1 is not the corner of two lines, arcs or conics (one curve ends there)</source>
+        <translation>Pisteeseen p%1 päättyy yksi käyrä. Viivojen, kaarien tai kartioleikkausten kulma edellyttää kahta käyrää</translation>
+    </message>
+    <message>
+        <source>parameter %1 is %2, in the design %3</source>
+        <translation>parametri %1 on %2, mallissa %3</translation>
+    </message>
+    <message>
+        <source>parameters look values up in the design&apos;s tables, which a script cannot make again</source>
+        <translation>parametrit hakevat arvoja mallin taulukoista, joita komentosarja ei voi tehdä uudelleen</translation>
     </message>
     <message>
         <source>parts without geometry: %1: the translation report the assembly keeps says of each: %2</source>
@@ -41986,6 +43028,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piste: poimi yksi luonnoksen ympyrä tai kaari</translation>
     </message>
     <message>
+        <source>point_clouds[%1]: point cloud %2 is listed more than once</source>
+        <translation>point_clouds[%1]: pistepilvi %2 on luettelossa useammin kuin kerran</translation>
+    </message>
+    <message>
         <source>pointer form %1</source>
         <translation>osoittimen muoto %1</translation>
     </message>
@@ -42088,6 +43134,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>print colours by height are written into USDZ files (and drawn by model_render)</source>
         <translation>korkeuden mukaiset tulostusvärit kirjoitetaan USDZ-tiedostoihin (ja model_render piirtää ne)</translation>
+    </message>
+    <message>
+        <source>print plates</source>
+        <translation>tulostusalustat</translation>
     </message>
     <message>
         <source>print profile</source>
@@ -42268,6 +43318,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>pulleys of different belt profiles (%1 and %2) do not share a belt</source>
         <translation>eri hihnaprofiilien hihnapyörät (%1 ja %2) eivät voi jakaa hihnaa</translation>
+    </message>
+    <message>
+        <source>purge volumes</source>
+        <translation>huuhtelutilavuudet</translation>
     </message>
     <message>
         <source>purge_volumes[%1]: from %2 to %3 is listed more than once</source>
@@ -42538,6 +43592,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>renaming faces</source>
         <translation>nimetään tahkoja</translation>
+    </message>
+    <message>
+        <source>render settings</source>
+        <translation>renderöintiasetukset</translation>
     </message>
     <message>
         <source>rendering attributes</source>
@@ -42984,6 +44042,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>katso analysis_shape</translation>
     </message>
     <message>
+        <source>see-through occurrences</source>
+        <translation>läpinäkyvät esiintymät</translation>
+    </message>
+    <message>
         <source>seed face</source>
         <translation>aloitustahko</translation>
     </message>
@@ -43042,6 +44104,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>selected sheet domain is not planar</source>
         <translation>valittu levyn alue ei ole tasomainen</translation>
+    </message>
+    <message>
+        <source>selection sets</source>
+        <translation>valintajoukot</translation>
     </message>
     <message>
         <source>self-illumination is not held</source>
@@ -44010,6 +45076,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>suppressed in the file; not checked against the file&apos;s history</source>
         <translation>vaimennettu tiedostossa; ei tarkistettu tiedoston historiaa vasten</translation>
+    </message>
+    <message>
+        <source>suppression and visibility that follow expressions</source>
+        <translation>lausekkeita seuraava vaimennus ja näkyvyys</translation>
     </message>
     <message>
         <source>surface extensions</source>
@@ -44992,6 +46062,54 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>LZMA-virran aluekooderi alkaa sen lopusta</translation>
     </message>
     <message>
+        <source>the PLY element %1 has no count</source>
+        <translation>PLY-elementillä %1 ei ole lukumäärää</translation>
+    </message>
+    <message>
+        <source>the PLY file ends before its last vertex</source>
+        <translation>PLY-tiedosto päättyy ennen viimeistä kärkipistettään</translation>
+    </message>
+    <message>
+        <source>the PLY file ends before its vertices</source>
+        <translation>PLY-tiedosto päättyy ennen kärkipisteitään</translation>
+    </message>
+    <message>
+        <source>the PLY file has no end_header line</source>
+        <translation>PLY-tiedostossa ei ole end_header-riviä</translation>
+    </message>
+    <message>
+        <source>the PLY file has no vertex element</source>
+        <translation>PLY-tiedostossa ei ole vertex-elementtiä</translation>
+    </message>
+    <message>
+        <source>the PLY file names no format</source>
+        <translation>PLY-tiedosto ei nimeä muotoaan</translation>
+    </message>
+    <message>
+        <source>the PLY file says it has %1 points, too many to read</source>
+        <translation>PLY-tiedoston mukaan siinä on %1 pistettä, liian monta luettavaksi</translation>
+    </message>
+    <message>
+        <source>the PLY file&apos;s header is not text</source>
+        <translation>PLY-tiedoston otsake ei ole tekstiä</translation>
+    </message>
+    <message>
+        <source>the PLY file&apos;s vertices have no x, y and z</source>
+        <translation>PLY-tiedoston kärkipisteillä ei ole x-, y- ja z-arvoja</translation>
+    </message>
+    <message>
+        <source>the PLY format %1 is not known</source>
+        <translation>PLY-muoto %1 on tuntematon</translation>
+    </message>
+    <message>
+        <source>the PLY list %1 has a type that is not known</source>
+        <translation>PLY-listan %1 tyyppi on tuntematon</translation>
+    </message>
+    <message>
+        <source>the PLY property %1 has a type that is not known</source>
+        <translation>PLY-ominaisuuden %1 tyyppi on tuntematon</translation>
+    </message>
+    <message>
         <source>the PNG file does not start with its IHDR chunk</source>
         <translation>PNG-tiedosto ei ala IHDR-lohkolla</translation>
     </message>
@@ -45532,6 +46650,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kappale %1%2</translation>
     </message>
     <message>
+        <source>the body encloses no volume (it is open or a mesh), so its points have no inside: measure the deviation without a sign</source>
+        <translation>kappale ei sulje sisäänsä tilavuutta (se on avoin tai verkko), joten pisteille ei ole sisäpuolta: mittaa poikkeama ilman etumerkkiä</translation>
+    </message>
+    <message>
         <source>the body found is one the file keeps in the design</source>
         <translation>löydetty kappale on sellainen, jonka tiedosto pitää suunnitelmassa</translation>
     </message>
@@ -45752,8 +46874,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>reunan luonnos ei tullut mukaan</translation>
     </message>
     <message>
+        <source>the box is too small for its board: its %1 has no room</source>
+        <translation>laatikko on liian pieni kartongilleen: osalle %1 ei ole tilaa</translation>
+    </message>
+    <message>
         <source>the box of the geometry the file keeps</source>
         <translation>tiedoston säilyttämän geometrian laatikko</translation>
+    </message>
+    <message>
+        <source>the box&apos;s blank runs onto itself at these sizes (its %1 and %2): make it lower or wider</source>
+        <translation>laatikon aihio menee näillä mitoilla päällekkäin itsensä kanssa (osat %1 ja %2): tee laatikosta matalampi tai leveämpi</translation>
     </message>
     <message>
         <source>the broker %1 has no address</source>
@@ -46084,6 +47214,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>rajatun kappaleen laajuutta ei tunneta</translation>
     </message>
     <message>
+        <source>the cloud has more than %1 points</source>
+        <translation>pilvessä on yli %1 pistettä</translation>
+    </message>
+    <message>
         <source>the code&apos;s content is empty</source>
         <translation>koodin sisältö on tyhjä</translation>
     </message>
@@ -46122,6 +47256,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the colour of %1 must have components from 0 to 1</source>
         <translation>kohteen %1 värin komponenttien on oltava välillä 0–1</translation>
+    </message>
+    <message>
+        <source>the colour scale&apos;s limit must be greater than zero, got %1</source>
+        <translation>väriasteikon rajan on oltava suurempi kuin nolla, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the colours are no base64: %1</source>
+        <translation>värit eivät ole base64-muotoa: %1</translation>
+    </message>
+    <message>
+        <source>the colours are not whole r, g, b triples</source>
+        <translation>värit eivät ole kokonaisia r, g, b -kolmikoita</translation>
     </message>
     <message>
         <source>the column %1 is there twice</source>
@@ -46218,6 +47364,22 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the configured length is not finite</source>
         <translation>määritetty pituus ei ole äärellinen</translation>
+    </message>
+    <message>
+        <source>the conic does not run on as a conic past this end</source>
+        <translation>kartioleikkaus ei jatku kartioleikkauksena tämän pään yli</translation>
+    </message>
+    <message>
+        <source>the conic&apos;s shoulder is at one of its ends</source>
+        <translation>kartioleikkauksen olkapiste on sen toisessa päässä</translation>
+    </message>
+    <message>
+        <source>the conic&apos;s shoulder is on the line through its ends</source>
+        <translation>kartioleikkauksen olkapiste on sen päiden kautta kulkevalla viivalla</translation>
+    </message>
+    <message>
+        <source>the conic&apos;s start and end are at the same place</source>
+        <translation>kartioleikkauksen alku ja loppu ovat samassa paikassa</translation>
     </message>
     <message>
         <source>the connection to the broker broke</source>
@@ -46416,8 +47578,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>puristusripojen korkeuden on oltava suurempi kuin nolla, annettiin %1</translation>
     </message>
     <message>
+        <source>the curve %1 did not come in</source>
+        <translation>käyrä %1 ei tullut mukaan</translation>
+    </message>
+    <message>
         <source>the curve branches at %1: it must be one curve without forks</source>
         <translation>käyrä haarautuu kohdassa %1: sen on oltava yksi käyrä ilman haaroja</translation>
+    </message>
+    <message>
+        <source>the curve crosses itself, so it cannot bound a profile: make it construction geometry, or change its range or formulas</source>
+        <translation>käyrä leikkaa itsensä, joten se ei voi rajata profiilia: muuta se apugeometriaksi tai muuta sen arvoväliä tai kaavoja</translation>
+    </message>
+    <message>
+        <source>the curve crosses itself: as construction geometry it bounds no profile</source>
+        <translation>käyrä leikkaa itsensä: apugeometriana se ei rajaa profiilia</translation>
+    </message>
+    <message>
+        <source>the curve did not come in</source>
+        <translation>käyrä ei tullut mukaan</translation>
     </message>
     <message>
         <source>the curve does not exist</source>
@@ -46446,6 +47624,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the curve is a circle, not a line</source>
         <translation>käyrä on ympyrä, ei viiva</translation>
+    </message>
+    <message>
+        <source>the curve is a conic, not a circle or an arc</source>
+        <translation>käyrä on kartioleikkaus, ei ympyrä eikä kaari</translation>
+    </message>
+    <message>
+        <source>the curve is a conic, not a line</source>
+        <translation>käyrä on kartioleikkaus, ei viiva</translation>
     </message>
     <message>
         <source>the curve is a fitted spline, not a circle or an arc</source>
@@ -46500,6 +47686,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>käyrä on elliptinen kaari, ei viiva</translation>
     </message>
     <message>
+        <source>the curve is no longer an equation curve</source>
+        <translation>käyrä ei ole enää yhtälökäyrä</translation>
+    </message>
+    <message>
         <source>the curve is not a circle</source>
         <translation>käyrä ei ole ympyrä</translation>
     </message>
@@ -46520,6 +47710,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>käyrä ei ole kaari tai ympyrä, jonka normaali on vapaa</translation>
     </message>
     <message>
+        <source>the curve is not an equation curve</source>
+        <translation>käyrä ei ole yhtälökäyrä</translation>
+    </message>
+    <message>
         <source>the curve is not planar</source>
         <translation>käyrä ei ole tasomainen</translation>
     </message>
@@ -46530,6 +47724,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the curve is straight: it lies in no one plane for a rib or a web to grow in</source>
         <translation>käyrä on suora: se ei määrää yhtä tasoa, jossa ripa tai uuma voisi kasvaa</translation>
+    </message>
+    <message>
+        <source>the curve needs its %1</source>
+        <translation>käyrä tarvitsee lausekkeen %1</translation>
     </message>
     <message>
         <source>the curve of %1</source>
@@ -46724,6 +47922,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>mallitiedostossa ei ole kenttää &quot;version&quot;</translation>
     </message>
     <message>
+        <source>the design has library parts BUILD placed, which a script cannot make again</source>
+        <translation>mallissa on BUILDin sijoittamia kirjasto-osia, joita komentosarja ei voi tehdä uudelleen</translation>
+    </message>
+    <message>
         <source>the design has no %1 %2</source>
         <translation>mallissa ei ole kohdetta %1 %2</translation>
     </message>
@@ -46750,6 +47952,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the design has no table %1 (its tables: %2)</source>
         <translation>mallissa ei ole taulukkoa %1 (sen taulukot: %2)</translation>
+    </message>
+    <message>
+        <source>the design has sketch blocks, which a script cannot make again</source>
+        <translation>mallissa on luonnoslohkoja, joita komentosarja ei voi tehdä uudelleen</translation>
     </message>
     <message>
         <source>the design is in no project</source>
@@ -46848,8 +48054,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>levitetty solidi: %1</translation>
     </message>
     <message>
+        <source>the deviation could not be measured: %1</source>
+        <translation>poikkeamaa ei voitu mitata: %1</translation>
+    </message>
+    <message>
         <source>the deviation must be greater than zero, got %1</source>
         <translation>poikkeaman on oltava suurempi kuin nolla, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the deviation needs a point cloud</source>
+        <translation>poikkeama tarvitsee pistepilven</translation>
+    </message>
+    <message>
+        <source>the deviation: %1</source>
+        <translation>poikkeama: %1</translation>
     </message>
     <message>
         <source>the dimension</source>
@@ -46906,6 +48124,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the direction of an extreme point is three numbers</source>
         <translation>ääripisteen suunta on kolme lukua</translation>
+    </message>
+    <message>
+        <source>the direction of gravity</source>
+        <translation>painovoiman suunta</translation>
     </message>
     <message>
         <source>the direction of gravity cannot be taken from that</source>
@@ -47342,6 +48564,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the equal spacing would over-constrain the sketch: the others already fix what it constrains</source>
         <translation>tasajako ylirajoittaisi luonnoksen: muut määräävät jo sen, mitä se rajoittaa</translation>
+    </message>
+    <message>
+        <source>the equation curve</source>
+        <translation>yhtälökäyrä</translation>
     </message>
     <message>
         <source>the error of %1 to contain “%2”, got “%3”</source>
@@ -48044,12 +49270,68 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>ei mitään, mistä tehdä lohko: valitse luonnoksen pisteitä ja käyriä</translation>
     </message>
     <message>
+        <source>Lock Aspect keeps the image&apos;s proportions: give the decal&apos;s width or its height, not %1 by %2 (or turn Lock Aspect off)</source>
+        <translation>Lukitse mittasuhteet säilyttää kuvan mittasuhteet: anna tarran leveys tai korkeus, ei %1 × %2 (tai poista Lukitse mittasuhteet käytöstä)</translation>
+    </message>
+    <message>
+        <source>give the decal&apos;s image: its `path` or its `data`</source>
+        <translation>anna tarran kuva: sen `path` tai sen `data`</translation>
+    </message>
+    <message>
         <source>holes with a cut_scope cut no modelled or taper thread; make the thread cosmetic</source>
         <translation>reiät, joilla on cut_scope, eivät leikkaa mallinnettua tai kartiokierrettä; tee kierteestä kosmeettinen</translation>
     </message>
     <message>
         <source>in the group %1</source>
         <translation>ryhmässä %1</translation>
+    </message>
+    <message>
+        <source>its %1 does not evaluate: %2</source>
+        <translation>sen %1 ei ole laskettavissa: %2</translation>
+    </message>
+    <message>
+        <source>its anchor is fixed where its expressions put it now</source>
+        <translation>sen ankkuri kiinnitetään siihen, mihin sen lausekkeet sen nyt asettavat</translation>
+    </message>
+    <message>
+        <source>its cells are not cut (mode `%1`), and MitCad&apos;s cell grid cuts</source>
+        <translation>sen soluja ei leikata (tila `%1`), ja MitCadin soluruudukko leikkaa</translation>
+    </message>
+    <message>
+        <source>its direction `%1` is neither outward nor inward</source>
+        <translation>sen suunta `%1` ei ole ulospäin eikä sisäänpäin</translation>
+    </message>
+    <message>
+        <source>its margin is left out: the file keeps one only with whole cells, not %1</source>
+        <translation>sen reunavara jätetään pois: tiedostossa se on vain kokonaisten solujen kanssa, ei tilassa %1</translation>
+    </message>
+    <message>
+        <source>its member did not come in</source>
+        <translation>sen rakenneosaa ei tuotu</translation>
+    </message>
+    <message>
+        <source>its member has no body</source>
+        <translation>sen rakenneosalla ei ole kappaletta</translation>
+    </message>
+    <message>
+        <source>its member has no planar end face on the end&apos;s plane</source>
+        <translation>sen rakenneosalla ei ole pään tasolla olevaa tasomaista päätytahkoa</translation>
+    </message>
+    <message>
+        <source>its range has units (%1), neither a length nor an angle</source>
+        <translation>sen välillä on yksiköt (%1), jotka eivät ole pituus eivätkä kulma</translation>
+    </message>
+    <message>
+        <source>its range&apos;s start and end have different units (%1 and %2)</source>
+        <translation>sen välin alulla ja lopulla on eri yksiköt (%1 ja %2)</translation>
+    </message>
+    <message>
+        <source>its snap inset is left out: MitCad does not move edges onto the lattice</source>
+        <translation>sen kohdistussisennys jätetään pois: MitCad ei siirrä reunoja hilalle</translation>
+    </message>
+    <message>
+        <source>its variable&apos;s unit %1 is not one this import knows</source>
+        <translation>sen muuttujan yksikkö %1 ei ole tämän tuonnin tuntema</translation>
     </message>
     <message>
         <source>meets: %1 is no sketch line</source>
@@ -48060,6 +49342,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>meets: poikkileikkaus ei ole äärellinen</translation>
     </message>
     <message>
+        <source>no cell of size %1 mm fits in the field: use smaller cells, a thinner web or margin, or trimmed edge cells</source>
+        <translation>kenttään ei mahdu yhtään %1 mm:n solua: käytä pienempiä soluja, ohuempaa seinämää tai reunavaraa tai rajattuja reunasoluja</translation>
+    </message>
+    <message>
         <source>no parameter to move</source>
         <translation>ei siirrettävää parametria</translation>
     </message>
@@ -48068,8 +49354,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>non_printable on true tai false, ei %1</translation>
     </message>
     <message>
+        <source>nothing of the outline is left</source>
+        <translation>ääriviivasta ei jää mitään</translation>
+    </message>
+    <message>
         <source>nothing to scale: the sketch&apos;s origin point and axes stay where they are</source>
         <translation>ei skaalattavaa: luonnoksen origo ja akselit pysyvät paikallaan</translation>
+    </message>
+    <message>
+        <source>only a Flat Pattern view has bend notes</source>
+        <translation>vain levityksen kuvannolla on taivutusmerkinnät</translation>
     </message>
     <message>
         <source>only a linked design takes chosen parts; a copy takes the whole design</source>
@@ -48088,8 +49382,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piste p%1 ei ole käyrällä c%2</translation>
     </message>
     <message>
+        <source>pick the ends to cap</source>
+        <translation>poimi suljettavat päät</translation>
+    </message>
+    <message>
         <source>pick two different curves to extend to meet</source>
         <translation>poimi kaksi eri käyrää jatkettavaksi kohtaamaan</translation>
+    </message>
+    <message>
+        <source>pieces name the feature&apos;s bodies by its uid: give uid too</source>
+        <translation>pieces nimeää piirteen kappaleet sen uid:n mukaan: anna myös uid</translation>
+    </message>
+    <message>
+        <source>pieces: %1 is neither the body split (%2) nor a body of %3</source>
+        <translation>pieces: %1 ei ole jaettu kappale (%2) eikä piirteen %3 kappale</translation>
     </message>
     <message>
         <source>projected geometry follows its source and is not scaled: leave it out of the selection</source>
@@ -48120,6 +49426,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>usean piirteen nimi on %1: anna sen uid</translation>
     </message>
     <message>
+        <source>snapped edge cells are cut along the cells&apos; own lines; the field&apos;s straight edges are not moved onto the lattice&apos;s lines</source>
+        <translation>kohdistetut reunasolut leikataan solujen omia viivoja pitkin; kentän suoria reunoja ei siirretä hilan viivoille</translation>
+    </message>
+    <message>
         <source>start_meets/end_meets: the edge is no sketch line</source>
         <translation>start_meets/end_meets: särmä ei ole luonnoksen viiva</translation>
     </message>
@@ -48144,8 +49454,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kohteen %1 päästökulman on oltava -90 ja 90 asteen välillä, annettiin %2 rad</translation>
     </message>
     <message>
+        <source>the Flat Pattern cannot be made</source>
+        <translation>levitystä ei voi tehdä</translation>
+    </message>
+    <message>
+        <source>the Flat Pattern of %1 cannot be made: %2</source>
+        <translation>kohteen %1 levitystä ei voi tehdä: %2</translation>
+    </message>
+    <message>
+        <source>the Flat Pattern of %1 has no frame</source>
+        <translation>kohteen %1 levityksellä ei ole koordinaatistoa</translation>
+    </message>
+    <message>
         <source>the base point must be finite, got %1</source>
         <translation>peruspisteen on oltava äärellinen, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the bend line it was picked on is gone from the Flat Pattern of %1</source>
+        <translation>taivutusviiva, jolta se valittiin, on poistunut kohteen %1 levityksestä</translation>
     </message>
     <message>
         <source>the bend reliefs at the ends of a %1 mm boundary leave no flange</source>
@@ -48196,8 +49522,44 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>reunakäyrät eivät muodosta yhtä silmukkaa: ne sulkeutuvat useaksi silmukaksi</translation>
     </message>
     <message>
+        <source>the box&apos;s Face: %1</source>
+        <translation>laatikon tahko: %1</translation>
+    </message>
+    <message>
         <source>the box&apos;s options: %1</source>
         <translation>laatikon asetukset: %1</translation>
+    </message>
+    <message>
+        <source>the cap on a line of the member did not come in: %1</source>
+        <translation>rakenneosan viivan kantta ei tuotu: %1</translation>
+    </message>
+    <message>
+        <source>the cap on line %1 of the member did not come in: %2</source>
+        <translation>rakenneosan viivan %1 kantta ei tuotu: %2</translation>
+    </message>
+    <message>
+        <source>the cell size must be at least %1 mm, got %2</source>
+        <translation>solun koon on oltava vähintään %1 mm, annettiin %2</translation>
+    </message>
+    <message>
+        <source>the cells do not reach a body</source>
+        <translation>solut eivät ulotu mihinkään kappaleeseen</translation>
+    </message>
+    <message>
+        <source>the cells do not reach body %1</source>
+        <translation>solut eivät ulotu kappaleeseen %1</translation>
+    </message>
+    <message>
+        <source>the cells trimmed to the field leave nothing to cut</source>
+        <translation>kenttään rajatut solut eivät jätä mitään leikattavaa</translation>
+    </message>
+    <message>
+        <source>the cells&apos; depth must be greater than zero, got %1</source>
+        <translation>solujen syvyyden on oltava suurempi kuin nolla, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the chamfer (%1 mm) is less than the corners&apos; round (%2 mm): give at least %3 mm</source>
+        <translation>viiste (%1 mm) on pienempi kuin nurkkien pyöristys (%2 mm): anna vähintään %3 mm</translation>
     </message>
     <message>
         <source>the chosen parts of %1 have no bodies to show</source>
@@ -48206,6 +49568,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the circles of the two arcs do not reach each other, so the arcs never meet</source>
         <translation>kaarten ympyrät eivät ulotu toisiinsa, joten kaaret eivät koskaan kohtaa</translation>
+    </message>
+    <message>
+        <source>the conical face has no edges to measure it by</source>
+        <translation>kartiotahkolla ei ole särmiä, joiden avulla sen voisi mitata</translation>
+    </message>
+    <message>
+        <source>the conical face lies only at its apex</source>
+        <translation>kartiotahko on vain kärjessään</translation>
+    </message>
+    <message>
+        <source>the conical face: %1</source>
+        <translation>kartiotahko: %1</translation>
     </message>
     <message>
         <source>the crease table has no row for a fold of %1 mm board%2 %3 with the front %4 the fold</source>
@@ -48244,8 +49618,56 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>käyrät kohtaavat vain siellä, missä toinen niistä kutistuisi olemattomiin tai sulkeutuisi itseensä</translation>
     </message>
     <message>
+        <source>the cut back does not meet the member</source>
+        <translation>lyhennys ei kohtaa rakenneosaa</translation>
+    </message>
+    <message>
+        <source>the cut back leaves nothing of the member</source>
+        <translation>lyhennys ei jätä rakenneosasta mitään</translation>
+    </message>
+    <message>
+        <source>the cut back: %1</source>
+        <translation>lyhennys: %1</translation>
+    </message>
+    <message>
         <source>the cycle&apos;s blocks are not where it runs them</source>
         <translation>työkierron lauseet eivät ole siellä, missä se ajaa ne</translation>
+    </message>
+    <message>
+        <source>the cylindrical face has no axis</source>
+        <translation>sylinteritahkolla ei ole akselia</translation>
+    </message>
+    <message>
+        <source>the cylindrical face has no size</source>
+        <translation>sylinteritahkolla ei ole kokoa</translation>
+    </message>
+    <message>
+        <source>the decal covers the conical face&apos;s apex, more than once around the face</source>
+        <translation>tarra peittää kartiotahkon kärjen, useammin kuin kerran tahkon ympäri</translation>
+    </message>
+    <message>
+        <source>the decal does not lie on its face (a cone&apos;s apex)</source>
+        <translation>tarra ei ole tahkollaan (kartion kärki)</translation>
+    </message>
+    <message>
+        <source>the decal is %1 mm wide around the conical face at its widest row, more than once around it (%2 mm there)</source>
+        <translation>tarra on leveimmällä rivillään %1 mm leveä kartiotahkon ympäri, useammin kuin kerran sen ympäri (siellä %2 mm)</translation>
+    </message>
+    <message>
+        <source>the decal is %1 mm wide around the cylindrical face, more than once around it (%2 mm)</source>
+        <translation>tarra on %1 mm leveä sylinteritahkon ympäri, enemmän kuin kerran sen ympäri (%2 mm)</translation>
+    </message>
+    <message>
+        <source>the decal needs a name</source>
+        <translation>tarra tarvitsee nimen</translation>
+    </message>
+    <message>
+        <source>the decal&apos;s %1 must be greater than zero, got %2</source>
+        <translation>tarran %1 on oltava suurempi kuin nolla, annettiin %2</translation>
+    </message>
+    <message>
+        <source>the decal&apos;s face: %1</source>
+        <translation>tarran tahko: %1</translation>
     </message>
     <message>
         <source>the design to link has no occurrence %1</source>
@@ -48272,8 +49694,48 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>päästökulman on oltava vähintään 0 ja alle 90 astetta, annettiin %1</translation>
     </message>
     <message>
+        <source>the end cap closes no member&apos;s end</source>
+        <translation>päätykansi ei sulje minkään rakenneosan päätä</translation>
+    </message>
+    <message>
+        <source>the end cap has no plate</source>
+        <translation>päätykannella ei ole levyä</translation>
+    </message>
+    <message>
+        <source>the end cap&apos;s %1 must be zero or more</source>
+        <translation>päätykannen arvon %1 on oltava nolla tai enemmän</translation>
+    </message>
+    <message>
+        <source>the end cap&apos;s face has no edges</source>
+        <translation>päätykannen tahkolla ei ole särmiä</translation>
+    </message>
+    <message>
+        <source>the end cap&apos;s face has no extent</source>
+        <translation>päätykannen tahkolla ei ole laajuutta</translation>
+    </message>
+    <message>
+        <source>the end cap&apos;s face has no normal</source>
+        <translation>päätykannen tahkolla ei ole normaalia</translation>
+    </message>
+    <message>
+        <source>the end cap&apos;s face is not planar</source>
+        <translation>päätykannen tahko ei ole tasomainen</translation>
+    </message>
+    <message>
+        <source>the end cap&apos;s ratio must be zero or more</source>
+        <translation>päätykannen suhteen on oltava nolla tai enemmän</translation>
+    </message>
+    <message>
+        <source>the end cap&apos;s thickness must be greater than zero</source>
+        <translation>päätykannen paksuuden on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
         <source>the end margin must not be negative, got %1</source>
         <translation>päädyn reunavara ei saa olla negatiivinen, saatiin %1</translation>
+    </message>
+    <message>
+        <source>the end&apos;s plane has no normal</source>
+        <translation>pään tasolla ei ole normaalia</translation>
     </message>
     <message>
         <source>the ends already meet: Blend Curve joins ends with a gap between them</source>
@@ -48624,8 +50086,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piirteen suunta on nolla</translation>
     </message>
     <message>
+        <source>the field spans %1 lattice positions, too many to plan: use larger cells or a smaller field</source>
+        <translation>kenttä kattaa %1 hilapaikkaa, liian monta suunniteltavaksi: käytä suurempia soluja tai pienempää kenttää</translation>
+    </message>
+    <message>
         <source>the field values are cut short</source>
         <translation>kenttien arvot katkeavat kesken</translation>
+    </message>
+    <message>
+        <source>the field&apos;s loop is not closed: %1 and %2 lie %3 mm apart</source>
+        <translation>kentän silmukka ei ole suljettu: %1 ja %2 ovat %3 mm:n päässä toisistaan</translation>
+    </message>
+    <message>
+        <source>the field&apos;s loop through %1 is not closed: its ends lie %2 mm apart</source>
+        <translation>kentän silmukka kohdan %1 kautta ei ole suljettu: sen päät ovat %2 mm:n päässä toisistaan</translation>
     </message>
     <message>
         <source>the filament change at %1 has no printed body to be measured from, so it is left out</source>
@@ -49228,14 +50702,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>muoto on %1, ei %2</translation>
     </message>
     <message>
-        <source>the formula of an equation curve (it stays the spline it placed)</source>
-        <translation>yhtälökäyrän kaava (käyrästä jää sen asettama splini)</translation>
-    </message>
-    <message>
-        <source>the formulas of %1 equation curves (each stays the spline it placed)</source>
-        <translation>%1 yhtälökäyrän kaavat (kustakin jää sen asettama splini)</translation>
-    </message>
-    <message>
         <source>the frame %1 of %2 is not available here</source>
         <translation>kohteen %2 kehys %1 ei ole saatavilla tässä</translation>
     </message>
@@ -49412,6 +50878,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>leikkauskohdan akselien ruudukkoa ei löytynyt</translation>
     </message>
     <message>
+        <source>the grid would have about %1 cells, more than the %2 one Cell Grid cuts: use larger cells or a smaller field</source>
+        <translation>ruudukossa olisi noin %1 solua, enemmän kuin Soluruudukon enimmäismäärä %2: käytä suurempia soluja tai pienempää kenttää</translation>
+    </message>
+    <message>
+        <source>the grid&apos;s angle and anchor must be numbers</source>
+        <translation>ruudukon kulman ja ankkurin on oltava lukuja</translation>
+    </message>
+    <message>
         <source>the grounded occurrence</source>
         <translation>kiinnitetty esiintymä</translation>
     </message>
@@ -49478,6 +50952,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the header&apos;s column %1 is none of a materials file: %2</source>
         <translation>otsakkeen sarake %1 ei ole mikään materiaalitiedoston sarakkeista: %2</translation>
+    </message>
+    <message>
+        <source>the height of annotation texts</source>
+        <translation>merkintätekstien korkeus</translation>
     </message>
     <message>
         <source>the helix angle must be at most 45 degrees, got %1 degrees</source>
@@ -49756,6 +51234,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tuonnin aikaraja saavutettiin</translation>
     </message>
     <message>
+        <source>the import&apos;s tolerance for joins</source>
+        <translation>tuonnin liitostoleranssi</translation>
+    </message>
+    <message>
         <source>the import; the stored bodies come in without the timeline</source>
         <translation>tuonti; tallennetut kappaleet tulevat ilman aikajanaa</translation>
     </message>
@@ -49766,6 +51248,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the inner race&apos;s bore must be smaller than the bore it runs in</source>
         <translation>sisärenkaan reiän on oltava pienempi kuin reikä, jossa se pyörii</translation>
+    </message>
+    <message>
+        <source>the inset must be zero or more</source>
+        <translation>sisennyksen on oltava nolla tai enemmän</translation>
     </message>
     <message>
         <source>the instance is not of this block</source>
@@ -49912,6 +51398,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>liitoskohdan osat ovat poistuneet</translation>
     </message>
     <message>
+        <source>the keep-outs&apos; edge cells are %1 as the field&apos;s, not %2</source>
+        <translation>kieltoalueiden reunasolut ovat %1 kuten kentän, eivät %2</translation>
+    </message>
+    <message>
         <source>the kept cage has control points beside its vertices&apos; own, which a Form&apos;s cage does not have</source>
         <translation>säilytetyllä häkillä on ohjauspisteitä kärkipisteidensä omien lisäksi, mitä Form-piirteen häkillä ei ole</translation>
     </message>
@@ -49960,12 +51450,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>sahausraon on oltava nolla tai enemmän, annettiin %1</translation>
     </message>
     <message>
+        <source>the kernel cannot measure %1</source>
+        <translation>ydin ei voi mitata kohdetta %1</translation>
+    </message>
+    <message>
         <source>the kernel described %1 of the body&apos;s %2 edges</source>
         <translation>ydin kuvasi kappaleen %2 särmästä %1</translation>
     </message>
     <message>
         <source>the kernel described %1 of the body&apos;s %2 faces</source>
         <translation>ydin kuvasi kappaleen %2 tahkosta %1</translation>
+    </message>
+    <message>
+        <source>the kernel measured a different number of points</source>
+        <translation>ydin mittasi eri määrän pisteitä</translation>
     </message>
     <message>
         <source>the key %1 has a &apos;/&apos;, which separates a set from a key in searches</source>
@@ -50034,6 +51532,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the length tolerance must be greater than zero</source>
         <translation>pituustoleranssin on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
+        <source>the length unit&apos;s size must be greater than zero, got %1</source>
+        <translation>pituusyksikön koon on oltava suurempi kuin nolla, annettiin %1</translation>
     </message>
     <message>
         <source>the length would be %1 mm: the offset ends the profile at or before its start</source>
@@ -50106,6 +51608,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the license %1 is not one the index accepts</source>
         <translation>lisenssi %1 ei ole hakemiston hyväksymä</translation>
+    </message>
+    <message>
+        <source>the lid&apos;s tuck must be deeper than 0 and end above the base: at most %1 mm, got %2</source>
+        <translation>kannen työntöläpän syvyyden on oltava yli 0, ja läpän on päätyttävä pohjan yläpuolelle: enintään %1 mm, annettiin %2</translation>
     </message>
     <message>
         <source>the limits or target of %1 are invalid</source>
@@ -50228,8 +51734,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>marginaalin on oltava äärellinen, annettiin %1</translation>
     </message>
     <message>
+        <source>the margin must not be negative, got %1</source>
+        <translation>reunavara ei saa olla negatiivinen, annettiin %1</translation>
+    </message>
+    <message>
         <source>the marker %1 is past the end of the timeline (%2 features)</source>
         <translation>merkki %1 on aikajanan lopun jälkeen (%2 piirrettä)</translation>
+    </message>
+    <message>
+        <source>the marker is after %1 features, in the design after %2</source>
+        <translation>merkki on %1 piirteen jälkeen, mallissa %2 piirteen jälkeen</translation>
     </message>
     <message>
         <source>the mass per length</source>
@@ -50276,6 +51790,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>rakenneosalla ei ole johdettua osaa</translation>
     </message>
     <message>
+        <source>the member has no extent</source>
+        <translation>rakenneosalla ei ole laajuutta</translation>
+    </message>
+    <message>
         <source>the member has no size</source>
         <translation>rakenneosalla ei ole kokoa</translation>
     </message>
@@ -50298,6 +51816,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the member was not made</source>
         <translation>rakenneosaa ei tehty</translation>
+    </message>
+    <message>
+        <source>the member&apos;s cut back has no parameter</source>
+        <translation>rakenneosan lyhennyksellä ei ole parametria</translation>
     </message>
     <message>
         <source>the member&apos;s edge frame is gone</source>
@@ -50612,6 +52134,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1 tapin kolot ovat päällekkäin: kukin %2 mm tahkon suunnassa välyksen kanssa, keskikohtien väli %3 mm</translation>
     </message>
     <message>
+        <source>the most points to keep must be from 1 to %1, got %2</source>
+        <translation>säilytettävien pisteiden enimmäismäärän on oltava 1–%1, annettiin %2</translation>
+    </message>
+    <message>
         <source>the motion %1 is listed twice</source>
         <translation>liike %1 on luettelossa kahdesti</translation>
     </message>
@@ -50678,6 +52204,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the nearest edge of the replay, an edge of %1, is %2 mm from it and %3 mm long</source>
         <translation>toiston lähin särmä, kohteen %1 särmä, on %2 mm:n päässä siitä ja %3 mm pitkä</translation>
+    </message>
+    <message>
+        <source>the new blank has no crease for the box&apos;s Fold %1: %2</source>
+        <translation>uudessa aihiossa ei ole nuuttia laatikon taitteelle %1: %2</translation>
     </message>
     <message>
         <source>the new component has %1 already</source>
@@ -50920,6 +52450,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>siirtymä vie kohteen %1 sen liikevaran ulkopuolelle kohteella %2: sen paikka on liikevaran rajojen Min ja Maks välillä</translation>
     </message>
     <message>
+        <source>the offset puts %1 beyond its travel: it moves with %2</source>
+        <translation>siirtymä vie kohteen %1 sen liikevaran ulkopuolelle: se liikkuu kohteen %2 mukana</translation>
+    </message>
+    <message>
         <source>the offset turns the sketch out of its support&apos;s plane</source>
         <translation>siirtymä kääntää luonnoksen pois tukensa tasosta</translation>
     </message>
@@ -51026,6 +52560,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the outline of face %1 is not one region (%2 found)</source>
         <translation>tahkon %1 ääriviiva ei ole yksi alue (löytyi %2)</translation>
+    </message>
+    <message>
+        <source>the outline set in does not close</source>
+        <translation>sisennetty ääriviiva ei sulkeudu</translation>
     </message>
     <message>
         <source>the outline&apos;s points must be finite</source>
@@ -51148,6 +52686,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>parametria %1 käytetään 1 muussa kohdassa: valitse, muutetaanko parametria vai annetaanko mitalle oma arvo</translation>
     </message>
     <message>
+        <source>the parameter %1: it uses parameters of features the script does not add</source>
+        <translation>parametri %1: se käyttää parametreja piirteistä, joita komentosarja ei lisää</translation>
+    </message>
+    <message>
         <source>the part has no bodies: its B-rep record holds none, it lists none and it has no mesh features</source>
         <translation>osalla ei ole kappaleita: sen B-rep-tietueessa ei ole niitä, se ei luettele yhtään eikä sillä ole verkkopiirteitä</translation>
     </message>
@@ -51178,6 +52720,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the part is after the timeline marker: move the marker past it first</source>
         <translation>osa on aikajanan merkin jälkeen: siirrä merkki ensin sen ohi</translation>
+    </message>
+    <message>
+        <source>the part is cut back by an inward end cap</source>
+        <translation>osaa lyhennetään sisäänpäin olevalla päätykannella</translation>
     </message>
     <message>
         <source>the part is in no timber frame</source>
@@ -51524,6 +53070,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>nimiön SVG-kuvien sisällä olevat kuvat jätetään pois tiedostosta %1</translation>
     </message>
     <message>
+        <source>the piece of the conic has no shoulder: it would reach the curve&apos;s asymptote or turn through half an ellipse</source>
+        <translation>kartioleikkauksen osalla ei ole olkapistettä: se ulottuisi käyrän asymptoottiin tai kääntyisi puolen ellipsin verran</translation>
+    </message>
+    <message>
         <source>the pitch circle holds fewer than %1 elements of %2 mm</source>
         <translation>jakoympyrälle mahtuu vähemmän kuin %1 elementtiä, joiden koko on %2 mm</translation>
     </message>
@@ -51744,6 +53294,42 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piste</translation>
     </message>
     <message>
+        <source>the point cloud %1 is gone</source>
+        <translation>pistepilvi %1 on poistunut</translation>
+    </message>
+    <message>
+        <source>the point cloud %1 was not kept</source>
+        <translation>pistepilveä %1 ei säilytetty</translation>
+    </message>
+    <message>
+        <source>the point cloud has more than %1 points</source>
+        <translation>pistepilvessä on yli %1 pistettä</translation>
+    </message>
+    <message>
+        <source>the point cloud has no points</source>
+        <translation>pistepilvessä ei ole pisteitä</translation>
+    </message>
+    <message>
+        <source>the point cloud needs a name</source>
+        <translation>pistepilvi tarvitsee nimen</translation>
+    </message>
+    <message>
+        <source>the point cloud&apos;s colours do not match its points</source>
+        <translation>pistepilven värit eivät vastaa sen pisteitä</translation>
+    </message>
+    <message>
+        <source>the point cloud&apos;s component: %1</source>
+        <translation>pistepilven komponentti: %1</translation>
+    </message>
+    <message>
+        <source>the point cloud&apos;s data is no base64: %1</source>
+        <translation>pistepilven data ei ole base64-muotoa: %1</translation>
+    </message>
+    <message>
+        <source>the point cloud&apos;s unit must be mm, cm, m, in or ft, got %1</source>
+        <translation>pistepilven yksikön on oltava mm, cm, m, in tai ft, annettiin %1</translation>
+    </message>
+    <message>
         <source>the point does not exist</source>
         <translation>pistettä ei ole olemassa</translation>
     </message>
@@ -51800,6 +53386,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piste on jo sillä tahkolla</translation>
     </message>
     <message>
+        <source>the point is on the face&apos;s axis</source>
+        <translation>piste on tahkon akselilla</translation>
+    </message>
+    <message>
         <source>the point is used by %1 curves, relations or dimensions; delete them with it</source>
         <translation>pistettä käyttää käyriä, suhteita tai mittoja (%1); poista ne sen mukana</translation>
     </message>
@@ -51840,8 +53430,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kaikki pisteet ovat samassa kohdassa: mikään käyrä ei kulje niiden kautta</translation>
     </message>
     <message>
+        <source>the points are no base64: %1</source>
+        <translation>pisteet eivät ole base64-muotoa: %1</translation>
+    </message>
+    <message>
+        <source>the points are not whole x, y, z triples</source>
+        <translation>pisteet eivät ole kokonaisia x, y, z -kolmikoita</translation>
+    </message>
+    <message>
+        <source>the points could not be told inside or outside</source>
+        <translation>pisteistä ei voitu päätellä, ovatko ne sisä- vai ulkopuolella</translation>
+    </message>
+    <message>
         <source>the points do not fit in the sketch: the scale is too large</source>
         <translation>pisteet eivät mahdu luonnokseen: mittakaava on liian suuri</translation>
+    </message>
+    <message>
+        <source>the points measured must be from 1 to %1, got %2</source>
+        <translation>mitattavien pisteiden määrän on oltava 1–%1, annettiin %2</translation>
     </message>
     <message>
         <source>the points must be finite</source>
@@ -52094,6 +53700,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the profiles do not match: the %1 of %2 and %3 differ</source>
         <translation>profiilit eivät vastaa toisiaan: ominaisuus %1 eroaa kohteissa %2 ja %3</translation>
+    </message>
+    <message>
+        <source>the profiles enclose no area to fill with cells</source>
+        <translation>profiilit eivät rajaa aluetta, jonka voisi täyttää soluilla</translation>
     </message>
     <message>
         <source>the profiles must come from one sketch</source>
@@ -52400,6 +54010,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kiskon luonnos ei tullut mukaan</translation>
     </message>
     <message>
+        <source>the range is empty or reversed: its end (%1) must be greater than its start (%2)</source>
+        <translation>arvoväli on tyhjä tai käänteinen: sen lopun (%1) on oltava suurempi kuin sen alun (%2)</translation>
+    </message>
+    <message>
+        <source>the range must be finite, got %1</source>
+        <translation>arvovälin on oltava äärellinen, annettiin %1</translation>
+    </message>
+    <message>
         <source>the ratio must be a number other than zero, not %1</source>
         <translation>suhteen on oltava nollasta poikkeava luku, ei %1</translation>
     </message>
@@ -52634,6 +54252,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the replay differs from the stored design; %1 replaces the bodies that differ</source>
         <translation>toisto poikkeaa tallennetusta mallista; %1 korvaa poikkeavat kappaleet</translation>
+    </message>
+    <message>
+        <source>the replay differs: %1</source>
+        <translation>toisto eroaa: %1</translation>
     </message>
     <message>
         <source>the replay failed: %1</source>
@@ -52956,6 +54578,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>ruuvin reikä tulee eri levyyn kuin ura</translation>
     </message>
     <message>
+        <source>the script leaves out %1 features: %2</source>
+        <translation>komentosarja jättää pois %1 piirrettä: %2</translation>
+    </message>
+    <message>
         <source>the seam points are left out: MitCad pairs the chains itself</source>
         <translation>saumapisteet jätetään pois: MitCad parittaa ketjut itse</translation>
     </message>
@@ -53106,10 +54732,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the selected occurrence does not own the %1</source>
         <translation>valittu esiintymä ei omista kohdetta %1</translation>
-    </message>
-    <message>
-        <source>the selection has no corner where two lines or arcs end together</source>
-        <translation>valinnassa ei ole kulmaa, jossa kaksi viivaa tai kaarta päättyy yhteen</translation>
     </message>
     <message>
         <source>the selection set needs a name</source>
@@ -54126,6 +55748,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>aikakoodien on kasvettava näytteestä seuraavaan</translation>
     </message>
     <message>
+        <source>the timeline group %1: its features are not all in the script</source>
+        <translation>aikajanan ryhmä %1: kaikki sen piirteet eivät ole komentosarjassa</translation>
+    </message>
+    <message>
         <source>the timeline marker could not be moved: %1</source>
         <translation>aikajanan merkkiä ei voitu siirtää: %1</translation>
     </message>
@@ -54156,6 +55782,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the tolerance must be between 0.000001 and 1 mm, got %1</source>
         <translation>toleranssin on oltava välillä 0,000001 ja 1 mm, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the tolerance must be from %1 mm to %2 mm, got %3</source>
+        <translation>toleranssin on oltava välillä %1 mm – %2 mm, annettiin %3</translation>
     </message>
     <message>
         <source>the tolerance must be greater than zero, got %1</source>
@@ -54242,12 +55872,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>origon kehyksen kierto z-akselin ympäri on MitCadin</translation>
     </message>
     <message>
+        <source>the turn&apos;s angle must be finite</source>
+        <translation>kierron kulman on oltava äärellinen</translation>
+    </message>
+    <message>
         <source>the turn&apos;s angle must not be zero, got %1</source>
         <translation>käännön kulma ei saa olla nolla, saatiin %1</translation>
     </message>
     <message>
         <source>the turn&apos;s axis has no direction</source>
         <translation>käännön akselilla ei ole suuntaa</translation>
+    </message>
+    <message>
+        <source>the turned over walls take at most %1 locking tabs twice the board&apos;s thickness wide, got %2</source>
+        <translation>käännetyissä seinissä voi olla enintään %1 lukituskielekettä, joiden leveys on kaksi kertaa kartongin paksuus, annettiin %2</translation>
     </message>
     <message>
         <source>the turned plane is not the sketch&apos;s</source>
@@ -54542,6 +56180,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>varoitus säilyy löydettyjen nimien kanssa</translation>
     </message>
     <message>
+        <source>the web between cells must be at least %1 mm, got %2</source>
+        <translation>solujen välisen seinämän on oltava vähintään %1 mm, annettiin %2</translation>
+    </message>
+    <message>
+        <source>the web between cells must be greater than zero, got %1</source>
+        <translation>solujen välisen seinämän on oltava suurempi kuin nolla, annettiin %1</translation>
+    </message>
+    <message>
         <source>the web viewer is off: %1</source>
         <translation>verkkokatselin on pois päältä: %1</translation>
     </message>
@@ -54698,6 +56344,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>ei ole kappaletta toimintoa %1 varten</translation>
     </message>
     <message>
+        <source>there is no body to cut the cells from</source>
+        <translation>ei ole kappaletta, josta solut leikattaisiin</translation>
+    </message>
+    <message>
         <source>there is no body “%1” at the timeline marker</source>
         <translation>kappaletta “%1” ei ole aikajanan merkin kohdalla</translation>
     </message>
@@ -54724,6 +56374,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>there is no coordinate system %1</source>
         <translation>koordinaatistoa %1 ei ole</translation>
+    </message>
+    <message>
+        <source>there is no decal %1</source>
+        <translation>tarraa %1 ei ole</translation>
     </message>
     <message>
         <source>there is no dimension %1 to stand under</source>
@@ -54810,6 +56464,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>alustaa %1 ei ole (mallin: %2)</translation>
     </message>
     <message>
+        <source>there is no point cloud %1</source>
+        <translation>pistepilveä %1 ei ole</translation>
+    </message>
+    <message>
         <source>there is no profile</source>
         <translation>profiilia ei ole</translation>
     </message>
@@ -54872,10 +56530,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>these materials are not one filament&apos;s presets: two of them are for any printer</source>
         <translation>nämä materiaalit eivät ole yhden filamentin esiasetuksia: kaksi niistä on mille tahansa tulostimelle</translation>
-    </message>
-    <message>
-        <source>these options change the shape of the box&apos;s blank: make the box again</source>
-        <translation>nämä vaihtoehdot muuttavat laatikon aihion muotoa: tee laatikko uudelleen</translation>
     </message>
     <message>
         <source>they are</source>
@@ -55318,6 +56972,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>rajauksen materiaalialue ei ole käytettävissä</translation>
     </message>
     <message>
+        <source>trimmed edge cells follow the field&apos;s edges as drawn, so they keep no margin: set the margin to 0, or choose whole or snapped edge cells</source>
+        <translation>rajatut reunasolut seuraavat kentän reunoja sellaisina kuin ne on piirretty, joten niissä ei ole reunavaraa: aseta reunavaraksi 0 tai valitse kokonaiset tai kohdistetut reunasolut</translation>
+    </message>
+    <message>
         <source>trimmed surfaces</source>
         <translation>rajatut pinnat</translation>
     </message>
@@ -55404,6 +57062,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>two nodes have the same id</source>
         <translation>kahdella solmulla on sama tunniste</translation>
+    </message>
+    <message>
+        <source>two of the conic&apos;s points are the same point</source>
+        <translation>kaksi kartioleikkauksen pisteistä on sama piste</translation>
     </message>
     <message>
         <source>two vertices of the cage have the same id</source>
@@ -55858,6 +57520,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>päivitykset hylättiin</translation>
     </message>
     <message>
+        <source>upto: no feature %1; give &quot;marker&quot; or a feature&apos;s uid or name</source>
+        <translation>upto: ei piirrettä %1; anna &quot;marker&quot; tai piirteen tunniste tai nimi</translation>
+    </message>
+    <message>
+        <source>upto: no feature; give &quot;marker&quot; or a feature&apos;s uid or name</source>
+        <translation>upto: ei piirrettä; anna &quot;marker&quot; tai piirteen tunniste tai nimi</translation>
+    </message>
+    <message>
+        <source>upto: several features are named %1; give its uid</source>
+        <translation>upto: useamman piirteen nimi on %1; anna sen tunniste</translation>
+    </message>
+    <message>
         <source>use &apos;==&apos; to compare, not &apos;=&apos;</source>
         <translation>käytä vertailuun &apos;==&apos;, ei &apos;=&apos;</translation>
     </message>
@@ -56160,6 +57834,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>will settings without a will</source>
         <translation>will-asetukset ilman will-viestiä</translation>
+    </message>
+    <message>
+        <source>with %1 points, the most an equation curve takes, the curve is still up to %2 mm from its formulas (its tolerance is %3 mm): a larger tolerance or a shorter range follows them</source>
+        <translation>%1 pisteelläkin, joka on yhtälökäyrän enimmäismäärä, käyrä on yhä jopa %2 mm:n päässä kaavoistaan (sen toleranssi on %3 mm): suuremmalla toleranssilla tai lyhyemmällä arvovälillä käyrä seuraa niitä</translation>
     </message>
     <message>
         <source>with constraints or dimensions on them</source>

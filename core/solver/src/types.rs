@@ -358,6 +358,60 @@ pub enum Constraint {
         b: EntityId,
         at: PointId,
     },
+    // Points on offsets of curves (mitcad#2278).
+    /// The point on the offset of `curve` by `left` along its left normal
+    /// (the left of the curve's own direction; a negative `left` is the
+    /// right): `p = S(t) + left n(t)`, `S` the curve, `n` its unit left
+    /// normal, at the parameter `at` gives. The parameter is the curve's
+    /// own: 0 to 1 from the start to the end of a line, the angle (from the
+    /// x axis) on a circle or an arc, the ellipse parameter on an ellipse
+    /// or an elliptical arc, the spline parameter on a spline. The offset
+    /// itself is not an entity: what a sketch computes from the solved
+    /// curve after the solve (an offset of a spline) stays exactly where
+    /// the point is.
+    PointOnOffset {
+        point: PointId,
+        curve: EntityId,
+        left: f64,
+        at: OffsetAt,
+    },
+    /// The point on the round corner of an offset (mitcad#2278): at the
+    /// distance `|a_left|` from `corner` (the point where curves `a` and
+    /// `b` meet), in a direction between the offset directions of `a` at
+    /// `a_at` (`a_left` times its left normal) and of `b` at `b_at`, which
+    /// should be less than a half turn apart: `p = corner + |a_left|
+    /// unit((1 - s) a_left n_a + s b_left n_b)` with an unknown `s` kept
+    /// between 0 and 1 (starting at `s`). `a_at` and `b_at` are not
+    /// [`OffsetAt::Along`].
+    PointOnOffsetCorner {
+        point: PointId,
+        corner: PointId,
+        a: EntityId,
+        a_at: OffsetAt,
+        a_left: f64,
+        b: EntityId,
+        b_at: OffsetAt,
+        b_left: f64,
+        s: f64,
+    },
+}
+
+// Points on offsets of curves (mitcad#2278).
+/// Where on its curve a [`Constraint::PointOnOffset`] holds its point, by
+/// the curve's parameter.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OffsetAt {
+    /// Free, starting at `t`: kept between the ends of `range` (lower
+    /// first), or all round a closed curve (a circle or an ellipse) with
+    /// none.
+    Along { t: f64, range: Option<(f64, f64)> },
+    /// At the parameter `t`.
+    At(f64),
+    /// At the curve's start: its start point's parameter (a line's 0, an
+    /// arc's or an elliptical arc's start point, a spline's first).
+    Start,
+    /// At the curve's end, as [`OffsetAt::Start`].
+    End,
 }
 
 impl Constraint {

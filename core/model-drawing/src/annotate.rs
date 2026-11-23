@@ -3800,6 +3800,7 @@ mod tests {
             side: None,
             outline: None,
             extreme: None,
+            bend: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Linear, vec![pick.clone()]);
         assert!(d.check().unwrap_err().contains("takes 2 picks"));
@@ -4125,6 +4126,7 @@ mod tests {
             side: None,
             outline: None,
             extreme: None,
+            bend: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Linear, Vec::new());
         d.along = Some(Along::Horizontal);
@@ -4772,6 +4774,7 @@ mod tests {
             side: None,
             outline: None,
             extreme: None,
+            bend: None,
         };
         let picked = |a: &ViewAnnotation| {
             let mut a = a.clone();
@@ -4916,6 +4919,7 @@ mod tests {
             side: None,
             outline: None,
             extreme: None,
+            bend: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Datum, vec![pick.clone()]);
         d.letter = Some("A".to_owned());
@@ -5005,6 +5009,7 @@ mod tests {
             side: None,
             outline: None,
             extreme: None,
+            bend: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Datum, vec![face.clone()]);
         d.letter = Some("B".to_owned());

@@ -23,6 +23,7 @@
 #include "CommandSupport.hpp"
 #include "MoveDragMotion.hpp"
 #include "MoveFaceText.hpp"
+#include "MoveTarget.hpp"
 
 namespace mitcad::cmd {
 namespace {
@@ -60,6 +61,16 @@ std::optional<gp_Pnt> pivotOf(const CommandState& state, const CommandContext& c
   return centerOf(state.items(movedKey(state)), context);
 }
 
+gp_Trsf moveFrame(const CommandState& state, const CommandContext& context);
+
+// A point of the design (a free move's pivot) in the coordinates of the
+// component the move works in, which its matrix is in (mitcad#2302: a
+// component picked inside a sub-assembly moves in its parent, whose
+// occurrence is seldom at the origin); the same point in the root.
+gp_Pnt inMoveFrame(const gp_Pnt& point, const CommandState& state, const CommandContext& context) {
+  return point.Transformed(moveFrame(state, context).Inverted());
+}
+
 // An edited free move as it was loaded (mitcad#1583): the feature's
 // matrix (`rows`) and the texts of the inputs that hold it (`texts`). While
 // the texts are those, OK gives the model that matrix back as it was,
@@ -76,9 +87,10 @@ QJsonObject freeTexts(const CommandState& state) {
 }
 
 // The panel's free move from the model's matrix, split about `pivot`
-// (freeMoveOf), and kept as loaded.
+// (freeMoveOf, the pivot in the move's component's coordinates as the
+// matrix is), and kept as loaded.
 void setFreeMove(const QJsonArray& rows, const gp_Pnt& pivot, CommandState& state, const CommandContext& context) {
-  const FreeMove move = freeMoveOf(rows, pivot);
+  const FreeMove move = freeMoveOf(rows, inMoveFrame(pivot, state, context));
   // The pivot in full: the handles sit at it moved by the distances.
   const auto full = [](double value) { return QString::number(value, 'g', 17); };
   state.setText(QStringLiteral("pivot"), QStringLiteral("%1,%2,%3").arg(full(pivot.X()), full(pivot.Y()), full(pivot.Z())));
@@ -222,6 +234,87 @@ void initMoveComponent(CommandState& state, const CommandContext& context) {
   state.setText(kMoveComponent, activeComponent(context));
 }
 
+// The component a new Move/Copy starts in, the active one (mitcad#2302),
+// kept in its hidden input "home_component": a component picked by its
+// browser row deeper than this one moves in its own parent component
+// (retargetMove), and a body still moves the occurrence placed in this one
+// (mitcad#1891). Empty in an edit, which stays in its feature's component.
+const QString kMoveHome = QStringLiteral("home_component");
+
+// The component picks are resolved against: the one the move started in,
+// else (an edit, Move Face) the one it works in.
+QString moveHome(const CommandState& state) {
+  const QString home = state.text(kMoveHome);
+  return home.isEmpty() ? state.text(kMoveComponent) : home;
+}
+
+// The occurrence tree of the `components` query; empty when the model
+// cannot say.
+QJsonArray occurrenceTree(const CommandContext& context) {
+  try {
+    return context.queryObject({{QStringLiteral("query"), QStringLiteral("components")}})
+        .value(QStringLiteral("occurrences"))
+        .toArray();
+  } catch (const std::exception&) {
+    return QJsonArray();
+  }
+}
+
+// The occurrence paths of Components' picks.
+QStringList componentPaths(const CommandState& state) {
+  QStringList paths;
+  for (const SelectionItem& item : state.items(QStringLiteral("components"))) {
+    paths << item.occurrence;
+  }
+  return paths;
+}
+
+bool movesComponents(const CommandState& state) {
+  return state.choice(QStringLiteral("move_type")) == QStringLiteral("components");
+}
+
+// The component a new Move/Copy works in, after its Objects or Move Object
+// changed (mitcad#2302): a component picked by its browser row whose path
+// passes through the active component but which is placed deeper moves
+// in the component it is placed in, its parent, where the model lets a
+// move_occurrence move it (add_feature's `component`, moveAddOptions), not
+// in the active one. Every other pick, and Bodies, work in the active
+// component. An edit (no "home_component") stays in its feature's.
+void retargetMove(CommandState& state, const CommandContext& context) {
+  const QString home = state.text(kMoveHome);
+  if (home.isEmpty()) {
+    return;
+  }
+  MoveTarget target;
+  target.component = home;
+  const QStringList paths = componentPaths(state);
+  if (movesComponents(state) && !paths.isEmpty()) {
+    target = moveTargetOf(paths, home, occurrenceTree(context));
+  }
+  if (target.component == state.text(kMoveComponent)) {
+    return;
+  }
+  state.setText(kMoveComponent, target.component);
+  if (target.component == home) {
+    qInfo().noquote() << QStringLiteral("Move/Copy: moving in %1, the active component").arg(home);
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Move/Copy: moving in %1 (at %2), the parent of %3, which the active component "
+                                      "%4 holds deeper")
+                           .arg(target.component, target.parentPath, paths.first(), home);
+}
+
+// add_feature's `component` of a Move/Copy that moves components placed
+// deeper than the active one (mitcad#2302): the component they are
+// placed in, the active one staying active.
+void moveAddOptions(QJsonObject& command, const CommandState& state) {
+  const QString home = state.text(kMoveHome);
+  const QString component = state.text(kMoveComponent);
+  if (!home.isEmpty() && !component.isEmpty() && component != home) {
+    command.insert(QStringLiteral("component"), component);
+  }
+}
+
 // --- A body of another component moves as its occurrence (mitcad#1196)
 
 // The occurrence that moves for a body or face of another component than
@@ -266,7 +359,7 @@ void addOccurrence(Selection& components, const QString& path) {
 // instead of the model refusing a body of another component. Not beside
 // bodies of the active component picked already: those move as bodies.
 void takeComponentOf(const SelectionItem& item, CommandState& state, const CommandContext& context) {
-  const QString occurrence = movedOccurrence(item.occurrence, state.text(kMoveComponent), context);
+  const QString occurrence = movedOccurrence(item.occurrence, moveHome(state), context);
   if (occurrence.isEmpty()) {
     return;
   }
@@ -284,6 +377,7 @@ void takeComponentOf(const SelectionItem& item, CommandState& state, const Comma
   qInfo().noquote() << QStringLiteral("Move/Copy: %1 is of another component than the active one: moving %2 "
                                       "(Move Object: Components)")
                            .arg(item.logDescription(), occurrence);
+  retargetMove(state, context);
 }
 
 // A pick of Components as the occurrence it stands for: a component (a
@@ -303,14 +397,16 @@ SelectionItem pickedOccurrenceOf(const SelectionItem& item) {
 // so that a body of an imported assembly's part moves the import's
 // occurrence, not the part's own nested one, which the model refuses as
 // placed in another component. Its own occurrence when none on the path is
-// placed there (the model then says why); a component row as it is.
+// placed there (the model then says why); a component row as it is (one
+// placed deeper moves in its own parent, mitcad#2302: retargetMove). The
+// move's component is the one it started in, also after a component row
+// placed deeper took the move into that row's parent.
 SelectionItem movedOccurrenceOf(const SelectionItem& item, const CommandState& state, const CommandContext& context) {
   SelectionItem occurrence = pickedOccurrenceOf(item);
   if (item.kind == SelectKind::Component) {
     return occurrence;
   }
-  const QString component =
-      state.text(kMoveComponent).isEmpty() ? activeComponent(context) : state.text(kMoveComponent);
+  const QString component = moveHome(state).isEmpty() ? activeComponent(context) : moveHome(state);
   const QString moved = movedOccurrence(item.occurrence, component, context);
   if (!moved.isEmpty() && moved != item.occurrence) {
     occurrence.occurrence = moved;
@@ -537,7 +633,10 @@ QString combineNote(const CommandState& state, const CommandContext& context) {
 // (mitcad#1580): the rings turn about it, and each arrow starts from it
 // without its own distance, so that its knob is there too and the arrows
 // of the other axes go along with what moves; none while a distance is no
-// number yet (a minus sign typed alone).
+// number yet (a minus sign typed alone). The axes are those of the
+// component the move works in (moveFrame, mitcad#2305), which the
+// distances and angles are along and about: in a turned parent the arrows
+// point where the part moves.
 std::function<std::optional<Manipulator>(const CommandState&, const CommandContext&)>
 freeHandle(int axis, bool turn) {
   return [axis, turn](const CommandState& state, const CommandContext& context) -> std::optional<Manipulator> {
@@ -545,8 +644,10 @@ freeHandle(int axis, bool turn) {
     if (!pivot) {
       return std::nullopt;
     }
-    const gp_Dir direction(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0);
-    const std::optional<gp_Pnt> at = turn ? freeMovedMiddle(state, *pivot) : freeArrowOrigin(state, *pivot, axis);
+    const gp_Trsf frame = moveFrame(state, context);
+    const gp_Dir direction = moveAxisOf(frame, axis);
+    const std::optional<gp_Pnt> at =
+        turn ? freeMovedMiddle(state, *pivot, frame) : freeArrowOrigin(state, *pivot, axis, frame);
     if (!at) {
       return std::nullopt;
     }
@@ -557,17 +658,17 @@ freeHandle(int axis, bool turn) {
   };
 }
 
+// Translate's arrows: along the axes of the component the move works in
+// (moveFrame, mitcad#2305), which its distances are along.
 std::function<std::optional<Manipulator>(const CommandState&, const CommandContext&)> translateHandle(int axis) {
   return [axis](const CommandState& state, const CommandContext& context) -> std::optional<Manipulator> {
     const auto center = centerOf(state.items(movedKey(state)), context);
     if (!center) {
       return std::nullopt;
     }
-    return arrow(*center, gp_Dir(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0));
+    return arrow(*center, moveAxisOf(moveFrame(state, context), axis));
   };
 }
-
-gp_Trsf moveFrame(const CommandState& state, const CommandContext& context);
 
 // Rotate's axis as the model turned the shown preview about it (mitcad#838,
 // keptRotateAxis): its ring runs about that axis, so that the ring's sense,
@@ -632,7 +733,8 @@ QJsonObject transformOf(const CommandState& state, const CommandContext& context
     move.rx = state.value(QStringLiteral("rx"));
     move.ry = state.value(QStringLiteral("ry"));
     move.rz = state.value(QStringLiteral("rz"));
-    return {{QStringLiteral("type"), type}, {QStringLiteral("matrix"), freeMatrixOf(move, *pivot)}};
+    return {{QStringLiteral("type"), type},
+            {QStringLiteral("matrix"), freeMatrixOf(move, inMoveFrame(*pivot, state, context))}};
   }
   if (type == QStringLiteral("translate")) {
     return {{QStringLiteral("type"), QStringLiteral("translate_xyz")},
@@ -902,33 +1004,22 @@ InputDef moveComponentInput() {
 }
 
 // Where the coordinates of the component a move works in are in the
-// design: the placement of its first occurrence (the identity in the root).
+// design (the identity in the root): the placement of the occurrence of it
+// that Components' picks are placed in, on their picked paths (mitcad#2302:
+// a component picked inside a sub-assembly moves in its parent, drawn at
+// the parent's occurrence it was picked under), else of its first
+// occurrence.
 gp_Trsf moveFrame(const CommandState& state, const CommandContext& context) {
   const QString component = state.text(kMoveComponent);
   if (component.isEmpty() || component == QStringLiteral("C0")) {
     return gp_Trsf();
   }
-  std::function<std::optional<gp_Trsf>(const QJsonArray&)> find =
-      [&component, &find](const QJsonArray& tree) -> std::optional<gp_Trsf> {
-    for (const QJsonValue& value : tree) {
-      const QJsonObject node = value.toObject();
-      if (node.value(QStringLiteral("component")).toString() == component) {
-        return trsfOf(node.value(QStringLiteral("world")).toArray());
-      }
-      if (const auto inside = find(node.value(QStringLiteral("children")).toArray())) {
-        return inside;
-      }
-    }
-    return std::nullopt;
-  };
-  try {
-    const auto placed = find(context.queryObject({{QStringLiteral("query"), QStringLiteral("components")}})
-                                 .value(QStringLiteral("occurrences"))
-                                 .toArray());
-    return placed ? *placed : gp_Trsf();
-  } catch (const std::exception&) {
+  const QJsonArray tree = occurrenceTree(context);
+  const QString at = frameOccurrenceOf(movesComponents(state) ? componentPaths(state) : QStringList(), component, tree);
+  if (at.isEmpty()) {
     return gp_Trsf();
   }
+  return trsfOf(occurrenceNodeAt(tree, at).value(QStringLiteral("world")).toArray());
 }
 
 // Move/Copy's provisional drag motion (CommandDef::dragMotion, mitcad#838):
@@ -947,7 +1038,8 @@ std::optional<DragMotion> moveDragMotion(const CommandState& state, const Comman
       if (!middle) {
         return std::nullopt;
       }
-      pivot = *middle;
+      // In `frame`'s coordinates, as the motion is (mitcad#2302).
+      pivot = inMoveFrame(*middle, state, context);
     }
     motion.of = [pivot](const CommandState& inputs) { return moveMotion(inputs, pivot); };
   } else if (type == QStringLiteral("rotate") || type == QStringLiteral("point_to_point") ||
@@ -1012,12 +1104,16 @@ CommandDef moveCommand(const CommandContext& context) {
           // A body clicked moves the occurrence placed in the move's
           // component (mitcad#1891).
           .withConvertNow(movedOccurrenceOf)
+          // A component row placed deeper than the active component moves
+          // in its own parent (mitcad#2302); also a script's items.
+          .withOnChange(retargetMove)
           .withVisible(choiceIs(QStringLiteral("move_type"), QStringLiteral("components")));
   def.inputs = {
       choiceInput(QStringLiteral("move_type"), QObject::tr("Move Object"),
                   {{QStringLiteral("bodies"), QStringLiteral("Bodies")},
                    {QStringLiteral("components"), QStringLiteral("Components")}},
-                  QStringLiteral("bodies")),
+                  QStringLiteral("bodies"))
+          .withOnChange(retargetMove),
       bodyObjects,
       componentObjects,
   };
@@ -1030,28 +1126,47 @@ CommandDef moveCommand(const CommandContext& context) {
   def.inputs << checkInput(QStringLiteral("copy"), QObject::tr("Create Copy"), false)
                     .withTooltip(QObject::tr("Move copies of the bodies; the originals stay"))
                     .withVisible(bodies)
-             << pivotInput() << moveComponentInput();
+             << pivotInput() << moveComponentInput()
+             << textInput(kMoveHome, QObject::tr("Active Component")).withVisible([](const CommandState&) {
+                  return false;
+                });
   def.enabled = [&context] { return hasBodies(context); };
   // Bodies and faces of other components selected before (a placed BUILD
   // part clicked, mitcad#1196) move as their occurrences.
   def.preselected = [](const Selection& selection, CommandState& state, const CommandContext& context) {
     takeComponentsOf(selection, state, context);
   };
-  // Components selected before (a pasted copy, P9) move as components.
+  // Components selected before (a pasted copy, P9) move as components; one
+  // placed deeper than the active component moves in its parent
+  // (mitcad#2302).
   def.init = [](CommandState& state, const CommandContext& context) {
     if (!state.items(QStringLiteral("components")).isEmpty() && state.items(QStringLiteral("bodies")).isEmpty()) {
       state.setChoice(QStringLiteral("move_type"), QStringLiteral("components"));
     }
     initMoveComponent(state, context);
+    state.setText(kMoveHome, state.text(kMoveComponent));
+    retargetMove(state, context);
   };
+  // A move in the parent of components placed deeper than the active one
+  // goes into that component (mitcad#2302), in its preview and on OK.
+  def.addOptions = moveAddOptions;
 
   def.build = [](const CommandState& state, const CommandContext& context) {
     Built result;
+    // One move_occurrence moves occurrences of one component: components
+    // picked in different components are refused (mitcad#2302; one OK
+    // gives one feature).
+    if (movesComponents(state) && !state.text(kMoveHome).isEmpty() &&
+        moveTargetOf(componentPaths(state), state.text(kMoveHome), occurrenceTree(context)).mixed) {
+      return Built::failure(QObject::tr("These components are placed in different components, and one move "
+                                        "moves the components of one. Move them one component at a time."),
+                            QStringLiteral("components"));
+    }
     const QJsonObject transform = transformOf(state, context, result);
     if (!result.error.isEmpty()) {
       return result;
     }
-    if (state.choice(QStringLiteral("move_type")) == QStringLiteral("components")) {
+    if (movesComponents(state)) {
       QJsonArray occurrences;
       for (const SelectionItem& item : state.items(QStringLiteral("components"))) {
         // The definition names an occurrence by its uid, the last step of
@@ -1096,16 +1211,30 @@ CommandDef moveCommand(const CommandContext& context) {
     return transformEditable(feature.value(QStringLiteral("transform")).toObject(), context);
   };
   // A grounded occurrence moves and stays grounded there (mitcad#1196; the
-  // model's move_occurrence): said under the inputs, not refused.
+  // model's move_occurrence): said under the inputs, not refused. A
+  // component picked deeper than the active one moves in its parent, whose
+  // own placement of it changes: in every occurrence of the parent
+  // (mitcad#2302).
   def.note = [](const CommandState& state, const CommandContext& context) -> QString {
-    if (state.choice(QStringLiteral("move_type")) != QStringLiteral("components")) {
+    if (!movesComponents(state)) {
       return QString();
     }
+    QStringList notes;
     const Selection& components = state.items(QStringLiteral("components"));
     const bool grounded = std::any_of(components.begin(), components.end(), [&context](const SelectionItem& item) {
       return groundedAt(item.occurrence, context);
     });
-    return grounded ? QObject::tr("Grounded: it stays grounded at the new place.") : QString();
+    if (grounded) {
+      notes << QObject::tr("Grounded: it stays grounded at the new place.");
+    }
+    const QString home = state.text(kMoveHome);
+    const QString component = state.text(kMoveComponent);
+    if (!home.isEmpty() && !component.isEmpty() && component != home &&
+        occurrenceCountOf(occurrenceTree(context), component) > 1) {
+      notes << QObject::tr("The component it is placed in is used more than once: it moves in every place "
+                           "that component is used.");
+    }
+    return notes.join(QLatin1Char(' '));
   };
   // The bodies or components follow a handle's drag at once (mitcad#838).
   def.dragMotion = moveDragMotion;

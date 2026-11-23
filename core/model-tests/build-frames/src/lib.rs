@@ -60,3 +60,12 @@ mod parallel_tests;
 mod print_service_build_tests;
 // Group identical parts in the Bill of Materials' views (mitcad#2215).
 mod bom_group_view_tests;
+// End caps of tubes and profiles (mitcad#2243).
+mod end_cap_tests;
+// End caps of closed sections of any shape (mitcad#2270).
+mod end_cap_outline_tests;
+// A part on a plane or a face follows it when it moves (mitcad#2286).
+mod plane_follow_tests;
+// Two carriages joined by a Rigid joint or a Rigid Group move together
+// (mitcad#2274).
+mod carriages_together_tests;

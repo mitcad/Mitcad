@@ -3,7 +3,8 @@
 The BUILD tab's planning (mitcad#375; [commands.md](../model-api/src/commands.md),
 "BUILD: profile assemblies"): placing and editing parts, connectors,
 panels, timber members and their joinery, spacing sets, timber frames,
-fasteners, the junctions where profiles meet and the cut list.
+fasteners, the junctions where profiles meet, end caps (`end_cap.rs`,
+mitcad#2243) and the cut list.
 
 The crate sits above `mitcad-model` and below `mitcad-model-api`
 (mitcad#777), so that an edit of BUILD planning recompiles only this crate

@@ -246,6 +246,8 @@ const std::vector<std::pair<QString, QStringList>>& otherNames() {
         row("view.fit", {"zoom extents"}),
         row("view.named_view", {"saved view"}),
         row("tools.preferences", {"options", "settings"}),
+        // Decals (mitcad#2244)
+        row("insert.decal", {"sticker", "label", "logo", "image on face", "texture on face"}),
     };
   }();
   return names;

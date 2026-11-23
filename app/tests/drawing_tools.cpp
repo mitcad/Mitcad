@@ -192,6 +192,21 @@ int drawingToolsTests() {
   CHECK(armList.size() == 3);
   CHECK(armList.value(1) == qMakePair(QStringLiteral("occurrence:O4"), QStringLiteral("Pin:2")));
   CHECK(armList.value(2) == qMakePair(QStringLiteral("body:F5.b0"), QStringLiteral("Arm body")));
+  // A sheet-metal body of its own: its Flat Pattern last, by its name
+  // (mitcad#2280); another component's sheet is not the root's.
+  const QJsonArray sheets{QJsonObject{{QStringLiteral("body"), QStringLiteral("F2.b0")}},
+                          QJsonObject{{QStringLiteral("body"), QStringLiteral("F5.b0")}}};
+  const QList<QPair<QString, QString>> withFlat =
+      subjectChoices(QStringLiteral("C0"), QStringLiteral("robot"), components, allBodies, sheets);
+  CHECK(withFlat.size() == 5);
+  CHECK(withFlat.value(4) == qMakePair(QStringLiteral("flat:F2.b0"), QStringLiteral("Base Flat Pattern")));
+  const QJsonObject flatSubject{{QStringLiteral("type"), QStringLiteral("flat_pattern")},
+                                {QStringLiteral("body"), QStringLiteral("F2.b0")}};
+  CHECK(subjectOf(QStringLiteral("flat:F2.b0")) == flatSubject);
+  CHECK(subjectChoice(flatSubject) == QStringLiteral("flat:F2.b0"));
+  command = base->command(QStringLiteral("D1"), 0, picks(0, {QPointF(10, 20)}),
+                          {{QStringLiteral("subject"), QStringLiteral("flat:F2.b0")}});
+  CHECK(command.value(QStringLiteral("subject")).toObject() == flatSubject);
   // The view panel's Shows (mitcad#1293): the root's own bodies, then each
   // occurrence with its component's bodies and its occurrences.
   const QVector<SubjectRow> rows = subjectRows(QStringLiteral("C0"), components, allBodies);
@@ -299,6 +314,9 @@ int drawingToolsTests() {
   CHECK(command.value(QStringLiteral("hatch")) == QJsonValue(false));
   command = viewEdit(QStringLiteral("D1"), 3, QStringLiteral("flip"), QStringLiteral("true"), style);
   CHECK(command.value(QStringLiteral("flip")) == QJsonValue(true));
+  // A Flat Pattern view's bend notes (mitcad#2280).
+  command = viewEdit(QStringLiteral("D1"), 5, QStringLiteral("bend_notes"), QStringLiteral("false"), style);
+  CHECK(command.value(QStringLiteral("bend_notes")) == QJsonValue(false));
   command = viewEdit(QStringLiteral("D1"), 4, QStringLiteral("radius"), QStringLiteral("12.5"), style);
   CHECK(command.value(QStringLiteral("radius")).toDouble() == 12.5);
   CHECK(viewEdit(QStringLiteral("D1"), 4, QStringLiteral("radius"), QStringLiteral("big"), style).isEmpty());

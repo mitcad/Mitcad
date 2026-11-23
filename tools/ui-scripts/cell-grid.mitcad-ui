@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: MIT
+# Cell Grid (mitcad#2238; app/COMMANDS.md "Cell Grid"), on cell-grid.json
+# (a plate 100 x 60 x 10 about the origin, Body1, F1.b0, 60000 mm3):
+#   1. Create Sketch on the plate's top face (Sketch1, F2: the model origin
+#      projected onto the face, x along X): a rectangle from (-40, -25) to
+#      (40, 25) and a circle of diameter 24 about the origin inside it.
+#   2. Cell Grid on the rectangle's region (the circle a keep-out), Size 8,
+#      Web 2, Depth 4, into the face: hexagons on the lattice of pitch 10
+#      at (8.660 i, 5 i + 10 j). Whole cells: the columns -4..4, the even
+#      ones at y 0, ±10, ±20, the odd ones at ±5, ±15: 41; the keep-out
+#      leaves out the cell on the origin and its six neighbours 10 away (6
+#      from it): 34 cells of 32 sqrt(3), 1884.47 mm2, 4 deep: 52462.115 mm3.
+#   3. CellGrid1 edited to circles of diameter 8 on the same centres: 34
+#      circles, 1709.03 mm2, 4 deep: 53163.894 mm3.
+# Run by tools/ui-cell-grid-test.sh (Linux),
+# tools/ui-windows-cell-grid-test.ps1 (Windows) and
+# tools/ui-macos-cell-grid-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. A sketch on the top face: the rectangle and the circle.
+mark
+command sketch.create
+wait-log '^Pick face F1[.]b0/F1:top at '
+wait-idle
+click-pick 'face F1[.]b0/F1:top at '
+wait-log '^Sketch started on [{]"body":"F1[.]b0","face":"F1:top"[}]'
+wait-log '^Sketch view -?[0-9.]+,'
+wait-idle
+mark
+# The far corner by typed sizes: a click at (40, 25) lands near the
+# orientation cube at this zoom (the first check turned the view).
+key r
+sketch-click -40 -25
+sketch-move 0 0
+type 80
+key Tab
+type 50
+key Return
+wait-log '^Added rectangle 80 x 50 mm at '
+key Escape
+wait-idle
+mark
+command sketch.circle
+# The diameter typed: a click at (12, 0) snaps to the layout grid.
+sketch-click 0 0
+sketch-move 12 0
+type 24
+key Return
+wait-log '^Added circle, diameter 24 mm at [(]0, 0[)]'
+key Escape
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle 30
+command view.fit
+wait-idle 30
+
+# 2. Cell Grid of hexagons on the rectangle's region.
+mark
+command solid.cell_grid
+wait-log '^Command Cell Grid started' 30
+wait-idle 30
+button '.*' clear_profiles
+wait-log '^Cell Grid Profiles: nothing$'
+mark
+click-pick 'profile F2/r\{c1\['
+wait-log '^Cell Grid Profiles: 1 profile '
+wait-idle 30
+type-in '^Panel Cell Grid input size at ' '8 mm'
+wait-idle 30
+type-in '^Panel Cell Grid input web at ' '2 mm'
+wait-idle 30
+mark
+type-in '^Panel Cell Grid input depth at ' '4 mm'
+wait-log '^Preview Cell Grid: ok, remark: 34 cells, open area 1884[.]47 mm' 60
+wait-idle 30
+mark
+button '^OK$'
+wait-log '^Added cell grid [(]hexagon, whole edge cells[)] of 1 profile[(]s[)]: size 8, web 2, depth 4, negative$' 60
+wait-idle 60
+capture hexagons 'Body \S+ [(]F1[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${hexagons} 52462.114885 1e-6 0.01
+wait-log '^Timeline CellGrid1 at ' 30
+
+# 3. Edited to circles.
+mark
+dblclick-logged '^Timeline CellGrid1 at '
+wait-log 'Editing F3 with Cell Grid' 30
+wait-log '^Preview Cell Grid: ok' 60
+wait-idle 30
+mark
+qt-choice input_shape 'Circle'
+wait-log '^Preview Cell Grid: ok, remark: 34 cells, open area 1709[.]03 mm' 60
+wait-idle 30
+mark
+button '^OK$'
+wait-idle 60
+capture circles 'Body \S+ [(]F1[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${circles} 53163.894386 1e-6 0.01
+expect-never 'Failed features: [^n]|Recompute failed|TestDriver: FAIL'

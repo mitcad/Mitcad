@@ -118,3 +118,6 @@ mod outline_set_2194_tests;
 // What uses a user parameter: the `parameters` query's `used_by`, and the
 // refusals of `delete_parameter` (mitcad#2202).
 mod parameter_users_2202_tests;
+// The timeline as a script, add_feature with a uid, run_script as one
+// undo step, and every CLI script's design replayed (mitcad#2245).
+mod script_export_tests;

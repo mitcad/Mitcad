@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: MIT
+# Macros and scripts (mitcad#2245, app/COMMANDS.md "Macros and scripts"),
+# the shared input script of tools/ui-macro-record-test.sh (Linux),
+# tools/ui-windows-macro-record-test.ps1 and tools/ui-macos-macro-record-test.sh,
+# on a new, empty design:
+#   1. Tools › Macro › Record Macro, then a sketch with a 60 x 40 rectangle,
+#      an extrusion 20 mm high and a fillet of r = 3 on a vertical edge,
+#      sent as the application sends them (each through its command path,
+#      which the recorder listens to): each step recorded, the indicator
+#      counting them; Stop Recording;
+#   2. Save Macro… writes the four steps to fillet-block.json;
+#   3. the four steps undone: no body left;
+#   4. Run Script… of fillet-block.json: the filleted block again, as one
+#      undo step named Run fillet-block;
+#   5. File › Export Timeline as Script… writes the timeline (the sketch,
+#      the extrusion and the fillet) to block-timeline.json;
+#   6. one Undo takes the whole script back.
+# The wrappers then read both files.
+wait-idle
+
+# 1. Recording.
+mark
+command tools.macro_record
+wait-log '^Macro: recording$'
+model-command '{"cmd":"sketch.create"}'
+wait-log '^Macro: recorded sketch\.create \(1 step\)$'
+model-command '{"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":60,"height":40}'
+wait-log '^Macro: recorded sketch\.add_rectangle \(2 steps\)$'
+model-command '{"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":20},"operation":"new_body"}}'
+wait-log '^New body Body1 \(F2\.b0\): volume 48000\.000 mm3$'
+wait-log '^Macro: recorded add_feature \(3 steps\)$'
+model-command '{"cmd":"add_feature","def":{"type":"fillet","body":"F2.b0","edges":["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"],"radius":3}}'
+wait-log '^Body Body1 \(F2\.b0\): volume 48000\.000 -> 47961\.372 mm3$'
+wait-log '^Macro: recorded add_feature \(4 steps\)$'
+mark
+command tools.macro_stop
+wait-log '^Macro: stopped, 4 steps$'
+
+# 2. Save Macro.
+mark
+command tools.macro_save
+focus-dialog '^Save Macro$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/fillet-block.json"
+sleep 300
+key Return
+focus-main
+wait-log '^Macro: saved 4 steps to ${MITCAD_TEST_WORK:re}/fillet-block\.json$'
+expect-file "${MITCAD_TEST_WORK}/fillet-block.json"
+
+# 3. The four steps undone.
+mark
+command edit.undo
+wait-log '^Undo: '
+command edit.undo
+wait-log '^Removed body Body1 \(F2\.b0\)$'
+command edit.undo
+command edit.undo
+wait-idle
+
+# 4. Run Script: the block again, one undo step.
+mark
+command tools.run_script
+focus-dialog '^Run Script$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/fillet-block.json"
+sleep 300
+key Return
+focus-main
+wait-log '^New body Body1 \(F2\.b0\): volume 47961\.372 mm3$' 60
+wait-log '^Script: ran [0-9]+ steps from ${MITCAD_TEST_WORK:re}/fillet-block\.json as one undo step \(Run fillet-block\)$'
+
+# 5. Export Timeline as Script.
+mark
+command file.export_script
+focus-dialog '^Export Timeline as Script$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/block-timeline.json"
+sleep 300
+key Return
+focus-main
+wait-log '^Script: exported 3 features, [0-9]+ steps to ${MITCAD_TEST_WORK:re}/block-timeline\.json$'
+expect-file "${MITCAD_TEST_WORK}/block-timeline.json"
+
+# 6. One Undo takes the script back.
+mark
+command edit.undo
+wait-log '^Undo: Run fillet-block$'
+wait-log '^Removed body Body1 \(F2\.b0\)$'
+expect-never 'TestDriver: FAIL|Script: .* (failed|refused)|Macro: could not save'

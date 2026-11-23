@@ -1169,6 +1169,15 @@ so a test is found by its name. Linux UI tests are scripts
 (`cmake/SelectionUiTests.cmake`) stay in their own module: one
 registration there serves Linux, Windows and macOS alike.
 
+**Known failures in geometry tests** (mitcad#2273): a case the geometry
+kernel or MitCad's dressup does not build right yet can stay in its test
+as a known failure, as in `geometry/tests/test_fillet_bench_cases.cpp`
+(the helper and its rules are in the file's header): it says why in one
+line, naming the open ticket that covers it where one does, runs and prints its result without failing the
+ctest, and fails the ctest as an "unexpected pass" once it builds the
+right answer, so that the change that fixes it moves it to the expected
+passes.
+
 **Translations:** a branch that adds or changes texts does not refresh
 `app/translations/*.ts` itself. The catalogues are refreshed once at the
 merge into the target branch (`tools/translations-update.cmake`, the
@@ -1216,17 +1225,18 @@ it into use on its machine.
   and three passes with the room full grow it by one. Contention lowers
   only the test's own room, never the machine's cap (mitcad#872,
   mitcad#2124: a few tests sensitive to load held a 12-core VM at 2 of
-  its 6): the machine's cap is the bound, `--ui-max` or `MITCAD_UI_JOBS`,
-  else 4 (one number for the scheduler and the report), kept for the
-  memory budget only (the scheduler admits a UI entry, as
-  any test, only while its predicted memory fits the budget). A cap that
-  an older runner learnt lower into the profile file is not read, and the
-  file's next save drops it. The scheduler holds UI entries to the cap
-  on every machine. A machine opts in to the rooms by giving the bound:
-  then the scheduler also holds UI entries to their rooms, and reruns a
-  UI entry that failed beside others alone after them. Without a bound
-  the runs only record and learn the rooms; no room applies and none is
-  rerun. For the Linux UI tests that `tools/check-all.sh` runs itself,
+  its 6): the machine's cap is the bound, `--ui-max` or `MITCAD_UI_JOBS`
+  (the scheduler admits a UI entry, as any test, only while its
+  predicted memory fits the budget). A cap that an older runner learnt
+  lower into the profile file is not read, and the file's next save
+  drops it. A machine opts in by giving the bound: then the scheduler
+  holds UI entries to it and to their rooms, and reruns a UI entry that
+  failed beside others alone after them. Without a bound there is no UI
+  cap (the report says `no cap (memory budget)`): the memory budget and
+  the CPU rules admit UI entries as every test, and the runs only record
+  and learn the rooms (mitcad#2260). Do not change how many UI entries
+  run at once (the default without a bound, the bound's handling,
+  `MITCAD_UI_JOBS`) without the owner's explicit permission. For the Linux UI tests that `tools/check-all.sh` runs itself,
   `mitcad-testrun --ui-cap` prints the cap to run at, `--ui-rooms` the
   tests' rooms, which it keeps as the scheduler does, and `--record-ui
   FILE` takes the runs back (name, exit status, seconds, UI entries beside
@@ -1359,7 +1369,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_CARGO_SWEEP=0`, `MITCAD_CARGO_JOB_MIB` | The crates' test builds (`core.cargo_build*`): no sweep of stale units after the build; MiB of available memory per cargo job instead of 2560 ([the crates' test builds](#the-crates-test-builds-sweep-jobs-debug-information)). |
 | `MITCAD_TEST_PRINT_PDF=<file>` | File › Print (mitcad#1089) shows no system print dialog: it prints to this PDF file through `QPrinter` (`printing::askPrinter`, logged `Print dialog skipped (test): printing to <file>`): `tools/ui-paper-print-test.sh`, `app.ui-windows-paper-print`, the print steps of `tools/ui-drawings-test.sh` and `tools/ui-build-test.sh`. |
 | `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
-| `MITCAD_TEST_GL_FAILURE=init\|reconnect\|throw` | The 3D view's attach to the graphics card fails (mitcad#2125, `OcctViewer::initializeGL`): `init` its first attach sees a driver that answers no GL version, as after a driver reset; `reconnect` the attaches after it; `throw` makes those throw `Standard_NullObject` where OCCT's `OpenGl_Context::Init` did. While it is set, a move of the view to another window, or a screen change of its window (the TestDriver's `screen-change`, which tells every shown window that its screen changed), counts as Qt making its surface again on every platform; `throw` also makes Component from Web's screen change (`CefView::screenChanged`) throw, which it catches and logs once. It is read at every attach: the TestDriver's `unset-env MITCAD_TEST_GL_FAILURE` (or `set-env NAME VALUE`, for `MITCAD_TEST_*` variables only) ends the failure while the app runs (`tools/ui-gl-failure-test.sh`, `app.ui-windows-gl-failure`). |
+| `MITCAD_TEST_GL_FAILURE=init\|reconnect\|throw` | The 3D view's attach to the graphics card fails (mitcad#2125, `OcctViewer::initializeGL`): `init` its first attach sees a driver that answers no GL version, as after a driver reset; `reconnect` the attaches after it; `throw` makes those throw `Standard_NullObject` where OCCT's `OpenGl_Context::Init` did. While it is set, a move of the view to another window, or a screen change of its window (the TestDriver's `screen-change`, which tells every shown window that its screen changed), counts as Qt making its surface again on every platform; `throw` also makes Component from Web's screen change (`CefView::screenChanged`) throw, which it catches and logs once. It is read at every attach: the TestDriver's `unset-env MITCAD_TEST_GL_FAILURE` (or `set-env NAME VALUE`, for `MITCAD_TEST_*` variables only) ends the failure while the app runs (`tools/ui-gl-failure-test.sh`, `app.ui-windows-gl-failure`). On Linux through EGL, `start` makes the start-up's graphics check fail for every EGL context (mitcad#2292, `framework/GraphicsStart.hpp`): MitCad then starts again in the same process on X11 with GLX, where the window draws and the 3D view says it cannot start (`tools/ui-gl-start-failure-test.sh`). |
 | `MITCAD_SHELL_TRACE=1` | Shell prints `shell trace:` lines on standard error (mitcad#2050, `geometry/src/shell_cavity.cpp`): why the geometry kernel's offset failed, what the cavity it falls back on found (the plates, thin faces and faces under removed ones), each step of it that failed (an inward offset with its `BRepOffset_Error` code, a thin part or rounding that could not be taken away, a kept face the cavity cut into) and a refused result, for a design whose Shell fails. |
 | `MITCAD_TEST_3DXWARE=1` | Windows: the 3DxWare runtime's stand-in (mitcad#2152, `app/platform/windows/SpaceMouse3DxWare.cpp`) loads in place of the installed `siappdll.dll` and reports one device, `Test 3D mouse`, so the 3D mouse's backend asks for MitCad's window at the moment a real driver start does; it opens the device only for a window and sends no events (`app.ui-windows-space-mouse-3dxware`). |
 
@@ -1823,9 +1833,13 @@ in the distro only:
   each body's box), or a failure in words (mitcad#2053). With OCCT port
   patch 2170 the design joins into one valid body (mitcad#2170), and
   every one of the 31 bodies, the five bare rods too, has its own volume
-  in common with the union, at most 1e-6 relative short and at most 1e-4
-  over (an excess above 1e-6 is printed with what the common is made of,
-  mitcad#2217); skipped with a message without it. Its synthetic tests of
+  in common with the union, at most 1e-6 relative short and at most 1e-6
+  over (the ring at most 1e-4 until the cause of its 1.09e-6 excess is
+  measured), the common's cut by the body empty; each body's numbers, and
+  for an excess above 1e-6 what the common is made of, go to
+  `common-volumes.txt` in the test's build folder `join-holds-inputs/`,
+  kept after a passing run (mitcad#2217); skipped with a message without
+  it. Its synthetic tests of
   the check that a union holds every body, of bodies inside others and
   of a bare rod's common with finned rods holding it (fins beside and
   over its seam, faces merged or not, joined with a plate) run without

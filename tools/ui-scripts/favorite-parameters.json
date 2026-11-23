@@ -1,0 +1,14 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/favorite-parameters.mitcad-ui (mitcad#2203): the user parameters width = 1200 mm (600 mm to 2400 mm in 10 mm steps, strict: a slider, and a value above the maximum is refused), depth = width / 20 (a formula, 60 mm) and shelves = 4 (no unit), none starred; a 10 x 10 mm board extruded depth high."},
+  {"cmd": "add_parameter", "name": "width", "unit": "mm", "expression": "1200 mm",
+   "min": "600 mm", "max": "2400 mm", "step": "10 mm", "strict": true},
+  {"cmd": "add_parameter", "name": "depth", "unit": "mm", "expression": "width / 20"},
+  {"cmd": "add_parameter", "name": "shelves", "unit": "", "expression": "4"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "depth"}, "operation": "new_body"}},
+  {"expect": {"bodies": 1}}
+]

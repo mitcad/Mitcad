@@ -694,6 +694,10 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
       return false;
     }
     m_def.load(def, m_state, m_host);
+    if (!m_def.suppressInput.isEmpty()) {
+      // Its Suppress as the feature is now (mitcad#2293).
+      m_state.setChecked(m_def.suppressInput, feature.value(QStringLiteral("suppressed")).toBool());
+    }
     setRowDefaults();
     int position = -1;
     for (int i = 0; i < timeline.size(); ++i) {
@@ -1113,7 +1117,11 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
     updateHighlights();
     inputsChanged();
   };
-  actions.accepted = [this] { commit(); };
+  actions.accepted = [this] {
+    m_continueAfterCommit = false; // OK closes, also after an Apply that waited
+    commit();
+  };
+  actions.applied = [this] { applyAndContinue(); };
   actions.rejected = [this] { cancel(); };
 
   // Both frontends can deliver edits while a preview computes. Numeric
@@ -1772,6 +1780,7 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
   moveKeyboardToValues();
   if (applyNow && !m_done) {
     qDebug().noquote() << QStringLiteral("%1 %2: Shift+click places at once").arg(m_def.name, input->label);
+    m_continueAfterCommit = false;
     commit();
     return;
   }
@@ -1779,6 +1788,7 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
   // a double click at a route's last node, an end on an end port).
   if (!window && !m_done && input->onPick && m_def.clickConfirms && m_def.clickConfirms(m_state)) {
     qDebug().noquote() << QStringLiteral("%1 %2: the click confirms").arg(m_def.name, input->label);
+    m_continueAfterCommit = false;
     commit();
   }
 }
@@ -3706,6 +3716,11 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
     // tried, or theirs comes back when that fails too (mitcad#2216).
     return;
   }
+  if (turnMissedOperation(preview.report)) {
+    // Cut or Join chosen by hand misses: the other direction is tried, or
+    // the user's comes back when that fails too (mitcad#2283).
+    return;
+  }
   m_shownKey = key;
   const QString status = preview.report.value(QStringLiteral("status")).toString();
   bool drawable = status == QStringLiteral("ok");
@@ -4601,7 +4616,9 @@ void CommandSession::resumePendingCommit() {
       return;
     }
     m_commitRequested = false;
-    commit();
+    if (!commit()) {
+      m_continueAfterCommit = false; // an Apply that waited and was refused
+    }
   });
 }
 
@@ -5232,6 +5249,15 @@ bool CommandSession::commit() {
     const Built built = m_def.build(m_state, m_host);
     const QString label = built.def.value(QStringLiteral("label")).toString(m_def.name);
     if (!m_host.runCommands(built.def.value(QStringLiteral("commands")).toArray(), label)) {
+      // The model's refusal in words in the panel's own message area, as
+      // its own checks are; the panel stays open (mitcad#2285).
+      if (m_host.lastCancelled()) {
+        qDebug().noquote() << QStringLiteral("%1: OK cancelled").arg(m_def.name);
+      } else if (const QString refusal = m_host.lastError(); !refusal.isEmpty()) {
+        showPanelMessage(refusal, NoticeLevel::Error);
+        qDebug().noquote() << QStringLiteral("%1: OK refused by the model: %2")
+                                  .arg(m_def.name, QString(refusal).replace(QLatin1Char('\n'), QLatin1Char(' ')));
+      }
       return false;
     }
     // A model command that edits a feature (mitcad#1939: Flat Pack,
@@ -5297,6 +5323,7 @@ bool CommandSession::commit() {
                {QStringLiteral("uid"), m_editUid},
                {QStringLiteral("def"), built.def}};
   }
+  const int addDepth = undoDepth();
   QJsonObject result;
   if (!m_host.runCommand(command, &result)) {
     if (m_host.lastCancelled()) {
@@ -5317,8 +5344,104 @@ bool CommandSession::commit() {
                                    .arg(m_def.name, result.value(QStringLiteral("uid")).toString()));
   logCreatedParameters(result);
   logVolumes(before);
+  // Its Suppress in the same undo step (mitcad#2293).
+  followSuppressInput(isEditing() ? m_editUid : result.value(QStringLiteral("uid")).toString(), addDepth);
+  if (m_continueAfterCommit && !isEditing()) {
+    // Apply: the panel stays for the next one (mitcad#2293).
+    m_continueAfterCommit = false;
+    continueAfterApply();
+    return true;
+  }
+  m_continueAfterCommit = false;
   finish(true);
   return true;
+}
+
+bool CommandSession::applyAndContinue() {
+  if (m_done || !m_def.applyNext || isEditing() || m_host.asynchronousCommands() || m_def.inspect ||
+      m_def.sketchCommand || m_def.modelCommand || m_def.accept || m_def.apply) {
+    return false;
+  }
+  m_continueAfterCommit = true;
+  const bool done = commit();
+  if (!done) {
+    m_continueAfterCommit = false;
+  }
+  return done;
+}
+
+void CommandSession::continueAfterApply() {
+  ++m_applied;
+  ++m_generation;
+  qDebug().noquote() << QStringLiteral("Applied %1 (%2)").arg(m_def.name).arg(m_applied);
+  // What the panel added before it (a sketch made from it) stays with the
+  // feature applied: Cancel takes nothing of it back now.
+  m_insertedDepth = -1;
+  m_insertedCount = 0;
+  const CommandState applied = m_state;
+  m_state = CommandState();
+  for (const InputDef& input : m_def.inputs) {
+    setDefaults(input, input.id);
+  }
+  setRowDefaults();
+  m_def.applyNext(applied, m_state, m_host);
+  m_startSettings = panelSettings(false);
+  // The design changed: no preview computed before stands for it now.
+  m_cache.clear();
+  m_cacheOrder.clear();
+  m_shownKey.clear();
+  m_rowsLeftOut.clear();
+  m_previewOk = false;
+  m_failed = false;
+  clearPreview();
+  m_host.refreshScene();
+  for (const Slot& slot : slotsOf(false)) {
+    if (slot.def->type == InputDef::Type::Value) {
+      evaluate(slot.key);
+    }
+  }
+  if (m_presenter) {
+    m_presenter->refresh(m_state);
+    m_presenter->setOkEnabled(false);
+  }
+  activateFirstNeeded();
+  updateHighlights();
+  inputsChanged();
+}
+
+void CommandSession::followSuppressInput(const QString& uid, int depth) {
+  if (m_def.suppressInput.isEmpty() || uid.isEmpty()) {
+    return;
+  }
+  const bool wanted = m_state.checked(m_def.suppressInput);
+  QString label;
+  try {
+    const bool now = m_host.queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
+                                         {QStringLiteral("uid"), uid}})
+                         .value(QStringLiteral("suppressed"))
+                         .toBool();
+    if (now == wanted) {
+      return;
+    }
+    label = m_host.queryObject({{QStringLiteral("query"), QStringLiteral("document")}})
+                .value(QStringLiteral("undo"))
+                .toString();
+  } catch (const std::exception&) {
+    return; // the feature is there as added; its light stays as it was
+  }
+  if (!m_host.runCommand({{QStringLiteral("cmd"), QStringLiteral("suppress_feature")},
+                          {QStringLiteral("uid"), uid},
+                          {QStringLiteral("suppressed"), wanted}})) {
+    return;
+  }
+  if (undoDepth() > depth + 1 && !label.isEmpty()) {
+    m_host.runCommand({{QStringLiteral("cmd"), QStringLiteral("merge_undo")},
+                       {QStringLiteral("depth"), depth},
+                       {QStringLiteral("label"), label}});
+  }
+  qDebug().noquote() << QStringLiteral("%1: %2 %3").arg(m_def.name, uid,
+                                                        wanted ? QStringLiteral("suppressed")
+                                                               : QStringLiteral("no longer suppressed"));
 }
 
 bool CommandSession::askBeforeComponent(const Built& built, bool& done) {

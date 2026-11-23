@@ -549,9 +549,37 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("delete_selection_set", Model),
     // Extend to Meet of two sketch curves (mitcad#2178).
     ("sketch.extend_to_meet", Model),
+    // Point clouds (mitcad#2240): an insert reads its file.
+    ("insert_point_cloud", FileIo),
+    ("move_point_cloud", Model),
+    ("place_point_cloud", Model),
+    ("set_point_cloud_visible", Model),
+    ("rename_point_cloud", Model),
+    ("delete_point_cloud", Model),
     // Insert Points (mitcad#2232): the model's own with the points' text
     // instead of a path ([`command_class_with`]).
     ("sketch.import_points", FileIo),
+    // Conic curves and their Rho (mitcad#2236).
+    ("sketch.conic", Model),
+    ("sketch.set_rho", Model),
+    // Scripts (mitcad#2245): the timeline as a script, written to a file
+    // or answered (agents read the design through its queries), and a
+    // script or recorded macro run as one undo step, the application's own
+    // workflow (agents send its commands themselves).
+    ("export_script", FileIo),
+    ("run_script", Internal),
+    // Equation curves of sketches (mitcad#2237).
+    ("sketch.equation_curve", Model),
+    ("sketch.edit_equation_curve", Model),
+    // Decals (mitcad#2244): an image read from a `path` is a file's, see
+    // `command_class_with`.
+    ("insert_decal", FileIo),
+    ("edit_decal", FileIo),
+    ("set_decal_visible", Model),
+    ("rename_decal", Model),
+    ("delete_decal", Model),
+    // End caps of profiles (mitcad#2243).
+    ("build_end_cap", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -851,8 +879,18 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("selection_sets", Model),
     // Which bodies a print service may take (mitcad#2214).
     ("print_service_check", Model),
+    // Point clouds and Point Cloud Deviation (mitcad#2240).
+    ("point_clouds", Model),
+    ("point_cloud_points", Model),
+    ("point_cloud_deviation", Model),
     // A point file for Insert Points (mitcad#2232).
     ("points_info", FileIo),
+    // Decals (mitcad#2244).
+    ("decals", Model),
+    ("decal_image", Model),
+    ("decal_outline", Model),
+    // The design's end caps and a preview of capping ends (mitcad#2243).
+    ("build_end_caps", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {
@@ -918,9 +956,13 @@ pub fn file_path_read(request: &serde_json::Value) -> Option<String> {
         "insert_image_reference" | "edit_image_reference" => {
             request.get("path")?.as_str().map(str::to_owned)
         }
+        // A point cloud's file read from its path (mitcad#2240).
+        "insert_point_cloud" => request.get("path")?.as_str().map(str::to_owned),
         // A point file read for Insert Points (mitcad#2232); its text
         // reads nothing.
         "sketch.import_points" => request.get("path")?.as_str().map(str::to_owned),
+        // A decal's image read from its path (mitcad#2244).
+        "insert_decal" | "edit_decal" => request.get("path")?.as_str().map(str::to_owned),
         _ => None,
     }
 }
@@ -944,7 +986,10 @@ pub fn command_class_with(request: &serde_json::Value) -> Option<ApiClass> {
             | "sketch.edit_text"
             | "insert_image_reference"
             | "edit_image_reference"
+            | "insert_point_cloud"
             | "sketch.import_points"
+            | "insert_decal"
+            | "edit_decal"
     ) {
         return Some(if file_path_read(request).is_some() {
             FileIo

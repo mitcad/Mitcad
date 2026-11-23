@@ -2,7 +2,9 @@
 //! A project's folders and designs (mitcad#144, `project_tree`), for the
 //! Projects panel: the folders and designs in the project's folder, each
 //! design with its latest version, its edit lock and whether it changed
-//! since that version, and the project's kind and remote. No network and
+//! since that version, its other files (mitcad#2204, `files.rs`) with
+//! their size and whether they changed, and the project's kind and
+//! remote. No network and
 //! no writes: the edit locks are the local copies the last poll left
 //! (`refs/mitcad/remote-locks/`), ahead and behind count from the
 //! remote-tracking reference of the last fetch or push.
@@ -16,6 +18,7 @@ use gix::bstr::ByteSlice;
 use mitcad_model::file::settings::ProjectSettings;
 use serde_json::{Value, json};
 
+use super::files::{Ignores, is_other_file};
 use super::inspect::{MAX_DESIGNS, MAX_ENTRIES, remotes_of};
 use super::{MAX_NAME, clean_text, modified, rfc3339};
 use crate::commit::rename_trailers;
@@ -47,18 +50,46 @@ pub(crate) struct Walked {
     pub folders: Vec<String>,
     /// Designs: relative path and the full path.
     pub designs: Vec<(String, PathBuf)>,
-    /// More entries than [`MAX_ENTRIES`] or designs than [`MAX_DESIGNS`].
+    /// The other files (mitcad#2204, `files.rs`): relative path and the
+    /// full path.
+    pub files: Vec<(String, PathBuf)>,
+    /// More entries than [`MAX_ENTRIES`], designs than [`MAX_DESIGNS`] or
+    /// other files than [`MAX_FILES`].
     pub truncated: bool,
 }
 
-/// The folders and designs under `root` (relative to it), leaving out
-/// every name starting with a dot (`.git`, `.mitcad`, the placeholder) and
-/// links, as the commit's walk.
-pub(crate) fn walk(root: &Path) -> Walked {
+/// The most other files a listing holds (as designs).
+pub(crate) const MAX_FILES: usize = MAX_DESIGNS;
+
+/// The folders, designs and other files under folder `start` of the
+/// project at `root` ("" the whole project; paths relative to `root`),
+/// leaving out every name starting with a dot (`.git`, `.mitcad`, the
+/// placeholder) and links, as the commit's walk. Other files are left out
+/// too when `ignored` (path, is a folder) says the project's `.gitignore`
+/// leaves them or a folder above them out, and when they are files the
+/// operating system leaves in folders.
+pub(crate) fn walk_from(
+    root: &Path,
+    start: &str,
+    ignored: &mut dyn FnMut(&str, bool) -> bool,
+) -> Walked {
     let mut walked = Walked::default();
     let mut seen = 0;
-    let mut folders = vec![(root.to_path_buf(), String::new())];
-    'walk: while let Some((folder, prefix)) = folders.pop() {
+    let (first, prefix, mut start_ignored) = if start.is_empty() {
+        (root.to_path_buf(), String::new(), false)
+    } else {
+        (root.join(start), format!("{start}/"), false)
+    };
+    let mut above = String::new();
+    for part in start.split('/').filter(|part| !part.is_empty()) {
+        if !above.is_empty() {
+            above.push('/');
+        }
+        above.push_str(part);
+        start_ignored = start_ignored || ignored(&above, true);
+    }
+    let mut folders = vec![(first, prefix, start_ignored)];
+    'walk: while let Some((folder, prefix, folder_ignored)) = folders.pop() {
         let Ok(entries) = fs::read_dir(&folder) else {
             continue;
         };
@@ -81,16 +112,30 @@ pub(crate) fn walk(root: &Path) -> Walked {
             let path = format!("{prefix}{name}");
             if kind.is_dir() {
                 walked.folders.push(path.clone());
-                folders.push((entry.path(), format!("{path}/")));
+                // Designs below an ignored folder are still listed, as
+                // before; other files are not.
+                let below_ignored = folder_ignored || ignored(&path, true);
+                folders.push((entry.path(), format!("{path}/"), below_ignored));
             } else if kind.is_file() && is_design_file(name) {
                 walked.designs.push((path, entry.path()));
+            } else if kind.is_file()
+                && !folder_ignored
+                && is_other_file(&path)
+                && !ignored(&path, false)
+            {
+                walked.files.push((path, entry.path()));
             }
         }
     }
     walked.folders.sort();
     walked.designs.sort();
+    walked.files.sort();
     if walked.designs.len() > MAX_DESIGNS {
         walked.designs.truncate(MAX_DESIGNS);
+        walked.truncated = true;
+    }
+    if walked.files.len() > MAX_FILES {
+        walked.files.truncate(MAX_FILES);
         walked.truncated = true;
     }
     walked
@@ -128,7 +173,10 @@ impl ProjectRepo {
         };
         let session = command.get("session").and_then(Value::as_str);
         let me = self.author(command).ok();
-        let walked = walk(self.root());
+        let mut ignores = Ignores::of(&self.repo);
+        let walked = walk_from(self.root(), "", &mut |path, folder| {
+            ignores.ignored(path, folder)
+        });
         let mut commits: HashMap<ObjectId, Value> = HashMap::new();
         let mut designs = Vec::new();
         for (path, full) in &walked.designs {
@@ -176,6 +224,27 @@ impl ProjectRepo {
                 "lock": lock,
             }));
         }
+        // Other files (mitcad#2204): as a design's state, without a
+        // version number or a lock.
+        let recorded_files: HashMap<String, ObjectId> = match head_tree {
+            Some(tree) => self.other_files(tree)?,
+            None => HashMap::new(),
+        };
+        let index = self.index_for_check();
+        let mut files = Vec::new();
+        for (path, full) in &walked.files {
+            let Ok(metadata) = fs::metadata(full) else {
+                continue;
+            };
+            let in_head = recorded_files.get(path).copied();
+            files.push(json!({
+                "path": path,
+                "size": metadata.len(),
+                "modified": modified(&metadata),
+                "recorded": in_head.is_some(),
+                "changed": self.file_changed(path, full, &metadata, in_head, index.as_ref()),
+            }));
+        }
         let name = self
             .root()
             .file_name()
@@ -195,6 +264,7 @@ impl ProjectRepo {
             "edit_locks": settings.enabled,
             "folders": walked.folders,
             "designs": designs,
+            "files": files,
             "truncated": walked.truncated,
             "history_truncated": history_truncated,
             "error": null,
@@ -445,6 +515,17 @@ pub(crate) fn describe(out: &mut String, answer: &Value) {
         }
         lines.push((path.to_owned(), line));
     }
+    // Other files (mitcad#2204): their size and state.
+    for file in answer["files"].as_array().into_iter().flatten() {
+        let path = file["path"].as_str().unwrap_or("");
+        let mut line = format!("{path}  {}", size_text(file["size"].as_u64().unwrap_or(0)));
+        if file["recorded"] != true {
+            line.push_str(", not recorded");
+        } else if file["changed"] == true {
+            line.push_str(", changed");
+        }
+        lines.push((path.to_owned(), line));
+    }
     lines.sort();
     if lines.is_empty() {
         out.push_str("No folders or designs\n");
@@ -454,5 +535,37 @@ pub(crate) fn describe(out: &mut String, answer: &Value) {
     }
     if answer["truncated"] == true {
         out.push_str("  ... (more than listed)\n");
+    }
+}
+
+/// A file's size for people: bytes, then KiB, MiB and GiB with one
+/// decimal.
+fn size_text(bytes: u64) -> String {
+    const UNITS: [&str; 3] = ["KiB", "MiB", "GiB"];
+    if bytes < 1024 {
+        return format!("{bytes} bytes");
+    }
+    // Precision is not needed here: a size shown to one decimal.
+    #[allow(clippy::cast_precision_loss)]
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::size_text;
+
+    #[test]
+    fn sizes_read_as_bytes_and_binary_units() {
+        assert_eq!(size_text(0), "0 bytes");
+        assert_eq!(size_text(1023), "1023 bytes");
+        assert_eq!(size_text(1536), "1.5 KiB");
+        assert_eq!(size_text(100 * 1024 * 1024), "100.0 MiB");
+        assert_eq!(size_text(3 * 1024 * 1024 * 1024), "3.0 GiB");
     }
 }

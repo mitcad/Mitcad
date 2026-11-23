@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Folder and design operations of a project (mitcad#144), for the
 //! Projects panel and `mitcad-cli project`: a new folder, a new design, a
-//! design or a folder moved, and one deleted, each recorded as one version
+//! design, another file (mitcad#2204, `files.rs`) or a folder moved, and
+//! one deleted, each recorded as one version
 //! with Save's rules ([`ProjectRepo::commit`]: the index locked, only the
 //! version's paths change, nothing recorded while HEAD is detached or a
 //! merge is in progress) and, in a Cloud project, pushed as a Save is.
@@ -14,7 +15,8 @@
 //!   ([`FOLDER_PLACEHOLDER`]), which the listing never shows; a move or a
 //!   delete that would leave its folder with nothing recorded adds one.
 //! - **Refusals** change nothing and answer `error` (`exists`, `locked`,
-//!   `invalid_path`, `not_found`, `local_changes`, `unsupported`).
+//!   `invalid_path`, `not_found`, `local_changes`, `unsupported`,
+//!   `too_large`).
 //! - A moved design's per-user display state and the project's design
 //!   opened last follow it; the B-rep store stays consistent because the
 //!   old and the new paths go into the same version (the commit keeps the
@@ -47,7 +49,7 @@ use crate::{CommitOutcome, Identity, ProjectRepo, VcsError, io_error, is_design_
 const FORBIDDEN: [char; 8] = ['<', '>', ':', '"', '|', '?', '*', '\\'];
 
 /// A refusal: an answer's `error`, nothing changed.
-fn refuse(class: ErrorClass, message: impl Into<String>) -> VcsError {
+pub(super) fn refuse(class: ErrorClass, message: impl Into<String>) -> VcsError {
     VcsError::Remote(RemoteError::new(class, message))
 }
 
@@ -78,7 +80,7 @@ fn parent_of(path: &str) -> &str {
 }
 
 /// Whether `path` is `folder` or below it.
-fn is_under(path: &str, folder: &str) -> bool {
+pub(super) fn is_under(path: &str, folder: &str) -> bool {
     path == folder
         || path
             .strip_prefix(folder)
@@ -111,7 +113,7 @@ fn files_on_disk(full: &Path, path: &str) -> Result<Vec<String>, VcsError> {
 }
 
 /// What an operation's answer starts with when it is refused.
-fn refused_answer() -> Value {
+pub(super) fn refused_answer() -> Value {
     json!({"commit": null, "skipped": null, "written": [], "removed": [], "deleted": [],
            "warnings": [], "push": null})
 }
@@ -132,6 +134,9 @@ impl ProjectRepo {
             "new_design" => self.new_design(command, control),
             "move" => self.move_entry(command, control),
             "delete" => self.delete_entry(command, control),
+            // Other files of a project (mitcad#2204).
+            "add_files" => self.add_files(command, control),
+            "record" => self.record_files(command, control),
             _ => return Ok(None),
         };
         let (mut value, error) = match result {
@@ -148,7 +153,7 @@ impl ProjectRepo {
     /// its folder with `/` (an absolute path inside it also does); hidden
     /// names, links on the way and names not every system can hold are
     /// refused.
-    fn project_path(&self, command: &Value, key: &str) -> Result<String, VcsError> {
+    pub(super) fn project_path(&self, command: &Value, key: &str) -> Result<String, VcsError> {
         let given = text(command, key)?;
         let invalid = |why: &str| refuse(ErrorClass::InvalidPath, format!("{given}: {why}"));
         let unholdable = |part: &str| {
@@ -200,7 +205,7 @@ impl ProjectRepo {
     /// The author of the version and whether one can be recorded now
     /// (Save's rule: not while HEAD is detached or a merge is in
     /// progress), before anything is written.
-    fn ready(&self, command: &Value) -> Result<Identity, VcsError> {
+    pub(super) fn ready(&self, command: &Value) -> Result<Identity, VcsError> {
         let author = self.author(command)?;
         if let Some(reason) = self.why_not_commit()? {
             return Err(refuse(
@@ -212,7 +217,7 @@ impl ProjectRepo {
     }
 
     /// The tree of the latest version.
-    fn head_tree(&self) -> Result<Option<ObjectId>, VcsError> {
+    pub(super) fn head_tree(&self) -> Result<Option<ObjectId>, VcsError> {
         Ok(match self.head_commit()? {
             Some(head) => Some(self.repo.find_commit(head)?.tree_id()?.detach()),
             None => None,
@@ -336,7 +341,7 @@ impl ProjectRepo {
     /// Records `files` as one version (the command's `message`, else
     /// `message`) and pushes it as a Save is pushed; a failed push is the
     /// answer's error, the version recorded.
-    fn record_version(
+    pub(super) fn record_version(
         &self,
         files: &[PathBuf],
         message: &str,
@@ -486,14 +491,21 @@ impl ProjectRepo {
             )
         })?;
         let folder = metadata.is_dir();
+        let design = !folder && is_design_file(&from);
         let invalid = |why: String| refuse(ErrorClass::InvalidPath, why);
-        if !folder && !is_design_file(&from) {
+        if !folder && !metadata.is_file() {
             return Err(invalid(format!(
-                "{from}: only designs and folders are moved here"
+                "{from}: only designs, other files and folders are moved here"
             )));
         }
-        if !folder && !is_design_file(&to) {
+        if design && !is_design_file(&to) {
             return Err(invalid(format!("{to}: a design's name ends with .mitcad")));
+        }
+        // Another file (mitcad#2204) does not become a design by its name.
+        if !folder && !design && is_design_file(&to) {
+            return Err(invalid(format!(
+                "{to}: only a design's name ends with .mitcad"
+            )));
         }
         if is_under(&to, &from) {
             return Err(invalid(format!("{from} cannot be moved into itself")));
@@ -518,7 +530,13 @@ impl ProjectRepo {
             .filter(|path| is_design_file(path) && visible(path))
             .cloned()
             .collect();
-        let rewrites = self.move_link_rewrites(&from, &to, command)?;
+        // Component links name designs only: another file moved changes
+        // none.
+        let rewrites = if folder || design {
+            self.move_link_rewrites(&from, &to, command)?
+        } else {
+            Vec::new()
+        };
         let affected: Vec<String> = designs
             .iter()
             .chain(recorded.iter().filter(|path| is_design_file(path)))
@@ -557,9 +575,13 @@ impl ProjectRepo {
             .iter()
             .map(|rewrite| (root.join(&rewrite.before), rewrite.bytes.clone()))
             .collect();
+        // Another file moved by itself is recorded at its new path, as a
+        // design is (mitcad#2204).
+        let single_file: Option<String> = (!folder && !design).then(|| from.clone());
         let old: Vec<String> = recorded
             .iter()
             .chain(designs.iter())
+            .chain(single_file.iter())
             .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -706,10 +728,15 @@ impl ProjectRepo {
             Some(metadata) => metadata.is_dir(),
             None => recorded.iter().any(|(recorded, _)| *recorded != path),
         };
-        if !folder && !is_design_file(&path) {
+        // Designs, other files (mitcad#2204) and folders; not a link.
+        if !folder
+            && metadata
+                .as_ref()
+                .is_some_and(|metadata| !metadata.is_file())
+        {
             return Err(refuse(
                 ErrorClass::InvalidPath,
-                format!("{path}: only designs and folders are deleted here"),
+                format!("{path}: only designs, other files and folders are deleted here"),
             ));
         }
         let on_disk = match &metadata {
@@ -815,6 +842,30 @@ pub(crate) fn describe(name: &str, answer: &Value) -> Option<String> {
         "new_design" => writeln!(out, "Made the design {}", field("path")),
         "move" => writeln!(out, "Moved {} to {}", field("from"), field("to")),
         "delete" => writeln!(out, "Deleted {}", field("path")),
+        // Other files of a project (mitcad#2204).
+        "add_files" => {
+            let added: Vec<&str> = answer["added"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            writeln!(out, "Added {}", added.join(", "))
+        }
+        "record" => {
+            let recorded: Vec<&str> = answer["recorded"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            if recorded.is_empty() {
+                out.push_str("No changes to record\n");
+                return Some(out);
+            } else {
+                writeln!(out, "Recorded the changes of {}", recorded.join(", "))
+            }
+        }
         _ => return None,
     };
     if let Some(commit) = answer["commit"].as_str() {

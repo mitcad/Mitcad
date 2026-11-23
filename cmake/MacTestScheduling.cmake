@@ -10,6 +10,10 @@ function(mitcad_macos_cargo_build test_name)
     set_tests_properties(${test_name} PROPERTIES RUN_SERIAL FALSE RESOURCE_LOCK cargo_build)
     set_property(TEST ${test_name} APPEND PROPERTY LABELS macos_cargo_build)
     set_property(TEST ${test_name} APPEND PROPERTY ENVIRONMENT MITCAD_CARGO_MAX_JOBS=2)
+    # Two compiler jobs build the whole debug test workspace from scratch
+    # in more than the hour other platforms allow (0.70.0-rc3 timed out at
+    # 3600 s): three hours here, the other platforms' limit unchanged.
+    set_tests_properties(${test_name} PROPERTIES TIMEOUT 10800)
   endif()
 endfunction()
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! The JSON Schemas of the measurement and annotation commands and of the
-//! image references' (mitcad#1918), written from their fields in
+//! The JSON Schemas of the measurement and annotation commands, of the
+//! image references' (mitcad#1918), of the point clouds' (mitcad#2240) and
+//! of the decals' that MCP permits (mitcad#2244, `decals.rs`), written from
+//! their fields in
 //! `core/model-api/src/measurements.rs`, `annotations.rs` and
 //! `image_references.rs` (with `MeasurePick`, `AnnotationPlane`,
 //! `AnnotationFormat`, `Tolerance` and `GeometricTolerance` of
@@ -28,6 +30,17 @@ pub(super) const COMMANDS: &[&str] = &[
     "set_image_reference_visible",
     "rename_image_reference",
     "delete_image_reference",
+    // Point clouds (mitcad#2240, `core/model-api/src/point_clouds.rs`).
+    "move_point_cloud",
+    "place_point_cloud",
+    "set_point_cloud_visible",
+    "rename_point_cloud",
+    "delete_point_cloud",
+    // Decals (mitcad#2244): insert_decal and edit_decal read files, so MCP
+    // does not permit them.
+    "set_decal_visible",
+    "rename_decal",
+    "delete_decal",
 ];
 
 /// An annotation's kinds (`MeasureKind`): the dimensions, then the leader
@@ -94,6 +107,10 @@ fn name() -> Value {
 
 fn image() -> Value {
     json!({"type": "string", "minLength": 1, "description": "The image reference by its name (Image1)"})
+}
+
+fn decal() -> Value {
+    json!({"type": "string", "minLength": 1, "description": "The decal by its name (Decal1)"})
 }
 
 fn color() -> Value {
@@ -363,7 +380,103 @@ fn image_reference(command: &str) -> Option<Value> {
     Some(spec)
 }
 
+fn cloud() -> Value {
+    json!({"type": "string", "minLength": 1, "description": "The point cloud by its name (PointCloud1; point_clouds query)"})
+}
+
+/// A point cloud command's schema (mitcad#2240; fields without `cmd`).
+fn point_cloud(command: &str) -> Option<Value> {
+    let spec = match command {
+        "move_point_cloud" => json!({
+            "description": "Moves a point cloud in its component, after its placement: turned (rotate), then moved (translate).",
+            "properties": {
+                "name": cloud(),
+                "translate": vec3("The move along x, y and z, mm"),
+                "rotate": {
+                    "type": "object",
+                    "description": "A turn about an axis, counter-clockwise looking against it",
+                    "properties": {
+                        "origin": vec3("A point of the axis, mm; the component's origin when left out"),
+                        "axis": vec3("The axis' direction"),
+                        "angle": number("Degrees")
+                    },
+                    "required": ["axis", "angle"],
+                    "additionalProperties": false
+                }
+            },
+            "required": ["name"],
+            "examples": [{"cmd": "move_point_cloud", "name": "PointCloud1", "translate": [0, 0, 5], "rotate": {"axis": [0, 0, 1], "angle": 90}}]
+        }),
+        "place_point_cloud" => json!({
+            "description": "Puts a point cloud into another occurrence's component, its placement kept, and/or back where it came in (reset).",
+            "properties": {
+                "name": cloud(),
+                "occurrence": text("The occurrence path from the root (O1/O4); \"\" for the root"),
+                "reset": flag(false, "Back where it came in: no placement")
+            },
+            "required": ["name"],
+            "examples": [{"cmd": "place_point_cloud", "name": "PointCloud1", "reset": true}]
+        }),
+        "set_point_cloud_visible" => json!({
+            "description": "Shows or hides a point cloud.",
+            "properties": {"name": cloud(), "visible": {"type": "boolean"}},
+            "required": ["name", "visible"],
+            "examples": [{"cmd": "set_point_cloud_visible", "name": "PointCloud1", "visible": false}]
+        }),
+        "rename_point_cloud" => json!({
+            "description": "Renames a point cloud; its deviations follow it.",
+            "properties": {
+                "name": cloud(),
+                "new_name": json!({"type": "string", "minLength": 1, "description": "Its new name"})
+            },
+            "required": ["name", "new_name"],
+            "examples": [{"cmd": "rename_point_cloud", "name": "PointCloud1", "new_name": "Scan"}]
+        }),
+        "delete_point_cloud" => json!({
+            "description": "Deletes a point cloud; a deviation of it then says it is gone.",
+            "properties": {"name": cloud()},
+            "required": ["name"],
+            "examples": [{"cmd": "delete_point_cloud", "name": "PointCloud1"}]
+        }),
+        _ => return None,
+    };
+    Some(spec)
+}
+
+/// A decal command's schema (fields without `cmd`; mitcad#2244,
+/// `core/model-api/src/decals.rs`).
+fn decal_command(command: &str) -> Option<Value> {
+    let spec = match command {
+        "set_decal_visible" => json!({
+            "description": "Shows or hides a decal.",
+            "properties": {"name": decal(), "visible": {"type": "boolean"}},
+            "required": ["name", "visible"],
+            "examples": [{"cmd": "set_decal_visible", "name": "Decal1", "visible": false}]
+        }),
+        "rename_decal" => json!({
+            "description": "Renames a decal.",
+            "properties": {
+                "name": decal(),
+                "new_name": json!({"type": "string", "minLength": 1, "description": "Its new name"})
+            },
+            "required": ["name", "new_name"],
+            "examples": [{"cmd": "rename_decal", "name": "Decal1", "new_name": "Warning label"}]
+        }),
+        "delete_decal" => json!({
+            "description": "Deletes a decal.",
+            "properties": {"name": decal()},
+            "required": ["name"],
+            "examples": [{"cmd": "delete_decal", "name": "Decal1"}]
+        }),
+        _ => return None,
+    };
+    Some(spec)
+}
+
 /// A command's schema of this family as [`super`] writes its own.
 pub(super) fn spec(name: &str) -> Option<Value> {
-    annotation(name).or_else(|| image_reference(name))
+    annotation(name)
+        .or_else(|| image_reference(name))
+        .or_else(|| point_cloud(name))
+        .or_else(|| decal_command(name))
 }

@@ -32,6 +32,9 @@ pub(crate) mod part_info;
 // The middle of a profile's side between its slots (mitcad#2002).
 mod side_middle;
 pub(crate) mod sources;
+// Carriages joined by a Rigid joint or a Rigid Group move together
+// (mitcad#2274).
+pub(crate) mod follow;
 
 pub use auto_name::is_automatic_name;
 pub(crate) use geometry::*;
@@ -255,6 +258,9 @@ pub enum BuildRole {
     Panel,
     Linear,
     Cap,
+    /// A plate closing a profile's end, made of its section (mitcad#2243):
+    /// no library part.
+    EndCap,
 }
 
 impl BuildRole {
@@ -266,6 +272,7 @@ impl BuildRole {
             Self::Panel => "panel",
             Self::Linear => "linear",
             Self::Cap => "cap",
+            Self::EndCap => "end_cap",
         }
     }
 }

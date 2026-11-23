@@ -1470,6 +1470,111 @@ fn a_move_of_an_occurrence_tells_the_copies_of_a_component_apart() {
     ));
 }
 
+/// A part inside a parent placed twice, the second copy turned a quarter
+/// about Z: a move of the part in the parent with its point picked
+/// through the second copy takes the point through that copy, not the
+/// parent's first one, so that the part lands on the picked target there
+/// (mitcad#2305).
+#[test]
+fn a_move_in_a_parent_used_twice_takes_points_through_the_picked_copy() {
+    let mut doc = Document::new(MockKernel::default());
+    // The target, a vertex of the root at (50, 60, 70).
+    let (root_body, root_vertex) = box_with_vertex(&mut doc);
+    doc.kernel()
+        .vertex_points
+        .borrow_mut()
+        .insert(root_vertex.clone(), [50.0, 60.0, 70.0]);
+    let (parent, first) = doc
+        .create_component(Some("Parent"), shift(200.0, 0.0, 0.0), true)
+        .unwrap();
+    let (_, part) = doc
+        .create_component(Some("Part"), shift(5.0, 0.0, 0.0), true)
+        .unwrap();
+    // The vertex is at (10, 0, 10) in Part, (15, 0, 10) in Parent.
+    let (part_body, part_vertex) = box_with_vertex(&mut doc);
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let quarter = Transform::rotation(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        std::f64::consts::FRAC_PI_2,
+    )
+    .unwrap();
+    let second = doc
+        .copy_occurrence(first, Some(shift(0.0, 300.0, 0.0).after(&quarter)))
+        .unwrap();
+    // Through the second copy the vertex is at (0, 315, 10).
+    let seen = |doc: &Document<MockKernel>, copy: OccurrenceUid| {
+        doc.placement(copy)
+            .unwrap()
+            .after(&doc.placement(part).unwrap())
+            .apply_point([10.0, 0.0, 10.0])
+    };
+    assert!(
+        near(seen(&doc, second), [0.0, 315.0, 10.0]),
+        "{:?}",
+        seen(&doc, second)
+    );
+    // The move goes into Parent (where Part is placed), the root active.
+    let through = format!("{second}/{part}");
+    let moved = doc
+        .add_feature_to(
+            &def(json!({"type": "move_occurrence", "occurrences": [part],
+                "transform": {"type": "point_to_point",
+                    "from": {"body": part_body, "vertex": part_vertex}, "from_occurrence": through,
+                    "to": {"body": root_body, "vertex": root_vertex}, "to_occurrence": ""}})),
+            None,
+            Some(parent),
+        )
+        .unwrap();
+    assert_ok(&doc, moved.uid);
+    // The part's vertex through the second copy is on the target: the
+    // world motion (50, -255, 60) turned back into Parent's coordinates.
+    assert!(
+        near(seen(&doc, second), [50.0, 60.0, 70.0]),
+        "{:?}",
+        seen(&doc, second)
+    );
+    assert!(
+        near(
+            doc.placement(part).unwrap().translation,
+            [-250.0, -50.0, 60.0]
+        ),
+        "{:?}",
+        doc.placement(part)
+    );
+    // The first copy shows the same placement in Parent, so the vertex is
+    // elsewhere there: (-40, -50, 70).
+    assert!(
+        near(seen(&doc, first), [-40.0, -50.0, 70.0]),
+        "{:?}",
+        seen(&doc, first)
+    );
+
+    // Point to Position with the point picked through the second copy:
+    // the vertex at (1, 2, 3) of Parent, where the second copy shows it at
+    // (-2, 301, 3).
+    let positioned = doc
+        .add_feature_to(
+            &def(json!({"type": "move_occurrence", "occurrences": [part],
+                "transform": {"type": "point_to_position",
+                    "point": {"body": part_body, "vertex": part_vertex}, "point_occurrence": through,
+                    "x": 1, "y": 2, "z": 3}})),
+            None,
+            Some(parent),
+        )
+        .unwrap();
+    assert_ok(&doc, positioned.uid);
+    assert!(
+        near(seen(&doc, second), [-2.0, 301.0, 3.0]),
+        "{:?}",
+        seen(&doc, second)
+    );
+    assert!(near(
+        doc.placement(part).unwrap().translation,
+        [-9.0, 2.0, -7.0]
+    ));
+}
+
 /// Sketches and construction geometry of another component are taken
 /// where an occurrence places them; without one they are still refused
 /// (mitcad#699).

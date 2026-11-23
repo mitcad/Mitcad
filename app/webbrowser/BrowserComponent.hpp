@@ -77,9 +77,16 @@ bool checkUnpackedBrowserComponent(const BrowserComponentInfo& unpacked, const B
 
 // The messages of a component of another interface than this MitCad's
 // (`abi`): an installed one (`installed`), and the manifest's packages
-// only for other interfaces (`published`).
+// only for other interfaces (`published`): with a newer interface among
+// them, MitCad needs an update; with only older ones (a MitCad whose
+// interface was raised before its release's package is published,
+// mitcad#2289), the package is not published yet.
 QString browserInterfaceMessage(int abi, int installed);
 QString browserPublishedInterfaceMessage(int abi, const QList<int>& published);
+// A component of another interface that MitCad does not replace (mitcad#2289):
+// the build's own (MITCAD_BROWSER_COMPONENT_DIR), or a module whose own
+// interface (`module`) is not the one its component.json says.
+QString browserModuleInterfaceMessage(int abi, int module);
 // "52.3 MB" for the question before a download.
 QString browserDownloadSize(qint64 bytes);
 

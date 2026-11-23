@@ -366,10 +366,10 @@ itself and hands over (`--record-ui`, below).
   (0: no other UI entry beside it); 3 passes with the room full (at least
   that many beside it) grow it by one. `--dry-run` shows it (`UI room N`).
 - **The machine's cap:** UI entries at once. It is the bound, `--ui-max`,
-  else `MITCAD_UI_JOBS`, else 4, one number for the scheduler, `--ui-cap`
-  and the end report, and exists for the memory budget only: the scheduler admits a UI entry, as
-  any test, only while its predicted memory fits the budget beside the
-  tests running. Contention failures never lower it, however many UI
+  else `MITCAD_UI_JOBS`, one value for the scheduler, `--ui-cap` and the
+  end report; without either there is no cap. The scheduler admits a UI
+  entry, as any test, only while its predicted memory fits the budget
+  beside the tests running. Contention failures never lower it, however many UI
   entries fail so in one run: each lowers only its own test's room
   (mitcad#872, mitcad#2124; the earlier rule dropped the cap by one after
   a run with two or more of them and grew it back only after two clean
@@ -379,24 +379,29 @@ itself and hands over (`--record-ui`, below).
   not read, and the file's next save drops it. The end report gives the
   run's line (`UI entries at once: cap 6; this run at most 6, 2 failed
   beside others and passed with fewer beside them (their rooms lowered),
-  ...`). Measuring
+  ...`; without a bound `UI entries at once: no cap (memory budget); this
+  run at most 15, ...`). Measuring
   mode records and learns the rooms too, but neither reruns nor holds UI
   entries to the cap.
 
-**The scheduler holds UI entries to the cap on every machine**: it starts
-a UI entry only while the UI entries running are fewer than the cap
-(non-UI tests are not counted), 4 without a bound (a follow-up of
-mitcad#2124: the Windows VM, with neither `--ui-max` nor
-`MITCAD_UI_JOBS`, ran 15 at once while its report named the cap 4).
-**A machine opts in to the rooms by giving the bound** (`--ui-max N` or
-`MITCAD_UI_JOBS`). Only then does the scheduler also wait until its room
-and every running UI entry's room allow one more beside them, and rerun a
-UI entry alone after a failure beside others. Without a bound the runs
-still record `beside` and learn the rooms, but no room applies and none
-is rerun. With a bound, `MITCAD_UI_JOBS` is the number at once, held
+**A machine opts in by giving the bound** (`--ui-max N` or
+`MITCAD_UI_JOBS`). Only then does the scheduler start a UI entry only
+while the UI entries running are fewer than the cap and its room and every
+running UI entry's room allow one more beside them (non-UI tests are not
+counted), and rerun a UI entry alone after a failure beside others.
+Without a bound the runs still record `beside` and learn the rooms, but
+UI entries are held by no count: no cap, no rooms, no rerun; only the
+memory budget and the CPU rules admit them, as every test (mitcad#2260:
+the Windows VM runs about 15 at once so), and the report says `no cap
+(memory budget)`. With a bound, `MITCAD_UI_JOBS` is the number at once, held
 lower only by the memory budget and, for a test that failed beside
 others, by its room. `--dry-run` and the run's first lines say which
 applies.
+
+Owner 22.11.2026: do not change how many UI entries run at once (the
+default without a bound, the bound's handling, MITCAD_UI_JOBS) without
+the owner's explicit permission; 934331a20 capped the Windows VM at 4
+unasked and slowed every Windows round several times over (mitcad#2260).
 
 `tools/check-all.sh` runs the Linux UI tests (`tools/ui-*-test.sh`) itself,
 not as ctests. For such a caller:

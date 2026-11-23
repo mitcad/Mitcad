@@ -11,7 +11,9 @@
 # Rotation (mitcad#1910): the second button chosen to run it locks and
 # frees the rotation outside a sketch, the tab's Lock rotation following;
 # in a sketch the rotation starts locked, the button frees it for that
-# sketch, and the next sketch starts locked again. Run by
+# sketch, and the next sketch starts locked again. Two designs share the
+# process's one connection, its input reaching the active one only, also
+# after the other one closes (mitcad#2297). Run by
 # ui-space-mouse-test.sh on Linux, ui-windows-space-mouse-test.ps1 in the
 # Windows VM and ui-macos-space-mouse-test.sh in the macOS VM, on the demo
 # design.
@@ -141,3 +143,44 @@ expect-view-orientation ${again} unchanged
 mark
 command sketch.finish
 wait-log '^Sketch finished'
+# Two designs on the process's one 3D mouse connection (mitcad#2297,
+# GitHub mitcad/Mitcad#587): the second design opened in a tab of its own
+# joins it (no second "3D mouse: none" or "connected" line) and the input
+# (the driver's space-mouse step gives it to the connection, as the
+# backend does) turns its view only, not the first one's; its tab left for
+# the first design's, the input turns the first one's; the second design
+# closed with its tab's ×, the first design still gets the input and the
+# device is not turned off.
+wait-idle
+capture-view-orientation firstDesign
+mark
+command file.new_design
+wait-log '^Document window created: ' 30
+wait-idle
+expect-document-windows 2
+expect-no-log '^3D mouse: (none|off|.+ connected \(.*)$'
+capture-view-orientation secondDesign
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), .*turned [0-9.]+ degrees, '
+expect-view-orientation ${secondDesign} changed
+mark
+document-tab-click 0
+wait-idle
+expect-view-orientation ${firstDesign} unchanged
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), .*turned [0-9.]+ degrees, '
+expect-view-orientation ${firstDesign} changed
+wait-idle
+capture-view-orientation beforeClose
+mark
+document-tab-close 1
+wait-log '^Document tab closed: ' 10
+wait-idle
+expect-document-windows 1
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), .*turned [0-9.]+ degrees, '
+expect-view-orientation ${beforeClose} changed
+expect-no-log '^3D mouse: (off|.+ disconnected)$'

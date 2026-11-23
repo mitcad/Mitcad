@@ -27,6 +27,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QDragEnterEvent>
+#include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -546,6 +547,7 @@ void MainWindow::prepareFileMenuActions() {
       {"file.update_web_viewer", tr("&Update Web Viewer")},
       {"file.import", tr("&Import…")},
       {"file.export", tr("&Export…")},
+      {"file.export_script", tr("Export Ti&meline as Script…")},
       {"file.create_drawing", tr("Create Dra&wing…")},
       {"file.export_drawing", tr("Export &Drawing…")},
       {"file.print", tr("Prin&t…")},
@@ -849,11 +851,30 @@ void MainWindow::closeDocument() {
   showHint(tr("Create a sketch to start modeling. S searches for commands."));
 }
 
+namespace {
+
+// Whether a drag carries a local file MitCad opens or imports.
+bool carriesFiles(const QMimeData* data) {
+  const QList<QUrl> urls = data != nullptr ? data->urls() : QList<QUrl>();
+  return std::any_of(urls.begin(), urls.end(), [](const QUrl& url) {
+    return url.isLocalFile() && fileKind(url.toLocalFile()) != FileKind::None;
+  });
+}
+
+} // namespace
+
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
-  const QList<QUrl> urls = event->mimeData()->urls();
-  if (std::any_of(urls.begin(), urls.end(), [](const QUrl& url) {
-        return url.isLocalFile() && fileKind(url.toLocalFile()) != FileKind::None;
-      })) {
+  if (carriesFiles(event->mimeData())) {
+    event->acceptProposedAction();
+  }
+}
+
+void MainWindow::dragMoveEvent(QDragMoveEvent* event) {
+  // Accepted here rather than left to the enter's state (mitcad#2289): a
+  // move event made without the system's drag (the UI tests' drops, the
+  // TestDriver's drop-files-on-widget) starts ignored, and QWidget's own
+  // dragMoveEvent accepts nothing, so the drop on the 3D view was refused.
+  if (carriesFiles(event->mimeData())) {
     event->acceptProposedAction();
   }
 }
@@ -884,7 +905,13 @@ void MainWindow::dropEvent(QDropEvent* event) {
 void MainWindow::openDropped(const QStringList& paths, std::optional<QPointF> onView) {
   // Later, so that the drag ends first; a design opens, the rest come in
   // (from the Start page too, mitcad#1258, which the import leaves).
-  afterEventWhenIdle(*this, this, [this, paths, onView] {
+  // While a command is open they come in by its kind (mitcad#2281,
+  // arriveDropped): at once beside an inspection, else when it closes.
+  afterEventWhenIdle(*this, this, [this, paths, onView] { arriveDropped(paths, onView); });
+}
+
+void MainWindow::openDroppedNow(const QStringList& paths, std::optional<QPointF> onView) {
+  {
     // Design files of other formats dropped on the view of a design with
     // content come in as its components, without asking (mitcad#1894).
     QStringList designs;
@@ -932,7 +959,7 @@ void MainWindow::openDropped(const QStringList& paths, std::optional<QPointF> on
       }
       importDesignsIntoDesign(designs, false, at);
     }
-  });
+  }
 }
 
 // ---------------------------------------------------------------------------

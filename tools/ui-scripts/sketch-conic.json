@@ -1,0 +1,7 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for Conic Curve (mitcad#2236): two free points that frame the view's fit (p1, p2) and nothing else, so that the conic the test draws is the sketch's sixth entity (its three points, then the conic)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]}
+]

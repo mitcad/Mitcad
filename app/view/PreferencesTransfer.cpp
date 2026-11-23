@@ -403,6 +403,12 @@ void ViewController::applyImportedSettings(const SettingsBeforeImport& was, cons
     // The ribbon's labels under its icons (mitcad#1936).
     through<RibbonLabels>(before, {ribbonLabelsKey()}, [] { return savedRibbonLabels(); },
                           [](const RibbonLabels& labels) { saveRibbonLabels(labels); });
+    // The Browser rows' Activate radio button and Show eye (mitcad#2223).
+    through<BrowserControlPlace>(before, {QStringLiteral("browser/activateButtonPlace")},
+                                 [] { return browserActivatePlace(); },
+                                 [](const BrowserControlPlace& place) { setBrowserActivatePlace(place); });
+    through<BrowserControlPlace>(before, {QStringLiteral("browser/showEyePlace")}, [] { return browserEyePlace(); },
+                                 [](const BrowserControlPlace& place) { setBrowserEyePlace(place); });
     const ThemeChoice themeNow = themePreference();
     if (themeNow != was.theme) {
       applyThemePreference(themeNow);

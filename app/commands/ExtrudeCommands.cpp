@@ -284,6 +284,9 @@ CommandDef extrudeCommand(const CommandContext& context) {
     }
     return direction;
   };
+  // Cut or Join chosen by hand that misses one way and works the other
+  // turns Flip once (mitcad#2283).
+  def.toolFlip = QStringLiteral("flip");
   const auto always = [](const CommandState&) { return true; };
   const auto thin = choiceIs(QStringLiteral("type"), QStringLiteral("thin"));
   const auto twoSides = choiceIs(QStringLiteral("direction"), kTwoSides);

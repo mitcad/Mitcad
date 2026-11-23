@@ -5,6 +5,7 @@
 #include "framework/CommandRegistry.hpp"
 #include "framework/DockState.hpp"
 #include "framework/InterfaceSize.hpp"
+#include "framework/ShutdownSteps.hpp"
 #include "framework/WindowPlace.hpp"
 #include "platform/MacChrome.hpp"
 
@@ -43,6 +44,7 @@ WindowManager::WindowManager(bool nativeUi, QObject* parent) : QObject(parent), 
   // end): the active window's place is kept for the next start (mitcad#1710).
   if (QCoreApplication::instance() != nullptr) {
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
+      const shutdown::Step step(QStringLiteral("window manager: the active window's place kept"));
       if (!m_quitting) saveActiveWindowPlace();
     });
   }
@@ -50,10 +52,13 @@ WindowManager::WindowManager(bool nativeUi, QObject* parent) : QObject(parent), 
 
 WindowManager::~WindowManager() {
   // At process shutdown, finish every session before QApplication's teardown.
+  // Each window's destruction is a shutdown step (mitcad#2275).
   const auto kept = m_windows;
+  const shutdown::Step step(QStringLiteral("window manager: %1 window(s) close").arg(kept.size()));
   m_windows.clear();
   for (const auto& window : kept) {
     if (!window) continue;
+    const shutdown::Step windowStep(QStringLiteral("window manager: %1 destroyed").arg(handle(window.data())));
     disconnect(window, nullptr, this, nullptr);
     disconnect(this, nullptr, window, nullptr);
     delete window.data();
@@ -356,6 +361,9 @@ void WindowManager::windowClosed(MainWindow* window) {
   if (window != nullptr) window->deleteLater();
   if (windows().isEmpty()) {
     qInfo() << "Document windows closed: empty process registry";
+    // MitCad quits: from here on the shutdown's steps are logged
+    // (mitcad#2275), the closed window's destruction too.
+    shutdown::begin(QStringLiteral("the last document window closed"));
     QTimer::singleShot(0, qApp, &QCoreApplication::quit);
   } else if (m_quitting) {
     if (!m_quitRunning) QTimer::singleShot(0, this, [this] { if (m_quitting) quit(); });

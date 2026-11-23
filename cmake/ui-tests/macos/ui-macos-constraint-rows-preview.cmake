@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Assembly Constraint's preview with more than one row (mitcad#1813): an
+# Constraint Set's preview with more than one row (mitcad#1813): an
 # incomplete row left out of the preview, a moved part drawn once; the
 # shared steps of tools/ui-constraint-rows-preview-test.sh and
 # tools/ui-windows-constraint-rows-preview-test.ps1 in the Qt frontend.

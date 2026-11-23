@@ -77,6 +77,7 @@
 #include "../library/PartFavourites.hpp"
 #include "../library/PartPicker.hpp"
 #include "../library/UsedParts.hpp"
+#include "BuildEndCapCommand.hpp"
 #include "CommandSupport.hpp"
 
 namespace mitcad {
@@ -8151,6 +8152,11 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
         line += QObject::tr(", %1 runs through").arg(cmd::componentName(through, model).toHtmlEscaped());
       }
       lines << line;
+      // A miter whose cut leans away since the lines moved (mitcad#2234).
+      const QString warning = str(joint, "warning");
+      if (!warning.isEmpty()) {
+        lines << QObject::tr("Joint: %1").arg(mitcad::modelMessage(warning).toHtmlEscaped());
+      }
       const QString problem = str(joint, "problem");
       const QString chosen = state.choice(kJoint);
       if (!problem.isEmpty()) {
@@ -8784,6 +8790,7 @@ void registerBuildCommands(CommandRegistry& registry, const CommandContext& cont
   // MODIFY
   registry.add(lengthCommand(host, context));
   registry.add(endsCommand(host, context));
+  registry.add(buildEndCapCommand(host, context)); // mitcad#2243
   registry.add(turnCommand(host, context, false));
   registry.add(turnCommand(host, context, true));
   registry.add(spacingCommand(shared, host, context)); // mitcad#478

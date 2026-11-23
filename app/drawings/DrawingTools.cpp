@@ -4,8 +4,10 @@
 #include <cmath>
 
 #include <QCoreApplication>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QSet>
 #include <QStringList>
 
 #include "../framework/Numbers.hpp"
@@ -843,27 +845,50 @@ QJsonArray childrenOf(const QJsonArray& tree, const QString& component, bool* fo
 } // namespace
 
 QList<QPair<QString, QString>> subjectChoices(const QString& component, const QString& name,
-                                              const QJsonObject& components, const QJsonArray& bodies) {
+                                              const QJsonObject& components, const QJsonArray& bodies,
+                                              const QJsonArray& sheetBodies) {
   const bool root = component.isEmpty() || component == QStringLiteral("C0");
   QList<QPair<QString, QString>> out;
   out.append({QStringLiteral("design"), name.isEmpty() ? Text::tr("The Design") : name});
   const QJsonArray tree = components.value(QStringLiteral("occurrences")).toArray();
   bool found = false;
   addOccurrences(root ? tree : childrenOf(tree, component, &found), QString(), QString(), out);
+  // The component's own bodies, by uid: their Flat Patterns follow.
+  QHash<QString, QString> own;
+  QStringList order;
   for (const QJsonValue& value : bodies) {
     const QJsonObject body = value.toObject();
     const QString owner = body.value(QStringLiteral("component")).toString();
-    const bool own = root ? owner.isEmpty() || owner == QStringLiteral("C0") : owner == component;
+    const bool mine = root ? owner.isEmpty() || owner == QStringLiteral("C0") : owner == component;
     const QString uid = body.value(QStringLiteral("uid")).toString();
-    if (own && !uid.isEmpty()) {
+    if (mine && !uid.isEmpty()) {
       const QString bodyName = body.value(QStringLiteral("name")).toString();
-      out.append({QStringLiteral("body:") + uid, bodyName.isEmpty() ? uid : bodyName});
+      own.insert(uid, bodyName.isEmpty() ? uid : bodyName);
+      order.append(uid);
+      out.append({QStringLiteral("body:") + uid, own.value(uid)});
+    }
+  }
+  // Each sheet-metal body's Flat Pattern (mitcad#2280), in the bodies'
+  // order.
+  QSet<QString> sheets;
+  for (const QJsonValue& value : sheetBodies) {
+    sheets.insert(value.toObject().value(QStringLiteral("body")).toString());
+  }
+  for (const QString& uid : order) {
+    if (sheets.contains(uid)) {
+      out.append({QStringLiteral("flat:") + uid, flatPatternLabel(own.value(uid))});
     }
   }
   return out;
 }
 
+QString flatPatternLabel(const QString& body) { return Text::tr("%1 Flat Pattern").arg(body); }
+
 QJsonObject subjectOf(const QString& choice) {
+  if (choice.startsWith(QStringLiteral("flat:"))) {
+    return {{QStringLiteral("type"), QStringLiteral("flat_pattern")},
+            {QStringLiteral("body"), choice.mid(QStringLiteral("flat:").size())}};
+  }
   if (choice.startsWith(QStringLiteral("occurrence:"))) {
     return {{QStringLiteral("type"), QStringLiteral("occurrence")},
             {QStringLiteral("occurrence"), choice.mid(QStringLiteral("occurrence:").size())}};
@@ -883,6 +908,12 @@ QString subjectChoice(const QJsonObject& subject) {
   }
   if (type == QStringLiteral("occurrence")) {
     return QStringLiteral("occurrence:") + subject.value(QStringLiteral("occurrence")).toString();
+  }
+  // A Flat Pattern of the component's own body (mitcad#2280).
+  if (type == QStringLiteral("flat_pattern")) {
+    return subject.contains(QStringLiteral("occurrence"))
+               ? QString()
+               : QStringLiteral("flat:") + subject.value(QStringLiteral("body")).toString();
   }
   const QJsonArray bodies = subject.value(QStringLiteral("bodies")).toArray();
   if (type == QStringLiteral("bodies") && bodies.size() == 1) {
@@ -1066,7 +1097,8 @@ QJsonObject viewEdit(const QString& drawing, int view, const QString& field, con
     command.insert(QStringLiteral("style"), changed);
   } else if (field == QStringLiteral("aligned") || field == QStringLiteral("hatch") ||
              field == QStringLiteral("flip") || field == QStringLiteral("center_marks") ||
-             field == QStringLiteral("retrieved_dimensions") || field == QStringLiteral("model_annotations")) {
+             field == QStringLiteral("retrieved_dimensions") || field == QStringLiteral("model_annotations") ||
+             field == QStringLiteral("bend_notes")) {
     command.insert(field, yes(value));
   } else if (field == QStringLiteral("radius")) {
     bool number = false;

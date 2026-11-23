@@ -27,7 +27,7 @@ use mitcad_model::expr::Unit;
 use mitcad_model::features::bound_length::{
     BoundFrom, BoundLengthDef, BoundMode, BoundTo, RayDirection, ShiftAxis,
 };
-use mitcad_model::features::derived_part::{DerivedPartDef, EndCut, Ends, Tilt};
+use mitcad_model::features::derived_part::{CutBack, DerivedPartDef, EndCut, Ends, Tilt};
 use mitcad_model::features::extrude::Operation;
 use mitcad_model::features::{
     FeatureDef, FeatureEntry, FrameOverride, GeomRef, JointDef, JointOrigin, OccurrencePath,
@@ -690,6 +690,41 @@ fn ground_frame<K: Kernel>(doc: &Document<K>, joint: FeatureUid) -> Option<(Tran
     let up = z_axis(&local);
     let offset = o.shift.map_or(0.0, |s| dot(turned.apply_vector(s), up));
     Some((turned, up, offset))
+}
+
+/// A ground joint's override in the plane's or the face's own frame
+/// (mitcad#2286): its origin and axes measured from `local` (the
+/// geometry's frame as it is now; a planar face's from the point of its
+/// plane nearest to the component's origin), so that it moves and turns
+/// with the plane or face and gives the same frame while it stays. On
+/// other geometry, or one that cannot be resolved, as it is.
+pub(crate) fn relative_to_geometry<K: Kernel>(
+    doc: &Document<K>,
+    geometry: &GeomRef,
+    local: &Transform,
+    o: FrameOverride,
+) -> FrameOverride {
+    match mitcad_model::internal::joints::relative_form(&mut doc.resolver(), geometry) {
+        Some(nearest) => mitcad_model::internal::joints::relative_override(local, &o, nearest),
+        None => o,
+    }
+}
+
+/// A ground joint's frame on its plane or face now and the way its
+/// override is kept relative to it (mitcad#2286): what `build_edit`
+/// writes the override's relative form with, none for other geometry.
+fn ground_relative<K: Kernel>(
+    doc: &Document<K>,
+    joint: FeatureUid,
+) -> Option<(FeatureUid, Transform, bool)> {
+    let Some(FeatureDef::Joint(j)) = doc.feature(joint).map(|e| &e.def) else {
+        return None;
+    };
+    let nearest =
+        mitcad_model::internal::joints::relative_form(&mut doc.resolver(), &j.b.geometry)?;
+    let local =
+        mitcad_model::internal::joints::origin_frame(&mut doc.resolver(), &j.b.geometry).ok()?;
+    Some((joint, local, nearest))
 }
 
 /// The offset of a part on a plane or a face along its normal
@@ -2322,6 +2357,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                         z_axis: None,
                         x_axis: Some(x),
                         shift: None,
+                        relative: None,
                     };
                     local = mitcad_model::internal::joints::apply_override(&end_frame_local, &o)
                         .map_err(refuse)?;
@@ -2340,6 +2376,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                         z_axis: Some(d),
                         x_axis: Some(hint),
                         shift: None,
+                        relative: None,
                     };
                     let turned =
                         mitcad_model::internal::joints::apply_override(&end_frame_local, &o)
@@ -3191,6 +3228,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 z_axis: turn,
                 x_axis: hint,
                 shift: None,
+                relative: None,
             });
         let direction = match turn {
             Some(d) => RayDirection::Vector(inverse(&local).apply_vector(d)),
@@ -3232,6 +3270,10 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             o.shift = Some(ground_shift(&at_point, up, offset));
             at_point = mitcad_model::internal::joints::apply_override(&local, o).map_err(refuse)?;
         }
+        // Kept in the plane's or the face's own frame (mitcad#2286), so
+        // that the part moves and turns with it: the same frame now.
+        let override_frame =
+            override_frame.map(|o| relative_to_geometry(self, geometry, &local, o));
         let shift = point_local.map_or([0.0; 3], |p| inverse(&local).apply_point(p));
         let frame_b = placement.after(&at_point);
         Ok(Spot::Joint(Box::new(JointPlan {
@@ -3422,6 +3464,7 @@ pub(crate) fn same_lie_x(
             z_axis: Some(z),
             x_axis: Some(x),
             shift: None,
+            relative: None,
         };
         mitcad_model::internal::joints::apply_override(frame, &o).is_ok_and(|turned| {
             let to_target = turned
@@ -3474,6 +3517,7 @@ pub(crate) fn side_lie(
         z_axis: None,
         x_axis: Some(parts(own)[2]),
         shift: None,
+        relative: None,
     };
     let turned = mitcad_model::internal::joints::apply_override(own, &o).ok()?;
     let (now, quarter) = (lies(own), lies(&turned));
@@ -3682,6 +3726,7 @@ pub(crate) fn make_part(
         ends: plan.own_ends.clone(),
         operation: Operation::NewBody,
         cuts: Vec::new(),
+        cut_back: CutBack::none(),
     };
     let part = add_feature(state, FeatureDef::DerivedPart(part_def), made)?;
     crate::parts::inherit_appearance(state, part, &plan.source.def);
@@ -3905,6 +3950,14 @@ pub trait EditBuild<K: Kernel> {
     /// Edits a BUILD part (`build_edit`); returns what changed.
     fn build_edit(&mut self, input: &EditInput) -> Result<Vec<String>, ModelError>;
 
+    /// Refreshes the joints after an edit to the member's derived feature,
+    /// merging the update into that edit's undo step.
+    fn refresh_build_joints(
+        &mut self,
+        component: ComponentUid,
+        depth: usize,
+    ) -> Result<(), ModelError>;
+
     /// A component by uid or name.
     fn component_by_ref(&self, text: &str) -> Result<ComponentUid, ModelError>;
 }
@@ -3912,6 +3965,69 @@ pub trait EditBuild<K: Kernel> {
 impl<K: Kernel> EditBuild<K> for Document<K> {
     fn build_edit(&mut self, input: &EditInput) -> Result<Vec<String>, ModelError> {
         let component = self.component_by_ref(&input.component)?;
+        // An end with an end cap stays square (mitcad#2243).
+        crate::end_cap::check_capped_ends(
+            self,
+            component,
+            input.ends.as_ref(),
+            input.shared_mitre,
+        )?;
+        let depth = self.undo_depth();
+        let changed = EditOnceOps::edit_once(self, component, input)?;
+        // A member along a sketch line edited (its row or option values
+        // swapping its size, its alignment, turn or offsets): the joints it
+        // is in keep its section anew (mitcad#2200, mitcad#2234), in the
+        // same undo step. A joint's condition writes its sections itself.
+        if input.joint.is_none() && input.shared_mitre.is_none() && self.undo_depth() > depth {
+            let label = self.undo_label().unwrap_or("Edit").to_owned();
+            crate::conditions::ConditionsCrateOps::refresh_joints(self, component, false)?;
+            self.merge_undo(depth, &label);
+        }
+        Ok(changed)
+    }
+
+    fn refresh_build_joints(
+        &mut self,
+        component: ComponentUid,
+        depth: usize,
+    ) -> Result<(), ModelError> {
+        let label = self.undo_label().unwrap_or("Edit").to_owned();
+        crate::conditions::ConditionsCrateOps::refresh_joints(self, component, true)?;
+        self.merge_undo(depth, &label);
+        Ok(())
+    }
+
+    fn component_by_ref(&self, text: &str) -> Result<ComponentUid, ModelError> {
+        let a = self.assembly();
+        if let Ok(uid) = text.parse::<ComponentUid>()
+            && a.exists(uid)
+        {
+            return Ok(uid);
+        }
+        a.components
+            .iter()
+            .find(|c| c.name == text)
+            .map(|c| c.uid)
+            .ok_or_else(|| refuse(format!("no component {text}")))
+    }
+}
+
+/// `build_edit` itself, before the joints keep the edited member's section
+/// anew.
+trait EditOnceOps<K: Kernel> {
+    fn edit_once(
+        &mut self,
+        component: ComponentUid,
+        input: &EditInput,
+    ) -> Result<Vec<String>, ModelError>;
+}
+
+impl<K: Kernel> EditOnceOps<K> for Document<K> {
+    fn edit_once(
+        &mut self,
+        component: ComponentUid,
+        input: &EditInput,
+    ) -> Result<Vec<String>, ModelError> {
         // A shared miter with the end it meets (mitcad#1940), on its own.
         if let Some(end) = input.shared_mitre {
             if input.ends.is_some()
@@ -3955,13 +4071,8 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
         }
         // A member along an edge: its edge, face, offsets, lie and row
         // (mitcad#1814).
-        let depth = self.undo_depth();
+        // The joints it is in keep its section anew in `build_edit`.
         if let Some(changed) = self.edit_along(component, input)? {
-            // The joints it is in keep its section anew (mitcad#2200), in
-            // the same undo step.
-            let label = self.undo_label().unwrap_or("Edit").to_owned();
-            crate::conditions::ConditionsCrateOps::refresh_joints(self, component)?;
-            self.merge_undo(depth, &label);
             return Ok(changed);
         }
         // A profile placed in parallel (mitcad#2201): placed anew with what
@@ -4224,6 +4335,14 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
             None => None,
         };
         let rest = self.plan_rest(&info, rotate, input.flip);
+        // A ground part whose placement changes (its offset, turn or
+        // flip): its plane's or face's frame now, which its override is
+        // written relative to (mitcad#2286).
+        let relative = ground
+            .filter(|_| {
+                ground_edit.is_some() || rest.is_some() || rotate.is_some() || input.flip.is_some()
+            })
+            .and_then(|joint| ground_relative(self, joint));
         let side_turn = self.plan_side_lie(&info, input.flip);
         // A carriage's travel limits, and its offset within them
         // (mitcad#2088).
@@ -4332,6 +4451,11 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
             if let (Some((origin, lift)), Some(joint)) = (rest, joint) {
                 edit_joint(state, joint, |j| {
                     if let Some(o) = j.b.frame_override.as_mut() {
+                        // The rest is in the component's coordinates
+                        // (mitcad#2286: kept relative again below).
+                        if let Some((_, local, _)) = &relative {
+                            *o = mitcad_model::internal::joints::absolute_override(local, o);
+                        }
                         o.origin = Some(origin);
                     }
                 })?;
@@ -4540,25 +4664,22 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
                 }
                 changed.push("grade".to_owned());
             }
+            // A ground part's placement edited: its override in the plane's
+            // or the face's own frame (mitcad#2286), an old design's
+            // absolute one too, so that it follows the plane or face from
+            // now on; the same frame now.
+            if let Some((joint, local, nearest)) = &relative {
+                edit_joint(state, *joint, |j| {
+                    j.b.frame_override = j.b.frame_override.map(|o| {
+                        mitcad_model::internal::joints::relative_override(local, &o, *nearest)
+                    });
+                })?;
+            }
             if changed.is_empty() {
                 return Err(refuse("nothing to change"));
             }
             Ok((label, changed))
         })
-    }
-
-    fn component_by_ref(&self, text: &str) -> Result<ComponentUid, ModelError> {
-        let a = self.assembly();
-        if let Ok(uid) = text.parse::<ComponentUid>()
-            && a.exists(uid)
-        {
-            return Ok(uid);
-        }
-        a.components
-            .iter()
-            .find(|c| c.name == text)
-            .map(|c| c.uid)
-            .ok_or_else(|| refuse(format!("no component {text}")))
     }
 }
 
@@ -4619,10 +4740,6 @@ impl<K: Kernel> EditCrateOps<K> for Document<K> {
         let Some(FeatureDef::Joint(j)) = self.feature(info.record.joint?).map(|e| &e.def) else {
             return None;
         };
-        let o = j.b.frame_override?;
-        let (Some(origin), Some(z)) = (o.origin, o.z_axis) else {
-            return None;
-        };
         if j.kind != JointKind::Rigid || self.target(&j.b.occurrence.0).is_some() {
             return None;
         }
@@ -4632,6 +4749,12 @@ impl<K: Kernel> EditCrateOps<K> for Document<K> {
         let local =
             mitcad_model::internal::joints::origin_frame(&mut self.resolver(), &j.b.geometry)
                 .ok()?;
+        // In the component's coordinates, the relative form's too
+        // (mitcad#2286).
+        let o = mitcad_model::internal::joints::absolute_override(&local, &j.b.frame_override?);
+        let (Some(origin), Some(z)) = (o.origin, o.z_axis) else {
+            return None;
+        };
         let up = z_axis(&local);
         if dot(unit(z)?, up).abs() >= 1e-6 {
             return None;
@@ -4819,6 +4942,7 @@ impl<K: Kernel> EditCrateOps<K> for Document<K> {
                     &from.geometry,
                 )
                 .map_err(refuse)?;
+                let o = mitcad_model::internal::joints::absolute_override(&local, &o);
                 let turned =
                     mitcad_model::internal::joints::apply_override(&local, &o).map_err(refuse)?;
                 if o.shift.is_some() {

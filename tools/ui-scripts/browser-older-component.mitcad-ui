@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Component from Web with a web browser component of an older interface
+# (mitcad#2289): MITCAD_BROWSER_COMPONENT_DIR names a component whose
+# component.json says the interface before this MitCad's. A build's
+# component is never replaced by a download, so MitCad says in words that
+# the component is for another version and loads nothing of it; the
+# window stays usable. Run by tools/ui-browser-older-component-test.sh.
+wait-idle 60
+mark
+command insert.component_web
+wait-log '^Component from Web: the build.s component .* has interface [0-9]+, not [0-9]+$' 20
+focus-dialog '^Component from Web$'
+button '^OK$'
+focus-main
+wait-idle
+expect-no-log '^Component from Web: loaded |^Component browser opened: |^Component from Web: the browser module did not load: '
+# Still usable: a model command after the message.
+model-command '{"cmd":"add_parameter","name":"afterOlderComponent","unit":"mm","expression":"5 mm"}'
+wait-idle
+expect-never 'TestDriver: FAIL|^Qt has caught an exception'
+quit

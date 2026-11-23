@@ -15,6 +15,8 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QEvent>
+#include <QFileIconProvider>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHash>
 #include <QHeaderView>
@@ -22,6 +24,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMoveEvent>
 #include <QPushButton>
 #include <QResizeEvent>
@@ -546,6 +549,20 @@ void BrowserDialog::showEntries(const QVector<BrowserEntry>& entries, bool searc
     if (entry.kind == BrowserEntry::Kind::Folder) {
       item->setIcon(kName, themeIcon(QStringLiteral("folder")));
       item->setToolTip(kName, QStringLiteral("%1\n%2").arg(entry.name, file));
+    } else if (entry.kind == BrowserEntry::Kind::File) {
+      // Another file (mitcad#2204): the system's icon for its type, its
+      // size in the tooltip; it opens with the system's app.
+      const RowMarks marks = fileMarks(entry.file);
+      item->setIcon(kName, QFileIconProvider().icon(QFileInfo(QDir(entry.root).filePath(entry.path))));
+      item->setToolTip(kName, QStringLiteral("%1\n%2\n%3\n%4\n%5")
+                                  .arg(entry.name, file, marks.full,
+                                       Text::tr("Size: %1").arg(QLocale().formattedDataSize(entry.file.size)),
+                                       Text::tr("Opens with the system's app")));
+      item->setText(kVersion, marks.text);
+      item->setToolTip(kVersion, marks.full);
+      if (entry.file.modified.isValid()) {
+        item->setText(kChanged, entry.file.modified.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+      }
     } else {
       const ProjectDesignRow& design = entry.design;
       const RowMarks marks = designMarks(design);
@@ -653,9 +670,13 @@ void BrowserDialog::activate(QTreeWidgetItem* item) {
   ProjectBrowserResult result;
   result.root = entry->root;
   result.path = QDir::cleanPath(QDir(entry->root).filePath(entry->path));
-  result.readOnly = m_readOnly != nullptr && m_readOnly->isChecked();
-  const QString line =
-      QStringLiteral("chose %1%2").arg(result.path, result.readOnly ? QStringLiteral(" (read-only)") : QString());
+  // Another file (mitcad#2204): for the system's app, never read-only.
+  result.file = entry->kind == BrowserEntry::Kind::File;
+  result.readOnly = !result.file && m_readOnly != nullptr && m_readOnly->isChecked();
+  const QString line = QStringLiteral("chose %1%2").arg(
+      result.path, result.file       ? QStringLiteral(" (a file for the system's app)")
+                   : result.readOnly ? QStringLiteral(" (read-only)")
+                                     : QString());
   const BrowserPlace place{entry->root, entry->folder()};
   finish(result, line, place);
 }

@@ -117,11 +117,11 @@ impl EmbeddedImage {
         Ok(())
     }
 
-    fn pixels(&self) -> [u32; 2] {
+    pub(crate) fn pixels(&self) -> [u32; 2] {
         [self.width, self.height]
     }
 
-    fn size(&self) -> [f64; 2] {
+    pub(crate) fn size(&self) -> [f64; 2] {
         [f64::from(self.width), f64::from(self.height)]
     }
 }
@@ -136,7 +136,7 @@ pub struct ImageSource {
 impl ImageSource {
     /// The image as the design keeps it and the size of a pixel its file
     /// states (or 96 to the inch), or why it cannot be kept.
-    fn embed(&self) -> Result<(EmbeddedImage, f64), String> {
+    pub(crate) fn embed(&self) -> Result<(EmbeddedImage, f64), String> {
         if self.bytes.len() > MAX_EMBEDDED_IMAGE {
             return Err(format!(
                 "the image is {} MB, more than the {} MB a design embeds",

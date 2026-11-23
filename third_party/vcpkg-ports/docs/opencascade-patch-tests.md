@@ -204,6 +204,14 @@ tools/occt-port-proof.py --in-chain, with the declarations of 0030, 0031,
 0170, 0180, 0260, 0320, 0330, 0531, 1662, 1701 carried, which add API the
 MitCad code uses).
 
+Benchmark cases (mitcad#2273): geometry/tests/test_fillet_bench_cases.cpp,
+fillet/l-block-inside-consumed and chamfer/l-block-inside-consumed: an
+L-block's inside edge rounded with 7 or chamfered with 7, the blend's
+contacts on the far edges of both its faces, which it consumes; checked
+against the exact volume and area with OCCT's dressup alone and with
+MitCad's (any known failure named there with why). Not a proof of
+this patch: their failure without it is not shown.
+
 ## 0015
 
 [0015-brepblend-surfrst-smaller-step-on-failed-reframing.patch](../opencascade/0015-brepblend-surfrst-smaller-step-on-failed-reframing.patch)
@@ -315,6 +323,13 @@ Test: geometry/tests/test_fillet_kernel.cpp (ctest
 geometry.suite.fillet_kernel), test_ridge_between_faces_at_a_small_angle:
 It fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py,
 reverted together with 0860, which changes the same lines).
+
+Benchmark case (mitcad#2273): geometry/tests/test_fillet_bench_cases.cpp,
+fillet/nearly-flat-ridge: a ridge between faces meeting at 179 degrees
+rounded with 180; checked against the exact volume, area and volume
+removed with OCCT's fillet alone and with MitCad's (any known failure named
+there with why). Not a proof of this patch: its failure without it
+is not shown.
 
 ## 0023
 
@@ -946,6 +961,16 @@ test_box_top_full_round_with_rounded_vertical_edges. Its failure without
 the patch is still to be shown: the patch does not revert at the port's
 tip without the more than 40 later patches that change the same lines
 (tried 2026-11-20 by tools/occt-port-proof.py).
+
+Benchmark cases (mitcad#2273): geometry/tests/test_fillet_bench_cases.cpp,
+fillet/slab-half-round, fillet/hole-waist, fillet/boss-s-curve and
+chamfer/block-ridge: two roundings or chamfers whose contact lines on the
+face between their edges are one line, the face vanishing (a block's top
+rounded to a half cylinder or chamfered to a ridge, a hole's two rims
+rounded to its waist, a boss's rim and root rounded into an S); checked
+against the exact volume and area with OCCT's dressup alone and with
+MitCad's (any known failure named there with why). Not a proof of
+this patch: their failure without it is not shown.
 
 ## 0160
 
