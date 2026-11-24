@@ -338,4 +338,19 @@ bool planeCurveTakes(const SelectionItem& item, const CommandContext& context);
 // Why a click on a 3D sketch's curve is not taken; empty when it is.
 QString planeCurveRefusal(const SelectionItem& item, const CommandContext& context);
 
+// --- A loft's end conditions (mitcad#2345; SweepCommands.cpp), shared by
+// Loft and Surface Loft: Start and End Condition with the choices the
+// first and the last of the input "sections" take (Free, Direction,
+// Tangent, Smooth, Perpendicular to Face, Point Sharp, Point Tangent), the
+// Face a Perpendicular to Face end leaves at right angles, and the takeoff's
+// angle and weight.
+
+// The inputs of one end (`last`: the end's, else the start's).
+QVector<InputDef> loftEndInputs(bool last);
+// The chosen conditions into a loft's definition (`start_condition`,
+// `end_condition`); free ends and sharp points are left out.
+void addLoftEnds(QJsonObject& def, const CommandState& state);
+// An edited loft's conditions into the panel.
+void loadLoftEnds(const QJsonObject& feature, CommandState& state, const CommandContext& context);
+
 } // namespace mitcad::cmd

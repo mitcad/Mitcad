@@ -26,6 +26,8 @@
 #include <vector>
 
 #include <TopoDS_Shape.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 
 #include "mitcad/geometry/shape.hpp"
 
@@ -225,6 +227,10 @@ struct FacesBeyondGrown {
   // The names of the new edges and of their vertices, each with the name
   // of the input's edge or vertex it stands for.
   std::vector<std::pair<std::string, std::string>> renames;
+  // The picked edges beside the narrow faces replaced, each with its other
+  // face (the face the ball touches beside the narrow one), as edge and
+  // face indices of the input (mitcad#2330: added_past_walls).
+  std::vector<std::pair<int, int>> replaced;
 };
 
 // The body for the rounding of the selected edges (`owner`, by edge: the
@@ -238,5 +244,44 @@ struct FacesBeyondGrown {
 // face beyond and the other face's surface near the edge.
 std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std::vector<int>& owner,
                                                    double contact);
+
+// The material that a rounding of a concave picked edge (`edge` of `body`,
+// a straight line) adds under the edge's other face (`face`, a plane: the
+// face the ball touches) past that face's side walls (mitcad#2330). The
+// rounding `made` (of `body`, faces_beyond_grown's or the kernel's) adds
+// material under the face, between its surface and the ball; along the
+// edge that material ends where the face does, at the faces standing on
+// the face's other edges (an end face, a cut face, a rounding an earlier
+// fillet made of a corner there), continued down past the face along
+// their own surfaces. Where such a wall does not reach across the
+// rounding's section (an earlier rounding of the corner took part of the
+// end face away, so that the rounding's contact on the face runs off it
+// onto that rounding), the kernel ends the rounding on the end face's
+// plane alone and leaves a lip standing out past the earlier rounding, a
+// step at its foot. That lip is the material `made` holds past the face's
+// walls continued: outside the body, outside the prism of the face along
+// its outward normal and on the face's side of the edge (the plane
+// through the edge along that normal; past it the rounding lies under the
+// edge's narrow face, taken away, and the face beyond). The walls must
+// stand at right angles to the face where the lip touches them (then the
+// prism's sides are the walls continued); elsewhere this throws a
+// std::runtime_error: the rounding cannot be ended on such a wall here.
+// Returns the lip, its faces on a wall's surface named after that wall,
+// null where `made` holds nothing past the walls; none where it cannot be
+// told (the face is no plane, the edge no line, a boolean fails).
+std::optional<ShapePtr> added_past_walls(const Shape& body, int edge, int face, const Shape& made);
+
+// The region a dressup took away from `body` (`dressed`: body less it)
+// continued past a plane it ends on (mitcad#2330): each of that region's
+// faces on `plane` swept `length` along `out` (the way past the plane), its
+// faces named after the dressed body's faces on whose surfaces they lie (the
+// rounding's, the end faces'). Where a dressup of edges at right angles to
+// the plane ends on it with the material past the plane taken off and put
+// back afterwards (ended_on_end_planes), the material put back less this
+// region is what the dressup leaves where its walls run on down through
+// that material. Null where the dressup took nothing away there (it only
+// adds); none where it cannot be built.
+std::optional<ShapePtr> removal_continued(const Shape& body, const Shape& dressed, const gp_Pln& plane,
+                                          const gp_Dir& out, double length);
 
 } // namespace mitcad::geometry::detail

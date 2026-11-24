@@ -455,7 +455,14 @@ impl<K: Kernel> Document<K> {
         };
         let before = policy::violations(&self.state.assembly, &self.state.features, &policy_of);
         let after = policy::violations(&next.assembly, &next.features, &policy_of);
-        let added = policy::new_violations(&before, &after);
+        let mut added = policy::new_violations(&before, &after);
+        // The assembly around a design edited in place (mitcad#2321): what
+        // refers to it is frozen at once, so it attaches nothing.
+        let around = |c: Option<ComponentUid>| {
+            c.and_then(|c| next.assembly.component(c))
+                .is_some_and(|c| c.in_place)
+        };
+        added.retain(|v| !around(Some(v.owner)) && !around(v.other));
         added.first().map(|v| {
             let mut message = next.refusal(v);
             if added.len() > 1 {

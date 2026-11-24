@@ -68,6 +68,9 @@ const std::pair<const char*, const char*> kShortLabels[] = {
     {"drawing.finish", QT_TRANSLATE_NOOP("RibbonLabel", "Finish")},
     {"drawing.parts_list", QT_TRANSLATE_NOOP("RibbonLabel", "BOM")},
     {"drawing.add_parts", QT_TRANSLATE_NOOP("RibbonLabel", "Add")},
+    // Weld symbols (mitcad#2350).
+    {"drawing.weld", QT_TRANSLATE_NOOP("RibbonLabel", "Weld")},
+    {"drawing.propose_welds", QT_TRANSLATE_NOOP("RibbonLabel", "Propose")},
 };
 
 } // namespace

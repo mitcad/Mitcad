@@ -9,6 +9,7 @@
 
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
+#include "SplitToolLinks.hpp"
 
 namespace mitcad::cmd {
 namespace {
@@ -407,19 +408,33 @@ CommandDef splitBodyCommand(const CommandContext& context) {
   };
   def.inputs += directionInputs();
   def.enabled = [&context] { return hasBodies(context); };
-  def.build = [](const CommandState& state, const CommandContext&) {
+  def.build = [](const CommandState& state, const CommandContext& context) {
     Built result;
+    const Selection& bodies = state.items(QStringLiteral("bodies"));
     QJsonObject def{{QStringLiteral("type"), QStringLiteral("split_body")},
-                    {QStringLiteral("bodies"), bodyUids(state.items(QStringLiteral("bodies")))}};
+                    {QStringLiteral("bodies"), bodyUids(bodies)}};
     if (!addTool(def, state, result)) {
       return result;
+    }
+    // A face or body of another component as the tool, read where it was
+    // picked (mitcad#2299): the split stays in the bodies' component.
+    const QJsonObject links =
+        splitToolLinks(bodies, state.items(QStringLiteral("tool")),
+                       [&context](const QString& path) { return occurrenceComponent(path, context); });
+    if (!links.isEmpty()) {
+      def.insert(QStringLiteral("tool_links"), links);
     }
     result.def = def;
     return result;
   };
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
-    state.setItems(QStringLiteral("bodies"), bodiesOf(feature.value(QStringLiteral("bodies")).toArray()));
+    Selection bodies = bodiesOf(feature.value(QStringLiteral("bodies")).toArray());
     loadTool(feature, state, context);
+    // A linked tool where its link saw it, the bodies where the link saw
+    // them (mitcad#2299; the .f3d import's splits too).
+    linkSplitPicks(feature.value(QStringLiteral("tool_links")).toObject(), bodies,
+                   state.items(QStringLiteral("tool")));
+    state.setItems(QStringLiteral("bodies"), bodies);
   };
   def.canEdit = [&context](const QJsonObject& feature) { return toolEditable(feature, context); };
   def.describe = [](const CommandState& state, const CommandContext&) {

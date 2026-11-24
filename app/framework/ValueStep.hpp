@@ -4,8 +4,9 @@
 // Stepping a value field's number with Up and Down and the mouse wheel
 // (mitcad#1254, app/COMMANDS.md "Stepping a value"): the command panel's
 // value fields and the sketch's value fields (framework/ParameterField.hpp
-// sends the keys and the wheel here). Text rules without widgets, so that
-// they are unit tested (app/tests/value_step.cpp).
+// sends the keys, the wheel and its step buttons here, mitcad#2327), and
+// the 3D view's value boxes (CommandSession::stepBoxValue). Text rules
+// without widgets, so that they are unit tested (app/tests/value_step.cpp).
 //
 // A step is 1 in the unit the field shows (1 mm, 1 in, 1°, or 1 for a
 // plain number), Shift 10 of it, the fine modifier 0.1 of it. Only a plain
@@ -75,5 +76,16 @@ std::optional<QString> steppedValue(const QString& text, ParameterKind kind, dou
 // stop at 0; every other one (a distance between two
 // points, a length, a radius, a diameter, an arc length) stays above 0.
 ValueStepLimit sketchDimensionStepLimit(const QString& type, bool signedOffset);
+
+// Step buttons (mitcad#2327): the up and down arrow pair at the right end
+// of a field that steps (ParameterField). Whether `text` is a value they
+// step: a plain value of the kind, as steppedValue takes it (an
+// expression, a parameter's name, an empty field: the buttons show
+// disabled).
+bool valueSteppable(const QString& text, ParameterKind kind);
+
+// The step buttons' tooltip: "Steps the value; Shift ×10, Ctrl ×0.1;
+// hold to repeat" ("Option ×0.1" on macOS).
+QString valueStepButtonHint(bool macKeys);
 
 } // namespace mitcad

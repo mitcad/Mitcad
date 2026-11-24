@@ -362,15 +362,34 @@ impl<K: Kernel> Document<K> {
         inside: &BTreeSet<ComponentUid>,
         references: &mut Vec<CutReference>,
     ) -> Result<(), ModelError> {
+        let is_outside = |p: &[OccurrenceUid]| !p.starts_with(path);
+        self.freeze_scoped(state, Some(component), &is_outside, inside, references)
+    }
+
+    /// [`Document::freeze_outside`] with what is outside given by
+    /// `is_outside` (an occurrence path from the root): Save Component as
+    /// Design's subtree, or the assembly around a design edited in place
+    /// (mitcad#2321, `edit_in_place.rs`). `made_in`: the component whose
+    /// bodies made by features of other components are frozen too.
+    pub(super) fn freeze_scoped(
+        &self,
+        state: &mut DocState,
+        made_in: Option<ComponentUid>,
+        is_outside: &dyn Fn(&[OccurrenceUid]) -> bool,
+        inside: &BTreeSet<ComponentUid>,
+        references: &mut Vec<CutReference>,
+    ) -> Result<(), ModelError> {
         let a = &self.state.assembly;
-        let outside = |link: &OccurrenceLink| !link.source.0.starts_with(path);
+        let outside = |link: &OccurrenceLink| is_outside(&link.source.0);
         let uids: Vec<FeatureUid> = self.state.features[..self.state.marker]
             .iter()
             .filter(|f| inside.contains(&f.component))
             .map(|f| f.uid)
             .collect();
         // Bodies a feature of another component made in it come first.
-        if let Some(renames) = self.freeze_made_bodies(state, component, &uids, references)? {
+        if let Some(component) = made_in
+            && let Some(renames) = self.freeze_made_bodies(state, component, &uids, references)?
+        {
             renames.apply(state, &uids)?;
         }
         // The hidden copies made so far: a body read again as it was (the
@@ -539,21 +558,21 @@ impl<K: Kernel> Document<K> {
                                 excluded,
                                 excluded_bodies,
                             } => {
-                                excluded.retain(|t| t.occurrence.0.starts_with(path));
-                                excluded_bodies.retain(|b| b.occurrence.0.starts_with(path));
+                                excluded.retain(|t| !is_outside(&t.occurrence.0));
+                                excluded_bodies.retain(|b| !is_outside(&b.occurrence.0));
                             }
                             TargetScope::Explicit {
                                 included,
                                 excluded_bodies,
                             } => {
                                 included.retain(|t| {
-                                    let kept = t.occurrence.0.starts_with(path);
+                                    let kept = !is_outside(&t.occurrence.0);
                                     if !kept {
                                         dropped.push(t.occurrence.0.clone());
                                     }
                                     kept
                                 });
-                                excluded_bodies.retain(|b| b.occurrence.0.starts_with(path));
+                                excluded_bodies.retain(|b| !is_outside(&b.occurrence.0));
                             }
                         }
                         for target in dropped {
@@ -614,7 +633,7 @@ impl<K: Kernel> Document<K> {
                 }
                 _ => {}
             }
-            self.freeze_points(&entry, &mut def, path, references);
+            self.freeze_points(&entry, &mut def, is_outside, references);
             // The renames of this feature, and of the copies made for it by
             // body (for the features after it).
             let mut renames = Renames::default();
@@ -744,11 +763,11 @@ impl<K: Kernel> Document<K> {
         &self,
         entry: &FeatureEntry,
         def: &mut FeatureDef,
-        path: &[OccurrenceUid],
+        is_outside: &dyn Fn(&[OccurrenceUid]) -> bool,
         references: &mut Vec<CutReference>,
     ) {
         let a = &self.state.assembly;
-        let outside = |p: &OccurrencePath| !p.0.starts_with(path);
+        let outside = |p: &OccurrencePath| is_outside(&p.0);
         let output = self.output_of(entry.uid).filter(|o| o.result.is_ok());
         // The picked geometry as this design names it (the frozen copy's
         // definition may name frozen bodies already).
@@ -1047,6 +1066,7 @@ impl<K: Kernel> Document<K> {
                 name: Some(name.clone()),
                 color: None,
                 shape: shape.clone(),
+                face_colors: Vec::new(),
             })
             .collect();
         let bodies = self.base_bodies(&imports)?;
@@ -1317,6 +1337,7 @@ impl<K: Kernel> Document<K> {
                 name: Some(b.name.clone()),
                 color: None,
                 shape: b.shape.clone(),
+                face_colors: Vec::new(),
             })
             .collect();
         let base_bodies = self.base_bodies(&imports)?;

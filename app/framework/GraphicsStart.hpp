@@ -17,9 +17,11 @@
 //   a legacy context), the driver's own highest compatibility version.
 //   The format that works becomes the default and the viewport's.
 // - Where none works, the program starts again in this process (exec)
-//   on the next platform of graphicsFallback(): X11 with GLX at the end,
-//   where the window and its panels draw and the 3D view says why it
-//   cannot.
+//   on the next platform of graphicsFallback(): X11 with GLX after X11
+//   with EGL, as 0.69 composed every window, the 3D view drawn in its own
+//   EGL context (ViewEglContext below), which the check makes too; native
+//   Wayland last, in a Wayland session only. Where nothing is left the
+//   window and its panels draw and the 3D view says why it cannot.
 //
 // Each attempt and Qt's warnings during it (they name the EGL call that
 // failed and its error) go to the log as "Graphics check: " lines. Qt's
@@ -41,11 +43,57 @@
 #include <QStringList>
 #include <QSurfaceFormat>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace mitcad {
+
+// The 3D view's own EGL context where Qt composes the window with GLX
+// (mitcad#2292): OCCT's port draws through EGL only (no Xlib), and a GLX
+// context is no EGL context, so OCCT draws in this one, current without a
+// window (EGL_KHR_surfaceless_context, else on a 1x1 pbuffer), into a
+// framebuffer of the view's, which the view reads back into the window
+// each frame (OcctViewer::paintGL). That is the 0.69 window, composed by
+// Qt's GLX integration, with the 3D view of 0.70 drawn by the same EGL
+// driver, but never through an X11 window's EGL surface, which the
+// reported NVIDIA drivers under XWayland did not give.
+//
+// The display is EGL's default one, else the first EGL device (the
+// graphics card), else Mesa's surfaceless platform; the context has the
+// viewport's version and profile, else the driver's highest compatibility
+// version. Under
+// libglvnd an EGL context cannot be made current while a GLX one is:
+// Qt's context is released first (OcctViewer's ViewGlCurrent).
+class ViewEglContext {
+public:
+  // A context for `format`'s version and profile, not current; null with
+  // `problem` set (each display tried and the EGL call that failed).
+  static std::unique_ptr<ViewEglContext> make(const QSurfaceFormat& format, QString& problem);
+  ~ViewEglContext();
+  ViewEglContext(const ViewEglContext&) = delete;
+  ViewEglContext& operator=(const ViewEglContext&) = delete;
+
+  // Current on this thread, OpenGL bound as EGL's API; no other API's
+  // context may be current.
+  bool makeCurrent();
+  void doneCurrent();
+  bool isCurrent() const;
+  // EGLDisplay and EGLContext, for OCCT's driver.
+  void* display() const { return m_display; }
+  void* context() const { return m_context; }
+  // "GL 4.6.0 NVIDIA 580.95.05 on NVIDIA GeForce RTX 4070/PCIe/SSE2 through
+  // EGL 1.5, NVIDIA Corporation (the default display, without a surface)".
+  const QString& description() const { return m_description; }
+
+private:
+  ViewEglContext() = default;
+  void* m_display = nullptr;
+  void* m_context = nullptr;
+  void* m_surface = nullptr;
+  QString m_description;
+};
 
 struct GraphicsStart {
   // The first of the formats tried that a window draws with; none when
@@ -58,9 +106,16 @@ struct GraphicsStart {
 };
 
 // Checks `formats` in order on the running platform, after the application
-// object and before any window. `forceFailure` (MITCAD_TEST_GL_FAILURE=start,
-// tests only) makes every EGL context fail the check.
-GraphicsStart startGraphics(const QList<QSurfaceFormat>& formats, bool forceFailure);
+// object and before any window; with Qt on GLX also the 3D view's own EGL
+// context (ViewEglContext). Tests only: `forceFailure`
+// (MITCAD_TEST_GL_FAILURE=start) makes every EGL context of Qt's fail the
+// check, `forceViewFailure` (MITCAD_TEST_GL_FAILURE=start-view) the view's
+// own as well.
+GraphicsStart startGraphics(const QList<QSurfaceFormat>& formats, bool forceFailure, bool forceViewFailure);
+
+// Whether MITCAD_TEST_GL_FAILURE=start-view (tests only) makes the 3D
+// view's own EGL context fail, in every start of the run.
+bool viewEglTestFailure();
 
 // Starts this program again in this process with `arguments` (the
 // command line as main() got it) on `fallback`'s platform, with `note` in

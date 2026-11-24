@@ -36,7 +36,7 @@ void MainWindow::registerTutorialCommands() {
   tutorials.id = QStringLiteral("help.tutorials");
   tutorials.name = tr("Tutorials…");
   tutorials.icon = QStringLiteral("web");
-  tutorials.tooltip = tr("Lists the tutorials of the tutorial sources and opens one beside the design");
+  tutorials.tooltip = tr("Shows the tutorials on the Start page, where one starts in a design of its own");
   tutorials.kind = CommandDef::Kind::Action;
   tutorials.mode = CommandDef::Mode::Any;
   tutorials.keywords = {QStringLiteral("tutorial"), QStringLiteral("lesson"), QStringLiteral("learn"),
@@ -95,6 +95,9 @@ TutorialGuide* MainWindow::guide() {
   m_guide = new TutorialGuide(std::move(host), this);
   // Leave Tutorial's availability follows the step.
   connect(m_guide, &TutorialGuide::changed, this, [this] { updateActions(); });
+  // The datums' places for UI tests keep clear of the callout (mitcad#2311),
+  // as of the cards over the view (OcctViewer::coveredChanged).
+  connect(m_guide, &TutorialGuide::calloutMoved, this, [this] { logDatumPlaces(); }, Qt::QueuedConnection);
   return m_guide;
 }
 

@@ -1503,6 +1503,21 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
   the closing button (OK) on the right; a tab's actions are hidden while
   another tab is shown, never offered for it.
 - **Toggles**: a checked toggle has an accent outline, not a fill.
+- **Step buttons** (mitcad#2327): a value field that steps (a command
+  panel's, a sketch tool's, the sketch's dimension editor) has a small
+  up and down arrow pair inside it at its right end, after its fx button
+  and any mark, one trailing button wide (the line edit's icon size and
+  6 px) and in the field's height, the up arrow above the down one. The
+  arrows are filled triangles in the field's text colour (70 %, as the
+  fx); a hovered half takes the hover tint and a pressed half the press
+  tint ([States](#17-states)) of the control radius, never more than
+  half its height; disabled (the field's text is an expression or a
+  parameter's name) they take the palette's disabled text colour and no
+  tint. They take no keyboard focus. A field narrow enough that its
+  value would not show beside them (a slider's field, a field beside a
+  reference, a sketch tool's field) is wider by their room
+  (`ParameterField::stepButtonsRoom`). No step buttons in a table's
+  cells or in the 3D view's value boxes, whose keys and wheel step them.
 - **Chips** (Render's shots, choices in a row of a card or bar):
   secondary buttons in a row 4 px apart; the chosen one is checked. Not
   in the toolbar panel, whose choices are icon buttons (chapter 13).

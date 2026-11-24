@@ -504,6 +504,9 @@ private:
   int m_hoveredAnnotation = 0;
   // Where each view's label was dragged, as logged last (mitcad#1909).
   QString m_loggedLabels;
+  // Whether the sheet shows a frame and a title block, as logged last
+  // (mitcad#2325).
+  QString m_loggedBorder;
   // A tool's picks so far, and the pointer for the rubber band.
   ToolPicks m_picks;
   QJsonArray m_pickMarks;
@@ -524,6 +527,8 @@ private:
   bool m_dragTip = false;
   QString m_loggedPlaces;
   QString m_loggedAnnotations;
+  // The views' phantom lines as last logged (mitcad#2113).
+  QString m_loggedPhantom;
   // A dimension's snapped place while it is placed, or its snapped drag
   // (mitcad#1173), and the hint shown beside it.
   bool m_snapped = false;

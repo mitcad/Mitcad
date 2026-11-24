@@ -3,7 +3,8 @@
 // query's sheet, lines and fields drawn on its grid, an image placed,
 // moves kept inside the block, deletes, the selected field's label, text
 // and height, and the block given back as `edit_drawing_title_block` takes
-// it; the sheet sizes' text forms of the dialogs.
+// it; the sheet sizes' text forms of the dialogs; the frame and title
+// block options and the templates without a block (mitcad#2325).
 #include "UnitTests.hpp"
 #include "drawings/DrawingTemplates.hpp"
 #include "drawings/TitleBlockEditor.hpp"
@@ -173,6 +174,42 @@ int titleBlockEditorTests() {
                               {QStringLiteral("choice"), QStringLiteral("user:company")},
                               {QStringLiteral("size"), own}}}}};
   CHECK(templateChoices(listed).at(0).size == QStringLiteral("500x300"));
+
+  // Templates without a frame or a title block (mitcad#2325): a choice
+  // knows whether it draws a block (the Sheet dialog hides the block's
+  // fields for Blank); the simple block draws one.
+  const QJsonObject offered{
+      {QStringLiteral("templates"),
+       QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("iso")},
+                              {QStringLiteral("name"), QStringLiteral("ISO")},
+                              {QStringLiteral("library"), QStringLiteral("builtin")},
+                              {QStringLiteral("choice"), QStringLiteral("iso")}},
+                  QJsonObject{{QStringLiteral("id"), QStringLiteral("blank")},
+                              {QStringLiteral("name"), QStringLiteral("Blank")},
+                              {QStringLiteral("library"), QStringLiteral("builtin")},
+                              {QStringLiteral("show_frame"), false},
+                              {QStringLiteral("show_title_block"), false},
+                              {QStringLiteral("choice"), QStringLiteral("blank")}}}}};
+  const QList<TemplateChoice> choices = templateChoices(offered);
+  CHECK(choices.size() == 3);
+  CHECK(choices.at(0).titleBlock && !choices.at(1).titleBlock && choices.at(2).titleBlock);
+  CHECK(choices.at(1).label == QStringLiteral("Blank") && choices.at(1).value == QJsonValue(QStringLiteral("blank")));
+  // The editor reads the sheet's template's options (both on for the
+  // simple block, which has none) and counts their change as a change.
+  std::optional<TitleBlockEditor> plain = TitleBlockEditor::fromSheet(sheet());
+  CHECK(plain.has_value() && plain->showFrame() && plain->showTitleBlock() && !plain->changed());
+  QJsonObject blankSheet = sheet();
+  blankSheet.insert(QStringLiteral("template"), QJsonObject{{QStringLiteral("id"), QStringLiteral("blank")},
+                                                           {QStringLiteral("show_frame"), false},
+                                                           {QStringLiteral("show_title_block"), false}});
+  std::optional<TitleBlockEditor> blank = TitleBlockEditor::fromSheet(blankSheet);
+  CHECK(blank.has_value());
+  if (blank) {
+    CHECK(!blank->showFrame() && !blank->showTitleBlock() && !blank->changed());
+    CHECK(!blank->setShowFrame(false) && !blank->changed());
+    CHECK(blank->setShowTitleBlock(true) && blank->showTitleBlock() && blank->changed());
+    CHECK(blank->setShowFrame(true) && blank->showFrame());
+  }
   return failures;
 }
 MITCAD_UNIT_TEST(titleBlockEditorTests);

@@ -1,0 +1,20 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/explode-view.mitcad-ui (mitcad#2113): Base:1 (a 40 x 30 x 10 box at the origin), Lid:1 (a 40 x 30 x 5 box on it, at z 10) and Pin:1 (a 10 x 10 x 20 box standing on the lid at (15, 10, 15)); a drawing Drawing1 without views."},
+  {"cmd": "create_component", "name": "Base"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 40, "width": 30, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "create_component", "name": "Lid", "transform": {"translation": [0, 0, 10]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 40, "width": 30, "height": 5, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "create_component", "name": "Pin", "transform": {"translation": [15, 10, 15]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 10, "width": 10, "height": 20, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "add_drawing", "size": "A3"},
+  {"expect": {"query": {"query": "components"},
+    "result": {"occurrences": [{"name": "Base:1"}, {"name": "Lid:1"}, {"name": "Pin:1"}]}}},
+  {"expect": {"query": {"query": "explode_views"}, "result": []}}
+]

@@ -167,6 +167,7 @@ impl<K: Kernel> Document<K> {
                         color: bodies[i].color,
                         shape: bodies[i].shape,
                         placements,
+                        face_colors: bodies[i].face_colors,
                     })
                     .collect(),
                 instances: instances

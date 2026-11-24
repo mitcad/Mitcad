@@ -1,0 +1,1006 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers: the end of a blend at a vertex of three faces
+(PerformOneCorner) whose cap on the face at the end leaves that face across
+one of its edges and comes back across the same edge, the face beyond that
+edge tangent to it, is cut by the face beyond between the two crossings
+(mitcad#2229, GitHub mitcad/Mitcad#566).
+
+The case: a block rounded all round keeps a flat face at the end of a
+straight edge between two planes (the side of a stepped block rounded by
+5 on its sides' and steps' edges: the rounding's core region, reaching 5
+from the edge along its two faces and 2.89 along the diagonal), ending in
+a rounding tangent to it (a torus band). The edge is chamfered with 4.5 or
+4.9: the bevel's cap on the end face, a straight line from the bevel's
+contact on one face to that on the other, leaves the end face across the
+torus band's edge and comes back across it. Expected: one valid solid, the
+body less the bevel's wedge (407.8222 of 509.0686 at 4.5), the end face
+kept in two corner pieces, the torus band cut by the bevel. Observed: the
+whole cap stored on the end face: the end face trimmed by a line that runs
+outside it (its area -0.69, the face's wire crossing itself), the torus
+band left whole under the bevel, the shape invalid and 0.0036 smaller.
+
+The origin: the cap is one intersection of the blend's surface with the end
+face's surface, from contact to contact, stored on that face alone (as an
+end face always covers the blend's section where the blend's ends lie on
+its arcs).
+
+- After the cap is computed, where neither end is OnSame, rolled, along an
+  edge, on a split face, ridden on or on a seam, and both ends lie on arcs:
+  the cap's curve on the end face is intersected with the face's other
+  edges. Where exactly one edge is crossed, exactly twice, both crossings
+  strictly inside the cap, the cap's middle between them outside the face
+  and the face beyond that edge tangent to the end face along it
+  (ChFi3d::IsTangentFaces), the cap is stored in three pieces: on the end
+  face up to the first crossing, on the face beyond between the crossings
+  (the blend's surface intersected with that face's, ChFi3d_ComputeCurves,
+  between the crossings' points on both), and on the end face from the
+  second crossing. The face beyond keeps the side the end face keeps (its
+  orientation from the two surfaces' normals at the crossing), the edge
+  between them is cut at both crossings, its part between them on the
+  corner's side of the cap's chord going.
+- With the same conditions, where both of the cap's ends are vertices, the
+  two ends of one edge of the end face, and the cap's inside lies outside
+  the face, the face beyond that edge tangent to the end face along it
+  (the chamfer of 5 there: the bevel's contacts reach the end face's
+  corners, its cap is the chord of the band's edge, observed: valid but
+  the end face trimmed by the chord outside it, area -3.06, the band
+  uncut, 0.058 mm3 short): the cap is stored on the face beyond alone,
+  the blend's surface intersected with that face's from vertex to vertex,
+  and the end face goes with its edges, cut at their vertices as a
+  consumed face's are.
+- ChFi3d_ComputeCurves, between given ends (wholeCurv false, as the end
+  of a blend cut by several faces is, PerformIntersectionAtEnd): a line
+  that is not periodic whose ends are found the other way round (Uf above
+  Ul) is trimmed from Ul to Uf, the inversion that follows running it from
+  the first end again. The case, found by the trace below: the chamfer of
+  5.5 and 7 there, whose contacts leave the bottom and the back onto the
+  half balls before the edge's ends, the end cut by a half ball, the torus
+  band and the other half ball. GeomInt's line on a ball is a piece of a
+  circle within the surfaces' bounds (1.4858 to 1.6417, the short arc
+  between the ends); at the spine's first end its ends were found at 1.6417
+  and 1.544, and trimmed from Uf to Ul the piece of the periodic circle
+  went round its period (1.6417 to 7.8272): the cut the long way round,
+  the bevel face and the balls' faces with wires crossing themselves
+  (BRepCheck status 18), their areas negative (the volume right only as
+  the long arcs cancelled). At the other end the ends came in order.
+- PerformIntersectionAtEnd, choosing where the blend crosses an edge
+  between two faces round the vertex: where that edge is the previous one
+  again (the end leaving a face across an edge and coming back across it,
+  the face between them a lens there) and the blend crosses it elsewhere
+  too, not the crossing the previous one took. The case, found by the
+  trace below: the rounding of 6 there, its end on a half ball, the torus
+  band, the flat end face, the band again and the other half ball; both
+  visits of the band's edge took the crossing nearest the vertex, the end
+  face between them was passed as at a point and went, and the band's cut
+  ran across where the end face's lens is: the band's wire crossing
+  itself, four edges in one face, the shape's volume 0.
+- A blend exactly as wide as both faces beside its edge where each face
+  ends in a half circle (the rounding of 10 there, mitcad#2329): the
+  analytic blend's contact lines (straight, on planes) touch their faces
+  at one point of an edge each, the faces' boundaries turning away from
+  them on both sides. Observed: SplitKPart's hatching found no domain
+  ("tangency line out of the face"), the walk that followed found no
+  start (each of its tries had a contact a micrometre outside its face,
+  "StartSol echec"), and the fillet failed. Now:
+  - SplitKPart (HatchAtTouch): where a side's straight contact line has
+    no domain, the line moved into the face by the hatcher's shift finds
+    exactly one, across one edge of the face (its ends on that edge), the
+    edge's point nearest the line between those crossings lies within a
+    tenth of the shift of it, and the line is outside the face at every
+    other sample between the crossings: the domain is that point, of no
+    length, its ends on that edge at the touching point. Only where both
+    sides touch so (a touch on one side, the other's contact inside its
+    face, is refused as before), the two domains meeting within
+    Precision::PIntersection(). A line crossing two edges about the
+    vertex between them is not taken (refused as before).
+  - The piece of no length is ended at both ends as a piece whose
+    contacts leave their faces across an edge (PerformOneCorner's end
+    cuts, above), each end cut from the touching point.
+  - ChFi3d_FilDS, a stripe of that one SurfData whose two ends on a side
+    are on the same edge at the same point (not a vertex) and whose
+    contact there has no length: no edge on that side's face (its line
+    left out, the face going whole); the stripe's two points on that side
+    made one (the last one's interferences given the first's point), and
+    the edge touched cut there with the face off it on both sides (one
+    EXTERNAL interference at the point instead of the two ends' FORWARD
+    and REVERSED ones, which kept the edge on both sides).
+  The case: a ball of 5 swept over a square (slab, two half cylinders, a
+  ball), or over the reported design's end-face region (its prism, a torus
+  along its arc, balls at the arc's ends), rounded on the back's bottom
+  edge with 10: one valid solid of the exact volume (561.3195 of 561.3205
+  by vprops for the first, 297.73099 of 297.73097 for the second), the
+  bottom and the back gone, no face under 0.01.
+- A trace on the standard error while MITCAD_TRACE_FILLET_WALK is set (as
+  the walk's trace of patch 2141): each of ChFi3d_ComputeCurves' lines
+  between given ends (whether it is periodic, its range, whether each end
+  was found on it, the face's bounds, the piece trimmed) and, in
+  PerformIntersectionAtEnd, each face at the end (the cut's ends in its
+  parameters, its bounds) and the cut on it (its ends and middle).
+- Elsewhere nothing changes. No catch is added.
+
+Upstream: changes the ends of blends whose cap leaves a flat end face
+across an edge tangent to the face beyond and returns, or runs along
+outside it from one end of that edge to the other (invalid or wrong
+shapes before), and builds analytic blends whose contacts touch both
+faces at one point each (failures before).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2229.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index ef23557c..a1003dc7 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -22,6 +22,9 @@
+ 
+ #include <ChFi3d_Builder_0.hxx>
+ 
++#include <cstdio>
++
++#include <OSD_Environment.hxx>
+ #include <AppParCurves_MultiBSpCurve.hxx>
+ #include <Approx_SameParameter.hxx>
+ #include <BRepAdaptor_Curve.hxx>
+@@ -4531,6 +4534,78 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+       }
+     }
+   }
++  // (A side whose contact touches its face at one point of an edge only, a
++  // blend as wide as the face there, ChFi3d_Builder::SplitKPart's
++  // HatchAtTouch: no edge on that face, which the blend takes away whole;
++  // the edge touched is cut there with the face off it on both sides. Only
++  // a stripe of this one SurfData, its ends the stripe's: its two points on
++  // that side are then one, where the end cuts of both ends meet.)
++  for (j = 1; j <= SeqFil.Length() && SeqFil.Length() == 1; j++)
++  {
++    const occ::handle<ChFiDS_SurfData>& Fd = SeqFil(j);
++    for (int onS = 1; onS <= 2; onS++)
++    {
++      const ChFiDS_FaceInterference& Fi = Fd->Interference(onS);
++      ChFiDS_CommonPoint&            Vf = Fd->ChangeVertex(true, onS);
++      ChFiDS_CommonPoint&            Vl = Fd->ChangeVertex(false, onS);
++      if (Fi.LineIndex() <= 0 || Fd->IsOnCurve(onS) || !Vf.IsOnArc() || !Vl.IsOnArc() || Vf.IsVertex()
++          || Vl.IsVertex() || !Vf.Arc().IsSame(Vl.Arc())
++          || std::abs(Fi.FirstParameter() - Fi.LastParameter()) > Precision::PConfusion()
++          || Vf.Point().Distance(Vl.Point()) > tol3d)
++      {
++        continue;
++      }
++      const int Ifirst = CorDat->IndexPoint(true, onS);
++      const int Ilast  = CorDat->IndexPoint(false, onS);
++      if (Ifirst <= 0 || Ilast <= 0)
++      {
++        continue;
++      }
++      DStr.ChangeCurve(Fi.LineIndex()).ChangeCurve().Nullify();
++      Fd->ChangeInterference(onS).SetLineIndex(0);
++      if (Ilast != Ifirst)
++      {
++        const auto aRepoint = [&](NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& theL) {
++          for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(theL); it.More(); it.Next())
++          {
++            if (it.Value()->GeometryType() == TopOpeBRepDS_POINT && it.Value()->Geometry() == Ilast)
++            {
++              it.Value()->Geometry(Ifirst);
++            }
++          }
++        };
++        for (int ic = 1; ic <= DStr.NbCurves(); ic++)
++        {
++          aRepoint(DStr.ChangeCurveInterferences(ic));
++        }
++        for (int is = 1; is <= DStr.NbShapes(); is++)
++        {
++          aRepoint(DStr.ChangeShapeInterferences(is));
++        }
++        CorDat->SetIndexPoint(Ifirst, false, onS);
++      }
++      // The edge touched: cut at the point, off the face both ways.
++      const TopoDS_Edge aArc = Vf.Arc();
++      const double      aPar = Vf.ParameterOnArc();
++      const int         Iarc = DStr.AddShape(aArc);
++      NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& aLA = DStr.ChangeShapeInterferences(Iarc);
++      for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(aLA); it.More();)
++      {
++        if (it.Value()->GeometryType() == TopOpeBRepDS_POINT && it.Value()->Geometry() == Ifirst)
++        {
++          aLA.Remove(it);
++        }
++        else
++        {
++          it.Next();
++        }
++      }
++      aLA.Append(ChFi3d_FilPointInDS(TopAbs_EXTERNAL, Iarc, Ifirst, aPar, false));
++      const double aTol = std::max(Vf.Tolerance(), Vl.Tolerance());
++      Vf.SetArc(aTol, aArc, aPar, TopAbs_EXTERNAL);
++      Vl.SetArc(aTol, aArc, aPar, TopAbs_EXTERNAL);
++    }
++  }
+   if (SeqFil.Length() > 1)
+   {
+     for (j = 1; j <= SeqFil.Length(); j++)
+@@ -5980,6 +6055,19 @@ static bool ChFi3d_LeavesPeriodicDomain(const occ::handle<Adaptor3d_Surface>& S,
+   return false;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_TracingCuts
++// purpose  : Whether ChFi3d_ComputeCurves traces its cuts between given ends
++//            on the standard error (the environment variable
++//            MITCAD_TRACE_FILLET_WALK set, read each time, as the trace of
++//            the walk reads it).
++//=======================================================================
++
++static bool ChFi3d_TracingCuts()
++{
++  return !OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty();
++}
++
+ //=======================================================================
+ // function : ComputeCurves
+ // purpose  : Calculates intersection between two HSurfaces.
+@@ -6302,6 +6390,33 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
+               }
+               ptestdeb = C3d->Value(Uf);
+               ptestfin = C3d->Value(Ul);
++              if (ChFi3d_TracingCuts())
++              {
++                std::fprintf(stderr,
++                             "fillet cut: line %d of %d, periodic %d, range %g..%g, ends (%f %f %f) (%f %f %f) "
++                             "placed %d %d, Uf %g Ul %g, types %d %d, S2 u %g..%g v %g..%g\n",
++                             ilin, nbl, C3d->IsPeriodic() ? 1 : 0, C3d->FirstParameter(), C3d->LastParameter(),
++                             pdeb.X(), pdeb.Y(), pdeb.Z(), pfin.X(), pfin.Y(), pfin.Z(), failedF ? 0 : 1,
++                             failedL ? 0 : 1, Uf, Ul, static_cast<int>(S1->GetType()),
++                             static_cast<int>(S2->GetType()), S2->FirstUParameter(), S2->LastUParameter(),
++                             S2->FirstVParameter(), S2->LastVParameter());
++              }
++              if (!C3d->IsPeriodic() && Uf > Ul)
++              {
++                // A line that is not periodic, its ends found the other way
++                // round (the line a piece of a circle, GeomInt's line within
++                // the surfaces' bounds): trimmed from the lower parameter to
++                // the higher (the inversion below runs it from the first end
++                // again). Trimmed from Uf to Ul, the piece of a periodic
++                // curve went round the circle's period, the long way
++                // (mitcad#2229: a bevel's end cut of a ball).
++                double Utmp = Uf;
++                Uf          = Ul;
++                Ul          = Utmp;
++                gp_Pnt Ptmp = ptestdeb;
++                ptestdeb    = ptestfin;
++                ptestfin    = Ptmp;
++              }
+               if (C3d->IsPeriodic() && !(failedF && failedL))
+               {
+                 // assure the same order of ends, otherwise TrimmedCurve will take
+@@ -6330,6 +6445,12 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
+             C3d = new Geom_TrimmedCurve(C3d, Uf, Ul);
+             Pc1 = new Geom2d_TrimmedCurve(Pc1, Uf, Ul);
+             Pc2 = new Geom2d_TrimmedCurve(Pc2, Uf, Ul);
++            if (ChFi3d_TracingCuts() && !wholeCurv)
++            {
++              const gp_Pnt aM = C3d->Value(0.5 * (C3d->FirstParameter() + C3d->LastParameter()));
++              std::fprintf(stderr, "fillet cut: line %d trimmed %g..%g, its middle (%f %f %f)\n", ilin,
++                           C3d->FirstParameter(), C3d->LastParameter(), aM.X(), aM.Y(), aM.Z());
++            }
+             // is it necessary to invert ?
+             double DistDebToDeb = ptestdeb.Distance(pdeb);
+             double DistDebToFin = ptestdeb.Distance(pfin);
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 5385150d..bb619d82 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -20,6 +20,9 @@
+ #include <Adaptor2d_Curve2d.hxx>
+ #include <Blend_FuncInv.hxx>
+ #include <BRepAdaptor_Curve.hxx>
++#include <OSD_Environment.hxx>
++
++#include <cstdio>
+ #include <BRepAlgo_NormalProjection.hxx>
+ #include <BRepBlend_Line.hxx>
+ #include <BRepClass_FaceClassifier.hxx>
+@@ -7660,6 +7663,173 @@ static bool ChFi3d_SliverFaceAtEnd(const TopOpeBRepDS_DataStructure&   DStr,
+   return false;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_CapLeavesAcrossTangentEdge
++// purpose  : Whether the cap of a blend's end on the face at the end Fv
++//            (its curve Pc on Fv from Udeb to Ufin, which ends on Fv's
++//            arcs ArcS1 and ArcS2) leaves Fv across one other edge Ea of
++//            Fv and comes back across Ea, the face beyond Ea (Fg) tangent
++//            to Fv along it: a flat face of a rounded body that ends in
++//            the rounding, smaller than the blend's section there. Ea,
++//            Fg, the cap's parameters at the two crossings (T1 < T2) and
++//            Ea's there (W1, W2). False elsewhere: no crossing, a crossing
++//            of another edge, more than two, one at an end of the cap, an
++//            overlap, or a face beyond that is not tangent to Fv.
++//=======================================================================
++
++static bool ChFi3d_CapLeavesAcrossTangentEdge(const ChFiDS_Map&                EFMap,
++                                              const TopoDS_Face&               Fv,
++                                              const occ::handle<Geom2d_Curve>& Pc,
++                                              const double                     Udeb,
++                                              const double                     Ufin,
++                                              const TopoDS_Edge&               ArcS1,
++                                              const TopoDS_Edge&               ArcS2,
++                                              const double                     Tol2d,
++                                              TopoDS_Edge&                     Ea,
++                                              TopoDS_Face&                     Fg,
++                                              double&                          T1,
++                                              double&                          T2,
++                                              double&                          W1,
++                                              double&                          W2)
++{
++  if (Pc.IsNull() || !(Ufin > Udeb))
++  {
++    return false;
++  }
++  TopoDS_Face FvF = Fv;
++  FvF.Orientation(TopAbs_FORWARD);
++  const occ::handle<Geom2d_Curve> aCap  = new Geom2d_TrimmedCurve(Pc, Udeb, Ufin);
++  const double                    aNear = 1.e-3 * (Ufin - Udeb);
++  for (TopExp_Explorer ex(FvF, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++    if (BRep_Tool::Degenerated(E) || E.IsSame(ArcS1) || E.IsSame(ArcS2))
++    {
++      continue;
++    }
++    double                          f = 0., l = 0.;
++    const occ::handle<Geom2d_Curve> aE2d = BRep_Tool::CurveOnSurface(E, FvF, f, l);
++    if (aE2d.IsNull())
++    {
++      return false;
++    }
++    Geom2dAPI_InterCurveCurve aInter(aCap, new Geom2d_TrimmedCurve(aE2d, f, l), Tol2d);
++    const Geom2dInt_GInter&   aI = aInter.Intersector();
++    if (!aI.IsDone() || aI.NbSegments() > 0)
++    {
++      return false;
++    }
++    if (aI.NbPoints() == 0)
++    {
++      continue;
++    }
++    if (aI.NbPoints() != 2 || !Ea.IsNull())
++    {
++      return false;
++    }
++    double t[2], w[2];
++    for (int i = 0; i < 2; i++)
++    {
++      t[i] = aI.Point(i + 1).ParamOnFirst();
++      w[i] = aI.Point(i + 1).ParamOnSecond();
++      if (t[i] <= Udeb + aNear || t[i] >= Ufin - aNear)
++      {
++        return false;
++      }
++    }
++    const int k = t[0] < t[1] ? 0 : 1;
++    Ea          = E;
++    T1          = t[k];
++    W1          = w[k];
++    T2          = t[1 - k];
++    W2          = w[1 - k];
++  }
++  if (Ea.IsNull() || !(T2 - T1 > aNear))
++  {
++    return false;
++  }
++  // Between the crossings the cap lies outside Fv.
++  BRepClass_FaceClassifier aCl(Fv, Pc->Value(0.5 * (T1 + T2)), Tol2d);
++  if (aCl.State() != TopAbs_OUT || !EFMap.Contains(Ea))
++  {
++    return false;
++  }
++  for (NCollection_List<TopoDS_Shape>::Iterator It(EFMap(Ea)); It.More(); It.Next())
++  {
++    if (!It.Value().IsSame(Fv))
++    {
++      Fg = TopoDS::Face(It.Value());
++    }
++  }
++  return !Fg.IsNull() && ChFi3d::IsTangentFaces(Ea, Fv, Fg);
++}
++
++//=======================================================================
++// function : ChFi3d_CapWhollyAcrossTangentEdge
++// purpose  : Whether the cap of a blend's end on the face at the end Fv
++//            (its curve Pc on Fv from Udeb to Ufin) runs from one vertex
++//            of an edge Ea of Fv to its other (the cap's ends CP1 and
++//            CP2, at those vertices) outside Fv, the face beyond Ea (Fg)
++//            tangent to Fv along it: the blend as wide as Fv reaches from
++//            its edge at Ea's ends, taking Fv away, the cap on Fg alone
++//            (ChFi3d_CapLeavesAcrossTangentEdge's crossings at the cap's
++//            ends). Ea and Fg; false elsewhere.
++//=======================================================================
++
++static bool ChFi3d_CapWhollyAcrossTangentEdge(const ChFiDS_Map&                EFMap,
++                                              const TopoDS_Face&               Fv,
++                                              const occ::handle<Geom2d_Curve>& Pc,
++                                              const double                     Udeb,
++                                              const double                     Ufin,
++                                              const ChFiDS_CommonPoint&        CP1,
++                                              const ChFiDS_CommonPoint&        CP2,
++                                              const double                     Tol2d,
++                                              TopoDS_Edge&                     Ea,
++                                              TopoDS_Face&                     Fg)
++{
++  if (Pc.IsNull() || !(Ufin > Udeb) || !CP1.IsVertex() || !CP2.IsVertex() || CP1.Vertex().IsSame(CP2.Vertex()))
++  {
++    return false;
++  }
++  TopoDS_Face FvF = Fv;
++  FvF.Orientation(TopAbs_FORWARD);
++  for (TopExp_Explorer ex(FvF, TopAbs_EDGE); ex.More() && Ea.IsNull(); ex.Next())
++  {
++    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++    if (BRep_Tool::Degenerated(E))
++    {
++      continue;
++    }
++    TopoDS_Vertex V1, V2;
++    TopExp::Vertices(E, V1, V2);
++    if ((V1.IsSame(CP1.Vertex()) && V2.IsSame(CP2.Vertex())) || (V1.IsSame(CP2.Vertex()) && V2.IsSame(CP1.Vertex())))
++    {
++      Ea = E;
++    }
++  }
++  if (Ea.IsNull() || !EFMap.Contains(Ea))
++  {
++    return false;
++  }
++  // The cap's inside lies outside Fv.
++  for (const double s : {0.25, 0.5, 0.75})
++  {
++    BRepClass_FaceClassifier aCl(Fv, Pc->Value(Udeb + s * (Ufin - Udeb)), Tol2d);
++    if (aCl.State() != TopAbs_OUT)
++    {
++      return false;
++    }
++  }
++  for (NCollection_List<TopoDS_Shape>::Iterator It(EFMap(Ea)); It.More(); It.Next())
++  {
++    if (!It.Value().IsSame(Fv))
++    {
++      Fg = TopoDS::Face(It.Value());
++    }
++  }
++  return !Fg.IsNull() && ChFi3d::IsTangentFaces(Ea, Fv, Fg);
++}
++
+ //=================================================================================================
+ 
+ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSame)
+@@ -8955,7 +9125,256 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+     }
+   }
+ 
+-  if (!intcouture)
++  // The cap leaving the face at the end across an edge tangent to the face
++  // beyond and coming back across it (ChFi3d_CapLeavesAcrossTangentEdge).
++  TopoDS_Edge aEacross;
++  TopoDS_Face aFacross;
++  double      aT1 = 0., aT2 = 0., aW1 = 0., aW2 = 0.;
++  const bool  isCapAcross = !intcouture && !couture && !onsame && !isEndOnFace && !isEndAlongEdge
++                           && !isSliverEnd && !isRolledEnd && !isRolledPast && ZSide == 0 && aRideSide == 0
++                           && CV1.IsOnArc() && CV2.IsOnArc()
++                           && ChFi3d_CapLeavesAcrossTangentEdge(myEFMap,
++                                                                Fv,
++                                                                Pc,
++                                                                Udeb,
++                                                                Ufin,
++                                                                CV1.Arc(),
++                                                                CV2.Arc(),
++                                                                tol2d,
++                                                                aEacross,
++                                                                aFacross,
++                                                                aT1,
++                                                                aT2,
++                                                                aW1,
++                                                                aW2);
++  // The cap running from one vertex of such an edge to its other, wholly
++  // outside the face at the end (ChFi3d_CapWhollyAcrossTangentEdge).
++  TopoDS_Edge aEwhole;
++  TopoDS_Face aFwhole;
++  const bool  isCapWhole = !isCapAcross && !intcouture && !couture && !onsame && !isEndOnFace && !isEndAlongEdge
++                          && !isSliverEnd && !isRolledEnd && !isRolledPast && ZSide == 0 && aRideSide == 0
++                          && ChFi3d_CapWhollyAcrossTangentEdge(
++                            myEFMap, Fv, Pc, Udeb, Ufin, CV1, CV2, tol2d, aEwhole, aFwhole);
++  if (isCapWhole)
++  {
++    // The cap on the face beyond alone, from one vertex of the edge between
++    // the faces to the other (the blend's surface cut by that face's). The
++    // face at the end goes: its edges are cut at their vertices, so that the
++    // builder drops them with it (as a consumed face above).
++    TopoDS_Face FgF = aFwhole;
++    FgF.Orientation(TopAbs_FORWARD);
++    double                          ef = 0., el = 0.;
++    const occ::handle<Geom2d_Curve> aEonG = BRep_Tool::CurveOnSurface(aEwhole, FgF, ef, el);
++    if (aEonG.IsNull())
++    {
++      throw Standard_ConstructionError("Failed to get p-curve of edge");
++    }
++    gp_Pnt2d pg1 = aEonG->Value(BRep_Tool::Parameter(CV1.Vertex(), aEwhole, FgF));
++    gp_Pnt2d pg2 = aEonG->Value(BRep_Tool::Parameter(CV2.Vertex(), aEwhole, FgF));
++    const gp_Pnt2d                   ps1 = Ps->Value(Udeb), ps2 = Ps->Value(Ufin);
++    occ::handle<BRepAdaptor_Surface> HBg = new BRepAdaptor_Surface(FgF);
++    ChFi3d_Recale(*HBg, pg1, pg2, true);
++    NCollection_Array1<double> PdG(1, 4), PfG(1, 4);
++    PdG(1) = ps1.X();
++    PdG(2) = ps1.Y();
++    PdG(3) = pg1.X();
++    PdG(4) = pg1.Y();
++    PfG(1) = ps2.X();
++    PfG(2) = ps2.Y();
++    PfG(3) = pg2.X();
++    PfG(4) = pg2.Y();
++    double gu1 = 0., gu2 = 0., gv1 = 0., gv2 = 0.;
++    ChFi3d_Boite(pg1, pg2, gu1, gu2, gv1, gv2);
++    ChFi3d_BoundFac(*HBg, gu1, gu2, gv1, gv2);
++    occ::handle<Geom_Curve>   aCG;
++    occ::handle<Geom2d_Curve> aPcS, aPcG;
++    double                    tolG = tolapp3d;
++    if (!ChFi3d_ComputeCurves(HGs, HBg, PdG, PfG, aCG, aPcS, aPcG, tolapp3d, tol2d, tolG))
++    {
++      throw Standard_Failure("OneCorner : failed to cut the face beyond the face at the end");
++    }
++    const double aCGf = aCG->FirstParameter();
++    const double aCGl = aCG->LastParameter();
++    if (aCG->Value(aCGf).Distance(CV1.Point()) > aCG->Value(aCGf).Distance(CV2.Point()))
++    {
++      throw Standard_Failure("OneCorner : the cut of the face beyond runs the wrong way");
++    }
++    tolreached       = std::max(tolreached, tolG);
++    const int Ipiece = DStr.AddCurve(TopOpeBRepDS_Curve(aCG, tolG));
++
++    // On the face beyond, kept on the side the face at the end would keep
++    // (the faces tangent along the edge, their surfaces' normals compared
++    // at side 1's vertex); on the blend as a cap is.
++    gp_Pnt         aP;
++    gp_Vec         du, dv;
++    const gp_Pnt2d pv1 = Pc->Value(Udeb);
++    Bs.D1(pv1.X(), pv1.Y(), aP, du, dv);
++    const gp_Vec nV = du.Crossed(dv);
++    HBg->D1(pg1.X(), pg1.Y(), aP, du, dv);
++    const gp_Vec             nG  = du.Crossed(dv);
++    const TopAbs_Orientation EtG = nV.Dot(nG) > 0. ? Et : TopAbs::Reverse(Et);
++    const int                IG  = DStr.AddShape(aFwhole);
++    DStr.ChangeShapeInterferences(IG).Append(ChFi3d_FilCurveInDS(Ipiece, IG, aPcG, EtG));
++    const TopAbs_Orientation EtS = Fd->Orientation() == Fv.Orientation() ? TopAbs::Reverse(Et) : Et;
++    DStr.ChangeSurfaceInterferences(Isurf).Append(ChFi3d_FilCurveInDS(Ipiece, Isurf, aPcS, EtS));
++
++    // The face at the end goes with its edges.
++    TopoDS_Face aFc = Fv;
++    aFc.Orientation(TopAbs_FORWARD);
++    for (ex.Init(aFc, TopAbs_EDGE); ex.More(); ex.Next())
++    {
++      TopoDS_Edge E       = TopoDS::Edge(ex.Current());
++      bool        onSpine = BRep_Tool::Degenerated(E);
++      for (int ie = 1; ie <= spine->NbEdges() && !onSpine; ie++)
++      {
++        onSpine = spine->Edges(ie).IsSame(E);
++      }
++      if (onSpine)
++      {
++        continue;
++      }
++      E.Orientation(TopAbs_FORWARD);
++      const int IE = DStr.AddShape(E);
++      for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
++      {
++        const TopoDS_Vertex& aV  = TopoDS::Vertex(exv.Current());
++        const int            IV  = DStr.AddShape(aV);
++        bool                 has = false;
++        for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator itI(
++               DStr.ShapeInterferences(IE));
++             itI.More() && !has;
++             itI.Next())
++        {
++          has = itI.Value()->GeometryType() == TopOpeBRepDS_VERTEX && itI.Value()->Geometry() == IV;
++        }
++        if (!has)
++        {
++          DStr.ChangeShapeInterferences(IE).Append(
++            ChFi3d_FilVertexInDS(TopAbs::Reverse(aV.Orientation()), IE, IV, BRep_Tool::Parameter(aV, E)));
++        }
++      }
++    }
++
++    // The cap's ends: the stripe's points, at the edge's vertices.
++    stripe->InDS(isfirst);
++    DStr.ChangeCurveInterferences(Ipiece).Append(
++      ChFi3d_FilPointInDS(TopAbs_FORWARD, Ipiece, stripe->IndexPoint(isfirst, 1), aCGf, true));
++    DStr.ChangeCurveInterferences(Ipiece).Append(
++      ChFi3d_FilPointInDS(TopAbs_REVERSED, Ipiece, stripe->IndexPoint(isfirst, 2), aCGl, true));
++  }
++  else if (isCapAcross)
++  {
++    // The cap in three pieces: on the face at the end from side 1 to the
++    // first crossing, on the face beyond across it (the blend's surface cut
++    // by that face's, from crossing to crossing), and on the face at the end
++    // from the second crossing to side 2. The edge between the two faces
++    // goes between the crossings where the blend takes it away.
++    TopoDS_Face FgF = aFacross;
++    FgF.Orientation(TopAbs_FORWARD);
++    TopoDS_Face FvF = Fv;
++    FvF.Orientation(TopAbs_FORWARD);
++    double                          ef = 0., el = 0.;
++    const occ::handle<Geom2d_Curve> aEonG = BRep_Tool::CurveOnSurface(aEacross, FgF, ef, el);
++    const occ::handle<Geom2d_Curve> aEonV = BRep_Tool::CurveOnSurface(aEacross, FvF, ef, el);
++    if (aEonG.IsNull() || aEonV.IsNull())
++    {
++      throw Standard_ConstructionError("Failed to get p-curve of edge");
++    }
++    const gp_Pnt                     X1 = Cc->Value(aT1);
++    const gp_Pnt                     X2 = Cc->Value(aT2);
++    gp_Pnt2d                         pg1 = aEonG->Value(aW1), pg2 = aEonG->Value(aW2);
++    const gp_Pnt2d                   ps1 = Ps->Value(aT1), ps2 = Ps->Value(aT2);
++    occ::handle<BRepAdaptor_Surface> HBg = new BRepAdaptor_Surface(FgF);
++    ChFi3d_Recale(*HBg, pg1, pg2, true);
++    NCollection_Array1<double> PdG(1, 4), PfG(1, 4);
++    PdG(1) = ps1.X();
++    PdG(2) = ps1.Y();
++    PdG(3) = pg1.X();
++    PdG(4) = pg1.Y();
++    PfG(1) = ps2.X();
++    PfG(2) = ps2.Y();
++    PfG(3) = pg2.X();
++    PfG(4) = pg2.Y();
++    double gu1 = 0., gu2 = 0., gv1 = 0., gv2 = 0.;
++    ChFi3d_Boite(pg1, pg2, gu1, gu2, gv1, gv2);
++    ChFi3d_BoundFac(*HBg, gu1, gu2, gv1, gv2);
++    occ::handle<Geom_Curve>   aCG;
++    occ::handle<Geom2d_Curve> aPcS, aPcG;
++    double                    tolG = tolapp3d;
++    if (!ChFi3d_ComputeCurves(HGs, HBg, PdG, PfG, aCG, aPcS, aPcG, tolapp3d, tol2d, tolG))
++    {
++      throw Standard_Failure("OneCorner : failed to cut the face beyond the face at the end");
++    }
++    const double aCGf = aCG->FirstParameter();
++    const double aCGl = aCG->LastParameter();
++    if (aCG->Value(aCGf).Distance(X1) > aCG->Value(aCGf).Distance(X2))
++    {
++      throw Standard_Failure("OneCorner : the cut of the face beyond runs the wrong way");
++    }
++    tolreached        = std::max(tolreached, tolG);
++    const int iX1     = DStr.AddPoint(TopOpeBRepDS_Point(X1, tolreached));
++    const int iX2     = DStr.AddPoint(TopOpeBRepDS_Point(X2, tolreached));
++    const int Ipiece1 = DStr.AddCurve(TopOpeBRepDS_Curve(new Geom_TrimmedCurve(Cc, Udeb, aT1), tolreached));
++    const int Ipiece2 = DStr.AddCurve(TopOpeBRepDS_Curve(aCG, tolG));
++    const int Ipiece3 = DStr.AddCurve(TopOpeBRepDS_Curve(new Geom_TrimmedCurve(Cc, aT2, Ufin), tolreached));
++
++    // On the face at the end the two pieces in it; on the face beyond the
++    // piece across it, kept on the same side (the faces tangent there, their
++    // surfaces' normals compared at the first crossing).
++    gp_Pnt   aP;
++    gp_Vec   du, dv;
++    gp_Pnt2d pv1 = Pc->Value(aT1);
++    Bs.D1(pv1.X(), pv1.Y(), aP, du, dv);
++    const gp_Vec nV = du.Crossed(dv);
++    HBg->D1(pg1.X(), pg1.Y(), aP, du, dv);
++    const gp_Vec             nG  = du.Crossed(dv);
++    const TopAbs_Orientation EtG = nV.Dot(nG) > 0. ? Et : TopAbs::Reverse(Et);
++    const int                IG  = DStr.AddShape(aFacross);
++    DStr.ChangeShapeInterferences(IShape).Append(
++      ChFi3d_FilCurveInDS(Ipiece1, IShape, new Geom2d_TrimmedCurve(Pc, Udeb, aT1), Et));
++    DStr.ChangeShapeInterferences(IShape).Append(
++      ChFi3d_FilCurveInDS(Ipiece3, IShape, new Geom2d_TrimmedCurve(Pc, aT2, Ufin), Et));
++    DStr.ChangeShapeInterferences(IG).Append(ChFi3d_FilCurveInDS(Ipiece2, IG, aPcG, EtG));
++    // On the blend, as in the cut split at a seam below.
++    const TopAbs_Orientation EtS = Fd->Orientation() == Fv.Orientation() ? TopAbs::Reverse(Et) : Et;
++    DStr.ChangeSurfaceInterferences(Isurf).Append(
++      ChFi3d_FilCurveInDS(Ipiece1, Isurf, new Geom2d_TrimmedCurve(Ps, Udeb, aT1), EtS));
++    DStr.ChangeSurfaceInterferences(Isurf).Append(ChFi3d_FilCurveInDS(Ipiece2, Isurf, aPcS, EtS));
++    DStr.ChangeSurfaceInterferences(Isurf).Append(
++      ChFi3d_FilCurveInDS(Ipiece3, Isurf, new Geom2d_TrimmedCurve(Ps, aT2, Ufin), EtS));
++
++    // The edge between the faces: the part between the crossings on the
++    // side of the cap's chord where the corner's vertex lies goes (a point
++    // interference FORWARD keeps the edge after its point, REVERSED before).
++    const double   wlo = std::min(aW1, aW2), whi = std::max(aW1, aW2);
++    const gp_Pnt2d c1 = Pc->Value(aT1), c2 = Pc->Value(aT2);
++    const auto     side = [&c1, &c2](const gp_Pnt2d& p) {
++      return (c2.X() - c1.X()) * (p.Y() - c1.Y()) - (c2.Y() - c1.Y()) * (p.X() - c1.X());
++    };
++    const bool aMiddleGoes =
++      side(aEonV->Value(0.5 * (wlo + whi))) * side(BRep_Tool::Parameters(Vtx, Fv)) > 0.;
++    const int IEa = DStr.AddShape(aEacross);
++    DStr.ChangeShapeInterferences(IEa).Append(ChFi3d_FilPointInDS(aMiddleGoes ? TopAbs_REVERSED : TopAbs_FORWARD,
++                                                                  IEa,
++                                                                  aW1 <= aW2 ? iX1 : iX2,
++                                                                  wlo));
++    DStr.ChangeShapeInterferences(IEa).Append(ChFi3d_FilPointInDS(aMiddleGoes ? TopAbs_FORWARD : TopAbs_REVERSED,
++                                                                  IEa,
++                                                                  aW1 <= aW2 ? iX2 : iX1,
++                                                                  whi));
++
++    // The pieces' ends: the stripe's points and the crossings.
++    stripe->InDS(isfirst);
++    const int ind1 = stripe->IndexPoint(isfirst, 1);
++    const int ind2 = stripe->IndexPoint(isfirst, 2);
++    DStr.ChangeCurveInterferences(Ipiece1).Append(ChFi3d_FilPointInDS(TopAbs_FORWARD, Ipiece1, ind1, Udeb));
++    DStr.ChangeCurveInterferences(Ipiece1).Append(ChFi3d_FilPointInDS(TopAbs_REVERSED, Ipiece1, iX1, aT1));
++    DStr.ChangeCurveInterferences(Ipiece2).Append(ChFi3d_FilPointInDS(TopAbs_FORWARD, Ipiece2, iX1, aCGf));
++    DStr.ChangeCurveInterferences(Ipiece2).Append(ChFi3d_FilPointInDS(TopAbs_REVERSED, Ipiece2, iX2, aCGl));
++    DStr.ChangeCurveInterferences(Ipiece3).Append(ChFi3d_FilPointInDS(TopAbs_FORWARD, Ipiece3, iX2, aT2));
++    DStr.ChangeCurveInterferences(Ipiece3).Append(ChFi3d_FilPointInDS(TopAbs_REVERSED, Ipiece3, ind2, Ufin));
++  }
++  else if (!intcouture)
+   {
+     // there is no intersection with the sewing edge
+     // the curve Cc is stored in the stripe
+@@ -12705,8 +13124,39 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+             std::max(Cad.Resolution(BRep_Tool::Tolerance(E2)), Precision::PConfusion());
+           double distmin = RealLast(), gapmin = RealLast();
+           nbp            = 0;
++          // The same edge as the previous one (the end leaving a face across
++          // an edge and coming back across it, the face between them a lens
++          // there, mitcad#2229): not the crossing the previous one took,
++          // where the edge is crossed elsewhere too (the two visits took the
++          // same crossing, and the face between them, passed at a point,
++          // went with the piece of it the blend leaves).
++          const bool aSameEdgeAgain = nb >= 2 && !Edge[nb - 1].IsNull() && Edge[nb - 1].IsSame(E2)
++                                      && !extend && inters.NbPoints() > 1;
++          const auto aTakenBefore = [&](const int i) {
++            if (!aSameEdgeAgain)
++            {
++              return false;
++            }
++            double aW = inters.Point(i).W(), aW1 = paredge1;
++            if (C->IsPeriodic())
++            {
++              const double aMid = 0.5 * (aFirstE2 + aLastE2);
++              aW  = ElCLib::InPeriod(aW, aMid - 0.5 * C->Period(), aMid + 0.5 * C->Period());
++              aW1 = ElCLib::InPeriod(aW1, aMid - 0.5 * C->Period(), aMid + 0.5 * C->Period());
++            }
++            return std::abs(aW - aW1) <= 10. * tolW;
++          };
++          bool aOtherCrossing = false;
++          for (int i = 1; i <= inters.NbPoints() && aSameEdgeAgain && !aOtherCrossing; i++)
++          {
++            aOtherCrossing = !aTakenBefore(i);
++          }
+           for (int i = 1; i <= inters.NbPoints(); i++)
+           {
++            if (aOtherCrossing && aTakenBefore(i))
++            {
++              continue;
++            }
+             double gap = 0.;
+             if (!extend)
+             {
+@@ -13186,6 +13636,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+     {
+       double uu1, uu2, vv1, vv2;
+       ChFi3d_Boite(pfac1, pfac2, uu1, uu2, vv1, vv2);
++      if (!OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty())
++      {
++        double aFU0 = 0., aFU1 = 0., aFV0 = 0., aFV1 = 0.;
++        BRepTools::UVBounds(Face[nb - 1], aFU0, aFU1, aFV0, aFV1);
++        std::fprintf(stderr,
++                     "fillet end face: %s end, face %d of %d (surface type %d, periodic %d %d), ends on it "
++                     "(%g %g) (%g %g), its bounds u %g..%g v %g..%g\n",
++                     isfirst ? "first" : "last", nb, nbface, static_cast<int>(Bs.GetType()),
++                     Bs.IsUPeriodic() ? 1 : 0, Bs.IsVPeriodic() ? 1 : 0, pfac1.X(), pfac1.Y(), pfac2.X(),
++                     pfac2.Y(), aFU0, aFU1, aFV0, aFV1);
++      }
+       ChFi3d_BoundFac(Bs, uu1, uu2, vv1, vv2);
+ 
+       //////////////////////////////////////////////////////////////////////
+@@ -13240,6 +13701,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+         }
+       }
+       // storage of information in the data structure
++      // (The cut on each face at the end, traced as the walk is.)
++      if (!OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty() && !Cc.IsNull())
++      {
++        const double aCf = Cc->FirstParameter(), aCl = Cc->LastParameter();
++        const gp_Pnt aA = Cc->Value(aCf), aB = Cc->Value(aCl), aM = Cc->Value(0.5 * (aCf + aCl));
++        std::fprintf(stderr,
++                     "fillet end cut: %s end, face %d of %d (surface type %d), from (%f %f %f) to (%f %f %f), "
++                     "middle (%f %f %f), parameters %g..%g\n",
++                     isfirst ? "first" : "last", nb, nbface, static_cast<int>(Bs.GetType()), aA.X(), aA.Y(),
++                     aA.Z(), aB.X(), aB.Y(), aB.Z(), aM.X(), aM.Y(), aM.Z(), aCf, aCl);
++      }
+ 
+       // evaluate tolerances
+       p1 = Cc->FirstParameter();
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+index d5144d30..f67af201 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+@@ -37,6 +37,7 @@
+ #include <Geom2d_Circle.hxx>
+ #include <Geom2d_Curve.hxx>
+ #include <Geom2d_TrimmedCurve.hxx>
++#include <Geom2dAPI_ExtremaCurveCurve.hxx>
+ #include <Geom2dAPI_ProjectPointOnCurve.hxx>
+ #include <gp_Circ2d.hxx>
+ #include <Geom2dAdaptor_Curve.hxx>
+@@ -906,6 +907,118 @@ static int HatchOffConcaveEdges(Geom2dHatch_Hatcher&                    H,
+   return aNb;
+ }
+ 
++//=======================================================================
++// function : HatchAtTouch
++// purpose  : A straight tangency line that touches its face at one point
++//            of the face's boundary only, off the face on both sides of
++//            it: a rounding exactly as wide as the face there, where the
++//            face's boundary turns away from the contact (a face ending in
++//            a half circle). The hatcher finds no domain. The line moved
++//            into the face by Shift finds one, about the point, across one
++//            edge of the face; it is replaced by the point itself, a domain
++//            of no length at the touching point, its ends on that edge.
++//            Replaces the hatching iH of H by that one and returns 1; 0
++//            otherwise.
++//=======================================================================
++
++static int HatchAtTouch(Geom2dHatch_Hatcher&                    H,
++                        int&                                    iH,
++                        const occ::handle<Geom2d_Curve>&        C,
++                        const occ::handle<Adaptor3d_TopolTool>& I,
++                        const double                            Shift)
++{
++  occ::handle<Geom2d_Curve> aBasis = C;
++  if (const occ::handle<Geom2d_TrimmedCurve> aTrim = occ::down_cast<Geom2d_TrimmedCurve>(C))
++  {
++    aBasis = aTrim->BasisCurve();
++  }
++  const occ::handle<Geom2d_Line> aLine = occ::down_cast<Geom2d_Line>(aBasis);
++  if (aLine.IsNull())
++  {
++    return 0;
++  }
++  const gp_Lin2d aL = aLine->Lin2d();
++  const gp_Vec2d aN(-aL.Direction().Y(), aL.Direction().X());
++  // (The touching point lies within the hatcher's tolerance of the line.)
++  const double aTol = 0.1 * Shift;
++  for (const double aSide : {1., -1.})
++  {
++    const occ::handle<Geom2d_Curve> aCs = occ::down_cast<Geom2d_Curve>(C->Translated(aN * (aSide * Shift)));
++    if (aCs.IsNull())
++    {
++      continue;
++    }
++    Geom2dAdaptor_Curve aLs(aCs);
++    const int           iHs = H.Trim(aLs);
++    H.ComputeDomains(iHs);
++    if (!H.IsDone(iHs) || H.NbDomains(iHs) != 1 || !H.Domain(iHs, 1).HasFirstPoint()
++        || !H.Domain(iHs, 1).HasSecondPoint() || H.Domain(iHs, 1).FirstPoint().NbPoints() != 1
++        || H.Domain(iHs, 1).SecondPoint().NbPoints() != 1)
++    {
++      H.RemHatching(iHs);
++      continue;
++    }
++    HatchGen_Domain*         aDom = (HatchGen_Domain*)(void*)&H.Domain(iHs, 1);
++    HatchGen_PointOnHatching aP1(aDom->FirstPoint());
++    HatchGen_PointOnHatching aP2(aDom->SecondPoint());
++    HatchGen_PointOnElement  aPE1(aP1.Point(1)), aPE2(aP2.Point(1));
++    const double             a = aP1.Parameter(), b = aP2.Parameter();
++    // The touching point: on the edge crossed, its point nearest the line
++    // between the crossings. (Where the line crosses two edges, about the
++    // vertex between them, the shape is not that of a touch along an edge:
++    // not taken.)
++    double aTouch = 0., aDist = RealLast();
++    if (aPE1.Index() == aPE2.Index())
++    {
++      const Geom2dAdaptor_Curve& aE = H.ElementCurve(aPE1.Index());
++      const double               e1 = std::min(aPE1.Parameter(), aPE2.Parameter());
++      const double               e2 = std::max(aPE1.Parameter(), aPE2.Parameter());
++      if (e2 - e1 > Precision::PConfusion())
++      {
++        Geom2dAPI_ExtremaCurveCurve anExt(C, aE.Curve(), a, b, e1, e2);
++        for (int k = 1; k <= anExt.NbExtrema(); k++)
++        {
++          double tc = 0., te = 0.;
++          anExt.Parameters(k, tc, te);
++          if (anExt.Distance(k) < aDist)
++          {
++            aDist  = anExt.Distance(k);
++            aTouch = tc;
++            aPE1.SetParameter(te);
++            aPE2.SetParameter(te);
++          }
++        }
++      }
++    }
++    // (The line off the face but at that point, between the crossings.)
++    bool aOff = aDist <= aTol && aTouch > a && aTouch < b;
++    for (int k = 1; k < 16 && aOff; k++)
++    {
++      const double t = a + (b - a) * k / 16.;
++      if (std::abs(t - aTouch) > (b - a) / 32.)
++      {
++        aOff = I->Classify(C->Value(t), Precision::Confusion(), false) == TopAbs_OUT;
++      }
++    }
++    if (!aOff)
++    {
++      H.RemHatching(iHs);
++      continue;
++    }
++    aP1.ClrPoints();
++    aP1.AddPoint(aPE1, Precision::PConfusion());
++    aP1.SetParameter(aTouch);
++    aP2.ClrPoints();
++    aP2.AddPoint(aPE2, Precision::PConfusion());
++    aP2.SetParameter(aTouch);
++    aDom->SetPoints(aP1, aP2);
++    H.RemHatching(iH);
++    iH = iHs;
++    return 1;
++  }
++  return 0;
++}
++
+ //=======================================================================
+ // function : LineOnBoundary
+ // purpose  : Whether a bounded tangency line lies on the boundary of its
+@@ -1388,6 +1501,8 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+   // it, and its ends found this near a vertex are at the vertex.
+   const double aShift = 10. * tol2d;
+   double       snap1 = 0., snap2 = 0.;
++  // (Lines touching their faces at a point only, HatchAtTouch.)
++  bool touch1 = false, touch2 = false;
+ 
+   // Cutting of tangency lines (hatching).
+   Geom2dHatch_Intersector   Inter(pitol, pitol);
+@@ -1452,6 +1567,13 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+     }
+     if (Nb1 == 0)
+     {
++      // (A line touching its face at one point only.)
++      Nb1   = HatchAtTouch(H1, iH1, C1, I1, aShift);
++      snap1 = Nb1 > 0 ? 100. * aShift : 0.;
++      touch1 = Nb1 > 0;
++    }
++    if (Nb1 == 0)
++    {
+ #ifdef OCCT_DEBUG
+       std::cout << "SplitKPart : tangency line out of the face" << std::endl;
+ #endif
+@@ -1516,6 +1638,13 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+     }
+     if (Nb2 == 0)
+     {
++      // (A line touching its face at one point only.)
++      Nb2   = HatchAtTouch(H2, iH2, C2, I2, aShift);
++      snap2 = Nb2 > 0 ? 100. * aShift : 0.;
++      touch2 = Nb2 > 0;
++    }
++    if (Nb2 == 0)
++    {
+ #ifdef OCCT_DEBUG
+       std::cout << "SplitKPart : tangency line out of the face" << std::endl;
+ #endif
+@@ -1523,6 +1652,12 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+     }
+   }
+ 
++  if (touch1 != touch2)
++  {
++    // (A blend touching one face at a point, its contact on the other
++    // inside that face or along it: not a blend of that width.)
++    return false;
++  }
+   if (Spine->IsPeriodic() && Spine->NbEdges() == 1)
+   {
+     // (A spine closed by its one edge: the blend's parameters are the
+@@ -1753,7 +1888,11 @@ bool ChFi3d_Builder::SplitKPart(const occ::handle<ChFiDS_SurfData>&
+           }
+           for (int icoup2 = 1; icoup2 <= nbcoup2; icoup2++)
+           {
+-            if (f2 <= l1 && f1 <= l2)
++            // (A domain of no length, a line touching its face at a point,
++            // HatchAtTouch, meets the other side's at that point within
++            // the parameters' rounding.)
++            const double aTouchGap = (l1 - f1 <= pitol || l2 - f2 <= pitol) ? pitol : 0.;
++            if (f2 <= l1 + aTouchGap && f1 <= l2 + aTouchGap)
+             {
+               if (f1 >= f2 - tol2d)
+               {

@@ -40,6 +40,15 @@ impl TurnStock {
         }
     }
 
+    /// The stock turned round about `back`: each node's Z becomes `back -
+    /// z`, from the lowest up (the sub-spindle's coordinates and back,
+    /// mitcad#2319).
+    pub fn turn_round(&mut self, back: f64) {
+        self.z = self.z.iter().rev().map(|z| back - z).collect();
+        self.inner.reverse();
+        self.outer.reverse();
+    }
+
     fn step(&self) -> f64 {
         if self.z.len() < 2 {
             1.0
@@ -71,7 +80,7 @@ impl TurnStock {
         let edge = tool.max_depth.max(2.0 * r).max(2.0 * half);
         let mut deepest: f64 = 0.0;
         let (hi_z, outside) = match tool.kind {
-            TurningToolKind::Threading { .. } => return 0.0,
+            TurningToolKind::Threading { .. } | TurningToolKind::Live => return 0.0,
             TurningToolKind::Turning => (tip[1] + edge, true),
             TurningToolKind::Boring { .. } => (tip[1] + edge, false),
             TurningToolKind::Grooving { width, inside } => (tip[1] + width, !inside),
@@ -145,6 +154,70 @@ fn x_at(chain: &[PV], z: f64, min: bool) -> Option<f64> {
     best
 }
 
+/// Where the part-off before the hand-over (the operation before the
+/// first on the sub-spindle, a parting blade's) cut the part free: the
+/// work Z of the blade's side towards the face (mitcad#2319).
+pub fn parted_at(program: &TurningProgram, first_sub: usize) -> Option<f64> {
+    let op = program.operations.get(first_sub.checked_sub(1)?)?;
+    let TurningToolKind::Parting { width } = op.tool.kind else {
+        return None;
+    };
+    let lowest = op
+        .path
+        .moves
+        .iter()
+        .map(|m| m.to()[1])
+        .fold(f64::INFINITY, f64::min);
+    lowest.is_finite().then_some(lowest + width)
+}
+
+/// Cuts one operation's toolpath out of the stock, its findings at the
+/// main spindle's work Z (`hand_over`: on the sub-spindle, mitcad#2319).
+fn cut_operation(
+    stock: &mut TurnStock,
+    index: usize,
+    op: &super::TurningProgramOp,
+    step: f64,
+    rapid_cuts: &mut Vec<Finding>,
+    hand_over: Option<&super::HandOver>,
+) {
+    let mut from: Option<PXZ> = None;
+    let mut reported = false;
+    for m in &op.path.moves {
+        let Some(f) = from else {
+            from = Some(m.to());
+            continue;
+        };
+        let mut prev = f;
+        for q in move_points(f, m, step / 4.0) {
+            let d = (q[0] - prev[0]).hypot(q[1] - prev[1]);
+            let n = ((d / (step / 2.0)).ceil() as usize).max(1);
+            for k in 1..=n {
+                let t = k as f64 / n as f64;
+                let p = [
+                    prev[0] + (q[0] - prev[0]) * t,
+                    prev[1] + (q[1] - prev[1]) * t,
+                ];
+                let depth = stock.cut(&op.tool, p);
+                if matches!(m, TurnMove::Rapid { .. }) && depth > 0.001 && !reported {
+                    reported = true;
+                    let z = hand_over.map_or(p[1], |h| h.main_z(p[1]));
+                    rapid_cuts.push(Finding {
+                        message: format!(
+                            "{}: a rapid move takes the tool into the stock.",
+                            op.name
+                        ),
+                        operation: index,
+                        at: Some([p[0], 0.0, z]),
+                    });
+                }
+            }
+            prev = q;
+        }
+        from = Some(m.to());
+    }
+}
+
 /// Cuts the program's toolpaths out of the part's stock, from `z_min`
 /// (towards the chuck) to the stock's face on nodes `step` apart, and
 /// compares what is left with the part within `tolerance`.
@@ -159,40 +232,33 @@ pub fn simulate_turning(
     let mut stock = TurnStock::new(part, z_min, step);
     let mut rapid_cuts = Vec::new();
     for (index, op) in program.operations.iter().enumerate() {
-        let mut from: Option<PXZ> = None;
-        let mut reported = false;
-        for m in &op.path.moves {
-            let Some(f) = from else {
-                from = Some(m.to());
-                continue;
-            };
-            let mut prev = f;
-            for q in move_points(f, m, step / 4.0) {
-                let d = (q[0] - prev[0]).hypot(q[1] - prev[1]);
-                let n = ((d / (step / 2.0)).ceil() as usize).max(1);
-                for k in 1..=n {
-                    let t = k as f64 / n as f64;
-                    let p = [
-                        prev[0] + (q[0] - prev[0]) * t,
-                        prev[1] + (q[1] - prev[1]) * t,
-                    ];
-                    let depth = stock.cut(&op.tool, p);
-                    if matches!(m, TurnMove::Rapid { .. }) && depth > 0.001 && !reported {
-                        reported = true;
-                        rapid_cuts.push(Finding {
-                            message: format!(
-                                "{}: a rapid move takes the tool into the stock.",
-                                op.name
-                            ),
-                            operation: index,
-                            at: Some([p[0], 0.0, p[1]]),
-                        });
-                    }
-                }
-                prev = q;
-            }
-            from = Some(m.to());
+        if !op.sub {
+            cut_operation(&mut stock, index, op, step, &mut rapid_cuts, None);
         }
+    }
+    // The sub-spindle's operations (mitcad#2319): the remnant the part-off
+    // leaves behind stays on the main spindle; the rest is cut in the
+    // sub-spindle's coordinates, the stock turned round.
+    if let (Some(hand_over), Some(first)) = (&program.hand_over, program.first_sub()) {
+        if let Some(cut) = parted_at(program, first) {
+            for i in 0..stock.z.len() {
+                if stock.z[i] < cut {
+                    stock.outer[i] = stock.inner[i];
+                }
+            }
+        }
+        stock.turn_round(hand_over.back_z);
+        for (index, op) in program.operations.iter().enumerate().skip(first) {
+            cut_operation(
+                &mut stock,
+                index,
+                op,
+                step,
+                &mut rapid_cuts,
+                Some(hand_over),
+            );
+        }
+        stock.turn_round(hand_over.back_z);
     }
     // Compare with the part between its face and its back: at each node
     // the part's lowest and highest radius round it (a node on a wall or

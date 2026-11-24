@@ -79,6 +79,12 @@ StockMesh stockMesh(const StockGrid& grid, const std::vector<float>& heights, co
 // and the ends of each stretch of material as rings. Plain shades.
 StockMesh turnedStockMesh(const QJsonObject& stock, const WorkFrame& frame, int segments = 48);
 
+// A mill-turn's stock cut in 3D (mitcad#2319): the `solid` of a lathe
+// setup's `cam_simulate` (`mesh`: `vertices` x, y, z in the design and
+// `triangles` three vertices each), each triangle with its own corners and
+// its face's normal. Plain shades; empty when the mesh does not read.
+StockMesh solidStockMesh(const QJsonObject& solid);
+
 // The snapshots' places along a playback of `points` places: at most
 // `count`, evenly apart, the last place always one; ascending, each once.
 std::vector<int> framePlaces(int points, int count);

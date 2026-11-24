@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MIT
+# Surface Loft's Start and End Condition, Perpendicular to Face at both
+# ends (mitcad#2345), on surface-loft-perpendicular.json (Sketch1 F1: a
+# circle R10; Extrude1 F2: the post, 20 mm high; Sketch2 F4 60 mm up: a
+# circle R20):
+#   1. Surface Loft from the post's top face to the circle above: Start
+#      Condition Perpendicular to Face with the post's wall as its Face,
+#      End Condition Perpendicular to Face (the circle's plane) with weight
+#      2; the panel shows both, the preview builds and the surface is
+#      added.
+#   2. The surface (F5.b0) is one side face (Tangent Edges Merge).
+# Run by tools/ui-surface-loft-perpendicular-test.sh (Linux),
+# tools/ui-windows-surface-loft-perpendicular-test.ps1 (Windows) and
+# tools/ui-macos-surface-loft-perpendicular-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+# Seen from the side and above: the post's wall and top, the circle above
+# (high enough to cover none of the top face).
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The sections: the post's top face, then the circle above it.
+mark
+command surface.loft
+wait-log '^Command Surface Loft started'
+wait-idle
+click-pick 'face F2[.]b0/F2:end'
+wait-log '^Surface Loft Sections: 1 face'
+wait-idle
+mark
+click-pick 'profile F4/'
+wait-log '^Surface Loft Sections: .*1 profile'
+wait-idle
+
+# The start leaves the post's top at right angles to its wall.
+qt-choice input_start_condition 'Perpendicular to Face'
+wait-idle
+expect-choice-text start_condition '^Perpendicular to Face$'
+click-logged '^Panel Surface Loft input start_face at '
+wait-idle
+mark
+click-pick 'face F2[.]b0/F2:side'
+wait-log '^Surface Loft Face: 1 face'
+wait-idle
+
+# The end reaches the circle at right angles to its plane, weight 2.
+qt-choice input_end_condition 'Perpendicular to Face'
+wait-idle
+expect-choice-text end_condition '^Perpendicular to Face$'
+mark
+type-in '^Panel Surface Loft input end_weight at ' '2'
+wait-idle
+wait-log '^Preview Surface Loft: ok' 60
+wait-idle
+expect-no-log '^Panel Surface Loft error: '
+mark
+key Return
+wait-log '^Added surface loft through 2 sections' 60
+wait-idle
+
+# 2. One side face.
+capture-model-number faces '{"query":"properties","bodies":["F5.b0"]}' total.faces
+expect-near ${faces} 1 0 0

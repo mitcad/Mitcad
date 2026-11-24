@@ -1,0 +1,600 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BRepGProp_Gauss: the volume and area integration integrates across the
+joints of each face's loop of pcurves, so that every loop closes in the
+face's parameters, and the volume integration integrates the ribbon from
+each edge's curve on a face to its 3D curve, so that the faces close along
+the edges' 3D curves (mitcad#2284, follow-up of mitcad#2267, GitHub
+mitcad/Mitcad#463).
+
+The case: a ring (a torus) joined with blades, triangles and rods read
+from a STEP file. Its common with the union has 40 faces on the ring's own
+surfaces, cut where the other bodies cross the torus. The common measured
+21135.163838, 21135.164173 and 21135.077405 mm3 about its middle and two
+points a diagonal away along X and Z, the ring 21135.140975 about each: a
+spread of 4.1e-6 relative with the point it is integrated about, where a
+closed shell has one volume about every point. The common's shell closes
+in space: its faces' shares of the ring's surface from their edges' 3D
+curves sum to (2.3e-14, -1.9e-14, 4.1e-11) mm2, through their pcurves with
+the joints closed to (-6.4e-12, -6.7e-14, -4.2e-11), while their normals
+integrated over their areas summed to (-1.53e-6, 1.08e-4, 3.96e-4).
+
+The cause: Compute integrates a face by Green's theorem in its parameters
+along its edges' pcurves (the domain's edges in their orientation in the
+forward face): at each point of a pcurve the integrand is integrated in u
+from the face's lowest u to the point, and that along the pcurve against
+dv. That is the integral over the domain the pcurves bound only where each
+pcurve starts at the parameters where the one before it ends. The
+common's pcurves meet at their vertices within the vertices' tolerance but
+apart along v (the section edges' and the ring's edges' curves on one
+face end at their own parameters of the vertex): each such joint left out
+a strip from the lowest u to the joint, as wide as the joint's gap along
+v, up to the ring's circumference long on the torus face reaching round
+the ring (159 joints, apart by up to 4.07e-8 along v, 9.17e-8 mm in
+space). The strips left out summed to (-1.53e-6, 1.08e-4, 3.96e-4) mm2,
+the whole of the integrated normals' sum; with every face's loop closed
+at its joints the common measured 21135.140974536, 21135.140974536 and
+21135.140974539 mm3 about the three points, the ring 21135.140974537.
+
+JointNodes pairs, in each wire of the forward face, each edge use's end
+(its pcurve's point at its end in the edge's orientation) with the start
+of a use there at the same vertex not yet paired, the nearest in the
+parameters. A joint whose two points and middle lie on the surface within
+the vertex's tolerance of it (not a period apart, not across the domain)
+and whose points differ along v by more than 1e-14 of the face's v range
+(at least 1e-14, below that the gap is the parameters' rounding) is
+integrated as the straight segment from the end to the start: Gauss
+points along the segment and, at each, in u from the face's lowest u over
+the surface's u knot spans, the parameters kept within the face's bounds
+as the pcurves' points are. The three Compute methods that integrate over
+a domain (the adaptive one, and the non-adaptive volume and area ones) add
+those nodes' integrand to the face's sums after the domain's edges. A
+joint apart only along u adds nothing, and faces whose pcurves meet at
+their vertices exactly are integrated as before.
+
+Closing the loops alone measures each face over the domain its pcurves
+bound. Where a pcurve lies off its edge's 3D curve (within the edge's
+tolerance: an approximated section curve's pcurve on a blend, say), the
+face reaches past the edge or stops short of it, and the face beside it on
+another surface, bounded by its own curve of the edge, does not meet it.
+An integration along the pcurves alone happened to hide such an offset
+where the pcurve runs along u (its v offset reads nothing); with the
+loops closed alone, two roundings mitred at a short edge
+(geometry.suite.fillet_corners, their blends cut by each other along
+approximated curves) measured 16.0707129 mm3 removed against 16.0693324
+from booleans of the analytic shapes, past the test's 5e-5. RibbonNodes
+integrates, for the volume (and its moments), the ribbon from each edge's
+curve on the face A(t) to its 3D curve C(t), R(t, s) = A(t) + s (C(t) -
+A(t)), oriented with the face (the face's orientation in the shape, the
+edge's in the face): at 8 Gauss points on each of the 3D curve's C2
+intervals (at least 4 pieces, at most 32) and 2 across. Faces and ribbons
+together close along the edges' 3D curves, the remaining holes at the
+vertices of the order of the tolerance squared. Two faces on one surface
+sharing their edge's pcurve have opposite ribbons that cancel. Only edges
+whose tolerance is above the confusion tolerance (1e-7 mm) are looked at
+(an edge's curves lie within its tolerance of each other, so a tighter
+edge's ribbon holds nothing the integration can tell), and of those only
+edges whose curve on the face lies off the 3D curve by more than 1e-7 mm
+at one of five points; degenerated edges, edges without a 3D curve and
+edges not SameParameter have none; the area is not changed by ribbons. A
+shape whose edges all lie within 1e-7 mm costs one tolerance lookup per
+edge. The shape is left as it is: no curve is moved, no tolerance
+changed.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2284.
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepGProp/BRepGProp_Gauss.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepGProp/BRepGProp_Gauss.cxx
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepGProp/BRepGProp_Gauss.cxx
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepGProp/BRepGProp_Gauss.cxx
+@@ -16,6 +16,24 @@
+ #include <BRepGProp_Face.hxx>
+ #include <BRepGProp_Domain.hxx>
+ #include <BRepGProp_Gauss.hxx>
++#include <BRepAdaptor_Curve.hxx>
++#include <BRepAdaptor_Surface.hxx>
++#include <BRep_Tool.hxx>
++#include <Geom_Curve.hxx>
++#include <GeomAbs_Shape.hxx>
++#include <TopLoc_Location.hxx>
++#include <Geom2d_Curve.hxx>
++#include <NCollection_DataMap.hxx>
++#include <TopExp.hxx>
++#include <TopTools_ShapeMapHasher.hxx>
++#include <TopoDS.hxx>
++#include <TopoDS_Edge.hxx>
++#include <TopoDS_Iterator.hxx>
++#include <TopoDS_Vertex.hxx>
++#include <gp_Pnt2d.hxx>
++
++#include <utility>
++#include <vector>
+ 
+ // If the following is defined the error of algorithm is calculated by static moments
+ #define IS_MIN_DIM
+@@ -153,6 +171,378 @@
+ 
+   return theA * theB;
+ }
++
++// MitCad (mitcad#2284): the joints of a face's loops of pcurves. A face is
++// integrated by Green's theorem in its parameters along its edges' pcurves:
++// at each point of a pcurve the integrand is integrated in u from the
++// face's lowest u to the point, and that along the pcurve against dv. That
++// is the integral over the domain the pcurves bound only where each pcurve
++// starts at the parameters where the one before it ends. Where two pcurves
++// meet at their vertex within its tolerance but at other parameters, the
++// integration leaves out a strip from the lowest u to the joint, as wide as
++// the joint's gap along v, and a closed shell's volume moves with the point
++// it is integrated about. Each such joint is integrated as the straight
++// segment from one pcurve's end to the next one's start, so that every loop
++// closes in the parameters; the shape is left as it is.
++struct JointNode
++{
++  double U;
++  double V;
++  double W;
++};
++
++// One use of an edge in a wire of the forward face: its pcurve's points at
++// its start and at its end (in the edge's orientation in the face) and its
++// vertices there.
++struct EdgeUse
++{
++  gp_Pnt2d      First;
++  gp_Pnt2d      Last;
++  TopoDS_Vertex VFirst;
++  TopoDS_Vertex VLast;
++  bool          Taken = false;
++};
++
++static double ClampTo(const double theValue, const double theLow, const double theHigh)
++{
++  return theValue < theLow ? theLow : (theValue > theHigh ? theHigh : theValue);
++}
++
++// The nodes (u, v, weight) whose integrand, weighted and summed, gives the
++// integral across the joints of the face's loops. In each wire, each edge
++// use's end is joined to the start of another use there at the same vertex,
++// not yet joined, nearest in the parameters. A joint from the end E to the
++// start S whose points and middle lie on the surface within the vertex's
++// tolerance of it (not a period apart, not across the domain) adds the
++// integral over t in [0, 1] of the integrand integrated in u from the
++// lowest u to u(t) at v(t), times (S - E) along v, on the segment from E to
++// S; a joint apart only along u adds nothing. The parameters are kept
++// within the face's bounds as the pcurves' points are.
++static void JointNodes(const BRepGProp_Face& theSurface, std::vector<JointNode>& theNodes)
++{
++  theNodes.clear();
++  const TopoDS_Face& aFace = theSurface.GetFace();
++  if (aFace.IsNull() || aFace.NbChildren() == 0)
++  {
++    return;
++  }
++
++  double aU1, aU2, aV1, aV2;
++  theSurface.Bounds(aU1, aU2, aV1, aV2);
++  if (Precision::IsInfinite(aU1) || Precision::IsInfinite(aU2) || Precision::IsInfinite(aV1)
++      || Precision::IsInfinite(aV2))
++  {
++    return;
++  }
++  const double aNoGap = 1.e-14 * std::max(1.0, aV2 - aV1);
++
++  std::vector<EdgeUse>                                                       aUses;
++  NCollection_DataMap<TopoDS_Shape, std::vector<int>, TopTools_ShapeMapHasher> aStarts;
++  std::vector<std::pair<gp_Pnt2d, gp_Pnt2d>>                                 aJoints;
++  for (TopoDS_Iterator aWires(aFace); aWires.More(); aWires.Next())
++  {
++    if (aWires.Value().ShapeType() != TopAbs_WIRE)
++    {
++      continue;
++    }
++    aUses.clear();
++    aStarts.Clear();
++    for (TopoDS_Iterator anEdges(aWires.Value()); anEdges.More(); anEdges.Next())
++    {
++      const TopoDS_Shape& aShape = anEdges.Value();
++      if (aShape.ShapeType() != TopAbs_EDGE
++          || (aShape.Orientation() != TopAbs_FORWARD && aShape.Orientation() != TopAbs_REVERSED))
++      {
++        continue;
++      }
++      const TopoDS_Edge&              anEdge = TopoDS::Edge(aShape);
++      double                          aFirst = 0.0, aLast = 0.0;
++      const occ::handle<Geom2d_Curve> aPCurve =
++        BRep_Tool::CurveOnSurface(anEdge, aFace, aFirst, aLast);
++      if (aPCurve.IsNull())
++      {
++        continue;
++      }
++      EdgeUse aUse;
++      TopExp::Vertices(anEdge, aUse.VFirst, aUse.VLast, true);
++      if (aUse.VFirst.IsNull() || aUse.VLast.IsNull())
++      {
++        continue;
++      }
++      const bool isReversed = anEdge.Orientation() == TopAbs_REVERSED;
++      aUse.First            = aPCurve->Value(isReversed ? aLast : aFirst);
++      aUse.Last             = aPCurve->Value(isReversed ? aFirst : aLast);
++      aStarts.TryBound(aUse.VFirst, std::vector<int>()).push_back(static_cast<int>(aUses.size()));
++      aUses.push_back(aUse);
++    }
++
++    for (std::size_t anEnd = 0; anEnd < aUses.size(); ++anEnd)
++    {
++      const std::vector<int>* aCandidates = aStarts.Seek(aUses[anEnd].VLast);
++      if (aCandidates == nullptr)
++      {
++        continue;
++      }
++      const gp_Pnt2d& anEndPoint = aUses[anEnd].Last;
++      int             aBest      = -1;
++      double          aNearest   = 0.0;
++      for (const int aCandidate : *aCandidates)
++      {
++        if (aUses[aCandidate].Taken)
++        {
++          continue;
++        }
++        const double aDistance = anEndPoint.SquareDistance(aUses[aCandidate].First);
++        if (aBest < 0 || aDistance < aNearest)
++        {
++          aBest    = aCandidate;
++          aNearest = aDistance;
++        }
++      }
++      if (aBest < 0)
++      {
++        continue;
++      }
++      aUses[aBest].Taken = true;
++      const gp_Pnt2d& aStartPoint = aUses[aBest].First;
++      // A gap along v of the order of the parameters' rounding holds nothing.
++      if (std::abs(aStartPoint.Y() - anEndPoint.Y()) <= aNoGap)
++      {
++        continue;
++      }
++
++      const gp_Pnt aVertex    = BRep_Tool::Pnt(aUses[anEnd].VLast);
++      const double aTolerance = std::max(BRep_Tool::Tolerance(aUses[anEnd].VLast), Precision::Confusion());
++      bool         isNear     = true;
++      for (int aStep = 0; aStep <= 2 && isNear; ++aStep)
++      {
++        const double aT = 0.5 * aStep;
++        const double aU = ClampTo(anEndPoint.X() + aT * (aStartPoint.X() - anEndPoint.X()), aU1, aU2);
++        const double aV = ClampTo(anEndPoint.Y() + aT * (aStartPoint.Y() - anEndPoint.Y()), aV1, aV2);
++        gp_Pnt       aPoint;
++        gp_Vec       aNormal;
++        theSurface.Normal(aU, aV, aPoint, aNormal);
++        isNear = aPoint.Distance(aVertex) <= aTolerance;
++      }
++      if (isNear)
++      {
++        aJoints.emplace_back(anEndPoint, aStartPoint);
++      }
++    }
++  }
++  if (aJoints.empty())
++  {
++    return;
++  }
++
++  // Gauss points along a joint and in u on each knot span from the lowest u.
++  const int   aNbT = 4;
++  math_Vector aTP(1, aNbT);
++  math_Vector aTW(1, aNbT);
++  math::GaussPoints(aNbT, aTP);
++  math::GaussWeights(aNbT, aTW);
++  const int   aNbU = std::min(std::max(theSurface.UIntegrationOrder(), 8), math::GaussPointsMax());
++  math_Vector aUP(1, aNbU);
++  math_Vector aUW(1, aNbU);
++  math::GaussPoints(aNbU, aUP);
++  math::GaussWeights(aNbU, aUW);
++  NCollection_Array1<double> aUKnots(1, theSurface.SUIntSubs() + 1);
++  theSurface.UKnots(aUKnots);
++
++  for (const std::pair<gp_Pnt2d, gp_Pnt2d>& aJoint : aJoints)
++  {
++    const gp_Pnt2d& anEndPoint   = aJoint.first;
++    const gp_Pnt2d& aStartPoint  = aJoint.second;
++    const double    aDV          = aStartPoint.Y() - anEndPoint.Y();
++    for (int iT = 1; iT <= aNbT; ++iT)
++    {
++      const double aT  = 0.5 + 0.5 * aTP(iT);
++      const double aWT = 0.5 * aTW(iT) * aDV;
++      const double aUT = ClampTo(anEndPoint.X() + aT * (aStartPoint.X() - anEndPoint.X()), aU1, aU2);
++      const double aVT = ClampTo(anEndPoint.Y() + aT * aDV, aV1, aV2);
++      double       aA  = aU1;
++      for (int k = aUKnots.Lower(); k <= aUKnots.Upper() + 1 && aA < aUT; ++k)
++      {
++        const double aB = k <= aUKnots.Upper() ? std::min(aUKnots(k), aUT) : aUT;
++        if (aB - aA < EPS_PARAM)
++        {
++          continue;
++        }
++        const double aMiddle = 0.5 * (aA + aB);
++        const double aHalf   = 0.5 * (aB - aA);
++        for (int iU = 1; iU <= aNbU; ++iU)
++        {
++          theNodes.push_back({aMiddle + aHalf * aUP(iU), aVT, aWT * aHalf * aUW(iU)});
++        }
++        aA = aB;
++      }
++    }
++  }
++}
++
++// MitCad (mitcad#2284): the ribbons between each edge's curve on the face
++// (its pcurve on the surface) and its 3D curve. The face's integral covers
++// the domain its pcurves bound, closed at their joints; where a pcurve lies
++// off the edge's 3D curve (within the edge's tolerance, as an approximated
++// section curve's pcurve does), the face reaches past the edge or stops
++// short of it, and a face beside it on another surface, bounded by its own
++// curve of the edge, does not meet it: the shell does not close in space
++// along that edge. The ribbon from the face's curve of the edge to the
++// edge's 3D curve, R(t, s) = A(t) + s (C(t) - A(t)) for s in [0, 1],
++// oriented with the face, closes it: the faces and their ribbons together
++// bound the volume within the edges' 3D curves. Two faces on one surface
++// sharing a pcurve of their edge have opposite ribbons that cancel. A
++// ribbon adds to the volume (and its moments) only, not to the area.
++//
++// RibbonNode: a point of a ribbon, its vector normal (the cross product of
++// its derivatives, oriented with the face, the face's orientation in the
++// shape included) and its weight.
++struct RibbonNode
++{
++  gp_Pnt P;
++  gp_Vec N;
++  double W;
++};
++
++static void RibbonNodes(const BRepGProp_Face& theSurface, std::vector<RibbonNode>& theNodes)
++{
++  theNodes.clear();
++  const TopoDS_Face& aFace = theSurface.GetFace();
++  if (aFace.IsNull() || aFace.NbChildren() == 0)
++  {
++    return;
++  }
++
++  double aU1, aU2, aV1, aV2;
++  theSurface.Bounds(aU1, aU2, aV1, aV2);
++  if (Precision::IsInfinite(aU1) || Precision::IsInfinite(aU2) || Precision::IsInfinite(aV1)
++      || Precision::IsInfinite(aV2))
++  {
++    return;
++  }
++  // The face's orientation in the shape (theSurface's normal is the forward
++  // face's, reversed for a reversed face), found at the first edge with a
++  // ribbon: 0 not yet, 2 none found.
++  double aFaceSign = 0.0;
++  auto   aFaceSignFound = [&]() {
++    if (aFaceSign != 0.0)
++    {
++      return aFaceSign != 2.0;
++    }
++    aFaceSign = 2.0;
++    const BRepAdaptor_Surface aForward(aFace, false);
++    for (int aTry = 1; aTry <= 3 && aFaceSign == 2.0; ++aTry)
++    {
++      const double aU = aU1 + (aU2 - aU1) * aTry / 4.0;
++      const double aV = aV1 + (aV2 - aV1) * aTry / 4.0;
++      gp_Pnt       aPoint;
++      gp_Vec       aDU, aDV, aNormal;
++      aForward.D1(aU, aV, aPoint, aDU, aDV);
++      theSurface.Normal(aU, aV, aPoint, aNormal);
++      const double aDot = aDU.Crossed(aDV).Dot(aNormal);
++      if (aDot > 0.0)
++      {
++        aFaceSign = 1.0;
++      }
++      else if (aDot < 0.0)
++      {
++        aFaceSign = -1.0;
++      }
++    }
++    return aFaceSign != 2.0;
++  };
++
++  // Gauss points along an edge (on each of its pieces) and across a ribbon
++  // (exact there: the integrand is a polynomial of degree 2 in s).
++  const int   aNbT = 8;
++  math_Vector aTP(1, aNbT);
++  math_Vector aTW(1, aNbT);
++  math::GaussPoints(aNbT, aTP);
++  math::GaussWeights(aNbT, aTW);
++  const double aS[2]     = {0.5 - 0.5 / std::sqrt(3.0), 0.5 + 0.5 / std::sqrt(3.0)};
++  const double aNoRibbon = Precision::Confusion() * Precision::Confusion();
++
++  for (TopoDS_Iterator aWires(aFace); aWires.More(); aWires.Next())
++  {
++    if (aWires.Value().ShapeType() != TopAbs_WIRE)
++    {
++      continue;
++    }
++    for (TopoDS_Iterator anEdges(aWires.Value()); anEdges.More(); anEdges.Next())
++    {
++      const TopoDS_Shape& aShape = anEdges.Value();
++      if (aShape.ShapeType() != TopAbs_EDGE
++          || (aShape.Orientation() != TopAbs_FORWARD && aShape.Orientation() != TopAbs_REVERSED))
++      {
++        continue;
++      }
++      const TopoDS_Edge& anEdge = TopoDS::Edge(aShape);
++      // The edge's curves (SameParameter) lie within its tolerance of each
++      // other: at the confusion tolerance (1e-7 mm) or below, the ribbon holds
++      // nothing the integration can tell, and costs nothing.
++      if (BRep_Tool::Tolerance(anEdge) <= Precision::Confusion() || BRep_Tool::Degenerated(anEdge)
++          || !BRep_Tool::SameParameter(anEdge))
++      {
++        continue;
++      }
++      TopLoc_Location               aLocation;
++      double                        aFirst = 0.0, aLast = 0.0;
++      const occ::handle<Geom_Curve> aCurve = BRep_Tool::Curve(anEdge, aLocation, aFirst, aLast);
++      double                        aPFirst = 0.0, aPLast = 0.0;
++      if (aCurve.IsNull() || BRep_Tool::CurveOnSurface(anEdge, aFace, aPFirst, aPLast).IsNull()
++          || !(aLast > aFirst))
++      {
++        continue;
++      }
++      const BRepAdaptor_Curve aSpace(anEdge);
++      const BRepAdaptor_Curve anOnFace(anEdge, aFace);
++      // An edge whose curve on the face lies on its 3D curve (within the
++      // confusion tolerance at its ends and at three points between) has no
++      // ribbon.
++      bool isApart = false;
++      for (int aSample = 0; aSample <= 4 && !isApart; ++aSample)
++      {
++        const double aT = aFirst + (aLast - aFirst) * aSample / 4.0;
++        isApart         = aSpace.Value(aT).SquareDistance(anOnFace.Value(aT)) > aNoRibbon;
++      }
++      if (!isApart || !aFaceSignFound())
++      {
++        continue;
++      }
++      // The ribbon in the loop's direction: the edge's parameter runs against
++      // the loop where the edge is reversed in the face. Its pieces: the 3D
++      // curve's C2 intervals, at least 4 and at most 32 (the ribbon is
++      // within the edge's tolerance; its integral needs no more).
++      const double aSign   = aFaceSign * (anEdge.Orientation() == TopAbs_REVERSED ? -1.0 : 1.0);
++      const int    aPieces = std::min(32, std::max(4, aSpace.NbIntervals(GeomAbs_C2)));
++      const double aStep = (aLast - aFirst) / aPieces;
++      for (int aPiece = 0; aPiece < aPieces; ++aPiece)
++      {
++        const double aMiddle = aFirst + (aPiece + 0.5) * aStep;
++        for (int iT = 1; iT <= aNbT; ++iT)
++        {
++          const double aT = aMiddle + 0.5 * aStep * aTP(iT);
++          gp_Pnt       aC, anA;
++          gp_Vec       aDC, aDA;
++          aSpace.D1(aT, aC, aDC);
++          anOnFace.D1(aT, anA, aDA);
++          const gp_Vec aD(anA, aC);
++          if (aD.SquareMagnitude() == 0.0)
++          {
++            continue;
++          }
++          const gp_Vec aDD = aDC - aDA;
++          for (int iS = 0; iS < 2; ++iS)
++          {
++            const gp_Pnt aPoint = anA.Translated(aD * aS[iS]);
++            const gp_Vec aNormal = aD.Crossed(aDA + aDD * aS[iS]);
++            theNodes.push_back({aPoint, aNormal, aSign * 0.5 * aStep * aTW(iT) * 0.5});
++          }
++        }
++      }
++    }
++  }
++}
+ } // namespace
+ 
+ //=================================================================================================
+@@ -1062,6 +1452,51 @@
+     theDomain.Next();
+   }
+ 
++  // MitCad (mitcad#2284): the integral across the joints of the face's loops
++  // of pcurves (JointNodes), so that each loop closes in the parameters.
++  if (!isNaturalRestriction)
++  {
++    std::vector<JointNode> aJoints;
++    JointNodes(theSurface, aJoints);
++    for (const JointNode& aNode : aJoints)
++    {
++      gp_Pnt aPoint;
++      gp_Vec aNormal;
++      theSurface.Normal(aNode.U, aNode.V, aPoint, aNormal);
++      if (myType == Vinert)
++      {
++        computeVInertiaOfElementaryPart(aPoint,
++                                        aNormal,
++                                        theLocation,
++                                        aNode.W,
++                                        theCoeff,
++                                        theIsByPoint,
++                                        anInertia);
++      }
++      else
++      {
++        computeSInertiaOfElementaryPart(aPoint, aNormal, theLocation, aNode.W, anInertia);
++      }
++    }
++    // The ribbons between the face's curves of its edges and their 3D
++    // curves (RibbonNodes), for the volume only.
++    if (myType == Vinert)
++    {
++      std::vector<RibbonNode> aRibbons;
++      RibbonNodes(theSurface, aRibbons);
++      for (const RibbonNode& aNode : aRibbons)
++      {
++        computeVInertiaOfElementaryPart(aNode.P,
++                                        aNode.N,
++                                        theLocation,
++                                        aNode.W,
++                                        theCoeff,
++                                        theIsByPoint,
++                                        anInertia);
++      }
++    }
++  }
++
+   if (myType == Vinert)
+   {
+     convert(anInertia, theCoeff, theIsByPoint, theOutGravityCenter, theOutInertia, theOutMass);
+@@ -1207,6 +1642,17 @@
+     addAndRestoreInertia(aCInertia, anInertia);
+   }
+ 
++  // MitCad (mitcad#2284): the joints of the face's loops of pcurves.
++  std::vector<JointNode> aJoints;
++  JointNodes(theSurface, aJoints);
++  for (const JointNode& aNode : aJoints)
++  {
++    gp_Pnt aPoint;
++    gp_Vec aNormal;
++    theSurface.Normal(aNode.U, aNode.V, aPoint, aNormal);
++    computeSInertiaOfElementaryPart(aPoint, aNormal, theLocation, aNode.W, anInertia);
++  }
++
+   convert(anInertia, theOutGravityCenter, theOutInertia, theOutMass);
+ }
+ 
+@@ -1298,6 +1744,36 @@
+     addAndRestoreInertia(aCInertia, anInertia);
+   }
+ 
++  // MitCad (mitcad#2284): the joints of the face's loops of pcurves.
++  std::vector<JointNode> aJoints;
++  JointNodes(theSurface, aJoints);
++  for (const JointNode& aNode : aJoints)
++  {
++    gp_Pnt aPoint;
++    gp_Vec aNormal;
++    theSurface.Normal(aNode.U, aNode.V, aPoint, aNormal);
++    computeVInertiaOfElementaryPart(aPoint,
++                                    aNormal,
++                                    theLocation,
++                                    aNode.W,
++                                    theCoeff,
++                                    theIsByPoint,
++                                    anInertia);
++  }
++  // The ribbons between the face's curves of its edges and their 3D curves.
++  std::vector<RibbonNode> aRibbons;
++  RibbonNodes(theSurface, aRibbons);
++  for (const RibbonNode& aNode : aRibbons)
++  {
++    computeVInertiaOfElementaryPart(aNode.P,
++                                    aNode.N,
++                                    theLocation,
++                                    aNode.W,
++                                    theCoeff,
++                                    theIsByPoint,
++                                    anInertia);
++  }
++
+   convert(anInertia, theCoeff, theIsByPoint, theOutGravityCenter, theOutInertia, theOutMass);
+ }
+ 

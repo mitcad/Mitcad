@@ -20,6 +20,10 @@
 #      starts as STEP named Plate in the last folder; 3MF with refinement
 #      High chosen and written. Lid selected next: the dialog starts with
 #      3MF, High and Lid's name, and Enter writes Lid.3mf.
+#   6. Export... (mitcad#2298) in the menus of Plate's row, Lid:1's row
+#      (its body), the root's row (every body: Plate, Lid, Skin and Body4)
+#      and the view's menu on Plate's top: File > Export's dialog with
+#      Selected bodies (n) and the file named as File > Export names it; cancelled.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-save-as-mesh-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -30,7 +34,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'file.export' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'file.export' = 'F9'; 'solid.offset_face' = 'F7' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -228,5 +232,57 @@ Ui-ExpectNew "Export dialog: 3MF for 3D printing (*.3mf) to $workLogged/meshes/L
 Ui-ExpectNew "Exported $workLogged/meshes/Lid.3mf: 3mf, 1 body" 'Lid written as 3MF' 60
 if (-not (Test-Path (Join-Path $meshes 'Lid.3mf'))) { Ui-Fail 'no Lid.3mf' }
 Write-Host 'ok   both files written'
+
+Write-Host '--- 6. Export... in the context menus (mitcad#2298)'
+$exportEntry = 'Export' + [char]0x2026
+# Expect-Entry "entry": the context menu logged last has the entry.
+function Expect-Entry([string]$Entry) {
+  $entries = Menu-Entries
+  if ([array]::IndexOf($entries, $Entry) -lt 0) { Ui-Fail "'$Entry' is not in the context menu: $($entries -join ' | ')" }
+  Write-Host "ok   the context menu has $Entry"
+}
+# Export-Entry "bodies" "name": Export... chosen in the context menu logged
+# last; File > Export's dialog opens with the bodies as its Bodies row and
+# the file named "name" (in the last folder, as the last type: 3MF);
+# cancelled.
+function Export-Entry([string]$Bodies, [string]$Name) {
+  Ui-Mark
+  Menu-Choose $exportEntry
+  Ui-ExpectNew ", type 3mf, refinement high, file $workLogged/meshes/$Name.3mf" "the Export dialog named $Name"
+  Ui-ExpectNew "Export dialog bodies: $Bodies" "it starts with $Bodies"
+  Ui-Step 'cancel (Esc)'                 { Ui-FocusDialog '^Export$'; Ui-Key 'Escape'; Ui-FocusMain }
+}
+Ui-FocusMain
+Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
+Row-Menu 'Browser Root/Bodies/Plate'
+Expect-Entry $exportEntry
+Expect-Last $entry
+Export-Entry 'Selected bodies (1)' 'Plate'
+Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
+# A component's row: its body.
+Row-Menu 'Browser Root/Lid:1'
+Expect-Entry $exportEntry
+Export-Entry 'Selected bodies (1)' 'Lid'
+Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
+# The root's row: every body, also Skin and Body4 (the unstitch's other
+# body), which Save as Mesh leaves out.
+Row-Menu 'Browser Root'
+Expect-Entry $exportEntry
+Export-Entry 'Selected bodies (4)' 'bench'
+Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
+# The view's context menu on Plate's top: Offset Face started (F7) and
+# cancelled for the faces' pick places.
+Ui-Mark
+Ui-Step 'offset face (F7)'               { Ui-Key 'F7' }
+Ui-ExpectNew 'Pick places:' 'where the faces are picked'
+Ui-Step 'cancel it (Esc)'                { Ui-Key 'Escape' }
+Ui-ExpectNew 'Command Offset Face cancelled' 'cancelled'
+$at = Ui-PickAt 'face F1.b0/F1:top at'
+Ui-Mark
+Ui-Step 'right-click Plate''s top'       { Ui-Click $at[0] $at[1] 3 }
+Ui-ExpectNew 'Selected: 1 face [face F1:top of F1.b0' 'the top selected'
+Ui-ExpectNew 'Context menu: ' 'the context menu opened'
+Expect-Entry $exportEntry
+Export-Entry 'Selected bodies (1)' 'Plate'
 
 Ui-Finish 'UI Windows save as mesh test'

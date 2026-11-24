@@ -483,3 +483,9 @@ pub use document::{
 };
 // Decals: images put on faces of bodies (mitcad#2244).
 pub use document::{DEFAULT_DECAL_OPACITY, Decal, DecalEdit, DecalMesh, DecalSurface, DecalTarget};
+// Exploded views of assemblies (mitcad#2113).
+pub mod explode;
+pub use document::{ExplodePart, ExplodePlacements, ExplodeState, ExplodeTrail, ResolvedStep};
+// Edit in Place: a linked component edited inside the assembly that holds
+// it (mitcad#2321).
+pub use document::{InPlaceContext, InPlaceMode};

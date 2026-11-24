@@ -27,6 +27,7 @@
 #include "../framework/TestSync.hpp"
 #include "../framework/UiSizes.hpp"
 #include "../view/SelectionLook.hpp"
+#include "../view/ViewPaintLayer.hpp"
 
 namespace mitcad::sketch {
 namespace {
@@ -784,20 +785,25 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
   return shape;
 }
 
-SketchOverlay::SketchOverlay(SketchController& controller, QWidget* view)
-    : QWidget(view), m_c(controller) {
+SketchOverlay::SketchOverlay(SketchController& controller, OcctViewer& view)
+    : QObject(&view), m_c(controller), m_view(view), m_font(view.font()) {
   setObjectName(QStringLiteral("sketchOverlay"));
-  setAttribute(Qt::WA_TransparentForMouseEvents);
-  setAttribute(Qt::WA_NoSystemBackground);
-  setFocusPolicy(Qt::NoFocus);
-  QFont small = font();
-  small.setPointSizeF(9.0 * uiTextScale()); // at Text size (mitcad#1556)
-  setFont(small);
+  m_font.setPointSizeF(9.0 * uiTextScale()); // at Text size (mitcad#1556)
+  // Drawn by the view itself (mitcad#2296).
+  m_layer = view.addPaintLayer(QStringLiteral("sketch overlay"), [this](QPainter& painter) { paint(painter); }, this);
   connect(&m_c.viewer(), &OcctViewer::backgroundToneChanged, this, &SketchOverlay::logDimensionHalos);
+  // The halo's and the lines' tone follow the background.
+  connect(&m_c.viewer(), &OcctViewer::backgroundToneChanged, this, &SketchOverlay::update);
   // The badge keeps clear of the cards over the view (mitcad#1756): it
   // follows them as they move, grow and fold.
-  connect(&m_c.viewer(), &OcctViewer::coveredChanged, this, qOverload<>(&QWidget::update));
-  connect(&m_c.viewer(), &OcctViewer::overlayInsetsChanged, this, qOverload<>(&QWidget::update));
+  connect(&m_c.viewer(), &OcctViewer::coveredChanged, this, &SketchOverlay::update);
+  connect(&m_c.viewer(), &OcctViewer::overlayInsetsChanged, this, &SketchOverlay::update);
+  // The colours of the theme (the badge's box, the selection's).
+  connect(&m_c.viewer(), &OcctViewer::themeChanged, this, &SketchOverlay::update);
+  // Painted once more when a navigation ends, which logs what the paints
+  // during it did not (paint: nothing that depends on the camera is logged
+  // while the view is navigated, mitcad#2296).
+  connect(&m_c.viewer(), &OcctViewer::navigationFinished, this, &SketchOverlay::update);
   // What lies behind the bodies (mitcad#1762) is found again once the
   // camera rests (not on every frame of an orbit) and when the bodies
   // change (Hide Above Sketch, an edit).
@@ -819,6 +825,33 @@ SketchOverlay::SketchOverlay(SketchController& controller, QWidget* view)
     update();
   });
 }
+
+void SketchOverlay::show() { m_layer->setShown(true); }
+
+void SketchOverlay::hide() {
+  if (!m_layer->isShown()) {
+    return;
+  }
+  m_layer->setShown(false);
+  m_loggedAxes.clear(); // the next sketch edit logs its axes again
+  m_loggedHighlights.clear(); // and its highlights
+  m_loggedBadge.clear();      // and its badge's place
+  m_loggedThrough.clear();    // and what it draws dimmed (mitcad#1762)
+  m_loggedDimensionsOnFace.clear(); // and its dimensions on a curved face (mitcad#1853)
+  m_behind.clear();
+  m_badgeRoom = 0;
+  m_view.setBadgeWidth(0); // no badge: the status pill may use the corner
+}
+
+bool SketchOverlay::isVisible() const { return m_layer->isShown(); }
+
+void SketchOverlay::update() { m_layer->update(); }
+
+QRect SketchOverlay::rect() const { return QRect(QPoint(0, 0), m_view.size()); }
+
+int SketchOverlay::width() const { return m_view.width(); }
+
+int SketchOverlay::height() const { return m_view.height(); }
 
 QString SketchOverlay::cameraKey() const {
   const occ::handle<Graphic3d_Camera>& camera = m_c.viewer().viewCamera();
@@ -1919,6 +1952,14 @@ void SketchOverlay::paintSnap(QPainter& painter) const {
     }
     paintPreview(painter, preview);
   }
+  // Where the plane cuts a body, or a circular edge out of the plane
+  // (mitcad#2324): the curve snapped to is drawn while it is hovered, in
+  // the tools' Guide style; the sections are never drawn otherwise.
+  if (snap.onSection() || (snap.kind == Snap::Kind::BodyEdgeCenter && !snap.bodyItem.inPlane)) {
+    ToolPreview preview;
+    preview.curve(snap.bodyItem.curve, 2.0 * m_c.pixel(), ToolPreview::Style::Guide);
+    paintPreview(painter, preview);
+  }
   const QPointF c = m_c.toScreen(snap.at);
   painter.setPen(QPen(kSnapColor, 1.8));
   painter.setBrush(Qt::NoBrush);
@@ -1927,9 +1968,12 @@ void SketchOverlay::paintSnap(QPainter& painter) const {
   case Snap::Kind::Point:
   case Snap::Kind::Origin:
   case Snap::Kind::BodyVertex: // a body vertex looks like a point (mitcad#258)
+  case Snap::Kind::BodySectionVertex: // and so does a section curve's end (mitcad#2324)
     painter.drawRect(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r));
     break;
   case Snap::Kind::Center:
+  case Snap::Kind::BodyEdgeCenter:    // a body edge's or a section's centre
+  case Snap::Kind::BodySectionCenter: // looks like a centre (mitcad#2324)
     painter.drawEllipse(c, r, r);
     painter.drawLine(QPointF(c.x() - 2, c.y()), QPointF(c.x() + 2, c.y()));
     painter.drawLine(QPointF(c.x(), c.y() - 2), QPointF(c.x(), c.y() + 2));
@@ -1955,6 +1999,7 @@ void SketchOverlay::paintSnap(QPainter& painter) const {
     break;
   case Snap::Kind::OnCurve:
   case Snap::Kind::BodyOnEdge: // along a body edge as along a curve (mitcad#1967)
+  case Snap::Kind::BodySection: // and along a section curve (mitcad#2324)
     painter.drawEllipse(c, 3.5, 3.5);
     break;
   default:
@@ -2020,17 +2065,24 @@ void SketchOverlay::paintCommandPicks(QPainter& painter) const {
   }
 }
 
-void SketchOverlay::paintEvent(QPaintEvent* event) {
-  Q_UNUSED(event);
+void SketchOverlay::paint(QPainter& painter) {
   if (!m_c.isActive()) {
     return;
   }
-  QPainter painter(this);
-  painter.setRenderHint(QPainter::Antialiasing);
+  // Painted with the frame that moved the camera, before the view's
+  // viewChanged: what lies behind the bodies is kept while it moves
+  // (behindBodies), as it was found before.
+  if (cameraKey() != m_sightCamera && !m_behind.empty()) {
+    m_sightTimer.start();
+  }
+  // While the view is navigated, nothing that depends on the camera is
+  // logged here: once it rests (mitcad#2296).
+  const bool navigating = m_view.isNavigating();
+  painter.setFont(m_font);
   const SketchModel& model = m_c.model();
 
+  // Its axes are logged with the "Sketch view" line (logAxes).
   paintAxes(painter);
-  logAxes();
 
   // Texts the view shows as their glyph outlines; a text without them (no
   // fonts, a sketch that did not evaluate) as plain text at its anchor.
@@ -2092,7 +2144,9 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
       paintDimensionHalo(painter, layouts[i].shape, halo);
     }
     painter.setOpacity(1.0);
-    logDimensionHalos();
+    if (!navigating) {
+      logDimensionHalos();
+    }
     for (std::size_t i = 0; i < layouts.size(); ++i) {
       const DimensionLayout& layout = layouts[i];
       const DimensionData* d = model.dimension(layout.id);
@@ -2134,7 +2188,10 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
     }
     painter.setOpacity(1.0);
   }
-  logThrough(dimmedDimensions, dimmedGlyphs);
+  // Found again once the camera rests (m_sightTimer), which paints again.
+  if (!navigating) {
+    logThrough(dimmedDimensions, dimmedGlyphs);
+  }
   // Equal spacings' chains (mitcad#221), numbered in the order the model
   // keeps: a selected or hovered one's, and the one an Equal Spacing panel
   // previews (its objects in the panel's order until the model has it).
@@ -2200,8 +2257,18 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   paintCommandPicks(painter);
 
   const BadgeLayout layout = badgeLayout();
-  if (auto* viewer = qobject_cast<OcctViewer*>(parentWidget())) {
-    viewer->setBadgeWidth(layout.room);
+  if (layout.room != m_badgeRoom) {
+    // The room it takes moves the navigation bar and the cards: after the
+    // view's frame, not while it is drawn.
+    m_badgeRoom = layout.room;
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+          if (isVisible()) {
+            m_view.setBadgeWidth(m_badgeRoom);
+          }
+        },
+        Qt::QueuedConnection);
   }
   painter.setPen(QPen(layout.color.lighter(160), 1.0));
   painter.setBrush(labelBox(220));
@@ -2234,15 +2301,9 @@ SketchOverlay::BadgeLayout SketchOverlay::badgeLayout() const {
   out.color = statusColor;
   const QFontMetricsF metrics(font());
   // Above what floats over the bottom of the view (the timeline card).
-  int bottomInset = 0;
-  int topInset = 0;
-  std::vector<QRect> covered;
-  auto* viewer = qobject_cast<OcctViewer*>(parentWidget());
-  if (viewer != nullptr) {
-    bottomInset = viewer->overlayInsets().bottom();
-    topInset = viewer->overlayInsets().top();
-    covered = viewer->coveredRects();
-  }
+  const int bottomInset = m_view.overlayInsets().bottom();
+  const int topInset = m_view.overlayInsets().top();
+  const std::vector<QRect> covered = m_view.coveredRects();
   const QString pointer = m_c.pointerText();
   out.pointer = pointer;
   // The pointer's place in the sketch's coordinates (mitcad#254), above the
@@ -2281,27 +2342,26 @@ SketchOverlay::BadgeLayout SketchOverlay::badgeLayout() const {
 }
 
 void SketchOverlay::placeBadge() {
-  // An exposed window paints the overlay, and its paint places and logs
-  // the badge.
-  const QWindow* handle = window()->windowHandle();
+  // An exposed window's view draws the overlay with its frames, and the
+  // paint places and logs the badge.
+  const QWindow* handle = m_view.window()->windowHandle();
   if (!m_c.isActive() || !isVisible() || (handle != nullptr && handle->isExposed())) {
     return;
   }
   const BadgeLayout layout = badgeLayout();
-  if (auto* viewer = qobject_cast<OcctViewer*>(parentWidget())) {
-    viewer->setBadgeWidth(layout.room);
-  }
+  m_badgeRoom = layout.room;
+  m_view.setBadgeWidth(layout.room);
   logBadge(layout.status, layout.badge.toAlignedRect(), layout.place.toAlignedRect());
 }
 
 void SketchOverlay::logBadge(const QString& status, const QRect& badge, const QRect& place) {
   // In the main window's coordinates, as the floating cards log theirs.
-  if (window() == nullptr || !window()->isVisible()) {
+  if (m_view.window() == nullptr || !m_view.window()->isVisible()) {
     return;
   }
-  const QPoint at = GlassCard::mapToHost(this, badge.topLeft());
-  const QPoint above = GlassCard::mapToHost(this, place.topLeft());
-  const QPoint view = GlassCard::mapToHost(this, QPoint(0, 0));
+  const QPoint at = GlassCard::mapToHost(&m_view, badge.topLeft());
+  const QPoint above = GlassCard::mapToHost(&m_view, place.topLeft());
+  const QPoint view = GlassCard::mapToHost(&m_view, QPoint(0, 0));
   const QString line = QStringLiteral("Sketch badge '%1' at %2,%3 %4x%5, pointer place %6,%7 %8x%9, view "
                                       "%10,%11 %12x%13")
                            .arg(status)
@@ -2322,7 +2382,7 @@ void SketchOverlay::logBadge(const QString& status, const QRect& badge, const QR
     qDebug().noquote() << line;
     // Where a click on it selects what is not fully constrained
     // (mitcad#2026), for UI tests.
-    const QPoint middle = GlassCard::mapToHost(this, badge.center());
+    const QPoint middle = GlassCard::mapToHost(&m_view, badge.center());
     qDebug().noquote() << QStringLiteral("Sketch badge middle at %1,%2").arg(middle.x()).arg(middle.y());
   }
 }
@@ -2354,7 +2414,7 @@ void SketchOverlay::logAxes() {
     return;
   }
   const AxesShape shape = axesShape();
-  const QPoint offset = mapTo(window(), QPoint(0, 0));
+  const QPoint offset = m_view.mapTo(m_view.window(), QPoint(0, 0));
   const auto windowPlace = [&offset](const QPointF& p) {
     return QStringLiteral("%1,%2").arg(qRound(p.x() + offset.x())).arg(qRound(p.y() + offset.y()));
   };
@@ -2434,19 +2494,6 @@ void SketchOverlay::paintAxes(QPainter& painter) const {
     painter.drawText(at + QPointF(10.0, -8.0), tr("Design origin"));
   }
   painter.restore();
-}
-
-void SketchOverlay::hideEvent(QHideEvent* event) {
-  QWidget::hideEvent(event);
-  m_loggedAxes.clear(); // the next sketch edit logs its axes again
-  m_loggedHighlights.clear(); // and its highlights
-  m_loggedBadge.clear();      // and its badge's place
-  m_loggedThrough.clear();    // and what it draws dimmed (mitcad#1762)
-  m_loggedDimensionsOnFace.clear(); // and its dimensions on a curved face (mitcad#1853)
-  m_behind.clear();
-  if (auto* viewer = qobject_cast<OcctViewer*>(parentWidget())) {
-    viewer->setBadgeWidth(0); // no badge: the status pill may use the corner
-  }
 }
 
 } // namespace mitcad::sketch

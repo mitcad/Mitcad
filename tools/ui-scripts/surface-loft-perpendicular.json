@@ -1,0 +1,12 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A post and a circle above it for Surface Loft's Perpendicular to Face ends (mitcad#2345; tools/ui-surface-loft-perpendicular-test.sh and its Windows and macOS twins). Sketch1 F1 on XY: a circle R10; Extrude1 F2: the post, 20 mm high (F2.b0). Plane1 F3 60 mm up; Sketch2 F4 on it: a circle R20. The circle is high enough that, in the isometric view, it covers none of the post's top face (at 30 mm only a thin crescent of the top face showed beside it, which the pick places found or missed by the platform's triangulation: 0.72.0-rc1 on Windows)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F1","center":[0,0],"diameter":20},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1}"}],
+    "extent":{"type":"distance","distance":20},"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok"}},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":60}}},
+  {"cmd":"sketch.create","plane":"F3"},
+  {"cmd":"sketch.add_circle","sketch":"F4","center":[0,0],"diameter":40}
+]

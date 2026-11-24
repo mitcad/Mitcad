@@ -55,7 +55,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/ipt` (`mitcad-ipt`) | Rust | `.ipt` part files: compound file container (MS-CFB), property sets (MS-OLEPS), the segment database, the B-rep record converted by `core/asm`, the meshes of mesh features, the definitions segment (parameters, sketches, features) and the bodies' and faces' appearances (the `Protein` package, read by `core/f3d-file`, mitcad#1367) as the import's dump IR, and `.iam` assemblies (referenced files, occurrences, placements; [README](../core/ipt/README.md)). No geometry. |
 | `core/ifc` (`mitcad-ifc`) | Rust | IFC files (IFC2X3, IFC4, IFC4X3; `.ifczip`): an own ISO 10303-21 reader, units, the spatial structure, products and their placements, relationships, styles, and the shapes' representation items decoded (profiles, swept solids, booleans, breps, face sets, mapped items; [README](../core/ifc/README.md)). No geometry. |
 | `core/solidcraft` (`mitcad-solidcraft`) | Rust | `.solidcraft` designs: the JSON document or its container, upgraded from any file format to one by SolidCraft's own steps (`third_party/solidcraft`), typed sketches and feature kinds, expressions in MitCad's language. No geometry. |
-| `core/dxf` | Rust | DXF read and write. |
+| `core/dxf` | Rust | DXF read and write, and a structure check of written R2000 text against the DXF reference (`check_r2000`, mitcad#2315). |
 | `core/dwg` (`mitcad-dwg`) | Rust | `.dwg` drawings, R13 to R2018: the containers and their compression, header variables, classes, the object map, objects, the data storage; the 3D content (B-rep records parsed by `core/asm`, meshes, blocks and inserts) and the plan of components; the writer of 2D drawings in R2000 for the drawing export (mitcad#728) ([README](../core/dwg/README.md)). No geometry. |
 | `core/3dm` (`mitcad-3dm`) | Rust | `.3dm` models, format versions 5 to 8 (mitcad#1715): the chunks, the settings (units, tolerance), layers, block definitions and the object table with attributes; B-reps, extrusions, NURBS, plane, revolution and sum surfaces, the curve classes, meshes and block instances, SubD objects' control nets (as Form cages, mitcad#1757); their conversion to the neutral B-rep model of `core/asm` in millimetres; a writer of sample models for the tests ([README](../core/3dm/README.md)). No geometry. |
 | `core/3mf` (`mitcad-3mf`) | Rust | 3MF writer (one object of parts), a checking reader, and the reader of the 3MF import (mitcad#2156: slicer projects whose meshes are in other model parts, open meshes kept with a warning). |
@@ -66,7 +66,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
 | `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images); its line art as SVG (mitcad#1736, `format: "svg"`) is a drawing view's projection along the camera (`core/model/src/preview/lines.rs`). |
-| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76, the program check, the turned section's simulation). No model, no OCCT; offsets by cavalier_contours. |
+| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC, Makera Carvera and Carvera Air); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76, the program check, the turned section's simulation; live tools on the C axis in `turning/live.rs`, mitcad#2067: milling and drilling on the face and the diameter, polar and cylindrical interpolation; mitcad#2319: planes with the Y axis and tilted by a B head, the sub-spindle's hand-over, the whole program cut in 3D in `turning/solid.rs`). No model, no OCCT; offsets by cavalier_contours. |
 | `core/subdiv` (`mitcad-subdiv`) | Rust | Forms (mitcad#1757): control cages, their edits, Catmull-Clark subdivision with creases and boundaries and the limit surface as bicubic patches, below the model (re-exported as `mitcad_model::subdiv`); no OCCT ([Forms](#forms-subdivision-surfaces)). |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
@@ -797,7 +797,12 @@ design in a project.
   whenever the sheet is drawn, so the annotation follows the model or is
   marked broken. Their values are written by the model annotations'
   engine (`api/annotations.rs`, mitcad#702) and laid out on the sheet in
-  paper millimetres relative to their picks. A view sees what it shows
+  paper millimetres relative to their picks. Weld symbols (mitcad#2350)
+  are such annotations, laid out by `core/model-drawing/src/weld.rs` by
+  ISO 2553 or AWS A2.4 as the drawing's standard says;
+  `api/drawing_welds.rs` proposes them from BUILD's joints
+  (`build_junctions`), finding each joint's edge among the bodies the
+  view shows. A view sees what it shows
   (mitcad#717): a section what lies behind its plane, and the planar faces
   its plane cuts (their cut edges, matched in Rust against the projection's
   cut faces); a detail and a broken view the parts of edges they show; of
@@ -990,6 +995,32 @@ design in a project.
   "Motion links"). The application adds them with ASSEMBLE › Motion Link
   and lists them in each component's Motion Links folder; the
   `.solidcraft` import maps the file's.
+- **Exploded views** (mitcad#2113, `core/model/src/explode.rs`,
+  `document/explode.rs`): view state of an assembly component, not
+  timeline features: named lists of steps that move occurrences (and the
+  component's own bodies) along a direction and/or turn them about an
+  axis, values as expressions of the parameters, directions as vectors or
+  geometry resolved as joint origins' frames. Nothing is stored of the
+  result: `Document::explode_state` works the offsets, trail lines and
+  animation fractions out from the recompute's placements whenever they
+  are asked for, so an explode follows the design and never changes its
+  placements, joints or timeline. Deleting an occurrence prunes it from
+  the steps after every edit (`DocState::prune_explode_views`; the api
+  says so in the command's warnings); an occurrence moved to another
+  parent, or bodies moved into a new component, are followed in the same
+  undo step (`DocState::follow_explode_moved` from `DocState::follow`,
+  `follow_explode_into`, mitcad#2328), pruned only when they leave the
+  view's component. Drawing views apply an explode's offsets to their
+  `Shown` bodies before projecting and add its trail lines as
+  `ViewEdgeKind::Trail` edges (thin phantom); the animated USDZ export
+  samples it as a study's placements plus the view component's own body
+  motions (`AnimationPoses::Explode`, a view of any component); the
+  `measure` query moves its picks by `Document::explode_motion` when given
+  the view shown; the application shows it by placing the shown bodies at
+  the query's design placements, with an overlay of its trail lines, and
+  keeps it shown during Measure (`CommandDef::keepsExplode`,
+  `CommandContext::shownExplode`)
+  ([commands.md](../core/model-api/src/commands.md), "Exploded views").
 - **Design policy** (mitcad#220, `core/model/src/policy.rs`,
   `document/policy.rs`): the root and each component have nine local
   settings (sketches, features, components; sketch attachment to and from
@@ -1459,7 +1490,13 @@ the `Shape` type.
   the parameter space is closed by a straight segment (mitcad#325: a
   fillet's blend face whose curve stopped 0.36 mm short of a vertex of
   0.74 mm tolerance measured 4.38 mm² instead of 6.64, and the body 3.5 mm³
-  off the file's). Only FreeCAD's reference check measures with OCCT's fixed rule
+  off the file's). The one side face of a loft with Tangent Edges Merge, a
+  periodic surface joined only C1 inside it, and its offsets are split at
+  their knots like any face: OCCT's fixed rule measured such a loft 11 %
+  low and the inside wall of its shell negative, the reported measures
+  are held within 1e-4 of OCCT's Gauss-Kronrod rule on a copy split at
+  the C1 lines and within 5e-3 of a mesh (mitcad#2309,
+  `geometry.merged_loft_volumes`). Only FreeCAD's reference check measures with OCCT's fixed rule
   (`fixed_point_properties`), as FreeCAD does. `Shape` caches its measured properties and bounding box
   behind a lock. Operations may read the same input shapes on several
   threads at once (the `.f3d` import's workers, mitcad#95): they never
@@ -1966,7 +2003,12 @@ the `Shape` type.
   (`joined_curve` in `loft_merge.cpp`) is continuous in its second
   derivative along each former edge, only in its first across the former
   joins. A symmetric Thicken splits the half offset of such a face at
-  those joins (`split_at_creases` in `surfaces.cpp`).
+  those joins (`split_at_creases` in `surfaces.cpp`). Two sections of one
+  closed edge each with Tangent Edges: Keep (a circle and an ellipse or a
+  closed spline) keep OCCT's through-sections surface, put on the same
+  surface made periodic where it closes smoothly, its edges' curves
+  carried over (`periodic_closed_sides` in `loft_skin.cpp`): the geometry
+  and topology unchanged, the side offset outward as Merge's is.
 - Import of STEP assemblies (mitcad#1274): `Kernel::read_file_structure`
   reads the file once (`geometry/io` `read_step_structured`) and gives
   each distinct part's bodies once, in the part's coordinates, with the
@@ -1978,6 +2020,19 @@ the `Shape` type.
   `Kernel::read_file` reads them. Into a design with content, the import
   is wrapped in a component named after the file (mitcad#1629,
   `Document::import_file_wrapped`, `import_file`'s `wrap`).
+- Faces coloured on their own in STEP and IGES files (mitcad#2313): the
+  XCAF collector (`geometry/io/src/xcaf.cpp`) gives each body, beside its
+  one colour, the faces whose own colour (on a face sub-shape of its part)
+  differs from it, by the face's index in `TopExp::MapShapes` order
+  (`io::Body::face_colors`; IGES sewing carries them to the sewn faces).
+  They cross the bridge in `BodyInfo`/`StructureBody` and reach the model
+  as `ImportBody::face_colors`; `Document::add_base_features` turns them
+  into document appearances and face appearances on the base feature's
+  `<feature>:import(<i>)` faces in the import's undo step
+  (`core/model/src/exchange/face_colors.rs`). On export the faces' own
+  appearances go out as `ExportBody::face_colors` and the writer sets them
+  as surface colours on face sub-shapes (`add_face_colors`). The mesh
+  formats ignore them.
 - Export: 3MF and STL are written by the model from
   `Kernel::triangle_mesh` (one closed, outward-facing mesh per body,
   placed by its occurrences). STEP, IGES, OBJ and BRep go through
@@ -1996,7 +2051,15 @@ the `Shape` type.
   (mitcad#1597, `exchange/usdz_animation.rs`) the occurrences' and bodies'
   placements are time-sampled, from poses given or from a motion study's
   steps evaluated apart from the document (`Document::study_placements`),
-  the meshes written once. Drawings (mitcad#471,
+  the meshes written once. URDF (mitcad#2100, `exchange/urdf.rs`) is
+  written by the model too: a ROS 2 package folder whose links are the
+  root component's units that move as one (grounded occurrences and the
+  root's bodies the base, rigid joints and rigid groups joined), whose
+  joints are the joint solver's joints walked as a tree from the base
+  (multi-motion kinds as chains of single-axis joints, loop-closing ones
+  left out), with a binary STL per body from `Kernel::triangle_mesh` in
+  its link's frame and inertials from `Kernel::physical_properties`.
+  Drawings (mitcad#471,
   `export_drawing`): `Kernel::project_view` gives a view's edges with
   hidden lines removed (OCCT's `HLRBRep_Algo`, lines and circles exact,
   other curves as polylines; `HLRBRep_PolyAlgo` on a triangulated copy
@@ -2988,6 +3051,14 @@ it and compares the two.
   step; a polygon's typed radius dimensions the construction circle it
   measures, and Edge Polygon's typed length dimensions the clicked edge.
   A polygon's side count is its geometry, not a dimension.
+  What sketch mode draws over the view (constraint symbols, dimensions,
+  previews, the badge; `SketchOverlay`) and the dimensions shown outside
+  sketch mode (`ShownDimensions`) are painted with QPainter into a
+  picture of the view's size in the frame that moves the camera and drawn
+  by OCCT in the view's overlay layer (`app/view/ViewPaintLayer`,
+  mitcad#2296), not by widgets over the view: Qt repaints such a widget
+  after every frame and composes the window under the view again, which
+  capped sketch mode near 30 frames a second.
   Tools use a custom cursor (`app/framework/Cursors`). Body edges and
   vertices in the sketch plane, which the Dimension tool picks and the
   drawing tools snap to (mitcad#1967), come from the model's `plane_geometry` query (the
@@ -3001,7 +3072,12 @@ it and compares the two.
   `plane_geometry_key` changes (the sketch's frame and the bodies before
   it), not after each edit of the sketch itself (mitcad#1646), and the
   items out of the plane off the UI thread, as a model job of their own
-  that gives way to the user's next action (mitcad#1656). A component's sketch is edited where one of
+  that gives way to the user's next action (mitcad#1656). The drawing
+  tools read those too, for the centers of round edges out of the plane,
+  and the same query's `section` form, the curves where the plane cuts
+  the visible bodies by face, read off the UI thread likewise once per key
+  (mitcad#2324): a click on a center or a section projects the edge or the
+  face's section (linked) in the click's undo step. A component's sketch is edited where one of
   its occurrences shows it (mitcad#505): the `sketch` query's frame is in
   the component's coordinates, and sketch mode places it in the design by
   that occurrence once (`SketchHost::sketchPlacement`): the plane link's
@@ -3768,7 +3844,9 @@ it and compares the two.
   one browsing profile for the application; its downloads go into
   temporary folders (`WebDownloadFolders`, one locked folder per run) and
   pass the format filter (`ComponentWebFiles`, plain Qt Core, by name and
-  first bytes), and a zip's files are listed and unpacked through the
+  first bytes); of CEF's download reports only those of a download the
+  window started reach the import, its end once (`WebDownloadReports`,
+  mitcad#2289), and a zip's files are listed and unpacked through the
   host and the bridge (`zip_list`, `zip_extract`, `mitcad-zip`). The design side
   (`MainWindowComponentWeb.cpp`) is ordinary JSON commands:
   `create_component`, `import_file`, `set_property` (the part number) and
@@ -3801,7 +3879,13 @@ it and compares the two.
   loop, never inside CEF's callback. Tutorials repositories are fetched
   as libraries are (`RepoKind::Tutorials`,
   `core/vcs/src/library/tutorials.rs`: `tutorial_list`,
-  `tutorial_install` into the user's data folder).
+  `tutorial_install` into the user's data folder, `tutorial_picture`).
+  They are chosen on the Start page (mitcad#2346): `TutorialChoice`, made
+  by the page's host (`StartPage::Host::tutorials`) so that `app/files`
+  needs nothing of `app/tutorials`, shows a card per tutorial in the
+  page's center; a tutorial's progress, which its pages report through the
+  bridge's `set_progress`, is a setting per tutorial id
+  (`TutorialSources`).
 - **Texture sources** (`app/materials/`, mitcad#315): where Edit
   Appearances finds sets of texture maps. Each source is one class behind
   `TextureSource` (asynchronous categories, search, thumbnails and fetch;
@@ -3868,23 +3952,38 @@ it and compares the two.
   own, and OCCT takes the surface Qt made current: Qt's offscreen surface,
   usually surfaceless on Mesa, where OCCT then makes a framebuffer of its
   own at each resize, which `paintGL()` replaces with its wrapper of Qt's.
-  A Qt context that is not an EGL one (Qt's GLX integration forced by the
-  user) fails the attach as any other graphics failure does (mitcad#2125):
-  the log's `3D view: no graphics:` line gives the reason, the user sees
-  the single graphics message, and each frame tries again.
+  Where Qt's context is not an EGL one (Qt's GLX integration, set by the
+  user or by the start-up's restart below), the view draws in an EGL
+  context of its own (`ViewEglContext` in `framework/GraphicsStart.hpp`:
+  EGL's default display, else the first EGL device, else Mesa's
+  surfaceless platform; current without a surface, else on a 1x1 pbuffer), which
+  the driver names instead of Qt's. OCCT draws there into a framebuffer of
+  the view's at the size of Qt's, wrapped as Qt's is; `paintGL()` reads
+  it back (`glReadPixels`) and paints it into Qt's framebuffer, which Qt
+  composes with GLX (mitcad#2292). libglvnd makes no EGL context current
+  while a GLX one is, so `OcctViewer::ViewGlCurrent` releases Qt's context
+  around everything OCCT draws or releases (each frame, the attach, a
+  snapshot, the view's end) and makes it current again after, with the
+  framebuffer it had bound. Where that context cannot be made either, the
+  attach fails as any other graphics failure does (mitcad#2125): the
+  log's `3D view: no graphics:` line gives the reason, the user sees the
+  single graphics message, and each frame tries again.
   A window holding the view is composed by Qt with OpenGL, so a failing
   context or window surface leaves the whole window black (mitcad#2292).
   Before the first window `framework/GraphicsStart.hpp` checks a context
   of the viewport's format made current on a window that is never shown,
-  with its EGL surface; where the driver refuses the 4.5 compatibility
-  format, the driver's highest compatibility version (a 2.0 request)
-  becomes the default, shared and viewport format; where none works,
-  MitCad starts again in the same process (exec) on the next platform of
-  `graphicsFallback()` not tried yet: in a Wayland session native Wayland
-  first (the reported black window, NVIDIA's driver under XWayland, had a
-  working context but nothing on the screen, while native Wayland drew),
-  then X11 with `xcb_egl`, then X11 with GLX, where the window draws and
-  the view says it cannot start. The
+  with its EGL surface (with GLX, the view's own EGL context too); where
+  the driver refuses the 4.5 compatibility format, the driver's highest
+  compatibility version (a 2.0 request) becomes the default, shared and
+  viewport format; where none works, MitCad starts again in the same
+  process (exec) on the next platform of `graphicsFallback()` not tried
+  yet: X11 with `xcb_egl`, then X11 with GLX (the window composed as up
+  to 0.69, the view in its own EGL context: the reported black or missing
+  windows, NVIDIA's drivers under XWayland, had working EGL contexts but
+  no EGL surface for their X11 window, while 0.69's GLX window drew), then
+  in a Wayland session native Wayland (opt-in otherwise, mitcad#2031);
+  where nothing is left, the window draws and the view says it cannot
+  start. The
   log's `Graphics check:` lines name each attempt and the EGL call that failed
   ([app/COMMANDS.md](../app/COMMANDS.md#the-window-when-opengl-fails-at-start-mitcad2292)).
   Qt's platform is chosen before the application object
@@ -5025,6 +5124,20 @@ expressions). Formats: [libraries.md](libraries.md).
   refuses those components (`Assembly::linked_in`); `update_links`
   updates them in place, keeping the joints' uids. Designs without
   components, chosen parts and links saved before keep the flat form.
+- **Edit in Place** (mitcad#2321, `document/edit_in_place.rs`,
+  `app/files/MainWindowEditInPlace.cpp`): a linked component's design is
+  edited in its own document inside the holder's window. The window's
+  document becomes the linked design's (its tab lends it, so one file is
+  never edited in two documents) while the holder's waits; the holder's
+  other bodies are shown in it as a read-only component that is runtime
+  only (`ComponentDef::in_place`: no save, no undo step goes past it), and
+  what a command picks on it is frozen as Save Component as Design freezes
+  outside references (`save_component.rs`'s `freeze_scoped`). Finish
+  gives the holder back, which takes the design's bodies through the same
+  reading as Update Link (`link_updates.rs`'s `read_linked_design`) as one
+  undo step. The start and the end are functions of both documents
+  (`mitcad_model_api::begin_edit_in_place`, `finish_edit_in_place`), not
+  JSON commands of one.
 - **Versions per part.** A part records the commit the user chose when
   inserting it; `update_links` reads that commit, never a newer one, and
   only `update_library_parts` (an undo step) moves a part to another

@@ -914,10 +914,43 @@ struct BoxFeatures {
     region: String,
     component: String,
     outline: mitcad_model::ids::FeatureUid,
-    /// The sketch its Folds' lines are on (none for a flat box) and its
-    /// Folds by their crease (`k` of the line `c<3k+3>`), in timeline order.
+    /// Its creases sketch: the one [`add_standard_box`] made after the
+    /// outline (a flat box's too, mitcad#2301), else the sketch its first
+    /// Fold's line is on; none when neither is left. Its Folds by their
+    /// crease (`k` of the line `c<3k+3>`), in timeline order.
     creases: Option<mitcad_model::ids::FeatureUid>,
     folds: Vec<(usize, mitcad_model::ids::FeatureUid)>,
+}
+
+/// Whether a sketch is a box's creases as [`make_box`] makes them: on the
+/// xy plane, for each crease `k` the points `p<3k+1>` and `p<3k+2>` and
+/// the line `c<3k+3>` from the one to the other, nothing else (the
+/// sketch's own axes aside).
+fn is_creases_sketch(sketch: &mitcad_model::features::SketchDef) -> bool {
+    use mitcad_model::features::SketchPlane;
+    use mitcad_model::sketch::EntityKind;
+    if !matches!(sketch.plane, SketchPlane::Xy) || sketch.plane_link.is_some() {
+        return false;
+    }
+    let entities: Vec<_> = sketch
+        .entities
+        .iter()
+        .filter(|e| e.axis.is_none())
+        .collect();
+    if entities.is_empty() || entities.len() % 3 != 0 {
+        return false;
+    }
+    entities.iter().enumerate().all(|(i, e)| {
+        let id = i as u32 + 1;
+        e.id == EntityUid(id)
+            && match &e.kind {
+                EntityKind::Point { .. } => i % 3 != 2,
+                EntityKind::Line { start, end, .. } => {
+                    i % 3 == 2 && *start == EntityUid(id - 2) && *end == EntityUid(id - 1)
+                }
+                _ => false,
+            }
+    })
 }
 
 fn box_features<K: Kernel>(
@@ -926,8 +959,15 @@ fn box_features<K: Kernel>(
 ) -> Result<BoxFeatures, ApiError> {
     use mitcad_model::features::FeatureDef;
     let mut found: Option<BoxFeatures> = None;
+    // The sketches before the Face, in timeline order, with their
+    // component and whether they are made as creases are: the box's
+    // creases sketch is the first such after its outline.
+    let mut sketches: Vec<(mitcad_model::ids::FeatureUid, String, bool)> = Vec::new();
     for entry in doc.features() {
         match (&entry.def, found.as_mut()) {
+            (FeatureDef::Sketch(s), None) => {
+                sketches.push((entry.uid, entry.component.to_string(), is_creases_sketch(s)));
+            }
             (FeatureDef::SheetFace(f), None) if f.rules == rules && f.body.is_none() => {
                 let Some(profile) = f.profiles.first() else {
                     continue;
@@ -935,13 +975,20 @@ fn box_features<K: Kernel>(
                 let mut face_def = serde_json::to_value(f)
                     .map_err(|e| ApiError(format!("the box's Face: {e}")))?;
                 face_def["type"] = json!("sheet_face");
+                let component = entry.component.to_string();
+                let creases = sketches
+                    .iter()
+                    .skip_while(|(uid, _, _)| *uid != profile.sketch)
+                    .skip(1)
+                    .find(|(_, of, creases)| *creases && *of == component)
+                    .map(|(uid, _, _)| *uid);
                 found = Some(BoxFeatures {
                     face: entry.uid,
                     face_def,
                     region: profile.region.to_string(),
-                    component: entry.component.to_string(),
+                    component,
                     outline: profile.sketch,
-                    creases: None,
+                    creases,
                     folds: Vec::new(),
                 });
             }
@@ -968,9 +1015,10 @@ fn box_features<K: Kernel>(
 /// mitcad#2285) make the sketches again with the new lines: the Face names
 /// the new outline's region, a Fold whose crease the blank no longer has
 /// goes and a new crease gets a Fold after the box's last; the box's later
-/// features stay where their references survive. Refused for rules of no
-/// standard box and for another style; nothing changes when a step is
-/// refused.
+/// features stay where their references survive. A flat box's creases
+/// sketch follows the same way and the box stays flat (mitcad#2301).
+/// Refused for rules of no standard box and for another style; nothing
+/// changes when a step is refused.
 pub(super) fn edit_standard_box<K: Kernel>(
     doc: &mut Document<K>,
     c: EditStandardBoxCommand,
@@ -1053,8 +1101,11 @@ fn remake_box<K: Kernel>(
     if let Some(creases) = found.creases {
         let creases_name = creases.to_string();
         let crease_count = made.blank.folds.len();
-        let same =
-            found.folds.len() == crease_count && found.folds.iter().all(|&(k, _)| k < crease_count);
+        // A flat box (no Folds of its own) keeps having none: only its
+        // creases sketch follows (mitcad#2301).
+        let same = found.folds.is_empty()
+            || (found.folds.len() == crease_count
+                && found.folds.iter().all(|&(k, _)| k < crease_count));
         // The Folds of creases the blank no longer has go first, the last
         // first; one a later feature uses refuses the edit in words.
         if !same {

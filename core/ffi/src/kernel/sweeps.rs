@@ -73,18 +73,25 @@ pub mod ffi {
     }
 
     /// A loft section: `kind` 0 a region (`index` into the frames and
-    /// regions), 1 a face (`index` into the bodies) or 2 a point.
+    /// regions), 1 a face (`index` into the bodies), 2 a point or 3 a
+    /// chain of curves (`chain`, a surface loft's, mitcad#2345; `normal`
+    /// its plane's when `has_normal`).
     struct LoftSectionInput {
         kind: u8,
         index: usize,
         face: String,
         point: [f64; 3],
+        chain: Vec<SweepCurve>,
+        has_normal: bool,
+        normal: [f64; 3],
     }
 
     /// `geometry::LoftSpec` with the sections' frames, regions and bodies
     /// passed along. The rails' curves one after another, `rails` holding
     /// how many each has; end kinds 0 free, 1 direction, 2 tangent, 3
-    /// smooth, 4 point sharp, 5 point tangent.
+    /// smooth, 4 point sharp, 5 point tangent, 6 perpendicular (with the
+    /// face `start_face` of the body at `start_face_body` of the bodies
+    /// when `start_has_face`, and likewise at the end; mitcad#2345).
     struct LoftInput {
         sections: Vec<LoftSectionInput>,
         centerline: Vec<SweepCurve>,
@@ -110,6 +117,13 @@ pub mod ffi {
         /// Tangent Edges: Merge (mitcad#2162): each section's tangent
         /// edges joined into one smooth edge per run.
         merge_tangent: bool,
+        /// The faces of Perpendicular ends (mitcad#2345).
+        start_has_face: bool,
+        start_face_body: usize,
+        start_face: String,
+        end_has_face: bool,
+        end_face_body: usize,
+        end_face: String,
     }
 
     /// `section` 0 circular, 1 square, 2 triangular; `thickness` 0 for a
@@ -236,6 +250,8 @@ use mitcad_model::PipeCorners;
 use mitcad_model::sweeps::PathFrame;
 // Body faces as profiles (mitcad#543).
 use mitcad_model::sweeps::ProfileFace;
+// The faces of a loft's Perpendicular ends (mitcad#2345).
+use mitcad_model::sweeps::LoftFace;
 
 use super::shape::ffi::new_shape_list;
 use super::{Shape, failed, occt, profile};
@@ -448,6 +464,9 @@ pub fn loft(spec: &LoftSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, K
             index: 0,
             face: String::new(),
             point: [0.0; 3],
+            chain: Vec::new(),
+            has_normal: false,
+            normal: [0.0, 0.0, 1.0],
         };
         match section {
             LoftSection::Region { frame, region } => {
@@ -466,6 +485,18 @@ pub fn loft(spec: &LoftSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, K
                 input.kind = 2;
                 input.point = *point;
             }
+            // A chain of curves (mitcad#2345).
+            LoftSection::Chain {
+                curves: chain,
+                normal,
+            } => {
+                input.kind = 3;
+                input.chain = curves(chain);
+                if let Some(normal) = normal {
+                    input.has_normal = true;
+                    input.normal = *normal;
+                }
+            }
         }
         sections.push(input);
     }
@@ -476,7 +507,22 @@ pub fn loft(spec: &LoftSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, K
         LoftEndKind::Smooth => 3,
         LoftEndKind::PointSharp => 4,
         LoftEndKind::PointTangent => 5,
+        LoftEndKind::Perpendicular => 6,
     };
+    // The faces of Perpendicular ends (mitcad#2345), passed with the
+    // sections' bodies.
+    let mut end_face = |face: Option<&LoftFace<'_, SharedPtr<Shape>>>| -> Result<_, KernelError> {
+        Ok(match face {
+            Some(face) => {
+                occt(face.body)?;
+                bodies.push(face.body.clone());
+                (true, bodies.len() - 1, face.face.to_string())
+            }
+            None => (false, 0, String::new()),
+        })
+    };
+    let (start_has_face, start_face_body, start_face) = end_face(spec.start_face.as_ref())?;
+    let (end_has_face, end_face_body, end_face) = end_face(spec.end_face.as_ref())?;
     let input = ffi::LoftInput {
         sections,
         centerline: spec.centerline.map(curves).unwrap_or_default(),
@@ -514,6 +560,12 @@ pub fn loft(spec: &LoftSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, K
         },
         parallel: spec.centerline_parallel,
         merge_tangent: spec.merge_tangent_edges,
+        start_has_face,
+        start_face_body,
+        start_face,
+        end_has_face,
+        end_face_body,
+        end_face,
     };
     // OCCT's lofts (through sections, the pipe shell along a centerline) do
     // not look at their progress range (mitcad#1922).

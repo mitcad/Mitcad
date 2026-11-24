@@ -100,7 +100,8 @@ pub enum ToolChanger {
 pub struct Machine {
     pub name: String,
     /// The post-processor's id (`grbl`, `grblhal`, `reprapfirmware`,
-    /// `millenniumos`, `mach3`, `mach4`, `linuxcnc`).
+    /// `millenniumos`, `mach3`, `mach4`, `linuxcnc`, `carvera`,
+    /// `carvera_air`).
     pub controller: String,
     /// Where the gauge line can go.
     pub travel: Bounds,

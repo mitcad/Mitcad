@@ -29,11 +29,13 @@ fn verified_replay_and_fallback_preserve_existing_bodies() {
                         name: Some("Existing solid".to_owned()),
                         color: None,
                         shape: original.clone(),
+                        face_colors: Vec::new(),
                     },
                     ImportBody {
                         name: Some("Existing sheet".to_owned()),
                         color: None,
                         shape: sheet.clone(),
+                        face_colors: Vec::new(),
                     },
                 ]))
                 .unwrap();
@@ -138,6 +140,7 @@ fn scope_tracks_document_identity_and_worker_copies_and_restores_after_drop() {
             name: None,
             color: None,
             shape: shape.clone(),
+            face_colors: Vec::new(),
         }]))
         .unwrap();
     }
@@ -176,6 +179,7 @@ fn an_explicit_candidate_cannot_remove_a_receivers_body() {
         name: None,
         color: None,
         shape: shape.clone(),
+        face_colors: Vec::new(),
     }]))
     .unwrap();
     let uid = doc.bodies()[0].uid;
@@ -218,6 +222,7 @@ fn an_initial_join_does_not_use_receiving_bodies_as_targets() {
         name: None,
         color: None,
         shape: shape.clone(),
+        face_colors: Vec::new(),
     }]))
     .unwrap();
     let uid = doc.bodies()[0].uid;

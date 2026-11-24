@@ -1,0 +1,117 @@
+# SPDX-License-Identifier: MIT
+# The drawing tools snap to the centres of circular body edges and to where
+# the sketch plane cuts the bodies (mitcad#2324, GitHub mitcad/Mitcad#579),
+# on sketch-section-snaps.json (a cylinder round (-40, 0) and a sphere round
+# (40, 0); Sketch1 on a plane 10 above XY, parallel to the cylinder's caps,
+# empty; no body edge lies in it):
+#   1. Line from (-10, 30) to near the cylinder's axis (-40, 0): its caps'
+#      circle, out of the plane, is projected (linked) and the line's end
+#      held on the projected circle's centre (Coincident), one undo step;
+#      one undo takes the line, the projection and the constraint away.
+#   2. Line from (10, 30) to near the sphere's centre (40, 0), where only
+#      the section is: the section of the sphere's face (Intersect's,
+#      linked) is added and the line's end held on the section circle's
+#      centre, one undo step; one undo takes all of it away.
+#   3. The same line again, the sketch finished, the sphere moved to
+#      (55, 0): the line's end follows the linked section's centre.
+# The centres are clicked 0.2 mm off: within the point snap's pixels at the
+# fit's zoom, also in session 0's 1024x768 window on Windows. The section
+# and the edges out of the plane are read off the UI thread: the clicks
+# wait for them.
+# Run by tools/ui-sketch-section-snaps-test.sh (Linux) and
+# tools/ui-windows-sketch-section-snaps-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F4 \(Sketch1\)'
+key F6
+wait-idle
+capture-undo-depth baseline
+
+# The drawing tool's first look reads the edges out of the plane and the
+# section.
+mark
+command sketch.line
+wait-log '^Sketch tool Line'
+wait-idle
+sketch-move 0 30
+wait-log '^Sketch body geometry out of the plane: [1-9]'
+wait-log '^Sketch section geometry: [1-9][0-9]* curve'
+wait-idle
+
+# 1. A line to the cylinder's axis: the centre of its caps' circle.
+mark
+sketch-click -10 30
+sketch-click -39.8 0.2
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+expect-log '^Projected the body edge E\{'
+expect-log '^Held p[0-9]+ coincident with p[0-9]+, the projected center of E\{'
+expect-log '^Sketch Sketch1: 1 linked projection\(s\)'
+expect-no-log ' not added: '
+expect-undo-depth ${baseline} 1
+wait-idle
+mark
+command edit.undo
+wait-log '^Sketch Sketch1: 0 linked projection\(s\)'
+expect-undo-depth ${baseline} 0
+wait-log '^Sketch Sketch1: 0 DOF'
+wait-idle
+
+# 2. A line to the sphere's section centre.
+mark
+command sketch.line
+wait-log '^Sketch tool Line'
+wait-idle
+sketch-move 0 30
+sketch-click 10 30
+sketch-click 40.2 0.2
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+expect-log '^Projected the section of the body face F2:'
+expect-log '^Held p[0-9]+ coincident with p[0-9]+, the section center of F2:'
+expect-log '^Sketch Sketch1: 1 linked projection\(s\)'
+expect-no-log ' not added: '
+expect-no-log 'the projected center of'
+expect-undo-depth ${baseline} 1
+wait-idle
+mark
+command edit.undo
+wait-log '^Sketch Sketch1: 0 linked projection\(s\)'
+expect-undo-depth ${baseline} 0
+wait-log '^Sketch Sketch1: 0 DOF'
+wait-idle
+
+# 3. The line again; the sphere moves and the line's end follows.
+mark
+command sketch.line
+wait-log '^Sketch tool Line'
+wait-idle
+sketch-move 0 30
+sketch-click 10 30
+sketch-click 40.2 0.2
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+expect-log '^Held p[0-9]+ coincident with p[0-9]+, the section center of F2:'
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+# The line's end is the sketch's second entity (after its start).
+capture-model-number endBefore '{"query": "sketch", "uid": "F4"}' entities.1.at.0
+expect-near ${endBefore} 40 1e-6 0.001
+model-command '{"cmd":"edit_feature","uid":"F2","def":{"type":"sphere","plane":{"type":"origin","plane":"xy"},"center":[55,0],"diameter":30,"operation":"new_body"}}'
+wait-idle
+capture-model-number endAfter '{"query": "sketch", "uid": "F4"}' entities.1.at.0
+expect-near ${endAfter} 55 1e-6 0.001
+capture-model-number endAfterY '{"query": "sketch", "uid": "F4"}' entities.1.at.1
+expect-near ${endAfterY} 0 1e-6 0.001
+expect-never 'TestDriver: FAIL'

@@ -11,7 +11,15 @@ to it changes nothing there (mitcad#2133).
 
 `tools/occt-port-proof.py` reads each section's `Test:` paragraph: the
 ctests it names (`geometry.port.0011`, or `(ctests geometry.a.b, c and d)`)
-and the test functions (`test_...`) whose failure counts for the patch.
+and the test functions (`test_...`) whose failure counts for the patch;
+every `test_...` word in the paragraph is such a function, so a paragraph
+names other patches' tests by their cases, not by their functions. A
+sentence "The test needs the later patch NNNN too" (or "the later patches
+NNNN and MMMM") makes the chain mode carry those patches in both states
+(mitcad#2310). Each named function must run alone: a suite part registers
+it with `guarded("<name>", ...)` (check.hpp), an executable of its own
+selects it by name (test_only.hpp), and no other label of the part may
+contain a named label.
 `--update-tests` rewrites the paragraph's sentence on the proof from the
 tool's last run; that run's table is
 [opencascade-before-after.md](opencascade-before-after.md).
@@ -435,8 +443,18 @@ tools/occt-port-proof.py).
 
 [0034-osd-signal-handler-recursive-mutex.patch](../opencascade/0034-osd-signal-handler-recursive-mutex.patch)
 
-Test: geometry/tests/port/p0034-raised-signal-reaches-occts-exception.cpp
-(ctest geometry.port.0034): test_raised_segv_is_the_operations_error and
+Test: none that the before/after proof can run, because every line the
+patch changes lies in OSD_signal.cxx's Windows branch (SIGWntHandler,
+CallHandler and the handlers' setup under `#ifdef _WIN32`), which OCCT
+compiles on Windows only; the proof tool builds and runs on Linux
+(mitcad#2310). On Linux and macOS OCCT's signal handling is the POSIX
+branch, which has no THE_SIGNAL_MUTEX, so no test there can fail without
+the patch: geometry/tests/port/p0034-raised-signal-reaches-occts-exception.cpp
+(ctest geometry.port.0034) passes with and without it there, at the tip and
+at its place in the chain (shown 2026-11-20 by tools/occt-port-proof.py and
+its --in-chain mode). The ctest is the patch's test on Windows, where the
+port's build runs it (the Windows ctests of the release build):
+test_raised_segv_is_the_operations_error and
 test_raised_sigill_is_the_operations_error, a signal SIGWntHandler hands
 to CallHandler (the nested lock) raised inside an operation is the
 operation's error, not std::system_error;
@@ -445,13 +463,7 @@ passes _FPE_EXPLICITGEN, which SIGWntHandler handles under its one lock),
 holds with and without the patch;
 test_raised_segv_on_another_thread_after_one_was_handled, the mutex is
 free again after a handled signal: a new thread installs the handlers and
-its signal is its operation's error within 30 s. The patched code is
-compiled on Windows only, so the tests show the patch there; on Linux
-and macOS they pass with and without it. It passes without the patch at
-its place in the chain too: the test does not prove it (shown 2026-11-20
-by tools/occt-port-proof.py --in-chain, with the declarations of 0170,
-0180, 0260, 0320, 0330, 0531, 1662, 1701 carried, which add API the MitCad
-code uses).
+its signal is its operation's error within 30 s.
 
 ## 0050
 
@@ -666,7 +678,28 @@ succeed without the patch.)
 
 [0076-chfi3d-extension-rolls-on-the-faces-own-surface.patch](../opencascade/0076-chfi3d-extension-rolls-on-the-faces-own-surface.patch)
 
-Test:
+Test: none that fails without it, because no body was found whose result
+the patch changes beyond the checks' tolerances: the synthetic test below,
+written for it, passes without the patch at the port's tip (reverted
+together with 0240) and at its place in the chain (shown 2026-11-20 by
+tools/occt-port-proof.py and its --in-chain mode; mitcad#2121,
+mitcad#2310). The patch changes where ChFi3d_BuildPlane continues the walk
+past the spine's end on a cylinder, cone, sphere or torus: on the face's
+own surface instead of the plane tangent to it at the crossing. The two
+continuations differ by the gap between the sections where the pieces
+meet, 0.03 in the header's case (a rounding of 3 round a chamfered bar,
+with 0075's rolling ball), which made the face builder drop part of a
+planar face. The sphere cap below was built so that the blend's cut on
+the flat face is made of the extension's sections, whose centres on the
+tangent plane would leave the circle the ball's centre runs on by up to
+0.057; yet without the patch its result is valid and its cuts lie within
+2e-4 of the ball's radius from that circle, as with it. Why the
+extension's sections there come out on the circle without the patch was
+not traced (it needs a run that logs which continuation the walk takes
+there). The header's chamfered
+bar was not rebuilt as a synthetic body (its dimensions are not recorded
+beyond the radius), so the patch stays without a proof. The test stays as
+the patch's case:
 geometry/tests/port/p0076-extension-rolls-on-the-faces-own-surface.cpp
 (ctest geometry.port.0076),
 test_cut_of_the_extension_past_the_sphere_is_a_rolling_ball: a cap of a
@@ -684,26 +717,30 @@ test_cut_before_the_sphere_edge_is_a_rolling_ball, the boundary: the flat
 face leaning further, the plate contact reaching it first, the cut made
 of sections on the sphere face. (The tests of
 0075 to 0077 in geometry/tests/test_fillet_rolling_ball.cpp round closed
-edges, whose blends have no ends and never come here.) It passes without
-the patch at its place in the chain too: the test does not prove it (shown
-2026-11-20 by tools/occt-port-proof.py --in-chain, with the declarations
-of 0170, 0180, 0260, 0320, 0330, 0531, 1662, 1701 carried, which add API
-the MitCad code uses).
+edges, whose blends have no ends and never come here.)
 
 ## 0077
 
 [0077-chfi3d-walk-past-the-spine-ends-before-a-singular-section.patch](../opencascade/0077-chfi3d-walk-past-the-spine-ends-before-a-singular-section.patch)
 
-Test: geometry/tests/test_fillet_rolling_ball.cpp (ctest
+Test: none that fails without it, because no test was found that the patch
+decides (mitcad#2121, mitcad#2310). The tests written with 0075 to 0077,
+geometry/tests/test_fillet_rolling_ball.cpp (ctest
 geometry.suite.fillet_rolling_ball),
 test_rounding_between_a_plate_and_a_tilted_rod_is_a_rolling_ball,
-test_rounding_of_a_tilted_rods_top_is_a_rolling_ball,
-test_rounding_between_a_plate_and_a_tilted_cone_is_a_rolling_ball: the
-tests written with 0075 to 0077. It passes without the patch at its place
-in the chain too: the test does not prove it (shown 2026-11-20 by
-tools/occt-port-proof.py --in-chain, with the declarations of 0170, 0180,
-0260, 0320, 0330, 0531, 1662, 1701 carried, which add API the MitCad code
-uses).
+test_rounding_of_a_tilted_rods_top_is_a_rolling_ball and
+test_rounding_between_a_plate_and_a_tilted_cone_is_a_rolling_ball, round
+closed edges, whose blends have no spine ends, so the cut past an end
+never applies to them; they pass without the patch at its place in the
+chain (shown 2026-11-20 by tools/occt-port-proof.py --in-chain), and at
+the port's tip, reverted together with the ten later patches that change
+its lines, OCCT does not build. The header's case, a rounding round a cone and
+a cylinder on one axis whose walk ran on 15 past the end on a circle of
+radius 17 and failed with "Failed approximation", gives no dimensions
+beyond those, and the chamfer of a reported design it names is a corpus
+case, which a test here may not hold; neither was rebuilt as a synthetic
+body. OCCT's DRAW case blend/complex B4, which the patch must leave
+valid, is its boundary in the port's DRAW runs.
 
 ## 0090
 
@@ -810,11 +847,20 @@ of its own, as before.
 [0140-chfi3d-contact-along-a-closed-face-edge.patch](../opencascade/0140-chfi3d-contact-along-a-closed-face-edge.patch)
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
-geometry.suite.chamfer_overflow), test_chamfer_as_wide_as_a_step_ring,
-test_chamfer_as_wide_as_a_lug_in_a_bore: Its failure without the patch is
-still to be shown: the patch does not revert at the port's tip without the
-more than 40 later patches that change the same lines (tried 2026-11-20 by
-tools/occt-port-proof.py).
+geometry.suite.chamfer_overflow), test_chamfer_as_wide_as_a_step_ring and
+test_chamfer_as_wide_as_a_lug_in_a_bore: the step ring's inner rim
+chamfered by the ring's width (a whole circle with the counterbore's seam
+at its vertex, two arcs with the seam there or turned away) and a lug's
+top arc in a bore chamfered by the top's width, its ends away from the
+bore's seam: built, valid, the exact volume, the ring (the lug's top)
+gone; the cases as the patch came with them (mitcad#2310: the cases added
+later, the turned whole circle, the fillets, the lug's ends on the seam
+and the p-curves' fit, need 0144 and 0147 and are their tests). It fails
+without the patch at its place in the chain: OCCT with the patches before
+it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, with the declarations of 0170, 0180,
+0260, 0320, 0330, 0531, 1662, 1701 carried, which add API the MitCad code
+uses).
 
 ## 0141
 
@@ -831,11 +877,19 @@ reverted together with 0282, which changes the same lines).
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
 geometry.suite.chamfer_overflow),
-test_chamfer_of_a_boss_beyond_a_plate_corner,
-test_chamfer_of_a_post_beyond_a_square_plate: Its failure without the
-patch is still to be shown: the patch does not revert at the port's tip
-without the more than 40 later patches that change the same lines (tried
-2026-11-20 by tools/occt-port-proof.py).
+test_chamfer_of_a_boss_beyond_a_plate_corner: a boss's foot under a
+plate's rounded corner chamfered past the plate's outline, the boss as
+long as the chamfer or longer with its seam away from the gap, and as
+long as the chamfer with its seam in the gap: built, valid, the exact
+volume; the cases as the patch came with them (mitcad#2310: the longer
+boss with its seam in the gap, the p-curves' fit and the cone as one face
+need 0145 and 0146 and are their test; the post beyond a square plate,
+named here before, came with 0480 and 0481 and is theirs). It fails
+without the patch at its place in the chain: OCCT with the patches before
+it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, with the declarations of 0170, 0180,
+0260, 0320, 0330, 0531, 1662, 1701 carried, which add API the MitCad code
+uses).
 
 ## 0143
 
@@ -855,9 +909,11 @@ on the underside, as stock.
 [0144-chfi3d-closed-contact-split-at-the-edges-vertex.patch](../opencascade/0144-chfi3d-closed-contact-split-at-the-edges-vertex.patch)
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
-geometry.suite.chamfer_overflow), test_chamfer_as_wide_as_a_step_ring: It
-fails without the patch at its place in the chain: OCCT with the patches
-before it, without and with this one (shown 2026-11-20 by
+geometry.suite.chamfer_overflow), test_step_ring_rim_blends_past_the_seam
+(the step ring's cases in every form, as since 0144 to 0147; renamed by
+mitcad#2310, which gave 0140's own cases a function of their own, its
+cases as in the run below): It fails without the patch at its place in the chain: OCCT
+with the patches before it, without and with this one (shown 2026-11-20 by
 tools/occt-port-proof.py --in-chain, with the declarations of 0170, 0180,
 0260, 0320, 0330, 0531, 1662, 1701 carried, which add API the MitCad code
 uses).
@@ -869,7 +925,9 @@ uses).
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
 geometry.suite.chamfer_overflow),
-test_chamfer_of_a_boss_beyond_a_plate_corner: It fails without the patch
+test_boss_foot_chamfer_across_its_seam (the boss's cases as they are since
+0145 and 0146; renamed by mitcad#2310, which gave 0142's own cases a
+function of their own, its cases as in the run below): It fails without the patch
 (shown 2026-11-20 by tools/occt-port-proof.py, reverted together with
 0481, 0581, 0650, which change the same lines).
 
@@ -879,7 +937,9 @@ test_chamfer_of_a_boss_beyond_a_plate_corner: It fails without the patch
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
 geometry.suite.chamfer_overflow),
-test_chamfer_of_a_boss_beyond_a_plate_corner: It fails without the patch
+test_boss_foot_chamfer_across_its_seam (the boss's cases as they are since
+0145 and 0146; renamed by mitcad#2310, which gave 0142's own cases a
+function of their own, its cases as in the run below): It fails without the patch
 at its place in the chain: OCCT with the patches before it, without and
 with this one (shown 2026-11-20 by tools/occt-port-proof.py --in-chain,
 with the declarations of 0170, 0180, 0260, 0320, 0330, 0531, 1662, 1701
@@ -891,7 +951,10 @@ carried, which add API the MitCad code uses).
 [0147-chfi3d-onsame-end-prolonged-along-a-seam.patch](../opencascade/0147-chfi3d-onsame-end-prolonged-along-a-seam.patch)
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
-geometry.suite.chamfer_overflow), test_chamfer_as_wide_as_a_lug_in_a_bore:
+geometry.suite.chamfer_overflow), test_lug_in_a_bore_blends_on_its_seam
+(the lug's cases in every form, as since this patch; renamed by
+mitcad#2310, which gave 0140's own case a function of its own, its cases
+as in the run below):
 It fails without the patch at its place in the chain: OCCT with the
 patches before it, without and with this one (shown 2026-11-20 by
 tools/occt-port-proof.py --in-chain, with the declarations of 0170, 0180,
@@ -924,10 +987,11 @@ together with 1110, 1560, 1730, which change the same lines).
 
 Test: geometry/tests/test_fillet_results.cpp (ctest
 geometry.suite.fillet_results), test_slot_end_beside_a_split_side: It
-fails with this patch and 20 later patches that change the same lines
-reverted together, so the test does not single this patch out (shown
-2026-11-20 by tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+fails without the patch at its place in the chain: OCCT with the patches
+before it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, with the declarations of 0170, 0180,
+0260, 0320, 0330, 0531, 1662, 1701 carried, which add API the MitCad code
+uses).
 
 ## 0151
 
@@ -935,9 +999,11 @@ third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 Test: geometry/tests/test_fillet_results.cpp (ctest
 geometry.suite.fillet_results), test_rounding_ends_on_a_pads_split_foot:
-Its failure without the patch is still to be shown: the patch does not
-revert at the port's tip without the more than 40 later patches that
-change the same lines (tried 2026-11-20 by tools/occt-port-proof.py).
+It fails without the patch at its place in the chain: OCCT with the
+patches before it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, with the declarations of 0170, 0180,
+0260, 0320, 0330, 0531, 1662, 1701 carried, which add API the MitCad code
+uses).
 
 ## 0152
 
@@ -957,10 +1023,11 @@ Test: geometry/tests/test_fillet_results.cpp (ctest
 geometry.suite.fillet_results), test_plate_edges_rounded_to_a_full_round;
 geometry/tests/test_fillet_occt_cases.cpp (ctest
 geometry.fillet_occt_cases),
-test_box_top_full_round_with_rounded_vertical_edges. Its failure without
-the patch is still to be shown: the patch does not revert at the port's
-tip without the more than 40 later patches that change the same lines
-(tried 2026-11-20 by tools/occt-port-proof.py).
+test_box_top_full_round_with_rounded_vertical_edges. It fails without the
+patch at its place in the chain: OCCT with the patches before it, without
+and with this one (shown 2026-11-23 by tools/occt-port-proof.py
+--in-chain, with the declarations of 0170, 0180, 0260, 0320, 0330, 0531,
+1662, 1701 carried, which add API the MitCad code uses).
 
 Benchmark cases (mitcad#2273): geometry/tests/test_fillet_bench_cases.cpp,
 fillet/slab-half-round, fillet/hole-waist, fillet/boss-s-curve and
@@ -1182,10 +1249,14 @@ test_rib_rounded_to_a_full_round_out_of_a_ring,
 test_slot_rounded_to_a_full_round_into_a_floor;
 geometry/tests/test_fillet_occt_cases.cpp (ctest
 geometry.fillet_occt_cases),
-test_box_top_full_round_with_rounded_vertical_edges. Its failure without
-the patch is still to be shown: the patch does not revert at the port's
-tip without the more than 40 later patches that change the same lines
-(tried 2026-11-20 by tools/occt-port-proof.py).
+test_box_top_full_round_with_rounded_vertical_edges. The suite part of
+test_fillet_results.cpp runs each test alone with MITCAD_TEST_ONLY since
+mitcad#2310 (its tests were not guarded before, so a run alone ran them
+all, and at the patch's place 0271's test failed). It fails without the
+patch at its place in the chain: OCCT with the patches before it, without
+and with this one (shown 2026-11-23 by tools/occt-port-proof.py
+--in-chain, with the declarations of 0320, 0330, 0531, 1662, 1701 carried,
+which add API the MitCad code uses).
 
 ## 0271
 
@@ -1268,11 +1339,13 @@ at least 1.1 wide (the contact of 1 stays on it) as stock.
 
 Test: geometry/tests/test_fillet_results.cpp (ctest
 geometry.suite.fillet_results),
-test_rib_foot_rounded_across_the_rods_seam: It fails with this patch and
-18 later patches that change the same lines reverted together, so the test
-does not single this patch out (shown 2026-11-20 by
-tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+test_rib_foot_rounded_across_the_rods_seam. The suite part runs each test
+alone with MITCAD_TEST_ONLY since mitcad#2310 (its tests were not guarded
+before, so a run alone ran them all, and at the patch's place 0670's test
+failed). It fails without the patch at its place in the chain: OCCT with
+the patches before it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, with the declarations of 0320, 0330,
+0531, 1662, 1701 carried, which add API the MitCad code uses).
 
 ## 0320
 
@@ -1280,10 +1353,13 @@ third_party/vcpkg-ports/docs/opencascade-before-after.md).
 
 Test: geometry/tests/test_fillet_kernel.cpp (ctest
 geometry.suite.fillet_kernel), test_where_a_fillet_stops: it reads the
-stage the patch adds and does not build without it. Its failure without
-the patch is still to be shown: the patch does not revert at the port's
-tip without the more than 40 later patches that change the same lines
-(tried 2026-11-20 by tools/occt-port-proof.py).
+stage the patch adds and does not build without it. It fails without the
+patch at its place in the chain: with the patches before it, the test
+calls a function the patch adds (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, with the declarations of 0531, 1662,
+1701 and the declarations and new functions of 0330 carried, which add API
+the MitCad code uses, the patch's own declarations in the state before it,
+which those use).
 
 ## 0321
 
@@ -1408,10 +1484,16 @@ test_split_by_curves_tangent_at_a_vertex: It fails without the patch
 [0380-chfi3d-chamfer-end-where-the-face-at-the-end-is-tangent-to-both-faces.patch](../opencascade/0380-chfi3d-chamfer-end-where-the-face-at-the-end-is-tangent-to-both-faces.patch)
 
 Test: geometry/tests/test_chamfer_overflow.cpp (ctest
-geometry.suite.chamfer_overflow), test_chamfer_of_a_rounded_crease: Its
-failure without the patch is still to be shown: the patch does not revert
-at the port's tip without the 46 later patches that change the same lines
-(tried 2026-11-20 by tools/occt-port-proof.py).
+geometry.suite.chamfer_overflow), test_chamfer_of_a_rounded_crease. The
+test needs the later patch 0381 too: the two came in one change, and the
+test's face count and wall-section check are 0381's (at 0380's place the
+test fails on the face count with 0380 too, and at 0381's place it passes
+with 0381 and fails without it), so in the chain the patch is shown with
+0381 carried (mitcad#2310). It fails without the patch at its place in the
+chain: OCCT with the patches before it, without and with this one (shown
+2026-11-23 by tools/occt-port-proof.py --in-chain, with 0381 carried in
+both states, which the test needs, and the declarations of 0531, 1662,
+1701 carried, which add API the MitCad code uses).
 
 ## 0381
 
@@ -1751,15 +1833,26 @@ without the patch (shown 2026-11-20 by tools/occt-port-proof.py).
 
 [0530-chfi3d-chamfer-guide-keeps-to-its-edges-at-the-blends-beside.patch](../opencascade/0530-chfi3d-chamfer-guide-keeps-to-its-edges-at-the-blends-beside.patch)
 
-Test: geometry/tests/test_chamfer_overflow.cpp,
-test_chamfer_wider_than_a_fin_side_strip (ctest
-geometry.suite.chamfer_overflow): a fin whose side strip is narrower in the
-middle than its tip's chamfer, by two distances and by angle: the volume
-removed that of the chamfer's sections, cut by the foot's chamfer, swept
-along the edge. Its failure without the patch is still to be shown: the
-patch does not revert at the port's tip without the more than 40 later
-patches that change the same lines (tried 2026-11-20 by
-tools/occt-port-proof.py).
+Test: none, because no test here reaches the patch's code. The patch
+changes the guide of a walked chamfer between two chamfers made as cones
+(ChFiKPart): a chain of edges joined at slight angles (1.4 degrees), arcs
+between curved stretches, where ChFi3d_PerformElSpine made the stretch's
+guide take the cones' end tangents and bent it up to 0.11 mm off its edge
+over 16.6 mm. The fin test written with it,
+geometry/tests/test_chamfer_overflow.cpp (ctest
+geometry.suite.chamfer_overflow), test_chamfer_wider_than_a_fin_side_strip,
+is 0531's case (a fin whose side strip is narrower than its tip's
+chamfer): at 0530's place it fails with 0530 too, and with 0531 carried
+in both states it passes without 0530 (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, mitcad#2310), so it does not show
+the guide's bend. The case the patch was made for is a
+reported design's chamfer, which a test here may not hold. A synthetic
+body for it would be a plate whose top outline runs arc, curved stretch
+(a B-spline), arc, the joints kinked by about 1.4 degrees so that the
+three edges still form one chain, chamfered along the chain by a quarter
+of a millimetre: the stretch's chamfer width in its middle against the
+distance would show the bent guide. Such a body has not been built and
+run yet, so the patch stays without a proof.
 
 ## 0531
 
@@ -1963,10 +2056,13 @@ Test: geometry/tests/test_fillet_results.cpp,
 test_bowl_topped_boss_rounded_past_corners_of_the_balls_radius (ctest
 geometry.suite.fillet_results): a boss topped by a steep bowl, its top's
 outline rounded with 0.2 past corners of the ball's radius: each corner one
-face on the ball's sphere, its area the spherical triangle's. Its failure
-without the patch is still to be shown: the patch does not revert at the
-port's tip without the 47 later patches that change the same lines (tried
-2026-11-20 by tools/occt-port-proof.py).
+face on the ball's sphere, its area the spherical triangle's. The suite
+part runs each test alone with MITCAD_TEST_ONLY since mitcad#2310 (its
+tests were not guarded before, so a run alone ran them all, and at the
+patch's place 0690's test failed). It fails without the patch at its place
+in the chain: OCCT with the patches before it, without and with this one
+(shown 2026-11-23 by tools/occt-port-proof.py --in-chain, with the
+declarations of 1662, 1701 carried, which add API the MitCad code uses).
 
 ## 0671
 
@@ -3647,22 +3743,31 @@ Test: geometry/tests/test_fillet_tight_tangent_end.cpp,
 test_ends_cut_by_the_rims (ctest geometry.fillet_tight_tangent_end): the
 case hub-foot-tight-rim-ends, its nine edges rounded with 1: valid and
 closed, the material added the stored body's within 0.5 %, on the stored
-body and back within 0.01 mm about both holes; the port's notes record the
-contour failing without the patch. It fails with this patch and 27 later
-patches that change the same lines reverted together, so the test does not
-single this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the
-patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md). The test reads
-a stored case (MITCAD_GEOMETRY_CASES): OCCT's fillet cannot make the
-earlier roundings of a hole's rim that touches the hub, so no synthetic
-body has been built (left, mitcad#1986).
+body and back within 0.01 mm about both holes, its four ends at vertices
+of the result within 0.01 mm; the port's notes record the contour failing
+without the patch. The checks of each end's face, which 1540 added to the
+same function, are its own test function since mitcad#2310 (at 1530's
+place the test failed with 1530 too, on the end face's area). It fails
+without the patch at its place in the chain: OCCT with the patches before
+it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, with the declarations of 1662, 1701
+carried, which add API the MitCad code uses). The test reads a stored case
+(MITCAD_GEOMETRY_CASES): OCCT's fillet cannot make the earlier roundings
+of a hole's rim that touches the hub, so no synthetic body has been built
+(left, mitcad#1986).
 
 ## 1540
 
 [1540-chfi3d-tight-tangent-end-walked-and-cut-pieces-one-face.patch](../opencascade/1540-chfi3d-tight-tangent-end-walked-and-cut-pieces-one-face.patch)
 
-Test: geometry/tests/test_fillet_tight_tangent_end.cpp: each end's face
-has the stored body's area, and the result the stored body's faces.
+Test: geometry/tests/test_fillet_tight_tangent_end.cpp,
+test_end_faces_as_stored (ctest geometry.fillet_tight_tangent_end): on the
+case hub-foot-tight-rim-ends rounded as for 1530, each end's face has the
+stored body's area within 1 %, and the result the stored body's faces
+(a function of its own since mitcad#2310; before, these checks were part
+of 1530's test function). It fails without the patch (shown 2026-11-23 by
+tools/occt-port-proof.py, reverted together with 1700, which changes the
+same lines).
 
 ## 1560
 
@@ -3806,11 +3911,18 @@ builds without the patch too), test_plate_end_face_rims_and_corners,
 test_plate_all_edges and test_slab_end_face_pair, the plate 1.3 thick and
 the roof slab's end face rounded with 1, each valid with the removed
 volume of the roundings' sections; documented to fail without the patches
-1640 to 1642 but for the first. It fails with this patch and 16 later
-patches that change the same lines reverted together, so the test does not
-single this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the
-patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+1640 to 1642 but for the first. The test needs the later patches 1641 and
+1642 too: the three came in one change and the test with them, the slab's
+end face pair is 1641's test, and the plate's end face consumed between
+rides that end in corners is the case 1642 was written for (at its place
+the test fails with 1640 too, mitcad#2310), so in the chain the patch is shown
+with 1641 and 1642 carried, or together with them where they build on its
+lines. It fails without the patch and 1641 at their place in the chain:
+OCCT with the patches before them, without and with these (shown
+2026-11-23 by tools/occt-port-proof.py --in-chain, with 1642 carried in
+both states, which the test needs, and the declarations of 1662, 1701
+carried, which add API the MitCad code uses; 1641 builds on the patch's
+lines, so the patch is shown together with it).
 
 ## 1641
 
@@ -3953,11 +4065,16 @@ tools/occt-port-proof.py).
 Test: geometry/tests/test_fillet_roof_slab.cpp, test_slab (ctest
 geometry.fillet_roof_slab): the roof slab rounded on all its edges with
 0.862 and 0.865, valid and closed, its volume against the roundings' union
-(a jump of 2 without the patch). It fails with this patch and 10 later
-patches that change the same lines reverted together, so the test does not
-single this patch out (shown 2026-11-20 by tools/occt-port-proof.py; the
-patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+(a jump of 2 without the patch). The test needs the later patch 1659 too:
+the two came in one change with the radii 0.862 and 0.865, whose end
+edge's face crossed itself without 1659 (at 1658's place the rounding
+fails with 1658 too, mitcad#2310), so in the chain the patch is shown with
+1659 carried, or together with it where it builds on its lines. It fails
+without the patch at its place in the chain: OCCT with the patches before
+it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain, with 1659 carried in both states,
+which the test needs, and the declarations of 1662, 1701 carried, which
+add API the MitCad code uses).
 
 ## 1659
 
@@ -4165,10 +4282,13 @@ geometry.fillet_top_chains): on the stored case `fillet-wall-run-on` of
 MITCAD_GEOMETRY_CASES, the fin top's outer and inner chains rounded with
 0.5 by OCCT's fillet alone: valid, taking what the two chains take alone
 within a thousandth; documented to fail without the patch
-(Failure_Overlap). It fails with this patch and 12 later patches that
-change the same lines reverted together, so the test does not single this
-patch out (shown 2026-11-20 by tools/occt-port-proof.py; the patches are
-listed in third_party/vcpkg-ports/docs/opencascade-before-after.md).
+(Failure_Overlap). The same function also rounded the foot (1711 and
+1728) until mitcad#2310 gave that part a function of its own, and the
+test's executable runs each function alone with MITCAD_TEST_ONLY since
+then (before, a run alone ran them all, and at the patch's place the
+later patches' cases crashed it). It fails without the patch at its place
+in the chain: OCCT with the patches before it, without and with this one
+(shown 2026-11-23 by tools/occt-port-proof.py --in-chain).
 
 ## 1711
 
@@ -4193,9 +4313,10 @@ reach the corner by other code first, so a small body there cannot be
 said to reach the repeat. Patch 1700 itself has no synthetic body (a U
 of cubic B-spline sides went another way at its ends), and at the port's
 tip the reported body's corner no longer reaches the repeat either:
-geometry.fillet_top_chains (test_reported_body, the stored case
-`fillet-wall-run-on` of MITCAD_GEOMETRY_CASES, the top's chains with the
-foot's rounding of 3: the fillet returns, valid) passes without the patch
+geometry.fillet_top_chains (the stored case `fillet-wall-run-on` of
+MITCAD_GEOMETRY_CASES, the top's chains with the foot's rounding of 3: the
+fillet returns, valid; then part of test_reported_body, since mitcad#2310
+test_outer_arm_ends_with_the_foot) passes without the patch
 (shown 2026-11-20 by tools/occt-port-proof.py). The patch stays as a guard:
 without it such a parse reads past a stripe's surfdata and does not
 return.
@@ -4209,10 +4330,12 @@ geometry.fillet_tangent_ride): test_wall (2.9, 2.5 and 2.127 wide),
 test_tower_foot (2.9, 2.5 and 2.2) and test_step (1.45 and 1.3 high), each
 in both orders: valid, the volume of the section within a millionth;
 without the patch the wall's result has more material and the other two
-fail. It fails with this patch and 9 later patches that change the same
-lines reverted together, so the test does not single this patch out (shown
-2026-11-20 by tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+fail. The test's executable runs each function alone with
+MITCAD_TEST_ONLY since mitcad#2310 (before, a run alone ran them all, and
+at the patches' places in the chain the later patches' cases failed). It
+fails without the patch at its place in the chain: OCCT with the patches
+before it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain).
 
 ## 1721
 
@@ -4222,11 +4345,10 @@ Test: geometry/tests/test_fillet_tangent_ride.cpp (ctest
 geometry.fillet_tangent_ride): test_narrowing_wall (either edge slanting,
 either end narrow) and test_falling_step, each in both orders: valid, the
 volume of the two roundings made one after the other within a millionth
-(the wall's result 0.45 mm3 more without the patch). It fails with this
-patch and 8 later patches that change the same lines reverted together, so
-the test does not single this patch out (shown 2026-11-20 by
-tools/occt-port-proof.py; the patches are listed in
-third_party/vcpkg-ports/docs/opencascade-before-after.md).
+(the wall's result 0.45 mm3 more without the patch). It fails without the
+patch at its place in the chain: OCCT with the patches before it, without
+and with this one (shown 2026-11-23 by tools/occt-port-proof.py
+--in-chain).
 
 ## 1722
 
@@ -4237,21 +4359,25 @@ Test: geometry/tests/test_fillet_tangent_ride.cpp, test_wall_end_corners
 rounded too (0.5 or 1, either side, one or both ends), a prism and a box,
 both orders: valid, the volume within a millionth; and
 geometry.fillet_top_chains, test_tower_top on the stored case
-`fillet-wall-run-on`. It fails with this patch and 7 later patches that
-change the same lines reverted together, so the test does not single this
-patch out (shown 2026-11-20 by tools/occt-port-proof.py; the patches are
-listed in third_party/vcpkg-ports/docs/opencascade-before-after.md).
+`fillet-wall-run-on` (without the legs' edges). Both functions held
+1723's cases too until mitcad#2310 gave those functions of their own, and
+both executables run each function alone with MITCAD_TEST_ONLY since then.
+It fails without the patch at its place in the chain: OCCT with the
+patches before it, without and with this one (shown 2026-11-23 by
+tools/occt-port-proof.py --in-chain).
 
 ## 1723
 
 [1723-chfi3d-tangent-ride-corner-of-three-blends.patch](../opencascade/1723-chfi3d-tangent-ride-corner-of-three-blends.patch)
 
-Test: geometry/tests/test_fillet_tangent_ride.cpp, test_wall_end_corners
-(ctest geometry.fillet_tangent_ride): the end edges rounded past the
-ride's point (1.2 and 1.5 beside the rounding of 2, 1.7 beside the
-rounding of 1), prism and box, both orders: valid, the volume within a
-millionth; and geometry.fillet_top_chains, test_tower_top with the legs'
-edges and test_thirteen_sets on the stored case `fillet-wall-run-on`. It
+Test: geometry/tests/test_fillet_tangent_ride.cpp,
+test_end_corners_of_three_blends (ctest geometry.fillet_tangent_ride): the
+end edges rounded past the ride's point (1.2 and 1.5 beside the rounding
+of 2, 1.7 beside the rounding of 1), prism and box, both orders: valid, the
+volume within a millionth; and geometry.fillet_top_chains,
+test_tower_top_with_the_legs and test_thirteen_sets on the stored case
+`fillet-wall-run-on` (functions of their own since mitcad#2310; in the run
+below the first two were cases of 1722's functions, run with them). It
 fails without the patch (shown 2026-11-20 by tools/occt-port-proof.py,
 reverted together with 1781, which changes the same lines).
 
@@ -4310,9 +4436,11 @@ the same lines).
 [1728-chfi3d-ride-on-the-other-stripe-at-an-end-where-the-face-between-narrows-to-nothing.patch](../opencascade/1728-chfi3d-ride-on-the-other-stripe-at-an-end-where-the-face-between-narrows-to-nothing.patch)
 
 Test: geometry/tests/test_fillet_top_chains.cpp (ctest
-geometry.fillet_top_chains): test_reported_body, both outer arm ends (the
-foot's rounding and the top's edges) valid with the ride's ends where the
-walk puts them (the 0.5's ends at the exact end on the foot's line), and
+geometry.fillet_top_chains): test_outer_arm_ends_with_the_foot, both
+outer arm ends (the foot's rounding and the top's edges) valid with the
+ride's ends where the walk puts them (the 0.5's ends at the exact end on
+the foot's line; a part of 1710's test function in the run below, a
+function of its own since mitcad#2310), and
 test_whole_fillet1, the design's whole rounding valid within 4 mm3 of the
 stored body's with every vertex within 0.05 (the ride approximated by the
 guide's parameter left 0.4 to 1.1 mm, mitcad#2075); both on the stored case
@@ -4581,8 +4709,8 @@ shelled 2 mm inwards with its three ends open, Intersection join: one valid
 solid, the wall 2 mm thick by points in the trunk, in both arms and under
 the crotch, the volume that of the tube less the same tube of radius 8;
 and geometry/tests/test_y_tube_crotch.cpp (ctest geometry.y_tube_crotch),
-the same through MitCad's sweep, mirror and shell. Its failure without the
-patch is still to be shown in the port's before/after run (mitcad#1986).
+the same through MitCad's sweep, mirror and shell. It fails without the
+patch (shown 2026-11-23 by tools/occt-port-proof.py).
 
 ## 2141
 
@@ -4600,8 +4728,8 @@ Test: geometry/tests/test_y_tube_crotch.cpp (ctest geometry.y_tube_crotch),
 test_crotch_rounded_6 and test_crotch_rounded_50: the Y tube's crotch
 rounded with 6 and 50, one valid solid without a note or a smaller
 radius, ending at both vanishing ends, passing the crotch's middle at the
-ball's lowest point. Its failure without the patch is still to be shown
-in the port's before/after run (mitcad#1986).
+ball's lowest point. It fails without the patch (shown 2026-11-23 by
+tools/occt-port-proof.py).
 
 ## 2143
 
@@ -4609,8 +4737,8 @@ in the port's before/after run (mitcad#1986).
 
 Test: geometry/tests/test_y_tube_crotch.cpp (ctest geometry.y_tube_crotch),
 test_shell_after_rounding_6 and test_shell_after_rounding_50, and
-cli.y_tube_crotch_reported. Its failure without the patch is still to be
-shown in the port's before/after run (mitcad#1986).
+cli.y_tube_crotch_reported. It fails without the patch (shown 2026-11-23
+by tools/occt-port-proof.py).
 
 ## 2170
 
@@ -4645,3 +4773,175 @@ within 1e-6. The reporter's design, with and without its roundings, is
 shelled by tools/cli/shell-reported-test.cmake (never committed, read from
 MITCAD_MITCAD_REPORTED). It fails without the patch (shown 2026-11-21 by
 tools/occt-port-proof.py).
+
+## 2228
+
+[2228-chfi3d-rounding-whose-contact-line-folds-walked-in-pieces-the-twisted-one-filled-between-its-neighbours.patch](../opencascade/2228-chfi3d-rounding-whose-contact-line-folds-walked-in-pieces-the-twisted-one-filled-between-its-neighbours.patch)
+
+Test: geometry.port.2228
+(geometry/tests/port/p2228-contact-line-folding-at-crests.cpp),
+test_wave_top_edge_rounded_past_its_crests: the band 24 wide and 10 high
+between two sine waves (amplitude 8, wavelength 30), made with OCCT alone,
+its walls bending at the crests with 2.85 mm, its upper top edge rounded
+with OCCT's fillet at 2.5, 3, 5 and 8.5: done, one valid solid, the volume
+(OCCT's Gauss-Kronrod integration; its default rule with an accuracy gave
+the band 15382.3, not 14400) falling as the radius grows, by more than
+half the corner's section (1 - pi / 4) r^2 along the edge and less than
+r^2 along it; at 2.5 that section along the edge within 0.2 %. Without the
+patch 3, 5 and 8.5 fail (the walk stops at the first cusp). Also geometry.fillet_wave_crests (the
+same band through MitCad's fillet, one edge and both top edges; its
+`--probe` traces OCCT's fillet at each radius) and cli.wavy_fillet_reported
+(the reported STEP model and the other program's `.f3d` result, from
+MITCAD_MITCAD_REPORTED). Its failure without the patch is still to be shown
+in the port's before/after run (mitcad#1986).
+
+## 2291
+
+[2291-chfi3d-tight-rim-corner-obtuse-by-the-walls-normal-at-the-ball.patch](../opencascade/2291-chfi3d-tight-rim-corner-obtuse-by-the-walls-normal-at-the-ball.patch)
+
+Test: geometry/tests/port/p2291-tight-rim-corner-obtuse-at-the-ball.cpp
+(ctest geometry.port.2291),
+test_top_rounded_past_a_cut_out_rim_whose_axis_lies_in_the_top: a block
+whose top meets a concave quarter cylinder of radius 10, its axis in the
+top's plane, the end face's edge with the cylinder rounded with 2 and then
+its edge with the top with 3, with OCCT alone: valid, free of
+self-interference, no face under 0.01 mm2, the corner's faces on the
+surface the first rounding's own ball sweeps within 5e-4 mm and on the
+ball by the centre along their normals within 2e-3 mm (the faces fitted
+within 1e-4, the normals' error times rk = 2) (before, a torus running back over the
+first rounding and a face of 0.0063 mm2);
+test_top_rounded_with_the_rims_radius_stays_clean, the boundary (2 for
+both): valid and clean with and without the patch. The reporter's design
+is opened by tools/cli/fillet-tight-rim-corner-reported-test.cmake (never
+committed, read from MITCAD_MITCAD_REPORTED). In the OCCT lab
+(2026-11-23, its case 2291-cut-out-rim-corner) the same rounding by the
+chain without the patch was invalid and self-interfering (4383.637326
+mm3), with it valid and free of self-interference (4355.522879 mm3); the
+lab's other 33 cases did not change. Not yet shown failing without the
+patch by tools/occt-port-proof.py.
+
+## 2284
+
+[2284-brepgprop-gauss-joints-of-a-faces-pcurves-integrated.patch](../opencascade/2284-brepgprop-gauss-joints-of-a-faces-pcurves-integrated.patch)
+
+Test: geometry/tests/port/p2284-joints-of-a-faces-pcurves-integrated.cpp
+(ctest geometry.port.2284), test_joint_apart_along_v_integrated,
+test_pcurve_off_its_edge_closed_in_space and test_closed_loops_unchanged:
+half a cylinder of radius 10 and height 10, built from scratch, one of
+whose edges' pcurves on its side face is changed by 1e-6 mm (the edge's
+and its vertices' tolerances 1e-5 mm): valid bodies whose volume about
+their middle and about points 100 mm away along X, Y and Z agrees within
+1e-9 relative and equals pi R^2 H / 2 within 1e-9. The side line's pcurve
+at u = pi ending 1e-6 short of the top: without the patch the volume
+moves by 4.2e-7 relative along Y (the strip the joint leaves out). The
+top arc's pcurve moved 1e-6 above its 3D curve: closing the joints alone
+moved it by 4.2e-7 (the patch's first form, in the bundle check); the
+ribbon to the 3D curve takes the strip away again. The half cylinder as
+built keeps its volume. geometry.suite.fillet_corners,
+test_two_roundings_mitred_at_a_short_edge: the patch's first form (the
+joints alone) measured 16.0707129 mm3 removed against 16.0693324 from
+booleans, past the test's 5e-5. The reported ring's
+common with the union (geometry.join_holds_inputs, from
+MITCAD_MITCAD_REPORTED) is within 1e-6 of the ring both ways and its
+volume about each of three points within 1e-9 of the ring's.
+geometry.fillet_tight_rim_corner, test_reported_body: each of the stored
+bodies before and after the rounding and OCCT's rounding moves by at most
+1e-3 mm3 with the point it is integrated about (without the patch 0.087,
+0.132 and 0.144 mm3, shown in the OCCT lab's case 2284-tube-rim-volumes).
+Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
+## 2229
+
+[2229-chfi3d-cap-leaving-the-end-face-across-a-tangent-edge-cut-by-the-face-beyond.patch](../opencascade/2229-chfi3d-cap-leaving-the-end-face-across-a-tangent-edge-cut-by-the-face-beyond.patch)
+
+Test: geometry.port.2229
+(geometry/tests/port/p2229-cap-leaving-the-end-face-across-a-tangent-edge.cpp),
+test_cap_leaving_the_end_face_across_a_tangent_edge: the stepped block
+rounded with 5 on eleven edges (by MitCad's rounding; OCCT's own fillet
+does not build that body), its back's bottom edge chamfered with 4.5 and
+4.9 by OCCT alone: one valid solid of the body's volume less its common
+part with the bevel's wedge, the flat end faces of the exact shape's
+areas; test_cap_wholly_across_a_tangent_edge, the chamfer of 5 (its cap
+the chord of the band's edge, the end face gone), the same checks;
+test_bevel_end_cut_by_the_half_balls, the chamfer of 5.5 and 7 (the end
+cut by the half balls and the band, the patch's ChFi3d_ComputeCurves
+part: each end's arc on a ball, a piece of a circle whose ends were found
+in reverse order, trimmed the long way round the circle before, the
+bevel's and the balls' wires crossing themselves), the same checks;
+test_rounding_end_across_the_end_faces_lens, the rounding of 6 (its end
+across the end face's lens between two crossings of one edge, the
+patch's PerformIntersectionAtEnd crossing part: the face dropped before,
+four edges in one face, volume 0) and of 7, the same checks;
+test_cap_within_the_end_face, the chamfer of 4, as before;
+test_rounding_as_wide_as_both_faces, the rounding and the chamfer of
+exactly 10, the width of the bottom and the back (mitcad#2329: the
+contacts touch each face at one point, the patch's SplitKPart and
+ChFi3d_FilDS part), the same checks with the volume within 1e-6 and no
+face under 0.01 mm2. Also geometry.suite.dressup_takes_face (the stepped
+block's dressups of 10 through MitCad, and a ball swept over a square,
+built from OCCT's primitives, its bottom and back ending in half circles,
+rounded with 7 and 10). The
+reported designs: cli.fillet_exact_reported (github-566, never
+committed). In the OCCT lab (case 2329-ball-as-wide-as-both-faces: the
+ball-swept square and a stand-in of the stepped block's end, a ball swept
+over its end face's region) the rounding of 10 failed without the
+patch's touch part ("StartSol echec": no domain on either face, no start
+for the walk) and with it is one valid solid of the exact volume
+(561.3195 of 561.3205 and 297.73099 of 297.73097 by vprops), the
+shared cases and OCCT's blend and chamfer groups unchanged. Without the patch the probe of mitcad#2229 showed the invalid
+shape 0.0036 mm3 short and end faces of area -0.69 (4.5) and -2.57 (4.9),
+and at 5 a valid shape 0.058 mm3 short with end faces of area -3.06; with
+the patch's first part 4.5 and 4.9 came out valid and exact (the end faces'
+corner pieces 0.124 and 0.0043 mm2). Its failure without the patch is
+still to be shown in the port's before/after run (mitcad#1986).
+## 2306
+
+[2306-chfi3d-corner-of-four-chamfers-meeting-in-a-plane-closed-by-a-planar-face.patch](../opencascade/2306-chfi3d-corner-of-four-chamfers-meeting-in-a-plane-closed-by-a-planar-face.patch)
+
+Test: geometry/tests/test_fillet_bench_cases.cpp (ctest
+geometry.fillet_bench_cases), test_chamfer_octahedron_all_edges: the
+octahedron |x| + |y| + |z| <= 10 with all twelve edges chamfered sqrt(6),
+four chamfers meeting at each vertex, by OCCT's chamfer alone and by
+MitCad's Chamfer: one valid closed solid each, the volume 2752/3 and the
+area 64 sqrt(3) + 192 sqrt(2) + 96 within 1e-6. On the port's tip without
+the patch both paths failed, every corner's plate not done (the case's
+known failures named mitcad#2306 until this patch). And
+geometry/tests/port/p2306-corner-of-planar-chamfers-and-reversed-solid.cpp
+(ctest geometry.port.2306): test_octahedron_chamfered_all_round_forward_solid
+and test_octahedron_chamfered_all_round_oriented_solid, the octahedron
+chamfered as a forward solid and as the reversed solid
+BRepLib::OrientClosedSolid makes of its sewn shell, one valid solid of 26
+planar faces, the volume and area exact within 1e-9;
+test_reversed_box_blended_as_the_box, a box as a reversed solid around
+its shell facing in, one edge chamfered 1 (995), a corner's three edges
+chamfered and rounded 1, valid, with the faces, volumes and areas of the
+box given forward. In the OCCT lab (DRAW's `chamf` and `blend`, the lab's
+case 2306-octahedron-chamfer) the chain without the patch fails the
+octahedron; with the corner part alone the reversed octahedron came out
+invalid with the volume 490.67 and the reversed box's results invalid
+with negative volumes; with both parts all are valid and exact. Its
+failure without the patch is still to be shown in the port's before/after
+run (mitcad#1986).
+
+## 2272
+
+[2272-brepblend-walk-ending-on-both-restrictions-takes-a-closed-guides-end-only-near-it.patch](../opencascade/2272-brepblend-walk-ending-on-both-restrictions-takes-a-closed-guides-end-only-near-it.patch)
+
+Test: geometry/tests/test_fillet_nozzle_dome_junction.cpp (ctest
+geometry.fillet_nozzle_dome_junction), test_foot_across_the_dome_edge: a
+nozzle of radius 15 on a dome that runs on into a tube, its foot across the
+circle where they meet, at four angles about the axis, rounded with 1.5 by
+the kernel's fillet alone and by MitCad's, picked by either edge of the
+foot's chain: one valid solid at the exact size without a note, the
+material added the same at every angle; and cli.fillet_nozzle_dome_reported,
+the reporter's design. Before the patch the kernel's fillet failed by the
+tube edge at every angle and by the dome edge at one (the probe run of
+mitcad#2272); with its first change alone, by the tube edge across the
+seams (bundle-dev-132). The OCCT lab case 2272-nozzle-foot-on-dome-edge
+fails without the patch (n0m, n0u by both edges, n270 by one half of its
+chain) and builds every pick with it; the lab case 2272-nozzle (the
+reporter's body before its copies' roundings, as .brep) fails without the
+patch on the original nozzle by both edges and builds every edge of all
+four feet with it. Its failure without the patch is still to be shown in
+the port's before/after run (mitcad#1986).

@@ -200,7 +200,8 @@ ui_mark
 ui_step "Create Drawing (search)"          ui_command "Create Drawing"
 ui_expect_new "Create Drawing dialog opened" "its dialog"
 ui_focus_dialog '^Create Drawing$'
-ui_step "Template: Company Logo (Alt+T, Home, Down, Down)" ui_key alt+t Home Down Down
+# The built-in ISO, ANSI and Blank (mitcad#2325) first, then the user's.
+ui_step "Template: Company Logo (Alt+T, Home, Down x3)" ui_key alt+t Home Down Down Down
 ui_step "OK"                               ui_key Return
 ui_focus_main
 ui_expect_new "Create Drawing dialog: template user:company-logo, A3, first_angle" "the user's template"

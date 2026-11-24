@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the weld symbol UI test (mitcad#2350; tools/ui-drawing-weld-test.sh): a two-member frame of the mitering test's synthetic 20 mm square profile (tools/ui-scripts/build-end-meets-profile.json, its library LIBRARY_URL replaced by the test). Upright (C1) stands at the origin, 500 long; Arm (C2), 300 long, stands with its end A on the upright's y+ side from offset 240, so it runs along +y from y = 10 at z = 240 to 260: a T joint. Drawing1 (D1, A3) has its right view at 1:5 with the frame's box in the middle at (200, 150): the model's (y, z) on the sheet at (170 + y / 5, 100 + z / 5); the arm's top edge at sheet y 152 from x 172 to 232, its bottom edge at y 148, its end on the upright's side at x 172. All geometry is synthetic."},
+  {"cmd": "build_place", "part": {"library": "test-profiles", "url": "LIBRARY_URL", "rev": "HEAD", "component": "p-slot-test"},
+   "at": {"point": [0, 0, 0]}, "length": 500, "name": "Upright"},
+  {"cmd": "build_place", "part": {"source": "S1"},
+   "at": {"occurrence": "Upright:1", "geometry": {"mount": "F1:mount(slot_y+_1)"}, "offset": 240, "from": "a"},
+   "length": 300, "name": "Arm"},
+  {"expect": {"bodies": 2}},
+  {"cmd": "add_drawing", "size": "A3"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "right", "at": [200, 150], "scale": "1:5"}
+]

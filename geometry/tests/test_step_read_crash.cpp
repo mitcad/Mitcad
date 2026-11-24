@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
   mitcad::geometry::catch_occt_crashes();
   std::filesystem::create_directories(argv[1]);
   const std::string path = (std::filesystem::path(argv[1]) / "box.step").string();
-  mitcad::io::write_step(path, {mitcad::io::Body{"Box", BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape(), std::nullopt, {}}});
+  mitcad::io::write_step(path, {mitcad::io::Body{"Box", BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape(), std::nullopt, {}, {}}});
 
   const bool bodies = fails_in_words("read_step", path, [](const std::string& p) { mitcad::io::read_step(p); });
   const bool structured = fails_in_words("read_step_structured", path, [](const std::string& p) {

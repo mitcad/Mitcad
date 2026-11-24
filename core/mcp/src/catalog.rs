@@ -122,6 +122,10 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({
                 "document": document,
                 "path": path,
+                // A URDF package (mitcad#2100).
+                "package": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "URDF: the ROS package's name (lower-case letters, digits and single underscores, starting with a letter); the file's name made one by default"},
+                "effort": {"type": "number", "exclusiveMinimum": 0, "default": 100, "description": "URDF: the effort limit of revolute (N m) and prismatic (N) joints"},
+                "velocity": {"type": "number", "exclusiveMinimum": 0, "default": 1, "description": "URDF: the velocity limit of revolute (rad/s) and prismatic (m/s) joints"},
                 "overwrite": {"type": "boolean", "default": false, "description": "Explicitly allow replacement of an existing file"}
             }),
             &["document", "path"],
@@ -138,12 +142,13 @@ pub(crate) fn tools() -> Vec<Value> {
                  Drawings: {EXPORT_DRAWING} (sheet, orientation, scale, projection, views, section, hidden_lines, ...; model_reference {{\"section\": \"Drawings\"}}).\n\
                  {EXPORT_3MF}\n\
                  USDZ: animation writes a mechanism's motion as time-sampled placements (poses per occurrence or body, or a motion study; model_reference {{\"section\": \"Animated USDZ\"}}).\n\
+                 URDF: a ROS 2 package folder beside path (links, joints, an STL per body; package, effort, velocity; model_reference {{\"section\": \"URDF\"}}).\n\
                  {EXPORT_RESULT}"
             ),
             json!({
                 "document": document,
                 "path": path,
-                "format": {"type": "string", "enum": ["step", "iges", "brep", "stl", "obj", "3mf", "usdz", "dxf", "pdf", "svg"]},
+                "format": {"type": "string", "enum": ["step", "iges", "brep", "stl", "obj", "3mf", "usdz", "urdf", "dxf", "pdf", "svg"]},
                 "bodies": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS}, "description": "Optional body identities, for example F7.b0"},
                 "sketch": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "Sketch feature identity for DXF, for example F2"},
                 "construction": {"type": "boolean", "default": false, "description": "With sketch: also write its construction curves and center lines, on the layer construction (left out by default)"},
@@ -192,7 +197,7 @@ pub(crate) fn tools() -> Vec<Value> {
 // model_export's description in labelled lines (mitcad#1897), the lines
 // both servers share.
 const EXPORT_FILES: &str = "Files: an existing file is replaced only with overwrite: true (each file the export writes, checked before any is written).";
-const EXPORT_MESH: &str = "refinement sets the mesh of STL, OBJ, 3MF and USDZ (low, medium by default, high, or {\"deviation\": mm, \"angle\": radians}; model_reference {\"section\": \"Mesh refinement\"}).";
+const EXPORT_MESH: &str = "refinement sets the mesh of STL, OBJ, 3MF, USDZ and URDF (low, medium by default, high, or {\"deviation\": mm, \"angle\": radians}; model_reference {\"section\": \"Mesh refinement\"}).";
 const EXPORT_DXF: &str = "DXF: a sketch handle, or a sheet-metal body whose Flat Pattern is written, instead of bodies, unless drawing or cut_sheet is given; cut_sheet writes a cut sheet kept in the design (DXF or SVG at 1:1; model_reference {\"section\": \"Cut sheets\"}).";
 const EXPORT_DRAWING: &str = "PDF and SVG (and DXF with drawing) draw the bodies: views with hidden lines removed, overall dimensions, hole diameters, a hole table and a title block; drawing holds the export_drawing options";
 const EXPORT_3MF: &str = "3MF for a slicer: plates writes the design's print plates (one_file: every plate in one file, for Bambu Studio, OrcaSlicer, QIDI Studio and PrusaSlicer 2.9+; file_per_plate: a file per plate beside path, for Cura and older PrusaSlicer; model_reference {\"section\": \"Print plates\"}), plate one of them, dialect the slicer whose settings go with the bodies (bambu_studio, orcaslicer, qidi_studio, prusaslicer, cura); on_bed, center, drop, auto_orient, bed_face and spacing lay the pieces on the print bed (also STL and OBJ; model_reference {\"section\": \"Print bed faces\"}), occurrences and whole pick placements.";

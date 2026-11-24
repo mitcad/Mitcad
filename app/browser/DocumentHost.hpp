@@ -242,6 +242,11 @@ public:
   // body among them), empty when it can.
   virtual void saveAsMesh(const Selection& /*items*/) {}
   virtual QString saveAsMeshBlocked(const Selection& /*items*/) const { return {}; }
+  // Export… (mitcad#2298): File › Export's dialog with the bodies of the
+  // items (as Save As Mesh takes them) as its selected bodies; why it
+  // cannot (they stand for no body), empty when it can.
+  virtual void exportItems(const Selection& /*items*/) {}
+  virtual QString exportBlocked(const Selection& /*items*/) const { return {}; }
   // Save Component as Design (mitcad#1057): a component (uid, its name)
   // written as a design file the user chooses.
   virtual void saveComponentAsDesign(const QString& /*component*/, const QString& /*name*/) {}
@@ -314,6 +319,12 @@ public:
   // Choose Linked Parts… (mitcad#2130) of a linked component (a uid): the
   // parts of its design it holds, chosen again as one undo step.
   virtual void chooseLinkedParts(const QString& /*component*/) {}
+  // Edit in Place (mitcad#2321) of a linked component (a uid): its design
+  // edited inside this one; Finish Edit in Place, and whether the window
+  // edits a design in place now.
+  virtual void editInPlace(const QString& /*component*/) {}
+  virtual void finishEditInPlace() {}
+  virtual bool editingInPlace() const { return false; }
 
   // CAM (mitcad#1013, cam/MainWindowCam.cpp): a setup or an operation (by
   // id) edited in its panel; a setup's toolpaths generated, simulated or
@@ -335,6 +346,14 @@ public:
   // Point clouds (mitcad#2240, MainWindowPointClouds.cpp): one moved in
   // Move Point Cloud's panel, from the Browser's Point Clouds.
   virtual void movePointCloud(const QString& /*name*/) {}
+
+  // Exploded views (mitcad#2113, MainWindowExplode.cpp): a view opened in
+  // the Explode panel (a new one when `name` is empty); a view shown
+  // exploded in the 3D view (empty: the design assembled again); the one
+  // shown (empty: none).
+  virtual void openExplodeView(const QString& /*name*/) {}
+  virtual void showExplodeView(const QString& /*name*/) {}
+  virtual QString shownExplodeView() const { return QString(); }
 };
 
 } // namespace mitcad

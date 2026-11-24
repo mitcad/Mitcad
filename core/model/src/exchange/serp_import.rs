@@ -205,6 +205,7 @@ fn plan<K: Kernel>(kernel: &K, serp: &Serp, source: &str) -> Plan<K::Shape> {
             name: o.name.clone(),
             color: serp.color(o),
             shape,
+            face_colors: Vec::new(),
         },
         folder: o.layer.map(|l| serp.layer_path(l)),
         hidden: !serp.shown(o),
@@ -295,6 +296,7 @@ fn plan<K: Kernel>(kernel: &K, serp: &Serp, source: &str) -> Plan<K::Shape> {
                 }),
                 color,
                 shape,
+                face_colors: Vec::new(),
             })
             .collect();
         blocks.push(PlannedBlock {

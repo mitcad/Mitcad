@@ -53,6 +53,11 @@ struct BodyItem {
   bool inPlane = true;
   double height = 0.0;
   std::vector<Lifted> path;
+  // A curve where the sketch plane cuts a body (mitcad#2324, the query's
+  // `section` form): `source` is the face it lies on, projected as that
+  // face's section (`sketch.project` with `section`), of whose curves the
+  // one where this is is taken.
+  bool section = false;
 
   bool isVertex() const { return type == QStringLiteral("vertex"); }
   // What projects to a point: a vertex, or an edge seen end on.
@@ -61,7 +66,8 @@ struct BodyItem {
   bool hasMiddle() const { return type == QStringLiteral("line") || type == QStringLiteral("arc"); }
   // Circles and arcs have a centre to pick.
   bool hasCenter() const { return type == QStringLiteral("circle") || type == QStringLiteral("arc"); }
-  // "the body vertex V{…}" / "the body edge E{…}" for hints and logs.
+  // "the body vertex V{…}" / "the body edge E{…}" / "the section of the
+  // body face F…" for hints and logs.
   QString describe() const;
 };
 
@@ -119,7 +125,8 @@ private:
 bool sameCurve(const Curve2& a, const Curve2& b, double tolerance);
 
 // The entities of a linked projection the sketch already has of the item's
-// source (the same name, body and occurrence) when they still match it:
+// source (the same name, body and occurrence; a section of the face for a
+// section item, mitcad#2324, a projection otherwise) when they still match it:
 // the projection follows its source and its point or curve is where the
 // item is (mitcad#256 rule 5, mitcad#258 rule 3). None otherwise.
 std::optional<ProjectedItem> existingProjection(const SketchModel& model, const BodyItem& item);

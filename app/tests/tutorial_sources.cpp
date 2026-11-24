@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // The in-app tutorials' sources (mitcad#2012, tutorials/TutorialSources):
 // the public repository by default, sources added once per repository and
-// read back, an installed tutorial's record of where it came from, and the
-// versions a tutorial's oldest MitCad is compared by.
+// read back, an installed tutorial's record of where it came from, the
+// versions a tutorial's oldest MitCad is compared by; a tutorial's progress
+// and the Start page's list of tutorials (mitcad#2346).
 #include "UnitTests.hpp"
 #include "tutorials/TutorialSources.hpp"
 
@@ -11,6 +12,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QSettings>
 #include <QTemporaryDir>
 
@@ -70,6 +73,86 @@ void versionTests() {
   CHECK(compareVersions(QStringLiteral("1.0"), QStringLiteral("0.99.9")) > 0);
 }
 
+// A tutorial's progress (mitcad#2346): none at first, a step of how many
+// read back, done, forgotten; the bridge's set_progress arguments taken or
+// refused; the log's words.
+void progressTests() {
+  const QString id = QStringLiteral("sketch-extrude");
+  forgetTutorialProgress(id);
+  CHECK(loadTutorialProgress(id).state == TutorialProgress::State::NotStarted);
+  CHECK(loadTutorialProgress(id).words() == QStringLiteral("not started"));
+  TutorialProgress progress;
+  QString error;
+  CHECK(tutorialProgressFromCall(QJsonObject{{QStringLiteral("step"), 3}, {QStringLiteral("steps"), 8}}, &progress,
+                                 &error));
+  CHECK(progress.state == TutorialProgress::State::InProgress && progress.step == 3 && progress.steps == 8);
+  saveTutorialProgress(id, progress);
+  CHECK(loadTutorialProgress(id) == progress);
+  CHECK(loadTutorialProgress(id).words() == QStringLiteral("in progress (step 3 of 8)"));
+  CHECK(loadTutorialProgress(id).toJson() == (QJsonObject{{QStringLiteral("state"), QStringLiteral("in_progress")},
+                                                          {QStringLiteral("step"), 3},
+                                                          {QStringLiteral("steps"), 8}}));
+  // Another tutorial's progress is its own.
+  CHECK(loadTutorialProgress(QStringLiteral("other")).state == TutorialProgress::State::NotStarted);
+  // A step without the count.
+  CHECK(tutorialProgressFromCall(QJsonObject{{QStringLiteral("step"), 2}}, &progress, &error));
+  CHECK(progress.words() == QStringLiteral("in progress (step 2)"));
+  CHECK(tutorialProgressFromCall(QJsonObject{{QStringLiteral("done"), true}}, &progress, &error));
+  saveTutorialProgress(id, progress);
+  CHECK(loadTutorialProgress(id).state == TutorialProgress::State::Done);
+  CHECK(loadTutorialProgress(id).words() == QStringLiteral("done"));
+  forgetTutorialProgress(id);
+  CHECK(loadTutorialProgress(id).state == TutorialProgress::State::NotStarted);
+  // Wrong arguments: no step, step 0, past the count, not whole.
+  for (const QJsonObject& wrong :
+       {QJsonObject{}, QJsonObject{{QStringLiteral("step"), 0}},
+        QJsonObject{{QStringLiteral("step"), 9}, {QStringLiteral("steps"), 8}},
+        QJsonObject{{QStringLiteral("step"), 2.5}}, QJsonObject{{QStringLiteral("step"), QStringLiteral("3")}},
+        QJsonObject{{QStringLiteral("done"), false}}}) {
+    error.clear();
+    CHECK(!tutorialProgressFromCall(wrong, &progress, &error));
+    CHECK(!error.isEmpty());
+  }
+}
+
+// The Start page's list (mitcad#2346): the sources in the settings' order,
+// each source's tutorials as the model ordered them, one tutorial per id;
+// the languages by their base; the UI's language first when a tutorial is
+// in it, else all.
+void listingTests() {
+  const auto tutorial = [](const char* id, const char* language) {
+    return QJsonObject{{QStringLiteral("id"), QLatin1String(id)}, {QStringLiteral("language"), QLatin1String(language)}};
+  };
+  const QJsonArray sources{
+      QJsonObject{{QStringLiteral("url"), QStringLiteral("/courses/own")},
+                  {QStringLiteral("name"), QStringLiteral("Own")},
+                  {QStringLiteral("rev"), QStringLiteral("0123")},
+                  {QStringLiteral("tutorials"), QJsonArray{tutorial("own-first", "fi"), tutorial("shared", "fi")}}},
+      QJsonObject{{QStringLiteral("url"), QStringLiteral("https://github.com/mitcad/tutorials.git")},
+                  {QStringLiteral("name"), QStringLiteral("MitCad tutorials")},
+                  {QStringLiteral("rev"), QStringLiteral("4567")},
+                  {QStringLiteral("tutorials"),
+                   QJsonArray{tutorial("part-one", "en"), tutorial("part-two", "pt-BR"), tutorial("shared", "en")}}}};
+  const QList<ListedTutorial> listed = listedTutorials(
+      sources, {QStringLiteral("https://www.github.com/mitcad/tutorials"), QStringLiteral("/courses/own")});
+  QStringList ids;
+  for (const ListedTutorial& entry : listed) {
+    ids << entry.id();
+  }
+  CHECK(ids == (QStringList{QStringLiteral("part-one"), QStringLiteral("part-two"), QStringLiteral("shared"),
+                            QStringLiteral("own-first")}));
+  CHECK(listed.at(0).source == QStringLiteral("MitCad tutorials") && listed.at(0).rev == QStringLiteral("4567"));
+  CHECK(listed.at(3).url == QStringLiteral("/courses/own"));
+  const QStringList languages = tutorialLanguages(listed);
+  CHECK(languages == (QStringList{QStringLiteral("en"), QStringLiteral("fi"), QStringLiteral("pt")}));
+  CHECK(defaultTutorialLanguage(languages, QStringLiteral("fi")) == QStringLiteral("fi"));
+  CHECK(defaultTutorialLanguage(languages, QStringLiteral("pt-BR")) == QStringLiteral("pt"));
+  CHECK(defaultTutorialLanguage(languages, QStringLiteral("sv")).isEmpty());
+  CHECK(tutorialInLanguage(QStringLiteral("pt-BR"), QStringLiteral("pt")));
+  CHECK(tutorialInLanguage(QStringLiteral("en"), QString()));
+  CHECK(!tutorialInLanguage(QStringLiteral("en"), QStringLiteral("fi")));
+}
+
 } // namespace
 
 int tutorialSourcesTests() {
@@ -87,6 +170,8 @@ int tutorialSourcesTests() {
   settingsTests();
   installedTests();
   versionTests();
+  progressTests();
+  listingTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

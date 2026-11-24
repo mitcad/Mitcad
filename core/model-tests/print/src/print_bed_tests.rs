@@ -647,6 +647,7 @@ fn a_surface_body_has_no_print_bed_face() {
         name: Some("Surface".to_owned()),
         color: None,
         shape: MockShape::imported("sheet", 4),
+        face_colors: Vec::new(),
     };
     let added = doc.add_base_feature(BaseInput::new(vec![sheet])).unwrap();
     let surface = added.bodies[0].uid;

@@ -260,6 +260,7 @@ impl Kernel for GeoKernel {
                 color: b.color,
                 shape: &b.shape.mock,
                 placements: b.placements,
+                face_colors: b.face_colors,
             })
             .collect();
         self.mock.write_file(path, &mocks, options)

@@ -285,3 +285,30 @@ fn process_profiles_name_the_layers() {
     assert_eq!(on(&back, CUT_INNER).len(), inner + 2);
     assert!(on(&back, "SCORE").is_empty());
 }
+
+#[test]
+fn every_process_writes_a_file_strict_readers_take() {
+    // mitcad#2315: a strict reader refused a Flat Pattern's R2000 file that
+    // MitCad's own reader took; the structure check holds the written text
+    // to the DXF reference, for each process, direction and unit.
+    for process in SheetProcess::ALL {
+        for direction in ["up", "down"] {
+            for unit in [LengthUnit::Millimetre, LengthUnit::Inch] {
+                let (regions, bends) = developed(direction);
+                let options = FlatDxfOptions {
+                    unit,
+                    tangents: true,
+                    process,
+                };
+                let flat = drawing(&regions, &bends, &options).unwrap();
+                let text =
+                    mitcad_dxf::write_string(&flat, &mitcad_dxf::WriteOptions::default()).unwrap();
+                let problems = mitcad_dxf::check_r2000(&text);
+                assert!(
+                    problems.is_empty(),
+                    "{process:?} {direction}: {problems:#?}"
+                );
+            }
+        }
+    }
+}

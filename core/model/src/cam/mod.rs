@@ -282,6 +282,69 @@ pub struct CamTool {
     /// Default speeds and feeds of the operations that use it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cutting: Option<Cutting>,
+    /// A milling tool on a lathe's turret is a live tool (mitcad#2067):
+    /// its holder along the spindle (axial, cutting the face) or across it
+    /// (radial, cutting the diameter); axial when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<LiveMount>,
+}
+
+/// How a live tool sits on a lathe's turret (mitcad#2067).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveMount {
+    /// Along the spindle axis: it mills and drills the part's face.
+    #[default]
+    Axial,
+    /// Across the spindle axis: it mills and drills the diameter.
+    Radial,
+    /// In a milling head that tilts about Y (a B axis, mitcad#2319): it
+    /// cuts the face, the diameter, planes and tilted planes.
+    Head,
+}
+
+/// Where a milling operation in a lathe setup cuts with its live tool
+/// (mitcad#2067).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LivePlace {
+    /// On the part's face, with the C axis interpolating (polar) or
+    /// indexed (drilling).
+    #[default]
+    Face,
+    /// On the diameter, with the C axis interpolating (cylindrical) or
+    /// indexed (drilling). Faces round the spindle axis, or sketch
+    /// geometry wrapped onto the diameter (mitcad#2319).
+    Diameter,
+    /// On a plane with the Y axis, the C axis clamped (mitcad#2319): the
+    /// face off the spindle axis, a flat across it, or a plane tilted by a
+    /// B head, as the operation's plane angles or its inputs give it.
+    Plane,
+}
+
+/// Whether a tool goes into a machine's library: lathe tools on a lathe,
+/// milling tools on a mill (mitcad#1869), and on a lathe with a C axis and
+/// live tools milling tools too, as its live tools on stations 1 to 99
+/// (mitcad#2067); a live holder only on such a lathe.
+pub fn tool_fits(tool: &CamTool, m: &Machine) -> Result<(), String> {
+    let n = tool.number;
+    match &m.lathe {
+        None if tool.shape.is_turning() => {
+            Err(format!("The machine {} takes milling tools only.", m.name))
+        }
+        None if tool.mount.is_some() => Err(format!(
+            "Tool {n} sits in a live tool's holder, which only a lathe's turret has."
+        )),
+        None => Ok(()),
+        Some(_) if tool.shape.is_turning() => Ok(()),
+        Some(lathe) if !lathe.mills() => {
+            Err(format!("The lathe {} takes lathe tools only.", m.name))
+        }
+        Some(_) if n > 99 => Err(format!(
+            "Tool {n} is a live tool: its number is its turret station, 1 to 99."
+        )),
+        Some(_) => Ok(()),
+    }
 }
 
 /// A number without trailing zeros, for names.
@@ -400,6 +463,11 @@ impl CamTool {
         if self.shape.is_turning() && n > 99 {
             return Err(format!(
                 "Tool {n} is a lathe tool: its number is its turret station, 1 to 99."
+            ));
+        }
+        if self.shape.is_turning() && self.mount.is_some() {
+            return Err(format!(
+                "Tool {n} is a lathe tool: only milling tools and drills sit in a live tool's holder."
             ));
         }
         if let Some(cutting) = &self.cutting {
@@ -609,17 +677,8 @@ impl CamMachine {
             l.validate()
                 .map_err(|e| format!("The machine {}: {e}", m.name))?;
         }
-        if self
-            .tools
-            .tools
-            .iter()
-            .any(|t| t.shape.is_turning() != lathe)
-        {
-            return Err(if lathe {
-                format!("The lathe {} takes lathe tools only.", m.name)
-            } else {
-                format!("The machine {} takes milling tools only.", m.name)
-            });
+        for tool in &self.tools.tools {
+            tool_fits(tool, m)?;
         }
         if !(m.spindle.min_rpm >= 0.0 && m.spindle.max_rpm >= m.spindle.min_rpm) {
             return Err(format!(
@@ -911,10 +970,35 @@ pub struct LatheSetup {
     /// towards the chuck), for the lathe check; unchecked when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chuck_gap: Option<CamValue>,
+    /// The sub-spindle takes the part over before the operations on its
+    /// back (mitcad#2319); none: the program stays on the main spindle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand_over: Option<HandOverSetup>,
+}
+
+/// The sub-spindle's hand-over of a lathe setup (mitcad#2319), each value
+/// its default when left out: the sub-spindle grips the part 10 mm from
+/// its back (the work Z where its jaws' face comes to), pulls it 50 mm
+/// back, the spindles synchronised at 500 rpm, the sub-spindle coming up at
+/// 1000 mm/min, its work offset G55.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HandOverSetup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grip_z: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withdraw: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed: Option<CamValue>,
+    /// 1 to 6 for G54 to G59.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_offset: Option<u8>,
 }
 
 impl LatheSetup {
     fn values(&self) -> Vec<&CamValue> {
+        let hand_over = self.hand_over.as_ref();
         [
             &self.stock_bore,
             &self.change_diameter,
@@ -923,10 +1007,16 @@ impl LatheSetup {
         ]
         .into_iter()
         .flatten()
+        .chain(hand_over.into_iter().flat_map(|h| {
+            [&h.grip_z, &h.withdraw, &h.rpm, &h.feed]
+                .into_iter()
+                .flatten()
+        }))
         .collect()
     }
 
     fn values_mut(&mut self) -> Vec<&mut CamValue> {
+        let hand_over = self.hand_over.as_mut();
         [
             &mut self.stock_bore,
             &mut self.change_diameter,
@@ -935,6 +1025,11 @@ impl LatheSetup {
         ]
         .into_iter()
         .flatten()
+        .chain(hand_over.into_iter().flat_map(|h| {
+            [&mut h.grip_z, &mut h.withdraw, &mut h.rpm, &mut h.feed]
+                .into_iter()
+                .flatten()
+        }))
         .collect()
     }
 }
@@ -1165,6 +1260,19 @@ impl OperationKind {
         )
     }
 
+    /// Whether a live tool on a lathe cuts it (mitcad#2067): facing,
+    /// contours, pockets, adaptive clearing and drilling.
+    pub fn cuts_live(&self) -> bool {
+        matches!(
+            self,
+            OperationKind::Facing
+                | OperationKind::Contour { .. }
+                | OperationKind::Pocket
+                | OperationKind::Adaptive
+                | OperationKind::Drill { .. }
+        )
+    }
+
     /// The default name, before its number: `Pocket 2`.
     pub fn words(&self) -> &'static str {
         match self {
@@ -1316,6 +1424,31 @@ pub struct CamOperation {
     /// A turning operation's speeds, feeds and depths (mitcad#1869).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turning: Option<TurningInput>,
+    /// Where a milling operation in a lathe setup cuts with its live tool
+    /// (mitcad#2067): on the face when left out. On the diameter its top,
+    /// bottom, clearance and retract are diameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<LivePlace>,
+    /// On a plane (mitcad#2319): the C axis's angle and the tool's tilt
+    /// (degrees), each from the inputs when left out (a planar face's
+    /// normal, a hole's axis).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plane: Option<LivePlaneAngles>,
+    /// A turning operation on the sub-spindle, after the setup's hand-over
+    /// (mitcad#2319): it turns the part's back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sub_spindle: bool,
+}
+
+/// The angles of a live tool's plane (mitcad#2319): `c` the C axis's
+/// (from the work X towards the work Y), `b` the tool's tilt from the
+/// spindle axis (0 the face, 90 a flat across it).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LivePlaneAngles {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub b: Option<CamValue>,
 }
 
 /// A turning operation's values (mitcad#1869), each the operation's
@@ -1427,6 +1560,15 @@ impl CamOperation {
                 }
             }
         }
+        // A live tool's plane (mitcad#2319).
+        if let Some(plane) = &self.plane {
+            out.extend(
+                [&plane.c, &plane.b]
+                    .into_iter()
+                    .flatten()
+                    .map(|v| (v, Angle)),
+            );
+        }
         out
     }
 
@@ -1510,6 +1652,15 @@ impl CamOperation {
                     out.push((value, kind));
                 }
             }
+        }
+        // A live tool's plane (mitcad#2319).
+        if let Some(plane) = &mut self.plane {
+            out.extend(
+                [&mut plane.c, &mut plane.b]
+                    .into_iter()
+                    .flatten()
+                    .map(|v| (v, Angle)),
+            );
         }
         out
     }
@@ -1824,7 +1975,56 @@ pub fn check_operation(op: &CamOperation) -> Result<(), String> {
                     .to_owned(),
             );
         }
+        if op.live.is_some() || op.plane.is_some() {
+            return Err("A turning operation turns: it has no live tool's place.".to_owned());
+        }
         return Ok(());
+    }
+    // The sub-spindle turns the part's back (mitcad#2319).
+    if op.sub_spindle {
+        return Err(
+            "Only turning operations turn the part's back on the sub-spindle; live tools cut on the main spindle."
+                .to_owned(),
+        );
+    }
+    if op.plane.is_some() && op.live != Some(LivePlace::Plane) {
+        return Err("Plane angles are for a live tool on a plane.".to_owned());
+    }
+    // A live tool's place on a lathe (mitcad#2067).
+    if let Some(place) = op.live {
+        if !op.kind.cuts_live() {
+            return Err(
+                "Live tools face, contour, pocket, clear adaptively and drill; the other operations do not cut with them."
+                    .to_owned(),
+            );
+        }
+        if place == LivePlace::Diameter {
+            let drill = matches!(op.kind, OperationKind::Drill { .. });
+            if matches!(op.kind, OperationKind::Facing) {
+                return Err(
+                    "A live tool faces the part's face: on the diameter, contour or pocket the faces round the spindle axis."
+                        .to_owned(),
+                );
+            }
+            // Faces round the axis, or a sketch's profiles and curves
+            // wrapped onto the diameter (mitcad#2319).
+            let fits = |i: &CamInput| {
+                if drill {
+                    matches!(i, CamInput::Point { .. })
+                } else {
+                    matches!(
+                        i,
+                        CamInput::Face { .. } | CamInput::Region { .. } | CamInput::Curves { .. }
+                    )
+                }
+            };
+            if !op.inputs.iter().all(fits) {
+                return Err(
+                    "On the diameter a live tool mills the faces round the spindle axis or the sketch geometry wrapped onto it, and drills holes at points."
+                        .to_owned(),
+                );
+            }
+        }
     }
     // The 3-axis operations read bodies and a boundary of faces or
     // profiles; only they read bodies.
@@ -2015,6 +2215,15 @@ pub struct CamOperationInput {
     /// A turning operation's values (mitcad#1869); null clears them.
     #[serde(default, deserialize_with = "double")]
     pub turning: Option<Option<TurningInput>>,
+    /// Where a live tool cuts on a lathe (mitcad#2067); null: the face.
+    #[serde(default, deserialize_with = "double")]
+    pub live: Option<Option<LivePlace>>,
+    /// A live tool's plane angles (mitcad#2319); null: from the inputs.
+    #[serde(default, deserialize_with = "double")]
+    pub plane: Option<Option<LivePlaneAngles>>,
+    /// A turning operation on the sub-spindle (mitcad#2319).
+    #[serde(default)]
+    pub sub_spindle: Option<bool>,
 }
 
 impl CamOperationInput {
@@ -2071,6 +2280,15 @@ impl CamOperationInput {
         if let Some(turning) = self.turning {
             op.turning = turning;
         }
+        if let Some(live) = self.live {
+            op.live = live;
+        }
+        if let Some(plane) = self.plane {
+            op.plane = plane;
+        }
+        if let Some(sub) = self.sub_spindle {
+            op.sub_spindle = sub;
+        }
     }
 }
 
@@ -2098,6 +2316,9 @@ pub struct CamToolInput {
     pub holder: Option<String>,
     #[serde(default)]
     pub cutting: Option<CuttingValues>,
+    /// A live tool's holder on a lathe (mitcad#2067).
+    #[serde(default)]
+    pub mount: Option<LiveMount>,
 }
 
 /// A tool's kind with its values as [`CamValue`]s.
@@ -2256,6 +2477,7 @@ impl CamToolInput {
                 .filter(|h| !h.is_empty())
                 .map(str::to_owned),
             cutting,
+            mount: self.mount,
         };
         if tool.name.is_empty() {
             tool.name = tool.default_name();

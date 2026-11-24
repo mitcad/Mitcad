@@ -25,3 +25,5 @@ mitcad-zip = { path = "../../zip" }
 mitcad-gltf = { path = "../../gltf" }
 # .serp test files written for the import (mitcad#1870).
 mitcad-serp = { path = "../../serp" }
+# The URDF files of the export, read back (mitcad#2100).
+roxmltree = "0.20.0"

@@ -4,6 +4,7 @@
 # check-all sources: core/import-base/src/report_status.rs core/import-replay/src/report.rs core/ffi/src/lib.rs
 # check-all sources: core/ffi/src/ipt_import.rs core/ffi/src/iam_import.rs core/ipt core/tests
 # check-all sources: tools/ui-scripts/import-report-status.mitcad-ui tools/ui-scripts/import-report-status-iam.mitcad-ui
+# check-all sources: tools/ui-scripts/import-report-fits.mitcad-ui app/files/F3dImport.cpp app/files/ImportItemProgress.cpp
 # The Import Report's status on every row and its one-line verdict
 # (mitcad#1893) through the real UI, the shared input scripts
 # tools/ui-scripts/import-report-status.mitcad-ui and
@@ -17,7 +18,11 @@
 #      no error rows, then all three again;
 #   2. --open of top.iam (--write-iam), one of whose files is missing: the
 #      verdict says one file could not be imported, that file's row is an
-#      error; the filter shows it alone.
+#      error; the filter shows it alone; the progress's number never
+#      goes back (mitcad#2331);
+#   3. designed.ipt again with 150 test warnings
+#      (MITCAD_TEST_IMPORT_REPORT_WARNINGS, import-report-fits.mitcad-ui):
+#      the report stays within the screen and scrolls (mitcad#2331).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-import-report-status-test.sh
@@ -58,4 +63,17 @@ MITCAD_TEST_INPUT=$here/ui-scripts/import-report-status-iam.mitcad-ui \
 wait_driver 'the assembly'
 ui_expect_log 'TestDriver: done' 'top.iam: one file could not be imported, its row an error, the filter'
 grep -E '^Import report (verdict|row): top\.iam: ' "$UI_LOG" | sed 's/^/     /'
+# The progress's number never goes back (mitcad#2331).
+grep -E '^Import progress: ' "$UI_LOG" | sed 's/^/     /'
+if grep -E '^Import progress: ' "$UI_LOG" | awk '{ n = $(NF - 2) + 0; if (n < last) bad = 1; last = n } END { exit bad }'; then
+  echo "ok   top.iam: the progress's number never goes back"
+else
+  ui_fail "top.iam: the progress's number went back"
+fi
+
+MITCAD_TEST_INPUT=$here/ui-scripts/import-report-fits.mitcad-ui MITCAD_TEST_IMPORT_REPORT_WARNINGS=150 \
+  ui_start_app --ui=qt --no-mcp --no-native-dialogs --open "$work/designed.ipt"
+wait_driver 'the long report'
+ui_expect_log 'TestDriver: done' 'designed.ipt with 150 warnings: within the screen, it scrolls, the filter'
+grep -E '^Import report size: designed\.ipt: ' "$UI_LOG" | sed 's/^/     /'
 ui_finish 'UI the Import Report: a status per row and a verdict'

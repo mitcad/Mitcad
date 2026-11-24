@@ -82,7 +82,8 @@ pub(super) struct SaveTemplateCommand {
 
 /// `edit_drawing_title_block` (mitcad#1625): a sheet's title block as the
 /// title block editor leaves it, its lines, fields and images, stored in
-/// the sheet's copy of its template.
+/// the sheet's copy of its template; and whether the template draws its
+/// frame and its title block (mitcad#2325), as they are when left out.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TitleBlockCommand {
@@ -90,6 +91,10 @@ pub(super) struct TitleBlockCommand {
     #[serde(default)]
     sheet: usize,
     title_block: BlockLayout,
+    #[serde(default)]
+    show_frame: Option<bool>,
+    #[serde(default)]
+    show_title_block: Option<bool>,
 }
 
 /// The `drawing_templates` query.
@@ -101,7 +106,8 @@ pub(super) struct TemplatesQuery {
     project: Option<String>,
 }
 
-/// A template a command chooses: a built-in one by its id (`iso`, `ansi`),
+/// A template a command chooses: a built-in one by its id (`iso`, `ansi`,
+/// `blank`: mitcad#2325),
 /// a template's data (as `drawing_templates` lists it: a user's or a
 /// project's), or `""` for the simple title block.
 pub(super) fn template_choice(value: &Value) -> Result<Option<SheetTemplate>, ApiError> {
@@ -114,7 +120,7 @@ pub(super) fn template_choice(value: &Value) -> Result<Option<SheetTemplate>, Ap
             .map(Some)
             .ok_or_else(|| {
                 ApiError(format!(
-                    "there is no built-in template {id}: iso or ansi (a user's or a \
+                    "there is no built-in template {id}: iso, ansi or blank (a user's or a \
                      project's is given as its data, as drawing_templates lists it)"
                 ))
             }),
@@ -131,9 +137,11 @@ pub(super) fn template_choice(value: &Value) -> Result<Option<SheetTemplate>, Ap
 }
 
 /// A sheet's title block fields as drawn, each `{"label", "text"}`: a
-/// template's, or the simple block's.
+/// template's (none when it draws no title block, mitcad#2325), or the
+/// simple block's.
 pub(super) fn title_fields(info: &TitleInfo) -> Vec<Value> {
     match &info.template {
+        Some(filled) if !filled.template.show_title_block => Vec::new(),
         Some(filled) => filled
             .template
             .title_block
@@ -241,7 +249,10 @@ pub(super) trait DrawingTemplatesOps<K: Kernel> {
 
     /// Stores a sheet's title block as edited on the sheet (mitcad#1625):
     /// in its template's copy, or in a copy of the ISO template's frame
-    /// for a sheet of the simple title block.
+    /// for a sheet of the simple title block; with the template's
+    /// `show_frame` and `show_title_block` when given (mitcad#2325). A
+    /// sheet without a title block is refused unless the command puts it
+    /// back.
     fn edit_drawing_title_block(&mut self, c: TitleBlockCommand) -> Result<Value, ApiError>;
 }
 
@@ -451,7 +462,22 @@ impl<K: Kernel> DrawingTemplatesOps<K> for Document<K> {
             .get_mut(c.sheet)
             .ok_or_else(|| ApiError(format!("{} has no sheet {}", old.name, c.sheet)))?;
         let mut t = editable_template(sheet);
+        // A sheet whose template draws no title block has none to edit,
+        // unless the command puts it back (mitcad#2325).
+        if !t.show_title_block && c.show_title_block.is_none() {
+            return Err(ApiError(format!(
+                "{} of {} has no title block: its template {} leaves it out \
+                 (show_title_block true puts it back)",
+                sheet.name, old.name, t.name
+            )));
+        }
         t.title_block = c.title_block;
+        if let Some(shown) = c.show_frame {
+            t.show_frame = shown;
+        }
+        if let Some(shown) = c.show_title_block {
+            t.show_title_block = shown;
+        }
         t.check().map_err(ApiError)?;
         let (width, height) = sheet.dimensions();
         t.fits(width, height).map_err(ApiError)?;

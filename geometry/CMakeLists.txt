@@ -434,6 +434,13 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/full_round.cpp
   src/full_round.hpp)
+
+# Fillets and chamfers of a straight edge ending on a flat face of a
+# rounded body smaller than their section: refused in words where they are
+# wider than the body there (mitcad#2229).
+target_sources(mitcad_geometry PRIVATE
+  src/end_face_dressup.cpp
+  src/end_face_dressup.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1751,4 +1758,66 @@ if(BUILD_TESTING)
   target_link_libraries(test_fillet_full_round PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_full_round COMMAND test_fillet_full_round)
   set_tests_properties(geometry.fillet_full_round PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # A wave-shaped band's top edge rounded wider than its crests bend
+  # (mitcad#2228): through MitCad's fillet at 2.5, 3, 5 and 8.5 one valid
+  # solid each, the twisted walk across each crest filled between the
+  # untwisted ones (OCCT port patch 2228); both top edges at 3 and 5.
+  # `--probe` traces OCCT's own fillet at each radius.
+  add_executable(test_fillet_wave_crests tests/test_fillet_wave_crests.cpp)
+  target_link_libraries(test_fillet_wave_crests PRIVATE mitcad_geometry mitcad_geometry_io mitcad_warnings)
+  add_test(NAME geometry.fillet_wave_crests COMMAND test_fillet_wave_crests)
+  set_tests_properties(geometry.fillet_wave_crests PROPERTIES TIMEOUT 600)
+  # A probe, not registered as a test (mitcad#2229): OCCT's own chamfer and
+  # fillet of the back's bottom edge of the stepped block rounded by 5 on
+  # eleven edges, whose ends lie on a flat face smaller than the blend's
+  # section: where OCCT stops or how its result differs from the exact
+  # shape, for the port patch of the blend's end.
+  add_executable(test_probe_end_face_dressup tests/probe_end_face_dressup.cpp)
+  target_link_libraries(test_probe_end_face_dressup PRIVATE mitcad_geometry mitcad_warnings)
+endif()
+
+if(BUILD_TESTING)
+  # The reported volume and area of lofts with Tangent Edges Merge (one
+  # side face on a periodic surface joined C1) and of their 2 mm shells
+  # against OCCT's Gauss-Kronrod integration of a copy split at its C1 lines
+  # within 1e-4 and a mesh of 5e-3 mm within 5e-3 (mitcad#2309): circles
+  # to slots, the owner's among them, and a circle to a spline outline. One
+  # ctest per loft, each prints what its measures cost.
+  add_executable(test_merged_loft_volumes tests/test_merged_loft_volumes.cpp)
+  target_link_libraries(test_merged_loft_volumes PRIVATE mitcad_geometry mitcad_geometry_analysis TKMesh
+    mitcad_warnings)
+  foreach(part IN ITEMS circle_slot_r50 circle_slot_r30 circle_spline circle_slot_owner)
+    add_test(NAME geometry.merged_loft_volumes.${part} COMMAND test_merged_loft_volumes ${part})
+    set_tests_properties(geometry.merged_loft_volumes.${part} PROPERTIES TIMEOUT 300)
+  endforeach()
+endif()
+
+if(BUILD_TESTING)
+  # A nozzle on a dome on a tube whose foot crosses the line where the dome
+  # runs on tangentially into the tube (GitHub #582, mitcad#2272): the foot
+  # rounded at four angles about the axis by the kernel's fillet alone and by
+  # MitCad's, picked by its dome edge and by its tube edge, and a nozzle
+  # wholly on the dome; one valid closed solid at the exact size without a
+  # note, the material added the same everywhere (port patch 2272). `--probe`
+  # prints the foot's vertices.
+  add_executable(test_fillet_nozzle_dome_junction tests/test_fillet_nozzle_dome_junction.cpp)
+  target_link_libraries(test_fillet_nozzle_dome_junction PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_nozzle_dome_junction COMMAND test_fillet_nozzle_dome_junction)
+  set_tests_properties(geometry.fillet_nozzle_dome_junction PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # A loft's Perpendicular end condition (mitcad#2345): the surface meets the
+  # face its section lies on at right angles within 1e-6 rad all along the
+  # section, for a circle on a plane (both ends), a cylinder's rim on its
+  # wall (a face section, and an open half circle as a surface of curves),
+  # the rim of a skewed barrel (a freeform face) and a block's top with
+  # upright rails; a free loft does not; a section off its face is refused.
+  add_executable(test_loft_perpendicular tests/test_loft_perpendicular.cpp)
+  target_link_libraries(test_loft_perpendicular PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.loft_perpendicular COMMAND test_loft_perpendicular)
+  set_tests_properties(geometry.loft_perpendicular PROPERTIES TIMEOUT 300)
 endif()

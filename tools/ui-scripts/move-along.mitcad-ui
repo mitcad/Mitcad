@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# Point to Point along one axis (mitcad#2339; GitHub mitcad/Mitcad#580),
+# the shared input script of tools/ui-move-along-test.sh (Linux) and
+# tools/ui-windows-move-along-test.ps1 (Windows), on the design
+# tools/ui-scripts/move-along.json makes: a block (its top corner (40, 30,
+# 20)) and a cylinder beside it (its bottom circle about (80, 10, 0)),
+# which MoveCylinder takes from its round bottom edge to the block's top
+# corner the whole way.
+#   1. MoveCylinder's edit shows Along under Target Point as icon buttons
+#      (All, X, Y, Z).
+#   2. Along Z chosen: the preview is ok, and OK keeps it; the wrappers
+#      check the saved design with move-along-check.json: the definition
+#      has along z and the cylinder went up 20 mm only, onto the block's
+#      top level, not sideways.
+wait-idle
+key F6
+wait-idle
+
+# --- 1. The edit: Along's icon buttons under Target Point.
+mark
+dblclick-logged '^Timeline MoveCylinder at '
+wait-log '^Editing F3 with Move/Copy$'
+wait-log '^Panel Move/Copy input along=z at '
+expect-log '^Panel Move/Copy input along=all at '
+expect-log '^Panel Move/Copy input along=x at '
+expect-log '^Panel Move/Copy input along=y at '
+wait-idle
+
+# --- 2. Along Z, then OK.
+mark
+click-logged '^Panel Move/Copy input along=z at '
+wait-log '^Preview Move/Copy: ok'
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/move-along.png'
+mark
+key Return
+wait-log '^Edited F3$'
+wait-idle
+
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

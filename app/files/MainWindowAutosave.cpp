@@ -49,6 +49,11 @@ void MainWindow::createAutosave() {
     if (modelBusy()) {
       return QStringLiteral("busy");
     }
+    // Edit in Place (mitcad#2321): the window's document is the linked
+    // design's, or a lent design's stand-in; not this design's recovery.
+    if (m_inPlaceHolder || m_inPlaceBorrower) {
+      return QStringLiteral("edit in place");
+    }
     if (m_nativeUi && m_session) {
       return QStringLiteral("command");
     }

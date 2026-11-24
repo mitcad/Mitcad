@@ -59,7 +59,8 @@ use mitcad_model::{
 use mitcad_model_drawing::annotate::{
     self, Along, AnnotationType, BodyGeometry, CurvedFace, Drawn, FlatFace, Frame, MarkArm,
     PenPattern, PenWidth, PickPoint, RoundFace, Seen, SheetNote, SketchItem, SketchPen,
-    SketchPenName, SurfaceFinish, Terminator, TorusFace, ViewAnnotation, ViewPick, Want,
+    SketchPenName, SurfaceFinish, Terminator, TorusFace, ViewAnnotation, ViewPick, Want, WeldKind,
+    WeldSide, WeldSymbol,
 };
 use mitcad_model_drawing::clip::ViewMap;
 use mitcad_model_drawing::compose::{
@@ -154,6 +155,10 @@ pub(super) struct AddAnnotationCommand {
     frame: Option<GeometricTolerance>,
     #[serde(default)]
     finish: Option<SurfaceFinish>,
+    /// A weld symbol's welds, sizes and tail (mitcad#2350); a fillet on
+    /// the arrow side when left out.
+    #[serde(default)]
+    weld: Option<WeldSymbol>,
     /// Its letters' height, mm (a text note's, mitcad#707; every
     /// annotation's own, mitcad#729).
     #[serde(default)]
@@ -228,6 +233,9 @@ pub(super) struct EditAnnotationCommand {
     frame: Option<GeometricTolerance>,
     #[serde(default, deserialize_with = "present")]
     finish: Option<Option<SurfaceFinish>>,
+    /// A weld symbol's welds, sizes and tail as a whole (mitcad#2350).
+    #[serde(default)]
+    weld: Option<WeldSymbol>,
     #[serde(default, deserialize_with = "present")]
     line_offset: Option<Option<f64>>,
     #[serde(default, deserialize_with = "present")]
@@ -537,7 +545,7 @@ impl ViewAt<'_> {
 
     /// Whether a view point lies on a line the view draws as visible (its
     /// visible edges and the outlines of its cut faces).
-    fn on_visible(&self, p: P2) -> bool {
+    pub(super) fn on_visible(&self, p: P2) -> bool {
         self.on_visible_within(p, VISIBLE_NEAR / self.placed.map.scale)
     }
 
@@ -1659,6 +1667,7 @@ fn noun(kind: AnnotationType) -> &'static str {
         AnnotationType::CenterPattern => "center pattern",
         AnnotationType::EdgeExtension => "edge extension",
         AnnotationType::HoleCallout => "hole callout",
+        AnnotationType::Weld => "weld symbol",
         _ => "dimension",
     }
 }
@@ -2341,6 +2350,16 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             AnnotationType::Finish => Some(c.finish.clone().unwrap_or_default()),
             _ => c.finish.clone(),
         };
+        // A weld symbol: a fillet on the arrow side unless given
+        // (mitcad#2350); its check refuses welds on another type.
+        template.weld = match kind {
+            AnnotationType::Weld => Some(
+                c.weld
+                    .clone()
+                    .unwrap_or_else(|| WeldSymbol::arrow(WeldSide::new(WeldKind::Fillet))),
+            ),
+            _ => c.weld.clone(),
+        };
         template.at = clicked.filter(|_| {
             matches!(
                 kind,
@@ -2350,6 +2369,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                     | AnnotationType::Finish
                     | AnnotationType::Balloon
                     | AnnotationType::HoleCallout
+                    | AnnotationType::Weld
             )
         });
         // A table: its place on the sheet and its settings.
@@ -2539,6 +2559,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             && c.letter.is_none()
             && c.frame.is_none()
             && c.finish.is_none()
+            && c.weld.is_none()
             && c.height.is_none()
             && c.table.is_none()
             && c.terminator.is_none();
@@ -2556,6 +2577,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 || c.letter.is_some()
                 || c.frame.is_some()
                 || c.finish.is_some()
+                || c.weld.is_some()
                 || c.line_offset.is_some()
                 || c.text_offset.is_some()
                 || c.table.is_some()
@@ -2663,6 +2685,11 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 AnnotationType::Finish => Some(finish.clone().unwrap_or_default()),
                 _ => finish.clone(),
             };
+        }
+        if let Some(weld) = &c.weld {
+            // Its welds as a whole (mitcad#2350); another type's check
+            // refuses them.
+            annotation.weld = Some(weld.clone());
         }
         if let Some(offset) = c.line_offset {
             // An angle's arc keeps a radius, as a drag and a place keep it
@@ -5430,6 +5457,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             || c.letter.is_some()
             || c.frame.is_some()
             || c.finish.is_some()
+            || c.weld.is_some()
             || c.series.is_some()
             || c.table.is_some()
             || c.balloons
@@ -5500,6 +5528,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             || c.letter.is_some()
             || c.frame.is_some()
             || c.finish.is_some()
+            || c.weld.is_some()
             || c.line_offset.is_some()
             || c.text_offset.is_some()
             || c.table.is_some()
@@ -6400,6 +6429,12 @@ fn written(
                     .finish
                     .as_ref()
                     .and_then(|f| f.text.clone())
+                    .unwrap_or_default(),
+                // Its welds in words (mitcad#2350).
+                AnnotationType::Weld => annotation
+                    .weld
+                    .as_ref()
+                    .map(WeldSymbol::label)
                     .unwrap_or_default(),
                 _ => words.as_ref().map(|w| w.text.clone()).unwrap_or_default(),
             },

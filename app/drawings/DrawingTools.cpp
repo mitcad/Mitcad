@@ -84,6 +84,12 @@ QJsonObject baseView(const QString& drawing, int sheet, const ToolPicks& picks,
     command.insert(QStringLiteral("subject"), subject);
   }
   addScale(command, optionValue(tool, options, QStringLiteral("scale")));
+  // An explode view of the drawing's component (mitcad#2113); none:
+  // assembled.
+  const QString explode = optionValue(tool, options, QStringLiteral("explode"));
+  if (!explode.isEmpty()) {
+    command.insert(QStringLiteral("explode"), explode);
+  }
   command.insert(QStringLiteral("style"),
                  QJsonObject{{QStringLiteral("hidden_lines"), yes(optionValue(tool, options, QStringLiteral("hidden_lines")))},
                              {QStringLiteral("tangent_edges"), yes(optionValue(tool, options, QStringLiteral("tangent_edges")))},
@@ -433,6 +439,110 @@ QJsonObject surfaceFinish(const QString& drawing, int /*sheet*/, const ToolPicks
   return command;
 }
 
+// --- Weld symbols (mitcad#2350) ---------------------------------------------
+
+QString weldType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("weld"); }
+
+// A weld symbol on the edge, corner or joint picked, its reference line
+// where the placing click is; its welds from the panel.
+QJsonObject weldSymbol(const QString& drawing, int /*sheet*/, const ToolPicks& picks,
+                       const QHash<QString, QString>& options) {
+  if (!picked(picks, 1, true)) {
+    return {};
+  }
+  QHash<QString, QString> chosen;
+  if (const DrawingToolDef* tool = drawingTool(QStringLiteral("drawing.weld"))) {
+    for (const ToolOption& option : tool->options) {
+      chosen.insert(option.id, optionValue(*tool, options, option.id));
+    }
+  }
+  const QJsonObject weld = weldOf(chosen);
+  if (weld.isEmpty()) {
+    return {};
+  }
+  QJsonObject command = annotationOn(drawing, picks, QStringLiteral("weld"));
+  command.insert(QStringLiteral("weld"), weld);
+  return command;
+}
+
+// Weld symbols proposed for the BUILD joints of the members picked on a
+// view (one at least), placed by a click beside them; each a fillet with
+// the panel's size and tail.
+QJsonObject proposeWelds(const QString& drawing, int /*sheet*/, const ToolPicks& picks,
+                         const QHash<QString, QString>& options) {
+  if (picks.view <= 0 || picks.picks.isEmpty()) {
+    return {};
+  }
+  QJsonObject weld{{QStringLiteral("arrow_side"), QJsonObject{{QStringLiteral("symbol"), QStringLiteral("fillet")}}}};
+  for (const char* field : {"size", "tail"}) {
+    weld = weldEdit(weld, QString::fromLatin1(field), toolOption("drawing.propose_welds", options, field));
+    if (weld.isEmpty()) {
+      return {};
+    }
+  }
+  return {{QStringLiteral("cmd"), QStringLiteral("propose_drawing_welds")},
+          {QStringLiteral("drawing"), drawing},
+          {QStringLiteral("view"), picks.view},
+          {QStringLiteral("picks"), picks.picks},
+          {QStringLiteral("weld"), weld}};
+}
+
+void addWeldTools(QVector<DrawingToolDef>& tools) {
+  const auto choice = [](const QString& id, const QString& label, const QList<QPair<QString, QString>>& choices,
+                         const QString& value) {
+    return ToolOption{id, label, ToolOption::Kind::Choice, choices, value};
+  };
+  const auto check = [](const QString& id, const QString& label) {
+    return ToolOption{id, label, ToolOption::Kind::Check, {}, QStringLiteral("false")};
+  };
+  const auto text = [](const QString& id, const QString& label) {
+    return ToolOption{id, label, ToolOption::Kind::Text, {}, QString()};
+  };
+  const auto icons = [](const QString& id, const QString& label, const QString& value) {
+    return ToolOption{id, label, ToolOption::Kind::Icons, weldSymbolChoices(true), value};
+  };
+  tools.append({QStringLiteral("drawing.weld"), Text::tr("Weld Symbol"), QStringLiteral("drawing-weld"),
+                Text::tr("Puts a weld symbol on an edge, a corner or a joint"), SheetPick::Picks,
+                Text::tr("Click the edge, corner or joint the arrow points at"),
+                {icons(QStringLiteral("arrow_symbol"), Text::tr("Arrow Side"), QStringLiteral("fillet")),
+                 text(QStringLiteral("size"), Text::tr("Size")),
+                 choice(QStringLiteral("measure"), Text::tr("Fillet Size"),
+                        {{QStringLiteral("throat"), Text::tr("Throat (a)")}, {QStringLiteral("leg"), Text::tr("Leg (z)")}},
+                        QStringLiteral("throat")),
+                 text(QStringLiteral("penetration"), Text::tr("Penetration")),
+                 text(QStringLiteral("count"), Text::tr("Count")),
+                 text(QStringLiteral("length"), Text::tr("Length")),
+                 text(QStringLiteral("pitch"), Text::tr("Pitch")),
+                 choice(QStringLiteral("contour"), Text::tr("Contour"),
+                        {{QStringLiteral("none"), Text::tr("None")},
+                         {QStringLiteral("flush"), Text::tr("Flush")},
+                         {QStringLiteral("convex"), Text::tr("Convex")},
+                         {QStringLiteral("concave"), Text::tr("Concave")}},
+                        QStringLiteral("none")),
+                 choice(QStringLiteral("finish"), Text::tr("Finish"),
+                        {{QStringLiteral("none"), Text::tr("None")},
+                         {QStringLiteral("grind"), Text::tr("Ground (G)")},
+                         {QStringLiteral("machine"), Text::tr("Machined (M)")},
+                         {QStringLiteral("chip"), Text::tr("Chipped (C)")},
+                         {QStringLiteral("hammer"), Text::tr("Hammered (H)")},
+                         {QStringLiteral("roll"), Text::tr("Rolled (R)")},
+                         {QStringLiteral("unspecified"), Text::tr("Any Way (U)")}},
+                        QStringLiteral("none")),
+                 check(QStringLiteral("toes_blended"), Text::tr("Toes Blended")),
+                 icons(QStringLiteral("other_symbol"), Text::tr("Other Side"), QStringLiteral("none")),
+                 text(QStringLiteral("other_size"), Text::tr("Other Side Size")),
+                 check(QStringLiteral("staggered"), Text::tr("Staggered")),
+                 check(QStringLiteral("all_around"), Text::tr("All Around")),
+                 check(QStringLiteral("field"), Text::tr("Field Weld")),
+                 text(QStringLiteral("tail"), Text::tr("Tail"))},
+                &weldSymbol, true, Text::tr("Click where the reference line starts"), &onePick, &weldType, true});
+  tools.append({QStringLiteral("drawing.propose_welds"), Text::tr("Propose Welds"), QStringLiteral("weld-propose"),
+                Text::tr("Proposes a weld symbol for each joint of the BUILD members clicked"), SheetPick::Picks,
+                Text::tr("Click the members whose joints are welded, then beside them"),
+                {text(QStringLiteral("size"), Text::tr("Size")), text(QStringLiteral("tail"), Text::tr("Tail"))},
+                &proposeWelds, false, QString(), &openPicks, &weldType, true});
+}
+
 // --- The tables' tools (mitcad#707 phase 3) --------------------------------
 
 QString balloonType(const QHash<QString, QString>& /*options*/) { return QStringLiteral("balloon"); }
@@ -675,6 +785,10 @@ QVector<DrawingToolDef> makeTools() {
                         QStringLiteral("design")),
                  choice(QStringLiteral("direction"), Text::tr("Orientation"), directions, QStringLiteral("front")),
                  choice(QStringLiteral("scale"), Text::tr("Scale"), scaleChoices(true), QStringLiteral("fit")),
+                 // The workspace lists the component's explode views
+                 // (mitcad#2113, explodeChoices).
+                 choice(QStringLiteral("explode"), Text::tr("Exploded View"), {{QString(), Text::tr("Assembled")}},
+                        QString()),
                  check(QStringLiteral("hidden_lines"), Text::tr("Hidden Edges"), false),
                  check(QStringLiteral("tangent_edges"), Text::tr("Tangent Edges"), false),
                  check(QStringLiteral("shaded"), Text::tr("Shaded"), false)},
@@ -704,6 +818,7 @@ QVector<DrawingToolDef> makeTools() {
                 &breakView, false, QString(), nullptr, nullptr, false});
   addAnnotationTools(tools);
   addTableTools(tools);
+  addWeldTools(tools);
   return tools;
 }
 
@@ -739,7 +854,8 @@ int toolGroup(const DrawingToolDef& tool) {
     return 3;
   }
   if (id == QStringLiteral("drawing.datum") || id == QStringLiteral("drawing.frame") ||
-      id == QStringLiteral("drawing.finish")) {
+      id == QStringLiteral("drawing.finish") || id == QStringLiteral("drawing.weld") ||
+      id == QStringLiteral("drawing.propose_welds")) {
     return 4;
   }
   if (id == QStringLiteral("drawing.hole_table") || id == QStringLiteral("drawing.parts_list") ||
@@ -799,6 +915,11 @@ QStringList toolKeywords(const QString& id) {
   } else if (id == QStringLiteral("drawing.hole_callout")) {
     out << QStringLiteral("leader") << QStringLiteral("thread") << QStringLiteral("counterbore")
         << QStringLiteral("countersink");
+  } else if (id == QStringLiteral("drawing.weld")) {
+    // mitcad#2350.
+    out << QStringLiteral("welding") << QStringLiteral("fillet weld") << QStringLiteral("butt weld");
+  } else if (id == QStringLiteral("drawing.propose_welds")) {
+    out << QStringLiteral("welding") << QStringLiteral("weld symbols") << QStringLiteral("frame joints");
   }
   return out;
 }
@@ -1282,6 +1403,9 @@ QString annotationName(const QString& type) {
   if (type == QStringLiteral("hole_callout")) {
     return Text::tr("Hole Callout");
   }
+  if (type == QStringLiteral("weld")) {
+    return Text::tr("Weld Symbol");
+  }
   return Text::tr("Dimension");
 }
 
@@ -1484,6 +1608,218 @@ QString lineStylesText(const QJsonArray& lines) {
                                             line.value(QStringLiteral("pattern")).toString());
   }
   return parts.isEmpty() ? QStringLiteral("none") : parts.join(QStringLiteral("; "));
+}
+
+// --- Weld symbols (mitcad#2350) ---------------------------------------------
+
+QString choiceIcon(const ToolOption& /*option*/, const QString& value) {
+  QString name = value;
+  name.replace(QLatin1Char('_'), QLatin1Char('-'));
+  return QStringLiteral("weld-") + name;
+}
+
+QList<QPair<QString, QString>> weldSymbolChoices(bool none) {
+  QList<QPair<QString, QString>> out;
+  if (none) {
+    out.append({QStringLiteral("none"), Text::tr("No Weld")});
+  }
+  out.append({{QStringLiteral("fillet"), Text::tr("Fillet")},
+              {QStringLiteral("square"), Text::tr("Square Butt (I)")},
+              {QStringLiteral("v"), Text::tr("V Butt")},
+              {QStringLiteral("bevel"), Text::tr("Bevel Butt (Half V)")},
+              {QStringLiteral("y"), Text::tr("Y Butt")},
+              {QStringLiteral("u"), Text::tr("U Butt")},
+              {QStringLiteral("j"), Text::tr("J Butt")},
+              {QStringLiteral("flare_v"), Text::tr("Flare V")},
+              {QStringLiteral("flare_bevel"), Text::tr("Flare Bevel")},
+              {QStringLiteral("plug"), Text::tr("Plug or Slot")},
+              {QStringLiteral("spot"), Text::tr("Spot")},
+              {QStringLiteral("seam"), Text::tr("Seam")},
+              {QStringLiteral("back_weld"), Text::tr("Back Weld")},
+              {QStringLiteral("backing"), Text::tr("Backing")},
+              {QStringLiteral("surfacing"), Text::tr("Surfacing")}});
+  return out;
+}
+
+namespace {
+
+// A side's number field from its text: empty takes it away; false for no
+// plain number, or not more than 0 (a count: no whole number of 1 or more).
+bool setWeldNumber(QJsonObject& side, const QString& key, const QString& value) {
+  const QString text = value.trimmed();
+  if (text.isEmpty()) {
+    side.remove(key);
+    return true;
+  }
+  const std::optional<double> number = parsePlainNumber(text);
+  if (!number || !std::isfinite(*number) || !(*number > 0.0)) {
+    return false;
+  }
+  if (key == QStringLiteral("count")) {
+    if (*number != std::floor(*number)) {
+      return false;
+    }
+    side.insert(key, static_cast<int>(*number));
+  } else {
+    side.insert(key, *number);
+  }
+  return true;
+}
+
+QString weldNumberText(const QJsonValue& value) {
+  return value.isDouble() ? QString::number(value.toDouble(), 'g', 6) : QString();
+}
+
+} // namespace
+
+QJsonObject weldEdit(const QJsonObject& weld, const QString& field, const QString& value) {
+  QJsonObject out = weld;
+  const auto flag = [&out](const QString& key, const QString& on) {
+    if (on == QStringLiteral("true")) {
+      out.insert(key, true);
+    } else {
+      out.remove(key);
+    }
+  };
+  if (field == QStringLiteral("arrow_symbol") || field == QStringLiteral("other_symbol")) {
+    const QString key = field == QStringLiteral("arrow_symbol") ? QStringLiteral("arrow_side") : QStringLiteral("other_side");
+    if (value == QStringLiteral("none") || value.isEmpty()) {
+      out.remove(key);
+      return out;
+    }
+    QJsonObject side = out.value(key).toObject();
+    side.insert(QStringLiteral("symbol"), value);
+    // Only a fillet's size measures its throat or its leg.
+    if (value != QStringLiteral("fillet")) {
+      side.remove(QStringLiteral("measure"));
+    }
+    out.insert(key, side);
+    return out;
+  }
+  if (field == QStringLiteral("all_around") || field == QStringLiteral("field") || field == QStringLiteral("staggered")) {
+    flag(field, value);
+    return out;
+  }
+  if (field == QStringLiteral("tail")) {
+    const QString tail = value.trimmed();
+    if (tail.isEmpty()) {
+      out.remove(field);
+    } else {
+      out.insert(field, tail);
+    }
+    return out;
+  }
+  if (field == QStringLiteral("other_size")) {
+    if (!out.value(QStringLiteral("other_side")).isObject()) {
+      return value.trimmed().isEmpty() ? out : QJsonObject();
+    }
+    QJsonObject side = out.value(QStringLiteral("other_side")).toObject();
+    if (!setWeldNumber(side, QStringLiteral("size"), value)) {
+      return {};
+    }
+    out.insert(QStringLiteral("other_side"), side);
+    return out;
+  }
+  // The arrow side's own fields.
+  static const QStringList own = {QStringLiteral("size"),    QStringLiteral("measure"),      QStringLiteral("penetration"),
+                                  QStringLiteral("count"),   QStringLiteral("length"),       QStringLiteral("pitch"),
+                                  QStringLiteral("contour"), QStringLiteral("finish"),       QStringLiteral("toes_blended")};
+  if (!own.contains(field)) {
+    return {};
+  }
+  if (!out.value(QStringLiteral("arrow_side")).isObject()) {
+    // Nothing to change on a side without a weld; a field left empty
+    // changes nothing.
+    const bool empty = value.trimmed().isEmpty() || value == QStringLiteral("none") ||
+                       value == QStringLiteral("false") || value == QStringLiteral("throat");
+    return empty ? out : QJsonObject();
+  }
+  QJsonObject side = out.value(QStringLiteral("arrow_side")).toObject();
+  if (field == QStringLiteral("measure")) {
+    if (value == QStringLiteral("leg") && side.value(QStringLiteral("symbol")).toString() == QStringLiteral("fillet")) {
+      side.insert(field, value);
+    } else {
+      side.remove(field);
+    }
+  } else if (field == QStringLiteral("contour") || field == QStringLiteral("finish")) {
+    if (value == QStringLiteral("none") || value.isEmpty()) {
+      side.remove(field);
+    } else {
+      side.insert(field, value);
+    }
+  } else if (field == QStringLiteral("toes_blended")) {
+    if (value == QStringLiteral("true")) {
+      side.insert(field, true);
+    } else {
+      side.remove(field);
+    }
+  } else if (!setWeldNumber(side, field, value)) {
+    return {};
+  }
+  out.insert(QStringLiteral("arrow_side"), side);
+  // An intermittent weld on both sides: its count, length and pitch the
+  // other side's too when it has none of its own.
+  if ((field == QStringLiteral("count") || field == QStringLiteral("length") || field == QStringLiteral("pitch")) &&
+      out.value(QStringLiteral("other_side")).isObject()) {
+    QJsonObject other = out.value(QStringLiteral("other_side")).toObject();
+    if (!other.contains(field) || weld.value(QStringLiteral("arrow_side")).toObject().value(field) == other.value(field)) {
+      if (side.contains(field)) {
+        other.insert(field, side.value(field));
+      } else {
+        other.remove(field);
+      }
+      out.insert(QStringLiteral("other_side"), other);
+    }
+  }
+  return out;
+}
+
+QJsonObject weldOf(const QHash<QString, QString>& options) {
+  // The symbols first: the sides' fields go on them.
+  static const QStringList order = {
+      QStringLiteral("arrow_symbol"), QStringLiteral("other_symbol"), QStringLiteral("size"),
+      QStringLiteral("measure"),      QStringLiteral("penetration"),  QStringLiteral("count"),
+      QStringLiteral("length"),       QStringLiteral("pitch"),        QStringLiteral("contour"),
+      QStringLiteral("finish"),       QStringLiteral("toes_blended"), QStringLiteral("other_size"),
+      QStringLiteral("staggered"),    QStringLiteral("all_around"),   QStringLiteral("field"),
+      QStringLiteral("tail")};
+  QJsonObject weld;
+  for (const QString& field : order) {
+    const auto found = options.constFind(field);
+    if (found == options.constEnd()) {
+      continue;
+    }
+    const QJsonObject changed = weldEdit(weld, field, found.value());
+    if (changed.isEmpty() && !found.value().trimmed().isEmpty() && found.value() != QStringLiteral("none")) {
+      return {};
+    }
+    if (!changed.isEmpty()) {
+      weld = changed;
+    }
+  }
+  return weld;
+}
+
+QHash<QString, QString> weldFields(const QJsonObject& weld) {
+  const QJsonObject arrow = weld.value(QStringLiteral("arrow_side")).toObject();
+  const QJsonObject other = weld.value(QStringLiteral("other_side")).toObject();
+  const auto onOff = [](bool on) { return on ? QStringLiteral("true") : QStringLiteral("false"); };
+  return {{QStringLiteral("arrow_symbol"), arrow.value(QStringLiteral("symbol")).toString(QStringLiteral("none"))},
+          {QStringLiteral("size"), weldNumberText(arrow.value(QStringLiteral("size")))},
+          {QStringLiteral("measure"), arrow.value(QStringLiteral("measure")).toString(QStringLiteral("throat"))},
+          {QStringLiteral("penetration"), weldNumberText(arrow.value(QStringLiteral("penetration")))},
+          {QStringLiteral("count"), weldNumberText(arrow.value(QStringLiteral("count")))},
+          {QStringLiteral("length"), weldNumberText(arrow.value(QStringLiteral("length")))},
+          {QStringLiteral("pitch"), weldNumberText(arrow.value(QStringLiteral("pitch")))},
+          {QStringLiteral("contour"), arrow.value(QStringLiteral("contour")).toString(QStringLiteral("none"))},
+          {QStringLiteral("finish"), arrow.value(QStringLiteral("finish")).toString(QStringLiteral("none"))},
+          {QStringLiteral("toes_blended"), onOff(arrow.value(QStringLiteral("toes_blended")).toBool())},
+          {QStringLiteral("other_symbol"), other.value(QStringLiteral("symbol")).toString(QStringLiteral("none"))},
+          {QStringLiteral("other_size"), weldNumberText(other.value(QStringLiteral("size")))},
+          {QStringLiteral("staggered"), onOff(weld.value(QStringLiteral("staggered")).toBool())},
+          {QStringLiteral("all_around"), onOff(weld.value(QStringLiteral("all_around")).toBool())},
+          {QStringLiteral("field"), onOff(weld.value(QStringLiteral("field")).toBool())},
+          {QStringLiteral("tail"), weld.value(QStringLiteral("tail")).toString()}};
 }
 
 } // namespace mitcad::drawings

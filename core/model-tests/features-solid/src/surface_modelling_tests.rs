@@ -992,3 +992,66 @@ fn match_surface_rebuilds_a_face_against_a_chain_and_fair_surface_smooths_faces(
         assert!(error.contains(expected), "{error}");
     }
 }
+
+/// A network whose curves do not all meet (mitcad#2333): the kernel's
+/// failure keeps its words and its places; its detail, which counts the
+/// curves, gets which sketch's curves they are.
+#[test]
+fn a_network_failure_names_the_sketches_of_its_curves() {
+    let mut doc = Document::new(MockKernel::default());
+    let first = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let second = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let a = line(&mut doc, first, [-5.0, 0.0], [25.0, 0.0]);
+    let b = line(&mut doc, first, [-5.0, 10.0], [25.0, 10.0]);
+    let c = line(&mut doc, second, [0.0, -5.0], [0.0, 15.0]);
+    let d = line(&mut doc, second, [20.0, -5.0], [20.0, 15.0]);
+    // As the geometry kernel words it (geometry/src/surface_fills.cpp).
+    let message = "boundary surface: a curve one way does not meet a crossing curve \
+                   (every curve one way must cross every curve the other way)";
+    let detail = format!(
+        "boundary surface: curve one way 2 ({b}) and crossing curve 2 ({d}) do not meet: \
+         0.5 mm apart at their nearest, (20, 10, 0.5) and (20, 10, 0)"
+    );
+    let tail = json!({"message": message, "detail": detail,
+        "places": [{"kind": "point", "at": [20, 10, 0.5]}, {"kind": "point", "at": [20, 10, 0]}]});
+    doc.kernel()
+        .fail_text
+        .borrow_mut()
+        .insert("boundary_surface", format!("{message}\n[placed: {tail}]"));
+    let curve = |sketch: FeatureUid, c: &str| json!({"sketch": sketch, "curves": [c]});
+    let uid = add(
+        &mut doc,
+        json!({"type": "boundary_surface",
+               "u": [curve(first, &a), curve(first, &b)],
+               "v": [curve(second, &c), curve(second, &d)]}),
+    );
+    let Some(FeatureStatus::Failed(error)) = doc.status(uid).cloned() else {
+        panic!("{uid} did not fail");
+    };
+    assert!(error.message.contains(message), "{error:?}");
+    assert!(!error.message.contains("Sketch"), "{error:?}");
+    assert_eq!(error.places.len(), 2, "{error:?}");
+    let legend = format!(
+        "(curves one way: 1 Sketch1 {a}, 2 Sketch1 {b}; crossing curves: 1 Sketch2 {c}, 2 Sketch2 {d})"
+    );
+    let agents = error.agent_text();
+    assert!(
+        agents.contains(&detail) && agents.contains(&legend),
+        "{agents}"
+    );
+    // A loft (no crossing curves) is not counted: its failure stays as the
+    // kernel gave it.
+    doc.kernel().fail_text.borrow_mut().insert(
+        "boundary_surface",
+        "boundary surface: the curves could not be lofted".to_owned(),
+    );
+    let loft = add(
+        &mut doc,
+        json!({"type": "boundary_surface", "u": [curve(first, &a), curve(first, &b)]}),
+    );
+    let error = failure(&doc, loft);
+    assert!(
+        error.contains("could not be lofted") && !error.contains("curves one way:"),
+        "{error}"
+    );
+}

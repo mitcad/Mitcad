@@ -476,6 +476,38 @@ pub fn work_segments(piece: &Piece, frame: &WorkFrame) -> Vec<Seg> {
     out
 }
 
+/// Points along a piece in model space, its ends included, arcs within
+/// [`TOLERANCE`]: a curve read as points (a face's boundary unrolled about
+/// a lathe's spindle axis, mitcad#2067).
+pub fn piece_points(piece: &Piece) -> Vec<P3> {
+    match piece {
+        Piece::Line { a, b } => vec![*a, *b],
+        Piece::Points(points) => points.clone(),
+        Piece::Arc {
+            center,
+            normal,
+            a,
+            sweep,
+        } => {
+            let Some(u) = unit3(sub(*a, *center)) else {
+                return vec![*a];
+            };
+            let radius = norm(sub(*a, *center));
+            let v = cross(*normal, u);
+            let n = steps(radius, *sweep, TOLERANCE);
+            (0..=n)
+                .map(|i| {
+                    let t = sweep * i as f64 / n as f64;
+                    add(
+                        *center,
+                        add(scale(u, radius * t.cos()), scale(v, radius * t.sin())),
+                    )
+                })
+                .collect()
+        }
+    }
+}
+
 fn plane_distance(a: P3, b: P3) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }

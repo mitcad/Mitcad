@@ -7,10 +7,13 @@
 // as sketch mode's overlay draws them (SketchOverlay: dimensionShape, the
 // halo, the lines, arrows and value boxes, driven and inactive ones in
 // their own styles), in view pixels in each sketch's placed frame, so that
-// they face the camera and keep their size at any zoom.
+// they face the camera and keep their size at any zoom. The view draws
+// them itself, in its overlay layer, painted with the frame that moves the
+// camera (a ViewPaintLayer, mitcad#2296): no widget over the view, which Qt
+// would paint and compose again after every frame.
 //
-// Display only: the widget lets the mouse through to the view, so they are
-// neither picked by the model's tools nor snapped to. It watches the view's
+// Display only: the mouse is the view's, so they are neither picked by the
+// model's tools nor snapped to. It watches the view's
 // mouse: a value under the pointer shows its tooltip (its name and
 // expression, as in sketch mode) and is drawn in the hover's colour; a
 // double-click on one asks to edit it (editRequested), which opens its
@@ -20,18 +23,22 @@
 #include <functional>
 #include <vector>
 
+#include <QFont>
+#include <QObject>
 #include <QPointF>
 #include <QRectF>
 #include <QString>
 #include <QTimer>
-#include <QWidget>
 
 #include "SketchModel.hpp"
 #include "SketchOverlay.hpp"
 
+class QPainter;
+
 namespace mitcad {
 class OcctViewer;
-}
+class ViewPaintLayer;
+} // namespace mitcad
 
 namespace mitcad::sketch {
 
@@ -43,13 +50,14 @@ struct ShownSketch {
   SketchModel model;
 };
 
-class ShownDimensions : public QWidget {
+class ShownDimensions : public QObject {
   Q_OBJECT
 
 public:
   explicit ShownDimensions(OcctViewer& viewer);
 
-  // The sketches whose dimensions are drawn now (none: the widget hides);
+  // The sketches whose dimensions are drawn now (none: the view no longer
+  // draws them);
   // lengths in the document's unit (`lengthScale` mm per unit, `lengthUnit`
   // its symbol), `textMode` the palette's Dimension text
   // (SketchController::DimensionText). Logs "Sketch dimensions shown
@@ -68,10 +76,11 @@ signals:
   void editRequested(const QString& sketch, const QString& dimension);
 
 protected:
-  void paintEvent(QPaintEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+  // Paints them, in view pixels (the view's frame, ViewPaintLayer).
+  void paint(QPainter& painter);
   struct Layout {
     std::size_t sketch = 0;    // in m_sketches
     std::size_t dimension = 0; // in its model's dimensions
@@ -90,6 +99,8 @@ private:
   void logPlaces();
 
   OcctViewer& m_viewer;
+  ViewPaintLayer* m_layer = nullptr; // what the view draws them in
+  QFont m_font;                      // sketch mode's dimensions' font
   std::vector<ShownSketch> m_sketches;
   double m_lengthScale = 1.0;
   QString m_lengthUnit;

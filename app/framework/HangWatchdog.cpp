@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QtLogging>
 
+#include "AccessibilityClients.hpp"
 #include "mcp/LogRing.hpp"
 
 namespace mitcad {
@@ -219,6 +220,16 @@ void HangWatchdog::watch() {
       const QString line = lastUiLine();
       if (!line.isEmpty()) {
         known << QStringLiteral("last line: %1").arg(quoted(line));
+      }
+      // A client reading the window through UI Automation (mitcad#2227).
+      // COM does not tell a caller in the multithreaded apartment: the
+      // processes that can be reading then (this thread, not the UI's).
+      const QString client = currentAccessibilityClient();
+      if (!client.isEmpty()) {
+        known << QStringLiteral("accessibility client: %1").arg(client);
+        if (client.endsWith(QLatin1String("(pid unknown)"))) {
+          known << QStringLiteral("UI Automation loaded in %1").arg(accessibilityClientCandidates());
+        }
       }
       text = QStringLiteral("UI not responding for %1 s (%2)").arg(hung / 1000).arg(known.join(QStringLiteral("; ")));
     } else if (hung >= m_nextReport) {

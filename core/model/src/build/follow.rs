@@ -10,12 +10,16 @@
 //! rewritten from where the follower is after each command
 //! ([`DocState::take_followed_offsets`]). An edit of one carriage's offset
 //! (Placement, a drag, `drive_joint`) moves the others with it, each within
-//! its travel limits ([`DocState::lead_followed_edits`]).
+//! its travel limits ([`DocState::lead_followed_edits`]). An offset that
+//! is an expression keeps it (mitcad#2317): a plain user parameter that
+//! only it uses takes the new value, any other expression (a formula, a
+//! parameter used elsewhere) refuses the move in words.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::held::slides_on_mate;
 use crate::document::{DocState, ModelError};
+use crate::expr::ParamKind;
 use crate::features::FeatureDef;
 use crate::ids::{ComponentUid, FeatureUid, OccurrenceUid};
 use crate::joints::{JointKind, JointsState, Motion};
@@ -199,13 +203,203 @@ fn changed(v: f64, was: f64) -> bool {
     (v - was).abs() > 1e-9 * (1.0 + was.abs())
 }
 
+/// Whether a carriage's stored offset, the parameter `id` of its joint
+/// `joint`'s position, can take where the carriage moves to (mitcad#2317):
+/// the joint's own parameter when it is a number, or a user parameter the
+/// position names when it is a number and nothing else uses it (its value
+/// follows, the joint keeps naming it). Otherwise, in words, why not: an
+/// offset by formula is calculated from its expression, and a parameter
+/// that something else uses would move that too.
+fn writable_offset(state: &DocState, joint: FeatureUid, id: ParamId) -> Result<(), String> {
+    let params = &state.parameters;
+    let Some(param) = params.get(id) else {
+        return Ok(());
+    };
+    if params.owner(id) == Some(joint) {
+        if param.expr().is_plain_number() || build_form(state, id) {
+            return Ok(());
+        }
+        return Err(format!(
+            "its offset is by formula ({}), calculated from its expression",
+            param.expression()
+        ));
+    }
+    let name = param.name();
+    if !param.expr().is_plain_number() {
+        return Err(format!(
+            "its offset is the parameter {name}, which is by formula ({})",
+            param.expression()
+        ));
+    }
+    if param.kind() != ParamKind::User || params.owner(id).is_some() || params.is_reference(id) {
+        return Err(format!(
+            "its offset is the parameter {name}, which is not a user parameter"
+        ));
+    }
+    let Some(entry) = state.entry(joint) else {
+        return Ok(());
+    };
+    // Its joint uses it once (for this offset), and nothing else does.
+    let mut users = state.parameter_users(name);
+    if let Some(i) = users.iter().position(|u| *u == entry.name) {
+        users.remove(i);
+    }
+    let slots = entry.def.params().iter().filter(|p| **p == id).count();
+    if !users.is_empty() {
+        return Err(format!(
+            "its offset is the parameter {name}, which is used by {} as well",
+            and_list(&users)
+        ));
+    }
+    if slots > 1 {
+        return Err(format!(
+            "its offset is the parameter {name}, which {} also uses for another value",
+            entry.name
+        ));
+    }
+    Ok(())
+}
+
+/// Whether the expression of a joint's own parameter `id` is BUILD's form
+/// of an Offset typed as a number (from End B `d12 - 140`, from the
+/// middle `d12 / 2 + 15`): it names only parameters of BUILD parts (the
+/// target's length), none of the user's.
+fn build_form(state: &DocState, id: ParamId) -> bool {
+    let params = &state.parameters;
+    let Some(param) = params.get(id) else {
+        return false;
+    };
+    let names = param.expr().references();
+    param.expr().table_references().is_empty()
+        && !names.is_empty()
+        && names.iter().all(|name| {
+            params
+                .find(name)
+                .and_then(|p| params.owner(p))
+                .and_then(|owner| state.entry(owner))
+                .is_some_and(|e| matches!(e.def, FeatureDef::DerivedPart(_)))
+        })
+}
+
+/// BUILD's form of an Offset ([`build_form`]) moved by `delta`: its
+/// trailing constant (`- 140` of `d12 - 140`) changed, the rest kept.
+fn rebased(text: &str, delta: f64) -> String {
+    let text = text.trim();
+    let cut = [text.rfind(" + "), text.rfind(" - ")]
+        .into_iter()
+        .flatten()
+        .max();
+    let (base, k) = match cut {
+        Some(i) => match text[i + 3..].trim().parse::<f64>() {
+            Ok(n) if text[i..].starts_with(" + ") => (&text[..i], n),
+            Ok(n) => (&text[..i], -n),
+            Err(_) => (text, 0.0),
+        },
+        None => (text, 0.0),
+    };
+    let k = k + delta;
+    let number = |v: f64| {
+        let s = format!("{v:.9}");
+        s.trim_end_matches('0').trim_end_matches('.').to_owned()
+    };
+    if k.abs() < 1e-9 {
+        base.to_owned()
+    } else if k > 0.0 {
+        format!("{base} + {}", number(k))
+    } else {
+        format!("{base} - {}", number(-k))
+    }
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The refusal of a move that would take carriage `who` with `with` when
+/// its offset cannot follow (`reason`, [`writable_offset`]).
+fn cannot_follow(
+    state: &DocState,
+    who: OccurrenceUid,
+    with: OccurrenceUid,
+    reason: &str,
+) -> ModelError {
+    ModelError::Invalid(format!(
+        "{} cannot move with {}: {reason}; make its offset a number, or a user parameter only \
+         it uses",
+        state.assembly.occurrence_name(who),
+        state.assembly.occurrence_name(with)
+    ))
+}
+
+impl DocState {
+    /// Writes a carriage's new offset `v` into the parameter `id` of its
+    /// joint `joint` ([`writable_offset`]); refused in words (the carriage
+    /// `who` moving with `with`) when that cannot be, or when the
+    /// parameter's limits keep it from `v`.
+    fn write_offset(
+        &mut self,
+        joint: FeatureUid,
+        id: ParamId,
+        v: f64,
+        who: OccurrenceUid,
+        with: OccurrenceUid,
+    ) -> Result<(), ModelError> {
+        writable_offset(self, joint, id)
+            .map_err(|reason| cannot_follow(self, who, with, &reason))?;
+        // BUILD's form of an Offset from End B or the middle keeps its form
+        // (it follows the target's length); a number where that does not
+        // give the value (another length unit).
+        let was = self.parameters.value(id);
+        let kept = match (self.parameters.get(id), was) {
+            (Some(p), Some(was)) if !p.expr().is_plain_number() && build_form(self, id) => {
+                let text = rebased(p.expression(), v - was);
+                self.parameters.set_expression(id, &text).is_ok()
+                    && self
+                        .parameters
+                        .value(id)
+                        .is_some_and(|now| (now - v).abs() < 1e-6)
+            }
+            _ => false,
+        };
+        if !kept {
+            self.parameters
+                .set_value(id, v)
+                .map_err(|e| ModelError::Invalid(e.to_string()))?;
+        }
+        if self.parameters.value(id).is_some_and(|now| changed(v, now)) {
+            let reason = format!(
+                "the limits of its offset's parameter {} keep it from there",
+                self.parameters.name(id)
+            );
+            return Err(cannot_follow(self, who, with, &reason));
+        }
+        Ok(())
+    }
+}
+
 impl DocState {
     /// Rewrites the stored offsets of the carriages that follow another
     /// (mitcad#2274) from where the recompute `result` left them (their
     /// joints' values at the marker); true when one changed. Only the
     /// follower's own placement at its joint's point of the timeline
     /// depends on it: the Rigid joint or Rigid Group moves it on from there.
-    pub(crate) fn take_followed_offsets<S>(&mut self, result: &Recomputed<S>) -> bool {
+    ///
+    /// An offset that is an expression (mitcad#2317) keeps it: a user
+    /// parameter it names takes the value where nothing else uses it
+    /// ([`writable_offset`]); otherwise the command that moved the follower
+    /// (from where it was in `before`, the joints of the recompute before
+    /// the command) is refused in words. One the command did not move stays
+    /// as it is.
+    pub(crate) fn take_followed_offsets<S>(
+        &mut self,
+        result: &Recomputed<S>,
+        before: &JointsState,
+    ) -> Result<bool, ModelError> {
         let mut any = false;
         for f in in_effect(self, &result.joints) {
             let Some(values) = result
@@ -220,12 +414,26 @@ impl DocState {
                 let (Some(v), Some(was)) = (values.get(&motion), self.parameters.value(id)) else {
                     continue;
                 };
-                if changed(*v, was) && self.parameters.set_value(id, *v).is_ok() {
-                    any = true;
+                if !changed(*v, was) {
+                    continue;
                 }
+                if let Err(reason) = writable_offset(self, f.joint, id) {
+                    let moved = before
+                        .joints
+                        .get(&f.joint)
+                        .and_then(|r| r.values.as_ref())
+                        .and_then(|b| b.get(&motion))
+                        .is_none_or(|b| changed(*v, *b));
+                    if moved {
+                        return Err(cannot_follow(self, f.follower, f.leader, &reason));
+                    }
+                    continue;
+                }
+                self.write_offset(f.joint, id, *v, f.follower, f.leader)?;
+                any = true;
             }
         }
-        any
+        Ok(any)
     }
 
     /// An edit that changed the stored offset of one carriage of a set that
@@ -307,7 +515,7 @@ impl DocState {
                     name(moved)
                 ))
             })?;
-            let mut writes: BTreeMap<ParamId, f64> = BTreeMap::new();
+            let mut writes: BTreeMap<ParamId, (f64, FeatureUid, OccurrenceUid)> = BTreeMap::new();
             for (o, j) in set.iter().filter(|(o, _)| *o != moved) {
                 let Some(solved) = values.get(j) else {
                     continue;
@@ -336,14 +544,14 @@ impl DocState {
                         )));
                     }
                     if self.parameters.value(id).is_none_or(|was| changed(v, was)) {
-                        writes.insert(id, v);
+                        writes.insert(id, (v, *j, *o));
                     }
                 }
             }
-            for (id, v) in writes {
-                self.parameters
-                    .set_value(id, v)
-                    .map_err(|e| ModelError::Invalid(e.to_string()))?;
+            // An offset that is an expression keeps it, or the edit is
+            // refused in words (mitcad#2317).
+            for (id, (v, j, o)) in writes {
+                self.write_offset(j, id, v, o, moved)?;
             }
         }
         Ok(())

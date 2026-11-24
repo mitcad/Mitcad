@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <initializer_list>
 #include <map>
 #include <memory>
@@ -96,6 +97,7 @@
 #include "cutouts.hpp"
 #include "dressup_check.hpp"
 #include "dressup_strips.hpp"
+#include "end_face_dressup.hpp"
 #include "emboss_projection.hpp"
 #include "face_join.hpp"
 #include "face_select.hpp"
@@ -4479,7 +4481,11 @@ gp_Pnt middle_of(const TopoDS_Edge& edge) {
 // dressup's reach round the end) is taken off, so that a face on the plane
 // covers the whole section; `build` dresses the edges on that body (the
 // edges found again by their middles); the material is put back and the
-// faces of one surface joined. A chain end counts where one face at it
+// faces of one surface joined. Where the edge stands at right angles to the
+// plane and the end face goes on tangentially into a face beyond near the
+// end (a concave rounding the end face runs into, GitHub #608), the
+// material is put back less the region the dressup took away continued past
+// the plane (removal_continued, mitcad#2330): its walls run on through it. A chain end counts where one face at it
 // beside the edge's own two is a plane, and the material past it touches
 // no selected edge but at that end. Null where there is no such end or the
 // result is not one valid closed solid holding a face of the dressup
@@ -4506,6 +4512,15 @@ ShapePtr ended_on_end_planes_within(const Shape& input, const std::vector<int>& 
     }
     // The material past the end planes near the chains' ends.
     std::vector<TopoDS_Shape> pasts;
+    // The ends where the dressup goes on past the plane through that
+    // material (mitcad#2330): the plane, the way past it, the box's half
+    // size.
+    struct Continued {
+      gp_Pln plane;
+      gp_Dir out;
+      double reach;
+    };
+    std::vector<Continued> ends;
     for (int e = 0; e < input.edge_count() && e < static_cast<int>(owner.size()); ++e) {
       if (owner[static_cast<std::size_t>(e)] < 0) {
         continue;
@@ -4574,6 +4589,37 @@ ShapePtr ended_on_end_planes_within(const Shape& input, const std::vector<int>& 
         }
         if (clear) {
           pasts.push_back(within.Shape());
+          // Whether the dressup goes on past the plane through the
+          // material put back (mitcad#2330): the edge a line at right
+          // angles to the plane, and the end face going on tangentially
+          // into a face beyond near the end (an earlier concave rounding
+          // that the end face runs into, GitHub #608: the material under
+          // the end face there is that rounding's, and the dressup's walls
+          // run on down to it, as where it was built first). Not where
+          // the material past the plane stands across the end face
+          // (GitHub #353's shelf: the dressup ends against it).
+          bool continued = curve.GetType() == GeomAbs_Line &&
+                           std::abs(std::abs(curve.Line().Direction().Dot(normal)) - 1.0) <= 1.0e-9;
+          if (continued) {
+            continued = false;
+            for (TopExp_Explorer ex(end_face, TopAbs_EDGE); ex.More() && !continued; ex.Next()) {
+              const TopoDS_Edge& side_edge = TopoDS::Edge(ex.Current());
+              const int i = input.edge_index(side_edge);
+              if (i < 0 || BRep_Tool::Degenerated(side_edge)) {
+                continue;
+              }
+              for (const int f : edge_faces.at(i)) {
+                if (f != at_end.front() && std::find(own.begin(), own.end(), f) == own.end() &&
+                    detail::is_smooth(side_edge, end_face, input.face(f)) &&
+                    BRepExtrema_DistShapeShape(side_edge, vertex).Value() <= s) {
+                  continued = true;
+                }
+              }
+            }
+          }
+          if (continued) {
+            ends.push_back({plane, gp_Dir(gp_Vec(at, beyond)), s});
+          }
         }
       }
     }
@@ -4620,9 +4666,42 @@ ShapePtr ended_on_end_planes_within(const Shape& input, const std::vector<int>& 
     if (!dressed) {
       return nullptr;
     }
-    ShapePtr made = dressed;
+    // The material put back, less the region the dressup took away continued
+    // past the plane where it goes on through it (mitcad#2330: Fillet1 of
+    // GitHub #608's design after Fillet2 left Fillet2's rounding standing
+    // out past its own as a lip, a step at its foot, which the other order
+    // did not have).
+    std::vector<ShapePtr> back_pieces;
     for (const BooleanPiece& piece : taken.pieces) {
-      const BooleanResult back = boolean(BooleanOp::Join, {made.get()}, *piece.shape);
+      back_pieces.push_back(piece.shape);
+    }
+    for (const Continued& end : ends) {
+      const std::optional<ShapePtr> on_past =
+          detail::removal_continued(body, *dressed, end.plane, end.out, 2.0 * end.reach);
+      if (!on_past) {
+        return nullptr;
+      }
+      if (!*on_past) {
+        continue;
+      }
+      std::vector<ShapePtr> kept;
+      for (const ShapePtr& piece : back_pieces) {
+        const BooleanResult less = boolean(BooleanOp::Cut, {piece.get()}, **on_past);
+        if (less.touched.empty() || !less.touched.front()) {
+          kept.push_back(piece);
+          continue;
+        }
+        for (const BooleanPiece& part : less.pieces) {
+          kept.push_back(part.shape);
+        }
+      }
+      back_pieces = std::move(kept);
+    }
+    double put_back = 0.0;
+    ShapePtr made = dressed;
+    for (const ShapePtr& piece : back_pieces) {
+      put_back += std::abs(detail::volume_of(piece->occt()));
+      const BooleanResult back = boolean(BooleanOp::Join, {made.get()}, *piece);
       if (back.pieces.size() != 1) {
         return nullptr;
       }
@@ -4641,12 +4720,12 @@ ShapePtr ended_on_end_planes_within(const Shape& input, const std::vector<int>& 
         !holds_made_face(*result, generated)) {
       return nullptr;
     }
-    // (The material put back is what was taken off: the result is the
-    // dressed body and that material together, by volume within 1e-6 of the
-    // input's.)
+    // (The result is the dressed body and the material put back together,
+    // by volume within 1e-6 of the input's; without an end going on past
+    // its plane that material is what was taken off.)
     const double whole = std::abs(detail::volume_of(solid));
-    const double expected =
-        std::abs(detail::volume_of(dressed->occt())) + whole - std::abs(detail::volume_of(body.occt()));
+    const double expected = std::abs(detail::volume_of(dressed->occt())) +
+                            (ends.empty() ? whole - std::abs(detail::volume_of(body.occt())) : put_back);
     if (std::abs(std::abs(detail::volume_of(result->occt())) - expected) > 1.0e-6 * std::max(1.0, whole)) {
       return nullptr;
     }
@@ -4673,6 +4752,50 @@ ShapePtr ended_on_end_planes(const Shape& input, const std::vector<int>& owner, 
     }
   }
   return nullptr;
+}
+
+// A dressup (`role` "fillet" or "chamfer", its surface `what`: "rounding"
+// or "bevel") of straight edges between two planes that end on a flat face
+// of a rounded body smaller than the dressup's section, the face ending in
+// a rounding tangent to it there (end_face_dressup.hpp, mitcad#2229, GitHub
+// mitcad/Mitcad#566), whose contact lies past both faces beside such an
+// edge: no such dressup exists there (it touches neither face), refused in
+// words before the geometry kernel with the largest size that fits
+// (std::invalid_argument: no smaller retry; `size` the size asked of an
+// edge, `size_word` its word). Elsewhere nothing: the kernel builds the
+// dressup, its end past such a face included.
+void refuse_wider_than_the_body(const char* role, const char* what, const Shape& input,
+                                const std::vector<int>& owner, const detail::SectionReach& reach, bool round,
+                                const std::function<double(int)>& size, const char* size_word) {
+  std::optional<detail::WiderThanBody> wider;
+  try {
+    OCC_CATCH_SIGNALS
+    const std::optional<detail::DressupSide> side = detail::dressup_side(input, owner);
+    if (!side || *side != detail::DressupSide::Within) {
+      return;
+    }
+    wider = detail::wider_than_the_body(input, owner, reach, round);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    return;
+  }
+  if (!wider) {
+    return;
+  }
+  const int e = wider->edge;
+  // (In thousandths of a millimetre, down.)
+  const double fits = std::floor(wider->fits * size(e) * 1000.0 + 1.0e-6) / 1000.0;
+  char text[32];
+  std::snprintf(text, sizeof text, "%.3f", fits);
+  const std::string largest = std::string(": the largest ") + size_word + " that fits is " + text + " mm";
+  throw std::invalid_argument(
+      std::string(role) + " failed; " +
+      placed_error(std::string("the ") + what +
+                       " is wider than the body at its edge and touches neither face beside it" + largest,
+                   std::string("the ") + what + " of " + describe_edge(input, e) +
+                       " is wider than the body there and touches neither face beside it" + largest,
+                   {edge_place(input.edge_name(e))}));
 }
 
 // How far a dressup reaching `contact` along its faces counts as reaching
@@ -4720,8 +4843,10 @@ std::string worded_failure(const std::string& kernel, const std::string& where) 
 // runs onto it. The result is taken where it is one closed solid holding a
 // face of the rounding and the whole input lies within it (a rounding of
 // concave edges only adds material: the material taken away with the
-// narrow face is filled again, the narrow face consumed all along); its
-// faces are named after the picked edges. Null otherwise (never throws but
+// narrow face is filled again, the narrow face consumed all along), with
+// what it adds past the walls of the face the ball touches cut away
+// (added_past_walls, mitcad#2330); its faces are named after the picked
+// edges. Null otherwise (never throws but
 // for cancelling and invalid arguments); `applies` tells whether there was
 // such a narrow face. Other narrow faces beside the edges, still narrow on
 // that body, are continued past their far edges there (over_narrow_faces).
@@ -4746,6 +4871,32 @@ ShapePtr over_tangent_far_edges(const std::string& feature, const Shape& input, 
       throw;
     } catch (...) {
       made = over_narrow_faces(feature, "fillet", *grown->body, grown->owner, contact, 1.0, build);
+    }
+    // What the rounding adds past the walls of the face the ball touches
+    // beside the narrow one (a lip standing out past an earlier rounding of
+    // the corner where the rounding's contact runs off that face onto it,
+    // ended on the end face's plane: a step at the earlier rounding's foot,
+    // GitHub #608) is cut away, the walls continued down past the face
+    // (added_past_walls, mitcad#2330); where such a wall does not stand at
+    // right angles to the face (added_past_walls throws), this gives null
+    // and the rounding fails in words (past_narrow_faces).
+    if (made && grown->replaced.size() == 1) {
+      const std::optional<ShapePtr> lip = detail::added_past_walls(*copy, grown->replaced.front().first,
+                                                                   grown->replaced.front().second, *made);
+      if (lip && *lip) {
+        const BooleanResult clipped = boolean(BooleanOp::Cut, {made.get()}, **lip);
+        if (!clipped.touched.empty() && clipped.touched.front() && clipped.pieces.size() == 1 &&
+            BRepCheck_Analyzer(clipped.pieces.front().shape->occt()).IsValid()) {
+          const ShapePtr kept = clipped.pieces.front().shape;
+          kept->copy_notes(*made);
+          made = kept;
+        } else if (std::abs(detail::volume_of((*lip)->occt())) >
+                   1.0e-9 * std::max(1.0, std::abs(detail::volume_of(input.occt())))) {
+          // (A lip of micrometres the cut cannot take away stays, as
+          // before; a larger one is never left.)
+          return nullptr;
+        }
+      }
     }
     if (!made || !closed_solids(made->occt()) || !holds_made_face(*made, feature + ":fillet(")) {
       return nullptr;
@@ -6793,6 +6944,23 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
   if (whole) {
     return result;
   }
+  // A straight edge ending on a flat face of a rounded body smaller than
+  // the rounding's section, the rounding wider than the body there (its
+  // contact past both faces beside the edge): refused in words before the
+  // geometry kernel (refuse_wider_than_the_body, mitcad#2229).
+  bool constant = !any_blended;
+  for (int e = 0; constant && e < input.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+    const int s = owner[static_cast<std::size_t>(e)];
+    constant = s < 0 || sets[static_cast<std::size_t>(s)].size == FilletSize::Constant;
+  }
+  if (!result && constant) {
+    const auto radius_of = [&](int e) {
+      const int s = e >= 0 && e < static_cast<int>(owner.size()) ? owner[static_cast<std::size_t>(e)] : -1;
+      return s < 0 ? 0.0 : sets[static_cast<std::size_t>(s)].radius;
+    };
+    refuse_wider_than_the_body("fillet", "rounding", input, owner, [&](int e, int) { return radius_of(e); }, true,
+                               radius_of, "radius");
+  }
   // The edges at their exact size alone, none of the ways round a failure
   // (the rings, the narrow faces continued, the 0.1 % smaller retry), on a
   // first pass over groups of edges the kernel rounds apart (mitcad#2161).
@@ -7234,6 +7402,39 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
     }
   }
   const std::vector<int> owner = select_edges(input, sets);
+  // A straight edge ending on a flat face of a rounded body smaller than
+  // the bevel's section, the bevel wider than the body there (its contact
+  // past both faces beside the edge): refused in words before the geometry
+  // kernel (refuse_wider_than_the_body, mitcad#2229).
+  {
+    const auto set_of = [&](int e) -> const ChamferSet* {
+      const int s = e >= 0 && e < static_cast<int>(owner.size()) ? owner[static_cast<std::size_t>(e)] : -1;
+      return s < 0 ? nullptr : &sets[static_cast<std::size_t>(s)];
+    };
+    // (Each leg on its own face, as the chamfer measures it.)
+    const detail::SectionReach leg_on = [&](int e, int f) {
+      const ChamferSet* set = set_of(e);
+      if (set == nullptr) {
+        return 0.0;
+      }
+      const ChamferSpec& spec = set->spec;
+      if (spec.type == ChamferType::EqualDistance) {
+        return spec.distance;
+      }
+      const bool measured = measured_face(input, e, spec.reference_face, spec.flip) == f;
+      if (spec.type == ChamferType::TwoDistances) {
+        return measured ? spec.distance : spec.distance2;
+      }
+      return measured ? spec.distance : spec.distance * std::tan(spec.angle);
+    };
+    refuse_wider_than_the_body(
+        "chamfer", "bevel", input, owner, leg_on, false,
+        [&](int e) {
+          const ChamferSet* set = set_of(e);
+          return set == nullptr ? 0.0 : set->spec.distance;
+        },
+        "distance");
+  }
   const ShapePtr result =
       canonical(input, with_own_chains("chamfer", input, sets, owner, [&](const std::vector<int>& selected) {
     const auto rings = [&](const Shape& body) { return ring_chamfer(feature, body, sets, selected); };

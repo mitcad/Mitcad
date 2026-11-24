@@ -129,6 +129,8 @@ const Allowed kAllowed[] = {
     {"view/TexturedBody.hpp", 1,
      "white under a texture in the shaded view (mitcad#2186), which OCCT multiplies its texture by"},
     {"view/DecalView.cpp", 1, "white under a decal's image (mitcad#2244), which OCCT multiplies its texture by"},
+    {"view/ViewPaintLayer.cpp", 1,
+     "white under the picture of a drawing the view draws itself (mitcad#2296), which OCCT multiplies its texture by"},
 };
 
 // The source text without its comments: strings (raw strings too) and

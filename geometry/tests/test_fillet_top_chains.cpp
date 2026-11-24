@@ -24,8 +24,8 @@
 // the vertex, read past a stripe's surfdata and did not return. 1728: the
 // top's outer 0.5 now rides on from where its contact on the wall crosses
 // the foot's, over the foot's rounding down to the plate, which cuts both.
-// Checks: built, valid, the 0.5's ends on the plate where the walk puts
-// them.
+// Checks (test_outer_arm_ends_with_the_foot): built, valid, the 0.5's ends
+// on the plate where the walk puts them.
 //
 // The design's whole rounding, fifteen sets: twelve of them build together
 // with the port's patches, valid (test_twelve_sets); the other three need a
@@ -41,11 +41,11 @@
 // on the outer side at a leg's front lies where the file's stored body has
 // it (z = -505.566, within a thousandth).
 //
-// 1723: with the legs' inner front edges rounded with 0.5 too (set 12),
-// which reach past the ride's point there, the corner of three blends:
-// built, valid, its points at a leg's front where the stored body has them;
-// and the twelve sets with set 5 (thirteen of the fifteen) build together,
-// valid.
+// 1723 (test_tower_top_with_the_legs): with the legs' inner front edges
+// rounded with 0.5 too (set 12), which reach past the ride's point there,
+// the corner of three blends: built, valid, its points at a leg's front
+// where the stored body has them; and the twelve sets with set 5 (thirteen
+// of the fifteen) build together, valid (test_thirteen_sets).
 //
 // 1725: with set 6 too (the tower's outer foot of 2, whose rider is the
 // plate's rim rounded all round, a closed contour), fourteen of the fifteen
@@ -116,6 +116,8 @@
 #include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+
+#include "test_only.hpp"
 
 namespace {
 
@@ -288,10 +290,31 @@ void test_reported_body() {
       }
     }
   }
+}
 
-  // 1711, 1728: with the foot's rounding of 3. At the outer arm ends the
-  // top's outer 0.5 rides on from where its contact on the wall crosses
-  // the foot's down over the foot's rounding to the plate, which cuts both.
+// 1711, 1728: the top's chains as in test_reported_body (1710), with the
+// foot's rounding of 3. At the outer arm ends the top's outer 0.5 rides on
+// from where its contact on the wall crosses the foot's down over the
+// foot's rounding to the plate, which cuts both. Apart from
+// test_reported_body, so that 1710's check runs alone (MITCAD_TEST_ONLY).
+void test_outer_arm_ends_with_the_foot() {
+  const std::string dir = cases_dir();
+  if (dir.empty()) {
+    std::printf("test_outer_arm_ends_with_the_foot: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    return;
+  }
+  TopoDS_Shape body;
+  BRep_Builder builder;
+  if (!BRepTools::Read(body, (dir + "/fillet-wall-run-on/body.brep").c_str(), builder) || body.IsNull()) {
+    std::printf("test_outer_arm_ends_with_the_foot: skipped (no case fillet-wall-run-on)\n");
+    return;
+  }
+  std::vector<TopoDS_Edge> outer;
+  std::vector<TopoDS_Edge> inner;
+  top_chains(body, outer, inner);
+  check(outer.size() == 8 && inner.size() == 7, "the top's chains have eight and seven edges");
+  std::vector<TopoDS_Edge> both = outer;
+  both.insert(both.end(), inner.begin(), inner.end());
   BRepFilletAPI_MakeFillet with_foot(body);
   for (const TopoDS_Edge& e : outer_foot(body)) {
     if (with_foot.Contour(e) == 0) {
@@ -592,6 +615,10 @@ void test_tower_top(bool with_legs) {
   }
 }
 
+// The tower's top with the legs' inner front edges (1723): its own test
+// function, so that test_tower_top (1722) runs without it (MITCAD_TEST_ONLY).
+void test_tower_top_with_the_legs() { test_tower_top(true); }
+
 // The twelve sets and set 5 (the tower's top outer edge) in one fillet;
 // with set 6 (the tower's outer foot) the fourteen.
 void test_thirteen_sets(bool with_set6, bool with_pit) {
@@ -823,21 +850,45 @@ void test_whole_fillet1() {
 
 } // namespace
 
+// Each test function runs where MITCAD_TEST_ONLY names it, or without it
+// (test_only.hpp).
 int main() {
+  using test_only::selected;
   try {
-    test_reported_body();
-    const std::vector<RoundedEdge> twelve(std::begin(kTwelveSets), std::end(kTwelveSets));
-    test_sets("the twelve sets", twelve, false);
-    test_sets("the twelve sets", twelve, true);
-    test_tower_top(false);
-    test_tower_top(true);
-    test_thirteen_sets(false, false);
-    test_thirteen_sets(true, false);
-    test_thirteen_sets(true, true);
-    test_pit_beside_the_foot();
-    test_inner_arm_ends();
-    test_one_inner_arm();
-    test_whole_fillet1();
+    if (selected("test_reported_body")) {
+      test_reported_body();
+    }
+    if (selected("test_outer_arm_ends_with_the_foot")) {
+      test_outer_arm_ends_with_the_foot();
+    }
+    if (selected("test_sets")) {
+      const std::vector<RoundedEdge> twelve(std::begin(kTwelveSets), std::end(kTwelveSets));
+      test_sets("the twelve sets", twelve, false);
+      test_sets("the twelve sets", twelve, true);
+    }
+    if (selected("test_tower_top")) {
+      test_tower_top(false);
+    }
+    if (selected("test_tower_top_with_the_legs")) {
+      test_tower_top_with_the_legs();
+    }
+    if (selected("test_thirteen_sets")) {
+      test_thirteen_sets(false, false);
+      test_thirteen_sets(true, false);
+      test_thirteen_sets(true, true);
+    }
+    if (selected("test_pit_beside_the_foot")) {
+      test_pit_beside_the_foot();
+    }
+    if (selected("test_inner_arm_ends")) {
+      test_inner_arm_ends();
+    }
+    if (selected("test_one_inner_arm")) {
+      test_one_inner_arm();
+    }
+    if (selected("test_whole_fillet1")) {
+      test_whole_fillet1();
+    }
   } catch (const Standard_Failure& e) {
     std::fprintf(stderr, "unexpected OCCT error: %s\n", e.what());
     ++failures;

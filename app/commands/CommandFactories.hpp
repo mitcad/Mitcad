@@ -192,4 +192,8 @@ CommandDef boundaryFillCommand(const CommandContext& context);
 // one shape and cut from bodies in one operation.
 CommandDef cellGridCommand(const CommandContext& context);
 
+// ExplodeCommands.cpp (mitcad#2113): a step of an explode view, made or
+// edited from the Explode panel.
+CommandDef explodeStepCommand(const CommandContext& context);
+
 } // namespace mitcad::cmd

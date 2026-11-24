@@ -183,6 +183,11 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     snapshot.decals = model.queryArray(QStringLiteral("decals"));
   } catch (const std::exception&) {
   }
+  // Exploded views (mitcad#2113).
+  try {
+    snapshot.explodeViews = model.queryArray(QStringLiteral("explode_views"));
+  } catch (const std::exception&) {
+  }
   // CAM setups with their operations' states (mitcad#1013): a model
   // without CAM has none.
   try {
@@ -246,7 +251,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
                                           snapshot.measurements, snapshot.drawings, snapshot.imageReferences,
                                           snapshot.centerOfMass, snapshot.camSetups,
                                           snapshot.camMachines, snapshot.selectionSets, snapshot.pointClouds,
-                                          snapshot.decals})
+                                          snapshot.decals, snapshot.explodeViews})
                      .toJson(QJsonDocument::Compact);
   // The values Show When conditions use (mitcad#863): a parameter changed
   // without changing what is shown still changes the light bulbs' tooltips.
@@ -686,6 +691,25 @@ QJsonArray DocumentSnapshot::drawingsOf(const QString& component) const {
     }
   }
   return out;
+}
+
+QJsonArray DocumentSnapshot::explodeViewsOf(const QString& component) const {
+  QJsonArray out;
+  for (const QJsonValue& value : explodeViews) {
+    if (value.toObject().value(QStringLiteral("component")).toString() == component) {
+      out.append(value);
+    }
+  }
+  return out;
+}
+
+QJsonObject DocumentSnapshot::explodeView(const QString& name) const {
+  for (const QJsonValue& value : explodeViews) {
+    if (value.toObject().value(QStringLiteral("name")).toString() == name) {
+      return value.toObject();
+    }
+  }
+  return QJsonObject();
 }
 
 QJsonObject DocumentSnapshot::joint(const QString& uid) const {

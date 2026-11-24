@@ -66,6 +66,13 @@ MeshPlan planSaveAsMesh(const QVector<MeshItem>& items, const QJsonArray& instan
                         const QHash<QString, MeshBody>& bodies, const QHash<QString, QString>& components,
                         const QString& design);
 
+// Every body `items` stand for, each once, in the items' order, as
+// planSaveAsMesh finds them (a body of any kind: surface and empty ones
+// too): File › Export's and the context menus' Export… "Selected bodies"
+// (mitcad#2298), where a component stands for the bodies placed in its
+// occurrence and the occurrences in it, the root for every body.
+QStringList meshItemsBodies(const QVector<MeshItem>& items, const QJsonArray& instances);
+
 // The name of one file for `items`, without the extension (owner
 // 26.10.2026; File › Export too since mitcad#1164): one body's name (the
 // same body picked twice is one), one component's name where an occurrence

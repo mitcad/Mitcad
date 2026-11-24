@@ -123,12 +123,14 @@ std::optional<GraphicsFallback> graphicsFallback(const QString& platformName, co
                                  QStringLiteral("native Wayland")};
   const GraphicsFallback egl{kXcbEgl, kXcb, kXcbEgl, QStringLiteral("X11 (XWayland) with Qt's EGL integration")};
   const GraphicsFallback glx{QStringLiteral("xcb_glx"), kXcb, QStringLiteral("xcb_glx"),
-                             QStringLiteral("X11 with GLX: the window draws, the 3D view (EGL) cannot")};
+                             QStringLiteral("X11 with GLX, the 3D view through its own EGL context")};
+  // X11 first, as 0.69 drew every window with GLX; native Wayland, which
+  // is opt-in (mitcad#2031), only where both X11 options failed.
   QList<GraphicsFallback> order;
+  order << egl << glx;
   if (waylandSession) {
     order << wayland;
   }
-  order << egl << glx;
   for (const GraphicsFallback& option : std::as_const(order)) {
     if (option.key != current && !tried.contains(option.key)) {
       return option;

@@ -799,11 +799,14 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   actionTile(QStringLiteral("import"), tr("Import File…"), tr("STEP, IGES, DXF and more"), QStringLiteral("file.import"));
   column->addLayout(actionRow);
 
-  // The designs' browser (mitcad#1301) and Resources side by side.
+  // The designs' browser (mitcad#1301), or the tutorials (mitcad#2346,
+  // showTutorials), and Resources side by side.
   auto* middle = new QHBoxLayout;
   middle->setSpacing(16);
+  m_middle = middle;
   auto* recentPanel = new StartPanel;
   recentPanel->setObjectName(QStringLiteral("startPageRecent"));
+  m_designsPanel = recentPanel;
   auto* recentColumn = new QVBoxLayout(recentPanel);
   recentColumn->setContentsMargins(18, 14, 18, 16);
   recentColumn->setSpacing(12);
@@ -1068,6 +1071,11 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   resourceTile(QStringLiteral("library"), tr("Component Libraries"), tr("Standard components to place"),
               QStringLiteral("insert.library_component"));
   resourceTile(QStringLiteral("web"), tr("User Guide"), tr("Tools and workflows"), QStringLiteral("help.user_guide"));
+  // The tutorials to start, shown in the centre (mitcad#2346).
+  if (m_host.tutorials) {
+    resourceTile(QStringLiteral("tutorial"), tr("Tutorials"), tr("Learn step by step in a design"),
+                 QStringLiteral("help.tutorials"));
+  }
   resourceTile(QStringLiteral("keyboard"), tr("Keyboard Shortcuts"), tr("Every key and the mouse"),
               QStringLiteral("help.shortcuts"));
   resourceTile(QStringLiteral("assistant-chat"), tr("Connect AI Assistant"), tr("Set up your preferred agent"),
@@ -1800,6 +1808,45 @@ void StartPage::showCardMenu(const start::Card& card, const QPoint& global) {
   } else if (chosen == remove) {
     removeDesign(card);
   }
+}
+
+void StartPage::showTutorials() {
+  if (!m_host.tutorials) {
+    return;
+  }
+  if (m_tutorialsPanel == nullptr) {
+    // In the designs' browser's place, on a panel of the same look; the
+    // list reads its sources when it shows (TutorialChoice::showEvent).
+    auto* panel = new StartPanel;
+    panel->setObjectName(QStringLiteral("startPageTutorials"));
+    auto* layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(18, 14, 18, 16);
+    layout->setSpacing(12);
+    layout->addWidget(m_host.tutorials([this] { showDesigns(); }), 1);
+    panel->hide();
+    m_middle->insertWidget(m_middle->indexOf(m_designsPanel) + 1, panel, 3);
+    m_tutorialsPanel = panel;
+  }
+  m_tutorialsShown = true;
+  setDropActive(false);
+  m_designsPanel->hide();
+  m_tutorialsPanel->show();
+  // Every choice is logged, also one that changes nothing.
+  qInfo().noquote() << QStringLiteral("Start page section: tutorials");
+  logPlaces();
+}
+
+void StartPage::showDesigns() {
+  m_tutorialsShown = false;
+  if (m_tutorialsPanel != nullptr) {
+    m_tutorialsPanel->hide();
+  }
+  m_designsPanel->show();
+  qInfo().noquote() << QStringLiteral("Start page section: designs");
+  // The designs' list as it is now (a tutorial may have saved one).
+  m_loggedList.clear();
+  refresh();
+  logPlaces();
 }
 
 void StartPage::choose(const QString& what, const std::function<void()>& run) {

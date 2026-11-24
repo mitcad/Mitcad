@@ -2070,7 +2070,10 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         }
         self.component = self.components.of_item(index);
         if !self.component.is_root() {
-            self.report.items[at].component = Some(self.doc.assembly().name(self.component));
+            let component = self.doc.assembly().name(self.component);
+            // (The application's progress dialog names it, mitcad#2331.)
+            trace!("item component: {component}");
+            self.report.items[at].component = Some(component);
         }
         if let Some(p) = &self.options.progress {
             p.at(index);
@@ -5660,6 +5663,7 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
                     name: body.name.clone(),
                     color: None,
                     shape: body.shape.clone(),
+                    face_colors: Vec::new(),
                 })
                 .collect();
             // Removed bodies come after the replacing ones, when there are

@@ -57,7 +57,7 @@ $menus = [ordered]@{
     ' | - | Material | Appearance'
   'SOLID/ASSEMBLE' = ('New Component' +
     ' | - | Joint | As-Built Joint | Joint Origin | Rigid Group | Constraint | Constraint Set' +
-    ' | - | Drive Joint | Motion Link | Contact Set | - | Let It Hang | - | Animate Joint | Motion Study...').Replace('...', $e)
+    ' | - | Drive Joint | Motion Link | Contact Set | - | Let It Hang | - | Animate Joint | Motion Study... | Explode...').Replace('...', $e)
   'SOLID/CONSTRUCT' = $construct
   'SOLID/INSPECT' = 'Measure | Interference | Section Analysis | Print Analysis | Draft Analysis | Point Cloud Deviation | Physical Properties | Center of Mass | Add Comment'
   'SOLID/INSERT' = ('Insert Component | Insert from Library' +

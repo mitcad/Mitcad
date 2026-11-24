@@ -161,6 +161,20 @@ pub(super) struct MeasureQuery {
     /// Include the exact maximum nearest-face gap when supported (#661).
     #[serde(default)]
     face_range: bool,
+    /// The explode view the 3D view shows the design by (mitcad#2328):
+    /// the picks are measured where it shows them.
+    #[serde(default)]
+    explode: Option<ShownExplode>,
+}
+
+/// An explode view at a time of its animation, as the 3D view shows it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ShownExplode {
+    name: String,
+    /// Seconds into its animation; every step done when left out.
+    #[serde(default)]
+    time: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1224,7 +1238,21 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
 
     fn measure_json(&self, query: &MeasureQuery) -> Result<Value, ApiError> {
         let kernel = self.kernel();
-        let a = self.resolve_selection(&query.a)?;
+        // Where an explode view shows the picks (mitcad#2328).
+        let explode = query
+            .explode
+            .as_ref()
+            .map(|shown| self.explode_state(&shown.name, shown.time))
+            .transpose()
+            .map_err(|e| ApiError(e.to_string()))?;
+        let resolve = |arg: &SelectionArg| -> Result<Resolved<K::Shape>, ApiError> {
+            let resolved = self.resolve_selection(arg)?;
+            match &explode {
+                Some(explode) => self.shown_by(resolved, arg, explode),
+                None => Ok(resolved),
+            }
+        };
+        let a = resolve(&query.a)?;
         let mut value = json!({
             "a": measurement_json(&measure_resolved(kernel, &a, &query.a.describe())?),
         });
@@ -1232,7 +1260,7 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
         add_plane_json(&mut value["a"], a.element.as_ref());
         add_occurrence_json(&mut value["a"], a.occurrence.as_ref());
         if let Some(b_input) = &query.b {
-            let b = self.resolve_selection(b_input)?;
+            let b = resolve(b_input)?;
             value["b"] = measurement_json(&measure_resolved(kernel, &b, &b_input.describe())?);
             add_axis_json(&mut value["b"], b.element.as_ref());
             add_plane_json(&mut value["b"], b.element.as_ref());
@@ -1534,6 +1562,17 @@ trait AnalysisLocal<K: Kernel> {
     /// mitcad#981), a datum moved, with its plane, axis, line or point in
     /// the design's coordinates (mitcad#647).
     fn resolve_selection(&self, arg: &SelectionArg) -> Result<Resolved<K::Shape>, ApiError>;
+
+    /// A selection resolved, moved where an explode view shows it
+    /// (mitcad#2328): a body by the explode's motion of its occurrence (or
+    /// of itself, a body of the view's component), a datum with its
+    /// occurrence's.
+    fn shown_by(
+        &self,
+        resolved: Resolved<K::Shape>,
+        arg: &SelectionArg,
+        explode: &mitcad_model::ExplodeState,
+    ) -> Result<Resolved<K::Shape>, ApiError>;
 
     /// The plane, axis, line or point of a face, edge or vertex for Measure
     /// (mitcad#647), in the body's coordinates: a cylinder's, cone's or
@@ -1905,6 +1944,57 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 self.placements_text(paths)
             ))),
         }
+    }
+
+    fn shown_by(
+        &self,
+        mut resolved: Resolved<K::Shape>,
+        arg: &SelectionArg,
+        explode: &mitcad_model::ExplodeState,
+    ) -> Result<Resolved<K::Shape>, ApiError> {
+        let input = &self.selection_fields(arg)?;
+        let (owner, body) = match (&input.datum, input.body) {
+            (Some(id), None) => (
+                id.trim()
+                    .parse::<FeatureUid>()
+                    .ok()
+                    .and_then(|uid| self.feature(uid))
+                    .map(|entry| entry.component),
+                None,
+            ),
+            (None, Some(body)) => (self.body_component(body), Some(body)),
+            _ => return Ok(resolved),
+        };
+        // Its path from the root: the one given, else the owner's only
+        // placement (as `selection_transform` places it).
+        let path = match &resolved.occurrence {
+            Some(path) => path.0.clone(),
+            None => owner
+                .filter(|owner| !owner.is_root())
+                .and_then(|owner| match self.assembly().paths_to(owner).as_slice() {
+                    [path] => Some(path.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+        };
+        let motion = self.explode_motion(explode, &path, body);
+        if motion.is_identity() {
+            return Ok(resolved);
+        }
+        resolved.element = resolved
+            .element
+            .as_ref()
+            .and_then(|element| moved_element(element, &motion));
+        if body.is_some() {
+            resolved.placed = motion.after(&resolved.placed);
+        } else {
+            // A datum's shape is made where it is in the design.
+            resolved.shape = self
+                .kernel()
+                .transform_shape(&resolved.shape, &motion, None)
+                .map_err(kernel_error("measure"))?;
+        }
+        Ok(resolved)
     }
 
     fn resolve_selection(&self, arg: &SelectionArg) -> Result<Resolved<K::Shape>, ApiError> {

@@ -103,6 +103,23 @@ bool isLathe(const QJsonObject& data, int setup) {
       .contains(QStringLiteral("lathe"));
 }
 
+// Whether a turning panel's setup hands the part over to its lathe's
+// sub-spindle (mitcad#2319): its turning may turn the part's back there.
+bool handsOver(const CommandState& state) {
+  const QJsonObject data = camData(state);
+  const QJsonObject setup = setupOf(data, state.choice(QStringLiteral("setup")).toInt());
+  const bool sub = machineOf(data, str(setup, "machine"))
+                       .value(QStringLiteral("machine"))
+                       .toObject()
+                       .value(QStringLiteral("lathe"))
+                       .toObject()
+                       .value(QStringLiteral("axes"))
+                       .toObject()
+                       .value(QStringLiteral("sub_spindle"))
+                       .toBool();
+  return sub && setup.value(QStringLiteral("lathe")).toObject().contains(QStringLiteral("hand_over"));
+}
+
 QJsonArray toolsOf(const QJsonObject& data, int setup) {
   return machineOf(data, str(setupOf(data, setup), "machine"))
       .value(QStringLiteral("tools"))
@@ -316,6 +333,11 @@ QJsonObject turningFields(const CommandState& state, const QString& type, QStrin
   if (!leave.isNull() || edit) {
     op.insert(QStringLiteral("stock_to_leave"), leave);
   }
+  // The part's back on the sub-spindle (mitcad#2319).
+  const bool sub = handsOver(state) && state.checked(QStringLiteral("sub_spindle"));
+  if (sub || edit) {
+    op.insert(QStringLiteral("sub_spindle"), sub);
+  }
   op.insert(QStringLiteral("spindle"), state.choice(QStringLiteral("spindle")));
   op.insert(QStringLiteral("coolant"), state.choice(QStringLiteral("coolant")));
   if (!why->isEmpty()) {
@@ -447,6 +469,11 @@ CommandDef MainWindow::camTurningCommand(const QString& type) {
     def.inputs.append(checkInput(QStringLiteral("constant_rpm"), tr("Constant spindle speed"))
                           .withTooltip(tr("Turns at a set speed instead of a constant surface speed")));
   }
+  // The part's back on the sub-spindle, after the setup's hand-over
+  // (mitcad#2319).
+  def.inputs.append(checkInput(QStringLiteral("sub_spindle"), tr("On the sub-spindle"))
+                        .withTooltip(tr("Turns the part's back after the sub-spindle has taken it over"))
+                        .withVisible([](const CommandState& state) { return handsOver(state); }));
   def.inputs.append(valueInput(QStringLiteral("spindle_rpm"), tr("Spindle Speed (rpm)"), ValueKind::Unitless, QString())
                         .withAuto(fromDefaults)
                         .withTooltip(tr("Revolutions per minute; empty: from the surface speed"))
@@ -544,6 +571,7 @@ CommandDef MainWindow::camTurningCommand(const QString& type) {
       loadTurningValue(state, QString::fromLatin1(key), turning.value(QLatin1String(key)), ValueKind::Length, context);
     }
     state.setChecked(QStringLiteral("constant_rpm"), turning.value(QStringLiteral("constant_rpm")).toBool());
+    state.setChecked(QStringLiteral("sub_spindle"), op.value(QStringLiteral("sub_spindle")).toBool());
     loadTurningValue(state, QStringLiteral("stock_to_leave"), op.value(QStringLiteral("stock_to_leave")),
                      ValueKind::Length, context);
     for (const char* key : {"spindle", "coolant"}) {

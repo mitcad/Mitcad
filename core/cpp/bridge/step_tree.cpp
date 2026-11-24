@@ -62,6 +62,10 @@ void write_step_tree(rust::Str path, const ShapeList& shapes, rust::Slice<const 
       if (info.has_color) {
         body.color = io::Color{info.color[0], info.color[1], info.color[2]};
       }
+      for (const TreeFaceColor& face : info.face_colors) {
+        body.face_colors.push_back(
+            io::FaceColor{face.face, io::Color{face.color[0], face.color[1], face.color[2]}});
+      }
       for (const TreePlacement& placement : info.placements) {
         body.placements.push_back(placement_of(placement));
       }

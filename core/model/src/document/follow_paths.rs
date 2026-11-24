@@ -26,7 +26,8 @@ pub(crate) enum Follow<'a> {
     /// An occurrence moved to another parent (Reparent Occurrence): a path
     /// from the root that leads through `old` (its path before) leads
     /// through `new` (after). Plate items, comment targets, selection set
-    /// members and point clouds' occurrences; the drawings follow in the
+    /// members, point clouds' occurrences and explode views' steps
+    /// (`DocState::follow_explode_moved`); the drawings follow in the
     /// move's plan, which checks them.
     Moved {
         old: &'a [OccurrenceUid],
@@ -89,6 +90,9 @@ impl DocState {
                         moved(&mut path.0);
                     }
                 }
+                // Explode views' steps, paths from their components
+                // (mitcad#2328).
+                self.follow_explode_moved(old, new);
             }
             Follow::Into {
                 source,

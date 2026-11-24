@@ -75,10 +75,15 @@ pub enum AnnotationType {
     /// the drawing's own texts before, after or in place of them
     /// (`format`).
     HoleCallout,
+    /// A weld symbol (mitcad#2350): a reference line with its arrow to an
+    /// edge, a corner or a joint, the arrow side's and the other side's
+    /// symbols with their sizes, and a tail ([`WeldSymbol`]), drawn by the
+    /// drawing's standard (ISO 2553 or AWS A2.4).
+    Weld,
 }
 
 impl AnnotationType {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Linear,
         Self::Angle,
         Self::Radius,
@@ -96,6 +101,7 @@ impl AnnotationType {
         Self::CenterPattern,
         Self::EdgeExtension,
         Self::HoleCallout,
+        Self::Weld,
     ];
 
     /// Its name in commands and files.
@@ -118,6 +124,7 @@ impl AnnotationType {
             Self::CenterPattern => "center_pattern",
             Self::EdgeExtension => "edge_extension",
             Self::HoleCallout => "hole_callout",
+            Self::Weld => "weld",
         }
     }
 
@@ -187,6 +194,7 @@ impl AnnotationType {
                 | Self::PartsList
                 | Self::Balloon
                 | Self::HoleCallout
+                | Self::Weld
         )
     }
 }
@@ -546,6 +554,396 @@ fn is_any(process: &FinishProcess) -> bool {
     *process == FinishProcess::Any
 }
 
+// --- Weld symbols (mitcad#2350) ---------------------------------------------
+
+/// The most a weld symbol's sizes may be, in the drawing's length unit.
+pub const MAX_WELD_SIZE: f64 = 100_000.0;
+/// The most welds of an intermittent weld a symbol counts.
+pub const MAX_WELD_COUNT: u32 = 10_000;
+/// The longest tail text and joint key of a weld symbol, characters.
+pub const MAX_WELD_TEXT: usize = 200;
+
+/// A weld symbol's basic symbol (ISO 2553, AWS A2.4; mitcad#2350): the
+/// weld's kind, drawn on its side of the reference line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeldKind {
+    /// A triangle, its upright leg on the left.
+    Fillet,
+    /// Square butt (I): two upright lines.
+    Square,
+    /// Single V butt.
+    V,
+    /// Single bevel butt (half V): its upright leg on the left.
+    Bevel,
+    /// Single V butt with a broad root face (Y).
+    Y,
+    /// Single U butt.
+    U,
+    /// Single J butt: its upright leg on the left.
+    J,
+    /// Flare V: two arcs back to back.
+    FlareV,
+    /// Flare bevel: an upright line and an arc.
+    FlareBevel,
+    /// Plug or slot: a rectangle on the line.
+    Plug,
+    /// Spot: a circle.
+    Spot,
+    /// Seam: a circle with two lines through it.
+    Seam,
+    /// Back or backing weld (a back run): a half circle.
+    BackWeld,
+    /// A backing strip: a rectangle closed on the line.
+    Backing,
+    /// Surfacing: two arcs side by side.
+    Surfacing,
+}
+
+impl WeldKind {
+    pub const ALL: [Self; 15] = [
+        Self::Fillet,
+        Self::Square,
+        Self::V,
+        Self::Bevel,
+        Self::Y,
+        Self::U,
+        Self::J,
+        Self::FlareV,
+        Self::FlareBevel,
+        Self::Plug,
+        Self::Spot,
+        Self::Seam,
+        Self::BackWeld,
+        Self::Backing,
+        Self::Surfacing,
+    ];
+
+    /// Its name in commands and files.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Fillet => "fillet",
+            Self::Square => "square",
+            Self::V => "v",
+            Self::Bevel => "bevel",
+            Self::Y => "y",
+            Self::U => "u",
+            Self::J => "j",
+            Self::FlareV => "flare_v",
+            Self::FlareBevel => "flare_bevel",
+            Self::Plug => "plug",
+            Self::Spot => "spot",
+            Self::Seam => "seam",
+            Self::BackWeld => "back_weld",
+            Self::Backing => "backing",
+            Self::Surfacing => "surfacing",
+        }
+    }
+
+    /// Its words in the `drawing` query's label.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Fillet => "fillet",
+            Self::Square => "square butt",
+            Self::V => "V butt",
+            Self::Bevel => "bevel butt",
+            Self::Y => "Y butt",
+            Self::U => "U butt",
+            Self::J => "J butt",
+            Self::FlareV => "flare V",
+            Self::FlareBevel => "flare bevel",
+            Self::Plug => "plug",
+            Self::Spot => "spot",
+            Self::Seam => "seam",
+            Self::BackWeld => "back weld",
+            Self::Backing => "backing",
+            Self::Surfacing => "surfacing",
+        }
+    }
+
+    /// Whether it is a groove (butt) weld: its size the depth of its
+    /// preparation, its penetration written with it.
+    pub fn is_groove(self) -> bool {
+        matches!(
+            self,
+            Self::Square
+                | Self::V
+                | Self::Bevel
+                | Self::Y
+                | Self::U
+                | Self::J
+                | Self::FlareV
+                | Self::FlareBevel
+        )
+    }
+}
+
+/// What a fillet weld's size measures (ISO 2553): its throat (`a`, the
+/// default) or its leg (`z`). AWS A2.4 writes a leg bare and a throat in
+/// parentheses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilletMeasure {
+    #[default]
+    Throat,
+    Leg,
+}
+
+/// The weld's face: flush (flat), convex or concave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeldContour {
+    Flush,
+    Convex,
+    Concave,
+}
+
+/// How a weld's face is finished, written as its letter beyond its
+/// contour: chipped (C), ground (G), hammered (H), machined (M), rolled
+/// (R), by any way (U).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeldFinish {
+    Chip,
+    Grind,
+    Hammer,
+    Machine,
+    Roll,
+    Unspecified,
+}
+
+impl WeldFinish {
+    /// Its letter on the drawing.
+    pub fn letter(self) -> &'static str {
+        match self {
+            Self::Chip => "C",
+            Self::Grind => "G",
+            Self::Hammer => "H",
+            Self::Machine => "M",
+            Self::Roll => "R",
+            Self::Unspecified => "U",
+        }
+    }
+}
+
+/// One side's weld of a weld symbol: its basic symbol and its sizes, in
+/// the drawing's length unit as given.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeldSide {
+    pub symbol: WeldKind,
+    /// A fillet's throat or leg (`measure`), a groove's depth of
+    /// preparation, a spot's or a plug's diameter, a seam's width, a
+    /// surfacing's thickness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    /// What a fillet's size measures; the throat when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measure: Option<FilletMeasure>,
+    /// The depth of penetration (ISO's `s`; AWS's effective throat in
+    /// parentheses).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub penetration: Option<f64>,
+    /// How many welds an intermittent weld (or spots, plugs) has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    /// Each weld's length (a continuous weld's when no pitch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    /// An intermittent weld's pitch, from one weld's middle to the next:
+    /// more than its length. ISO 2553 writes the gap between them (`e`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contour: Option<WeldContour>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish: Option<WeldFinish>,
+    /// The weld's toes blended smoothly into the parts.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub toes_blended: bool,
+}
+
+impl WeldSide {
+    /// A weld of this kind without sizes.
+    pub fn new(symbol: WeldKind) -> Self {
+        Self {
+            symbol,
+            size: None,
+            measure: None,
+            penetration: None,
+            count: None,
+            length: None,
+            pitch: None,
+            contour: None,
+            finish: None,
+            toes_blended: false,
+        }
+    }
+
+    fn check(&self) -> Result<(), String> {
+        let size = |value: Option<f64>, what: &str| match value {
+            Some(v) if !(v.is_finite() && v > 0.0 && v <= MAX_WELD_SIZE) => Err(format!(
+                "a weld's {what} is more than 0 and at most {MAX_WELD_SIZE}"
+            )),
+            _ => Ok(()),
+        };
+        size(self.size, "size")?;
+        size(self.penetration, "penetration")?;
+        size(self.length, "length")?;
+        size(self.pitch, "pitch")?;
+        if self.measure.is_some() && self.symbol != WeldKind::Fillet {
+            return Err("only a fillet weld's size measures its throat or its leg".to_owned());
+        }
+        if let Some(count) = self.count
+            && !(1..=MAX_WELD_COUNT).contains(&count)
+        {
+            return Err(format!("a weld symbol counts 1 to {MAX_WELD_COUNT} welds"));
+        }
+        if let (Some(length), Some(pitch)) = (self.length, self.pitch)
+            && pitch <= length
+        {
+            return Err("an intermittent weld's pitch is more than each weld's length".to_owned());
+        }
+        if self.pitch.is_some() && self.length.is_none() {
+            return Err("an intermittent weld's pitch goes with each weld's length".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// A weld symbol (ISO 2553 or AWS A2.4 by the drawing's standard,
+/// mitcad#2350): the arrow side's weld and the other side's, each with its
+/// own symbol and sizes, the supplementary symbols at the arrow's end of
+/// the reference line (all around, field weld), and the tail's text (a
+/// process number or a note). A weld proposed for a BUILD joint keeps the
+/// joint's key (`joint`), so that proposing again finds it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeldSymbol {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrow_side: Option<WeldSide>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_side: Option<WeldSide>,
+    /// Welded all around: a circle where the arrow meets the reference
+    /// line.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all_around: bool,
+    /// Welded on site (a field weld): a flag where the arrow meets the
+    /// reference line.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub field: bool,
+    /// The two sides' intermittent welds staggered: the other side's
+    /// symbol drawn offset along the line.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub staggered: bool,
+    /// The tail's text: a process number (ISO 4063), a specification or a
+    /// note; no tail when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail: Option<String>,
+    /// The BUILD joint it was proposed for (`build_junctions`' id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joint: Option<String>,
+}
+
+impl WeldSymbol {
+    /// A symbol of one weld on the arrow side.
+    pub fn arrow(side: WeldSide) -> Self {
+        Self {
+            arrow_side: Some(side),
+            ..Self::default()
+        }
+    }
+
+    /// Why it cannot be kept, if it cannot.
+    pub fn check(&self) -> Result<(), String> {
+        if self.arrow_side.is_none() && self.other_side.is_none() {
+            return Err(
+                "a weld symbol has a weld on the arrow side, the other side or both".to_owned(),
+            );
+        }
+        for side in [&self.arrow_side, &self.other_side].into_iter().flatten() {
+            side.check()?;
+        }
+        if self.staggered && (self.arrow_side.is_none() || self.other_side.is_none()) {
+            return Err("staggered welds are on both sides".to_owned());
+        }
+        if let Some(tail) = &self.tail
+            && (tail.trim().is_empty() || tail.chars().count() > MAX_WELD_TEXT)
+        {
+            return Err(format!(
+                "a weld symbol's tail has a text of 1 to {MAX_WELD_TEXT} characters"
+            ));
+        }
+        if let Some(joint) = &self.joint
+            && (joint.trim().is_empty()
+                || joint.trim() != joint.as_str()
+                || joint.chars().count() > MAX_WELD_TEXT)
+        {
+            return Err("a weld symbol's joint is a BUILD joint's key".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Its words in the `drawing` query: each side's weld and sizes, then
+    /// all around, field weld and the tail.
+    pub fn label(&self) -> String {
+        let number = |v: f64| {
+            let text = format!("{v:.3}");
+            text.trim_end_matches('0').trim_end_matches('.').to_owned()
+        };
+        let side = |s: &WeldSide, which: &str| {
+            let mut words = vec![s.symbol.words().to_owned()];
+            if let Some(size) = s.size {
+                let prefix = match (s.symbol, s.measure.unwrap_or_default()) {
+                    (WeldKind::Fillet, FilletMeasure::Throat) => "a",
+                    (WeldKind::Fillet, FilletMeasure::Leg) => "z",
+                    _ => "",
+                };
+                words.push(format!("{prefix}{}", number(size)));
+            }
+            if let Some(p) = s.penetration {
+                words.push(format!("s{}", number(p)));
+            }
+            match (s.count, s.length, s.pitch) {
+                (count, Some(l), Some(p)) => words.push(format!(
+                    "{}{}-{}",
+                    count.map(|n| format!("{n}×")).unwrap_or_default(),
+                    number(l),
+                    number(p)
+                )),
+                (count, Some(l), None) => words.push(format!(
+                    "{}{}",
+                    count.map(|n| format!("{n}×")).unwrap_or_default(),
+                    number(l)
+                )),
+                (Some(n), None, _) => words.push(format!("{n}×")),
+                (None, None, _) => {}
+            }
+            format!("{} ({which})", words.join(" "))
+        };
+        let mut parts = Vec::new();
+        if let Some(s) = &self.arrow_side {
+            parts.push(side(s, "arrow side"));
+        }
+        if let Some(s) = &self.other_side {
+            parts.push(side(s, "other side"));
+        }
+        if self.staggered {
+            parts.push("staggered".to_owned());
+        }
+        if self.all_around {
+            parts.push("all around".to_owned());
+        }
+        if self.field {
+            parts.push("field weld".to_owned());
+        }
+        if let Some(tail) = &self.tail {
+            parts.push(tail.trim().to_owned());
+        }
+        parts.join(" / ")
+    }
+}
+
 /// An annotation on a view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -589,6 +987,9 @@ pub struct ViewAnnotation {
     pub frame: Option<GeometricTolerance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish: Option<SurfaceFinish>,
+    /// A weld symbol's welds, sizes and tail (mitcad#2350).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weld: Option<WeldSymbol>,
     /// A hole table's or a parts list's settings (its place on the sheet,
     /// columns, sort, ...).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -692,6 +1093,7 @@ impl ViewAnnotation {
             letter: None,
             frame: None,
             finish: None,
+            weld: None,
             table: None,
             height: None,
             turn: None,
@@ -844,6 +1246,14 @@ impl ViewAnnotation {
         }
         if self.finish.is_some() && kind != AnnotationType::Finish {
             return Err("only a surface finish symbol has a finish".to_owned());
+        }
+        match (&self.weld, kind) {
+            (Some(weld), AnnotationType::Weld) => weld.check()?,
+            (None, AnnotationType::Weld) => {
+                return Err("a weld symbol needs its welds".to_owned());
+            }
+            (Some(_), _) => return Err("only a weld symbol has welds".to_owned()),
+            (None, _) => {}
         }
         match (&self.table, kind.is_table()) {
             (Some(table), true) => table.check(kind == AnnotationType::HoleTable)?,

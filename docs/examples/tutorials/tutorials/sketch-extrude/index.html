@@ -39,10 +39,42 @@ for (const step of steps) {
   list.appendChild(item);
 }
 let next = 0;
+// Where the user is, for the Start page's card ("In progress (step 2 of 5)",
+// "Done") and to continue there later (docs/tutorials.md, "Progress").
+// mitcad.call works with every MitCad that has the bridge; an older one
+// without set_progress refuses it, and the tutorial goes on.
+function progress(value) {
+  mitcad.call("set_progress", value).catch(() => {});
+}
 function show(index) {
   document.querySelectorAll("li").forEach(li => li.classList.remove("now"));
   document.getElementById("step-" + steps[index].id).classList.add("now");
+  progress({step: index + 1, steps: steps.length});
   mitcad.startStep(steps[index]).catch(error => console.log("mitcad:tutorial:step refused: " + error.message));
+}
+// Left at a later step: the steps before it marked done, and the choice to
+// go on there or to start over.
+function offerToContinue(step) {
+  next = step - 1;
+  for (let i = 0; i < next; i += 1) {
+    document.getElementById("step-" + steps[i].id).classList.add("done");
+  }
+  const offer = document.createElement("p");
+  offer.textContent = "You stopped at step " + step + " of " + steps.length + ". ";
+  const goOn = document.createElement("button");
+  goOn.textContent = "Continue";
+  goOn.onclick = () => { offer.remove(); show(next); };
+  const over = document.createElement("button");
+  over.textContent = "Start over";
+  over.onclick = () => {
+    offer.remove();
+    document.querySelectorAll("li").forEach(li => li.classList.remove("done"));
+    next = 0;
+    show(0);
+  };
+  offer.append(goOn, " ", over);
+  list.before(offer);
+  console.log("mitcad:tutorial:offered to continue at " + step);
 }
 if (window.mitcad) {
   // What the page logs as "mitcad:tutorial:..." is in MitCad's log, for
@@ -55,6 +87,7 @@ if (window.mitcad) {
       show(next);
     } else {
       document.getElementById("end").hidden = false;
+      progress({done: true});
       console.log("mitcad:tutorial:finished");
     }
   });
@@ -67,7 +100,14 @@ if (window.mitcad) {
       list.after(again);
     }
   });
-  show(0);
+  mitcad.state().then(state => {
+    const saved = state.progress;
+    if (saved && saved.state === "in_progress" && saved.step > 1 && saved.step <= steps.length) {
+      offerToContinue(saved.step);
+    } else {
+      show(0);
+    }
+  }, () => show(0));
 }
 </script>
 </body>

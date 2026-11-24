@@ -130,7 +130,7 @@ use mitcad_model::datum::{
     CurveGeometry, PathParameter, PathPoint, SurfaceGeometry, SurfacePoint, Vec3,
 };
 use mitcad_model::exchange::{
-    ExportBody, ExportFormat, ExportOptions, LengthUnit, ReadOptions, StepSchema,
+    ExportBody, ExportFormat, ExportOptions, FaceColor, LengthUnit, ReadOptions, StepSchema,
 };
 use mitcad_model::topo::FaceBoundaryRef;
 use mitcad_model::{BodyKind, ImportBody};
@@ -731,6 +731,14 @@ impl Kernel for OcctKernel {
                 name: (!info.name.is_empty()).then_some(info.name),
                 color: info.has_color.then_some(info.color),
                 shape,
+                face_colors: info
+                    .face_colors
+                    .iter()
+                    .map(|f| FaceColor {
+                        face: f.face,
+                        color: f.color,
+                    })
+                    .collect(),
             })
             .collect())
     }
@@ -762,6 +770,14 @@ impl Kernel for OcctKernel {
                         name: p.name.clone(),
                     })
                     .collect(),
+                face_colors: body
+                    .face_colors
+                    .iter()
+                    .map(|f| exchange::ffi::FaceColor {
+                        face: f.face,
+                        color: f.color,
+                    })
+                    .collect(),
             });
         }
         let tolerance = options.refinement.tolerance();
@@ -776,6 +792,8 @@ impl Kernel for OcctKernel {
                 ExportFormat::ThreeMf => return Err(KernelError::Unsupported("3MF files")),
                 // And USDZ from face_meshes (mitcad#123).
                 ExportFormat::Usdz => return Err(KernelError::Unsupported("USDZ files")),
+                // And URDF packages from triangle_mesh (mitcad#2100).
+                ExportFormat::Urdf => return Err(KernelError::Unsupported("URDF files")),
             },
             ap242: options.step_schema == StepSchema::Ap242,
             unit: match options.unit {
@@ -2850,6 +2868,14 @@ impl Kernel for OcctKernel {
                 name: named(info.name),
                 color: info.has_color.then_some(info.color),
                 shape,
+                face_colors: info
+                    .face_colors
+                    .iter()
+                    .map(|f| FaceColor {
+                        face: f.face,
+                        color: f.color,
+                    })
+                    .collect(),
             })
             .collect();
         if !read.assembly {
@@ -3314,6 +3340,14 @@ impl Kernel for OcctKernel {
                         .placements
                         .iter()
                         .map(|p| placement(&p.transform, &p.name))
+                        .collect(),
+                    face_colors: body
+                        .face_colors
+                        .iter()
+                        .map(|f| step_tree::ffi::TreeFaceColor {
+                            face: f.face,
+                            color: f.color,
+                        })
                         .collect(),
                 });
             }

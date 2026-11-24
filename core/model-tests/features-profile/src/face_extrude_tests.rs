@@ -81,6 +81,7 @@ fn imported(doc: &mut Document<MockKernel>, history: &str) -> BodyUid {
                 name: Some("Part".to_owned()),
                 color: None,
                 shape: MockShape::imported(history, 6),
+                face_colors: Vec::new(),
             }])
         })
         .unwrap();

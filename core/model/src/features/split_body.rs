@@ -267,7 +267,11 @@ fn split_tool<K: Kernel>(
         return resolve_tool(ctx, tool, offset, direction);
     };
     let Some(link) = links.get(&body) else {
-        return resolve_tool(ctx, tool, offset, direction);
+        // A tool of another component without its link (mitcad#2299): said
+        // in words, not as a body id and an activation that cannot help
+        // (the split is in the component of the bodies it splits).
+        return resolve_tool(ctx, tool, offset, direction)
+            .map_err(|e| unlinked_tool(ctx, body).unwrap_or(e));
     };
     let (component, transform) = ctx.linked(link).map_err(|e| format!("tool {body}: {e}"))?;
     let shape = ctx.body_in(component, body)?;
@@ -282,5 +286,23 @@ fn split_tool<K: Kernel>(
             Resolved::Face { shape, face }
         }
         _ => Resolved::Body { shape },
+    })
+}
+
+/// Why a tool on `body` cannot be read when `body` is a body of another
+/// component than the split's and no `tool_links` entry says where that
+/// component is seen; `None` for a body of the split's own component.
+fn unlinked_tool<K: Kernel>(ctx: &EvalContext<'_, K>, body: BodyUid) -> Option<String> {
+    if ctx.env.bodies.contains_key(&body) {
+        return None;
+    }
+    let owner = *ctx.env.owners.get(&body)?;
+    (owner != ctx.component()).then(|| {
+        format!(
+            "the splitting tool is in {}, another component, and the split does not say where \
+             that component is placed: pick the tool again in the view, where that component \
+             is seen",
+            ctx.env.assembly.name(owner)
+        )
     })
 }

@@ -287,7 +287,7 @@ int make(const Arguments& args) {
     shape = BRepBuilderAPI_Transform(shape, move, true).Shape();
   }
   const std::string name = args.option("--name").value_or(kind);
-  mitcad::io::write_file(p.back(), {Body{name, shape, std::nullopt, {}}});
+  mitcad::io::write_file(p.back(), {Body{name, shape, std::nullopt, {}, {}}});
   return 0;
 }
 
@@ -474,7 +474,7 @@ int section(const Arguments& args) {
   report.add("area_mm2", s.area);
   if (const auto out = args.option("--out")) {
     const TopoDS_Shape& result = s.face_count > 0 ? s.faces : s.curves;
-    mitcad::io::write_file(*out, {Body{"Section", result, std::nullopt, {}}});
+    mitcad::io::write_file(*out, {Body{"Section", result, std::nullopt, {}, {}}});
   }
   report.print(args.json);
   return 0;

@@ -2,9 +2,13 @@
   "id": "sketch-extrude",
   "title": "Your first part: a sketch and an extrude",
   "language": "en",
-  "version": "1.0",
+  "version": "1.1",
   "min_mitcad": "0.68.0",
   "license": "CC0-1.0",
   "description": "Draw a rectangle on the XY plane and extrude it 20 mm into a block.",
-  "start": "index.html"
+  "start": "index.html",
+  "duration": 5,
+  "level": "beginner",
+  "picture": "images/result.png",
+  "order": 1
 }

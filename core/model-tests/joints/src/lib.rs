@@ -26,3 +26,7 @@ mod joint_holder_tests;
 mod flexible_free_parts_tests;
 // A new joint keeps what earlier joints hold where it is (mitcad#2199).
 mod earlier_joint_kept_tests;
+// Exploded views of assemblies (mitcad#2113).
+mod explode_tests;
+// Exploded views that follow the design, and Measure on them (mitcad#2328).
+mod explode_follow_2328_tests;

@@ -39,7 +39,9 @@ use crate::transform::{Instance, Transform};
 /// feature's component through the occurrence of it that the first such
 /// path passes through (mitcad#2305: a part picked through the second
 /// occurrence of its parent is taken through that one, so that it lands on
-/// the picked target there), else through its first occurrence. Without
+/// the picked target there), else through the occurrence a
+/// `move_occurrence` records in `parent_occurrence` (mitcad#2307: both
+/// points at the root level), else through its first occurrence. Without
 /// one, the reference is in the feature's component's coordinates, as
 /// before.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,7 +67,8 @@ pub enum MoveSpec<P = ParamId> {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         axis_occurrence: Option<OccurrencePath>,
     },
-    /// Takes `from` onto `to`.
+    /// Takes `from` onto `to`; with `along` an axis, only along that axis
+    /// (mitcad#2339).
     PointToPoint {
         from: GeomRef,
         to: GeomRef,
@@ -73,6 +76,8 @@ pub enum MoveSpec<P = ParamId> {
         from_occurrence: Option<OccurrencePath>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         to_occurrence: Option<OccurrencePath>,
+        #[serde(default, skip_serializing_if = "MoveAlong::is_all")]
+        along: MoveAlong,
     },
     /// Takes `point` to the position.
     PointToPosition {
@@ -83,6 +88,41 @@ pub enum MoveSpec<P = ParamId> {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         point_occurrence: Option<OccurrencePath>,
     },
+}
+
+/// What Point to Point keeps of the motion from its origin to its target
+/// (mitcad#2339): all of it, or only its distance along one axis of the
+/// feature's component (the component that holds what moves), so that a
+/// body is brought level with a face, an edge or a point along that axis
+/// without moving sideways.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveAlong {
+    /// The whole motion, as before `along` existed.
+    #[default]
+    All,
+    X,
+    Y,
+    Z,
+}
+
+impl MoveAlong {
+    /// Whether the whole motion is kept (left out of the definition).
+    pub fn is_all(&self) -> bool {
+        *self == Self::All
+    }
+
+    /// The part of `motion` that is kept: the one component along the
+    /// axis (exactly, the others exactly 0), or all of it.
+    pub fn keep(self, motion: Vec3) -> Vec3 {
+        let axis = match self {
+            Self::All => return motion,
+            Self::X => 0,
+            Self::Y => 1,
+            Self::Z => 2,
+        };
+        std::array::from_fn(|i| if i == axis { motion[i] } else { 0.0 })
+    }
 }
 
 /// What a move's motion was worked out from (mitcad#838): a Rotate's axis
@@ -162,11 +202,13 @@ impl<P> MoveSpec<P> {
                 to,
                 from_occurrence,
                 to_occurrence,
+                along,
             } => MoveSpec::PointToPoint {
                 from: from.clone(),
                 to: to.clone(),
                 from_occurrence: from_occurrence.clone(),
                 to_occurrence: to_occurrence.clone(),
+                along: *along,
             },
             MoveSpec::PointToPosition {
                 point,
@@ -203,6 +245,7 @@ impl<P> MoveSpec<P> {
                 to,
                 from_occurrence,
                 to_occurrence,
+                ..
             } => vec![
                 (from, from_occurrence.as_ref()),
                 (to, to_occurrence.as_ref()),
@@ -236,6 +279,7 @@ impl<P> MoveSpec<P> {
                 to,
                 from_occurrence,
                 to_occurrence,
+                ..
             } => vec![(from, from_occurrence), (to, to_occurrence)],
             MoveSpec::PointToPosition {
                 point,
@@ -317,14 +361,21 @@ impl MoveSpec {
         Ok(())
     }
 
+    /// The motion in the feature's component's coordinates. `parent`: the
+    /// occurrence of the feature's component what moves was picked
+    /// through (a `move_occurrence`'s `parent_occurrence`, mitcad#2307),
+    /// the frame when no picked path passes through one.
     pub(crate) fn resolve<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
+        parent: Option<&OccurrencePath>,
     ) -> Result<Transform, String> {
         // The paths the points and axes were picked in, from, to, point or
         // axis first: the first that passes through an occurrence of the
-        // feature's component gives the frame (mitcad#2305).
-        let picked = self.occurrence_paths();
+        // feature's component gives the frame (mitcad#2305); else the
+        // occurrence what moves was picked through (mitcad#2307).
+        let mut picked = self.occurrence_paths();
+        picked.extend(parent);
         let transform = match self {
             Self::Free { matrix } => free_transform(matrix)?,
             Self::TranslateXyz { x, y, z } => {
@@ -357,11 +408,16 @@ impl MoveSpec {
                 to,
                 from_occurrence,
                 to_occurrence,
+                along,
             } => {
                 let from = placed_point(ctx, from, from_occurrence.as_ref(), &picked)?;
                 let to = placed_point(ctx, to, to_occurrence.as_ref(), &picked)?;
+                // The points as resolved; the app keeps Along's part of the
+                // motion itself during a drag (mitcad#2339).
                 ctx.move_basis = Some(MotionBasis::PointToPoint { from, to });
-                Transform::translation(sub(to, from))
+                // Along an axis of the feature's component, only that
+                // distance (mitcad#2339).
+                Transform::translation(along.keep(sub(to, from)))
             }
             Self::PointToPosition {
                 point,
@@ -544,7 +600,7 @@ impl FeatureInfo for MoveDef {
 
 impl<K: Kernel> Evaluate<K> for MoveDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
-        let transform = self.transform.resolve(ctx)?;
+        let transform = self.transform.resolve(ctx, None)?;
         place_bodies(ctx, &self.bodies, &transform, self.copy)
     }
 }

@@ -453,6 +453,9 @@ pub struct MockKernel {
     /// the third too; other cuts keep the target's bounds. Faces and edges
     /// as without this.
     pub box_booleans: Cell<bool>,
+    /// The faces' own colours of each body of each `write_file` and of each
+    /// body of each `write_step_tree`'s definitions, in order (mitcad#2313).
+    pub written_face_colors: RefCell<Vec<Vec<Vec<mitcad_model_base::exchange::FaceColor>>>>,
 }
 
 /// A definition of a tree `write_step_tree` wrote ([`MockKernel::step_trees`],
@@ -2120,6 +2123,9 @@ impl Kernel for MockKernel {
         self.written_placements
             .borrow_mut()
             .push(bodies.iter().map(|b| b.placements.to_vec()).collect());
+        self.written_face_colors
+            .borrow_mut()
+            .push(bodies.iter().map(|b| b.face_colors.to_vec()).collect());
         self.written.borrow_mut().push((
             path.to_owned(),
             options.format,
@@ -3316,6 +3322,19 @@ impl Kernel for MockKernel {
             LoftSection::Region { region, .. } => format!("region {}", region.key),
             LoftSection::Face { face, .. } => format!("face {face}"),
             LoftSection::Point(p) => format!("point {p:?}"),
+            // A chain of curves (mitcad#2345), its plane when it has one.
+            LoftSection::Chain { curves, normal } => {
+                let chain = describe_chains(std::slice::from_ref(&curves.to_vec()));
+                match normal {
+                    Some(n) => format!(
+                        "chain {chain} normal {} {} {}",
+                        number(n[0]),
+                        number(n[1]),
+                        number(n[2])
+                    ),
+                    None => format!("chain {chain}"),
+                }
+            }
         };
         let names = |path: &[PathCurve]| {
             path.iter()
@@ -3343,12 +3362,19 @@ impl Kernel for MockKernel {
             let rails: Vec<String> = spec.rails.iter().map(|r| names(r)).collect();
             text += &format!(" rails {}", rails.join("; "));
         }
-        for (which, end) in [("start", spec.start), ("end", spec.end)] {
+        for (which, end, face) in [
+            ("start", spec.start, spec.start_face.as_ref()),
+            ("end", spec.end, spec.end_face.as_ref()),
+        ] {
             if !matches!(end.kind, LoftEndKind::Free | LoftEndKind::PointSharp) {
                 text += &format!(
                     " {which} {:?} angle {} weight {}",
                     end.kind, end.angle, end.weight
                 );
+            }
+            // A Perpendicular end's face (mitcad#2345).
+            if let Some(face) = face {
+                text += &format!(" face {}", face.face);
             }
         }
         // A frame along the centre line (mitcad#543).
@@ -3380,10 +3406,18 @@ impl Kernel for MockKernel {
             text += " tangent_edges merge";
         }
         self.specs.borrow_mut().push(text);
+        // Chains of curves (mitcad#2345): a sheet as loft_sheet's.
+        if let Some(LoftSection::Chain { curves, .. }) = spec.sections.first() {
+            return Ok(sheet_of_chains(
+                format!("loft({}:{})", spec.feature, spec.sections.len()),
+                spec.feature,
+                &[curves.to_vec()],
+            ));
+        }
         let key = |section: &LoftSection<'_, MockShape>| match section {
             LoftSection::Region { region, .. } => Some(RoleKey::Region(region.key.clone())),
             LoftSection::Face { face, .. } => Some(RoleKey::Face(Box::new((*face).clone()))),
-            LoftSection::Point(_) => None,
+            LoftSection::Point(_) | LoftSection::Chain { .. } => None,
         };
         let mut faces = Vec::new();
         for section in &spec.sections {
@@ -3402,7 +3436,7 @@ impl Kernel for MockKernel {
                     ));
                     break;
                 }
-                LoftSection::Point(_) => {}
+                LoftSection::Point(_) | LoftSection::Chain { .. } => {}
             }
         }
         if !spec.closed {
@@ -7237,6 +7271,12 @@ impl Kernel for MockKernel {
         }
         self.call("write")?;
         self.write_units.borrow_mut().push(options.unit);
+        self.written_face_colors.borrow_mut().push(
+            tree.definitions
+                .iter()
+                .flat_map(|d| d.bodies.iter().map(|b| b.face_colors.to_vec()))
+                .collect(),
+        );
         let definitions = tree
             .definitions
             .iter()

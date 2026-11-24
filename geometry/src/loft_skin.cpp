@@ -8,11 +8,14 @@
 #include <cstdio>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
+#include <Adaptor3d_Curve.hxx>
+#include <Approx_CurvilinearParameter.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -32,7 +35,9 @@
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <GeomAbs_Shape.hxx>
 #include <GeomAdaptor_Curve.hxx>
+#include <Geom2d_Curve.hxx>
 #include <GeomConvert.hxx>
 #include <GeomConvert_CompCurveToBSplineCurve.hxx>
 #include <GeomFill_SectionGenerator.hxx>
@@ -42,13 +47,17 @@
 #include <Geom_TrimmedCurve.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
+#include <NCollection_IndexedMap.hxx>
 #include <NCollection_Sequence.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
 
@@ -261,9 +270,11 @@ std::vector<Rail> meet_rails(const std::vector<Path>& paths, const std::vector<S
 }
 
 // The wire with its edges split at the points that lie inside them;
-// `origin` gets every edge of the result with the edge it came from.
+// `origin` gets every edge of the result with the edge it came from. Closed,
+// but for an `open` chain of curves (mitcad#2345), which OCCT's matching of
+// the sections must take as open.
 TopoDS_Wire split_at(const TopoDS_Wire& wire, const std::vector<gp_Pnt>& points, double tolerance,
-                     std::vector<std::pair<TopoDS_Edge, TopoDS_Edge>>& origin) {
+                     std::vector<std::pair<TopoDS_Edge, TopoDS_Edge>>& origin, bool open = false) {
   BRep_Builder builder;
   TopoDS_Wire result;
   builder.MakeWire(result);
@@ -312,7 +323,83 @@ TopoDS_Wire split_at(const TopoDS_Wire& wire, const std::vector<gp_Pnt>& points,
       origin.emplace_back(oriented, edge);
     }
   }
+  result.Closed(!open);
+  return result;
+}
+
+// A section of one closed edge (a circle, a ring of tangent edges merged
+// into one, mitcad#2162) has no vertex of its own: its seam is only where
+// its curve happens to start. Split at the rails (`split`, from
+// `original`), the two pieces on either side of the seam are joined into
+// one, so that the section's vertices are the rails' hits alone and every
+// section runs from rail to rail alike (mitcad#2320: a seam on one side of
+// rounded rectangles, matched to its own point on the other sections, made
+// that side's faces differ from the other side's). `origin` gets the
+// joined edge with the closed edge it came from. The split wire as it is
+// where the seam is at a rail, or the section has several edges.
+TopoDS_Wire without_seam(const TopoDS_Wire& original, const TopoDS_Wire& split, const std::vector<gp_Pnt>& hits,
+                         double tolerance, std::vector<std::pair<TopoDS_Edge, TopoDS_Edge>>& origin) {
+  const std::vector<TopoDS_Edge> before = wire_edges(original);
+  if (before.size() != 1) {
+    return split;
+  }
+  TopoDS_Vertex first;
+  TopoDS_Vertex last;
+  TopExp::Vertices(before.front(), first, last);
+  if (first.IsNull() || !first.IsSame(last)) {
+    return split;
+  }
+  const gp_Pnt seam = BRep_Tool::Pnt(first);
+  for (const gp_Pnt& hit : hits) {
+    if (seam.Distance(hit) <= tolerance) {
+      return split;
+    }
+  }
+  std::vector<TopoDS_Edge> pieces = wire_edges(split);
+  if (pieces.size() < 2) {
+    return split;
+  }
+  // From the piece that leaves the seam: the last one then arrives there.
+  const auto leaving = std::find_if(pieces.begin(), pieces.end(), [&](const TopoDS_Edge& piece) {
+    return TopExp::FirstVertex(piece, true).IsSame(first);
+  });
+  if (leaving == pieces.end()) {
+    return split;
+  }
+  std::rotate(pieces.begin(), leaving, pieces.end());
+  if (!TopExp::LastVertex(pieces.back(), true).IsSame(first)) {
+    return split;
+  }
+  const TopoDS_Edge& arriving = pieces.back();
+  const TopoDS_Edge& departing = pieces.front();
+  const Curve head = edge_curve(arriving);
+  const Curve tail = edge_curve(departing);
+  if (head->Degree() != tail->Degree()) {
+    return split;
+  }
+  // Two pieces of one curve: the second goes on where the first ends, its
+  // parameter carried on (not rescaled), the knot between them kept once
+  // less than the degree where the curve is smooth across its seam (within
+  // the kernel's confusion, so that the joined piece stays the curve).
+  GeomConvert_CompCurveToBSplineCurve joining(head);
+  if (!joining.Add(tail, Precision::Confusion(), true, false, head->Degree() - 1)) {
+    return split;
+  }
+  const Curve joined = joining.BSplineCurve();
+  BRepBuilderAPI_MakeEdge edge(joined, TopExp::FirstVertex(arriving, true), TopExp::LastVertex(departing, true),
+                               joined->FirstParameter(), joined->LastParameter());
+  if (!edge.IsDone()) {
+    return split;
+  }
+  BRep_Builder builder;
+  TopoDS_Wire result;
+  builder.MakeWire(result);
+  for (std::size_t k = 1; k + 1 < pieces.size(); ++k) {
+    builder.Add(result, pieces[k]);
+  }
+  builder.Add(result, edge.Edge());
   result.Closed(true);
+  origin.emplace_back(edge.Edge(), before.front());
   return result;
 }
 
@@ -538,11 +625,18 @@ struct Takeoffs {
 // so that neighbouring edges leave each vertex with one vector: each
 // edge's takeoff scaled and slid along the edge, blended linearly between
 // its ends.
+// An open section (a chain of curves, mitcad#2345) has no corner at its
+// ends: there each end edge keeps its own takeoff.
 std::vector<Field> with_corners(const std::vector<Curve>& curves, const std::vector<Field>& takeoff,
-                                const gp_Vec& axis) {
+                                const gp_Vec& axis, bool open = false) {
   const std::size_t count = curves.size();
-  std::vector<gp_Vec> corners(count);
+  std::vector<gp_Vec> corners(count + 1);
+  corners[count] = takeoff[count - 1](curves[count - 1]->LastParameter());
   for (std::size_t a = 0; a < count; ++a) {
+    if (open && a == 0) {
+      corners[a] = takeoff[a](curves[a]->FirstParameter());
+      continue;
+    }
     const std::size_t prev = (a + count - 1) % count;
     const double ue = curves[prev]->LastParameter();
     const double us = curves[a]->FirstParameter();
@@ -555,7 +649,7 @@ std::vector<Field> with_corners(const std::vector<Curve>& curves, const std::vec
     const double u0 = curve->FirstParameter();
     const double u1 = curve->LastParameter();
     const gp_Vec ca = corners[j];
-    const gp_Vec cb = corners[(j + 1) % count];
+    const gp_Vec cb = open && j + 1 == count ? corners[count] : corners[(j + 1) % count];
     // Plain variables, not structured bindings: a lambda may capture those
     // only from C++20 on.
     const std::pair<double, double> start = decompose(ca, d(u0), tangent(curve, u0));
@@ -638,6 +732,7 @@ std::vector<Field> curvature_fields(const std::vector<Curve>& curves, const std:
 // One section after matching: a point, or its edges' curves in order.
 struct Matched {
   bool point = false;
+  bool open = false; // a chain of curves that does not close (mitcad#2345)
   gp_Pnt tip;
   gp_Pnt centre;
   std::vector<TopoDS_Edge> edges;
@@ -701,6 +796,58 @@ struct EndRows {
   int order = 0;
   std::vector<std::vector<gp_Vec>> first;
   std::vector<std::vector<gp_Vec>> second;
+  // A Perpendicular end on a face (mitcad#2345): the first derivatives the
+  // rows are fitted to, per face, which skin_surfaces holds them to.
+  std::vector<Field> wanted;
+};
+
+// The normals of the face a Perpendicular end leaves at right angles
+// (mitcad#2345) at points of the section, which must lie on it within
+// kOnFace: the unit normal of its surface where the point projects onto
+// it, in the face's orientation.
+class FaceNormals {
+public:
+  FaceNormals(const TopoDS_Face& face, const char* which) : m_which(which) {
+    m_surface = BRep_Tool::Surface(face);
+    if (m_surface.IsNull()) {
+      throw std::invalid_argument(std::string("the face of the ") + which + " condition has no surface");
+    }
+    m_reversed = face.Orientation() == TopAbs_REVERSED;
+    BRepTools::UVBounds(face, m_u0, m_u1, m_v0, m_v1);
+  }
+
+  gp_Vec at(const gp_Pnt& p) const {
+    GeomAPI_ProjectPointOnSurf projection(p, m_surface, m_u0, m_u1, m_v0, m_v1);
+    if (projection.NbPoints() == 0 || projection.LowerDistance() > kOnFace) {
+      const std::string off =
+          projection.NbPoints() == 0 ? std::string() : distance_words(projection.LowerDistance()) + " mm ";
+      throw std::invalid_argument("the " + m_which + " section lies " + off +
+                                  "off the face it is to leave at right angles; it must lie on the face");
+    }
+    double u = 0.0;
+    double v = 0.0;
+    projection.LowerDistanceParameters(u, v);
+    gp_Pnt q;
+    gp_Vec su;
+    gp_Vec sv;
+    m_surface->D1(u, v, q, su, sv);
+    gp_Vec n = su.Crossed(sv);
+    if (n.Magnitude() <= 1.0e-12) {
+      throw std::invalid_argument("the face the " + m_which + " section is to leave at right angles has no normal " +
+                                  "where the section lies on it");
+    }
+    n.Normalize();
+    return m_reversed ? -n : n;
+  }
+
+  // The import's geometric tolerance (mitcad#224).
+  static constexpr double kOnFace = 0.01;
+
+private:
+  std::string m_which;
+  occ::handle<Geom_Surface> m_surface;
+  bool m_reversed = false;
+  double m_u0 = 0.0, m_u1 = 0.0, m_v0 = 0.0, m_v1 = 0.0;
 };
 
 // `length` is the loft's parameter over the span from the section to the
@@ -761,6 +908,7 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
   case LoftEnd::Kind::Direction:
   case LoftEnd::Kind::Tangent:
   case LoftEnd::Kind::Smooth:
+  case LoftEnd::Kind::Perpendicular:
     break;
   }
   std::vector<Curve> curves;
@@ -770,12 +918,54 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
   std::vector<Field> takeoff;
   std::vector<Neighbour> neighbours;
   gp_Vec axis;
-  if (condition.kind == LoftEnd::Kind::Direction) {
+  // Perpendicular (mitcad#2345) to a face: the picked one, else the face
+  // section's own; without either, to the section's plane as Direction at
+  // angle 0.
+  const TopoDS_Face reference = condition.kind != LoftEnd::Kind::Perpendicular ? TopoDS_Face()
+                                : !section.perpendicular.IsNull()               ? section.perpendicular
+                                                                                : section.face;
+  const bool on_plane = condition.kind == LoftEnd::Kind::Perpendicular && reference.IsNull();
+  if (condition.kind == LoftEnd::Kind::Perpendicular && !reference.IsNull()) {
+    const FaceNormals normals(reference, which);
+    // One side for the whole section: the one the next section lies on,
+    // seen from corresponding points.
+    double side = 0.0;
+    gp_Vec mean;
+    for (const Strip& strip : strips) {
+      const Curve& here_curve = strip.curves[index];
+      const Curve& next_curve = strip.curves[adjacent];
+      for (int k = 0; k < 8; ++k) {
+        const double u =
+            here_curve->FirstParameter() + (here_curve->LastParameter() - here_curve->FirstParameter()) * (k + 0.5) / 8;
+        const gp_Pnt p = here_curve->Value(u);
+        const gp_Pnt q = next_curve.IsNull() ? next.tip : next_curve->Value(u);
+        const gp_Vec n = normals.at(p);
+        side += n.Dot(gp_Vec(p, q));
+        mean += n;
+      }
+    }
+    const double sign = side < 0.0 ? -1.0 : 1.0;
+    axis = mean * sign;
+    if (axis.Magnitude() > 1.0e-12) {
+      axis.Normalize();
+    }
+    // As long as the sections' corresponding vertices are apart, as a
+    // tangent end's.
+    weight *= vertex_reach(strips, index, adjacent) / length;
+    const std::shared_ptr<const FaceNormals> shared = std::make_shared<const FaceNormals>(normals);
+    for (const Curve& curve : curves) {
+      takeoff.push_back([=](double u) { return shared->at(curve->Value(u)) * (sign * weight); });
+    }
+  } else if (condition.kind == LoftEnd::Kind::Direction || on_plane) {
     std::optional<gp_Dir> normal = section.normal;
     if (!normal && !section.face.IsNull()) {
       if (const std::optional<gp_Pln> plane = face_plane(section.face)) {
         normal = plane->Axis().Direction();
       }
+    }
+    if (!normal && on_plane) {
+      throw std::invalid_argument(std::string("the ") + which +
+                                  " section lies in no plane: leaving it at right angles needs the face it lies on");
     }
     if (!normal) {
       throw std::invalid_argument(std::string("the ") + which + " direction condition needs a planar section");
@@ -783,11 +973,13 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
     const gp_Vec n = towards(*normal, here.centre, next.centre);
     axis = n;
     const double out = turning(curves, n, here.centre);
-    const double c = std::cos(condition.angle);
+    // Perpendicular to the section's plane is Direction at angle 0.
+    const double angle = on_plane ? 0.0 : condition.angle;
+    const double c = std::cos(angle);
     // The angle is measured along the loft: positive leaves the first section
     // outward and arrives at the last one moving outward, so the takeoff into
     // the loft from the last section tilts inward.
-    const double s = std::sin(condition.angle) * (index == 0 ? 1.0 : -1.0);
+    const double s = std::sin(angle) * (index == 0 ? 1.0 : -1.0);
     for (const Curve& curve : curves) {
       takeoff.push_back([=](double u) {
         const gp_Vec outward = tangent(curve, u).Crossed(n) * out;
@@ -842,7 +1034,7 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
       takeoff.push_back([=](double u) { return neighbour->at(curve->Value(u)).across * weight; });
     }
   }
-  const std::vector<Field> first = with_corners(curves, takeoff, axis);
+  const std::vector<Field> first = with_corners(curves, takeoff, axis, here.open);
   std::vector<Field> second;
   if (condition.kind == LoftEnd::Kind::Smooth) {
     second = curvature_fields(curves, first, neighbours);
@@ -858,7 +1050,99 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
       rows.second.push_back(fit_field(*curves[j], second[j]));
     }
   }
+  // A face's normals are no image of the section's curve: skin_surfaces
+  // holds the fitted rows to them (mitcad#2345).
+  if (condition.kind == LoftEnd::Kind::Perpendicular && !reference.IsNull()) {
+    for (const Field& field : first) {
+      rows.wanted.push_back([field, into](double u) { return field(u) * into; });
+    }
+  }
   return rows;
+}
+
+// How far the rows of a Perpendicular end on a face (mitcad#2345) are
+// from the takeoffs they are fitted to, at four points inside every knot
+// span of every face: the largest distance relative to the takeoff's
+// length (an angle in radians, near enough). 0 for other ends.
+double fit_error(const EndRows& rows, const std::vector<Strip>& strips, std::size_t index) {
+  double worst = 0.0;
+  for (std::size_t j = 0; j < rows.wanted.size() && j < strips.size(); ++j) {
+    const Strip& strip = strips[j];
+    NCollection_Array1<gp_Pnt> poles(1, strip.pole_count());
+    for (int k = 1; k <= strip.pole_count(); ++k) {
+      poles(k) = gp_Pnt(rows.first[j][static_cast<std::size_t>(k) - 1].XYZ());
+    }
+    const Curve fitted =
+        new Geom_BSplineCurve(poles, strip.weights[index], strip.knots, strip.mults, strip.degree);
+    for (int s = strip.knots.Lower(); s < strip.knots.Upper(); ++s) {
+      const double a = strip.knots(s);
+      const double b = strip.knots(s + 1);
+      for (int k = 1; k <= 4; ++k) {
+        const double u = a + (b - a) * k / 5.0;
+        const gp_Vec want = rows.wanted[j](u);
+        const double length = want.Magnitude();
+        if (length <= 1.0e-12) {
+          continue;
+        }
+        const gp_Vec got(fitted->Value(u).XYZ());
+        worst = std::max(worst, (got - want).Magnitude() / length);
+      }
+    }
+  }
+  return worst;
+}
+
+// `from` copied into `to`, whatever its length was.
+template <typename T>
+void copy_into(NCollection_Array1<T>& to, const NCollection_Array1<T>& from) {
+  to.Resize(from.Lower(), from.Upper(), false);
+  for (int k = from.Lower(); k <= from.Upper(); ++k) {
+    to(k) = from(k);
+  }
+}
+
+// Every knot span of the strip's curves halved (the curves themselves
+// unchanged, still compatible), a point section's row grown to match.
+void split_spans(Strip& strip) {
+  std::vector<double> middles;
+  for (int s = strip.knots.Lower(); s < strip.knots.Upper(); ++s) {
+    middles.push_back((strip.knots(s) + strip.knots(s + 1)) / 2);
+  }
+  std::size_t reference = strip.curves.size();
+  for (std::size_t i = 0; i < strip.curves.size(); ++i) {
+    if (strip.curves[i].IsNull()) {
+      continue;
+    }
+    const Curve curve = Handle(Geom_BSplineCurve)::DownCast(strip.curves[i]->Copy());
+    for (const double u : middles) {
+      curve->InsertKnot(u, 1, 0.0, true);
+    }
+    strip.curves[i] = curve;
+    copy_into(strip.poles[i], curve->Poles());
+    if (const NCollection_Array1<double>* weights = curve->Weights()) {
+      copy_into(strip.weights[i], *weights);
+    } else {
+      strip.weights[i].Resize(1, curve->NbPoles(), false);
+      strip.weights[i].Init(1.0);
+    }
+    if (reference == strip.curves.size()) {
+      reference = i;
+      strip.degree = curve->Degree();
+      copy_into(strip.knots, curve->Knots());
+      copy_into(strip.mults, curve->Multiplicities());
+    }
+  }
+  // A point is a section of its neighbour's weights, all at the point.
+  for (std::size_t i = 0; i < strip.curves.size(); ++i) {
+    if (!strip.curves[i].IsNull() || reference == strip.curves.size()) {
+      continue;
+    }
+    const gp_Pnt tip = strip.poles[i](strip.poles[i].Lower());
+    const std::size_t neighbour = i == 0 ? 1 : strip.curves.size() - 2;
+    strip.poles[i].Resize(1, strip.poles[reference].Length(), false);
+    strip.poles[i].Init(tip);
+    copy_into(strip.weights[i], strip.weights[neighbour]);
+  }
 }
 
 // The far end of a two-section loft whose other end alone has a
@@ -984,7 +1268,8 @@ void align_to_previous(std::vector<Matched>& matched) {
     Matched& m = matched[i];
     const Matched& before = matched[i - 1];
     const std::size_t n = m.curves.size();
-    if (m.point || before.point || n < 2 || before.curves.size() != n) {
+    // An open chain (mitcad#2345) has ends where it is: not turned round.
+    if (m.point || before.point || m.open || before.open || n < 2 || before.curves.size() != n) {
       continue;
     }
     std::vector<Curve> forward = m.curves;
@@ -1394,6 +1679,52 @@ std::optional<SeamChains> match_seams(const std::vector<Matched>& matched, doubl
 
 double curve_length(const Curve& curve) { return GCPnts_AbscissaPoint::Length(GeomAdaptor_Curve(curve)); }
 
+// The curve running at one speed along it: as it is where it does (a
+// line, a ring of merged tangent edges, loft_merge), else a polynomial
+// B-spline within kJoinTolerance of it by arc length over [0, its length],
+// its ends exactly the curve's. With rails every section's piece of a face
+// runs so (mitcad#2320): the face relates the sections' points by the
+// share of the way along their pieces, and the rails' bends by arc length
+// round the first section, whatever the curves' own parameters (a whole
+// circle's rational form runs unevenly round it from wherever it starts,
+// so that mirrored sections met each other at points that were not
+// mirrored). A curve that cannot be so approximated within the tolerance
+// is left as it is.
+Curve by_arc_length(const Curve& curve) {
+  const double first = curve->FirstParameter();
+  const double last = curve->LastParameter();
+  double slowest = std::numeric_limits<double>::max();
+  double fastest = 0.0;
+  for (int k = 0; k <= 32; ++k) {
+    const double speed = curve->DN(first + (last - first) * k / 32, 1).Magnitude();
+    slowest = std::min(slowest, speed);
+    fastest = std::max(fastest, speed);
+  }
+  if (!(slowest > 0.0) || fastest - slowest <= 1.0e-4 * fastest) {
+    return curve;
+  }
+  const occ::handle<Adaptor3d_Curve> along = new GeomAdaptor_Curve(curve);
+  const double length = GCPnts_AbscissaPoint::Length(*along);
+  if (!(length > Precision::Confusion())) {
+    return curve;
+  }
+  const Approx_CurvilinearParameter approximation(along, kJoinTolerance, GeomAbs_C2, 9, 1000);
+  if (!approximation.HasResult() || approximation.MaxError3d() > 10 * kJoinTolerance) {
+    return curve;
+  }
+  Curve result = approximation.Curve3d();
+  NCollection_Array1<double> knots(result->Knots());
+  const double from = knots(knots.Lower());
+  const double to = knots(knots.Upper());
+  for (int i = knots.Lower(); i <= knots.Upper(); ++i) {
+    knots(i) = (knots(i) - from) / (to - from) * length;
+  }
+  result->SetKnots(knots);
+  result->SetPole(1, curve->Value(first));
+  result->SetPole(result->NbPoles(), curve->Value(last));
+  return result;
+}
+
 // The parameter `length` along the curve from its start.
 double at_length(const Curve& curve, double length) {
   const GeomAdaptor_Curve adaptor(curve);
@@ -1747,6 +2078,24 @@ std::vector<Surface> skin_surfaces(const std::vector<Matched>& matched, const st
   EndRows starts = end_rows(start, sections.front(), matched, strips, 0, 1, v[1] - v[0], "start");
   EndRows ends =
       end_rows(end, sections.back(), matched, strips, count - 1, count - 2, v[count - 1] - v[count - 2], "end");
+  // A Perpendicular end on a face (mitcad#2345): the rows hold the face's
+  // normals, which are no image of the section's curves, only at their
+  // fitting points; the curves' knot spans halved until they hold them
+  // within kPerpendicularFit everywhere, so that the surface meets the face
+  // at right angles within 1e-6 rad all along the section.
+  constexpr double kPerpendicularFit = 1.0e-7;
+  for (int round = 0;
+       fit_error(starts, strips, 0) > kPerpendicularFit || fit_error(ends, strips, count - 1) > kPerpendicularFit;
+       ++round) {
+    if (round == 8) {
+      throw std::runtime_error("the loft could not be made to leave the face at right angles all along the section");
+    }
+    for (Strip& strip : strips) {
+      split_spans(strip);
+    }
+    starts = end_rows(start, sections.front(), matched, strips, 0, 1, v[1] - v[0], "start");
+    ends = end_rows(end, sections.back(), matched, strips, count - 1, count - 2, v[count - 1] - v[count - 2], "end");
+  }
   if (count == 2 && starts.order > 0 && ends.order == 0) {
     ends = far_end(starts, start, strips, 0, 1, v[1] - v[0]);
   } else if (count == 2 && ends.order > 0 && starts.order == 0) {
@@ -1839,6 +2188,22 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
   if (closed && (!rail_paths.empty() || count < 3)) {
     throw std::invalid_argument("a closed loft through two sections or along rails is not supported");
   }
+  // Open chains of curves (mitcad#2345), a surface's sections all open: no
+  // corners at their ends, never turned round, matched as open wires;
+  // rails share a closed section's length between them. A solid's
+  // sections are closed, as before, whatever their wires say.
+  const auto is_open = [](const SkinSection& section) {
+    return section.point ||
+           (section.shape.ShapeType() == TopAbs_WIRE && !BRep_Tool::IsClosed(section.shape));
+  };
+  const bool open = !solid && std::all_of(sections.begin(), sections.end(), is_open) &&
+                    std::any_of(sections.begin(), sections.end(), [](const SkinSection& s) { return !s.point; });
+  if (open && !rail_paths.empty()) {
+    throw std::invalid_argument("unsupported: loft rails with open sections");
+  }
+  if (open && closed) {
+    throw std::invalid_argument("a closed loft through open sections is not supported");
+  }
   Bnd_Box box;
   for (const SkinSection& section : sections) {
     BRepBndLib::Add(section.shape, box);
@@ -1859,7 +2224,9 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     for (const Rail& rail : rails) {
       hits.push_back(rail.hits[i]);
     }
-    wires.Append(split_at(TopoDS::Wire(sections[i].shape), hits, tolerance, origins[i]));
+    const TopoDS_Wire wire = TopoDS::Wire(sections[i].shape);
+    wires.Append(
+        without_seam(wire, split_at(wire, hits, tolerance, origins[i], open), hits, tolerance, origins[i]));
   }
 
   // Edge for edge, from corresponding starts. With rails, where OCCT's
@@ -1897,6 +2264,7 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     for (std::size_t i = 0; i < count; ++i) {
       Matched& m = matched[i];
       m.centre = centre_of(sections[i].shape);
+      m.open = open;
       if (sections[i].point) {
         m.point = true;
         m.tip = BRep_Tool::Pnt(TopoDS::Vertex(sections[i].shape));
@@ -1962,6 +2330,15 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     matched = match_along_rails(sections, wires, origins, rails, tolerance, section_wires);
     edge_count = matched.front().curves.size();
   }
+  // With rails, each face's pieces of the sections related by arc length
+  // (by_arc_length, mitcad#2320).
+  if (!rails.empty()) {
+    for (Matched& m : matched) {
+      for (Curve& curve : m.curves) {
+        curve = by_arc_length(curve);
+      }
+    }
+  }
   // Two sections with free ends: built here only where faces would meet at
   // a crease that fades out at both sections (mitcad#2141), each chain of
   // faces made tangent so one surface.
@@ -2006,24 +2383,53 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     }
     const double length = at.back();
     at.pop_back();
-    const auto share = [&](const Rail& rail, double x) {
+    // Each face's shares of the rails' bends: four poles across the face
+    // per rail. Between two neighbouring rails along the section (from the
+    // one at arc length p to the next, l further on) the share of the
+    // first is the smooth step f(t) = 1 - 3 t^2 + 2 t^3 of t = (x - p) / l,
+    // the next one's 1 - f(t), the others' 0: so the step is the same
+    // whatever vertices the section has between the rails (mitcad#2320: a
+    // vertex on one side only, the seam of a rounded rectangle, made that
+    // side's step steeper and its side bulge past its rail), and a face
+    // from xa to xb takes the part of it between its ends, exactly (the
+    // cubic's Bezier poles over that part). One rail: all of its bend
+    // everywhere.
+    const auto shares_of = [&](double xa, double xb) {
+      std::vector<std::array<double, 4>> shares(rails.size(), std::array<double, 4>{1.0, 1.0, 1.0, 1.0});
       if (rails.size() == 1) {
-        return 1.0;
+        return shares;
       }
-      const double p = at[static_cast<std::size_t>(rail.vertex)];
-      double ahead = length;
-      double behind = length;
-      for (const Rail& other : rails) {
-        if (&other == &rail) {
-          continue;
+      const auto ahead = [&](double from, double to) { return std::fmod(to - from + 2 * length, length); };
+      // The rails before and after the face's middle along the section.
+      const double middle = xa + (xb - xa) / 2;
+      std::size_t previous = 0;
+      std::size_t next = 0;
+      for (std::size_t r = 0; r < rails.size(); ++r) {
+        const double p = at[static_cast<std::size_t>(rails[r].vertex)];
+        if (ahead(p, middle) < ahead(at[static_cast<std::size_t>(rails[previous].vertex)], middle)) {
+          previous = r;
         }
-        const double q = at[static_cast<std::size_t>(other.vertex)];
-        ahead = std::min(ahead, std::fmod(q - p + length, length));
-        behind = std::min(behind, std::fmod(p - q + length, length));
+        if (ahead(middle, p) < ahead(middle, at[static_cast<std::size_t>(rails[next].vertex)])) {
+          next = r;
+        }
       }
-      const double forward = std::fmod(x - p + length, length);
-      const double backward = std::fmod(p - x + length, length);
-      return std::max({0.0, 1.0 - forward / ahead, 1.0 - backward / behind});
+      const double p = at[static_cast<std::size_t>(rails[previous].vertex)];
+      double span = ahead(p, at[static_cast<std::size_t>(rails[next].vertex)]);
+      if (span <= 0.0) {
+        span = length;
+      }
+      const double ta = std::clamp(ahead(p, xa) / span, 0.0, 1.0);
+      const double tb = std::clamp(ta + (xb - xa) / span, 0.0, 1.0);
+      const auto f = [](double t) { return 1.0 - 3.0 * t * t + 2.0 * t * t * t; };
+      const auto df = [](double t) { return -6.0 * t + 6.0 * t * t; };
+      const std::array<double, 4> step{f(ta), f(ta) + (tb - ta) / 3.0 * df(ta), f(tb) - (tb - ta) / 3.0 * df(tb),
+                                       f(tb)};
+      for (std::size_t r = 0; r < rails.size(); ++r) {
+        for (std::size_t k = 0; k < 4; ++k) {
+          shares[r][k] = r == previous ? step[k] : r == next ? 1.0 - step[k] : 0.0;
+        }
+      }
+      return shares;
     };
     // The rails' distances from the loft along their vertex lines, as
     // curves in a common basis over the loft's parameter.
@@ -2034,6 +2440,48 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     const auto distance = [&](std::size_t r, double x) {
       const Surface& surface = surfaces[static_cast<std::size_t>(rails[r].vertex)];
       return gp_Vec(surface->Value(surface->UKnot(1), x), rails[r].spine.point(lengths[r](x)));
+    };
+    // A Perpendicular end (mitcad#2345): each bend leaves that section along
+    // the loft's own takeoff at its rail's vertex, as fast as the rail draws
+    // it there, so that rails leaving the section at right angles to the
+    // face keep the condition (all along the section on a plane, where every
+    // takeoff is parallel; elsewhere at the rails' vertices). Other ends'
+    // bends are free, as before.
+    const auto held = [&](std::size_t r, bool at_start) {
+      EndDerivatives derivatives;
+      if ((at_start ? start : end).kind != LoftEnd::Kind::Perpendicular) {
+        return derivatives;
+      }
+      const double x = at_start ? v.front() : v.back();
+      const double inward = at_start ? 1.0 : -1.0;
+      const Surface& surface = surfaces[static_cast<std::size_t>(rails[r].vertex)];
+      gp_Pnt p;
+      gp_Vec su;
+      gp_Vec sv;
+      surface->D1(surface->UKnot(1), x, p, su, sv);
+      if (sv.Magnitude() <= 1.0e-12) {
+        return derivatives;
+      }
+      // The distance's slope at the section, as the bend must leave it
+      // (a slope off it leaves the bend off the rail near the section): the
+      // bend is 0 at the section (it runs through the sections exactly), so
+      // the one-sided difference of second order from that 0, by steps of a
+      // thousandth of the span, improved by Richardson's extrapolation with
+      // the steps halved (a tiny step would be lost in the distance's own
+      // noise).
+      const auto one_sided = [&](double h) {
+        return (distance(r, x + inward * h) * 4 - distance(r, x + inward * 2 * h)) * (inward / (2 * h));
+      };
+      const double step = 1.0e-3 * (v.back() - v.front());
+      const gp_Vec slope = (one_sided(step / 2) * 4 - one_sided(step)) / 3;
+      // A rail that leaves the section along the takeoff (at right angles
+      // to the face) leaves the bend exactly along it; another bends the
+      // takeoff, as rails bend every condition.
+      const gp_Vec along = sv.Normalized();
+      const gp_Vec on = along * slope.Dot(along);
+      const gp_Vec off = slope - on;
+      derivatives.first = off.Magnitude() <= 1.0e-5 * std::max(slope.Magnitude(), 1.0e-9) ? on : slope;
+      return derivatives;
     };
     std::vector<Curve> bends;
     const auto fit_bends = [&] {
@@ -2057,7 +2505,7 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
             points.emplace_back(section ? gp_XYZ(0, 0, 0) : distance(r, params[k]).XYZ());
             largest = std::max(largest, gp_Vec(points.back().XYZ()).Magnitude());
           }
-          bends.push_back(interpolate_with_ends(points, params, {}, {}));
+          bends.push_back(interpolate_with_ends(points, params, held(r, true), held(r, false)));
           for (std::size_t k = 0; k + 1 < params.size(); ++k) {
             const double x = (params[k] + params[k + 1]) / 2;
             error = std::max(error, gp_Vec(bends.back()->Value(x).XYZ()).Subtracted(distance(r, x)).Magnitude());
@@ -2086,36 +2534,24 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
         const double xb = j + 1 < edge_count ? at[j + 1] : length;
         const double u0 = surfaces[j]->UKnot(1);
         const double u1 = surfaces[j]->UKnot(surfaces[j]->NbUKnots());
-        // Shares across the face: a smooth step between its vertices (and
-        // down to the far side and back on a single closed edge).
-        const bool middle = edge_count == 1;
-        NCollection_Array1<double> uknots(1, middle ? 3 : 2);
-        NCollection_Array1<int> umults(1, middle ? 3 : 2);
+        // Shares across the face: its part of the smooth step between the
+        // rails on either side of it (all of the bend for one rail, a
+        // single closed edge among them).
+        NCollection_Array1<double> uknots(1, 2);
+        NCollection_Array1<int> umults(1, 2);
         uknots(1) = u0;
         umults(1) = 4;
-        if (middle) {
-          uknots(2) = (u0 + u1) / 2;
-          umults(2) = 3;
-        }
-        uknots(uknots.Upper()) = u1;
-        umults(umults.Upper()) = 4;
-        const int upoles = middle ? 7 : 4;
+        uknots(2) = u1;
+        umults(2) = 4;
+        const int upoles = 4;
         const int vpoles = bends.front()->NbPoles();
         NCollection_Array2<gp_Pnt> net(1, upoles, 1, vpoles);
         net.Init(gp_Pnt(0, 0, 0));
+        const std::vector<std::array<double, 4>> shares = shares_of(xa, xb);
         for (std::size_t r = 0; r < rails.size(); ++r) {
-          std::vector<double> shares;
-          const double a = share(rails[r], xa);
-          const double b = middle ? a : share(rails[r], xb);
-          if (middle) {
-            const double m = share(rails[r], xa + length / 2);
-            shares = {a, a, m, m, m, a, a};
-          } else {
-            shares = {a, a, b, b};
-          }
           for (int k = 1; k <= upoles; ++k) {
             for (int l = 1; l <= vpoles; ++l) {
-              net(k, l).ChangeCoord() += bends[r]->Pole(l).XYZ() * shares[static_cast<std::size_t>(k) - 1];
+              net(k, l).ChangeCoord() += bends[r]->Pole(l).XYZ() * shares[r][static_cast<std::size_t>(k) - 1];
             }
           }
         }
@@ -2138,7 +2574,7 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
   // One surface all round the sections (a chain round the whole section,
   // mitcad#2141; one closed edge per section, as merged tangent edges are,
   // mitcad#2271): periodic where it closes smoothly.
-  const bool one_round = surfaces.size() == 1 && (chains ? chains->round : edge_count == 1);
+  const bool one_round = !open && surfaces.size() == 1 && (chains ? chains->round : edge_count == 1);
   if (one_round) {
     surfaces.front() = periodic_where_closed(surfaces.front());
   }
@@ -2215,6 +2651,75 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     }
   }
   return namer.shape();
+}
+
+bool periodic_closed_sides(const TopoDS_Shape& loft) {
+  bool changed = false;
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapes(loft, TopAbs_FACE, faces);
+  BRep_Builder builder;
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    const TopoDS_Face face = TopoDS::Face(faces(i).Oriented(TopAbs_FORWARD));
+    TopLoc_Location location;
+    const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face, location);
+    const Surface spline = Handle(Geom_BSplineSurface)::DownCast(surface);
+    if (spline.IsNull() || spline->IsUPeriodic()) {
+      continue;
+    }
+    const Surface periodic = periodic_where_closed(spline);
+    if (periodic == spline) {
+      continue;
+    }
+    // The edges' curves on the face, each with the curve of its other
+    // side where it is the seam, carried over to the periodic surface (the
+    // same parameters: making it periodic keeps them).
+    struct OnFace {
+      TopoDS_Edge edge;
+      occ::handle<Geom2d_Curve> forward;
+      occ::handle<Geom2d_Curve> reversed;
+    };
+    std::vector<OnFace> curves;
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+    TopExp::MapShapes(face, TopAbs_EDGE, edges);
+    bool complete = true;
+    for (int e = 1; e <= edges.Extent(); ++e) {
+      OnFace on;
+      on.edge = TopoDS::Edge(edges(e).Oriented(TopAbs_FORWARD));
+      double first = 0.0;
+      double last = 0.0;
+      on.forward = BRep_Tool::CurveOnSurface(on.edge, face, first, last);
+      if (BRep_Tool::IsClosed(on.edge, face)) {
+        on.reversed =
+            BRep_Tool::CurveOnSurface(TopoDS::Edge(on.edge.Oriented(TopAbs_REVERSED)), face, first, last);
+      }
+      complete = complete && !on.forward.IsNull();
+      curves.push_back(on);
+    }
+    if (!complete) {
+      continue;
+    }
+    // Within the 1e-6 mm periodic_where_closed may move the surface where
+    // it closes.
+    const double tolerance = std::max(BRep_Tool::Tolerance(face), 1.0e-6);
+    builder.UpdateFace(face, periodic, location, tolerance);
+    for (const OnFace& on : curves) {
+      const double edge_tolerance = std::max(BRep_Tool::Tolerance(on.edge), 1.0e-6);
+      // Off the old surface, onto the new one.
+      builder.UpdateEdge(on.edge, occ::handle<Geom2d_Curve>(), surface, location, edge_tolerance);
+      if (on.reversed.IsNull()) {
+        builder.UpdateEdge(on.edge, on.forward, face, edge_tolerance);
+      } else {
+        builder.UpdateEdge(on.edge, on.forward, on.reversed, face, edge_tolerance);
+      }
+    }
+    changed = true;
+  }
+  if (changed) {
+    // The seam's smoothness, on the new surface (the offsets take it as
+    // smooth all along).
+    BRepLib::EncodeRegularity(loft, 1.0e-8);
+  }
+  return changed;
 }
 
 } // namespace mitcad::geometry::detail

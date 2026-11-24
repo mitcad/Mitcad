@@ -113,7 +113,8 @@
             "assemble.flex_hang",
             "-",
             "assemble.animate_joint",
-            "assemble.motion_study"
+            "assemble.motion_study",
+            "assemble.explode"
           ]
         },
         {
@@ -806,7 +807,7 @@
           "group": "SHEET",
           "entries": [
             {"command": "drawing.edit_sheet", "button": true},
-            {"command": "drawing.add_revision", "button": true}
+            "drawing.add_revision"
           ]
         },
         {
@@ -815,28 +816,28 @@
             {"command": "drawing.base_view", "button": true},
             {"command": "drawing.projected_view", "button": true},
             {"command": "drawing.section_view", "button": true},
-            {"command": "drawing.detail_view", "button": true},
-            {"command": "drawing.break", "button": true}
+            "drawing.detail_view",
+            "drawing.break"
           ]
         },
         {
           "group": "GEOMETRY",
           "entries": [
             {"command": "drawing.center_mark", "button": true},
-            {"command": "drawing.centerline", "button": true},
-            {"command": "drawing.line", "button": true},
-            {"command": "drawing.arc", "button": true},
-            {"command": "drawing.center_pattern", "button": true},
-            {"command": "drawing.edge_extension", "button": true}
+            "drawing.centerline",
+            "drawing.line",
+            "drawing.arc",
+            "drawing.center_pattern",
+            "drawing.edge_extension"
           ]
         },
         {
           "group": "DIMENSIONS",
           "entries": [
             {"command": "drawing.dimension", "button": true},
-            {"command": "drawing.ordinate", "button": true},
-            {"command": "drawing.baseline", "button": true},
-            {"command": "drawing.model_items", "button": true}
+            "drawing.ordinate",
+            "drawing.baseline",
+            "drawing.model_items"
           ]
         },
         {
@@ -844,23 +845,25 @@
           "entries": [
             {"command": "drawing.text", "button": true},
             {"command": "drawing.note", "button": true},
-            {"command": "drawing.hole_callout", "button": true}
+            "drawing.hole_callout"
           ]
         },
         {
           "group": "SYMBOLS",
           "entries": [
-            {"command": "drawing.datum", "button": true},
-            {"command": "drawing.frame", "button": true},
-            {"command": "drawing.finish", "button": true}
+            "drawing.datum",
+            "drawing.frame",
+            {"command": "drawing.finish", "button": true},
+            {"command": "drawing.weld", "button": true},
+            "drawing.propose_welds"
           ]
         },
         {
           "group": "TABLES",
           "entries": [
-            {"command": "drawing.hole_table", "button": true},
+            "drawing.hole_table",
             {"command": "drawing.parts_list", "button": true},
-            {"command": "drawing.balloon", "button": true}
+            "drawing.balloon"
           ]
         },
         {
@@ -1180,7 +1183,9 @@
     "test.nested_wait",
     "edit.repeat",
     "sketch.explode_text",
-    "sketch.edit_equation_curve"
+    "sketch.edit_equation_curve",
+    "assemble.explode_step",
+    "assemble.finish_edit_in_place"
   ],
   "optional": [
     "file.render_image",

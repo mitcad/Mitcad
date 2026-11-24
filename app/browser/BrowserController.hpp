@@ -82,6 +82,9 @@ public:
 
   // After the model or the origin's visibility changed.
   void refresh(const DocumentSnapshot& snapshot);
+  // The explode view the 3D view shows (mitcad#2113; empty: none): its
+  // Browser row in bold, the rows rebuilt at once.
+  void setShownExplodeView(const QString& name);
   // A design was opened (mitcad#426), before its refresh: the browser is
   // rebuilt with the rows' default states, folded when they would not fit
   // (BrowserPanel::designOpened).
@@ -255,6 +258,13 @@ public:
   // appearance or a material varies with an option by the fx of the
   // Appearance and Material tools (mitcad#861, mitcad#1059).
   void suppressWhen(const QString& feature);
+  // Suppress Features and Unsuppress Features (GitHub mitcad/Mitcad#600,
+  // mitcad#2314): the features, in timeline order, as one undo step.
+  // Suppressing asks once about the union of their active dependents
+  // (those whose suppression follows no condition): Suppress All (with
+  // the model's `dependents`), Suppress Only This or Cancel; no question
+  // when there are none, and none when unsuppressing.
+  void setFeaturesSuppressed(const QStringList& uids, bool suppress);
   void showBodyWhen(const QString& body);
   void showOccurrenceWhen(const QString& path);
   // A message history's row about a feature clicked (mitcad#1042): the

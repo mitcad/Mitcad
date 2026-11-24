@@ -13,6 +13,16 @@ pub mod ffi {
         has_color: bool,
         /// sRGB components in [0, 1].
         color: [f64; 3],
+        /// The faces whose colour is not the body's (mitcad#2313).
+        face_colors: Vec<StructureFaceColor>,
+    }
+
+    /// A face of a body and its colour: the face's index in the body's
+    /// shape (the kernel's face order, from 0) and sRGB components in
+    /// [0, 1].
+    struct StructureFaceColor {
+        face: usize,
+        color: [f64; 3],
     }
 
     /// A part or an assembly of the file: a part's bodies are a run of

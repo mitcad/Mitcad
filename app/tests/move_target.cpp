@@ -8,6 +8,7 @@
 #include "commands/MoveTarget.hpp"
 
 #include <cstdio>
+#include <optional>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -131,11 +132,53 @@ void frameTests() {
   CHECK(world.size() == 3 && world.at(0).toArray().at(3).toDouble() == 50.0);
 }
 
+// The paths a move's definition records (mitcad#2307).
+void writtenPathTests() {
+  const QJsonArray occurrences = tree();
+  // A root-level pick (an empty path) of a move in Common, a component
+  // placed deeper than the active root: written with the root path "", so
+  // that the model reads it in the design's coordinates.
+  const std::optional<QString> root = pickedOccurrenceToWrite(QString(), QStringLiteral("C3"), occurrences);
+  CHECK(root.has_value() && root->isEmpty());
+  // In the root, root-level geometry is the move's own: no path.
+  CHECK(!pickedOccurrenceToWrite(QString(), QStringLiteral("C0"), occurrences));
+  CHECK(!pickedOccurrenceToWrite(QString(), QString(), occurrences));
+  // Common's own geometry at either of its occurrences: no path.
+  CHECK(!pickedOccurrenceToWrite(QStringLiteral("O1/O2/O5"), QStringLiteral("C3"), occurrences));
+  CHECK(!pickedOccurrenceToWrite(QStringLiteral("O1/O2/O3"), QStringLiteral("C3"), occurrences));
+  // Another component's geometry: its path.
+  CHECK(pickedOccurrenceToWrite(QStringLiteral("O7/O8"), QStringLiteral("C3"), occurrences) ==
+        QStringLiteral("O7/O8"));
+  CHECK(pickedOccurrenceToWrite(QStringLiteral("O7"), QStringLiteral("C0"), occurrences) == QStringLiteral("O7"));
+
+  // Logo picked through the second Common, used twice: the move records
+  // that Common.
+  CHECK(parentOccurrenceToWrite({QStringLiteral("O1/O2/O5/O4")}, QStringLiteral("C3"), occurrences) ==
+        QStringLiteral("O1/O2/O5"));
+  CHECK(parentOccurrenceToWrite({QStringLiteral("O1/O2/O3/O4")}, QStringLiteral("C3"), occurrences) ==
+        QStringLiteral("O1/O2/O3"));
+  // A parent used once, the root, or no path under the parent: none.
+  CHECK(parentOccurrenceToWrite({QStringLiteral("O1/O6")}, QStringLiteral("C1"), occurrences).isEmpty());
+  CHECK(parentOccurrenceToWrite({QStringLiteral("O7")}, QStringLiteral("C0"), occurrences).isEmpty());
+  CHECK(parentOccurrenceToWrite({}, QStringLiteral("C3"), occurrences).isEmpty());
+  CHECK(parentOccurrenceToWrite({QStringLiteral("O7/O8")}, QStringLiteral("C3"), occurrences).isEmpty());
+
+  // An edit loads Logo under the recorded Common, not at its first path.
+  const QString first = QStringLiteral("O1/O2/O3/O4");
+  CHECK(loadedOccurrencePath(QStringLiteral("O4"), QStringLiteral("O1/O2/O5"), first, occurrences) ==
+        QStringLiteral("O1/O2/O5/O4"));
+  // Nothing recorded, or a recorded path that leads nowhere now: its first.
+  CHECK(loadedOccurrencePath(QStringLiteral("O4"), QString(), first, occurrences) == first);
+  CHECK(loadedOccurrencePath(QStringLiteral("O4"), QStringLiteral("O1/O9"), first, occurrences) == first);
+  CHECK(loadedOccurrencePath(QStringLiteral("O4"), QStringLiteral("O1/O6"), first, occurrences) == first);
+}
+
 int moveTargetTests() {
   failures = 0;
   treeTests();
   targetTests();
   frameTests();
+  writtenPathTests();
   return failures;
 }
 

@@ -350,7 +350,7 @@ const char* const kUsage = R"(usage:
                     [--coordinates design|component|<coordinate system>] [--occurrence <path>]
       Writes bodies at the timeline marker (all, or the listed uids or
       names) to a .step/.stp, .iges/.igs, .stl, .obj, .brep, .3mf, .usdz,
-      .glb or .gltf file. STEP and IGES keep body names and imported colours;
+      .glb, .gltf or .urdf file. STEP and IGES keep body names and imported colours;
       --refinement or --deviation and --angle set the STL, OBJ, 3MF and
       USDZ triangulation: the refinements (medium by default) bound each
       doubly curved face at about 5 000, 20 000 and 50 000 triangles (a
@@ -362,6 +362,9 @@ const char* const kUsage = R"(usage:
       bodies as shaded meshes in the components' hierarchy, with their
       appearances and textures (relative texture paths from the design's
       folder).
+      A .urdf path writes a ROS 2 package folder beside it, named after
+      the file: the robot description of the design's joints, its links
+      and a binary STL per body, in metres (all bodies; mitcad#2100).
       A .glb or .gltf file is the file File > Export writes: the visible
       bodies (or the listed ones, every placement of each) in the
       component tree as nested nodes, one mesh per body and look that its

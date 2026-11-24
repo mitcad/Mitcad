@@ -12,6 +12,7 @@
 //! plane) are the same in all of them and are written by [`Output`], which
 //! also leaves out words that have not changed (modal values).
 
+mod carvera;
 mod grbl;
 mod linuxcnc;
 mod mach;
@@ -31,6 +32,7 @@ use crate::program::{Coolant, Program, SpindleDirection};
 use crate::tool::Tool;
 use crate::toolpath::{CycleKind, DrillCycle, Move, P3, arc_sweep, move_points};
 
+pub use carvera::{Carvera, CarveraAir};
 pub use grbl::{Grbl, GrblHal};
 pub use linuxcnc::LinuxCnc;
 pub use mach::{Mach3, Mach4};
@@ -253,6 +255,9 @@ pub fn dialects() -> Vec<Box<dyn PostProcessor>> {
         Box::new(Mach3),
         Box::new(Mach4),
         Box::new(LinuxCnc),
+        // Makera's desktop machines (mitcad#2349).
+        Box::new(Carvera),
+        Box::new(CarveraAir),
     ]
 }
 

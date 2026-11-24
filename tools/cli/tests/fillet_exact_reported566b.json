@@ -1,0 +1,21 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #566's second design (mitcad#2229; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): GitHub #375's second design with Chamfer1 (F14) of d6 = 5 on the back's bottom edge, after Fillet1 (F12) of radius 5 on eleven edges. The rounding leaves a flat face at each end of that edge, which reaches 5 from it along the bottom and the back and about 2.89 along the diagonal, and ends in a rounding tangent to it. A bevel wider than about 4.09 runs out of it: the bevel stood out past the face, the rounding beyond left untrimmed under it, and above 5 it failed. Now the OCCT port's end of a blend (patch 2229) cuts the bevel's ends by the roundings beyond where they leave the flat faces, the bevel built at its size: one bevel face, no warning or information, no face under 0.01 mm2, at 5 and 4.5; at 7 it builds too. At exactly 10, the width of the bottom and the back, the bevel touches each at one point and takes both away whole: built with no warning or information, no face under 0.01 mm2 (mitcad#2329; its one face and exact volume checked by geometry.suite.dressup_takes_face). At 12 it touches neither the bottom nor the back (both reach 10 from the edge): refused in words with the largest distance that fits, 10 (the command's error is the text for agents, naming the edge: \"the bevel of edge E{…} is wider than the body there and touches neither face beside it: …\")."},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"feature": "Chamfer1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F14"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "min_face_area": 0.01}},
+  {"cmd": "set_parameter", "name": "d6", "value": 4.5},
+  {"expect": {"feature": "Chamfer1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F14"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "min_face_area": 0.01}},
+  {"cmd": "set_parameter", "name": "d6", "value": 7},
+  {"expect": {"feature": "Chamfer1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F14"}, "result": {"status": "ok", "level": null}}},
+  {"cmd": "set_parameter", "name": "d6", "value": 10},
+  {"expect": {"feature": "Chamfer1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F14"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "min_face_area": 0.01}},
+  {"cmd": "set_parameter", "name": "d6", "value": 12},
+  {"expect": {"feature": "Chamfer1", "status": "error",
+    "error_contains": "is wider than the body there and touches neither face beside it: the largest distance that fits is 10.000 mm"}}
+]

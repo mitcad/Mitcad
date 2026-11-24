@@ -1,0 +1,371 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Chamfers: the corner where four or more planar chamfers meet round a
+vertex, their sections there in one plane, is that plane; fillets and
+chamfers of a solid whose own orientation is reversed (mitcad#2306, a
+case of a public B-rep benchmark, mitcad#2273, GitHub mitcad/Mitcad#576).
+
+The case: the octahedron |x| + |y| + |z| <= 10, all twelve edges
+chamfered sqrt(6) on both faces. Four chamfers meet at each vertex; each
+is a plane, and the contact lines of two neighbours cross on their common
+face, where each chamfer's section at the vertex ends: four straight
+segments bounding a square in one plane (x = 6 at the vertex (10, 0, 0)).
+Traced in DRAW: the stripes build, and at every vertex
+PerformMoreThreeCorner finds the four crossings and puts the four
+sections into its plate as borders held G1 to each chamfer's surface. No
+surface is tangent to the four planes along the square's sides: the
+plate is not done at any of the six vertices, every vertex is faulty and
+the chamfer is not done.
+
+- ChFi3d_Builder::PerformMoreThreeCorner: where every edge at the vertex
+  is chamfered (no sharp edge), each chamfer's surface data at the corner
+  is a plane that meets both its neighbours on the faces between them,
+  and the sections lie in one plane within the approximation tolerance
+  (SectionsOfChamfersInOnePlane), the plate is built G0 to the sections;
+  where the plane it starts from holds every end of the sections and the
+  plate's curves end at them, within the same tolerance (CornerPlane),
+  that plane is the corner's surface instead of the plate's
+  approximation, with the plate's curves on it. Elsewhere nothing
+  changes.
+
+The case's test makes the octahedron as the solid of its sewn shell,
+which faces in, oriented by BRepLib::OrientClosedSolid, which reverses
+the solid. Every fillet or chamfer of a solid whose own orientation is
+reversed came out invalid: the result is rebuilt in new solids, which
+took the input solid's shells without its own orientation, so every face
+of the input the blends did not make faced in (the octahedron's eight
+triangles; a box's faces beside one chamfered edge, its volume
+negative).
+
+- ChFi3d_Builder::ChFi3d_Builder: a solid whose own orientation is
+  reversed is taken as the same solid oriented forward holding its shells
+  with that orientation composed into theirs (ForwardSolid): the same
+  faces, each with the orientation it has within the solid given. Any
+  other shape as before.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2306.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
+index 85de8256..cb980316 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
+@@ -53,6 +53,9 @@
+ #include <TopAbs_ShapeEnum.hxx>
+ #include <TopExp.hxx>
+ #include <TopoDS.hxx>
++#include <BRep_Builder.hxx>
++#include <TopoDS_Iterator.hxx>
++#include <TopoDS_Solid.hxx>
+ #include <TopoDS_Edge.hxx>
+ #include <TopoDS_Face.hxx>
+ #include <TopoDS_Shape.hxx>
+@@ -389,19 +392,51 @@ static TopOpeBRepDS_BuildTool mkbuildtool()
+   return BT;
+ }
+ 
++//=======================================================================
++// function : ForwardSolid
++// purpose  : A solid whose own orientation is reversed, as the same solid
++//           oriented forward holding its shells with that orientation
++//           composed into theirs (the faces' orientations within it, and
++//           so the side the material is on, are those of the solid given);
++//           any other shape as it is. The result of a blend is rebuilt in
++//           new solids, which took the input solid's shells without its
++//           own orientation: from a reversed solid around a shell facing
++//           in (BRepLib::OrientClosedSolid's result for such a shell),
++//           every face the blends did not make came out facing in,
++//           an invalid shape with the volume wrong (mitcad#2306).
++//=======================================================================
++
++static TopoDS_Shape ForwardSolid(const TopoDS_Shape& theShape)
++{
++  if (theShape.IsNull() || theShape.ShapeType() != TopAbs_SOLID
++      || theShape.Orientation() != TopAbs_REVERSED)
++  {
++    return theShape;
++  }
++  BRep_Builder aBuilder;
++  TopoDS_Solid aSolid;
++  aBuilder.MakeSolid(aSolid);
++  for (TopoDS_Iterator anIt(theShape); anIt.More(); anIt.Next())
++  {
++    aBuilder.Add(aSolid, anIt.Value());
++  }
++  aSolid.Closed(theShape.Closed());
++  return aSolid;
++}
++
+ //=================================================================================================
+ 
+ ChFi3d_Builder::ChFi3d_Builder(const TopoDS_Shape& S, const double Ta)
+     : done(false),
+-      myShape(S)
++      myShape(ForwardSolid(S))
+ {
+   myDS   = new TopOpeBRepDS_HDataStructure();
+   myCoup = new TopOpeBRepBuild_HBuilder(mkbuildtool());
+-  myEFMap.Fill(S, TopAbs_EDGE, TopAbs_FACE);
+-  myESoMap.Fill(S, TopAbs_EDGE, TopAbs_SOLID);
+-  myEShMap.Fill(S, TopAbs_EDGE, TopAbs_SHELL);
+-  myVFMap.Fill(S, TopAbs_VERTEX, TopAbs_FACE);
+-  myVEMap.Fill(S, TopAbs_VERTEX, TopAbs_EDGE);
++  myEFMap.Fill(myShape, TopAbs_EDGE, TopAbs_FACE);
++  myESoMap.Fill(myShape, TopAbs_EDGE, TopAbs_SOLID);
++  myEShMap.Fill(myShape, TopAbs_EDGE, TopAbs_SHELL);
++  myVFMap.Fill(myShape, TopAbs_VERTEX, TopAbs_FACE);
++  myVEMap.Fill(myShape, TopAbs_VERTEX, TopAbs_EDGE);
+   SetParams(Ta, 1.0e-4, 1.e-5, 1.e-4, 1.e-5, 1.e-3);
+   SetContinuity(GeomAbs_C1, Ta);
+   myFailure    = Failure_None;
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+index 0146edb0..94c22583 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -59,6 +59,11 @@
+ #include <NCollection_List.hxx>
+ #include <ChFiDS_Regul.hxx>
+ #include <ChFiDS_Spine.hxx>
++#include <ChFiDS_ChamfSpine.hxx>
++#include <Geom_Plane.hxx>
++#include <Geom_RectangularTrimmedSurface.hxx>
++#include <GProp_PEquation.hxx>
++#include <gp_Pln.hxx>
+ #include <NCollection_Array1.hxx>
+ #include <Extrema_ExtCC.hxx>
+ #include <Extrema_ExtPC.hxx>
+@@ -1477,6 +1482,134 @@ static TopAbs_Orientation PlateOrientation(
+   }
+ }
+ 
++//=======================================================================
++// function : SectionsOfChamfersInOnePlane
++// purpose  : Whether every edge at a corner is chamfered (no sharp edge),
++//           each chamfer's surface data at the corner a plane that meets
++//           both its neighbours on the faces between them (theInters), and
++//           the chamfers' sections at the corner, each a straight segment
++//           between the points where its contact lines meet those of its
++//           neighbours, lie in one plane within theTol (mitcad#2306).
++//           theEnds gets the sections' end points, two for each chamfer.
++//=======================================================================
++
++static bool SectionsOfChamfersInOnePlane(
++  const TopOpeBRepDS_DataStructure&                     theDStr,
++  const NCollection_Array1<occ::handle<ChFiDS_Stripe>>& theCD,
++  const int                                             theNbEdges,
++  const bool                                            theInters,
++  const NCollection_Array1<bool>&                       theSharp,
++  const NCollection_Array1<int>&                        theJf,
++  const NCollection_Array2<int>&                        theI,
++  const NCollection_Array2<double>&                     theP,
++  const double                                          theTol,
++  NCollection_Sequence<gp_Pnt>&                         theEnds)
++{
++  theEnds.Clear();
++  if (!theInters || theNbEdges < 3)
++  {
++    return false;
++  }
++  for (int ic = 0; ic < theNbEdges; ic++)
++  {
++    int icplus = 0, icmoins = 0;
++    Indices(theNbEdges, ic, icplus, icmoins);
++    if (theSharp.Value(ic) || theCD.Value(ic).IsNull()
++        || occ::down_cast<ChFiDS_ChamfSpine>(theCD.Value(ic)->Spine()).IsNull()
++        || theI.Value(ic, icplus) != theI.Value(ic, icmoins))
++    {
++      return false;
++    }
++    const int           isurf = SurfIndex(theCD, ic, theI.Value(ic, icplus), ChFiSURFACE);
++    GeomAdaptor_Surface asurf(theDStr.Surface(isurf).Surface());
++    if (asurf.GetType() != GeomAbs_Plane)
++    {
++      return false;
++    }
++    gp_Pnt2d p2d1, p2d2;
++    Calcul_P2dOnSurf(theCD.Value(ic),
++                     3 - theJf.Value(ic),
++                     theI.Value(ic, icmoins),
++                     theP.Value(ic, icmoins),
++                     p2d1);
++    Calcul_P2dOnSurf(theCD.Value(ic),
++                     theJf.Value(ic),
++                     theI.Value(ic, icplus),
++                     theP.Value(ic, icplus),
++                     p2d2);
++    theEnds.Append(asurf.Value(p2d1.X(), p2d1.Y()));
++    theEnds.Append(asurf.Value(p2d2.X(), p2d2.Y()));
++  }
++  NCollection_Array1<gp_Pnt> aPnts(1, theEnds.Length());
++  for (int k = 1; k <= theEnds.Length(); k++)
++  {
++    aPnts.SetValue(k, theEnds.Value(k));
++  }
++  const bool aPlanar = GProp_PEquation(aPnts, theTol).IsPlanar();
++  if (!aPlanar)
++  {
++    theEnds.Clear();
++  }
++  return aPlanar;
++}
++
++//=======================================================================
++// function : CornerPlane
++// purpose  : The plane a plate built G0 to sections in one plane
++//           (SectionsOfChamfersInOnePlane) starts from, when it holds every
++//           end of the sections and the plate's curves on it end at them,
++//           all within theTol: the corner's surface, on which the plate's
++//           curves are the sections' curves (the plate is that plane and
++//           a correction, which is nothing there). Null otherwise
++//           (mitcad#2306).
++//=======================================================================
++
++static occ::handle<Geom_Plane> CornerPlane(const GeomPlate_BuildPlateSurface& thePlate,
++                                           const NCollection_Sequence<gp_Pnt>& theEnds,
++                                           const double                        theTol)
++{
++  occ::handle<Geom_Surface> aInit = thePlate.SurfInit();
++  const occ::handle<Geom_RectangularTrimmedSurface> aTrimmed =
++    occ::down_cast<Geom_RectangularTrimmedSurface>(aInit);
++  if (!aTrimmed.IsNull())
++  {
++    aInit = aTrimmed->BasisSurface();
++  }
++  const occ::handle<Geom_Plane> aPlane = occ::down_cast<Geom_Plane>(aInit);
++  if (aPlane.IsNull() || thePlate.G0Error() > theTol || thePlate.Curves2d().IsNull())
++  {
++    return occ::handle<Geom_Plane>();
++  }
++  const gp_Pln aPln = aPlane->Pln();
++  for (int k = 1; k <= theEnds.Length(); k++)
++  {
++    if (aPln.Distance(theEnds.Value(k)) > theTol)
++    {
++      return occ::handle<Geom_Plane>();
++    }
++  }
++  const occ::handle<NCollection_HArray1<occ::handle<Geom2d_Curve>>>& aCurves = thePlate.Curves2d();
++  for (int ic = aCurves->Lower(); ic <= aCurves->Upper(); ic++)
++  {
++    const occ::handle<Geom2d_Curve>& aC2d = aCurves->Value(ic);
++    for (int e = 0; e < 2; e++)
++    {
++      const gp_Pnt2d aUV = aC2d->Value(e == 0 ? aC2d->FirstParameter() : aC2d->LastParameter());
++      const gp_Pnt   aP  = aPlane->Value(aUV.X(), aUV.Y());
++      bool           aAtEnd = false;
++      for (int k = 1; k <= theEnds.Length() && !aAtEnd; k++)
++      {
++        aAtEnd = aP.Distance(theEnds.Value(k)) <= theTol;
++      }
++      if (!aAtEnd)
++      {
++        return occ::handle<Geom_Plane>();
++      }
++    }
++  }
++  return aPlane;
++}
++
+ //=======================================================================
+ // function : PerformMoreThreeCorner
+ // purpose  : Process case of a top with n edges.
+@@ -3343,6 +3476,24 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+       constr = 0;
+     }
+   }
++  // (Chamfers meeting round the corner whose sections there lie in one
++  // plane, as at each vertex of an octahedron whose twelve edges are all
++  // chamfered alike, four chamfers meeting at each: every edge at the
++  // vertex chamfered, each chamfer's surface a plane and meeting both its
++  // neighbours on the faces between them, so that the corner's border is
++  // the chain of the chamfers' sections, straight segments, and these lie
++  // in one plane. No surface is tangent to each chamfer's plane along its
++  // section: held G1 to them, the plate was not done and the chamfer
++  // failed. The corner is that plane: the plate is built G0 to the
++  // sections, and the plane it starts from, through them, is the corner's
++  // surface, CornerPlane below.)
++  NCollection_Sequence<gp_Pnt> sectionends;
++  const bool                   planarcorner =
++    SectionsOfChamfersInOnePlane(DStr, CD, nedge, inters, sharp, jf, i, p, tolapp3d, sectionends);
++  if (planarcorner)
++  {
++    constr = 0;
++  }
+   GeomPlate_BuildPlateSurface PSurf(degree, nbcurvpnt, nbiter, tol2d, tolapp3d, angular);
+   // calculation of curves on surface for each stripe
+   for (ic = 0; ic < nedge; ic++)
+@@ -4168,23 +4319,39 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+ #endif
+   if (PSurf.IsDone())
+   {
+-    int                            nbcarreau = 9;
+-    int                            degmax    = 8;
+-    double                         seuil;
+-    occ::handle<GeomPlate_Surface> gpPlate = PSurf.Surface();
+-
+-    NCollection_Sequence<gp_XY>  S2d;
+-    NCollection_Sequence<gp_XYZ> S3d;
+-    S2d.Clear();
+-    S3d.Clear();
+-    PSurf.Disc2dContour(4, S2d);
+-    PSurf.Disc3dContour(4, 0, S3d);
+-    seuil = std::max(tolapp, 10 * PSurf.G0Error());
+-    GeomPlate_PlateG0Criterion critere(S2d, S3d, seuil);
+-    GeomPlate_MakeApprox       Mapp(gpPlate, critere, tolapp, nbcarreau, degmax);
+-    occ::handle<Geom_Surface>  Surf(Mapp.Surface());
+-    double                     coef = 1.1, apperror;
+-    apperror                        = Mapp.CriterionError() * coef;
++    double                    coef = 1.1, apperror;
++    occ::handle<Geom_Surface> Surf;
++    double                    surferror = 0., plateapperror = 0.;
++    // (Sections of chamfers in one plane: that plane, as above.)
++    const occ::handle<Geom_Plane> cornerplane =
++      planarcorner ? CornerPlane(PSurf, sectionends, tolapp3d) : occ::handle<Geom_Plane>();
++    if (!cornerplane.IsNull())
++    {
++      Surf          = cornerplane;
++      surferror     = std::max(PSurf.G0Error(), Precision::Confusion());
++      plateapperror = surferror * coef;
++    }
++    else
++    {
++      int                            nbcarreau = 9;
++      int                            degmax    = 8;
++      double                         seuil;
++      occ::handle<GeomPlate_Surface> gpPlate = PSurf.Surface();
++
++      NCollection_Sequence<gp_XY>  S2d;
++      NCollection_Sequence<gp_XYZ> S3d;
++      S2d.Clear();
++      S3d.Clear();
++      PSurf.Disc2dContour(4, S2d);
++      PSurf.Disc3dContour(4, 0, S3d);
++      seuil = std::max(tolapp, 10 * PSurf.G0Error());
++      GeomPlate_PlateG0Criterion critere(S2d, S3d, seuil);
++      GeomPlate_MakeApprox       Mapp(gpPlate, critere, tolapp, nbcarreau, degmax);
++      Surf          = Mapp.Surface();
++      surferror     = Mapp.ApproxError();
++      plateapperror = Mapp.CriterionError() * coef;
++    }
++    apperror = plateapperror;
+ 
+ #ifdef OCCT_DEBUG
+     ChFi3d_ResultChron(ch, t_approxplate); // result performances for approxplate
+@@ -4202,7 +4369,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+     //     gp_Pnt2d uv;
+     //     double scal;
+ 
+-    TopOpeBRepDS_Surface Tsurf(Surf, Mapp.ApproxError());
++    TopOpeBRepDS_Surface Tsurf(Surf, surferror);
+     int                  Isurf = DStr.AddSurface(Tsurf);
+     // lbo : historique QDF.
+     if (!myEVIMap.IsBound(V1))
+@@ -4417,7 +4584,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+         isfirst = (sens.Value(ic) == 1);
+         //   calculate curves interference relative to stripes
+ 
+-        apperror = Mapp.CriterionError() * coef;
++        apperror = plateapperror;
+         pardeb   = CD.Value(ic)->PCurve(isfirst)->FirstParameter();
+         parfin   = CD.Value(ic)->PCurve(isfirst)->LastParameter();
+ 

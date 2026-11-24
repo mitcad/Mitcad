@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
@@ -64,7 +65,9 @@
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Iterator.hxx>
+#include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Lin.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt2d.hxx>
 
@@ -2616,6 +2619,9 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
     namer.finish();
     FacesBeyondGrown out;
     out.body = namer.shape();
+    for (const Replaced& r : replaced) {
+      out.replaced.emplace_back(r.edge, r.other);
+    }
     const Shape& m = *out.body;
     // The faces of `m` an input face became.
     const auto images = [&](const TopoDS_Shape& face) {
@@ -2714,6 +2720,207 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
       }
     }
     return out;
+  });
+}
+
+std::optional<ShapePtr> added_past_walls(const Shape& body, int edge, int face, const Shape& made) {
+  if (edge < 0 || edge >= body.edge_count() || face < 0 || face >= body.face_count()) {
+    return std::nullopt;
+  }
+  throw_if_cancelled();
+  return occt_guarded([&]() -> std::optional<ShapePtr> {
+    const TopoDS_Shape& solid = body.occt();
+    const double tolerance = std::max(1.0e-6, 2.0 * BRep_Tool::MaxTolerance(solid, TopAbs_VERTEX));
+    const double body_volume = absolute_volume_of(solid);
+    const TopoDS_Face& top = body.face(face);
+    const BRepAdaptor_Surface surface(top, false);
+    if (surface.GetType() != GeomAbs_Plane) {
+      return std::nullopt;
+    }
+    const TopoDS_Edge& picked = TopoDS::Edge(body.edge(edge));
+    const BRepAdaptor_Curve curve(picked);
+    if (BRep_Tool::Degenerated(picked) || curve.GetType() != GeomAbs_Line) {
+      return std::nullopt;
+    }
+    const gp_Dir normal = point_and_normal(top).second;
+    const gp_Pnt middle = curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()));
+    // Across the edge in the face's plane, towards the face.
+    gp_Vec across = gp_Vec(normal).Crossed(gp_Vec(curve.Line().Direction()));
+    if (across.Magnitude() < gp::Resolution()) {
+      return std::nullopt;
+    }
+    across.Normalize();
+    const gp_Pln plane = surface.Plane();
+    BRepTopAdaptor_FClass2d classifier(top, Precision::PConfusion());
+    const auto inside = [&](const gp_Pnt& p) {
+      double u = 0.0;
+      double v = 0.0;
+      ElSLib::Parameters(plane, p, u, v);
+      return classifier.Perform(gp_Pnt2d(u, v)) == TopAbs_IN;
+    };
+    const double step = std::max(100.0 * tolerance, 1.0e-4);
+    gp_Vec towards;
+    if (inside(middle.Translated(across * step))) {
+      towards = across;
+    } else if (inside(middle.Translated(across * -step))) {
+      towards = across.Reversed();
+    } else {
+      return std::nullopt;
+    }
+    const Box box = grown(bounds_of(made.occt()), 1.0 + 10.0 * tolerance);
+    const double depth = diagonal(box);
+    // The face's prism out of the body: the material under the face within
+    // its walls continued at right angles to it.
+    BRepPrimAPI_MakePrism prism(top, gp_Vec(normal) * depth, true);
+    if (!prism.IsDone()) {
+      return std::nullopt;
+    }
+    // Past the edge, on the side away from the face.
+    const TopoDS_Face parting = BRepBuilderAPI_MakeFace(gp_Pln(middle, gp_Dir(towards))).Face();
+    const TopoDS_Shape half = BRepPrimAPI_MakeHalfSpace(parting, middle.Translated(towards * -1.0)).Solid();
+    const TopoDS_Shape beyond = boolean<BRepAlgoAPI_Common>(solid_of(box), half);
+    BRepAlgoAPI_Cut cut;
+    ShapeList tools;
+    tools.Append(solid);
+    tools.Append(prism.Shape());
+    tools.Append(beyond);
+    const TopoDS_Shape left = boolean(made.occt(), tools, cut);
+    BRep_Builder builder;
+    TopoDS_Compound lip;
+    builder.MakeCompound(lip);
+    int pieces = 0;
+    // (A piece thicker on average than ten times the tolerance, not a
+    // sliver between the walls and faces of `made` on their surfaces a few
+    // 1e-7 apart: a lip may be micrometres thin where the earlier rounding
+    // reaches only just past the contact, GitHub #560's design.)
+    for (TopExp_Explorer ex(left, TopAbs_SOLID); ex.More(); ex.Next()) {
+      GProp_GProps area;
+      BRepGProp::SurfaceProperties(ex.Current(), area);
+      const double volume = absolute_volume_of(ex.Current());
+      if (volume > 1.0e-15 * std::max(1.0, body_volume) && volume > 10.0 * tolerance * std::abs(area.Mass())) {
+        builder.Add(lip, BRepBuilderAPI_Copy(ex.Current()).Shape());
+        ++pieces;
+      }
+    }
+    if (pieces == 0) {
+      return ShapePtr{};
+    }
+    // The walls: the faces on the face's other edges. Where the lip touches
+    // one, it stands at right angles to the face along that edge (its normal
+    // across the face's), so that the prism's side there is the wall
+    // continued past the face.
+    const EdgeFaces edge_faces(body);
+    std::vector<int> walls;
+    for (TopExp_Explorer ex(top, TopAbs_EDGE); ex.More(); ex.Next()) {
+      const TopoDS_Edge& side = TopoDS::Edge(ex.Current());
+      if (side.IsSame(picked) || BRep_Tool::Degenerated(side)) {
+        continue;
+      }
+      const int s = body.edge_index(side);
+      int wall = -1;
+      if (s >= 0) {
+        for (const int f : edge_faces.at(s)) {
+          wall = f != face ? f : wall;
+        }
+      }
+      if (wall >= 0 && std::find(walls.begin(), walls.end(), wall) == walls.end()) {
+        walls.push_back(wall);
+      }
+      if (!within_distance(lip, side, 10.0 * tolerance)) {
+        continue;
+      }
+      if (wall < 0) {
+        throw std::runtime_error("the rounding runs past the face's edge onto no face");
+      }
+      const occ::handle<Geom_Surface> wall_surface = BRep_Tool::Surface(body.face(wall));
+      const BRepAdaptor_Curve along(side);
+      for (int i = 0; i <= 4; ++i) {
+        const gp_Pnt p =
+            along.Value(along.FirstParameter() + 0.25 * i * (along.LastParameter() - along.FirstParameter()));
+        GeomAPI_ProjectPointOnSurf projection(p, wall_surface);
+        if (projection.NbPoints() == 0) {
+          throw std::runtime_error("the rounding runs past a wall it cannot follow");
+        }
+        double u = 0.0;
+        double v = 0.0;
+        projection.LowerDistanceParameters(u, v);
+        gp_Pnt q;
+        gp_Vec du;
+        gp_Vec dv;
+        wall_surface->D1(u, v, q, du, dv);
+        const gp_Vec n = du.Crossed(dv);
+        if (n.Magnitude() < gp::Resolution() || std::abs(gp_Vec(normal).Dot(n.Normalized())) > 1.0e-6) {
+          throw std::runtime_error("the rounding runs past a wall that does not stand at right angles to its face");
+        }
+      }
+    }
+    // (Its faces on a wall's surface named after the wall: the faces they
+    // leave in the result are that wall continued.)
+    std::vector<Shape::NamedFace> named;
+    for (TopExp_Explorer ex(lip, TopAbs_FACE); ex.More(); ex.Next()) {
+      const std::vector<gp_Pnt> points = samples(TopoDS::Face(ex.Current()));
+      for (const int w : walls) {
+        if (on_surface(points, BRep_Tool::Surface(body.face(w)), 10.0 * tolerance)) {
+          named.push_back({ex.Current(), body.face_names(w)});
+          break;
+        }
+      }
+    }
+    return std::make_shared<Shape>(lip, named);
+  });
+}
+
+std::optional<ShapePtr> removal_continued(const Shape& body, const Shape& dressed, const gp_Pln& plane,
+                                          const gp_Dir& out, double length) {
+  if (!(length > 0.0)) {
+    return std::nullopt;
+  }
+  throw_if_cancelled();
+  return occt_guarded([&]() -> std::optional<ShapePtr> {
+    const double tolerance = std::max(1.0e-6, 2.0 * BRep_Tool::MaxTolerance(body.occt(), TopAbs_VERTEX));
+    const TopoDS_Shape removed = boolean<BRepAlgoAPI_Cut>(body.occt(), dressed.occt());
+    const double body_volume = absolute_volume_of(body.occt());
+    if (absolute_volume_of(removed) <= 1.0e-12 * std::max(1.0, body_volume)) {
+      return ShapePtr{};
+    }
+    BRep_Builder builder;
+    TopoDS_Compound prisms;
+    builder.MakeCompound(prisms);
+    int count = 0;
+    for (TopExp_Explorer ex(removed, TopAbs_FACE); ex.More(); ex.Next()) {
+      const TopoDS_Face& face = TopoDS::Face(ex.Current());
+      const BRepAdaptor_Surface surface(face, false);
+      if (surface.GetType() != GeomAbs_Plane) {
+        continue;
+      }
+      const gp_Pln on = surface.Plane();
+      if (!on.Axis().Direction().IsParallel(plane.Axis().Direction(), 1.0e-9) ||
+          plane.Distance(on.Location()) > 10.0 * tolerance) {
+        continue;
+      }
+      BRepPrimAPI_MakePrism prism(face, gp_Vec(out) * length, true);
+      if (!prism.IsDone()) {
+        return std::nullopt;
+      }
+      builder.Add(prisms, prism.Shape());
+      ++count;
+    }
+    if (count == 0) {
+      return ShapePtr{};
+    }
+    // (Named after the dressed body's faces they run on from: the faces
+    // they leave in the material put back are those faces continued.)
+    std::vector<Shape::NamedFace> named;
+    for (TopExp_Explorer ex(prisms, TopAbs_FACE); ex.More(); ex.Next()) {
+      const std::vector<gp_Pnt> points = samples(TopoDS::Face(ex.Current()));
+      for (int f = 0; f < dressed.face_count(); ++f) {
+        if (on_surface(points, BRep_Tool::Surface(dressed.face(f)), 10.0 * tolerance)) {
+          named.push_back({ex.Current(), dressed.face_names(f)});
+          break;
+        }
+      }
+    }
+    return std::make_shared<Shape>(prisms, named);
   });
 }
 

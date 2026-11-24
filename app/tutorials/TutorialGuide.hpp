@@ -89,6 +89,10 @@ public:
   // For MCP's ui_guide and its resource: whether a step is shown, the step,
   // its sequence number (one per step started) and the last event.
   QJsonObject state() const;
+  // The step's callout in the window's coordinates while it is shown, else
+  // a null rectangle: a click there reaches the callout, not what lies
+  // under it (the places logged for UI tests keep clear of it, mitcad#2311).
+  QRect calloutRect() const;
 
 signals:
   // {"event": "step_done" | "step_left" | "refused", "step": <id>,
@@ -96,6 +100,8 @@ signals:
   void guideEvent(const QJsonObject& event);
   // The state changed (a step started or ended, an event).
   void changed();
+  // The callout was placed elsewhere, shown or hidden (calloutRect).
+  void calloutMoved();
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;

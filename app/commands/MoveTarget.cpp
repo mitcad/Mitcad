@@ -142,4 +142,35 @@ QString frameOccurrenceOf(const QStringList& paths, const QString& component, co
   return firstOccurrenceOf(tree, component);
 }
 
+std::optional<QString> pickedOccurrenceToWrite(const QString& path, const QString& component,
+                                               const QJsonArray& tree) {
+  const QString own = component.isEmpty() ? kRootComponent : component;
+  if (componentAtPath(tree, path) == own) {
+    return std::nullopt;
+  }
+  return path;
+}
+
+QString parentOccurrenceToWrite(const QStringList& paths, const QString& component, const QJsonArray& tree) {
+  if (component.isEmpty() || component == kRootComponent || occurrenceCountOf(tree, component) < 2) {
+    return QString();
+  }
+  for (const QString& path : paths) {
+    const QString parentPath = parentPathOf(path);
+    if (!parentPath.isEmpty() && componentAtPath(tree, parentPath) == component) {
+      return parentPath;
+    }
+  }
+  return QString();
+}
+
+QString loadedOccurrencePath(const QString& uid, const QString& parentOccurrence, const QString& fallback,
+                             const QJsonArray& tree) {
+  if (parentOccurrence.isEmpty() || occurrenceNodeAt(tree, parentOccurrence).isEmpty()) {
+    return fallback;
+  }
+  const QString path = joined(parentOccurrence, uid);
+  return occurrenceNodeAt(tree, path).isEmpty() ? fallback : path;
+}
+
 } // namespace mitcad::cmd

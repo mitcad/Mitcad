@@ -9,7 +9,8 @@
 // themes have patches in the OCCT port (third_party/vcpkg-ports): faces a
 // dressup consumes, two roundings meeting on one contact line (a full
 // round), a convex and a concave rounding of one face meeting, edges near
-// tangent, chamfers wider than a face beside them.
+// tangent, chamfers wider than a face beside them, four planar chamfers
+// meeting at a vertex (patch 2306, mitcad#2306).
 //
 // The bodies are modelled here from the case descriptions (dimensions,
 // edges, sizes); the expected volumes and areas are their closed forms. No
@@ -528,13 +529,17 @@ void test_chamfer_l_block_inside_consumed() {
 // where the contact lines of two of its chamfers cross, exactly on a corner
 // square's edge, so each corner touches the faces only at points.
 //
-// A known failure on both paths (first run, mitcad#2273): the kernel's
-// chamfer is not done, and MitCad's Chamfer fails on the twelve edges with
-// none of its ways round building it. A vertex of four chamfered edges is
-// made by the kernel's corner of more than three stripes (ChFi3d_Builder::
-// PerformMoreThreeCorner, an n-sided plate), where the answer is a planar
-// square touching each face at one point; that this corner is where it
-// stops is read from the code, not yet traced.
+// A known failure on both paths at first (mitcad#2273): the kernel's corner
+// of more than three stripes (ChFi3d_Builder::PerformMoreThreeCorner) found
+// the four chamfers meeting on the faces at each vertex, but its n-sided
+// plate, held G1 to each chamfer's plane along its section, was not done at
+// any of the six vertices: no surface is tangent to four planes along a
+// square's sides. Port patch 2306 builds such a corner, whose borders are
+// sections of planar chamfers in one plane, as that plane; and since
+// OrientClosedSolid below reverses the solid around the sewn shell, which
+// faces in, the same patch has the dressup take a reversed solid as that
+// solid oriented forward (before, the eight triangles came out facing in:
+// invalid, the volume 490.67) (mitcad#2306).
 void test_chamfer_octahedron_all_edges() {
   BRepBuilderAPI_Sewing sewing;
   for (const double sx : {-1.0, 1.0}) {
@@ -558,11 +563,7 @@ void test_chamfer_octahedron_all_edges() {
   Answer answer;
   answer.volume = 2752.0 / 3.0;
   answer.area = 64.0 * std::sqrt(3.0) + 192.0 * std::sqrt(2.0) + 96.0;
-  chamfer_case("chamfer/octahedron-all-edges", body, edges, 12, std::sqrt(6.0), answer,
-               Expect{"not done: four chamfers meet at each vertex, which a planar square closes; the kernel's "
-                      "corner of more than three stripes does not make it"},
-               Expect{"not built: the chamfer of the twelve edges fails and none of the ways round a kernel "
-                      "failure builds it"});
+  chamfer_case("chamfer/octahedron-all-edges", body, edges, 12, std::sqrt(6.0), answer, Expect{}, Expect{});
 }
 
 } // namespace

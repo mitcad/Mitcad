@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MIT
+# The DRAWING tab's groups in a 1280 px wide window (mitcad#2066), run in the
+# layout the wrapper starts (Floating and Docked), on a box with one drawing
+# (drawing-ribbon-fit.json):
+#   1. The window 1280 x 800, the drawing opened from the browser: its tab
+#      alone, its groups fitted to the window.
+#   2. Preferences › Display › Toolbar labels: Icons only, then Labels under
+#      icons, then Icons only again. Each change logs the tab's collapsed
+#      groups ("Ribbon collapsed DRAWING: none", Ribbon::setButtonLabels),
+#      and a later fit logs them again where they change; a picture with
+#      the labels and one without (drawing-ribbon-fit-<layout>-labels.png,
+#      -icons.png).
+# The wrappers read the log: in each of these states the Dimensions, Text,
+# Symbols and Tables groups are not collapsed, where the window is as wide
+# as asked (the Windows VM's 1024 x 768 desktop keeps it narrower).
+# Run by tools/ui-drawing-ribbon-fit-test.sh (Linux),
+# tools/ui-windows-drawing-ribbon-fit-test.ps1 (Windows) and
+# tools/ui-macos-drawing-ribbon-fit-test.sh (macOS).
+expect-ever 'View area' 30
+window-resize 1280 800
+wait-idle
+expect-ever '^Browser Root/Drawings/Drawing1 at ' 30
+wait-idle
+
+# 1. The drawing opened.
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Ribbon tabs: DRAWING [(]shown DRAWING[)]$'
+wait-idle
+wait-log '^Ribbon DRAWING/TABLES at '
+sleep 500
+
+# 2. Icons only (the start, where the layout shows labels by default),
+# Labels under icons, Icons only again.
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice ribbonLabels 'Icons only'
+key Return
+focus-main
+wait-idle
+sleep 500
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice ribbonLabels 'Labels under icons'
+key Return
+focus-main
+wait-log '^Ribbon labels: labels [(]rows '
+wait-log '^Ribbon collapsed DRAWING: '
+wait-idle
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/drawing-ribbon-fit-${MITCAD_TEST_LAYOUT}-labels.png'
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice ribbonLabels 'Icons only'
+key Return
+focus-main
+wait-log '^Ribbon labels: icons [(]rows '
+wait-log '^Ribbon collapsed DRAWING: '
+wait-idle
+sleep 500
+screenshot '${MITCAD_TEST_WORK}/drawing-ribbon-fit-${MITCAD_TEST_LAYOUT}-icons.png'
+expect-never 'TestDriver: FAIL'

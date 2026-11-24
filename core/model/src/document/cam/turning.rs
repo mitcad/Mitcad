@@ -65,6 +65,8 @@ pub(super) struct TurnRun<'a> {
     pub frame: Result<TurnFrame, String>,
     pub machine: &'a CamMachine,
     pub operations: Vec<TurnComputed>,
+    /// The sub-spindle's hand-over (mitcad#2319), when the setup has one.
+    pub hand_over: Option<Result<turn::HandOver, String>>,
 }
 
 /// The inverse of a placement's linear part (a placement is invertible).
@@ -784,6 +786,8 @@ impl<K: Kernel> Document<K> {
             direction: op.spindle,
             coolant: op.coolant,
             path: path.map_err(|e| e.message)?,
+            live: None,
+            sub: false,
         })
     }
 
@@ -801,15 +805,39 @@ impl<K: Kernel> Document<K> {
             .ok_or_else(|| invalid(NO_MACHINE))?;
         let frame = self.turn_frame(setup);
         let sf = self.cam_setup_frame(setup);
+        // The part turned round on the sub-spindle (mitcad#2319).
+        let sub_frame = match &frame {
+            Ok(tf) if setup.operations.iter().any(|o| o.sub_spindle) => {
+                Some(self.turn_sub_frame(setup, tf))
+            }
+            _ => None,
+        };
+        let hand_over = match (
+            &frame,
+            setup.lathe.as_ref().and_then(|l| l.hand_over.as_ref()),
+        ) {
+            (Ok(tf), Some(h)) => Some(self.turn_hand_over(tf, h)),
+            _ => None,
+        };
         let operations = setup
             .operations
             .iter()
             .filter(|op| only.is_none_or(|ids| ids.contains(&op.id)))
             .map(|op| {
                 let fingerprint = self.cam_fingerprint(setup, &sf, Some(machine), op);
-                let result = (!op.suppressed).then(|| match &frame {
-                    Err(e) => Err(e.clone()),
-                    Ok(tf) => self.turn_compute_operation(tf, machine, op),
+                let result = (!op.suppressed).then(|| match (&frame, &sub_frame) {
+                    (Err(e), _) => Err(e.clone()),
+                    (Ok(_), Some(sub)) if op.sub_spindle => {
+                        let sub = sub.as_ref().map_err(Clone::clone)?;
+                        let mut turned = self.turn_compute_operation(sub, machine, op)?;
+                        turned.sub = true;
+                        Ok(turned)
+                    }
+                    (Ok(tf), _) if op.kind.is_turning() => {
+                        self.turn_compute_operation(tf, machine, op)
+                    }
+                    // A live tool on the C axis (mitcad#2067).
+                    (Ok(tf), _) => self.live_compute_operation(setup, tf, machine, op),
                 });
                 TurnComputed {
                     id: op.id,
@@ -823,7 +851,96 @@ impl<K: Kernel> Document<K> {
             frame,
             machine,
             operations,
+            hand_over,
         })
+    }
+
+    /// The sub-spindle's work coordinates of a lathe setup (mitcad#2319):
+    /// the setup's frame turned round about its X at the part's back (the
+    /// zero there, Z away from the sub-spindle's chuck), the part's
+    /// section in it, the stock from where the main spindle's parting off
+    /// cut it (the last operation before the first on the sub-spindle,
+    /// else the stock's back) to the part's face.
+    pub(super) fn turn_sub_frame(
+        &self,
+        setup: &CamSetup,
+        tf: &TurnFrame,
+    ) -> Result<TurnFrame, String> {
+        let back = tf.part.back_z();
+        let frame = WorkFrame {
+            origin: tf.frame.to_model([0.0, 0.0, back]),
+            x: tf.frame.x,
+            y: scale(tf.frame.y, -1.0),
+            z: scale(tf.frame.z, -1.0),
+        };
+        let bodies = self.cam_setup_bodies(setup)?;
+        let chains = self.turn_section(&bodies, &frame)?;
+        let widest =
+            |c: &outline::Chain| c.contour.vertices.iter().map(|v| v.x).fold(0.0, f64::max);
+        let chain = chains
+            .iter()
+            .max_by(|a, b| widest(a).total_cmp(&widest(b)))
+            .ok_or_else(|| "The part's back cannot be cut through the spindle axis.".to_owned())?;
+        let (outside, inside) = split_profile(&chain.contour)?;
+        let live = |o: &&CamOperation| !o.suppressed;
+        let first = setup
+            .operations
+            .iter()
+            .position(|o| o.sub_spindle && !o.suppressed);
+        let parting = first.and_then(|i| setup.operations[..i].iter().rev().find(live));
+        let cut = match parting.map(|o| &o.kind) {
+            Some(OperationKind::TurnPartOff { z }) => match z {
+                Some(v) => v.evaluate(self.parameters(), ValueKind::Length)?,
+                None => back,
+            },
+            _ => tf.stock_back,
+        };
+        let face = outside.first().map_or(0.0, |v| v.z);
+        let part = TurnPart {
+            outside,
+            inside,
+            stock_radius: tf.part.stock_radius,
+            stock_inner_radius: tf.part.stock_inner_radius,
+            stock_face: (back - cut).max(face),
+        };
+        part.validate()?;
+        let clear = tf.change[1] - tf.part.stock_face;
+        let change = [tf.change[0], part.stock_face + clear];
+        Ok(TurnFrame {
+            frame,
+            part,
+            stock_back: back - tf.part.stock_face,
+            change,
+        })
+    }
+
+    /// A lathe setup's hand-over to the sub-spindle with its defaults
+    /// (mitcad#2319, [`crate::cam::HandOverSetup`]).
+    fn turn_hand_over(
+        &self,
+        tf: &TurnFrame,
+        h: &crate::cam::HandOverSetup,
+    ) -> Result<turn::HandOver, String> {
+        let params = self.parameters();
+        let value = |v: &Option<CamValue>, kind: ValueKind, default: f64| match v {
+            Some(v) => v.evaluate(params, kind),
+            None => Ok(default),
+        };
+        let (face, back) = (tf.part.face_z(), tf.part.back_z());
+        let hand_over = turn::HandOver {
+            grip_z: value(
+                &h.grip_z,
+                ValueKind::Length,
+                face - (0.5 * (face - back)).min(10.0),
+            )?,
+            withdraw: value(&h.withdraw, ValueKind::Length, 50.0)?,
+            rpm: value(&h.rpm, ValueKind::Number, 500.0)?,
+            feed: value(&h.feed, ValueKind::Length, 1000.0)?,
+            work_offset: h.work_offset.unwrap_or(2),
+            back_z: back,
+        };
+        hand_over.validate().map_err(|e| e.message)?;
+        Ok(hand_over)
     }
 
     /// The program of a computed lathe setup; refused when an operation
@@ -837,6 +954,14 @@ impl<K: Kernel> Document<K> {
         program.work_offset = setup.work_offset;
         if let Some(number) = setup.lathe.as_ref().and_then(|l| l.program_number) {
             program.number = number;
+        }
+        // The lathe's codes of the C axis and its live tools (mitcad#2067).
+        if let Some(lathe) = &run.machine.machine.lathe {
+            program.mill_turn = lathe.mill_turn.clone();
+        }
+        // The sub-spindle's hand-over (mitcad#2319).
+        if let Some(hand_over) = &run.hand_over {
+            program.hand_over = Some(hand_over.clone()?);
         }
         for computed in &run.operations {
             match &computed.result {
@@ -955,9 +1080,17 @@ impl<K: Kernel> Document<K> {
                         target.generated = Some(hex(computed.fingerprint));
                     }
                     entry["state"] = json!("up_to_date");
-                    entry["cut_length"] = json!(op.path.cut_length());
-                    entry["duration"] = json!(op.path.duration(rapid, |x| op.spindle.rpm_at(x)));
-                    entry["moves"] = json!(op.path.moves.len());
+                    if let Some(live) = &op.live {
+                        // A live tool's moves, feeds per minute (mitcad#2067).
+                        entry["cut_length"] = json!(live.path.cut_length());
+                        entry["duration"] = json!(live.path.duration(rapid));
+                        entry["moves"] = json!(live.path.moves.len());
+                    } else {
+                        entry["cut_length"] = json!(op.path.cut_length());
+                        entry["duration"] =
+                            json!(op.path.duration(rapid, |x| op.spindle.rpm_at(x)));
+                        entry["moves"] = json!(op.path.moves.len());
+                    }
                 }
                 Some(Err(e)) => {
                     entry["state"] = json!("failed");
@@ -1004,8 +1137,36 @@ impl<K: Kernel> Document<K> {
                 });
                 match &computed.result {
                     None => {}
+                    // A live tool's moves in the work coordinates
+                    // (mitcad#2067).
+                    Some(Ok(op)) if op.live.is_some() => {
+                        let live = op.live.as_ref().expect("a live operation");
+                        let view = Self::live_view_path(live);
+                        value["bounds"] = json!(view.bounds());
+                        value["toolpath"] = json!(view);
+                        value["live"] = json!({"side": live.side, "path": live.path});
+                        value["tool"] = json!({"number": op.tool.number, "name": op.tool.name,
+                                               "diameter": live.cutter.diameter});
+                        value["spindle"] = json!(op.spindle);
+                        value["cut_length"] = json!(live.path.cut_length());
+                        value["duration"] = json!(live.path.duration(rapid));
+                    }
                     Some(Ok(op)) => {
-                        value["toolpath"] = json!(Self::turn_view_path(&op.path));
+                        let mut view = Self::turn_view_path(&op.path);
+                        // The sub-spindle's moves on the part where it
+                        // was (mitcad#2319): its Z turned round at the
+                        // part's back.
+                        if let (true, Ok(tf)) = (op.sub, &run.frame) {
+                            let back = tf.part.back_z();
+                            for m in &mut view.moves {
+                                if let Move::Rapid { to } | Move::Line { to, .. } = m {
+                                    *to = [to[0], -to[1], back - to[2]];
+                                }
+                            }
+                            value["sub_spindle"] = json!(true);
+                        }
+                        value["bounds"] = json!(view.bounds());
+                        value["toolpath"] = json!(view);
                         value["turn_path"] = json!(op.path);
                         value["tool"] = json!({"number": op.tool.number, "name": op.tool.name,
                                                "diameter": 2.0 * op.tool.nose_radius.max(0.2)});
@@ -1013,7 +1174,6 @@ impl<K: Kernel> Document<K> {
                         value["cut_length"] = json!(op.path.cut_length());
                         value["duration"] =
                             json!(op.path.duration(rapid, |x| op.spindle.rpm_at(x)));
-                        value["bounds"] = json!(Self::turn_view_path(&op.path).bounds());
                     }
                     Some(Err(e)) => value["error"] = json!(e),
                 }
@@ -1094,6 +1254,21 @@ impl<K: Kernel> Document<K> {
         // Room for the parting blade beyond the stock's back.
         let z_min = tf.stock_back.min(tf.part.back_z()) - 10.0;
         let sim = turn::simulate_turning(&tf.part, &program, z_min, step, tolerance);
+        // The live tools' cuts on the face and the diameter (mitcad#2067),
+        // each program operation by its id.
+        let ids: Vec<u32> = run
+            .operations
+            .iter()
+            .filter(|c| matches!(c.result, Some(Ok(_))))
+            .map(|c| c.id)
+            .collect();
+        let live = self
+            .live_simulate_json(setup, tf, &program, &ids, (z_min, step), tolerance)
+            .map_err(invalid)?;
+        // The whole program cut out of the bar in 3D (mitcad#2319).
+        let solid = self
+            .solid_simulate_json(setup, tf, &program, &ids, (z_min, step))
+            .map_err(invalid)?;
         Ok(json!({
             "setup": setup.id,
             "turning": true,
@@ -1103,6 +1278,8 @@ impl<K: Kernel> Document<K> {
             "left_at": sim.left_at,
             "gouges": sim.gouges,
             "rapid_cuts": sim.rapid_cuts,
+            "live": live,
+            "solid": solid,
         }))
     }
 }

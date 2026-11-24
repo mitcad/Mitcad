@@ -679,6 +679,7 @@ impl Import<'_> {
                         name: Some(body.name),
                         color: None,
                         shape,
+                        face_colors: Vec::new(),
                     });
                     visible.push(body.visible);
                 }
@@ -740,6 +741,7 @@ impl Import<'_> {
                 name: Some(b.name.clone()),
                 color: None,
                 shape: b.shape.clone(),
+                face_colors: Vec::new(),
             })
             .collect();
         let visible: Vec<bool> = part

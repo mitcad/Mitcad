@@ -30,8 +30,13 @@ BOM = chr(0xFEFF)
 
 REPOSITORY_FIELDS = {"format": str, "version": int, "name": str, "description": str}
 TUTORIAL_FIELDS = {"id": str, "title": str, "language": str, "version": str, "min_mitcad": str,
-                   "license": str, "description": str, "start": str, "designs": list}
+                   "license": str, "description": str, "start": str, "designs": list,
+                   "duration": int, "level": str, "picture": str, "order": int}
 REQUIRED = ("id", "title", "language", "version", "min_mitcad", "license")
+# What the Start page's card shows when a tutorial gives it.
+LEVELS = ("beginner", "intermediate", "advanced")
+PICTURE_TYPES = (".png", ".jpg", ".jpeg")
+MAX_PICTURE_BYTES = 4 << 20
 
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 LANGUAGE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
@@ -157,6 +162,23 @@ def check_tutorial(folder, problems):
             problems.add(path, "%s is not a path inside the tutorial" % page)
         elif not (folder / page).is_file():
             problems.add(path, "%s is not a file of the tutorial" % page)
+    level = manifest.get("level")
+    if isinstance(level, str) and level and level not in LEVELS:
+        problems.add(path, "level \"%s\" is not one of %s" % (level, ", ".join(LEVELS)))
+    for name in ("duration", "order"):
+        value = manifest.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value < 1:
+            problems.add(path, "%s is %d; it starts at 1" % (name, value))
+    picture = manifest.get("picture")
+    if isinstance(picture, str) and picture:
+        if not valid_path(picture):
+            problems.add(path, "%s is not a path inside the tutorial" % picture)
+        elif not picture.lower().endswith(PICTURE_TYPES):
+            problems.add(path, "picture %s is not a PNG or JPEG file" % picture)
+        elif not (folder / picture).is_file():
+            problems.add(path, "%s is not a file of the tutorial" % picture)
+        elif (folder / picture).stat().st_size > MAX_PICTURE_BYTES:
+            problems.add(path, "picture %s is larger than %d MB" % (picture, MAX_PICTURE_BYTES >> 20))
 
 
 def check(root):

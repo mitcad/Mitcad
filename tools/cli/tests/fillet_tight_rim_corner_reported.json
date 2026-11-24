@@ -1,0 +1,15 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #592's design (mitcad#2291; opened with --open, never committed; tools/cli/fillet-tight-rim-corner-reported-test.cmake): a block 30 x 10 x 20 (Extrude1 F13) whose top meets a concave quarter cylinder of radius 10 (the cut-out, its axis in the top's plane). Fillet1 (F14) rounds the end face's edge with the cut-out with d4 = 2, Fillet2 (F15) the end face's edge with the top with d5 = 3; its chain runs on round Fillet1's arc on the top and along the top's edge with the cut-out. Before, the corner was the acute tight corner of the port's patch 1590: its torus ran back over Fillet1's rounding (0.03 mm off it) and the cut-out's rounding was carried past its contact with the cut-out, a face of 0.0063 mm2: the roundings did not join cleanly. With the port's patch 2291 the corner is obtuse at the ball's contact with the cut-out, and Fillet1's own ball closes it. One valid solid, no warning, no face under 0.01 mm2."},
+  {"expect": {"feature": "Fillet2", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F15"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "min_face_area": 0.01,
+    "has_face": "F15:fillet(E{F13:end(r{c1[c6,c10],c6[c1,c8],c8[c6,c10],c10[c8,c1]})|F13:side(c10[c8,c1])})"}},
+  {"comment": "The volume of the same block rounded so by OCCT alone (geometry.port.2291: 4355.522880; before the patch the reported design had 4355.487)."},
+  {"expect": {"body": "Body1", "volume": 4355.52288, "tolerance": 2e-6}},
+  {"comment": "Fillet2 with Fillet1's radius 2: no tight corner, the ball stays put round Fillet1's arc; clean as before, the volume geometry.port.2291's (4388.488279) and the design's before the patch."},
+  {"cmd": "set_parameter", "name": "d5", "value": 2},
+  {"expect": {"feature": "Fillet2", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F15"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "min_face_area": 0.01}},
+  {"expect": {"body": "Body1", "volume": 4388.488279, "tolerance": 2e-6}}
+]

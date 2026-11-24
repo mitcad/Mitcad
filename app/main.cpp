@@ -42,6 +42,7 @@
 #include "framework/AppTheme.hpp"
 #include "framework/ChromeStyle.hpp"
 #include "framework/DebugLog.hpp"
+#include "framework/AccessibilityClients.hpp"
 #include "framework/HangWatchdog.hpp"
 #include "framework/RibbonLabels.hpp"
 #include "framework/SessionLog.hpp"
@@ -309,9 +310,9 @@ int runApplication(int argc, char* argv[]) {
   // checked before any window, as a window holding the 3D view whose
   // context or surface fails stays black, panels and all. The format that
   // works becomes the viewport's; where none does, MitCad starts again in
-  // this process on the next platform (in a Wayland session native Wayland
-  // first; X11 with GLX at the end, where the window draws and the 3D view
-  // says it cannot start). The lines go to the log after "Display platform:".
+  // this process on the next platform (X11 with GLX after X11 with EGL, the
+  // 3D view in its own EGL context; native Wayland last, in a Wayland
+  // session). The lines go to the log after "Display platform:".
   QStringList graphicsLog;
 #if defined(__linux__) && defined(MITCAD_OCCT_EGL)
   if (!mitcad::headlessUiTest() && (QGuiApplication::platformName() == QLatin1String("xcb") ||
@@ -321,17 +322,21 @@ int runApplication(int argc, char* argv[]) {
     if (!earlier.isEmpty()) {
       graphicsLog << QStringLiteral("Graphics check: started again after: %1").arg(earlier);
     }
-    // Tests only: the first start's EGL contexts fail the check.
-    const bool forceFailure = restarts == 0 && qEnvironmentVariable("MITCAD_TEST_GL_FAILURE") == QLatin1String("start");
+    // Tests only: the first start's EGL contexts fail the check; with
+    // start-view the 3D view's own EGL context fails in every start too.
+    const bool forceViewFailure = mitcad::viewEglTestFailure();
+    const bool forceFailure =
+        restarts == 0 && (qEnvironmentVariable("MITCAD_TEST_GL_FAILURE") == QLatin1String("start") || forceViewFailure);
     const mitcad::GraphicsStart graphics = mitcad::startGraphics(
-        {mitcad::viewportSurfaceFormat(), mitcad::viewportFallbackSurfaceFormat()}, forceFailure);
+        {mitcad::viewportSurfaceFormat(), mitcad::viewportFallbackSurfaceFormat()}, forceFailure, forceViewFailure);
     graphicsLog << graphics.log;
     if (graphics.format) {
       mitcad::useViewportSurfaceFormat(*graphics.format);
     } else {
-      // In a Wayland session native Wayland comes first: the reported black
-      // window (NVIDIA's driver under XWayland) had no EGL surface for its
-      // X11 window, while native Wayland drew everything.
+      // X11 with GLX after X11 with EGL, as 0.69 drew the window, the 3D
+      // view through its own EGL context: the reported black windows
+      // (NVIDIA's driver under XWayland) had no EGL surface for their X11
+      // window. Native Wayland (opt-in, mitcad#2031) only after both.
       const QString integration = qEnvironmentVariable("QT_XCB_GL_INTEGRATION");
       QStringList tried = qEnvironmentVariable(mitcad::kGraphicsTriedVariable)
                               .split(QLatin1Char(','), Qt::SkipEmptyParts);
@@ -711,6 +716,10 @@ int runApplication(int argc, char* argv[]) {
   // questions are still there: they wait for the handler set further down.
   mitcad::FileOpenFilter fileOpenFilter;
   app.installEventFilter(&fileOpenFilter);
+
+  // Who reads the window through UI Automation, in the log (mitcad#2227):
+  // before the first window's accessible interface is made.
+  mitcad::installAccessibilityClientLog();
 
   // A screenshot run offers no crash reports either (mitcad#62).
   mitcad::ReportCenter::setOfferEarlierCrashes(!parser.isSet(screenshotOption));

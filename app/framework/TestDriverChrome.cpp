@@ -17,6 +17,8 @@
 #include <QLayout>
 #include <QLineEdit>
 #include <QMenu>
+#include <QProcess>
+#include <QRegularExpression>
 #include <QRegion>
 #include <QScreen>
 #include <QScrollArea>
@@ -28,6 +30,7 @@
 #include <QToolButton>
 #include <QTabBar>
 
+#include "AccessibleTree.hpp"
 #include "ChromeStyle.hpp"
 #include "IconSizeStyle.hpp"
 #include "Ribbon.hpp"
@@ -737,6 +740,14 @@ const TestDriver::StepSpec kStepSpecs[] = {
     // Preferences' Text size, Icon size and Font as the run applied them
     // (mitcad#1556).
     {"expect-text-icon-size", 3, 3, TestDriver::kIdle},
+    // The window's accessibility tree walked as a client reads it, its
+    // nodes per subtree and the walk's time in the log; over the limits
+    // fails (mitcad#2227). A third number also lists the subtrees of that
+    // many nodes, the hidden ones' too.
+    {"accessible-tree", 0, 3, TestDriver::kIdle},
+    // Windows: a UI Automation client (mitcad-uia-walk) reads the whole
+    // window in one bulk read within the time (mitcad#2227).
+    {"uia-walk", 1, 2, TestDriver::kIdle},
 };
 
 } // namespace
@@ -775,7 +786,99 @@ void TestDriver::runChromeStep(const QString& name, const QStringList& a, int li
       fail(line, QStringLiteral("expect-text-icon-size <text%> <icon%> <family|system>")); return;
     }
     testTextIconSize(textPercent, iconPercent, a.at(2));
+  } else if (name == QLatin1String("accessible-tree")) {
+    bool nodesOk = true;
+    bool msOk = true;
+    const int maxNodes = a.size() > 0 ? a.at(0).toInt(&nodesOk) : 0;
+    const int maxMs = a.size() > 1 ? a.at(1).toInt(&msOk) : 0;
+    bool detailOk = true;
+    const int detail = a.size() > 2 ? a.at(2).toInt(&detailOk) : 0;
+    if (!nodesOk || !msOk || !detailOk || maxNodes < 0 || maxMs < 0 || detail < 0) {
+      fail(line, QStringLiteral("accessible-tree [<max nodes> [<max ms> [<detail nodes>]]]"));
+      return;
+    }
+    testAccessibleTree(line, maxNodes, maxMs, detail);
+  } else if (name == QLatin1String("uia-walk")) {
+    bool msOk = true;
+    const int maxMs = a.size() > 1 ? a.at(1).toInt(&msOk) : 0;
+    if (!msOk || maxMs < 0) {
+      fail(line, QStringLiteral("uia-walk <client> [<max ms>]"));
+      return;
+    }
+    testUiaWalk(line, a.at(0), maxMs);
   }
+}
+
+void TestDriver::testAccessibleTree(int line, int maxNodes, int maxMs, int detail) {
+  QWidget* window = topWindow();
+  if (window == nullptr) {
+    fail(line, QStringLiteral("accessible-tree: no window"));
+    return;
+  }
+  const AccessibleTreeStats stats = walkAccessibleTree(window);
+  qInfo().noquote() << QStringLiteral("Accessible tree: %1 nodes (%2 invisible children skipped), depth %3, "
+                                      "widest %4 children (%5), walk %6 ms%7")
+                           .arg(stats.nodes)
+                           .arg(stats.invisible)
+                           .arg(stats.maxDepth)
+                           .arg(stats.widest)
+                           .arg(stats.widestNode)
+                           .arg(stats.ms)
+                           .arg(stats.truncated ? QStringLiteral(", stopped at the limit") : QString());
+  const AccessibleTreeStats listed = detail > 0 ? walkAccessibleTree(window, true, 0.0, detail) : stats;
+  if (detail > 0) {
+    qInfo().noquote()
+        << QStringLiteral("Accessible hidden: %1 nodes below the invisible children").arg(listed.hiddenNodes);
+  }
+  for (const QString& subtree : listed.subtrees) {
+    qInfo().noquote() << QStringLiteral("Accessible subtree: %1").arg(subtree);
+  }
+  if ((maxNodes > 0 && stats.nodes > maxNodes) || (maxMs > 0 && stats.ms > maxMs)) {
+    fail(line, QStringLiteral("accessible-tree: %1 nodes in %2 ms, more than %3 nodes or %4 ms")
+                   .arg(stats.nodes)
+                   .arg(stats.ms)
+                   .arg(maxNodes)
+                   .arg(maxMs));
+  }
+}
+
+void TestDriver::testUiaWalk(int line, const QString& client, int maxMs) {
+#ifdef Q_OS_WIN
+  // The client reads the window from its own process while this one's
+  // event loop serves the read.
+  auto* process = new QProcess(this);
+  process->setProcessChannelMode(QProcess::MergedChannels);
+  QWidget* window = topWindow();
+  if (window == nullptr) {
+    process->deleteLater();
+    fail(line, QStringLiteral("uia-walk: no window"));
+    return;
+  }
+  // It stays a moment after the read, as a reading program lives on.
+  QStringList arguments{QString::number(QCoreApplication::applicationPid()),
+                        QString::number(static_cast<quint64>(window->winId())), QStringLiteral("--hold"),
+                        QStringLiteral("3000")};
+  process->start(client, arguments);
+  whenReady([process] { return process->state() == QProcess::NotRunning; }, 120,
+            QStringLiteral("uia-walk: the UI Automation client did not end"), [this, process, line, maxMs] {
+              const QString output = QString::fromLocal8Bit(process->readAll()).trimmed();
+              const bool ran = process->exitStatus() == QProcess::NormalExit && process->exitCode() == 0;
+              process->deleteLater();
+              qInfo().noquote() << QStringLiteral("UIA client: %1").arg(output);
+              static const QRegularExpression timed(QStringLiteral(R"(in (\d+) ms)"));
+              const QRegularExpressionMatch match = timed.match(output);
+              const int ms = match.hasMatch() ? match.captured(1).toInt() : -1;
+              if (!ran || ms < 0) {
+                fail(line, QStringLiteral("uia-walk: the client's read failed: %1").arg(output));
+              } else if (maxMs > 0 && ms > maxMs) {
+                fail(line, QStringLiteral("uia-walk: the read took %1 ms, more than %2 ms").arg(ms).arg(maxMs));
+              }
+            });
+#else
+  Q_UNUSED(client);
+  Q_UNUSED(maxMs);
+  fail(line, QStringLiteral("uia-walk: UI Automation is Windows only"));
+#endif
 }
 
 } // namespace mitcad

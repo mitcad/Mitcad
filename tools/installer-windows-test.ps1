@@ -13,7 +13,8 @@
 #      test runs with administrator rights).
 #   1. just for the current user, the installer's files: executables, Qt
 #      and OCCT DLLs, the Qt platform plugin, the Visual C++ runtime, the
-#      licences; no Mesa, no PDB files. The installed mitcad-updater does
+#      licences, the built-in texture images once (in bin\textures, no copy
+#      built into a program, mitcad#2323); no Mesa, no PDB files. The installed mitcad-updater does
 #      not run an installer whose SHA-256 is not the one it is given, or
 #      without one, and logs the reason as its last line (mitcad#603).
 #      Files in use (mitcad#1454): while `mitcad-cli mcp` runs from bin,
@@ -332,6 +333,27 @@ function Test-Programs([string]$Install) {
   if ($sourceTextures.Count -eq 0) { Fail 'no texture images in core\model-base\textures' }
   elseif ($missingTextures.Count -eq 0) { Pass "$($sourceTextures.Count) built-in texture images in bin\textures" }
   else { Fail "texture images missing from bin\textures: $($missingTextures.Name -join ', ')" }
+  # ... and only there (mitcad#2323, as tools/appimage-test.sh, mitcad#2251):
+  # no program in bin carries a copy of them built in, as mitcad.exe and
+  # mitcad-cli.exe each did with include_bytes! before mitcad#2218 (the
+  # installer then had the images twice). A run of 64 bytes from the middle
+  # of each image is looked for in each .exe of bin (bytes read as
+  # ISO-8859-1, one character per byte, and compared ordinally).
+  $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+  $textureNeedles = @($sourceTextures | ForEach-Object {
+      $data = [System.IO.File]::ReadAllBytes($_.FullName)
+      $half = [int][math]::Floor($data.Length / 2)
+      [pscustomobject]@{ Name = $_.Name; Text = $latin1.GetString($data, $half, [math]::Min(64, $data.Length - $half)) }
+    })
+  $textureCopies = @(foreach ($program in @(Get-ChildItem $bin -Filter '*.exe' -File)) {
+      $text = $latin1.GetString([System.IO.File]::ReadAllBytes($program.FullName))
+      foreach ($needle in $textureNeedles) {
+        if ($text.IndexOf($needle.Text, [System.StringComparison]::Ordinal) -ge 0) { "$($program.Name): $($needle.Name)" }
+      }
+      $text = $null
+    })
+  if ($textureCopies.Count -eq 0) { Pass 'no program in bin carries a copy of the texture images' }
+  else { Fail "programs in bin carry the texture images built in: $(($textureCopies | Select-Object -First 3) -join ', ')" }
   foreach ($pattern in 'opengl32.dll', 'libgallium_wgl.dll', 'opengl32sw.dll', '*.pdb') {
     $found = @(Get-ChildItem $Install -Recurse -Filter $pattern -ErrorAction SilentlyContinue)
     if ($found.Count -eq 0) { Pass "no $pattern" } else { Fail "$pattern must not be installed: $($found[0].FullName)" }

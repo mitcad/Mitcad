@@ -475,6 +475,17 @@ public:
   // The spline of this sketch, not projected, under a view position;
   // empty when there is none (Insert Point is offered only there).
   QString splineAt(const QPointF& screen) const;
+  // Remove Point (mitcad#2326, `sketch.remove_spline_point`), the pair of
+  // Insert Point: the point `point` leaves the spline `curve`, which stays
+  // (fitted again through the rest, or one control point and one knot
+  // fewer). One undo step. A refusal shows `Remove Point: <reason>` when
+  // `showRefusal`, else it is only logged (Delete then deletes as before);
+  // false when refused.
+  bool removeSplinePoint(const QString& curve, const QString& point, bool showRefusal = true);
+  // The spline of this sketch that lists `point` (the first such; not an
+  // equation curve, whose points are its formulas'); empty when none does.
+  // `only`: empty too when any other curve uses the point.
+  QString splineOfPoint(const QString& point, bool only = false) const;
 
   // --- Options of the sketch palette
   bool construction() const { return m_construction; }
@@ -1203,6 +1214,18 @@ private:
   // told again where the pointer is.
   void takeOutOfPlane(const QString& key, std::vector<BodyItem> items, const QString& error, bool later);
   void setBodyItems();
+  // Where the sketch plane cuts the visible bodies (mitcad#2324, the
+  // `plane_geometry` query's `section` form), for the drawing tools' section
+  // snaps: read off the UI thread when the sketch opens and whenever the
+  // geometry key changes (the bodies before the sketch changed), never per
+  // pointer move; empty until read. `m_sectionKey` is the key read,
+  // `m_sectionReading` the one being read.
+  const BodyGeometry& sectionGeometry();
+  BodyGeometry m_section;
+  QString m_sectionKey;
+  QString m_sectionReading;
+  void readSectionLater(const QString& key);
+  void takeSection(const QString& key, std::vector<BodyItem> items, const QString& error, bool later);
   // Where the items out of the plane are in the view (mitcad#866), made
   // again only when the items or the camera change.
   struct BodyScreen {

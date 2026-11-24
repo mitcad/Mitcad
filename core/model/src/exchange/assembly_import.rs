@@ -443,6 +443,8 @@ impl<K: Kernel> Document<K> {
         }
         let added = self.add_base_features(label, inputs)?;
         for (entry, imported) in owners.into_iter().zip(added) {
+            // What the faces' colours could not do (mitcad#2313).
+            placing.warnings.extend(imported.warnings.iter().cloned());
             placing.made[entry].feature = Some(imported);
         }
         Ok(())

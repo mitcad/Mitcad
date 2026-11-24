@@ -724,6 +724,15 @@ named_enum! {
             curve: EntityUid,
             at: [f64; 2],
         },
+        // Remove Point on a spline (mitcad#2326): the pair of Insert Point;
+        // the spline stays with one point fewer.
+        "sketch.remove_spline_point" => RemoveSplinePoint {
+            sketch: FeatureUid,
+            #[serde(with = "mitcad_model::internal::ids::curve_serde")]
+            curve: EntityUid,
+            #[serde(with = "mitcad_model::sketch::internal::point_serde")]
+            point: EntityUid,
+        },
         // The whole sketch scaled by a factor about a point (mitcad#860,
         // `scale.rs`), or selected points, curves and texts (Sketch Scale,
         // mitcad#2109).
@@ -1704,10 +1713,13 @@ pub(super) fn step_changes(command: &Value) -> Vec<EntityUid> {
             .filter_map(|curve| EntityUid::parse_curve(curve).ok())
             .collect();
     }
+    // Remove Point on a spline (mitcad#2326) makes nothing: the spline it
+    // changes is its step's item.
     if name != "sketch.trim"
         && name != "sketch.extend"
         && name != "sketch.break"
         && name != "sketch.edit_equation_curve"
+        && name != "sketch.remove_spline_point"
     {
         return Vec::new();
     }
@@ -1822,11 +1834,14 @@ pub(crate) trait SketchOps<K: Kernel> {
     /// in the sketch's plane, in sketch coordinates, each with the `source`,
     /// `body` and `occurrence` that `sketch.project` takes; with
     /// `out_of_plane` the others too, projected, with `in_plane`, `path`
-    /// and `height` (mitcad#866).
+    /// and `height` (mitcad#866). With `section` instead the curves where
+    /// the plane cuts those bodies, each with its face as `source` and
+    /// `"section": true` (mitcad#2324).
     fn plane_geometry_json(
         &self,
         sketch: FeatureUid,
         out_of_plane: bool,
+        section: bool,
     ) -> Result<Value, ApiError>;
 
     /// The `plane_geometry_key` query (mitcad#1646): `{"key": "<hex>"}`,
@@ -2144,9 +2159,16 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
         &self,
         sketch: FeatureUid,
         out_of_plane: bool,
+        section: bool,
     ) -> Result<Value, ApiError> {
-        let items: Vec<Value> = self
-            .sketch_body_geometry(sketch, out_of_plane)?
+        // Where the plane cuts the bodies (mitcad#2324), or their edges and
+        // vertices.
+        let items = if section {
+            self.plane_section(sketch)?
+        } else {
+            self.sketch_body_geometry(sketch, out_of_plane)?
+        };
+        let items: Vec<Value> = items
             .into_iter()
             .map(|item| {
                 let (kind, geometry) = match &item.shape {
@@ -2171,6 +2193,10 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                     value["in_plane"] = json!(false);
                     value["path"] = json!(out.path);
                     value["height"] = json!(out.height);
+                }
+                // A section curve: its source is the face it lies on.
+                if section {
+                    value["section"] = json!(true);
                 }
                 value
             })
@@ -3471,6 +3497,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 },
             ),
             C::InsertSplinePoint { sketch, .. } => (*sketch, "Insert Spline Point in {sketch}"),
+            C::RemoveSplinePoint { sketch, .. } => (*sketch, "Remove Spline Point in {sketch}"),
             C::Scale { sketch, .. } => (*sketch, "Scale {sketch}"),
             C::BlendCurve { sketch, .. } => (*sketch, "Blend Curve in {sketch}"),
             C::ExtendToMeet { sketch, .. } => (*sketch, "Extend to Meet in {sketch}"),
@@ -4541,6 +4568,9 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 C::InsertSplinePoint { curve, at, .. } => {
                     let p = edit.insert_spline_point(curve, at)?;
                     made_ref.push(Ref::Point(p).to_string());
+                }
+                C::RemoveSplinePoint { curve, point, .. } => {
+                    edit.remove_spline_point(curve, point)?;
                 }
                 C::Scale {
                     factor,

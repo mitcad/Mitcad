@@ -7,15 +7,17 @@
 //! rail's length parameter so that it follows the rail. `build_place` and
 //! `build_edit` take `limits` (`min`, `max`; left out or null: the
 //! default). A drag stops the part at them; the other parts BUILD placed
-//! do not drag at all (`mitcad_model`'s `build/held.rs`).
+//! do not drag at all (`mitcad_model`'s `build/held.rs`). A part that
+//! slides along its target frame's z (a bearing on a shaft, mitcad#2317)
+//! gets the same limits on that slide, from the shaft's end A.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::geometry::{scale, x_axis};
+use crate::geometry::{scale, x_axis, z_axis};
 use crate::parts::{PartInfo, PartsBuild, as_input};
-use crate::place::{EditCrateOps, PlaceInput, Plan, Spot, plus, reach_along_x, refuse};
+use crate::place::{EditCrateOps, PlaceInput, Plan, Spot, plus, reach_along, refuse};
 use mitcad_model::build::SideFrom;
 use mitcad_model::expr::Unit;
 use mitcad_model::features::{FeatureDef, Limit, ValueInput};
@@ -43,13 +45,16 @@ pub struct TravelInput {
 pub struct Travel {
     pub min: ValueInput,
     pub max: ValueInput,
+    /// The slide they limit: `Tx` (a carriage on a rail), `Tz` (a bearing
+    /// on a shaft).
+    pub motion: Motion,
 }
 
 impl Travel {
     /// The joint's `limits` for its slide.
     pub(crate) fn limits(&self) -> BTreeMap<Motion, Limit<ValueInput>> {
         BTreeMap::from([(
-            Motion::Tx,
+            self.motion,
             Limit {
                 min: Some(self.min.clone()),
                 max: Some(self.max.clone()),
@@ -62,9 +67,15 @@ impl Travel {
 /// The default travel of a part that reaches `lo` to `hi` from its frame
 /// along the slide, on a rail `length` long whose length parameter is
 /// `name`: flush with end A (its frame `-lo` from it) to flush with end B
-/// (`length - hi`, an expression of the parameter). The values and their
-/// numbers.
-fn default_travel(lo: f64, hi: f64, length: f64, name: Option<&str>) -> (Travel, f64, f64) {
+/// (`length - hi`, an expression of the parameter), on the slide
+/// `motion`. The values and their numbers.
+fn default_travel(
+    lo: f64,
+    hi: f64,
+    length: f64,
+    name: Option<&str>,
+    motion: Motion,
+) -> (Travel, f64, f64) {
     let min = if lo.abs() < 1e-12 { 0.0 } else { -lo };
     let max = length - hi;
     let travel = Travel {
@@ -73,8 +84,21 @@ fn default_travel(lo: f64, hi: f64, length: f64, name: Option<&str>) -> (Travel,
             Some(name) => ValueInput::Name(format!("{name}{}", plus(-hi))),
             None => ValueInput::Number(max),
         },
+        motion,
     };
     (travel, min, max)
+}
+
+/// The slide BUILD gives travel limits (mitcad#2088, mitcad#2317): a
+/// slider's along its target frame's x (a carriage on a rail) or z (a
+/// bearing on a shaft), a cylindrical joint's along z; with the index of
+/// that axis in the frame.
+fn travel_motion(kind: JointKind, slide: Motion) -> Option<(Motion, usize)> {
+    match (kind, slide) {
+        (JointKind::Slider, Motion::Tx) => Some((Motion::Tx, 0)),
+        (JointKind::Slider, Motion::Tz) | (JointKind::Cylindrical, _) => Some((Motion::Tz, 2)),
+        _ => None,
+    }
 }
 
 /// A part's frame `own` turned by its joint's override, as the joint
@@ -107,14 +131,18 @@ pub(crate) fn plan_travel<K: Kernel>(
         let (id, l) = t.info.length?;
         Some((doc.parameters().name(id), l, t.info.name.clone()))
     });
+    // Along the rail's x (a carriage), along the shaft's z (a bearing,
+    // mitcad#2317).
     let slide = match &plan.spot {
-        Spot::Joint(j) if mate && j.kind == JointKind::Slider => match &j.slide_value {
-            Some((Motion::Tx, _, v)) => Some(*v),
-            _ => None,
+        Spot::Joint(j) if mate => match &j.slide_value {
+            Some((m, _, v)) => travel_motion(j.kind, *m)
+                .filter(|(motion, _)| motion == m)
+                .map(|(motion, axis)| (*v, motion, axis)),
+            None => None,
         },
         _ => None,
     };
-    let (Some(v), Some((name, length, target))) = (slide, length) else {
+    let (Some((v, motion, axis)), Some((name, length, target))) = (slide, length) else {
         if input.limits.is_some() {
             return Err(refuse(format!(
                 "{label} does not slide along another part: it has no travel limits"
@@ -132,10 +160,10 @@ pub(crate) fn plan_travel<K: Kernel>(
             .unwrap_or(Transform::IDENTITY),
         joint.own_override.as_ref(),
     );
-    let (lo, hi) = reach_along_x(plan.bounds.as_ref(), &own, plan.rotate, joint.flip);
+    let (lo, hi) = reach_along(plan.bounds.as_ref(), &own, plan.rotate, joint.flip, axis);
     let (travel, min, max) = asked(
         doc,
-        default_travel(lo, hi, length, Some(&name)),
+        default_travel(lo, hi, length, Some(&name), motion),
         input.limits.as_ref(),
         &label,
         &target,
@@ -147,10 +175,17 @@ pub(crate) fn plan_travel<K: Kernel>(
         }
         // A click goes to the nearer limit.
         let at = v.clamp(min, max);
-        let shift = Transform::translation(scale(x_axis(&joint.frame_b), at - v));
+        let along = match motion {
+            Motion::Tx => x_axis(&joint.frame_b),
+            _ => z_axis(&joint.frame_b),
+        };
+        let shift = Transform::translation(scale(along, at - v));
         joint.frame_b = shift.after(&joint.frame_b);
-        joint.slide_value = Some((Motion::Tx, ValueInput::Number(at), at));
-        joint.from = Some(SideFrom::A);
+        joint.slide_value = Some((motion, ValueInput::Number(at), at));
+        // (A slide along z records no `from`: measured from end A.)
+        if motion == Motion::Tx {
+            joint.from = Some(SideFrom::A);
+        }
         plan.placement = shift.after(&plan.placement);
     }
     plan.travel = Some(travel);
@@ -182,7 +217,8 @@ fn asked<K: Kernel>(
             format!("{label} is longer than {target}: it has no room to travel on it")
         }));
     }
-    Ok((Travel { min, max }, lo, hi))
+    let motion = default.motion;
+    Ok((Travel { min, max, motion }, lo, hi))
 }
 
 /// The refusal of a place beyond a part's travel.
@@ -194,9 +230,11 @@ fn beyond(label: &str, target: &str) -> String {
 }
 
 /// The slide a BUILD part's joint gives it when it slides on another part
-/// cut to length (a carriage on its rail).
+/// cut to length (a carriage on its rail, a bearing on its shaft).
 struct Slide {
     joint: FeatureUid,
+    /// The slide: `Tx` along the rail, `Tz` along the shaft.
+    motion: Motion,
     /// The part's reach from its frame along the slide, least and most.
     reach: (f64, f64),
     /// The target's length and its parameter's name.
@@ -209,7 +247,13 @@ struct Slide {
 impl Slide {
     /// Its default travel.
     fn default_travel(&self) -> (Travel, f64, f64) {
-        default_travel(self.reach.0, self.reach.1, self.length, Some(&self.name))
+        default_travel(
+            self.reach.0,
+            self.reach.1,
+            self.length,
+            Some(&self.name),
+            self.motion,
+        )
     }
 }
 
@@ -224,9 +268,7 @@ fn slide_of<K: Kernel>(doc: &Document<K>, info: &PartInfo, rotate: Option<f64>) 
     let FeatureDef::Joint(j) = &entry.def else {
         return None;
     };
-    if j.kind != JointKind::Slider || j.slide_axis.motion() != Motion::Tx {
-        return None;
-    }
+    let (motion, axis) = travel_motion(j.kind, j.slide_axis.motion())?;
     let (Some(length), Some(name)) = doc.joint_target_length(joint) else {
         return None;
     };
@@ -251,7 +293,8 @@ fn slide_of<K: Kernel>(doc: &Document<K>, info: &PartInfo, rotate: Option<f64>) 
     let bounds: Option<BoundingBox> = doc.part_bounds(info.component);
     Some(Slide {
         joint,
-        reach: reach_along_x(bounds.as_ref(), &own, angle, j.flip),
+        motion,
+        reach: reach_along(bounds.as_ref(), &own, angle, j.flip, axis),
         length,
         name,
         target,
@@ -282,7 +325,7 @@ pub fn travel_of<K: Kernel>(
     let Some(FeatureDef::Joint(j)) = doc.feature(slide.joint).map(|e| &e.def) else {
         return None;
     };
-    let limit = j.limits.get(&Motion::Tx);
+    let limit = j.limits.get(&slide.motion);
     let round = |v: f64| (v * 1e6).round() / 1e6 + 0.0;
     let value = |id: Option<mitcad_model::parameters::ParamId>| {
         id.and_then(|id| doc.parameters().value(id)).map(round)
@@ -322,7 +365,7 @@ pub(crate) fn edit_travel<K: Kernel>(
     let Some(FeatureDef::Joint(j)) = doc.feature(joint).map(|e| &e.def) else {
         return Ok(None);
     };
-    let now = j.limits.get(&Motion::Tx);
+    let now = j.limits.get(&slide.motion);
     let value_of = |id: Option<mitcad_model::parameters::ParamId>| {
         id.and_then(|id| doc.parameters().value(id))
     };
@@ -343,7 +386,7 @@ pub(crate) fn edit_travel<K: Kernel>(
             };
             let (_, bmin, bmax) = before.default_travel();
             let input = match as_input(&FeatureDef::Joint(j.clone()), doc.parameters()) {
-                FeatureDef::Joint(j) => j.limits.get(&Motion::Tx).cloned(),
+                FeatureDef::Joint(j) => j.limits.get(&slide.motion).cloned(),
                 _ => None,
             };
             let keep = |id: Option<mitcad_model::parameters::ParamId>, was: f64| {
@@ -382,7 +425,7 @@ pub(crate) fn edit_travel<K: Kernel>(
         Some(tx) => value_in(doc, tx, Unit::MM)?,
         None => j
             .position
-            .get(&Motion::Tx)
+            .get(&slide.motion)
             .and_then(|id| doc.parameters().value(*id))
             .unwrap_or(0.0),
     };

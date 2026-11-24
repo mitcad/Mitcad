@@ -1,0 +1,113 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+BRepBlend_Walking: a walk that ends on both faces' restrictions at once
+takes the end parameter of a closed guide only where the guide's end lies
+near the section found, and a walk that ends on one restriction corrects
+its end only to an end of that restriction near the point found on it
+(mitcad#2272, GitHub mitcad/Mitcad#582).
+
+The case: a nozzle of radius 15 on a dome that runs on tangentially into a
+tube of the same radius (50), the nozzle's axis on the circle where they
+meet, its foot rounded with 1.5. The foot is a closed tangent chain of two
+edges, one on the dome, one on the tube, whose two vertices lie on that
+circle; the nozzle's side is one face closed round its axis, its seam
+through one of the two vertices. The rounding's walk on the faces of the
+chain's first edge (the dome or the tube and the nozzle's side) ends at the
+chain's other vertex, where its contact on the body reaches the circle (the
+face's restriction) and, where the seam runs through that vertex, its
+contact on the nozzle the seam (the other face's restriction): both at
+once (Blend_OnRst12).
+
+There, for a periodic guide, the walk tests the guide's ends saved before
+its extension (ChFiDS_ElSpine::GetSavedFirstParameter and
+GetSavedLastParameter) by the plane through the guide's point at the end
+and the section's two points: where that plane is normal to the guide at
+the end, the end's parameter is taken. Both vertices of the foot and the
+section's points lie in the plane of the circle, normal to the guide at
+both vertices, so the section at the chain's other vertex, half a turn from
+the guide's ends, was given the parameter 0 or the period (the trace: the
+walk's line from w 0 to 0, or to the period, with 30 points along half the
+foot) and the stripe failed (Failure_Stripe). The rounding built only when
+the chain's first edge started at the seam's vertex, where the parameter
+taken is the right one: picked by one of its edges on three of the four
+nozzles, by neither on the fourth.
+
+The guide's end is now taken only where the guide's point at the end lies
+within the distance between the section's two points (at least 10 times
+the walk's 3d tolerance) of the guide's point at the parameter found.
+
+The same plane tricked the end on one restriction. Where the nozzle lies
+across the dome's and the tube's seams (its foot then has four edges) and
+the chain's first edge starts at the vertex the nozzle's seam does not run
+through, the walk's first piece, going back from its start, ends at that
+vertex on the circle (the body's restriction) alone.
+CorrectExtremityOnOneRst (OCC25701) then takes the end of the restriction
+nearest the guide: the restriction is the circle between the foot's two
+vertices, both on the guide, and the first in the order of its ends was
+the other vertex; its plane test passed (the same plane), and the piece
+started at the parameter of the vertex half a turn away (w -43.9 instead
+of 0). The rounding failed picked by that edge.
+
+Now an end of the restriction is taken only where it lies within twice the
+distance between the point found on the restriction and the guide's point
+at the parameter found (at least 10 times the walk's 3d tolerance) of that
+point; without such an end nothing is corrected.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2272.
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+index 2052e413..f2cf6354 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+@@ -2625,6 +2625,18 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+               {
+                 continue;
+               }
++              // Only a guide end near the section found, within the
++              // distance between its two points (mitcad#2272): round a
++              // closed guide the section found and the guide's ends may lie
++              // in one plane normal to the guide at both although they are
++              // far apart along it (the two vertices of a nozzle's foot on
++              // the circle where a dome runs on into a tube), and the walk's
++              // end took the guide's end, half a turn away.
++              if (Pnt0.Distance(hguide->Value(param))
++                  > std::max(Pnt1.Distance(Pnt2), 10. * tolpoint3d))
++              {
++                continue;
++              }
+               Dir0 /= Length;
+               gce_MakePln PlaneBuilder(Pnt0, Pnt1, Pnt2);
+               if (!PlaneBuilder.IsDone())
+@@ -3069,10 +3081,20 @@ bool BRepBlend_Walking::CorrectExtremityOnOneRst(const int     IndexOfRst,
+   double GlobalMinSqDist = Precision::Infinite();
+   double ParamOnGuide    = 0;
+   gp_Pnt PointOnGuide;
++  // Only an end of the restriction near the point found on it, within twice
++  // its distance from the guide's point at the parameter found (mitcad#2272):
++  // both ends of a restriction may lie on the guide (the circle where a dome
++  // runs on into a tube between the two vertices of a nozzle's foot), and the
++  // one nearer the guide in the order of the ends was taken, half a turn away.
++  const double aNearEnd = 2. * thePntOnRst.Distance(hguide->Value(theParam)) + 10. * tolpoint3d;
+   for (int k = 0; k < 2; k++)
+   {
+     gp_Pnt2d      P2dOnEnd = BRepBlend_HCurve2dTool::Value(DomainOfRst->Value(), Ends[k]);
+     gp_Pnt        PntOnEnd = Adaptor3d_HSurfaceTool::Value(SurfOfRst, P2dOnEnd.X(), P2dOnEnd.Y());
++    if (PntOnEnd.Distance(thePntOnRst) > aNearEnd)
++    {
++      continue;
++    }
+     Extrema_ExtPC projoncurv(PntOnEnd, theElSpine);
+     if (!projoncurv.IsDone())
+     {
+@@ -3096,6 +3118,10 @@ bool BRepBlend_Walking::CorrectExtremityOnOneRst(const int     IndexOfRst,
+       PointOnGuide    = projoncurv.Point(imin).Value();
+     }
+   }
++  if (Precision::IsInfinite(GlobalMinSqDist))
++  {
++    return false;
++  }
+   NewParam = ParamOnGuide;
+   if (hguide->IsPeriodic())
+   {

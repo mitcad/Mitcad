@@ -1575,6 +1575,155 @@ fn a_move_in_a_parent_used_twice_takes_points_through_the_picked_copy() {
     ));
 }
 
+/// Point to Point with both points picked at the root level (an empty
+/// path each), the part picked through the second, turned occurrence of a
+/// parent used twice: no picked path passes through the parent, so the
+/// move's `parent_occurrence` gives the occurrence the points are taken
+/// through, and the part lands on the target there (mitcad#2307).
+#[test]
+fn a_move_with_root_level_points_goes_through_the_parent_it_was_picked_in() {
+    let mut doc = Document::new(MockKernel::default());
+    // The root-level points: where the second copy shows the part's
+    // vertex (below), and the target.
+    let (from_body, from_vertex) = box_with_vertex(&mut doc);
+    doc.kernel()
+        .vertex_points
+        .borrow_mut()
+        .insert(from_vertex.clone(), [0.0, 315.0, 10.0]);
+    let (to_body, to_vertex) = box_with_vertex(&mut doc);
+    doc.kernel()
+        .vertex_points
+        .borrow_mut()
+        .insert(to_vertex.clone(), [50.0, 60.0, 70.0]);
+    let (parent, first) = doc
+        .create_component(Some("Parent"), shift(200.0, 0.0, 0.0), true)
+        .unwrap();
+    let (_, part) = doc
+        .create_component(Some("Part"), shift(5.0, 0.0, 0.0), true)
+        .unwrap();
+    // The vertex is at (10, 0, 10) in Part, (15, 0, 10) in Parent.
+    box_with_vertex(&mut doc);
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let quarter = Transform::rotation(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        std::f64::consts::FRAC_PI_2,
+    )
+    .unwrap();
+    let second = doc
+        .copy_occurrence(first, Some(shift(0.0, 300.0, 0.0).after(&quarter)))
+        .unwrap();
+    let seen = |doc: &Document<MockKernel>, copy: OccurrenceUid| {
+        doc.placement(copy)
+            .unwrap()
+            .after(&doc.placement(part).unwrap())
+            .apply_point([10.0, 0.0, 10.0])
+    };
+    assert!(
+        near(seen(&doc, second), [0.0, 315.0, 10.0]),
+        "{:?}",
+        seen(&doc, second)
+    );
+    // The move goes into Parent, the root active; the part was picked
+    // through the second copy (`parent_occurrence`), both points in the
+    // root (`""`, as the app writes a root-level pick of a move into a
+    // deeper component).
+    let moved = doc
+        .add_feature_to(
+            &def(json!({"type": "move_occurrence", "occurrences": [part],
+                "parent_occurrence": second.to_string(),
+                "transform": {"type": "point_to_point",
+                    "from": {"body": from_body, "vertex": from_vertex}, "from_occurrence": "",
+                    "to": {"body": to_body, "vertex": to_vertex}, "to_occurrence": ""}})),
+            None,
+            Some(parent),
+        )
+        .unwrap();
+    assert_ok(&doc, moved.uid);
+    // The world motion (50, -255, 60) turned back through the second copy
+    // into Parent's coordinates: the part's vertex there is on the target.
+    assert!(
+        near(seen(&doc, second), [50.0, 60.0, 70.0]),
+        "{:?}",
+        seen(&doc, second)
+    );
+    assert!(
+        near(
+            doc.placement(part).unwrap().translation,
+            [-250.0, -50.0, 60.0]
+        ),
+        "{:?}",
+        doc.placement(part)
+    );
+    // The first copy shows the same placement in Parent.
+    assert!(
+        near(seen(&doc, first), [-40.0, -50.0, 70.0]),
+        "{:?}",
+        seen(&doc, first)
+    );
+}
+
+/// A move into a parent placed deeper than the active root (a part of a
+/// turned sub-assembly picked by its browser row), its target a vertex of
+/// the root picked while the root is active: written with the root path
+/// `""`, the target is read in the design's coordinates and taken into
+/// the parent's, so the part lands on it (mitcad#2307).
+#[test]
+fn a_move_into_a_nested_parent_takes_a_root_level_target_in_root_coordinates() {
+    let mut doc = Document::new(MockKernel::default());
+    let (root_body, root_vertex) = box_with_vertex(&mut doc);
+    doc.kernel()
+        .vertex_points
+        .borrow_mut()
+        .insert(root_vertex.clone(), [50.0, 60.0, 70.0]);
+    let quarter = Transform::rotation(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        std::f64::consts::FRAC_PI_2,
+    )
+    .unwrap();
+    let (_, outer) = doc
+        .create_component(Some("Outer"), shift(100.0, 0.0, 0.0), true)
+        .unwrap();
+    let (parent, inner) = doc
+        .create_component(Some("Parent"), shift(0.0, 50.0, 0.0).after(&quarter), true)
+        .unwrap();
+    let (_, part) = doc
+        .create_component(Some("Part"), shift(5.0, 0.0, 0.0), true)
+        .unwrap();
+    // The vertex is at (10, 0, 10) in Part, (100, 65, 10) in the design.
+    let (part_body, part_vertex) = box_with_vertex(&mut doc);
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let seen = |doc: &Document<MockKernel>| {
+        doc.placement(outer)
+            .unwrap()
+            .after(&doc.placement(inner).unwrap())
+            .after(&doc.placement(part).unwrap())
+            .apply_point([10.0, 0.0, 10.0])
+    };
+    assert!(near(seen(&doc), [100.0, 65.0, 10.0]), "{:?}", seen(&doc));
+    let moved = doc
+        .add_feature_to(
+            &def(json!({"type": "move_occurrence", "occurrences": [part],
+                "transform": {"type": "point_to_point",
+                    "from": {"body": part_body, "vertex": part_vertex},
+                    "from_occurrence": format!("{outer}/{inner}/{part}"),
+                    "to": {"body": root_body, "vertex": root_vertex}, "to_occurrence": ""}})),
+            None,
+            Some(parent),
+        )
+        .unwrap();
+    assert_ok(&doc, moved.uid);
+    // On the target: the world motion (-50, -5, 60) turned back into
+    // Parent's coordinates, (-5, 50, 60).
+    assert!(near(seen(&doc), [50.0, 60.0, 70.0]), "{:?}", seen(&doc));
+    assert!(
+        near(doc.placement(part).unwrap().translation, [0.0, 50.0, 60.0]),
+        "{:?}",
+        doc.placement(part)
+    );
+}
+
 /// Sketches and construction geometry of another component are taken
 /// where an occurrence places them; without one they are still refused
 /// (mitcad#699).

@@ -150,6 +150,121 @@ fn tutorials_are_fetched_listed_and_installed() {
     }
 }
 
+/// The Start page's cards (mitcad#2346): a tutorial's duration, level,
+/// picture and place in the recommended order are listed when it gives
+/// them and left out when it does not; the order puts the first part first
+/// whatever the titles, those without an order after; a wrong level, a
+/// picture that is no PNG or JPEG and an order of 0 leave the tutorial out
+/// with the reason; the picture is written for a card before the tutorial
+/// is installed.
+#[test]
+fn tutorials_give_their_cards_details_and_order() {
+    let Some(cli) = system_git() else {
+        return;
+    };
+    let scratch = Scratch::new("tutorials-cards");
+    let cache = LibraryCache::new(scratch.join("cache"));
+    let dir = scratch.join("course");
+    write(
+        &dir.join("mitcad-tutorials.json"),
+        r#"{"format": "mitcad-tutorials", "version": 1, "name": "Ordered course"}"#,
+    );
+    let tutorial = |id: &str, title: &str, extra: &str| {
+        write(
+            &dir.join(format!("tutorials/{id}/tutorial.json")),
+            &format!(
+                r#"{{"id": "{id}", "title": "{title}", "language": "en", "version": "1.0",
+                    "min_mitcad": "0.1.0", "license": "CC0-1.0"{extra}}}"#
+            ),
+        );
+        write(
+            &dir.join(format!("tutorials/{id}/index.html")),
+            "<p>1</p>\n",
+        );
+    };
+    tutorial(
+        "part-two",
+        "A second part",
+        r#", "order": 2, "duration": 15, "level": "intermediate""#,
+    );
+    tutorial(
+        "part-one",
+        "Zero to a block",
+        r#", "order": 1, "duration": 10, "level": "beginner", "picture": "images/result.png",
+            "description": "A sketch and an extrude.""#,
+    );
+    tutorial("extra", "An extra", "");
+    tutorial("bad-level", "Bad level", r#", "level": "expert""#);
+    tutorial(
+        "bad-picture",
+        "Bad picture",
+        r#", "picture": "images/result.gif""#,
+    );
+    tutorial("bad-order", "Bad order", r#", "order": 0"#);
+    write(
+        &dir.join("tutorials/part-one/images/result.png"),
+        "not really a PNG\n",
+    );
+    git(&dir, &["init", "-q"]).unwrap();
+    git(&dir, &["add", "-A"]).unwrap();
+    git(&dir, &["commit", "-q", "-m", "Ordered course"]).unwrap();
+    let url = slashes(&dir);
+    command(
+        &cache,
+        Some(&cli),
+        json!({"cmd": "library_fetch", "url": url}),
+    );
+
+    let listed = command(&cache, None, json!({"cmd": "tutorial_list", "urls": [url]}));
+    let source = &listed["sources"][0];
+    let ids: Vec<&str> = source["tutorials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["part-one", "part-two", "extra"], "{listed}");
+    let first = &source["tutorials"][0];
+    assert_eq!(first["duration"], 10, "{first}");
+    assert_eq!(first["level"], "beginner", "{first}");
+    assert_eq!(first["picture"], "images/result.png", "{first}");
+    assert_eq!(first["order"], 1, "{first}");
+    assert_eq!(first["description"], "A sketch and an extrude.", "{first}");
+    // A tutorial without them has none of the fields.
+    let extra = &source["tutorials"][2];
+    for field in ["duration", "level", "picture", "order"] {
+        assert!(extra.get(field).is_none(), "{field}: {extra}");
+    }
+    let problems = source["problems"].to_string();
+    assert!(
+        problems.contains("level \\\"expert\\\" is not one of"),
+        "{problems}"
+    );
+    assert!(problems.contains("is not a PNG or JPEG file"), "{problems}");
+    assert!(problems.contains("order starts at 1"), "{problems}");
+
+    // The picture for the card, before any install.
+    let file = scratch.join("pictures/part-one.png");
+    let written = command(
+        &cache,
+        None,
+        json!({"cmd": "tutorial_picture", "url": url, "id": "part-one", "file": file}),
+    );
+    assert_eq!(written["bytes"], 17, "{written}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "not really a PNG\n");
+    // A tutorial without a picture, and one that is not there.
+    for id in ["part-two", "missing"] {
+        let refused = api::command(
+            &json!({"cmd": "tutorial_picture", "url": url, "id": id, "file": scratch.join("pictures/x.png")})
+                .to_string(),
+            &cache,
+            None,
+            None,
+        );
+        assert!(refused.is_err(), "{id}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_tutorial_with_a_symbolic_link_is_not_installed() {

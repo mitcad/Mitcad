@@ -159,6 +159,23 @@ pub struct KnotInsertion {
     pub last: usize,
 }
 
+/// A control point removed with a knot ([`Nurbs::remove_control_point`],
+/// mitcad#2326): one control point and one knot fewer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnotRemoval {
+    /// The spline without them: the old control points before the removed
+    /// one at their places, those after it one place earlier.
+    pub spline: Nurbs,
+    /// The knot value removed.
+    pub knot: f64,
+    /// The old indices of the control points that moved to keep the curve
+    /// near its old shape (empty when none did).
+    pub moved: Vec<usize>,
+    /// Whether the curve is the same as before (within `1e-9` of the
+    /// control points' size): the knot was one insertion made.
+    pub exact: bool,
+}
+
 impl Nurbs {
     pub fn domain(&self) -> (f64, f64) {
         (
@@ -535,6 +552,172 @@ impl Nurbs {
             first,
             last,
         })
+    }
+
+    /// Removes the control point `m` with one interior knot (Remove Point
+    /// on a spline, mitcad#2326; the inverse of [`Nurbs::insert_knot`]).
+    ///
+    /// The knot is one whose removal changes the control points around
+    /// `m`: of the interior knot values among `knots[m + 1..=m + degree]`
+    /// (those `m`'s Greville abscissa averages), one that leaves the curve
+    /// as it is wins (so that a point just inserted goes again exactly),
+    /// else the one nearest the Greville abscissa. The other control points
+    /// it changes (`moved`) are worked out from both sides in homogeneous
+    /// coordinates (The NURBS Book, A5.8 with one removal): those before
+    /// `m` from the unchanged point before them, those after `m` from the
+    /// unchanged point after them, so the change stays within the knot's
+    /// `degree + 1` spans. Where no such knot is there (the end point of a
+    /// clamped spline, whose knots there are all at the end), the interior
+    /// knot nearest the Greville abscissa goes and no other point moves:
+    /// the next point becomes the end.
+    ///
+    /// None when fewer than `degree + 1` points would remain, for an index
+    /// out of range and where no knot lies inside the domain.
+    pub fn remove_control_point(&self, m: usize) -> Option<KnotRemoval> {
+        let p = self.degree;
+        let n = self.control.len();
+        if p == 0 || n < p + 2 || m >= n || self.knots.len() != n + p + 1 {
+            return None;
+        }
+        let (lo, hi) = self.domain();
+        if hi <= lo {
+            return None;
+        }
+        let u = &self.knots;
+        let greville = u[m + 1..=m + p].iter().sum::<f64>() / p as f64;
+        // Each distinct interior knot value: its last index and how often
+        // it is there; the interior indices are `p + 1..n`.
+        let mut values: Vec<(usize, usize)> = Vec::new();
+        let mut i = p + 1;
+        while i < n {
+            let v = u[i];
+            let mut r = i;
+            while r + 1 < n && u[r + 1] == v {
+                r += 1;
+            }
+            if v > lo && v < hi {
+                values.push((r, u.iter().filter(|k| **k == v).count()));
+            }
+            i = r + 1;
+        }
+        if values.is_empty() {
+            return None;
+        }
+        // The knots whose removal changes `m`, worked out.
+        let mut best: Option<(bool, f64, f64, KnotRemoval)> = None;
+        for &(r, s) in &values {
+            if s > p || m + p < r || m + s > r {
+                // Not within `r - p..=r - s`.
+                continue;
+            }
+            let Some((removal, residual)) = self.without_knot(r, s, m) else {
+                continue;
+            };
+            let key = (removal.exact, (u[r] - greville).abs(), residual);
+            let better = best.as_ref().is_none_or(|(e, g, d, _)| {
+                (key.0 && !*e) || (key.0 == *e && (key.1 < *g || (key.1 == *g && key.2 < *d)))
+            });
+            if better {
+                best = Some((key.0, key.1, key.2, removal));
+            }
+        }
+        if let Some((_, _, _, removal)) = best {
+            return Some(removal);
+        }
+        // Nothing to work out: the knot nearest the Greville abscissa goes
+        // with the point, the others stay where they are.
+        let &(r, _) = values
+            .iter()
+            .min_by(|a, b| {
+                (u[a.0] - greville)
+                    .abs()
+                    .total_cmp(&(u[b.0] - greville).abs())
+            })
+            .expect("one interior knot at least");
+        let mut knots = u.clone();
+        let knot = knots.remove(r);
+        let mut control = self.control.clone();
+        control.remove(m);
+        let mut weights = self.weights.clone();
+        if !weights.is_empty() {
+            weights.remove(m);
+        }
+        Some(KnotRemoval {
+            spline: Nurbs {
+                degree: p,
+                control,
+                weights,
+                knots,
+            },
+            knot,
+            moved: Vec::new(),
+            exact: false,
+        })
+    }
+
+    /// The knot `knots[r]` (there `s` times, `r` its last index) removed
+    /// with the control point `m` (in `r - p..=r - s`), the points between
+    /// worked out from both sides; with the distance by which the curve
+    /// misses the removed point's equation (0 when the knot was removable).
+    /// None where a weight would not stay positive.
+    fn without_knot(&self, r: usize, s: usize, m: usize) -> Option<(KnotRemoval, f64)> {
+        let p = self.degree;
+        let n = self.control.len();
+        let (first, last) = (r - p, r - s);
+        let mut knots = self.knots.clone();
+        let v = knots.remove(r);
+        let h = |i: usize| -> [f64; 3] {
+            let w = self.weight(i);
+            [self.control[i][0] * w, self.control[i][1] * w, w]
+        };
+        // Inserting `v` into the new spline gives the old: for `i` in
+        // `first..=last`, old `i` = (1 - a_i) new `i - 1` + a_i new `i`.
+        let alpha = |i: usize| (v - knots[i]) / (knots[i + p] - knots[i]);
+        let mut q: Vec<[f64; 3]> = (0..n - 1)
+            .map(|j| if j < first { h(j) } else { h(j + 1) })
+            .collect();
+        for i in first..m {
+            let a = alpha(i);
+            let (old, before) = (h(i), q[i - 1]);
+            q[i] = std::array::from_fn(|k| (old[k] - (1.0 - a) * before[k]) / a);
+        }
+        for i in (m + 1..=last).rev() {
+            let a = alpha(i);
+            let (old, after) = (h(i), q[i]);
+            q[i - 1] = std::array::from_fn(|k| (old[k] - a * after[k]) / (1.0 - a));
+        }
+        if q.iter()
+            .any(|w| !(w[2] > 0.0 && w.iter().all(|x| x.is_finite())))
+        {
+            return None;
+        }
+        // How far the removed point's own equation is off.
+        let a = alpha(m);
+        let (before, after) = (q[m - 1], q[m]);
+        let blend: [f64; 3] = std::array::from_fn(|k| (1.0 - a) * before[k] + a * after[k]);
+        let old = h(m);
+        let residual = dist(
+            [old[0] / old[2], old[1] / old[2]],
+            [blend[0] / blend[2], blend[1] / blend[2]],
+        );
+        let rational = !self.weights.is_empty();
+        let spline = Nurbs {
+            degree: p,
+            control: q.iter().map(|w| [w[0] / w[2], w[1] / w[2]]).collect(),
+            weights: if rational {
+                q.iter().map(|w| w[2]).collect()
+            } else {
+                Vec::new()
+            },
+            knots,
+        };
+        let removal = KnotRemoval {
+            spline,
+            knot: v,
+            moved: (first..=last).filter(|i| *i != m).collect(),
+            exact: residual <= 1e-9 * self.size().max(1.0),
+        };
+        Some((removal, residual))
     }
 
     /// The piece between `t0` and `t1` as a clamped B-spline.
@@ -1424,6 +1607,121 @@ mod tests {
             assert_eq!(refined.spline.control[last], [0.0, 0.0]);
             assert!(refined.first >= 1 && refined.last < last);
         }
+    }
+
+    /// The curves agree within `tolerance` at sampled parameters.
+    fn agree(a: &Nurbs, b: &Nurbs, tolerance: f64) {
+        assert_eq!(a.domain(), b.domain());
+        let (lo, hi) = a.domain();
+        for i in 0..=200 {
+            let t = lo + (hi - lo) * i as f64 / 200.0;
+            let (p, q) = (a.eval(t)[0], b.eval(t)[0]);
+            assert!(dist(p, q) < tolerance, "at {t}: {p:?} {q:?}");
+        }
+    }
+
+    #[test]
+    fn a_control_point_removed_undoes_its_insertion() {
+        // Mitcad#2326: a knot inserted and the new point removed again
+        // give back the spline, knots and control points, open, rational
+        // and closed alike.
+        let cubic = Nurbs {
+            degree: 3,
+            control: vec![
+                [0.0, 0.0],
+                [10.0, 25.0],
+                [30.0, 30.0],
+                [45.0, -5.0],
+                [60.0, 10.0],
+                [75.0, 0.0],
+            ],
+            weights: Vec::new(),
+            knots: vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.45, 1.0, 1.0, 1.0, 1.0],
+        };
+        let closed = Nurbs {
+            degree: 3,
+            control: vec![
+                [0.0, 0.0],
+                [30.0, -5.0],
+                [40.0, 20.0],
+                [5.0, 18.0],
+                [-10.0, 8.0],
+                [0.0, 0.0],
+            ],
+            weights: Vec::new(),
+            knots: clamped_uniform_knots(6, 3),
+        };
+        for spline in [cubic, quarter_circle(), closed] {
+            for t in [0.05, 0.2, 0.31, 0.5, 0.7, 0.95] {
+                let refined = spline.insert_knot(t).unwrap();
+                let new = &refined.spline;
+                // The new point is the one nearest the curve at the knot,
+                // as Insert Point picks it.
+                let on = new.eval(refined.knot)[0];
+                let fresh = (refined.first..=refined.last)
+                    .min_by(|a, b| dist(new.control[*a], on).total_cmp(&dist(new.control[*b], on)))
+                    .unwrap();
+                let back = new.remove_control_point(fresh).unwrap();
+                assert!(back.exact, "{t}");
+                assert_eq!(back.knot, refined.knot);
+                assert_eq!(back.spline.knots, spline.knots);
+                assert_eq!(back.spline.weights.len(), spline.weights.len());
+                for (a, b) in back.spline.control.iter().zip(&spline.control) {
+                    assert!(dist(*a, *b) < 1e-9, "{t}: {a:?} {b:?}");
+                }
+                agree(&spline, &back.spline, 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn a_control_point_removed_changes_the_curve_near_it_only() {
+        for rational in [false, true] {
+            // Twelve points of a cubic: knots at i / 9 inside.
+            let cubic = wavy(12, 3, rational);
+            // An interior point: one knot fewer, its neighbours moved, the
+            // points far from it and both ends where they were.
+            let removed = cubic.remove_control_point(6).unwrap();
+            let new = &removed.spline;
+            assert_eq!(new.control.len(), 11);
+            assert_eq!(new.knots.len(), 15);
+            assert_eq!(new.weights.len(), if rational { 11 } else { 0 });
+            assert_eq!(new.domain(), cubic.domain());
+            assert!(!removed.exact);
+            // The knot nearest the point's Greville abscissa (5 / 9).
+            let r = cubic.knots.iter().position(|k| *k == removed.knot).unwrap();
+            assert_eq!(r, 8);
+            assert_eq!(removed.moved, vec![5, 7]);
+            for i in 0..12 {
+                if i == 6 || removed.moved.contains(&i) {
+                    continue;
+                }
+                let j = if i < 6 { i } else { i - 1 };
+                assert_eq!(new.control[j], cubic.control[i], "{i}");
+            }
+            // Outside the removed knot's spans the curve is as it was.
+            let (from, to) = (cubic.knots[r - 3], cubic.knots[r + 3]);
+            for i in 0..=90 {
+                let t = i as f64 / 90.0;
+                if t > from && t < to {
+                    continue;
+                }
+                assert!(dist(cubic.eval(t)[0], new.eval(t)[0]) < 1e-9, "{t}");
+            }
+            // An end point: the next point becomes the end, nothing moves.
+            let start = cubic.remove_control_point(0).unwrap();
+            assert!(start.moved.is_empty());
+            assert_eq!(start.spline.control, cubic.control[1..].to_vec());
+            assert!(dist(start.spline.eval(0.0)[0], cubic.control[1]) < 1e-12);
+            let end = cubic.remove_control_point(11).unwrap();
+            assert_eq!(end.spline.control, cubic.control[..11].to_vec());
+            assert!(dist(end.spline.eval(1.0)[0], cubic.control[10]) < 1e-12);
+            assert!(cubic.remove_control_point(12).is_none());
+        }
+        // Too few points would remain: degree + 1 is the least.
+        assert!(wavy(4, 3, false).remove_control_point(1).is_none());
+        let five = wavy(5, 3, false).remove_control_point(2).unwrap();
+        assert_eq!(five.spline.control.len(), 4);
     }
 
     #[test]

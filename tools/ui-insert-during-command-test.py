@@ -57,6 +57,9 @@ def workflow(directory):
     web = WEB_FILE.replace(".", "\\.")
     dropped = DROPPED.replace(".", "\\.")
     drop_path = (directory / DROPPED).as_posix()
+    # macOS message boxes expose the question instead of the window title.
+    import_place = (rf"^Where to Import$|^Import {dropped} into a new component named "
+                    rf"{Path(DROPPED).stem}, or into the active component\?$")
     inserted = ("expect-log '^Component from Web: inserted %s as component .* \\(C[0-9]+, occurrence O[0-9]+, "
                 "1 body\\(ies\\)\\), part number PA100$' 60" % web)
     lines = [
@@ -116,7 +119,7 @@ def workflow(directory):
         "expect-log '^Command Measure started' 20",
         "drop-files-on-widget modelView '%s'" % drop_path,
         "expect-log '^%s comes in beside Measure, which stays open$' 20" % dropped,
-        "focus-dialog '^Where to Import$' 20",
+        f"focus-dialog '{import_place}' 20",
         "button '^New Component$'",
         "focus-main",
         "expect-log '^Imported %s as ' 60" % dropped,
@@ -141,7 +144,7 @@ def workflow(directory):
         "key Escape",
         "expect-log '^Command Extrude cancelled$' 20",
         "expect-log '^%s comes in now that Extrude closed$' 20" % dropped,
-        "focus-dialog '^Where to Import$' 20",
+        f"focus-dialog '{import_place}' 20",
         "button '^New Component$'",
         "focus-main",
         "expect-log '^Imported %s as ' 60" % dropped,

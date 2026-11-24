@@ -252,6 +252,12 @@ struct DocumentSnapshot {
   // entries (drawing, name, component, sheets), and those of a component.
   QJsonArray drawings;
   QJsonArray drawingsOf(const QString& component) const;
+  // Exploded views (mitcad#2113): the `explode_views` query's entries
+  // (name, component, component_name, seconds, steps), those of a
+  // component, and one by name (an empty object when none).
+  QJsonArray explodeViews;
+  QJsonArray explodeViewsOf(const QString& component) const;
+  QJsonObject explodeView(const QString& name) const;
   // Image references (mitcad#782): the `image_references` query's entries
   // (settings, pixels, size, digest, and the corners at the marker or why
   // the plane is not there), and one by name (an empty object when none).

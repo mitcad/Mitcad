@@ -168,6 +168,7 @@ impl<K: Kernel> Document<K> {
             name: Some("Envelope".to_owned()),
             color: None,
             shape: built.shape,
+            face_colors: Vec::new(),
         };
         Ok((self.base_bodies(&[envelope])?, mounts, built.detail))
     }

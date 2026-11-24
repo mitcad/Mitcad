@@ -868,6 +868,11 @@ private:
   void closeValueBox(bool keep);
   // Tab in the field: the next handle's value box (`back`: the previous).
   void stepValueBox(bool back);
+  // Up, Down or the wheel in the field (mitcad#2327): its plain value
+  // stepped by `by` in the unit it shows, as the panel's field steps
+  // (ParameterField::stepText), logged with what stepped it (`how`).
+  void stepBoxValue(double by, const QString& how);
+  int m_valueBoxWheel = 0; // the wheel's turn not yet a step
   // The box's text evaluated (mitcad#1181): an error border while it is
   // not a value, as the panel's field shows it; Enter and Tab then keep
   // the box open (a refusal logged), Esc puts the value back.

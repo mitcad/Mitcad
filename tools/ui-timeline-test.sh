@@ -503,10 +503,24 @@ ui_expect_new "Timeline selected: F2, F3, F4" "the same run"
 expect_last "Selected: " "1 body, 1 feature [body F2.b0; feature F3]" "the rolled-back chamfer left out"
 expect_last "Feature faces highlighted: " "F3 1" "only the fillet's face highlighted"
 ui_step "move to the end"                ui_click_logged "Timeline button end"
+# The run F2..F4 is still selected, and Suppress Features takes the
+# selection its feature is in (GitHub mitcad/Mitcad#600, mitcad#2314):
+# Chamfer1 alone is selected first.
+ui_mark
+ui_step "click Chamfer1 alone"           ui_click_logged "Timeline Chamfer1"
+expect_last "Selected: " "1 feature [feature F4]" "only Chamfer1 selected"
 ui_mark
 ui_step "right-click Chamfer1"           ui_click_logged "Timeline Chamfer1" 3
 ui_step "choose Suppress Features"       ui_menu_choose "Suppress Features"
 ui_expect_new "Suppressed Chamfer1" "Chamfer1 suppressed"
+# Chamfer1 is still the timeline's selection, and its suppression already
+# took the highlight away; the selection and the highlight are logged only
+# when they change. Fillet1 first (a selection and a face highlighted), so
+# that the click on the suppressed chamfer changes both again.
+ui_mark
+ui_step "click Fillet1"                  ui_click_logged "Timeline Fillet1"
+expect_last "Selected: " "1 feature [feature F3]" "Fillet1 is selected"
+expect_last "Feature faces highlighted: " "F3 1" "its rounded face is highlighted"
 ui_mark
 ui_step "click Chamfer1"                 ui_click_logged "Timeline Chamfer1"
 expect_last "Selected: " "nothing" "the suppressed chamfer selects nothing"

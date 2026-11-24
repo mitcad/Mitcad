@@ -38,7 +38,7 @@ use crate::transform::Transform;
 
 impl<K: Kernel> Document<K> {
     /// The bodies' meshes, placed and in work coordinates, as one mesh.
-    fn cam_work_mesh(
+    pub(super) fn cam_work_mesh(
         &self,
         bodies: &[(BodyUid, Transform)],
         sf: &SetupFrame,

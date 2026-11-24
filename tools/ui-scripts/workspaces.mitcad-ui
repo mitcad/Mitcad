@@ -23,10 +23,9 @@
 #   2b. Make -> Render: the Render tab alone, shown, the rendered view on
 #      where the render worker is there; a picture (workspaces-render.png).
 #   3. Render -> Drawing: the rendered view as it was before, the design's
-#      one drawing opens, its tab alone, its Sheet group (Sheet… and Add
-#      Revision…) on the panel ("Ribbon DRAWING/SHEET at": collapsed to its
-#      menu in a 1024 px window, so no "Drawing Sheet at" of the bar's
-#      button); a picture (workspaces-drawing.png). The left card is the
+#      one drawing opens, its tab alone, its Sheet group (Sheet… its one
+#      button, Add Revision… in its menu, mitcad#2066) on the panel ("Ribbon
+#      DRAWING/SHEET at"); a picture (workspaces-drawing.png). The left card is the
 #      Drawings card ("drawingsDock"), not the model's Browser, in a
 #      column of its own left of the drawing's bar and sheet ("Drawing
 #      column at", checked by the test's wrapper): Drawing1
@@ -56,7 +55,7 @@ expect-ever '^Document tab shown at ' 30
 expect-ever '^Menu bar button at ' 30
 expect-ever '^Menu bar hidden: Floating$' 30
 expect-ever '^Floating cards: .*; titleRow 0,0 ' 30
-expect-ever '^Ribbon group DRAWING/SHEET buttons: drawing.edit_sheet, drawing.add_revision$' 30
+expect-ever '^Ribbon group DRAWING/SHEET buttons: drawing.edit_sheet$' 30
 expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
 wait-idle
 

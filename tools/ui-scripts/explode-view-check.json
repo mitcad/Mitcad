@@ -1,0 +1,16 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Saved by the UI after the explode view steps (mitcad#2113): Explode1 with Auto Explode's three steps, the lid's step made by its handle and the pin's step along its own edge, kept as the edge's reference (mitcad#2328); the drawing's base view shows it; the design's placements as assembled."},
+  {"expect": {"query": {"query": "explode_views"},
+    "some": {"name": "Explode1"}}},
+  {"expect": {"query": {"query": "explode_views"},
+    "result": [{"name": "Explode1", "component": "C0", "steps": [
+      {"name": "Base:1"}, {"name": "Pin:1"}, {"name": "Lid:1"},
+      {"occurrences": [{"name": "Lid:1"}], "trails": true},
+      {"occurrences": [{"name": "Pin:1"}],
+       "direction": {"occurrence": "O3", "occurrence_name": "Pin:1", "geometry": {"body": "F3.b0"}}}]}]}},
+  {"expect": {"query": {"query": "components"},
+    "result": {"occurrences": [{"name": "Base:1"}, {"name": "Lid:1"}, {"name": "Pin:1"}]}}},
+  {"expect": {"query": {"query": "drawing", "drawing": "D1"},
+    "result": {"sheets": [{"views": [{"id": 1, "explode": "Explode1"}]}]}}}
+]

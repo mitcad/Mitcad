@@ -1468,7 +1468,10 @@ command changed, as "Live tools" above describes; arrays of commands
 work as there, each refused entry undoing the ones before it.
 
 The export formats are `step`, `iges`, `brep`, `stl`, `obj`, `3mf`,
-`usdz` and `dxf`. DXF must have a `sketch` name or UID and excludes
+`usdz`, `urdf` and `dxf`. `urdf` writes a ROS 2 package folder beside the
+path, named after it or `package` (refused when it exists, unless
+`overwrite`), with `effort` and `velocity` for its joints (`commands.md`,
+*URDF*). DXF must have a `sketch` name or UID and excludes
 `bodies`; a name several features share gives its only sketch, else it
 is refused with their UIDs (feature names are not unique). The other
 formats accept `bodies` and exclude `sketch`. An export must have a new

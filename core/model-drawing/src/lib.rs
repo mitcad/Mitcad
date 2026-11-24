@@ -44,6 +44,8 @@ pub mod svg;
 pub mod svg_image;
 pub mod tables;
 pub mod template;
+// Weld symbols by ISO 2553 and AWS A2.4 (mitcad#2350).
+pub mod weld;
 
 use std::sync::Arc;
 

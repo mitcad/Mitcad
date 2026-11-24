@@ -183,6 +183,25 @@ int saveAsMeshTests() {
   CHECK(meshItemsName({}, names, components, design) == design);
   CHECK(meshItemsName({{Kind::Component, QStringLiteral("C0"), QString()}}, names, components, design) == design);
   CHECK(meshItemsName({{Kind::Body, QStringLiteral("F4.b0"), QString()}}, names, components, design) == design);
+
+  // Export…'s and File › Export's selected bodies (mitcad#2298): every body
+  // the items stand for, surface bodies too, each once in the items' order;
+  // a component's where its occurrence places them, the root's every body.
+  CHECK(meshItemsBodies({{Kind::Body, QStringLiteral("F2.b1"), QStringLiteral("O1")}}, instances) ==
+        QStringList{QStringLiteral("F2.b1")});
+  CHECK(meshItemsBodies({{Kind::Component, QStringLiteral("C1"), QStringLiteral("O1")}}, instances) ==
+        (QStringList{QStringLiteral("F2.b0"), QStringLiteral("F2.b1"), QStringLiteral("F3.b0")}));
+  CHECK(meshItemsBodies({{Kind::Component, QStringLiteral("C1"), QStringLiteral("O2")}}, instances) ==
+        (QStringList{QStringLiteral("F2.b0"), QStringLiteral("F2.b1")}));
+  CHECK(meshItemsBodies({{Kind::Body, QStringLiteral("F1.b0"), QString()},
+                         {Kind::Component, QStringLiteral("C2"), QStringLiteral("O1/O3")},
+                         {Kind::Body, QStringLiteral("F1.b0"), QString()}},
+                        instances) == (QStringList{QStringLiteral("F1.b0"), QStringLiteral("F3.b0")}));
+  CHECK(meshItemsBodies({{Kind::Component, QStringLiteral("C0"), QString()}}, instances) ==
+        (QStringList{QStringLiteral("F1.b0"), QStringLiteral("F2.b0"), QStringLiteral("F2.b1"),
+                     QStringLiteral("F3.b0")}));
+  CHECK(meshItemsBodies({}, instances).isEmpty());
+  CHECK(meshItemsBodies({{Kind::Component, QStringLiteral("C1"), QStringLiteral("O9")}}, instances).isEmpty());
   return failures;
 }
 MITCAD_UNIT_TEST(saveAsMeshTests);

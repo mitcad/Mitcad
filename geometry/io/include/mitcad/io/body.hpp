@@ -12,6 +12,7 @@
 // exchange keeps global settings), so they may be called from any thread.
 
 #include <array>
+#include <cstddef>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -59,6 +60,17 @@ struct Placement {
   bool is_identity() const;
 };
 
+// A face of a body coloured on its own (mitcad#2313): the face's index in
+// the body's shape, counted from 0 in the order TopExp::MapShapes finds
+// the shape's faces (the order of the faces the modelling facade names),
+// and its colour.
+struct FaceColor {
+  std::size_t face = 0;
+  Color color;
+
+  bool operator==(const FaceColor& other) const { return face == other.face && color == other.color; }
+};
+
 // A body read from or written to a file: a solid (or another shape) with
 // its name and colour. Mesh bodies (from STL and OBJ files) are faces that
 // carry only a triangulation (see mesh.hpp).
@@ -67,11 +79,18 @@ struct Placement {
 // instances of one part in an assembly, the other formats as moved copies;
 // without placements once as it is. Readers give none (assemblies are
 // flattened, see read_step).
+//
+// `face_colors` (mitcad#2313): the faces whose colour is not the body's.
+// The STEP and IGES readers give the faces whose own colour (a surface or
+// generic colour on the face) differs from `color`; the STEP and IGES
+// writers write them as the faces' surface colours beside the body's
+// colour. The mesh formats neither read nor write them.
 struct Body {
   std::string name;
   TopoDS_Shape shape;
   std::optional<Color> color;
   std::vector<Placement> placements;
+  std::vector<FaceColor> face_colors;
 };
 
 // The bodies where their placements put them: a copy per placement, moved

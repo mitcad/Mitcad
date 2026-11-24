@@ -20,6 +20,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QJsonArray>
@@ -30,8 +32,13 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QRectF>
+#include <QScreen>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
+#include <QStyle>
 #include <QTextDocumentFragment>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtLogging>
@@ -76,6 +83,9 @@ const ExportType kTypes[] = {
     // its buffer and images beside it.
     {"glb", "", "glb", QT_TRANSLATE_NOOP("Export", "glTF binary (*.glb)")},
     {"gltf", "", "gltf", QT_TRANSLATE_NOOP("Export", "glTF (*.gltf)")},
+    // A ROS 2 package of the design's mechanism (mitcad#2100): links,
+    // joints and meshes, in a folder beside the file named after it.
+    {"urdf", "", "urdf", QT_TRANSLATE_NOOP("Export", "URDF robot for ROS 2 (*.urdf)")},
 };
 
 constexpr int kTypeCount = static_cast<int>(sizeof(kTypes) / sizeof(kTypes[0]));
@@ -85,7 +95,7 @@ const QStringList kRefinements{QStringLiteral("low"), QStringLiteral("medium"), 
 bool isMeshType(const QString& format) {
   return format == QStringLiteral("stl") || format == QStringLiteral("obj") || format == QStringLiteral("3mf") ||
          format == QStringLiteral("usdz") || format == QStringLiteral("html") || format == QStringLiteral("glb") ||
-         format == QStringLiteral("gltf");
+         format == QStringLiteral("gltf") || format == QStringLiteral("urdf");
 }
 
 // The type a file's extension asks for (the first of a format), or -1.
@@ -131,6 +141,9 @@ int typeOfSuffix(const QString& suffix, int current) {
   }
   if (is({"gltf"})) {
     return 11;
+  }
+  if (is({"urdf"})) {
+    return 12;
   }
   return -1;
 }
@@ -406,13 +419,16 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     // A glTF file keeps the component tree with its placements: the design's
     // coordinates (mitcad#1826).
     const bool gltf = format == QStringLiteral("glb") || format == QStringLiteral("gltf");
+    // A URDF package is the whole design as it moves (mitcad#2100).
+    const bool urdf = format == QStringLiteral("urdf");
     // A 3MF file of the plates prints the whole design on the bed
     // (mitcad#1679); on the bed the bodies are where the design shows them.
     const bool threeMf = format == QStringLiteral("3mf");
     const bool platesChosen = threeMf && hasPlates && !plateBox->currentData().toString().isEmpty();
     const bool bed = platesChosen || (threeMf && onBed->isChecked());
-    form->setRowVisible(bodies, format != QStringLiteral("dxf") && !page && !platesChosen);
-    form->setRowVisible(coordinates, chooseCoordinates && format != QStringLiteral("dxf") && !page && !gltf && !bed);
+    form->setRowVisible(bodies, format != QStringLiteral("dxf") && !page && !platesChosen && !urdf);
+    form->setRowVisible(coordinates,
+                        chooseCoordinates && format != QStringLiteral("dxf") && !page && !gltf && !bed && !urdf);
     form->setRowVisible(plateBox, threeMf && hasPlates);
     form->setRowVisible(slicerBox, threeMf);
     form->setRowVisible(onBed, threeMf && !platesChosen);
@@ -491,6 +507,10 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
                                  hasPlates ? QStringLiteral("%1 (%2)").arg(startPlates).arg(plates.plates.size())
                                            : QStringLiteral("none"),
                                  plates.dialect.isEmpty() ? QStringLiteral("none") : plates.dialect);
+  // The Bodies row it starts with (mitcad#2298).
+  qDebug().noquote() << QStringLiteral("Export dialog bodies: %1")
+                            .arg(selectedBodies > 0 ? QStringLiteral("Selected bodies (%1)").arg(selectedBodies)
+                                                    : QStringLiteral("All bodies"));
 
   prepareModal(&dialog);
   while (execDialog(&dialog) == QDialog::Accepted) {
@@ -516,6 +536,11 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
       } else if (!occurrences && choice.coordinates == QStringLiteral("design")) {
         choice.coordinates.clear(); // as before: nothing to choose by
       }
+    }
+    if (choice.format == QStringLiteral("urdf")) {
+      // The whole design where it places the bodies (mitcad#2100).
+      choice.selectedOnly = false;
+      choice.coordinates.clear();
     }
     if (choice.format == QStringLiteral("3mf")) {
       // The design's print plates and the bed (mitcad#1679).
@@ -2062,7 +2087,19 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
 
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Import Report"));
-  auto* layout = new QVBoxLayout(&dialog);
+  // Everything above the buttons in one scrolling area, so that a long
+  // report never grows the dialog past the screen (mitcad#2331): the
+  // buttons stay in sight, the rows keep their own scrolling.
+  auto* outer = new QVBoxLayout(&dialog);
+  auto* scroll = new QScrollArea;
+  scroll->setObjectName(QStringLiteral("importReportScroll"));
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  auto* content = new QWidget;
+  auto* layout = new QVBoxLayout(content);
+  layout->setContentsMargins(0, 0, 0, 0);
+  scroll->setWidget(content);
+  outer->addWidget(scroll, 1);
   const auto field = [&design](const char* key, const QString& otherwise) {
     const QString value = design.value(QLatin1String(key)).toString();
     return (value.isEmpty() ? otherwise : value).toHtmlEscaped();
@@ -2495,6 +2532,8 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                               .arg(shown)
                               .arg(items->topLevelItemCount());
   });
+  // (Tall enough to use beside long text sections, which scroll with it.)
+  items->setMinimumHeight(items->fontMetrics().height() * 12);
   layout->addWidget(items, 1);
   // The table has the keyboard first, as before the filter came (Enter
   // still closes the report).
@@ -2541,6 +2580,15 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   }
   for (const QJsonValue& warning : replay.value(QStringLiteral("warnings")).toArray()) {
     warnings << QStringLiteral("%1&nbsp;%2").arg(warningIcon, mitcad::modelMessage(warning.toString()).toHtmlEscaped());
+  }
+  // A long list of warnings for the tests (mitcad#2331): the report with
+  // them still fits the screen.
+  const int testWarnings = qEnvironmentVariableIntValue("MITCAD_TEST_IMPORT_REPORT_WARNINGS");
+  for (int i = 1; i <= testWarnings; ++i) {
+    warnings << QStringLiteral("%1&nbsp;Test warning %2 of %3: a line of a long report.")
+                    .arg(warningIcon)
+                    .arg(i)
+                    .arg(testWarnings);
   }
   {
     auto* text = new QLabel(QObject::tr("<b>Warnings</b><br>%1")
@@ -2630,8 +2678,27 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   buttons->button(QDialogButtonBox::Close)->setDefault(true);
-  layout->addWidget(buttons);
-  dialog.resize(720, 520);
+  outer->addWidget(buttons);
+  // Never larger than the screen's available area, its frame included;
+  // as tall as its content at the start where that fits (mitcad#2331).
+  QScreen* screen = parent != nullptr ? parent->screen() : QGuiApplication::primaryScreen();
+  const QRect available = screen != nullptr ? screen->availableGeometry() : QRect(0, 0, 720, 520);
+  const int frame = dialog.style()->pixelMetric(QStyle::PM_TitleBarHeight);
+  const QSize largest(std::max(available.width(), 320), std::max(available.height() - frame, 240));
+  dialog.setMaximumSize(largest);
+  dialog.resize(std::min(720, largest.width()),
+                std::min(std::max(520, dialog.sizeHint().height()), largest.height()));
+  // Its height and whether it scrolls, once shown, for the tests.
+  QTimer::singleShot(250, &dialog, [&dialog, scroll, file, available] {
+    const bool scrolls = scroll->verticalScrollBar()->maximum() > 0;
+    const bool within = dialog.frameGeometry().height() <= available.height();
+    qDebug().noquote() << QStringLiteral("Import report size: %1: height %2 of %3 available, %4, %5")
+                              .arg(file)
+                              .arg(dialog.frameGeometry().height())
+                              .arg(available.height())
+                              .arg(within ? QStringLiteral("within the screen") : QStringLiteral("past the screen"),
+                                   scrolls ? QStringLiteral("scrolls") : QStringLiteral("does not scroll"));
+  });
   if (isIfcImport(result)) {
     qDebug().noquote() << QStringLiteral("Import report: %1: %2 products (%3), %4 bodies")
                               .arg(file)

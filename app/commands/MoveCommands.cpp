@@ -38,6 +38,18 @@ const Choices kMoveTypes = {{QStringLiteral("free"), QStringLiteral("Free Move")
                             {QStringLiteral("point_to_point"), QStringLiteral("Point to Point")},
                             {QStringLiteral("point_to_position"), QStringLiteral("Point to Position")}};
 
+// Point to Point's Along (mitcad#2339): the whole motion, or only its
+// distance along one axis of the move's component; icon buttons, their
+// labels the tooltips.
+const Choices kMoveAlong = {{QStringLiteral("all"), QStringLiteral("All: the whole way to the Target Point")},
+                            {QStringLiteral("x"), QStringLiteral("X: along X only")},
+                            {QStringLiteral("y"), QStringLiteral("Y: along Y only")},
+                            {QStringLiteral("z"), QStringLiteral("Z: along Z only")}};
+const QHash<QString, QString> kMoveAlongIcons = {{QStringLiteral("all"), QStringLiteral("move-along-all")},
+                                                 {QStringLiteral("x"), QStringLiteral("move-along-x")},
+                                                 {QStringLiteral("y"), QStringLiteral("move-along-y")},
+                                                 {QStringLiteral("z"), QStringLiteral("move-along-z")}};
+
 // The points of a move: vertices, construction and sketch points, and the
 // centres of circles and arcs, given by their edges (the model takes a
 // circular edge as its centre).
@@ -62,6 +74,7 @@ std::optional<gp_Pnt> pivotOf(const CommandState& state, const CommandContext& c
 }
 
 gp_Trsf moveFrame(const CommandState& state, const CommandContext& context);
+QString moveFrameOccurrence(const CommandState& state, const CommandContext& context);
 
 // A point of the design (a free move's pivot) in the coordinates of the
 // component the move works in, which its matrix is in (mitcad#2302: a
@@ -458,25 +471,33 @@ void takeComponentsOf(const Selection& selection, CommandState& state, const Com
 // the move's (a vertex of another part): `<key>_occurrence` beside it, the
 // occurrence's path, so that the model takes it where that occurrence
 // places it (commands.md, "move, align, scale", mitcad#699). Geometry of
-// the move's own component, or picked in no occurrence, goes as before.
+// the move's own component goes as before. A root-level pick (an empty
+// path) of a move that works in a deeper component (one picked inside a
+// sub-assembly moves in its parent, mitcad#2302) goes with the root path
+// "" (mitcad#2307): without it the model would read the root's point in
+// the move's own component's coordinates.
 void addPickedOccurrence(QJsonObject& transform, const QString& key, const SelectionItem& item,
                          const CommandState& state, const CommandContext& context) {
-  if (item.occurrence.isEmpty()) {
-    return;
+  const std::optional<QString> path =
+      pickedOccurrenceToWrite(item.occurrence, state.text(kMoveComponent), occurrenceTree(context));
+  if (path) {
+    transform.insert(key + QStringLiteral("_occurrence"), *path);
   }
-  const QString own = state.text(kMoveComponent).isEmpty() ? QStringLiteral("C0") : state.text(kMoveComponent);
-  if (placedComponent(item.occurrence, context) == own) {
-    return;
-  }
-  transform.insert(key + QStringLiteral("_occurrence"), item.occurrence);
 }
 
-// A definition's point or axis, in the occurrence it was picked in.
-SelectionItem pickedItemOf(const QJsonObject& transform, const QString& key, const CommandContext& context) {
+// A definition's point or axis, in the occurrence it was picked in. One
+// without a path is geometry of the move's own component: it takes that
+// component's occurrence the move is drawn at (moveFrame; none in the
+// root), so that an empty path always means the root (mitcad#2307) and OK
+// writes it back without a path.
+SelectionItem pickedItemOf(const QJsonObject& transform, const QString& key, const CommandState& state,
+                           const CommandContext& context) {
   SelectionItem item = itemOf(transform.value(key), context);
   const QJsonValue occurrence = transform.value(key + QStringLiteral("_occurrence"));
   if (occurrence.isString()) {
     item.occurrence = occurrence.toString();
+  } else {
+    item.occurrence = moveFrameOccurrence(state, context);
   }
   return item;
 }
@@ -760,7 +781,12 @@ QJsonObject transformOf(const CommandState& state, const CommandContext& context
     return picked(rotate, QStringLiteral("axis"), state.items(QStringLiteral("axis")).first());
   }
   if (type == QStringLiteral("point_to_point")) {
-    const QJsonObject points{{QStringLiteral("type"), type}};
+    QJsonObject points{{QStringLiteral("type"), type}};
+    // Along an axis only (mitcad#2339); All is left out, as before.
+    const QString along = state.choice(QStringLiteral("along"));
+    if (!along.isEmpty() && along != QStringLiteral("all")) {
+      points.insert(QStringLiteral("along"), along);
+    }
     return picked(picked(points, QStringLiteral("from"), state.items(QStringLiteral("from")).first()),
                   QStringLiteral("to"), state.items(QStringLiteral("to")).first());
   }
@@ -806,19 +832,21 @@ bool loadTransform(const QJsonObject& transform, CommandState& state, const QJso
   }
   if (type == QStringLiteral("rotate")) {
     state.setChoice(QStringLiteral("type"), type);
-    state.setItems(QStringLiteral("axis"), {pickedItemOf(transform, QStringLiteral("axis"), context)});
+    state.setItems(QStringLiteral("axis"), {pickedItemOf(transform, QStringLiteral("axis"), state, context)});
     loadValue(state, QStringLiteral("angle"), transform.value(QStringLiteral("angle")), feature, context);
     return true;
   }
   if (type == QStringLiteral("point_to_point")) {
     state.setChoice(QStringLiteral("type"), type);
-    state.setItems(QStringLiteral("from"), {pickedItemOf(transform, QStringLiteral("from"), context)});
-    state.setItems(QStringLiteral("to"), {pickedItemOf(transform, QStringLiteral("to"), context)});
+    state.setItems(QStringLiteral("from"), {pickedItemOf(transform, QStringLiteral("from"), state, context)});
+    state.setItems(QStringLiteral("to"), {pickedItemOf(transform, QStringLiteral("to"), state, context)});
+    const QString along = str(transform, "along");
+    state.setChoice(QStringLiteral("along"), along.isEmpty() ? QStringLiteral("all") : along);
     return true;
   }
   if (type == QStringLiteral("point_to_position")) {
     state.setChoice(QStringLiteral("type"), type);
-    state.setItems(QStringLiteral("point"), {pickedItemOf(transform, QStringLiteral("point"), context)});
+    state.setItems(QStringLiteral("point"), {pickedItemOf(transform, QStringLiteral("point"), state, context)});
     loadValue(state, QStringLiteral("px"), transform.value(QStringLiteral("x")), feature, context);
     loadValue(state, QStringLiteral("py"), transform.value(QStringLiteral("y")), feature, context);
     loadValue(state, QStringLiteral("pz"), transform.value(QStringLiteral("z")), feature, context);
@@ -827,7 +855,7 @@ bool loadTransform(const QJsonObject& transform, CommandState& state, const QJso
   if (type == QStringLiteral("translate_along")) {
     // Move Face's Translate Along (Move/Copy has no inputs for it).
     state.setChoice(QStringLiteral("type"), QStringLiteral("along"));
-    state.setItems(QStringLiteral("along_axis"), {pickedItemOf(transform, QStringLiteral("axis"), context)});
+    state.setItems(QStringLiteral("along_axis"), {pickedItemOf(transform, QStringLiteral("axis"), state, context)});
     loadValue(state, QStringLiteral("distance"), transform.value(QStringLiteral("distance")), feature, context);
     return true;
   }
@@ -977,6 +1005,13 @@ QVector<InputDef> motionInputs(const Choices& types, bool along) {
       << selectionInput(QStringLiteral("to"), QObject::tr("Target Point"), kMovePointKinds, 1, 1)
              .withAccepts(isMovePoint)
              .withVisible(type("point_to_point"))
+      // Only along one axis of the move's component (mitcad#2339): a body
+      // brought level with a face, an edge or a point without moving
+      // sideways.
+      << choiceInput(QStringLiteral("along"), QObject::tr("Along"), kMoveAlong, QStringLiteral("all"))
+             .withChoiceIcons(kMoveAlongIcons)
+             .withTooltip(QObject::tr("The whole way to the Target Point, or only along X, Y or Z"))
+             .withVisible(type("point_to_point"))
       // Point to Position
       << selectionInput(QStringLiteral("point"), QObject::tr("Point"), kMovePointKinds, 1, 1)
              .withAccepts(isMovePoint)
@@ -1010,16 +1045,23 @@ InputDef moveComponentInput() {
 // the parent's occurrence it was picked under), else of its first
 // occurrence.
 gp_Trsf moveFrame(const CommandState& state, const CommandContext& context) {
-  const QString component = state.text(kMoveComponent);
-  if (component.isEmpty() || component == QStringLiteral("C0")) {
-    return gp_Trsf();
-  }
-  const QJsonArray tree = occurrenceTree(context);
-  const QString at = frameOccurrenceOf(movesComponents(state) ? componentPaths(state) : QStringList(), component, tree);
+  const QString at = moveFrameOccurrence(state, context);
   if (at.isEmpty()) {
     return gp_Trsf();
   }
-  return trsfOf(occurrenceNodeAt(tree, at).value(QStringLiteral("world")).toArray());
+  return trsfOf(occurrenceNodeAt(occurrenceTree(context), at).value(QStringLiteral("world")).toArray());
+}
+
+// The path of the occurrence whose placement is moveFrame: empty in the
+// root (mitcad#2307: a loaded point of the move's own component is placed
+// there too).
+QString moveFrameOccurrence(const CommandState& state, const CommandContext& context) {
+  const QString component = state.text(kMoveComponent);
+  if (component.isEmpty() || component == QStringLiteral("C0")) {
+    return QString();
+  }
+  return frameOccurrenceOf(movesComponents(state) ? componentPaths(state) : QStringList(), component,
+                           occurrenceTree(context));
 }
 
 // Move/Copy's provisional drag motion (CommandDef::dragMotion, mitcad#838):
@@ -1177,6 +1219,14 @@ CommandDef moveCommand(const CommandContext& context) {
       result.def = {{QStringLiteral("type"), QStringLiteral("move_occurrence")},
                     {QStringLiteral("occurrences"), occurrences},
                     {QStringLiteral("transform"), transform}};
+      // The occurrence of a parent used more than once the components
+      // were picked through (mitcad#2307): the model takes root-level
+      // points through it, so that the part lands on the target there.
+      const QString parent =
+          parentOccurrenceToWrite(componentPaths(state), state.text(kMoveComponent), occurrenceTree(context));
+      if (!parent.isEmpty()) {
+        result.def.insert(QStringLiteral("parent_occurrence"), parent);
+      }
       return result;
     }
     result.def = {{QStringLiteral("type"), QStringLiteral("move")},
@@ -1192,9 +1242,15 @@ CommandDef moveCommand(const CommandContext& context) {
     if (str(feature, "type") == QStringLiteral("move_occurrence")) {
       state.setChoice(QStringLiteral("move_type"), QStringLiteral("components"));
       Selection items;
+      // Under the parent's occurrence they were picked through, when the
+      // definition records it (mitcad#2307), so that the edit's frame and
+      // its OK keep it.
+      const QString parent = str(feature, "parent_occurrence");
+      const QJsonArray tree = parent.isEmpty() ? QJsonArray() : occurrenceTree(context);
       for (const QJsonValue& occurrence : feature.value(QStringLiteral("occurrences")).toArray()) {
         SelectionItem item{SelectKind::Component, QString(), QString(), QString()};
-        item.occurrence = occurrencePath(occurrence.toString(), context);
+        item.occurrence =
+            loadedOccurrencePath(occurrence.toString(), parent, occurrencePath(occurrence.toString(), context), tree);
         items.append(item);
       }
       state.setItems(QStringLiteral("components"), items);

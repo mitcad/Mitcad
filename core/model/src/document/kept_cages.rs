@@ -56,6 +56,7 @@ mod tests {
                     name: Some("Form1".to_owned()),
                     color: None,
                     shape: MockShape::imported("sheet", 1),
+                    face_colors: Vec::new(),
                 }])
             })
             .unwrap();

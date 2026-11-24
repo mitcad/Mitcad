@@ -1,4 +1,4 @@
-# Chamfers wider than a face beside them: 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531, 1090, 1100, 1110, 1120
+# Chamfers wider than a face beside them: 0140–0149, 0380, 0381, 0480, 0481, 0530, 0531, 1090, 1100, 1110, 1120, 2306
 
 The edge overflow of [0010 to 0019 and 0050 to 0077](fillet-edge-overflow.md)
 for chamfers (mitcad#240, mitcad#263). `geometry/tests/test_chamfer_overflow.cpp`
@@ -40,6 +40,11 @@ chamfer alone. Later chamfer cases from stored designs: 0440 in
   onto the copy of a closed edge's vertex nearest it on a periodic face,
   as 0149 did for the end snapped second only: a blind hole's rim
   bevelled or rounded as deep as the hole (mitcad#1117).
+- **2306** closes a corner where four or more planar chamfers meet round
+  a vertex, their sections there in one plane, with that plane: every
+  edge of an octahedron chamfered alike failed; and it blends a solid
+  whose own orientation is reversed as that solid oriented forward, whose
+  fillets and chamfers came out invalid (mitcad#2306).
 
 ## 0140 to 0149: chamfers wider than a face beside them
 
@@ -432,6 +437,72 @@ past the vertex its corner failed. The plate's chamfer builds with both
 ends of its chain alike, valid and closed, its centre of mass on the
 plate's plane of symmetry within 1e-9 mm.
 
+## 2306: planar chamfers meeting round a corner; a reversed solid
+
+### 2306-chfi3d-corner-of-four-chamfers-meeting-in-a-plane-closed-by-a-planar-face
+
+The octahedron |x| + |y| + |z| <= 10 with all twelve edges chamfered
+sqrt(6) on both faces (a case of a public B-rep benchmark, mitcad#2273):
+four chamfers meet at each of the six vertices. Each chamfer is a plane
+(the one of the edge from (10, 0, 0) to (0, 10, 0) is x + y = 8), and the
+contact lines of two chamfers next to each other at a vertex cross on
+their common face (at (6, 2, 2) on x + y + z = 10). Cut there, each
+chamfer's section at the vertex is a straight segment, and the four
+segments bound a square in the plane x = 6: the exact corner, 26 planar
+faces in all.
+
+The vertex has more than three edges, so `PerformFilletOnVertex` takes
+the corner of many stripes, `PerformMoreThreeCorner`. Traced in DRAW
+(`chamf` on the twelve edges in their order): the stripes all build;
+at every vertex the corner finds the four crossings on the faces (each
+pair of neighbours meets, no connecting curve is needed) and puts the
+four sections into its n-sided plate (`GeomPlate_BuildPlateSurface`)
+as borders held G1 to each chamfer's surface. That plate is not done at
+any of the six vertices: no surface is tangent to the four planes along
+the square's sides, whose corners each have two planes there.
+`PerformFilletOnVertex` returns without the corner, every vertex is
+faulty, and the chamfer is not done.
+
+At a corner where every edge is chamfered (no sharp edge), each
+chamfer's surface data at the corner is a plane that meets both its
+neighbours on the faces between them, and the sections (the segments
+between those meetings) lie in one plane within the approximation
+tolerance (`SectionsOfChamfersInOnePlane`), the plate is now built G0 to
+the sections. Its starting surface is then the plane through them, and
+where that plane holds every end of the sections and the plate's curves
+end at them, within the same tolerance (`CornerPlane`), that plane is the
+corner's surface instead of the plate's approximation, with the plate's
+curves on it. Elsewhere nothing changes, and a fillet corner, a corner
+with a sharp edge or with a connecting curve on a face keeps its G1
+plate.
+
+The octahedron's chamfer builds one valid solid of 26 planar faces, its
+volume 917.33333333333292 (exact 2752/3) and its area 478.38025566004234
+(exact 64 sqrt(3) + 192 sqrt(2) + 96), the tolerances 2.2e-7 at most.
+
+That holds for the octahedron as a solid oriented forward around its
+sewn shell turned outward. The geometry test makes it otherwise: the
+solid of the sewn shell, which faces in, oriented by
+`BRepLib::OrientClosedSolid`, which reverses the solid itself. Every
+fillet or chamfer of a solid whose own orientation is reversed came out
+invalid (`BRepCheck_BadOrientationOfSubshape`): the blends were right,
+but the result is rebuilt in new solids (the builder's `MergeSolid`),
+which took the input solid's shells without the solid's own orientation,
+so every face of the input the blends did not make faced in. The
+octahedron's eight triangles faced in, the volume 490.67 with the area
+exact; a box made the same way, one edge chamfered 1, gave -945.67
+instead of 995, and a corner's three edges chamfered or rounded 1 were
+negative too, through corners the first part does not touch.
+
+`ChFi3d_Builder`'s constructor now takes a solid whose own orientation is
+reversed as the same solid oriented forward, holding its shells with that
+orientation composed into theirs (`ForwardSolid`). The faces are the same,
+each with the orientation it has within the solid given, so the blends
+are computed as before; the result is built from a forward solid. The
+reversed octahedron then gives the result above, and the reversed box
+gives the volumes and areas of the box given forward. Any other shape
+(a forward solid, a shell, a compound) is taken as before.
+
 ## Reports and tests
 
 - 0140 to 0149: mitcad#240, mitcad#263 and
@@ -466,3 +537,14 @@ plate's plane of symmetry within 1e-9 mm.
   `TopoDS_Builder::Add`. Through the geometry facade the same, and the
   diagonal with the two edges beyond it on the earlier chamfer's face, a
   corner of two chamfers, which a guide on past every end broke).
+- 2306: mitcad#2306 and `geometry/tests/test_fillet_bench_cases.cpp`
+  (`chamfer/octahedron-all-edges`, OCCT's chamfer alone and MitCad's
+  Chamfer: the exact volume and area within 1e-6; both paths were known
+  failures before the patch, the plate of every corner not done, and with
+  the corner alone the test's reversed solid came out invalid with the
+  volume 490.67) and
+  `geometry/tests/port/p2306-corner-of-planar-chamfers-and-reversed-solid.cpp`
+  (ctest geometry.port.2306: the octahedron chamfered as a forward and as
+  a reversed solid, 26 planar faces, the exact volume and area within
+  1e-9; a reversed box's edge and corner chamfered and the corner rounded
+  as the box given forward).

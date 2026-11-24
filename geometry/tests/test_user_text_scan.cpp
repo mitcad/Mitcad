@@ -214,6 +214,9 @@ const Allowed kAllowed[] = {
      "face_words(): a face's name for a full round error's detail, placed_error() (mitcad#2279)"},
     {"full_round.cpp", "\"an unnamed edge\" : \"edge \" + name",
      "edge_words(): an edge's name for a full round error's detail, placed_error() (mitcad#2279)"},
+    {"surface_fills.cpp", "\" do not meet: %s apart at their nearest, (%g, %g, %g)",
+     "miss_text(): the gap and nearest points of a network's pair that does not meet, for the detail of "
+     "placed_error() in network_surface() (mitcad#2333)"},
 };
 
 bool allowed(const std::string& file, const std::string& text) {

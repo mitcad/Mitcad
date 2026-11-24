@@ -166,7 +166,17 @@ std::optional<gp_Trsf> basisMotion(const CommandState& state, const QJsonObject&
     if (!from || !to) {
       return std::nullopt;
     }
-    motion.SetTranslation(gp_Vec(*to - *from));
+    // Along: only that distance, along the axis of the move's component
+    // the basis is given in (mitcad#2339), as the model keeps it.
+    gp_XYZ moved = *to - *from;
+    const QString along = state.choice(QStringLiteral("along"));
+    const int axis = along == QStringLiteral("x") ? 1 : along == QStringLiteral("y") ? 2 : along == QStringLiteral("z") ? 3 : 0;
+    if (axis != 0) {
+      const double kept = moved.Coord(axis);
+      moved = gp_XYZ(0, 0, 0);
+      moved.SetCoord(axis, kept);
+    }
+    motion.SetTranslation(gp_Vec(moved));
     return motion;
   }
   if (type == QStringLiteral("point_to_position")) {

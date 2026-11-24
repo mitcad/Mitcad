@@ -175,6 +175,7 @@ std::string edge_along(const Shape& body, int axis, double u, double v) {
 // cut (none without one): the ball's centre (xc, yc), its contact on C at
 // x = xt.
 struct Added {
+  double radius = kRadius;
   double area = 0.0;
   double xc = 0.0;
   double yc = 0.0;
@@ -189,11 +190,12 @@ double arc_term(double cx, double cy, double r, double t0, double t1) {
 
 double line_term(double x0, double y0, double x1, double y1) { return 0.5 * (x0 * y1 - x1 * y0); }
 
-Added section_added() {
+Added section_added(double radius = kRadius) {
   Added f;
-  f.yc = kA - kRadius;
+  f.radius = radius;
+  f.yc = kA - radius;
   const double dy = kFar - f.yc;
-  f.xc = kCentre - std::sqrt((kCentre + kRadius) * (kCentre + kRadius) - dy * dy);
+  f.xc = kCentre - std::sqrt((kCentre + radius) * (kCentre + radius) - dy * dy);
   // The contact on C, by its angle about C's axis (between pi and 3 pi / 2).
   double t = std::atan2(f.yc - kFar, f.xc - kCentre);
   if (t < 0.0) {
@@ -205,14 +207,14 @@ Added section_added() {
   // F's boundary: the contact on A, along A to N, down N, along C to its
   // contact, back along the ball's arc (clockwise: the sum is negative).
   double sum = line_term(f.xc, kA, 0.0, kA) + line_term(0.0, kA, 0.0, kFar) + arc_term(kCentre, kFar, kCentre, kPi, t);
-  sum += arc_term(f.xc, f.yc, kRadius, std::atan2(ty - f.yc, tx - f.xc), 0.5 * kPi);
+  sum += arc_term(f.xc, f.yc, radius, std::atan2(ty - f.yc, tx - f.xc), 0.5 * kPi);
   f.area = std::abs(sum);
   return f;
 }
 
 // F's height at x: from the ball's arc up to A (x <= 0) or to C.
 double height_of(const Added& f, double x) {
-  const double ball = f.yc + std::sqrt(std::max(0.0, kRadius * kRadius - (x - f.xc) * (x - f.xc)));
+  const double ball = f.yc + std::sqrt(std::max(0.0, f.radius * f.radius - (x - f.xc) * (x - f.xc)));
   const double top =
       x <= 0.0 ? kA : kFar - std::sqrt(std::max(0.0, kCentre * kCentre - (x - kCentre) * (x - kCentre)));
   return std::max(0.0, top - ball);
@@ -220,8 +222,8 @@ double height_of(const Added& f, double x) {
 
 // The volume the rounding adds: F's prism less its part past the cut,
 // where the cut's line runs through (p, 0) (Simpson's rule across F).
-double added_volume(bool cut, double p) {
-  const Added f = section_added();
+double added_volume(bool cut, double p, double radius = kRadius) {
+  const Added f = section_added(radius);
   double past = 0.0;
   if (cut) {
     const int n = 40000;
@@ -235,6 +237,32 @@ double added_volume(bool cut, double p) {
     past *= h / 3.0;
   }
   return kDepth * f.area - past;
+}
+
+// What an earlier rounding of the end face's left edge with `other` takes
+// from the added prism (mitcad#2330): F's part, at the end face, past that
+// rounding's arc about (kLeft + other, kDepth - other) in (x, z), towards
+// the corner, where the rounding reaches past the ball's contact on A
+// (Simpson's rule across F up to the arc's centre).
+double past_corner_rounding(double other, double radius) {
+  const Added f = section_added(radius);
+  const double cx = kLeft + other;
+  const double cz = kDepth - other;
+  const double x1 = std::min(cx, f.xt);
+  if (!(x1 > f.xc)) {
+    return 0.0;
+  }
+  const int n = 40000;
+  const double h = (x1 - f.xc) / n;
+  double sum = 0.0;
+  for (int i = 0; i <= n; ++i) {
+    const double x = f.xc + i * h;
+    const double dx = x - cx;
+    const double arc = cz + std::sqrt(std::max(0.0, other * other - dx * dx));
+    const double w = (i == 0 || i == n) ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0);
+    sum += w * height_of(f, x) * std::max(0.0, kDepth - arc);
+  }
+  return sum * h / 3.0;
 }
 
 Bnd_Box box_of(const TopoDS_Shape& shape) {
@@ -272,6 +300,33 @@ int faces_on_n(const TopoDS_Shape& shape) {
   return n;
 }
 
+// The planar faces of the shape on A's plane (y = kA) facing up, out of
+// material below them: the top of a lip the rounding left standing out
+// past an earlier rounding of a corner of A (mitcad#2330); A itself faces
+// down.
+int faces_up_on_a(const TopoDS_Shape& shape) {
+  int n = 0;
+  for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(ex.Current());
+    const BRepAdaptor_Surface surface(face, false);
+    if (surface.GetType() != GeomAbs_Plane) {
+      continue;
+    }
+    const gp_Pln plane = surface.Plane();
+    double y = plane.Axis().Direction().Y();
+    if (!plane.Direct()) {
+      y = -y;
+    }
+    if (face.Orientation() == TopAbs_REVERSED) {
+      y = -y;
+    }
+    if (std::abs(std::abs(y) - 1.0) < 1e-9 && std::abs(plane.Location().Y() - kA) < 1e-6 && y > 0.0) {
+      ++n;
+    }
+  }
+  return n;
+}
+
 // Whether a face's name is `name` or a piece of it (`name`#k).
 bool holds_face(const Shape& shape, const std::string& name) {
   for (int f = 0; f < shape.face_count(); ++f) {
@@ -284,9 +339,9 @@ bool holds_face(const Shape& shape, const std::string& name) {
   return false;
 }
 
-// The picked edge of `body` rounded with 11.9 as F7, checked as the
-// header says against `added` (relative `within`).
-void round_and_check(const char* label, const Shape& body, double added, double within) {
+// The picked edge of `body` rounded with `radius` (11.9) as F7, checked as
+// the header says against `added` (relative `within`).
+void round_and_check(const char* label, const Shape& body, double added, double within, double radius = kRadius) {
   const std::string edge = edge_along(body, 2, 0.0, kA);
   CHECK(!edge.empty());
   if (edge.empty()) {
@@ -294,7 +349,7 @@ void round_and_check(const char* label, const Shape& body, double added, double 
   }
   FilletSet set;
   set.edges = {edge};
-  set.radius = kRadius;
+  set.radius = radius;
   ShapePtr result;
   try {
     result = fillet("F7", body, {set});
@@ -336,6 +391,38 @@ void round_and_check(const char* label, const Shape& body, double added, double 
   // N gone; the rounding named after the picked edge.
   CHECK(faces_on_n(shape) == 0);
   CHECK(holds_face(*result, "F7:fillet(" + edge + ")"));
+  // No lip standing out past an earlier rounding (mitcad#2330).
+  const int up = faces_up_on_a(shape);
+  if (up != 0) {
+    std::fprintf(stderr, "%s: %d face(s) on A's plane facing up: a step\n", label, up);
+  }
+  CHECK(up == 0);
+}
+
+// The cut block with the cut's vertical edge with the left face and the
+// end face's left edge rounded with `other` as F6; null where that fails.
+ShapePtr other_rounded(double other) {
+  const ShapePtr cut = block(true, -2.8);
+  const std::string vertical = edge_along(*cut, 1, kLeft, kCutDepth);
+  const std::string end = edge_along(*cut, 1, kLeft, kDepth);
+  CHECK(!vertical.empty());
+  CHECK(!end.empty());
+  if (vertical.empty() || end.empty()) {
+    return nullptr;
+  }
+  FilletSet set;
+  set.edges = {vertical, end};
+  set.radius = other;
+  ShapePtr body;
+  try {
+    body = fillet("F6", *cut, {set});
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "the other fillet failed: %s\n", error.what());
+    CHECK(false);
+    return nullptr;
+  }
+  CHECK(body != nullptr);
+  return body;
 }
 
 void test_rounding_over_the_round_face() {
@@ -354,30 +441,94 @@ void test_rounding_ending_on_the_cut_face_past_the_origin() {
 }
 
 void test_rounding_after_the_other_fillet() {
-  const ShapePtr cut = block(true, -2.8);
   // The cut's vertical edge with the left face and the end face's left
   // edge, rounded with 9 as F6.
-  const std::string vertical = edge_along(*cut, 1, kLeft, kCutDepth);
-  const std::string end = edge_along(*cut, 1, kLeft, kDepth);
-  CHECK(!vertical.empty());
-  CHECK(!end.empty());
-  if (vertical.empty() || end.empty()) {
-    return;
+  if (const ShapePtr body = other_rounded(kOther)) {
+    round_and_check("after the other fillet", *body, added_volume(true, -2.8), 1e-4);
   }
-  FilletSet other;
-  other.edges = {vertical, end};
-  other.radius = kOther;
-  ShapePtr body;
+}
+
+// GitHub #608 (mitcad#2330): the rounding with 14.2 (its contact on A at
+// x = -12.0) after the other fillet with 9.5, whose rounding of the end
+// face's left edge reaches A as far as x = -9.5, past that contact (its
+// rounding of the cut's edge stays short of it, to x = -13.8). The
+// rounding's contact runs off A onto the earlier rounding near the end
+// face; the material it adds ends at that rounding continued down past A
+// (as where the fillets come in the other order), no lip standing out past
+// it on the end face's plane, no face on A's plane facing up. The volume
+// added: F's prism less its part past the cut and its part past the
+// earlier rounding.
+void test_rounding_after_the_other_fillet_reaching_past_its_contact() {
+  constexpr double other = 9.5;
+  constexpr double radius = 14.2;
+  CHECK(kLeft + other > section_added(radius).xc);
+  if (const ShapePtr body = other_rounded(other)) {
+    round_and_check("after the other fillet past the contact", *body,
+                    added_volume(true, -2.8, radius) - past_corner_rounding(other, radius), 1e-5, radius);
+  }
+}
+
+// The other order of the case above (mitcad#2330): the rounding with 14.2
+// first, then the other fillet with 9.5. Its rounding of the end face's
+// left edge ends on A's plane, which does not reach across it there (the
+// rounding with 14.2 runs into A tangentially short of the corner); it runs
+// on down through that rounding's material, so that no lip of it stands
+// out past the other rounding (the bundle check of 23.11 found three faces
+// facing up on the reported design in this order). One valid closed solid
+// without a note, no face on A's plane facing up, the volume that of the
+// first order within 1e-6.
+void test_other_fillet_after_the_rounding_reaching_past_its_contact() {
+  constexpr double other = 9.5;
+  constexpr double radius = 14.2;
+  FilletSet set;
+  set.radius = radius;
+  ShapePtr first_order;
+  if (const ShapePtr body = other_rounded(other)) {
+    set.edges = {edge_along(*body, 2, 0.0, kA)};
+    try {
+      first_order = fillet("F7", *body, {set});
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "the rounding after the other fillet failed: %s\n", error.what());
+    }
+  }
+  const ShapePtr cut = block(true, -2.8);
+  set.edges = {edge_along(*cut, 2, 0.0, kA)};
+  ShapePtr rounded;
+  ShapePtr second_order;
   try {
-    body = fillet("F6", *cut, {other});
+    rounded = fillet("F7", *cut, {set});
+    FilletSet then;
+    then.edges = {edge_along(*rounded, 1, kLeft, kCutDepth), edge_along(*rounded, 1, kLeft, kDepth)};
+    CHECK(!then.edges[0].empty() && !then.edges[1].empty());
+    then.radius = other;
+    second_order = fillet("F6", *rounded, {then});
   } catch (const std::exception& error) {
-    std::fprintf(stderr, "the other fillet failed: %s\n", error.what());
+    std::fprintf(stderr, "the other order failed: %s\n", error.what());
     CHECK(false);
     return;
   }
-  CHECK(body != nullptr);
-  if (body) {
-    round_and_check("after the other fillet", *body, added_volume(true, -2.8), 1e-4);
+  CHECK(second_order != nullptr);
+  if (!second_order) {
+    return;
+  }
+  const TopoDS_Shape& shape = second_order->occt();
+  CHECK(closed(shape));
+  CHECK(BRepCheck_Analyzer(shape).IsValid());
+  for (const std::string& note : second_order->notes()) {
+    std::fprintf(stderr, "other order: note: %s\n", note.c_str());
+  }
+  CHECK(second_order->notes().empty());
+  const int up = faces_up_on_a(shape);
+  if (up != 0) {
+    std::fprintf(stderr, "other order: %d face(s) on A's plane facing up: a step\n", up);
+  }
+  CHECK(up == 0);
+  CHECK(first_order != nullptr);
+  if (first_order) {
+    const double one = volume_of(first_order->occt());
+    const double two = volume_of(shape);
+    std::printf("both orders: %.6f and %.6f\n", one, two);
+    CHECK_NEAR_TOL(two, one, 1e-6);
   }
 }
 
@@ -391,6 +542,10 @@ int main() {
   test::guarded("test_rounding_ending_on_the_cut_face_past_the_origin",
                 test::test_rounding_ending_on_the_cut_face_past_the_origin);
   test::guarded("test_rounding_after_the_other_fillet", test::test_rounding_after_the_other_fillet);
+  test::guarded("test_rounding_after_the_other_fillet_reaching_past_its_contact",
+                test::test_rounding_after_the_other_fillet_reaching_past_its_contact);
+  test::guarded("test_other_fillet_after_the_rounding_reaching_past_its_contact",
+                test::test_other_fillet_after_the_rounding_reaching_past_its_contact);
   if (test::failures == 0) {
     std::puts("test_fillet_narrow_face_tangent_beyond: all checks passed");
   }

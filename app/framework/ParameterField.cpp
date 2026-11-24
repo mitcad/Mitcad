@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
+#include <initializer_list>
 #include <memory>
 #include <utility>
 
@@ -30,6 +31,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
+#include <QPaintEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QPixmap>
@@ -38,6 +41,7 @@
 #include <QRect>
 #include <QRectF>
 #include <QRegularExpression>
+#include <QResizeEvent>
 #include <QStyle>
 #include <QStyleOptionViewItem>
 #include <QStyledItemDelegate>
@@ -51,6 +55,7 @@
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QWheelEvent>
+#include <QWidgetAction>
 #include <QtLogging>
 
 #include "Dialogs.hpp"
@@ -131,6 +136,171 @@ QIcon fxIcon(const QWidget& field) {
   painter.end();
   return QIcon(pixmap);
 }
+
+// The step buttons of a field that steps (mitcad#2327,
+// docs/ui-conventions.md "Step buttons"): an up and a down arrow, one above
+// the other, in the line edit's rightmost trailing place. The upper half
+// steps up, the lower half down (ParameterField::stepButton); a press held
+// repeats after the platform's spin box delay at its rate, while the
+// pointer stays on the pressed half. Drawn in the field's text colour, a
+// hovered or pressed half with the text colour's tint of the control
+// radius; disabled in the palette's disabled text colour, without a tint.
+// They take no keyboard focus: the field keeps it.
+class StepButtons : public QWidget {
+public:
+  StepButtons(QLineEdit* edit, ParameterField* field) : QWidget(edit), m_field(field) {
+    setObjectName(QStringLiteral("parameterSteps"));
+    setFocusPolicy(Qt::NoFocus);
+    setMouseTracking(true);
+    setCursor(Qt::ArrowCursor); // not the field's text cursor
+    // A press on disabled buttons does not reach the field's text.
+    setAttribute(Qt::WA_NoMousePropagation);
+    setToolTip(valueStepButtonHint(kMacKeys));
+    m_repeat.setSingleShot(true);
+    QObject::connect(&m_repeat, &QTimer::timeout, this, [this] { repeat(); });
+  }
+
+  // The middle of a half, in the buttons' coordinates.
+  QPoint centre(bool up) const { return halfRect(up ? 1 : -1).center().toPoint(); }
+
+protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    // The field's colours: a sketch's field over the view has light ones of
+    // its own (its style sheet).
+    const QPalette& colours = parentWidget() != nullptr ? parentWidget()->palette() : palette();
+    const bool enabled = isEnabled();
+    QColor ink = colours.color(enabled ? QPalette::Active : QPalette::Disabled, QPalette::Text);
+    if (enabled) {
+      ink.setAlphaF(0.7f); // as the fx button's text
+    }
+    painter.setPen(Qt::NoPen);
+    for (const int half : {1, -1}) {
+      const QRectF area = halfRect(half);
+      if (enabled && (m_pressed == half || (m_pressed == 0 && m_hover == half))) {
+        // A hover's tint (about 8 %), stronger while pressed (about 14 %).
+        QColor tint = colours.color(QPalette::Active, QPalette::Text);
+        tint.setAlphaF(m_pressed == half ? 0.14f : 0.08f);
+        const qreal radius = std::min<qreal>(kControlRadius, area.height() / 2.0);
+        painter.setBrush(tint);
+        painter.drawRoundedRect(area, radius, radius);
+      }
+      // A small triangle in the middle of its half.
+      const qreal across = std::max<qreal>(3.0, std::min(area.width() - 8.0, area.height() * 1.2));
+      const qreal tall = across / 2.0;
+      const QPointF middle = area.center();
+      const qreal tip = middle.y() - half * tall / 2.0;
+      const qreal base = middle.y() + half * tall / 2.0;
+      const QPointF corners[3] = {QPointF(middle.x() - across / 2.0, base), QPointF(middle.x() + across / 2.0, base),
+                                  QPointF(middle.x(), tip)};
+      painter.setBrush(ink);
+      painter.drawPolygon(corners, 3);
+    }
+  }
+
+  void mousePressEvent(QMouseEvent* event) override {
+    event->accept();
+    if (event->button() != Qt::LeftButton || !isEnabled()) {
+      return;
+    }
+    m_pressed = halfAt(event->position().toPoint());
+    m_hover = m_pressed;
+    m_modifiers = event->modifiers();
+    update();
+    if (m_pressed == 0) {
+      return;
+    }
+    const QPointer<StepButtons> alive(this);
+    if (m_field) {
+      m_field->stepButton(m_pressed > 0, m_modifiers, false);
+    }
+    if (alive && m_pressed != 0) {
+      m_repeat.start(style()->styleHint(QStyle::SH_SpinBox_ClickAutoRepeatThreshold, nullptr, this));
+    }
+  }
+
+  void mouseMoveEvent(QMouseEvent* event) override {
+    event->accept();
+    const int over = halfAt(event->position().toPoint());
+    if (over != m_hover) {
+      m_hover = over;
+      update();
+    }
+  }
+
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    event->accept();
+    if (event->button() == Qt::LeftButton) {
+      stop();
+    }
+  }
+
+  void leaveEvent(QEvent* event) override {
+    QWidget::leaveEvent(event);
+    if (m_pressed == 0 && m_hover != 0) {
+      m_hover = 0;
+      update();
+    }
+  }
+
+  void hideEvent(QHideEvent* event) override {
+    QWidget::hideEvent(event);
+    stop();
+    m_hover = 0;
+  }
+
+  void changeEvent(QEvent* event) override {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::EnabledChange && !isEnabled()) {
+      stop(); // an expression now, or a field turned off
+    }
+    update();
+  }
+
+private:
+  QRectF halfRect(int half) const {
+    const qreal middle = height() / 2.0;
+    return half > 0 ? QRectF(0.5, 0.5, width() - 1.0, middle - 1.0)
+                    : QRectF(0.5, middle + 0.5, width() - 1.0, middle - 1.0);
+  }
+
+  // 1 over the up button, -1 over the down button, 0 off both.
+  int halfAt(const QPoint& at) const {
+    if (!rect().contains(at)) {
+      return 0;
+    }
+    return at.y() < height() / 2 ? 1 : -1;
+  }
+
+  void repeat() {
+    if (m_pressed == 0 || !isEnabled() || !m_field) {
+      return;
+    }
+    const QPointer<StepButtons> alive(this);
+    // Only while the pointer is on the pressed button, as a spin box's.
+    if (m_hover == m_pressed) {
+      m_field->stepButton(m_pressed > 0, m_modifiers, true);
+    }
+    if (alive && m_pressed != 0) {
+      m_repeat.start(style()->styleHint(QStyle::SH_SpinBox_ClickAutoRepeatRate, nullptr, this));
+    }
+  }
+
+  void stop() {
+    m_repeat.stop();
+    if (m_pressed != 0) {
+      m_pressed = 0;
+      update();
+    }
+  }
+
+  QPointer<ParameterField> m_field;
+  QTimer m_repeat;
+  int m_pressed = 0; // the half pressed: 1 up, -1 down
+  int m_hover = 0;   // the half under the pointer
+  Qt::KeyboardModifiers m_modifiers;
+};
 
 bool selectable(const QTreeWidgetItem* item) {
   return item != nullptr && item->flags().testFlag(Qt::ItemIsSelectable) &&
@@ -445,7 +615,12 @@ const ParameterSource* parameterSourceOf(const QWidget* widget) {
 }
 
 int leaveValueField(QLineEdit* edit, const QFocusEvent& event) {
-  if (edit == nullptr || event.reason() == Qt::PopupFocusReason) {
+  // Nor when only its window lost the keyboard (another window activated):
+  // the field keeps its caret and selection, as QLineEdit keeps its
+  // selection then, so that typing once the window is back replaces what
+  // was selected (0.72.0-rc1 on Windows: a field's selected "0 mm" was left
+  // with the caret at its start, and "10 mm" typed became "10 mm0 mm").
+  if (edit == nullptr || event.reason() == Qt::PopupFocusReason || event.reason() == Qt::ActiveWindowFocusReason) {
     return -1;
   }
   const int caret = edit->cursorPosition();
@@ -460,6 +635,7 @@ ParameterField* ParameterField::attach(QLineEdit* edit, ParameterFieldOptions op
   if (ParameterField* existing = of(edit)) {
     existing->m_options = std::move(options);
     existing->updateFxTip();
+    existing->updateStepButtons();
     return existing;
   }
   return new ParameterField(edit, std::move(options));
@@ -472,6 +648,22 @@ ParameterField* ParameterField::of(const QLineEdit* edit) {
 ParameterField::ParameterField(QLineEdit* edit, ParameterFieldOptions options)
     : QObject(edit), m_edit(edit), m_options(std::move(options)) {
   setObjectName(QStringLiteral("parameterField"));
+  // The step buttons (mitcad#2327) first: a line edit lays its trailing
+  // buttons out from its right end in the order they were added, so they
+  // are the rightmost, after the fx and any mark the field's owner adds
+  // later. Hidden while the field does not step (updateStepButtons).
+  auto* steps = new QWidgetAction(edit);
+  steps->setObjectName(QStringLiteral("parameterStepsAction"));
+  steps->setDefaultWidget(new StepButtons(edit, this));
+  steps->setVisible(m_options.steps);
+  m_stepAction = steps;
+  edit->addAction(steps, QLineEdit::TrailingPosition);
+  m_stepWidget = steps->defaultWidget();
+  if (m_stepWidget) {
+    // The line edit shows a widget action's widget as it adds it; its room
+    // follows the widget's visibility, its place the action's.
+    m_stepWidget->setVisible(m_options.steps);
+  }
   m_fx = new QAction(edit);
   m_fx->setObjectName(QStringLiteral("parameterFx"));
   updateFxTip();
@@ -487,6 +679,9 @@ ParameterField::ParameterField(QLineEdit* edit, ParameterFieldOptions options)
     }
   });
   connect(edit, &QLineEdit::cursorPositionChanged, this, [this] { caretMoved(); });
+  // The step buttons disabled while the text is no plain value (mitcad#2327).
+  connect(edit, &QLineEdit::textChanged, this, [this] { updateStepButtons(); });
+  updateStepButtons();
   edit->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(edit, &QWidget::customContextMenuRequested, this, &ParameterField::showMenu);
   edit->installEventFilter(this);
@@ -1233,6 +1428,108 @@ void ParameterField::stepValue(double by, const QString& how) {
   });
 }
 
+QWidget* ParameterField::stepButtons() const {
+  return m_options.steps && m_stepWidget ? m_stepWidget.data() : nullptr;
+}
+
+QPoint ParameterField::stepButtonCentre(const QWidget* buttons, bool up) {
+  if (const auto* steps = dynamic_cast<const StepButtons*>(buttons)) {
+    return steps->centre(up);
+  }
+  return buttons != nullptr ? buttons->rect().center() : QPoint();
+}
+
+int ParameterField::stepButtonsRoom(const QWidget* field) {
+  // As QLineEdit lays out a trailing button: the line edit icon size and 6
+  // pixels wide, after a margin.
+  const QStyle* style = field != nullptr ? field->style() : QApplication::style();
+  return style->pixelMetric(QStyle::PM_LineEditIconSize, nullptr, field) + 6 +
+         style->pixelMetric(QStyle::PM_LineEditIconMargin, nullptr, field);
+}
+
+void ParameterField::stepButton(bool up, Qt::KeyboardModifiers modifiers, bool held) {
+  if (!m_options.steps) {
+    return;
+  }
+  // The field takes the keyboard on the first click: Up, Down and the wheel
+  // step it next, Enter takes its value.
+  if (!m_edit->hasFocus()) {
+    m_edit->setFocus(Qt::MouseFocusReason);
+  }
+  close();
+  QString how;
+  const double by = keyStep(up ? Qt::Key_Up : Qt::Key_Down, modifiers, &how);
+  const QString what = m_options.label.isEmpty() ? QStringLiteral("value") : m_options.label;
+  if (by == 0.0) {
+    // Modifiers that do not step (Alt with Shift): as the keys, nothing.
+    qDebug().noquote() << QStringLiteral("Value field %1: %2 button not stepped: the modifiers do not step")
+                              .arg(what, up ? QStringLiteral("Up") : QStringLiteral("Down"));
+    return;
+  }
+  stepValue(by, how + (held ? QStringLiteral(" button held") : QStringLiteral(" button")));
+}
+
+void ParameterField::updateStepButtons() {
+  if (m_stepAction == nullptr || !m_stepWidget) {
+    return;
+  }
+  const bool shown = m_options.steps;
+  if (m_stepAction->isVisible() != shown || m_stepWidget->isVisibleTo(m_edit) != shown) {
+    m_stepAction->setVisible(shown);
+    m_stepWidget->setVisible(shown);
+    // The other buttons and the text make room again: a line edit lays its
+    // buttons out as it is resized.
+    QResizeEvent resized(m_edit->size(), m_edit->size());
+    QCoreApplication::sendEvent(m_edit, &resized);
+    m_edit->update();
+  }
+  if (!shown) {
+    m_stepsEnabled = -1;
+    return;
+  }
+  // Enabled through the action, which sets its widget so (and would set it
+  // back on its next change otherwise).
+  const bool plain = valueSteppable(m_edit->text(), m_options.kind);
+  if (m_stepAction->isEnabled() != plain) {
+    m_stepAction->setEnabled(plain);
+  }
+  const int now = plain ? 1 : 0;
+  if (now != m_stepsEnabled) {
+    if (m_stepsEnabled >= 0) {
+      const QString what = m_options.label.isEmpty() ? QStringLiteral("value") : m_options.label;
+      qDebug().noquote() << (plain ? QStringLiteral("Step buttons %1 on").arg(what)
+                                   : QStringLiteral("Step buttons %1 off: %2").arg(what, m_edit->text()));
+    }
+    m_stepsEnabled = now;
+  }
+}
+
+void ParameterField::logStepPlaces() {
+  m_stepPlacesQueued = false;
+  const QWidget* buttons = stepButtons();
+  if (buttons == nullptr || !buttons->isVisible()) {
+    return;
+  }
+  // In the main window's coordinates, as the fx button's (logFx).
+  const QPoint origin = topWindow()->mapToGlobal(QPoint(0, 0));
+  const QPoint up = buttons->mapToGlobal(stepButtonCentre(buttons, true)) - origin;
+  const QPoint down = buttons->mapToGlobal(stepButtonCentre(buttons, false)) - origin;
+  const QString what = m_options.label.isEmpty() ? QStringLiteral("value") : m_options.label;
+  const QString lines = QStringLiteral("Step buttons %1 up at %2,%3\nStep buttons %1 down at %4,%5")
+                            .arg(what)
+                            .arg(up.x())
+                            .arg(up.y())
+                            .arg(down.x())
+                            .arg(down.y());
+  if (lines == m_loggedStepPlaces) {
+    return;
+  }
+  m_loggedStepPlaces = lines;
+  for (const QString& line : lines.split(QLatin1Char('\n'))) {
+    qDebug().noquote() << line;
+  }
+}
+
 void ParameterField::move(int step) {
   const int count = m_list->topLevelItemCount();
   if (count == 0) {
@@ -1829,6 +2126,14 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
   case QEvent::FocusIn:
     QTimer::singleShot(0, this, [this] { logFx(); });
     break;
+  case QEvent::Show:
+    // Where the step buttons are (mitcad#2327), once the line edit has
+    // placed them.
+    if (m_options.steps && !m_stepPlacesQueued) {
+      m_stepPlacesQueued = true;
+      QTimer::singleShot(0, this, [this] { logStepPlaces(); });
+    }
+    break;
   case QEvent::FocusOut:
   case QEvent::Hide:
     m_wheel = 0;
@@ -1863,10 +2168,18 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
     if (m_edit->hasFocus()) {
       QTimer::singleShot(0, this, [this] { logFx(); });
     }
+    // A sketch's field placed anew moves its step buttons (mitcad#2327).
+    if (m_options.steps && !m_stepPlacesQueued) {
+      m_stepPlacesQueued = true;
+      QTimer::singleShot(0, this, [this] { logStepPlaces(); });
+    }
     break;
   case QEvent::PaletteChange:
   case QEvent::StyleChange:
     updateIcon();
+    if (m_stepWidget) {
+      m_stepWidget->update(); // drawn in the field's colours
+    }
     break;
   default:
     break;

@@ -1,0 +1,9 @@
+{
+  "format": "mitcad-drawing-template",
+  "id": "blank",
+  "name": "Blank",
+  "margins": [10, 10, 10, 10],
+  "title_block": {"width": 180, "height": 36},
+  "show_frame": false,
+  "show_title_block": false
+}

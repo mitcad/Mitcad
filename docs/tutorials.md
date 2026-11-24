@@ -4,8 +4,10 @@ A MitCad tutorial is a set of web pages shown beside the design. Its steps
 point at what to use next. The tutorial pane outlines a button, an input
 or a Browser row, and a callout says what to do. MitCad holds back other
 input until the user does the step. Tutorials are packages in git
-repositories, as [component libraries](libraries.md) are. Users get them
-from Help › Tutorials…. Nothing ships in the installers.
+repositories, as [component libraries](libraries.md) are. Users choose
+them on the Start page: its Tutorials button (under User Guide) and Help ›
+Tutorials… show a card of each in the page's center. Nothing ships in the
+installers.
 
 This page gives the formats, so that you can write a tutorial and publish
 it. The user's side is in the [user guide](user-guide.md#tutorials). The
@@ -51,21 +53,31 @@ my-course/                         a git repository
   "license": "CC-BY-4.0",
   "description": "Draw a rectangle and extrude it into a block.",
   "start": "index.html",
-  "designs": ["designs/start.mitcad"]
+  "designs": ["designs/start.mitcad"],
+  "duration": 10,
+  "level": "beginner",
+  "picture": "images/result.png",
+  "order": 1
 }
 ```
 
 | Field | Meaning |
 |---|---|
 | `id` | Lower case letters, digits and hyphens, at most 64 characters. The same as the tutorial's folder name. |
-| `title` | Shown in Help › Tutorials… and above the pane. |
-| `language` | The language of its pages (`en`, `fi`, …). |
-| `version` | Its own version. The list shows it beside the installed one. |
-| `min_mitcad` | The oldest MitCad it works with. An older MitCad refuses to open it. |
-| `license` | An SPDX licence id for its text and media. |
-| `description` | The list's tooltip. |
+| `title` | Shown on its card on the Start page and above the pane. |
+| `language` | The language of its pages (`en`, `fi`, `pt-BR`, …). The Start page shows the tutorials in MitCad's language first, and offers a choice of language when the tutorials are in several. |
+| `version` | Its own version, in the card's details. |
+| `min_mitcad` | The oldest MitCad it works with. An older MitCad refuses to start it. |
+| `license` | An SPDX license id for its text and media, in the card's details. |
+| `description` | Optional. What it teaches, in one line on its card (the whole text in the line's tooltip). |
 | `start` | The page shown first, a path in its folder. Default `index.html`. |
 | `designs` | Its starting designs, paths in its folder. A page opens them with `window.mitcad.openDesign`. |
+| `duration` | Optional. How long it takes, in whole minutes; the card shows "10 min". |
+| `level` | Optional. `beginner`, `intermediate` or `advanced`; the card shows it. |
+| `picture` | Optional. A picture of its result, a PNG or JPEG file in its folder of at most 4 MB; the card shows it at 168 × 112 (a picture of 336 × 224 stays sharp on HiDPI screens). |
+| `order` | Optional. Its place in the recommended order of its repository, from 1 (the first part first). The cards are in this order, those without one after them, each by title; the sources in the order they were added. |
+
+The card shows only the optional fields a tutorial gives.
 
 A tutorial with a wrong manifest is left out of the list, and the log
 says why. The paths stay inside the tutorial's folder. Symbolic links and
@@ -92,11 +104,12 @@ The tutorial's own pages get `window.mitcad`. Its calls return promises.
 |---|---|
 | `mitcad.startStep(step)` | Shows a guide step ([Guide steps](#guide-steps)), replacing one shown. Resolves to the guide's state; rejects with the reason when the step is not valid or names a command MitCad does not have. |
 | `mitcad.endStep()` | Ends the step shown. |
-| `mitcad.state()` | `{"guide", "mode", "command", "picked", "design", "modified", "version"}`: the guide's state, the window's mode (`idle`, `sketch`, `command`, `pick_plane`), the open command's id, the kinds picked, the design's name, whether it has unsaved changes, MitCad's version. |
+| `mitcad.state()` | `{"guide", "mode", "command", "picked", "design", "modified", "version", "progress"}`: the guide's state, the window's mode (`idle`, `sketch`, `command`, `pick_plane`), the open command's id, the kinds picked, the design's name, whether it has unsaved changes, MitCad's version, and the tutorial's progress ([Progress](#progress)). |
+| `mitcad.setProgress(progress)` | Records where the user is: `{"step": 3, "steps": 8}` (`steps` may be left out) or `{"done": true}` ([Progress](#progress)). Resolves to the progress recorded. |
 | `mitcad.openDesign(path)` | Opens a starting design of the tutorial (a `.mitcad` path in its folder) as a copy of its own in the local data folder's `tutorial-designs/<id>`. The user's unsaved changes are asked about first, as File › Open asks. |
 | `mitcad.leave()` | Leaves the tutorial, as Leave Tutorial does. |
 | `mitcad.on(event, listener)`, `mitcad.off(event, listener)` | Listens to the guide's events ([Events](#events)); `"*"` listens to all. |
-| `mitcad.call(name, args)` | The calls above by name (`start_step`, `end_step`, `state`, `open_design`, `leave`). |
+| `mitcad.call(name, args)` | The calls above by name (`start_step`, `end_step`, `state`, `set_progress`, `open_design`, `leave`). |
 
 The bridge gives no file access and makes no model edits. The user makes
 every change in MitCad. A page cannot run a command; it shows a step, and
@@ -116,6 +129,42 @@ mitcad.on("step_left", event => console.log("mitcad:tutorial:left " + event.reas
 mitcad.openDesign("designs/start.mitcad").then(() => mitcad.startStep(steps[0]));
 </script>
 ```
+
+## Progress
+
+A tutorial's card on the Start page says *Not started*, *In progress (step
+3 of 8)* or *Done*, as the tutorial's pages report it with
+`mitcad.setProgress`. MitCad keeps it per tutorial id until the user
+starts the tutorial from the beginning again. The card's action is
+*Start*, *Continue* while the tutorial is in progress and *Start Again*
+once it is done; Start Again, and *Start Over* in the card's context menu,
+forget the progress first. Every start opens the tutorial's first page
+(`start`) in an empty design of its own.
+
+The page then finds the progress in `mitcad.state().progress`:
+`{"state": "not_started"}`, `{"state": "in_progress", "step": 3,
+"steps": 8}` or `{"state": "done"}`. A page that continues uses it: the
+example below marks the steps before it as done and offers to go on there
+or to start over. A tutorial whose steps need what the user built earlier
+can open a starting design of that point with `mitcad.openDesign`.
+
+```js
+mitcad.state().then(state => {
+  const saved = state.progress;
+  if (saved && saved.state === "in_progress") {
+    offerToContinue(saved.step);   // the page's own
+  } else {
+    show(0);
+  }
+});
+// Each step shown, and the end:
+mitcad.setProgress({step: index + 1, steps: steps.length});
+mitcad.setProgress({done: true});
+```
+
+`mitcad.setProgress` came with MitCad's Start page tutorials;
+`mitcad.call("set_progress", …)` does the same, and a MitCad without it
+rejects the call, so a page that catches the rejection works with both.
 
 ## Guide steps
 
@@ -177,25 +226,29 @@ id) and `sequence` (one per step started).
 
 ## Sources and download
 
-Help › Tutorials… lists the tutorials of the configured sources. The
-public repository `https://github.com/mitcad/tutorials.git` is the
-default source; Add Source… adds a repository of one's own by its
-address or folder (a private course). The sources are kept in the
-setting `tutorials/sources`.
+The Start page's Tutorials (and Help › Tutorials…) shows the tutorials of
+the configured sources as cards in the page's center; the breadcrumb's
+Recent designs leads back to the designs. The public repository
+`https://github.com/mitcad/tutorials.git` is the default source; Sources ›
+Add Source… adds a repository of one's own by its address or folder (a
+private course). The sources are kept in the setting `tutorials/sources`.
 
 A source is fetched as a library is: a bare clone in the libraries'
-folder, made the first time the dialog opens and updated with Update
+folder, made the first time the tutorials show a source never fetched,
+and updated with Sources › Update
 ([Where libraries are kept](libraries.md#where-libraries-are-kept),
-[Fetching without git](libraries.md#fetching-without-git)). Open writes
-the chosen tutorial's folder, at the source's version fetched last, into
+[Fetching without git](libraries.md#fetching-without-git)). A card's
+picture is read from that clone. A card's Start (Continue, Start Again)
+writes the tutorial's folder, at the source's version fetched last, into
 the user's data folder (`tutorials/<id>` in the local data folder,
 `MITCAD_TUTORIALS_DIR` for tests), with `.mitcad-tutorial-source.json`
-naming where it came from, and opens its pane. The pane needs the web
-browser component; MitCad offers its download when it is missing
+naming where it came from, and opens its pane in an empty design of its
+own. There is no step of installing apart from starting. The pane needs
+the web browser component; MitCad offers its download when it is missing
 ([Component from Web](architecture.md)).
 
-The model's commands `tutorial_list` and `tutorial_install` do the
-listing and the installing
+The model's commands `tutorial_list`, `tutorial_install` and
+`tutorial_picture` do the listing, the installing and the cards' pictures
 ([commands.md](../core/model-api/src/commands.md#in-app-tutorials)).
 
 An example, a sketch and an extrude, is in
@@ -204,9 +257,10 @@ layout to start from, and the seed of the public repository, with its
 `README.md`, `LICENSE` and a CI check (`tools/check-tutorials.py`, run by
 `.github/workflows/check.yml`) that checks every `tutorial.json` against
 the format above. MitCad reads only the manifests and `tutorials/`, so
-these files are left alone. MitCad's UI test `app.ui-*-tutorials`
-(`tools/ui-tutorials-test.py`) installs the example as a source and takes
-each step of its tutorial to its end, so a UI change that breaks the
+these files are left alone. MitCad's UI tests `app.ui-*-tutorials` and
+`app.ui-*-tutorials-start-page` (`tools/ui-tutorials-test.py`) add the
+example as a source, start its tutorial from its card on the Start page
+and take each step of it to its end, so a UI change that breaks the
 example fails a MitCad test.
 
 ## Making and publishing a tutorial
@@ -216,7 +270,7 @@ example fails a MitCad test.
 2. Write its pages and its steps. Name targets by command ids and input
    keys: `ui_state` over live MCP lists an open panel's input keys, and
    [app/COMMANDS.md](../app/COMMANDS.md) the command ids.
-3. Add your repository's folder in Help › Tutorials… › Add Source… and
-   open the tutorial to try it.
+3. Add your repository's folder with the Start page's Tutorials › Sources
+   › Add Source…, and start the tutorial from its card to try it.
 4. Push it to a git host. For the public repository, open a pull request;
    its CI runs `tools/check-tutorials.py`, which you can run first.

@@ -187,6 +187,11 @@ FieldFit fieldFit(const QLineEdit& edit, int base, int viewWidth) {
       chrome += 16 + 6 + 4;
     }
   }
+  // Its step buttons (mitcad#2327).
+  if (const ParameterField* stepping = ParameterField::of(&edit);
+      stepping != nullptr && stepping->stepButtons() != nullptr) {
+    chrome += ParameterField::stepButtonsRoom(&edit);
+  }
   FieldFit fit;
   fit.text = edit.fontMetrics().horizontalAdvance(edit.text());
   fit.width = std::clamp(fit.text + chrome, base, std::max(base, viewWidth / 3));
@@ -552,6 +557,51 @@ void SketchOp::constrain(const QString& point, const Snap& snap) {
     }
     break;
   }
+  case Snap::Kind::BodyEdgeCenter:
+  case Snap::Kind::BodySection:
+  case Snap::Kind::BodySectionVertex:
+  case Snap::Kind::BodySectionCenter: {
+    // At the centre of a projected circular edge, or on, at an end of or at
+    // the centre of the curve of a face's section (mitcad#2324): the edge
+    // or the face's section projected (linked), and the point coincident
+    // with the projected curve or its point.
+    const ProjectedItem projected = projectBody(snap.bodyItem);
+    const CurveData* curve = model().curve(projected.curve);
+    if (curve == nullptr) {
+      break;
+    }
+    QString entity = curve->id;
+    QString what = QStringLiteral("on %1, the section curve of");
+    if (snap.kind == Snap::Kind::BodyEdgeCenter || snap.kind == Snap::Kind::BodySectionCenter) {
+      entity = curve->center;
+      what = snap.kind == Snap::Kind::BodyEdgeCenter ? QStringLiteral("coincident with %1, the projected center of")
+                                                     : QStringLiteral("coincident with %1, the section center of");
+    } else if (snap.kind == Snap::Kind::BodySectionVertex) {
+      // The projected curve's end where the snap went.
+      entity.clear();
+      double nearest = std::numeric_limits<double>::max();
+      for (const QString& end : {curve->start, curve->end}) {
+        const auto at = model().pointAt(end);
+        if (at && dist(*at, snap.at) < nearest) {
+          nearest = dist(*at, snap.at);
+          entity = end;
+        }
+      }
+      what = QStringLiteral("coincident with %1, the section curve's end of");
+    }
+    if (entity.isEmpty() || entity == point) {
+      break;
+    }
+    QJsonObject cmd = command(QStringLiteral("sketch.add_constraint"));
+    cmd.insert(QStringLiteral("constraint"), QJsonObject{{QStringLiteral("type"), QStringLiteral("coincident")},
+                                                         {QStringLiteral("point"), point},
+                                                         {QStringLiteral("entity"), entity}});
+    if (attempt(cmd)) {
+      // For UI tests: what holds the point where the plane cuts the body.
+      qDebug().noquote() << QStringLiteral("Held %1 %2 %3").arg(point, what.arg(entity), snap.bodyItem.source);
+    }
+    break;
+  }
   default:
     break;
   }
@@ -609,7 +659,10 @@ void SketchOp::addDimension(const QJsonObject& dimension, const QString& value) 
 ProjectedItem SketchOp::projectBody(const BodyItem& item) {
   const QString key = QStringList{item.source, item.body, item.linked ? item.occurrence : QStringLiteral("-")}.join(
       QLatin1Char('|'));
-  if (const auto done = m_projected.constFind(key); done != m_projected.cend()) {
+  // A face's section (mitcad#2324) is not kept by its source: each of its
+  // curves is an item of its own, found in the section made before
+  // (existingProjection) by where it is.
+  if (const auto done = m_projected.constFind(key); !item.section && done != m_projected.cend()) {
     return done.value();
   }
   ProjectedItem out;
@@ -626,6 +679,11 @@ ProjectedItem SketchOp::projectBody(const BodyItem& item) {
     if (item.linked) {
       cmd.insert(QStringLiteral("occurrence"), item.occurrence);
     }
+    // Where the plane cuts the face (mitcad#2324): the face's section, as
+    // Intersect makes it of that face.
+    if (item.section) {
+      cmd.insert(QStringLiteral("section"), true);
+    }
     // The action's undo step is named after what it makes, not after the
     // projection that comes first.
     const bool first = m_label.isEmpty();
@@ -639,12 +697,30 @@ ProjectedItem SketchOp::projectBody(const BodyItem& item) {
     const SketchModel& after = model();
     // A vertex, or an edge seen end on out of the plane, projects to a
     // point (mitcad#866).
-    for (const QJsonValue& value : result.value(QStringLiteral("entities")).toArray()) {
+    const QJsonArray made = result.value(QStringLiteral("entities")).toArray();
+    for (const QJsonValue& value : made) {
       const QString id = value.toString();
       if (item.isPoint() && out.point.isEmpty() && after.point(id) != nullptr) {
         out.point = id;
       } else if (!item.isPoint() && out.curve.isEmpty() && after.curve(id) != nullptr) {
         out.curve = id;
+      }
+    }
+    // A face's section may have more curves than the one snapped to: the
+    // one where it is, else the one of them nearest its middle.
+    if (item.section) {
+      if (const auto found = existingProjection(after, item)) {
+        out = *found;
+      } else {
+        const V2 middle = item.curve.at((item.curve.t0() + item.curve.t1()) / 2.0);
+        double nearest = std::numeric_limits<double>::max();
+        for (const QJsonValue& value : made) {
+          const CurveData* c = after.curve(value.toString());
+          if (c != nullptr && c->curve.distanceTo(middle) < nearest) {
+            nearest = c->curve.distanceTo(middle);
+            out.curve = c->id;
+          }
+        }
       }
     }
     // Joined to the same curve or point projected before from another
@@ -657,7 +733,7 @@ ProjectedItem SketchOp::projectBody(const BodyItem& item) {
     qDebug().noquote() << QStringLiteral("Projected %1 of %2: %3")
                               .arg(item.describe(), item.body, out.point.isEmpty() ? out.curve : out.point);
   }
-  if (!out.empty()) {
+  if (!out.empty() && !item.section) {
     m_projected.insert(key, out);
   }
   return out;
@@ -802,8 +878,7 @@ void SketchOp::rollback() {
 
 SketchController::SketchController(SketchHost& host, OcctViewer& viewer, CommandRegistry& registry, QObject* parent)
     : QObject(parent), m_registry(registry), m_host(host), m_viewer(viewer) {
-  m_overlay = new SketchOverlay(*this, &viewer);
-  m_overlay->hide();
+  m_overlay = new SketchOverlay(*this, viewer);
   const QString dimensionText = QSettings().value(QStringLiteral("sketch/dimensionText")).toString();
   m_dimensionText = dimensionText == QStringLiteral("name")         ? DimensionText::Name
                     : dimensionText == QStringLiteral("name_value") ? DimensionText::NameValue
@@ -814,16 +889,29 @@ SketchController::SketchController(SketchHost& host, OcctViewer& viewer, Command
   viewer.setSketchPointsHidden(!m_showPoints);
   liveControllers().push_back(this);
   viewer.installEventFilter(this);
-  // After the frame, which may have moved the camera.
+  // After the frame, which may have moved the camera. The overlay follows
+  // the camera in the frame itself (the view draws it, mitcad#2296); the
+  // places the UI tests read are logged once the camera rests: not at each
+  // frame of a navigation, but when it ends (navigationFinished) and after
+  // any other frame.
   connect(
       &viewer, &OcctViewer::viewChanged, m_overlay,
       [this] {
         if (!isActive()) {
           return;
         }
-        m_overlay->update();
         placeFields();
-        logView();
+        if (!m_viewer.isNavigating()) {
+          logView();
+        }
+      },
+      Qt::QueuedConnection);
+  connect(
+      &viewer, &OcctViewer::navigationFinished, m_overlay,
+      [this] {
+        if (isActive()) {
+          logView();
+        }
       },
       Qt::QueuedConnection);
   // The badge follows the cards over the view and the sketch's status, also
@@ -949,9 +1037,7 @@ void SketchController::enter(const QString& uid) {
                               .arg(m_model.name, m_model.surface->describe());
   }
   m_viewer.setSketchPlane(toAx3(m_model.frame));
-  m_overlay->resize(m_viewer.size());
   m_overlay->show();
-  m_overlay->raise();
 }
 
 void SketchController::leave() {
@@ -987,6 +1073,9 @@ void SketchController::leave() {
   m_outOfPlaneKey.clear();
   m_outOfPlaneReading.clear();
   m_bodyOutOfPlane = false;
+  m_section.clear();
+  m_sectionKey.clear();
+  m_sectionReading.clear();
   m_bodyScreen.clear();
   m_bodyScreenRevision = -1;
   m_hover.clear();
@@ -1388,6 +1477,19 @@ void SketchController::resetTool() {
 }
 
 void SketchController::deleteSelection() {
+  // One point that only one spline uses leaves the spline, which stays
+  // (Remove Point, mitcad#2326); where the model refuses that (too few
+  // points left, a projected or an offset's spline) the point goes with
+  // its spline, as before.
+  if (const Selection& selection = m_host.selection();
+      selection.size() == 1 && selection.first().owner == m_uid &&
+      selection.first().kind == SelectKind::SketchPoint && !isAxisSelection(selection.first())) {
+    const QString point = selection.first().name;
+    const QString spline = splineOfPoint(point, true);
+    if (!spline.isEmpty() && removeSplinePoint(spline, point, false)) {
+      return;
+    }
+  }
   QJsonArray items;
   QJsonArray unfix;
   for (const SelectionItem& item : m_host.selection()) {
@@ -1982,6 +2084,46 @@ bool SketchController::insertSplinePoint(const QString& curve, const QPointF& sc
                             .arg(made.isEmpty() ? QString() : made.first().toString(), curve)
                             .arg(on.x, 0, 'f', 3)
                             .arg(on.y, 0, 'f', 3);
+  return true;
+}
+
+QString SketchController::splineOfPoint(const QString& point, bool only) const {
+  QString spline;
+  for (const CurveData& c : m_model.curves) {
+    if (!c.points.contains(point)) {
+      continue;
+    }
+    if (c.isSpline() && m_model.equationOf(c.id) == nullptr && spline.isEmpty()) {
+      spline = c.id;
+    } else if (only) {
+      return QString();
+    }
+  }
+  return spline;
+}
+
+bool SketchController::removeSplinePoint(const QString& curve, const QString& point, bool showRefusal) {
+  if (m_model.curve(curve) == nullptr || m_model.point(point) == nullptr) {
+    return false;
+  }
+  SketchOp op(*this);
+  QJsonObject cmd = op.command(QStringLiteral("sketch.remove_spline_point"));
+  cmd.insert(QStringLiteral("curve"), curve);
+  cmd.insert(QStringLiteral("point"), point);
+  if (!op.run(cmd)) {
+    const QString reason = op.error();
+    op.rollback();
+    // "Remove Point refused: c3 would keep 1 points, …", for UI tests.
+    qDebug().noquote() << QStringLiteral("Remove Point refused: %1").arg(reason);
+    if (showRefusal) {
+      error(tr("Remove Point: %1").arg(reason));
+    }
+    return false;
+  }
+  m_host.setSelection({});
+  op.commit();
+  // "Removed point p12 from c3", for UI tests.
+  qDebug().noquote() << QStringLiteral("Removed point %1 from %2").arg(point, curve);
   return true;
 }
 
@@ -2927,6 +3069,91 @@ void SketchController::takeOutOfPlane(const QString& key, std::vector<BodyItem> 
       m_tool->move(m_snap);
     }
     m_overlay->update();
+    // The section's read waits while this one runs (one job at a time):
+    // asked for now (mitcad#2324).
+    if (m_tool && m_tool->snaps() && m_tool->bodySnaps()) {
+      sectionGeometry();
+    }
+  }
+}
+
+const BodyGeometry& SketchController::sectionGeometry() {
+  if (!isActive() || m_host.modelBusy()) {
+    return m_section;
+  }
+  const QString key = QStringLiteral("%1 %2").arg(m_uid, geometryKey());
+  if (key != m_sectionKey) {
+    // The bodies changed: nothing of the old section is offered while the
+    // new one is read.
+    if (!m_section.items().empty()) {
+      m_section.clear();
+    }
+    readSectionLater(key);
+  }
+  return m_section;
+}
+
+void SketchController::readSectionLater(const QString& key) {
+  if (m_sectionReading == key) {
+    return; // under way
+  }
+  m_sectionReading = key;
+  // Read into BodyItems on the model's worker, as the items out of the
+  // plane are (readOutOfPlaneLater).
+  auto items = std::make_shared<std::vector<BodyItem>>();
+  const auto read = [items](const QJsonValue& answer) {
+    BodyGeometry geometry;
+    geometry.load(answer.toArray(), &curveFromJson);
+    *items = geometry.items();
+  };
+  QPointer<SketchController> self(this);
+  // A host that reads it at once answers inside the call.
+  auto inside = std::make_shared<bool>(true);
+  const auto done = [self, key, items, inside](bool read, const QString& error) {
+    if (!self) {
+      return;
+    }
+    if (self->m_sectionReading == key) {
+      self->m_sectionReading.clear();
+    }
+    if (!read && error.isEmpty()) {
+      return; // gave way: asked again by the tool's next look
+    }
+    self->takeSection(key, std::move(*items), error, !*inside);
+  };
+  const QJsonObject query{{QStringLiteral("query"), QStringLiteral("plane_geometry")},
+                          {QStringLiteral("sketch"), m_uid},
+                          {QStringLiteral("section"), true}};
+  const bool started = m_host.queryInBackground(query, read, this, done);
+  *inside = false;
+  if (!started && m_sectionReading == key) {
+    m_sectionReading.clear(); // the model computes: asked again later
+  }
+}
+
+void SketchController::takeSection(const QString& key, std::vector<BodyItem> items, const QString& error,
+                                   bool later) {
+  // Read for another sketch or bodies that changed meanwhile: not these.
+  if (!isActive() || m_host.modelBusy() || key != QStringLiteral("%1 %2").arg(m_uid, geometryKey())) {
+    return;
+  }
+  m_sectionKey = key;
+  if (!error.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Sketch section geometry not read: %1").arg(error);
+  }
+  m_section.set(std::move(items));
+  // For UI tests: the section snaps are offered from now on.
+  qDebug().noquote() << QStringLiteral("Sketch section geometry: %1 curve(s)")
+                            .arg(static_cast<qulonglong>(m_section.items().size()));
+  // Read off the UI thread, after the tool looked: snapped again where the
+  // pointer is (which also asks for the items out of the plane, if their
+  // read waited for this one).
+  if (later && m_tool && m_cursorValid) {
+    updateCursor(m_cursor);
+    if (m_cursorValid) {
+      m_tool->move(m_snap);
+    }
+    m_overlay->update();
   }
 }
 
@@ -3376,7 +3603,14 @@ void SketchController::updateCursor(const QPointF& position) {
     settings.toScreen = [this](const V2& p) { return toScreen(p); };
     settings.grid = m_gridSnap;
     settings.gridStep = m_gridStep > 0.0 ? m_gridStep : m_viewer.gridStep(); // the lines shown
-    settings.body = m_tool->bodySnaps() ? &bodyGeometry() : nullptr;
+    // Body snaps: the edges and vertices in the plane (read now), the
+    // centres of circular edges out of it and where the plane cuts the
+    // bodies (mitcad#2324: each read off the UI thread once per geometry
+    // key, the section after the others, as the model takes one job at a
+    // time). The first look of a drawing tool in an opened sketch starts
+    // them; the snaps are offered once they are read.
+    settings.body = m_tool->bodySnaps() ? &bodyGeometry(true) : nullptr;
+    settings.section = m_tool->bodySnaps() ? &sectionGeometry() : nullptr;
     settings.axes = true; // mitcad#948
     // The acquired lines' extensions (mitcad#2035); not while Shift or Alt
     // is held.
@@ -3442,8 +3676,9 @@ bool SketchController::eventFilter(QObject* watched, QEvent* event) {
   if (auto* edit = qobject_cast<QLineEdit*>(watched)) {
     return fieldEvent(edit, event);
   }
-  // A field's fx button takes its presses itself.
-  if (auto* button = qobject_cast<QToolButton*>(watched)) {
+  // A field's fx button and step buttons (mitcad#2327) take their presses
+  // themselves.
+  if (auto* button = qobject_cast<QWidget*>(watched)) {
     if (auto* edit = qobject_cast<QLineEdit*>(button->parentWidget())) {
       return fieldMouse(edit, button, event);
     }
@@ -3453,7 +3688,8 @@ bool SketchController::eventFilter(QObject* watched, QEvent* event) {
 
 bool SketchController::viewerEvent(QEvent* event) {
   if (event->type() == QEvent::Resize) {
-    m_overlay->resize(static_cast<QResizeEvent*>(event)->size());
+    // Drawn again for the view's new size with its next frame.
+    m_overlay->update();
     return false;
   }
   if (event->type() == QEvent::WindowBlocked) {
@@ -4342,11 +4578,18 @@ void SketchController::setFields(const QVector<FieldSpec>& fields) {
         suggest.stepLimit.minimum = 3.0;
         suggest.stepLimit.above = false;
       }
-      ParameterField::attach(edit, suggest);
+      ParameterField* stepping = ParameterField::attach(edit, suggest);
       // Its fx button's presses pass to the view as the field's do
-      // (fieldMouse(), mitcad#671).
+      // (fieldMouse(), mitcad#671), and so do its step buttons' until the
+      // field is typed into (mitcad#2327).
       for (QToolButton* button : edit->findChildren<QToolButton*>()) {
         button->installEventFilter(this);
+      }
+      if (QWidget* buttons = stepping != nullptr ? stepping->stepButtons() : nullptr) {
+        buttons->installEventFilter(this);
+        // The value keeps its room beside them.
+        field.baseWidth += ParameterField::stepButtonsRoom(edit);
+        edit->setFixedWidth(field.baseWidth);
       }
     }
     const int index = static_cast<int>(m_fields.size());
@@ -4749,7 +4992,8 @@ void SketchController::openValueEditor(const QPointF& at, const QString& text, F
     suggest.steps = true;
     suggest.stepLimit = stepLimit;
     ParameterField::attach(edit, suggest);
-    width += 20; // the fx button
+    // The fx button and the step buttons (mitcad#2327).
+    width += 20 + ParameterField::stepButtonsRoom(edit);
   }
   // A longer text, such as an expression it opens with, widens it, and it
   // grows as it is typed (mitcad#1724).

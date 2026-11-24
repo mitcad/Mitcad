@@ -3,7 +3,7 @@
 
 // Sheet templates of drawings (mitcad#707 phase 4, app/COMMANDS.md
 // "Drawings"): the choices the model's `drawing_templates` query lists (the
-// built-in ISO and ANSI, the user's and the project's) and the simple title
+// built-in ISO, ANSI and Blank, the user's and the project's) and the simple title
 // block, each with what the model's `template` field takes for it; and what
 // Create Drawing opens with (mitcad#1218). Plain Qt Core, so that the tests
 // check it without a window.
@@ -36,6 +36,10 @@ struct TemplateChoice {
   // What `add_drawing`'s and `edit_drawing_sheet`'s `template` takes: a
   // built-in one's id, a user's or a project's data, "" for none.
   QJsonValue value;
+  // Whether it draws a title block (mitcad#2325: Blank and a template with
+  // `show_title_block` false do not; the Sheet dialog then hides the
+  // block's fields).
+  bool titleBlock = true;
 };
 
 // A sheet size as the dialogs keep it (mitcad#1625): a named size as the

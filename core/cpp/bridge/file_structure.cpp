@@ -29,6 +29,12 @@ void add_body(FileStructure& out, io::Body& body, ShapeList& shapes) {
   if (body.color) {
     info.color = {rounded(body.color->r), rounded(body.color->g), rounded(body.color->b)};
   }
+  for (const io::FaceColor& face : body.face_colors) {
+    StructureFaceColor color;
+    color.face = face.face;
+    color.color = {rounded(face.color.r), rounded(face.color.g), rounded(face.color.b)};
+    info.face_colors.push_back(color);
+  }
   out.bodies.push_back(std::move(info));
   shapes.push(std::make_shared<geometry::Shape>(std::move(body.shape)));
 }

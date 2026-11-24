@@ -1735,6 +1735,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             name: Some(name),
             color: None,
             shape,
+            face_colors: Vec::new(),
         });
     }
 
@@ -2413,6 +2414,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                         name: Some(name),
                         color: None,
                         shape,
+                        face_colors: Vec::new(),
                     });
                 }
                 Err(why) => {

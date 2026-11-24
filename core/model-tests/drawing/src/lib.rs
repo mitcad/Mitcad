@@ -31,3 +31,7 @@ mod bom_structure_tests;
 mod placements_tests;
 // A drawing's own hole callout in the exported files (mitcad#2054).
 mod hole_callout_export_tests;
+// A drawing view of an explode view (mitcad#2113).
+mod explode_view_tests;
+// Sheets without a frame or a title block: the Blank template (mitcad#2325).
+mod blank_template_tests;

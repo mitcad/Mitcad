@@ -33,7 +33,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <set>
 
 #include <QImage>
 #include <QPointer>
@@ -46,6 +45,7 @@
 
 #include "include/cef_browser.h"
 #include "include/wrapper/cef_message_router.h"
+#include "webbrowser/ComponentWebFiles.hpp"
 
 class QEvent;
 class QFocusEvent;
@@ -71,7 +71,7 @@ class CefView : public QWidget {
 
 public:
   // A download's state for downloadUpdated.
-  enum class DownloadState { InProgress, Complete, Canceled, Failed };
+  using DownloadState = WebDownloadState;
 
   explicit CefView(QWidget* parent = nullptr);
   // A tutorial's page (mitcad#2012, CefBridgeConfig.hpp): window.mitcad is
@@ -208,7 +208,7 @@ private:
   // the rest to the diagnostics (mitcad#1906).
   void logged(bool error, const QString& message, const QString& source, int line);
   QString downloadStarting(std::uint32_t id, const QString& suggestedName, const QUrl& url);
-  bool downloadRefused(std::uint32_t id) const { return m_refused.count(id) != 0; }
+  bool downloadRefused(std::uint32_t id) const { return m_downloads.refused(id); }
   // `reason` in words (the user's), `detail` the log's (the bytes and
   // CEF's interrupt code, mitcad#1716).
   void downloadChanged(std::uint32_t id, qint64 received, qint64 total, DownloadState state, const QString& path,
@@ -254,11 +254,14 @@ private:
   QRect m_popupRect;
   bool m_popupShown = false;
   QRect m_caret;
-  std::set<std::uint32_t> m_refused;
-  // The path each download was given, by CEF's id: CEF asks again when it
-  // resumes a broken-off download itself, and an item interrupted before
-  // it wrote anything reports no path (mitcad#1716).
-  std::map<std::uint32_t, QString> m_downloadPaths;
+  // The downloads by CEF's id (ComponentWebFiles.hpp): the path each was
+  // given (CEF asks again when it resumes a broken-off download itself,
+  // and an item interrupted before it wrote anything reports no path,
+  // mitcad#1716), those refused, and which reports are told: only those of
+  // a download this view started, until its end (mitcad#2281, mitcad#2289:
+  // CEF reports an ended item again, and items this view never started;
+  // told, the import read a file that was gone).
+  WebDownloadReports m_downloads;
   // What the log said last of each download.
   struct DownloadLog {
     bool seen = false;
@@ -266,10 +269,6 @@ private:
     int tenth = 0;
   };
   std::map<std::uint32_t, DownloadLog> m_downloadLog;
-  // The downloads that ended (complete or canceled): told once
-  // (mitcad#2281). CEF may report an ended item again; told twice, the
-  // second import read the file the first had already taken away.
-  std::set<std::uint32_t> m_ended;
 };
 
 } // namespace mitcad

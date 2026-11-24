@@ -69,3 +69,5 @@ mod plane_follow_tests;
 // Two carriages joined by a Rigid joint or a Rigid Group move together
 // (mitcad#2274).
 mod carriages_together_tests;
+// Weld symbols proposed from BUILD's joints on a drawing (mitcad#2350).
+mod weld_proposal_tests;

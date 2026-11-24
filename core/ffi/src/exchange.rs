@@ -112,6 +112,7 @@ impl Document {
                 name: body.and_then(|b| b.name.clone()),
                 color: body.and_then(|b| b.color),
                 shape,
+                face_colors: Vec::new(),
             });
         }
         let input = BaseInput {
@@ -163,6 +164,7 @@ impl Document {
                     name: None,
                     color: None,
                     shape: list.at(i),
+                    face_colors: Vec::new(),
                 }])
             });
         }
@@ -203,6 +205,7 @@ impl Document {
                         name: mesh.name.clone(),
                         color: None,
                         shape,
+                        face_colors: Vec::new(),
                     }])
                 });
             }

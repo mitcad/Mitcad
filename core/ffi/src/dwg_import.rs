@@ -461,6 +461,7 @@ impl Document {
                             name: Some(name),
                             color: b.color.map(|c| c.map(|v| f64::from(v) / 255.0)),
                             shape,
+                            face_colors: Vec::new(),
                         });
                 }
             }

@@ -11,6 +11,8 @@
 #include <QStringList>
 #include <QTemporaryDir>
 
+#include "ImportItemProgress.hpp"
+
 class QDialog;
 class QMessageBox;
 class QTimer;
@@ -169,10 +171,10 @@ private:
   QTimer* m_ticker = nullptr;
   QElapsedTimer m_clock;
   QByteArray m_errors; // the worker's standard error, line by line
-  int m_items = 0;     // timeline items, when the worker said
-  int m_done = 0;      // items replayed
-  int m_position = 0;  // the item being replayed (from 1)
-  QString m_current;   // its name
+  // The timeline's items: their count, those done, the current one
+  // (mitcad#2331), and the number the dialog showed last (logged).
+  ImportItemProgress m_progress;
+  int m_shownNumber = 0;
   // An .iam assembly's part files (mitcad#507): how many the worker
   // counted, the one being imported (from 1), how many are done, its name.
   int m_parts = 0;

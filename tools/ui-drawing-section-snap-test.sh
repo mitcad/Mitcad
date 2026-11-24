@@ -98,11 +98,12 @@ no_refusal() {
 # point_line n: the newest "Drawing point <n> at …" line since the mark.
 point_line() { tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -o "Drawing point $1 at .*" | tail -1; }
 
-# tool "name": the drawing tool from the bar.
+# tool "name": the drawing tool from the bar, by its button or, a row of
+# its group's menu only (Break, mitcad#2066), from the menu.
 tool() {
   ui_mark
-  settled "Drawing tool $1"
-  ui_step "$1"                             ui_click_logged "Drawing tool $1"
+  settled "$(ui_drawing_tool_place "$1")"
+  ui_step "$1"                             ui_drawing_tool "$1"
   ui_expect_new "Drawing tool: $1" "the $1 tool is on"
 }
 

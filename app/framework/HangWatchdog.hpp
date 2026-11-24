@@ -8,6 +8,11 @@
 // 30 s while it lasts; when the UI thread runs its loop again it writes
 // "UI responding again after N.N s". A modal dialog's or a progress
 // dialog's own event loop counts as running.
+// While a UI Automation client reads the window (AccessibilityClients.hpp,
+// mitcad#2227), the first line also names it ("accessibility client:
+// <exe name> (pid N)"), and for a client COM does not tell ("unknown (pid
+// unknown)") the processes that have UI Automation loaded ("UI Automation
+// loaded in <exe> (pid N), ...", found by this thread).
 //
 // The threshold: MITCAD_HANG_WATCHDOG_MS (milliseconds; 0 turns it off),
 // else 5000 ms; off by default under the UI tests (MITCAD_TEST_INPUT,

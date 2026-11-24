@@ -529,6 +529,9 @@ public:
   // Save As Mesh (mitcad#734; files/MainWindowSaveAsMesh.cpp).
   void saveAsMesh(const Selection& items) override;
   QString saveAsMeshBlocked(const Selection& items) const override;
+  // Export… of the context menus (mitcad#2298; files/MainWindowFiles.cpp).
+  void exportItems(const Selection& items) override;
+  QString exportBlocked(const Selection& items) const override;
   // Save Component as Design (mitcad#1057; files/MainWindowSaveComponent.cpp).
   void saveComponentAsDesign(const QString& component, const QString& name) override;
   // Linked designs (mitcad#1416; files/MainWindowLinks.cpp): Open Linked
@@ -540,6 +543,14 @@ public:
   void updateLink(const QString& component) override;
   // Choose Linked Parts… (mitcad#2130, files/MainWindowLinks.cpp).
   void chooseLinkedParts(const QString& component) override;
+  // Edit in Place (mitcad#2321, files/MainWindowEditInPlace.cpp): the
+  // linked design of `component` edited inside this design, in its own
+  // document (its tab's, lent while the mode lasts, or read without a tab);
+  // Finish Edit in Place gives this design back, which takes the design's
+  // bodies as one undo step.
+  void editInPlace(const QString& component) override;
+  void finishEditInPlace() override;
+  bool editingInPlace() const override { return m_inPlaceHolder.has_value(); }
   // Drawings kept in the design (mitcad#707; drawings/MainWindowDrawings.cpp):
   // one opened over the 3D view, a new one in a component's Drawings folder
   // (the root's: "C0") opened at once.
@@ -1905,9 +1916,11 @@ private:
   // package's, whose pages alone get the bridge window.mitcad, `page` the
   // one shown first.
   void openTutorialPane(const QString& folder, const QString& page, const QString& title);
-  // Help › Tutorials… (TutorialsDialog): the sources' tutorials listed, the
-  // chosen one installed (or updated) into the user's data folder, checked
-  // against its oldest MitCad, and opened in the pane.
+  // Help › Tutorials… (mitcad#2346): the Start page's tutorials
+  // (tutorials/TutorialChoice.hpp), shown in its centre, the page shown;
+  // the one started there (openListedTutorial) installed (or updated) into
+  // the user's data folder, checked against its oldest MitCad, and opened
+  // in the pane.
   void showTutorials();
   void openListedTutorial(const QString& url, const QJsonObject& tutorial);
   // The pane opened in the window of the design the tutorial is worked in
@@ -1916,6 +1929,12 @@ private:
   // window, or this one after its unsaved-changes question; cancelled, no
   // tutorial).
   void openTutorialInDesign(const QString& folder, const QString& page, const QString& title);
+  // Over the Start page the component is had first (mitcad#2311: a declined
+  // download opens no new design), then the design chosen as above.
+  bool showTutorialInDesign(const BrowserComponentInfo& component, const QString& folder, const QString& page,
+                            const QString& title);
+  // withBrowserComponent with the tutorials' title and download question.
+  void withTutorialComponent(const std::function<bool(const BrowserComponentInfo&)>& then);
   bool showTutorialPane(const BrowserComponentInfo& component, const QString& folder, const QString& page,
                         const QString& title);
   void ensureTutorialPane();
@@ -1977,6 +1996,10 @@ private:
   // File › Export; with `sketch` (a sketch's context-menu Export DXF…,
   // mitcad#1963) the dialog starts on that sketch's DXF, named after it.
   void exportFile(const QString& sketch = QString());
+  // File › Export's dialog with `items` standing for the selection
+  // (mitcad#2298: a context menu's Export… gives the rows selected with
+  // its own).
+  void exportFileOf(const QString& sketch, const Selection& items);
   // Export Drawing (mitcad#471; files/MainWindowDrawing.cpp): the drawing
   // its dialog lays out is kept in the design and written (mitcad#707).
   void exportDrawing();
@@ -2209,6 +2232,11 @@ private:
   // by Save As Mesh's rule (mitcad#1164): one body's, one component's, else
   // the design's.
   QString exportName(const Selection& items) const;
+  // The bodies File › Export's "Selected bodies" writes for the items
+  // (mitcad#2298, files/MainWindowSaveAsMesh.cpp): bodies, the bodies of
+  // faces, edges and vertices, and a component's bodies where its
+  // occurrence places them (the root's: every body).
+  QStringList exportBodies(const Selection& items) const;
   // The bodies and faces the context menu's Appearance… gives the
   // Appearance tool (mitcad#1059): those the selection stands for (bodies,
   // faces, and the bodies of edges and vertices), each once.
@@ -2537,6 +2565,45 @@ private:
   // The files the watcher watches: those the snapshot's linked designs name.
   void refreshLinkWatch();
   LinkWatcher* m_linkWatcher = nullptr;
+  // Edit in Place (mitcad#2321; files/MainWindowEditInPlace.cpp). While the
+  // mode lasts the window's document is the linked design's and the
+  // holder's waits here; the tab the design came from has a stand-in
+  // meanwhile, which it neither computes nor shows.
+  std::optional<rust::Box<Document>> m_inPlaceHolder;
+  QString m_inPlaceComponent; // the holder's linked component (uid)
+  QString m_inPlaceName;      // its name
+  QString m_inPlaceFile;      // the linked design's file
+  QPointer<MainWindow> m_inPlaceTab;
+  // After Finish: the linked design's unsaved edits, which the holder's
+  // Save writes first: kept here when it came from no tab, else its tab's.
+  std::optional<rust::Box<Document>> m_inPlaceKept;
+  QPointer<MainWindow> m_inPlaceKeptTab;
+  QString m_inPlaceKeptComponent;
+  QString m_inPlaceKeptFile;
+  // The file the holder's Save writes for it now (linkedDesignSaved does
+  // not offer it as changed).
+  QString m_inPlaceSaving;
+  // This tab's design is edited in place in that window, which holds its
+  // document until Finish.
+  QPointer<MainWindow> m_inPlaceBorrower;
+  void registerEditInPlaceCommands();
+  // Save in the mode: the linked design's file.
+  bool saveInPlaceDesign();
+  // The holder's Save: the linked design's unsaved in-place edits written
+  // first, the link recording the file; false when that failed.
+  bool saveInPlaceEdits();
+  // maybeSave's question about the linked design's unsaved in-place edits,
+  // the mode ended; false when canceled.
+  bool settleInPlaceEdits();
+  // A command's frozen picks of the assembly (`in_place_notices`) in the
+  // message band, after the command.
+  void showInPlaceNotices(const QJsonObject& answer);
+  // This tab's document lent to `borrower`'s Edit in Place, and given back.
+  void lendForInPlace(MainWindow* borrower);
+  void returnFromInPlace(rust::Box<Document> document);
+  // Why this tab takes no change or close while its design is edited in
+  // place elsewhere; empty when it is not.
+  QString lentReason() const;
   QLabel* m_rendererLabel = nullptr;
   FloatingLayout* m_floating = nullptr; // the central widget in Floating chrome
   GlassCard* m_commandCard = nullptr;
@@ -3432,6 +3499,38 @@ private:
   void followFavoriteParametersAction(bool shown);
   QPointer<QWidget> m_favoriteParametersContainer;
   bool m_favoriteParametersShown = false;
+
+  // Exploded views (mitcad#2113; MainWindowExplode.cpp): Explode (the
+  // Assemble group) opens the Explode panel (motion/ExplodeViewDialog),
+  // whose steps Explode Step makes and edits; a view shown exploded in the
+  // 3D view (the Browser's Exploded Views rows) at a time of its animation
+  // (none: every step done), with its trail lines. Commands work on the
+  // design assembled: showBodies shows it exploded again after them.
+  void registerExplodeCommands();
+  void openExplodeView(const QString& name) override;
+  void showExplodeView(const QString& name) override;
+  QString shownExplodeView() const override { return m_explodeShown; }
+  // The view and time the 3D view shows the bodies by now (mitcad#2328):
+  // when idle, and while a command that keeps it runs (Measure,
+  // CommandDef::keepsExplode); empty otherwise.
+  QJsonObject shownExplode() const override;
+  bool explodeDisplayed() const;
+  // The shown view at a time of its animation (the panel's playback).
+  void showExplodeAt(const QString& name, std::optional<double> time);
+  // Explode Step's panel for a step of a view (-1: a new one).
+  void editExplodeStep(const QString& view, int step);
+  // The bodies at the shown view's places (none shown: as they are) and
+  // its trail lines in the view; a view that is gone is shown no more.
+  void explodeBodies(std::vector<BodyDisplay>& bodies);
+  // After a refresh (a step made, Undo, any change): the open Explode
+  // panel reads the views again (not while it plays).
+  void followExplodePanel();
+  QPointer<QDialog> m_explodeDialog;
+  QString m_explodeShown;
+  std::optional<double> m_explodeTime;
+  QString m_loggedExplode;
+  // The command the shown explode was last logged as kept for (UI tests).
+  QString m_loggedExplodeKept;
 };
 
 } // namespace mitcad

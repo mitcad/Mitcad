@@ -5,7 +5,8 @@
 # picks it up). A 40 x 30 x 20 block with a hole, an empty ISO drawing
 # (Drawing1) and an empty cut sheet (CutSheet1) that mitcad-cli makes is
 # opened, Drawing1 opened from the browser and a front view and a projected
-# view placed on it (Base View on the ribbon), and the screen saved with the
+# view placed on it (Base View on the ribbon: its button, or its row in
+# the Create group's menu where the group is folded), and the screen saved with the
 # ribbon's Drawing tab and the sheet over the whole view, on the light and
 # the dark theme (Qt's GTK platform theme, MITCAD_TEST_COLOR_SCHEME), in
 # the Floating layout (the default) and the Docked one:
@@ -97,10 +98,14 @@ picture() {
   ui_expect_log "Browser Root/Drawings/Drawing1 at" "the browser lists Drawing1"
   open_drawing Drawing1
   ui_expect_new "Ribbon tabs: DRAWING (shown DRAWING)" "$layout, $theme: the Drawing tab alone"
-  ui_expect_new "Drawing tool Base View at" "Base View on the ribbon"
+  # The drawing's places (from "Drawing area" on): Base View's button where
+  # the Create group shows it, else the group's name, whose menu has it
+  # (ui_drawing_tool; mitcad#2066: in Floating at 1280 px the groups had
+  # folded into menus, so no "Drawing tool Base View at" came).
+  ui_expect_new "Drawing area " "the drawing's places on the ribbon"
   ui_expect_new "Drawing sheet view " "the sheet placed"
   ui_mark
-  ui_step "Base View (the ribbon)"         ui_click_logged "Drawing tool Base View"
+  ui_step "Base View (the ribbon)"         ui_drawing_tool "Base View"
   ui_expect_new "Drawing tool: Base View" "Base View on"
   ui_mark
   ui_step "the front view"                 sheet_click 120 120

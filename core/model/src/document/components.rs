@@ -109,6 +109,14 @@ impl DocState {
         if !a.exists(component) {
             return Err(invalid(format!("component {component} does not exist")));
         }
+        // The assembly around a design edited in place (mitcad#2321).
+        if a.component(component).is_some_and(|c| c.in_place) {
+            return Err(invalid(format!(
+                "{} is the assembly around the design edited in place; it is shown for picks \
+                 and measures only and changes only in its own design",
+                a.name(component)
+            )));
+        }
         if let Some(link) = a.component(component).and_then(|c| c.link.as_ref()) {
             return Err(invalid(format!(
                 "{} is linked from {}; it changes only with that file",
@@ -1235,6 +1243,7 @@ impl<K: Kernel> Document<K> {
                 name: Some(self.body_name(uid)),
                 color: None,
                 shape: shape.clone(),
+                face_colors: Vec::new(),
             });
         }
         Ok(ComponentSnapshot {
@@ -1784,6 +1793,7 @@ impl<K: Kernel> Document<K> {
                 name: names.get(&instance.body).cloned(),
                 color: None,
                 shape,
+                face_colors: Vec::new(),
             });
             if let Some(origin) = origin {
                 looks.push(super::linked_looks::source_look(source, &instance, origin));

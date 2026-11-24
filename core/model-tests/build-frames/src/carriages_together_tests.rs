@@ -12,6 +12,7 @@ use mitcad_model::assembly::inverse;
 use mitcad_model::features::FeatureDef;
 use mitcad_model::ids::FeatureUid;
 use mitcad_model::joints::Motion;
+use mitcad_model::parameters::ParamId;
 use mitcad_model::testing::MockKernel;
 use mitcad_model_tests_support::test_library::*;
 
@@ -91,17 +92,43 @@ fn rigid_where_they_are(doc: &mut Document<MockKernel>, c1: &Value, c2: &Value) 
 
 /// Drags a carriage `by` along its rail.
 fn drag_along(doc: &mut Document<MockKernel>, carriage: &Value, by: f64) {
-    let placement = placed(doc, occurrence(carriage));
-    let at = placement.translation;
-    let along = placement.apply_vector([1.0, 0.0, 0.0]);
+    try_drag_along(doc, carriage, by).unwrap();
+    all_ok(doc);
+}
+
+/// [`drag_along`], its refusal kept.
+fn try_drag_along(
+    doc: &mut Document<MockKernel>,
+    carriage: &Value,
+    by: f64,
+) -> Result<Value, String> {
+    let along = placed(doc, occurrence(carriage)).apply_vector([1.0, 0.0, 0.0]);
+    drag_by(doc, carriage, along, by)
+}
+
+/// Drags a part `by` along the direction `along`.
+fn drag_by(
+    doc: &mut Document<MockKernel>,
+    part: &Value,
+    along: [f64; 3],
+    by: f64,
+) -> Result<Value, String> {
+    let at = placed(doc, occurrence(part)).translation;
     let target: [f64; 3] = std::array::from_fn(|i| at[i] + along[i] * by);
     command(
         doc,
-        json!({"cmd": "drag_occurrence", "occurrence": carriage["occurrence"], "point": at,
+        json!({"cmd": "drag_occurrence", "occurrence": part["occurrence"], "point": at,
                "target": target}),
     )
-    .unwrap();
-    all_ok(doc);
+}
+
+/// The parameter a carriage's slide is driven by (its Placement Offset).
+fn slide_parameter(doc: &Document<MockKernel>, carriage: &Value) -> ParamId {
+    let joint: FeatureUid = carriage["joint"].as_str().unwrap().parse().unwrap();
+    let FeatureDef::Joint(j) = &doc.feature(joint).unwrap().def else {
+        panic!("a joint");
+    };
+    j.position[&Motion::Tx]
 }
 
 fn offset_to(
@@ -231,4 +258,273 @@ fn a_rigid_joint_whose_carriage_cannot_reach_fails_in_words() {
     assert!(error.contains("cannot"), "{added}");
     // The second stays where its offset puts it.
     assert_slides(&doc, &c1, &c2, 100.0, 250.0);
+}
+
+/// A part's Placement Offset as `build_parts` gives it (BUILD Placement
+/// fills its Offset from it).
+fn build_offset(doc: &Document<MockKernel>, part: &Value) -> Value {
+    query(doc, json!({"query": "build_parts"}))["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["component"] == part["component"])
+        .unwrap_or_else(|| panic!("no part {part}"))["offset"]
+        .clone()
+}
+
+fn assert_offsets(doc: &Document<MockKernel>, b1: &Value, b2: &Value, first: f64, second: f64) {
+    let (o1, o2) = (build_offset(doc, b1), build_offset(doc, b2));
+    let at = |o: &Value, want: f64| o.as_f64().is_some_and(|v| (v - want).abs() < 1e-4);
+    assert!(
+        at(&o1, first) && at(&o2, second),
+        "offsets {o1}, {o2} instead of {first}, {second}"
+    );
+}
+
+/// Two bearings on a shaft (GitHub mitcad/Mitcad#575): a bearing slides
+/// along its shaft frame's z, and BUILD records no `from` for it, yet
+/// `build_parts` gives its Placement Offset (from end A, as `build_edit`
+/// takes it), before and after a Rigid Group joins the two; an Offset
+/// edit of one moves the other with it.
+#[test]
+fn bearings_on_a_shaft_have_placement_offsets_and_move_together() {
+    let mut doc = design();
+    let shaft = first(&mut doc, "shaft8", [0.0; 3], 100.0);
+    let sp = derived(&doc, component(&shaft));
+    let bearing = |doc: &mut Document<MockKernel>, offset: f64| {
+        place(
+            doc,
+            json!({"part": part("bearing8"),
+                   "at": {"occurrence": shaft["occurrence"], "geometry": {"mount": format!("{sp}:mount(shaft)")},
+                          "offset": offset}}),
+        )
+    };
+    let b1 = bearing(&mut doc, 20.0);
+    let b2 = bearing(&mut doc, 80.0);
+    all_ok(&doc);
+    assert_offsets(&doc, &b1, &b2, 20.0, 80.0);
+    // The Offset edited and read back.
+    offset_to(&mut doc, &b1, 30.0).unwrap();
+    all_ok(&doc);
+    assert_offsets(&doc, &b1, &b2, 30.0, 80.0);
+    // A Rigid Group keeps them where they are; an edit of one moves both.
+    let group = command(
+        &mut doc,
+        json!({"cmd": "add_rigid_group", "occurrences": [b1["occurrence"], b2["occurrence"]]}),
+    )
+    .unwrap();
+    assert_eq!(group["error"], Value::Null, "{group}");
+    all_ok(&doc);
+    assert_offsets(&doc, &b1, &b2, 30.0, 80.0);
+    offset_to(&mut doc, &b1, 20.0).unwrap();
+    all_ok(&doc);
+    assert_offsets(&doc, &b1, &b2, 20.0, 70.0);
+}
+
+/// Sets a carriage's offset to an expression (a parameter's name or a
+/// formula) with BUILD's Placement.
+fn offset_expression(doc: &mut Document<MockKernel>, carriage: &Value, expression: &str) {
+    command(
+        doc,
+        json!({"cmd": "build_edit", "component": carriage["component"],
+               "at": {"offset": expression}}),
+    )
+    .unwrap();
+    all_ok(doc);
+}
+
+fn add_parameter(doc: &mut Document<MockKernel>, name: &str, expression: &str) -> ParamId {
+    command(
+        doc,
+        json!({"cmd": "add_parameter", "name": name, "expression": expression}),
+    )
+    .unwrap();
+    doc.parameters().find(name).unwrap()
+}
+
+/// A follower whose offset is a user parameter that only it uses keeps
+/// the parameter (mitcad#2317): a drag or a Placement edit of the other
+/// carriage moves it, and the parameter takes its new offset.
+#[test]
+fn a_follower_s_offset_as_a_user_parameter_keeps_the_parameter() {
+    let mut doc = design();
+    let (_, c1, c2) = rail_and_two_carriages(&mut doc, 100.0, 250.0);
+    let second_at = add_parameter(&mut doc, "second_at", "250 mm");
+    offset_expression(&mut doc, &c2, "second_at");
+    assert_eq!(slide_parameter(&doc, &c2), second_at);
+    let added = rigid_where_they_are(&mut doc, &c1, &c2);
+    assert_eq!(added["error"], Value::Null, "{added}");
+    all_ok(&doc);
+    assert_slides(&doc, &c1, &c2, 100.0, 250.0);
+    // A drag of the first moves both; the second's offset is still the
+    // parameter, now where the second is.
+    drag_along(&mut doc, &c1, 50.0);
+    assert_slides(&doc, &c1, &c2, 150.0, 300.0);
+    assert_eq!(slide_parameter(&doc, &c2), second_at);
+    let value = doc.parameters().value(second_at).unwrap();
+    assert!(near(value, 300.0), "second_at is {value}");
+    // So does a Placement edit of the first.
+    offset_to(&mut doc, &c1, 120.0).unwrap();
+    all_ok(&doc);
+    assert_slides(&doc, &c1, &c2, 120.0, 270.0);
+    assert_eq!(slide_parameter(&doc, &c2), second_at);
+    assert!(near(doc.parameters().value(second_at).unwrap(), 270.0));
+    // Undone in one step: the parameter is back too.
+    command(&mut doc, json!({"cmd": "undo"})).unwrap();
+    assert_slides(&doc, &c1, &c2, 150.0, 300.0);
+    assert!(near(doc.parameters().value(second_at).unwrap(), 300.0));
+}
+
+/// A follower placed from End B keeps BUILD's form of its Offset (an
+/// expression of the rail's length): only its number changes, and it
+/// stays measured from End B (mitcad#2317).
+#[test]
+fn a_follower_placed_from_end_b_stays_measured_from_there() {
+    let mut doc = design();
+    let (_, c1, c2) = rail_and_two_carriages(&mut doc, 100.0, 250.0);
+    // 150 from End B of the rail 400 long: where it is.
+    command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": c2["component"],
+               "at": {"offset": 150, "from": "b"}}),
+    )
+    .unwrap();
+    all_ok(&doc);
+    assert_slides(&doc, &c1, &c2, 100.0, 250.0);
+    let own = slide_parameter(&doc, &c2);
+    let formula = |doc: &Document<MockKernel>| {
+        let p = doc.parameters().get(own).unwrap();
+        (p.expr().is_plain_number(), p.expression().to_owned())
+    };
+    assert!(!formula(&doc).0, "{}", formula(&doc).1);
+    let added = rigid_where_they_are(&mut doc, &c1, &c2);
+    assert_eq!(added["error"], Value::Null, "{added}");
+    all_ok(&doc);
+    drag_along(&mut doc, &c1, 50.0);
+    assert_slides(&doc, &c1, &c2, 150.0, 300.0);
+    assert_eq!(slide_parameter(&doc, &c2), own);
+    let (plain, text) = formula(&doc);
+    assert!(!plain, "{text}");
+    assert_offsets(&doc, &c1, &c2, 150.0, 100.0);
+}
+
+/// A follower whose offset is by formula, or a parameter something else
+/// uses as well, cannot take where the other carriage would move it: the
+/// move is refused in words, and the expression stays (mitcad#2317).
+#[test]
+fn a_follower_s_offset_by_formula_refuses_the_move_in_words() {
+    let mut doc = design();
+    let (_, c1, c2) = rail_and_two_carriages(&mut doc, 100.0, 250.0);
+    add_parameter(&mut doc, "base", "100 mm");
+    offset_expression(&mut doc, &c2, "base + 150 mm");
+    let own = slide_parameter(&doc, &c2);
+    let expression = |doc: &Document<MockKernel>| {
+        doc.parameters()
+            .get(own)
+            .map(|p| p.expression().to_owned())
+            .unwrap_or_default()
+    };
+    assert!(expression(&doc).contains("base"), "{}", expression(&doc));
+    let added = rigid_where_they_are(&mut doc, &c1, &c2);
+    assert_eq!(added["error"], Value::Null, "{added}");
+    all_ok(&doc);
+    assert_slides(&doc, &c1, &c2, 100.0, 250.0);
+    // A drag of the first is refused, in words; nothing moves.
+    let refused = try_drag_along(&mut doc, &c1, 50.0).unwrap_err();
+    assert!(
+        refused.contains("cannot move with") && refused.contains("by formula"),
+        "{refused}"
+    );
+    assert_slides(&doc, &c1, &c2, 100.0, 250.0);
+    assert!(expression(&doc).contains("base"), "{}", expression(&doc));
+    // So is a Placement edit.
+    let refused = offset_to(&mut doc, &c1, 120.0).unwrap_err();
+    assert!(refused.contains("by formula"), "{refused}");
+    assert_slides(&doc, &c1, &c2, 100.0, 250.0);
+    // A user parameter that another parameter uses as well.
+    let shared = add_parameter(&mut doc, "shared", "250 mm");
+    add_parameter(&mut doc, "twice", "shared * 2");
+    offset_expression(&mut doc, &c2, "shared");
+    assert_eq!(slide_parameter(&doc, &c2), shared);
+    let refused = try_drag_along(&mut doc, &c1, 50.0).unwrap_err();
+    assert!(
+        refused.contains("cannot move with") && refused.contains("twice"),
+        "{refused}"
+    );
+    assert_slides(&doc, &c1, &c2, 100.0, 250.0);
+    assert!(near(doc.parameters().value(shared).unwrap(), 250.0));
+}
+
+/// One `build_parts` entry.
+fn build_part(doc: &Document<MockKernel>, part: &Value) -> Value {
+    query(doc, json!({"query": "build_parts"}))["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["component"] == part["component"])
+        .unwrap_or_else(|| panic!("no part {part}"))
+        .clone()
+}
+
+/// Bearings on a shaft have travel limits as carriages on a rail do
+/// (mitcad#2317): their slide is along the shaft frame's z, from flush
+/// with the shaft's end A to flush with its end B (a bearing is 24 long,
+/// its frame in its middle: 12 to 88 on a shaft 100 long). A coupled drag
+/// stops both where the first reaches a limit; an Offset past one is
+/// refused.
+#[test]
+fn bearings_on_a_shaft_have_travel_limits_and_a_coupled_drag_stops_at_the_first() {
+    let mut doc = design();
+    let shaft = first(&mut doc, "shaft8", [0.0; 3], 100.0);
+    let sp = derived(&doc, component(&shaft));
+    let bearing = |doc: &mut Document<MockKernel>, offset: f64| {
+        place(
+            doc,
+            json!({"part": part("bearing8"),
+                   "at": {"occurrence": shaft["occurrence"], "geometry": {"mount": format!("{sp}:mount(shaft)")},
+                          "offset": offset}}),
+        )
+    };
+    let b1 = bearing(&mut doc, 20.0);
+    let b2 = bearing(&mut doc, 80.0);
+    all_ok(&doc);
+    for b in [&b1, &b2] {
+        let entry = build_part(&doc, b);
+        assert_eq!(entry["slides"], json!(true), "{entry}");
+        let limits = &entry["limits"];
+        let is = |key: &str, want: f64| limits[key].as_f64().is_some_and(|v| near(v, want));
+        assert!(
+            is("min", 12.0)
+                && is("max", 88.0)
+                && is("default_min", 12.0)
+                && is("default_max", 88.0),
+            "{limits}"
+        );
+    }
+    let group = command(
+        &mut doc,
+        json!({"cmd": "add_rigid_group", "occurrences": [b1["occurrence"], b2["occurrence"]]}),
+    )
+    .unwrap();
+    assert_eq!(group["error"], Value::Null, "{group}");
+    all_ok(&doc);
+    assert_offsets(&doc, &b1, &b2, 20.0, 80.0);
+    // Along the shaft.
+    let along = placed(&doc, occurrence(&shaft)).apply_vector([0.0, 0.0, 1.0]);
+    // A drag of either moves both.
+    drag_by(&mut doc, &b1, along, -5.0).unwrap();
+    all_ok(&doc);
+    assert_offsets(&doc, &b1, &b2, 15.0, 75.0);
+    // Past the second's Max (88): both stop there.
+    drag_by(&mut doc, &b1, along, 100.0).unwrap();
+    all_ok(&doc);
+    assert_offsets(&doc, &b1, &b2, 28.0, 88.0);
+    // Past the first's Min (12), dragging the second: both stop there.
+    drag_by(&mut doc, &b2, along, -100.0).unwrap();
+    all_ok(&doc);
+    assert_offsets(&doc, &b1, &b2, 12.0, 72.0);
+    // An Offset past a limit is refused in words.
+    let refused = offset_to(&mut doc, &b2, 95.0).unwrap_err();
+    assert!(refused.contains("beyond its travel"), "{refused}");
+    assert_offsets(&doc, &b1, &b2, 12.0, 72.0);
 }

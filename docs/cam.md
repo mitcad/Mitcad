@@ -2,7 +2,8 @@
 
 MitCad's CAM (mitcad#1013) turns bodies and sketches into toolpaths and
 writes them as G-code for the controller of a CNC router or mill, and
-turns parts on a 2-axis lathe ([Turning](#turning)). This
+turns parts on a 2-axis lathe ([Turning](#turning)), with live tools on
+its C axis ([Live tools on the C axis](#live-tools-on-the-c-axis)). This
 page is the design: what was learnt from the open-source CAM projects,
 the scope by phases, the data model, the machine model with its
 collision zones and tool changers, the post-processors, simulation, the
@@ -54,7 +55,15 @@ probing cycles (G6500 to G6520, G6600) and parks with G27; Mach3 and
 Mach4 run `T M6` through their M6 macros and take the tool length from
 the tool table with `G43 H`; LinuxCNC likewise, with `%` around the
 program, path blending `G64 P`, and a DIY changer remapped to M6 in the
-machine's configuration.
+machine's configuration; Makera's Carvera and Carvera Air (mitcad#2349;
+their firmware is built on Smoothieware, read from Makera's G-code and
+M-code lists and the output of Makera's published post-processors, no
+code taken) change and measure the tool with `M6 T<n>` (the Carvera
+from its six-slot changer, the Air at a manual change position), turn
+the spindle with `M3 S` only (`M4` is not wired), blow air with
+`M7`/`M9`, dwell with `G4 P` in seconds, pause with `M600`, go to their
+clearance position with `G28` (not a homing move there), have no canned
+drilling cycles, and take `.cnc` files.
 
 Sources: [FreeCAD's CAM operations](https://github.com/FreeCAD/FreeCAD/tree/main/src/Mod/CAM/Path/Op),
 [its post-processors](https://github.com/FreeCAD/FreeCAD/tree/main/src/Mod/CAM/Path/Post/scripts),
@@ -68,7 +77,11 @@ Sources: [FreeCAD's CAM operations](https://github.com/FreeCAD/FreeCAD/tree/main
 [grblHAL tool change](https://github.com/grblHAL/core/wiki/Manual,-semi-automatic-and-automatic-tool-change),
 [MillenniumOS](https://github.com/MillenniumMachines/MillenniumOS) and
 [its G-code reference](https://github.com/MillenniumMachines/MillenniumOS/blob/main/GCODE.md),
-[LinuxCNC G-code](https://linuxcnc.org/docs/html/gcode/overview.html).
+[LinuxCNC G-code](https://linuxcnc.org/docs/html/gcode/overview.html),
+[Makera's supported codes](https://wiki.makera.com/en/supported-codes),
+[the Carvera firmware's G-codes](https://carvera-community.gitbook.io/docs/firmware/supported-commands/gcodes)
+and [M-codes](https://carvera-community.gitbook.io/docs/firmware/supported-commands/mcodes),
+[Makera's post-processors](https://github.com/MakeraInc/CarveraProfiles).
 
 ## Decisions
 
@@ -142,9 +155,14 @@ are listed again under [Open questions](#open-questions).
    the bodies' revolved profile, constant surface speed under a spindle
    limit, the Fanuc turning dialect with G71, G70 and G76, the program
    check and the simulation of the turned section ([Turning](#turning)).
-   Later: C-axis indexing and live tools (G12.1/G112 polar, G7.1/G107
-   cylindrical interpolation, the C-axis mode and brake codes), Y-axis
-   milling, a tilting B head; the lathe's axes are kept for them.
+   Then live tools on the C axis (mitcad#2067: milling and drilling on
+   the face and the diameter, the C axis indexed and clamped, G12.1
+   polar and G7.1 cylindrical interpolation, the C-axis mode and brake
+   codes; [Live tools on the C axis](#live-tools-on-the-c-axis)). Then
+   (mitcad#2319, GitHub mitcad/Mitcad#346's phases 2 to 4) Y-axis
+   milling on planes, a tilting B head, the sub-spindle's hand-over, the
+   multi-axis stock in 3D and sketches wrapped onto the diameter
+   ([The Y axis, the B head and the sub-spindle](#the-y-axis-the-b-head-and-the-sub-spindle)).
 
 ## Data model
 
@@ -242,7 +260,10 @@ Three kinds (`ToolChanger`):
   `T M6`, which their manual change handles (grblHAL's `$341` modes,
   the M6 macros, LinuxCNC's manual change dialog); RepRapFirmware shows a
   message box (`M291 … S2`) and selects the tool; MillenniumOS selects the
-  tool and asks the operator itself.
+  tool and asks the operator itself; the Carvera and the Carvera Air
+  write `M6 T`, which is the controller's own change either way (the
+  Carvera's changer, the Air's stop at its change position, announced
+  with a comment), followed by the controller's measurement of the tool.
 - **Controller:** the controller's own changer: the dialect's tool
   change command alone (`T M6`, or `T` on RepRapFirmware). A **DIY
   changer configured in the controller** is this kind: a grblHAL tool
@@ -269,7 +290,9 @@ Three kinds (`ToolChanger`):
 After any change the tool length offset follows where the dialect uses
 one (`G43 H` on Mach3, Mach4 and LinuxCNC by default; grbl's and
 grblHAL's `G43.1 Z` from the tool's length when the setting asks for it;
-RepRapFirmware and MillenniumOS apply the tool's offsets with the tool).
+RepRapFirmware and MillenniumOS apply the tool's offsets with the tool;
+the Carvera and the Carvera Air measure the tool in `M6` and set its
+offset themselves, so none is written even when asked for).
 The rack's slots and the rack itself belong in the zones, so that
 operations keep clear of them; the changer's own moves are read back
 from the posted program and checked, the rack's zones (those a slot is
@@ -576,18 +599,18 @@ spin-up dwell), the coolant and the moves; at the end the spindle and
 coolant off, the safe height, the park position and the dialect's
 footer.
 
-| | grbl | grblHAL | RepRapFirmware | MillenniumOS | Mach3, Mach4 | LinuxCNC |
-|---|---|---|---|---|---|---|
-| Header | `G90 G94 G17`, `G21`, `G54` | as grbl | `G90`, `G21`, `G17`, `G54` | `G90 G21 G94`, `M4000` per tool, `G28`, `G6600 W` when asked, `G54` | `G90 G94 G91.1 G40 G49 G17`, `G21`, `G54` | `%`, `G17 G90 G94 G40 G49 G80`, `G21`, `G64 P<tol>`, `G54` |
-| Tool change | M0 pause (manual), `T M6` (controller) | `T M6` | `M291` box (manual), `T` | `T` | `T M6` | `T M6` |
-| Length offset | `G43.1 Z` when asked | `G43.1 Z` when asked | with the tool | with the tool | `G43 H` | `G43 H` |
-| Spindle | `S M3` | `S M3` | `M3 S` | `M3.9 S` (waits), `M5.9` | `S M3` | `S M3` |
-| Coolant | M8, M9 (no M7 in its standard build) | M7, M8, M9 | M7, M8, M9 | M7, M7.1 air, M8, M9 | M7, M8, M9 | M7, M8, M9 |
-| Dwell | `G4 P` s | `G4 P` s | `G4 S` s | (none needed) | `G4 P` s | `G4 P` s |
-| Canned drilling | none | `G98 G81/G83/G73`, `G80` | none | `G81/G83/G73` per hole | `G98 G81/G83/G73`, `G80` | `G98 G81/G83/G73`, `G80` |
-| Comments | `( )` | `( )` | `;` | `;` | `( )` | `( )` |
-| End | `M30` | `M30` | `M0` | `G27`, `M0` | `M30` | `M2`, `%` |
-| File | `.nc` | `.nc` | `.gcode` | `.gcode` | `.tap` | `.ngc` |
+| | grbl | grblHAL | RepRapFirmware | MillenniumOS | Mach3, Mach4 | LinuxCNC | Carvera, Carvera Air |
+|---|---|---|---|---|---|---|---|
+| Header | `G90 G94 G17`, `G21`, `G54` | as grbl | `G90`, `G21`, `G17`, `G54` | `G90 G21 G94`, `M4000` per tool, `G28`, `G6600 W` when asked, `G54` | `G90 G94 G91.1 G40 G49 G17`, `G21`, `G54` | `%`, `G17 G90 G94 G40 G49 G80`, `G21`, `G64 P<tol>`, `G54` | `G90 G94`, `G17`, `G21`, `G54` |
+| Tool change | M0 pause (manual), `T M6` (controller) | `T M6` | `M291` box (manual), `T` | `T` | `T M6` | `T M6` | `M6 T` (1 to 6 on the Carvera; the Air: a comment, then `M6 T`) |
+| Length offset | `G43.1 Z` when asked | `G43.1 Z` when asked | with the tool | with the tool | `G43 H` | `G43 H` | measured by `M6` |
+| Spindle | `S M3` | `S M3` | `M3 S` | `M3.9 S` (waits), `M5.9` | `S M3` | `S M3` | `M3 S` (no `M4`) |
+| Coolant | M8, M9 (no M7 in its standard build) | M7, M8, M9 | M7, M8, M9 | M7, M7.1 air, M8, M9 | M7, M8, M9 | M7, M8, M9 | M7 air, M9 (no flood, no mist) |
+| Dwell | `G4 P` s | `G4 P` s | `G4 S` s | (none needed) | `G4 P` s | `G4 P` s | `G4 P` s |
+| Canned drilling | none | `G98 G81/G83/G73`, `G80` | none | `G81/G83/G73` per hole | `G98 G81/G83/G73`, `G80` | `G98 G81/G83/G73`, `G80` | none |
+| Comments | `( )` | `( )` | `;` | `;` | `( )` | `( )` | `( )` |
+| End | `M30` | `M30` | `M0` | `G27`, `M0` | `M30` | `M2`, `%` | `G28` (clearance position), `M30` |
+| File | `.nc` | `.nc` | `.gcode` | `.gcode` | `.tap` | `.ngc` | `.cnc` |
 
 Settings (`PostSettings`): units (millimetres or inches), arcs on or off
 with a tolerance, line numbers (N10, N20, …), comments on or off, the
@@ -619,8 +642,9 @@ moves, which stay for the checks and the simulation. With
 (`G98` and the first hole, the other holes by X and Y, `G80`; G98 takes
 the tool back to the clearance height between holes) and MillenniumOS one
 whole cycle line per hole followed by `G0 Z` to the clearance height (its
-cycles end at the retract height); grbl and RepRapFirmware have none and
-get the moves. The controller pecks from the retract height by its own
+cycles end at the retract height); grbl, RepRapFirmware and the Carvera
+machines have none and get the moves. The controller pecks from the
+retract height by its own
 rules, so its pecks are not exactly the written-out ones; the hole, its
 depth and the heights are the same. Every move of the cycle still goes
 through `Output::motion`, which writes the cycle's lines with the moves
@@ -642,7 +666,25 @@ grbl and grblHAL, which act on `?`, `~` and `!` wherever they are in the
 stream (a status report, a cycle start, a feed hold), those become `_`,
 in comments and in a tool's name filled into a changer's line. A
 command the controller does not have is refused in words (air blast and
-mist on grbl; a counter-clockwise spindle on MillenniumOS).
+mist on grbl; a counter-clockwise spindle on MillenniumOS and the
+Carvera machines; flood and mist coolant on the Carvera machines; tool 0,
+their probe, on both and a tool number above 6 on the Carvera, whose
+changer has six slots).
+
+**Makera Carvera and Carvera Air** (mitcad#2349, `post/carvera.rs`):
+two dialects with the same G-code but for the tool change. `M6 T<n>`
+is the controller's whole change, the tool's length measurement and its
+offset included: on the Carvera from the changer's six slots (another
+number is refused), on the Air a stop at the change position for the
+operator, announced by a comment with the tool's number and name. A tool
+a program-driven changer has no slot for waits with `M600`. The end
+writes `G28`, the machine's clearance position, in place of the
+machine's park position. Inches are written with `G20` as Makera's own
+list has it; the community firmware's list marks `G20` as a known
+problem there, so millimetres are the safer choice on that firmware.
+The optional 4th axis is not written: besides the A word its moves need
+the controller's `G92.4` to bring the axis back to 0 to 360 degrees, and
+the milling here is 2.5-axis.
 
 A new dialect is a struct implementing `PostProcessor` in
 `core/cam/src/post/`, listed in `dialects()`, with a golden test of the
@@ -783,7 +825,8 @@ lathe".
 - **The lathe** is a machine with lathe data (`turning::Lathe`): the
   turret's stations (a tool's number is its station), the chuck's
   diameter and jaw length, and the axes it has beyond X and Z (a C axis,
-  live tools, Y, a tilting B; kept, not used yet). The machine's travel,
+  live tools, Y, a tilting B, a sub-spindle; used by the live tools and
+  the hand-over, mitcad#2067 and mitcad#2319). The machine's travel,
   spindle limits, feeds, zones and park keep their meaning in the
   lathe's axes: X is the controlled point's distance from the spindle
   axis (a radius), Z runs along the spindle, positive away from the
@@ -877,6 +920,195 @@ lathe".
   parting blade runs into) and the simulation (no rapid into the stock,
   no cut into the part).
 
+### Live tools on the C axis
+
+A lathe whose spindle is also a C axis and whose turret has driven
+tools mills and drills on the turned part (mitcad#2067, the first of
+GitHub mitcad/Mitcad#346's mill-turn phases): Rust in
+`core/cam/src/turning/live.rs`, the document's side in
+`core/model/src/document/cam/live.rs`, the API in
+[commands.md](../core/model-api/src/commands.md), "CAM: live tools on a
+lathe's C axis".
+
+- **The machine:** the lathe's `axes` `c` and `live_tools`, and its
+  `MillTurn` data: the live spindle's speeds and the codes its builder
+  gives the C axis and the live tools (C axis on and off, the clamp, the
+  live tool forward, reverse and stop with `{rpm}`). Builders differ
+  here, so the codes are the lathe's; the defaults are one common set
+  (`M154` with `G28 H0.`, `M155`, `M14`, `M15`, `M133 P{rpm}`, `M134
+  P{rpm}`, `M135`).
+- **The tools:** on such a lathe the milling tools and drills are live
+  tools on its stations, each in an axial holder (cutting the face) or a
+  radial one (cutting the diameter).
+- **The operations are the milling ones** (facing, contours, pockets,
+  adaptive clearing, drilling) and compute with the milling engine; only
+  their frame differs. **On the face** it is the lathe setup's work
+  coordinates (the zero on the spindle axis at the part's face, Z along
+  the spindle away from the chuck), which is a mill's frame with Z up:
+  the inputs are a mill's. **On the diameter** it is the cylinder of a
+  radius about the spindle axis unrolled: x the length round it (the
+  angle times the radius, from the work X towards the work Y), y the
+  work Z, z the distance from the axis, the tool pointing at the axis.
+  Walls are offset exactly on that cylinder, the floor of what is milled
+  (the radius of the faces picked, all round the axis at one radius,
+  unrolled from the widest gap round it); holes are placed on the bar's
+  cylinder.
+- **C** is the angle about the spindle axis of the point under the tool,
+  from the work X towards the work Y, in degrees.
+- **The post** (the Fanuc dialect): before the first live operation the
+  main spindle stops, the C axis goes on, feeds go per minute (G98) and
+  the live tool starts. A path whose cuts all run along the tool
+  (drilling) is written with the C axis indexed: `G0 X C` (face) or `G0
+  Z C` (diameter) to each hole, the clamp before its cut and free before
+  the next index; with `canned_cycles` as `G83` (face) and `G87`
+  (diameter) with `R` the retract's distance from the clearance and `Q`
+  the peck, the holes after the first by their place, `G80` after.
+  Other paths: on the face in polar coordinate interpolation (`G17`,
+  `G12.1` … `G13.1`, `G18`; X a diameter and C the length across the
+  face, arcs with I and J), entered from C at zero at the start's radius;
+  on the diameter in cylindrical interpolation (`G19`, `G7.1 C` with the
+  cylinder's radius … `G7.1 C0.`, `G18`; Z and C in degrees, arcs with R,
+  at most a third of a turn a block). Neither mode takes G0, so the
+  path's rapids are G1 at the machine's fastest feed there, along the
+  tool first when rising, across first when sinking. Before the next
+  turning operation and at the end the live tool stops, the C axis goes
+  off and feeds go per revolution again.
+- **The program check** reads it back: C (an angle, a length in polar
+  interpolation), the modes and the cycles, and refuses a G0 or a tool
+  change in interpolation, polar interpolation outside G17 or
+  cylindrical outside G19, a cut while the main spindle stands at feeds
+  per revolution (or turns at feeds per minute), a drilling cycle
+  without its words, a program that ends in interpolation.
+- **The lathe check:** a lathe without the C axis and live tools, a live
+  speed beyond the live spindle's, a feed beyond the machine's, and the
+  travel, the zones and the chuck at each point's distance from the axis
+  and Z.
+- **The simulation:** the live operations of a side (the face, and each
+  cylinder of the diameter) on a height map of their frame, the stock as
+  the turning before the first of them left it (the face: the highest Z
+  with material at each node's radius; the diameter: the outer radius at
+  each node's Z), cut with the milling simulation; the material left and
+  the gouges against the setup's bodies seen the same way (on the
+  diameter the bodies' mesh unrolled, the triangles across the seam left
+  out), and the rapids that cut. *Simulate* sums up the live tools' cuts
+  in words and draws the stock cut in 3D (the next section).
+- **Not yet:** tool radius compensation in the control (the path is the
+  tool centre's, as Decision 3 has it).
+- **Tests:** `core/cam/src/turning/live_tests.rs`: the exact Fanuc
+  program of a flange (two holes on the face indexed and clamped, a slot
+  on the face in polar interpolation, a cross hole on the diameter, a
+  wrapped slot in cylindrical interpolation, then a finishing cut) read
+  back; G83 and G87; the program check's refusals; the lathe check; the
+  turned stock's maps and the live cuts simulated.
+  `core/model-tests/cam/src/live_tests.rs` (the api) and the UI test
+  `tools/ui-cam-mill-turn-test.sh` with its Windows and macOS twins.
+
+### The Y axis, the B head and the sub-spindle
+
+The rest of GitHub mitcad/Mitcad#346's mill-turn (mitcad#2319): Rust in
+`core/cam/src/turning/` (`live.rs`, `post.rs`, `check.rs`, `stock.rs`,
+`solid.rs`), the document's side in `core/model/src/document/cam/live.rs`
+and `turning.rs`, the API in
+[commands.md](../core/model-api/src/commands.md), "CAM: the Y axis, the B
+head and the sub-spindle".
+
+- **The machine:** the lathe's `axes` `y` (the turret moves in Y; the
+  travel's Y is the Y axis's then, as far each way from the spindle
+  axis), `b` (a milling head that tilts about Y) and `sub_spindle`; a Y
+  axis and a B head need the C axis and live tools. Their codes are the
+  lathe's `MillTurn` as the C axis's are, the defaults one common set:
+  the B head's clamp `M107` and `M108`; the sub-spindle's axis along Z
+  `A` (or `B` without a B head, or `E`), the spindles synchronised
+  `M213` and apart `M212`, its chuck closed `M78` and open `M79`, the
+  main chuck open `M69`, the sub-spindle forward `M203`, reverse `M204`,
+  stop `M205`. A live tool sits in an axial or radial holder or in the
+  B head.
+- **Phase 2, the Y axis: on a plane** (`LiveSide::Plane { c, b }`): the
+  C axis indexed and clamped at `c`, the tool tilted `b` degrees from the
+  spindle axis towards the machine's X. The plane's frame is the work
+  frame turned by B about the machine's Y and by C about the spindle
+  axis: at B 0 it is the face's (x and y on the face, off the axis by the
+  Y axis: keyways, off-center pockets and holes not on a circle about the
+  axis), at B 90 a flat along the axis (x towards the chuck, y the Y axis,
+  z the distance from the axis: flats, keyways with flat floors, cross
+  holes off the axis). The operations are the milling ones computed in
+  that frame, its values (top, bottom, heights) along its z; the angles
+  are the operation's, else from its first input: a planar face's normal
+  or a hole's axis, turned away from the part's middle. The post writes
+  `G0 C` with the clamp, then `G17` (B 0: X a diameter, Y, Z; arcs with I
+  and J) or `G19` (B 90: Y, Z along the axis, X the depth as a diameter;
+  arcs with J and K) and G0 to G3 as a mill's, `G18` after; drilling as
+  `G83 X Y Z` (`G87 Z Y X` across) with `canned_cycles`.
+- **Phase 3, the B head: a tilted plane** (B neither 0 nor 90, the tool
+  in the B head): `G68.2 X0. Y0. Z0. I90. J{b} K-90.` (the tilted
+  working plane: B about the machine's Y as Euler angles about Z, X, Z),
+  `G53.1` turning the head to it between its clamp codes, the path in the
+  plane's frame (X, Y and Z lengths, arcs with I and J, `G83` for holes
+  along the tool), `G69` and `G18` after; its first move goes along the
+  tool to the start's height, then across. A tool in the B head on the
+  face, the diameter or a plane at B 0 or 90 tilts the head there first
+  (`G0 B` between the clamp codes).
+- **Phase 3, the sub-spindle's hand-over** (`TurningProgram::hand_over`,
+  the setup's `lathe.hand_over`): before the main spindle's last parting
+  off (or before the first operation on the sub-spindle when nothing
+  parts it off) the turret goes to its change position, the main spindle
+  turns at the synchronised speed (`G97 S M3`), the spindles are
+  synchronised, the sub-spindle comes up with its chuck open (`G0 A` to
+  the grip plus the pull-back, `G98 G1 A` to the grip, `G99`) and grips;
+  the part-off runs; then (without a part-off the main chuck opens) the
+  sub-spindle pulls the part back, the spindles go apart and stop, and
+  the sub-spindle's work offset (`G55` by default) follows. The
+  operations after it are turning operations on the sub-spindle
+  (`sub_spindle`): the part turned round about the work X at its back,
+  the zero there, Z away from the sub-spindle's chuck, the stock from
+  where the part-off cut it; their spindle starts with the sub-spindle's
+  codes (`G96 S M203`). The grip is written in the main spindle's work Z
+  of the sub-spindle's jaws' face; live tools cut on the main spindle
+  only.
+- **Phase 4, the multi-axis stock** (`turning::solid`): the bar as cubes
+  of one size (a sixth of the smallest live tool, at most 400 000 of
+  them), cut by the whole program in its order: a turning operation
+  keeps what the turned section after it keeps revolved (turning only
+  takes material away), a live tool takes what its cutter's shape (flat,
+  bull, ball, drill point, V) covers at points half a cube apart along
+  its moves, its axis the side's; the sub-spindle's turning cuts the
+  stock turned round, and the remnant the part-off leaves behind goes.
+  `cam_simulate` gives its surface (the cubes' faces towards no material)
+  as a mesh in the design with its volumes (the bar's, what is left,
+  what the live tools took, the material over the part and the part's
+  cubes cut away) and the rapids that cut; *Simulate* draws it in place
+  of the revolved section. The live tools' height maps of a plane are
+  the turned stock seen along its tool.
+- **Phase 4, sketches wrapped onto the diameter:** on the diameter a
+  contour or a pocket takes a sketch's profiles or curves on a plane
+  along the spindle axis as well as the faces round it: its lengths
+  across the axis become lengths round the cylinder it wraps on (the
+  plane's distance from the axis, or the bar's radius for a plane through
+  the axis), unrolled as the faces are, arcs kept; its bottom diameter is
+  the operation's. The post writes it in cylindrical interpolation on
+  that cylinder.
+- **The checks:** the program check reads Y, the B head's B, the
+  sub-spindle's axis (each alone in its block), `G68.2` (all six words),
+  `G53.1` and `G69`, moves on a plane (X halved) or in the tilted plane
+  (in its frame), and refuses a Y move while the main spindle turns, a
+  cut from an unknown place, `G53.1` without a tilted plane and a tool
+  change or the end in one; a spindle started with `G96`/`G97 S` and a
+  code of its own (the sub-spindle) turns. The lathe check wants the Y
+  axis for a plane, the B head for a tilted one or a tool in the head,
+  the Y travel, and a sub-spindle for its operations (only their speeds
+  are checked there: its travel, zones and chuck are not modeled).
+- **Tests:** `core/cam/src/turning/axes_tests.rs`: the exact Fanuc
+  program of a flat at C 30 with the Y axis, an off-center hole on the
+  face with Y and a hole on a plane tilted 45 degrees by the B head, read
+  back; G83 with X and Y; the exact program of a pin parted off into the
+  sub-spindle and faced on its back; the program check's refusals; the
+  lathe check; the turned stock following the part to the sub-spindle;
+  the planes' height maps; the stock cut in 3D (its volumes, the flat's
+  material gone, a closed surface). `core/model-tests/cam/src/axes_tests.rs`
+  (the api: a flat, a tilted hole, a wrapped sketch and the hand-over on
+  the mock kernel), `app/tests/cam_solid_stock.cpp` and the UI test
+  `tools/ui-cam-mill-turn-axes-test.sh` with its Windows and macOS twins.
+
 ## API
 
 Commands and queries of `core/model-api` (`api/cam.rs`), documented in
@@ -960,7 +1192,8 @@ The first round (branch `feature-1013-cam`, crate `core/cam`, ctest
 - `post`: the `PostProcessor` trait, `Output` (modal writer, units,
   arcs or lines, line numbers, comments), the driver `post`, and the
   dialects grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4,
-  LinuxCNC with golden G-code per dialect.
+  LinuxCNC, Makera Carvera and Carvera Air with golden G-code per
+  dialect.
 
 The offsets use cavalier_contours 0.9 (MIT OR Apache-2.0) with
 static_aabb2d_index and ahash (MIT OR Apache-2.0) and zerocopy (BSD-2,

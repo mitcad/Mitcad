@@ -144,6 +144,8 @@ const TestDriver::StepSpec kStepSpecs[] = {
     // A command the model refuses: its refusal shown as the user sees it
     // (mitcad#1284: the model's message in the interface language).
     {"model-command-refused", 1, 1, TestDriver::kIdle},
+    // A text of a model query's answer (mitcad#2321: a face's name).
+    {"capture-model-text", 3, 3, TestDriver::kIdle},
 };
 
 } // namespace
@@ -168,6 +170,21 @@ void TestDriver::runModelStep(const QString& name, const QStringList& a, int lin
       fail(line, QStringLiteral("model query path '%1' is not a finite number").arg(a.at(2))); return;
     }
     m_vars.insert(a.at(0), QString::number(value.toDouble(), 'g', 17));
+  } else if (name == QLatin1String("capture-model-text")) {
+    // As capture-model-number, for a text (mitcad#2321).
+    auto* window = qobject_cast<MainWindow*>(mainWindow);
+    const QJsonDocument query = QJsonDocument::fromJson(a.at(1).toUtf8());
+    if (!window || !query.isObject()) { fail(line, QStringLiteral("capture-model-text requires a document and JSON query")); return; }
+    QJsonValue value = window->query(query.object());
+    for (const QString& part : a.at(2).split(QLatin1Char('.'))) {
+      bool isPathIndex = false;
+      const int pathIndex = part.toInt(&isPathIndex);
+      value = isPathIndex && value.isArray() ? value.toArray().at(pathIndex) : value.toObject().value(part);
+    }
+    if (!value.isString() || value.toString().isEmpty()) {
+      fail(line, QStringLiteral("model query path '%1' is not a text").arg(a.at(2))); return;
+    }
+    m_vars.insert(a.at(0), value.toString());
   } else if (name == QLatin1String("expect-document-cache-sharing")) {
     double total = 0;
     if (!toNumber(a.at(0), total) || total <= 0) { fail(line, QStringLiteral("expected a positive process cache budget")); return; }

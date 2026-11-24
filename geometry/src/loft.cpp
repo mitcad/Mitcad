@@ -2,12 +2,15 @@
 #include "mitcad/geometry/loft.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepGProp.hxx>
@@ -28,6 +31,7 @@
 #include <Precision.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
 #include <gp_Ax2.hxx>
 
 #include "history.hpp"
@@ -55,6 +59,64 @@ struct Prepared {
   // edges it joins.
   std::vector<std::pair<TopoDS_Edge, std::vector<TopoDS_Edge>>> sources;
 };
+
+// The section is one closed edge (a circle, an ellipse, a closed spline).
+bool one_closed_edge(const Prepared& section) {
+  if (section.point || section.shape.IsNull() || section.shape.ShapeType() != TopAbs_WIRE) {
+    return false;
+  }
+  TopoDS_Edge only;
+  int edges = 0;
+  for (TopExp_Explorer it(section.shape, TopAbs_EDGE); it.More(); it.Next()) {
+    if (edges == 0 || !it.Current().IsSame(only)) {
+      only = TopoDS::Edge(it.Current());
+      ++edges;
+    }
+  }
+  return edges == 1 && BRep_Tool::IsClosed(only);
+}
+
+// A chain section's curves joined into a wire (mitcad#2345), each edge
+// named side(<curve>) after the curve whose middle is nearest to its own
+// (the wire maker may copy an edge to join it), as loft_sheet names them.
+detail::NamedWire chain_wire(const std::string& feature, const Path& chain, const std::string& which) {
+  if (chain.empty()) {
+    throw std::invalid_argument(which + " has no curves");
+  }
+  const auto middle_of = [](const TopoDS_Edge& edge) {
+    const BRepAdaptor_Curve curve(edge);
+    return curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0);
+  };
+  BRepBuilderAPI_MakeWire make;
+  std::vector<std::pair<gp_Pnt, std::string>> middles;
+  for (const PathCurve& piece : chain) {
+    const TopoDS_Edge edge = detail::model_edge(piece.curve);
+    make.Add(edge);
+    if (!make.IsDone()) {
+      throw std::invalid_argument(placed_error(which + ": a curve does not join the curve before it",
+                                               which + ": curve " + piece.name +
+                                                   " does not join the curve before it"));
+    }
+    middles.emplace_back(middle_of(edge), piece.name);
+  }
+  detail::NamedWire named;
+  named.wire = make.Wire();
+  for (TopExp_Explorer it(named.wire, TopAbs_EDGE); it.More(); it.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+    const gp_Pnt middle = middle_of(edge);
+    double best = std::numeric_limits<double>::infinity();
+    std::string name;
+    for (const auto& [point, curve] : middles) {
+      const double d = point.Distance(middle);
+      if (d < best) {
+        best = d;
+        name = curve;
+      }
+    }
+    named.edges.emplace_back(edge, face_name(feature, "side", name));
+  }
+  return named;
+}
 
 int wire_count(const TopoDS_Face& face) {
   int count = 0;
@@ -113,6 +175,12 @@ Prepared prepare(const std::string& feature, const LoftSection& section, std::si
     prepared.face = face;
     break;
   }
+  case LoftSection::Kind::Chain:
+    // Curves joined end to end (mitcad#2345), a surface loft's section:
+    // no cap, so no key.
+    prepared.named = chain_wire(feature, section.chain, which);
+    prepared.normal = section.normal;
+    break;
   }
   prepared.shape = prepared.named.wire;
   return prepared;
@@ -218,6 +286,22 @@ ShapePtr loft(const LoftSpec& spec) {
   if (spec.closed && !spec.ruled && count < 3) {
     throw std::invalid_argument("a smooth closed loft needs three or more sections");
   }
+  // Chains of curves (mitcad#2345): a surface through chains only, all
+  // open or all closed (checked once they are wires).
+  const bool chains = std::any_of(spec.sections.begin(), spec.sections.end(),
+                                  [](const LoftSection& s) { return s.kind == LoftSection::Kind::Chain; });
+  if (chains) {
+    if (!std::all_of(spec.sections.begin(), spec.sections.end(),
+                     [](const LoftSection& s) { return s.kind == LoftSection::Kind::Chain; })) {
+      throw std::invalid_argument("a loft of curve sections has only curve sections");
+    }
+    if (spec.solid) {
+      throw std::invalid_argument("a loft of curve sections is a surface");
+    }
+    if (!spec.centerline.empty()) {
+      throw std::invalid_argument("unsupported: a loft of curve sections along a centre line");
+    }
+  }
   const auto imposes = [](const LoftEnd& end) {
     return end.kind != LoftEnd::Kind::Free && end.kind != LoftEnd::Kind::PointSharp;
   };
@@ -272,20 +356,53 @@ ShapePtr loft(const LoftSpec& spec) {
     if (named == sections.end()) {
       throw std::invalid_argument("a loft needs a section that is not a point");
     }
-    const NameList first = sections.front().point || spec.closed
+    if (chains) {
+      const bool open = !BRep_Tool::IsClosed(sections.front().shape);
+      for (const Prepared& section : sections) {
+        if (BRep_Tool::IsClosed(section.shape) == open) {
+          throw std::invalid_argument("the curve sections must be all open or all closed");
+        }
+      }
+    }
+    // A Perpendicular end's face (mitcad#2345), found on its body: read
+    // only, its surface's normals along the section.
+    const auto perpendicular_face = [](const LoftEnd& end, const char* which) {
+      if (end.kind != LoftEnd::Kind::Perpendicular || !end.body) {
+        return TopoDS_Face();
+      }
+      const std::vector<int> faces = end.body->find_faces(end.face);
+      if (faces.size() != 1) {
+        const std::string why = faces.empty() ? " does not exist" : " is in several pieces";
+        throw std::invalid_argument(face_error(end.face, std::string("the ") + which + " condition's face" + why,
+                                               std::string("the ") + which + " condition's face " + end.face +
+                                                   why));
+      }
+      return end.body->face(faces.front());
+    };
+    const TopoDS_Face start_face = perpendicular_face(spec.start, "start");
+    const TopoDS_Face end_face = perpendicular_face(spec.end, "end");
+    const auto skin_of = [&] {
+      std::vector<detail::SkinSection> skin;
+      for (const Prepared& section : sections) {
+        skin.push_back({section.shape, section.point, section.normal, section.body, section.face, section.sources,
+                        TopoDS_Face()});
+      }
+      skin.front().perpendicular = start_face;
+      skin.back().perpendicular = end_face;
+      return skin;
+    };
+    // Chains have no caps (mitcad#2345).
+    const NameList first = sections.front().point || spec.closed || chains
                                ? NameList{}
                                : NameList{face_name(spec.feature, "start", sections.front().key)};
-    const NameList last = sections.back().point || spec.closed
+    const NameList last = sections.back().point || spec.closed || chains
                               ? NameList{}
                               : NameList{face_name(spec.feature, "end", sections.back().key)};
     ShapePtr result;
     if (skinned) {
       // End conditions and rails: OCCT's through-sections cannot impose
       // them; free ends without rails keep its results.
-      std::vector<detail::SkinSection> skin;
-      for (const Prepared& section : sections) {
-        skin.push_back({section.shape, section.point, section.normal, section.body, section.face, section.sources});
-      }
+      const std::vector<detail::SkinSection> skin = skin_of();
       result = detail::skinned_loft(skin, spec.start, spec.end, spec.rails, named->named, first, last, spec.closed,
                                     spec.solid, false, aligned && spec.rails.empty());
     } else if (!spec.centerline.empty()) {
@@ -305,10 +422,7 @@ ShapePtr loft(const LoftSpec& spec) {
       // does not take (Shell failed Inside): skinned here as they are, the
       // side's surface periodic where it closes (skinned_loft).
       if (count == 2 && !spec.closed) {
-        std::vector<detail::SkinSection> skin;
-        for (const Prepared& section : sections) {
-          skin.push_back({section.shape, section.point, section.normal, section.body, section.face, section.sources});
-        }
+        const std::vector<detail::SkinSection> skin = skin_of();
         const bool rings = aligned && !sections.front().point && !sections.back().point;
         if (rings) {
           result = detail::skinned_loft(skin, spec.start, spec.end, {}, named->named, first, last, false, spec.solid,
@@ -331,6 +445,15 @@ ShapePtr loft(const LoftSpec& spec) {
         // merged into one smooth edge each are matched already.
         result = detail::through_sections(shapes, named->named, first, last, spec.ruled, !spec.closed && !aligned,
                                           spec.solid);
+        // (mitcad#2271) Two sections of one closed edge each with Tangent
+        // Edges Keep (a circle and an ellipse or a closed spline): OCCT's
+        // side closes on itself as a clamped surface, which the kernel's
+        // offset does not take outward (Shell Outside Sharp failed). The
+        // same surface made periodic where it closes smoothly, as Merge's
+        // skinned rings are: the loft's geometry and topology unchanged.
+        if (count == 2 && !spec.closed && one_closed_edge(sections.front()) && one_closed_edge(sections.back())) {
+          detail::periodic_closed_sides(result->occt());
+        }
       }
     }
     return detail::finished(*result, "the loft");

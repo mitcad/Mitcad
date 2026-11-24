@@ -1,0 +1,13 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #608's design (mitcad#2330; opened with --open, never committed; tools/cli/fillet-full-round-order-reported-test.cmake): GitHub #560's design (tools/cli/tests/fillet_narrow_face_tangent_reported.json) with Fillet2 (F7, the concave edge between the bottom left of the step and the riser) at 14.2 and Fillet1 (F6, the cut's vertical edge and the end face's left edge, the left face 16.68 wide between them) at 11, in the design's own order: Fillet2, then Fillet1. Fillet2's ball touches the bottom 11.995 left of the riser; Fillet1's rounding of the end face's left edge reaches the bottom 13.09 from the left face, past that contact, so that the material Fillet2 adds there ends at Fillet1's rounding continued down. The script that moves Fillet1 before Fillet2 (fillet_full_round_order_reported_moved.json) must give the same body: the test compares the volumes the two runs report."},
+  {"expect": {"feature": "Fillet2", "status": "ok", "bodies": 1}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F7"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"query": {"query": "feature", "uid": "F6"}, "result": {"status": "ok", "level": null}}},
+  {"comment": "No sliver face; no plane facing up at the height of the step's bottom left, 14.992968 (the top of a lip of Fillet2's rounding standing out past Fillet1's: in this order Fillet1's rounding, ended on the bottom's plane, left the part of Fillet2's rounding beyond it there; in the bundle check of 23.11 three planes faced up). The top faces up at 44.226352."},
+  {"expect": {"body": "F2.b0", "min_face_area": 0.01}},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "none": {"surface": "plane", "normal": [0, 0, 1], "origin": [0, 0, 14.992968419619515]}}},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "some": {"surface": "plane", "normal": [0, 0, 1], "origin": [0, 0, 44.2263521302069]}}}
+]

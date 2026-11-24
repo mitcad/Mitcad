@@ -98,20 +98,6 @@ QString solidcraftRefusal(const QString& path) {
   return QString::fromUtf8(refused.data(), static_cast<qsizetype>(refused.size()));
 }
 
-// What a selection stands for when bodies are exported: bodies, and the
-// bodies of faces, edges and vertices.
-QStringList selectedBodies(const Selection& selection) {
-  QStringList uids;
-  for (const SelectionItem& item : selection) {
-    const bool onBody = item.kind == SelectKind::Body || item.kind == SelectKind::Face ||
-                        item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex;
-    if (onBody && !uids.contains(item.owner)) {
-      uids << item.owner;
-    }
-  }
-  return uids;
-}
-
 // A menu's entries as the log shows them (mitcad#175): the names without
 // their underlined letters and dots, "-" for a separator, a submenu as
 // "Name > [its entries]" (`collapsed`: "Name >" only). Two separators in a
@@ -2241,7 +2227,18 @@ void MainWindow::finishDesignImport(const QString& stopped, bool cancelled) {
 // ---------------------------------------------------------------------------
 // Export
 
-void MainWindow::exportFile(const QString& given) {
+void MainWindow::exportFile(const QString& given) { exportFileOf(given, m_selection); }
+
+// Export… of a body's or a component's context menu (mitcad#2298), in the
+// Browser or the view: File › Export's dialog for the items the menu was
+// opened on (the rows selected with its own, as Save as Mesh… takes them).
+void MainWindow::exportItems(const Selection& items) { exportFileOf(QString(), items); }
+
+QString MainWindow::exportBlocked(const Selection& items) const {
+  return exportBodies(items).isEmpty() ? tr("There are no bodies to export") : QString();
+}
+
+void MainWindow::exportFileOf(const QString& given, const Selection& items) {
   QVector<QPair<QString, QString>> sketches;
   for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
     if (feature.isSketch() && feature.isActive()) {
@@ -2252,17 +2249,20 @@ void MainWindow::exportFile(const QString& given) {
   if (sketch.isEmpty() && m_mode == Mode::Sketch) {
     sketch = m_sketch->uid();
   }
-  if (sketch.isEmpty() && !m_selection.isEmpty()) {
-    sketch = sketchOf(m_selection.first());
+  if (sketch.isEmpty() && !items.isEmpty()) {
+    sketch = sketchOf(items.first());
   }
-  const QStringList selected = selectedBodies(m_selection);
+  // The bodies "Selected bodies" writes: bodies, those of faces, edges and
+  // vertices, and a component's where its occurrence places them
+  // (mitcad#2298).
+  const QStringList selected = exportBodies(items);
   const QString base = m_filePath.isEmpty() ? documentName() : QFileInfo(m_filePath).completeBaseName();
   // Named as Save As Mesh names its file (mitcad#1164): the selected body,
   // the selected component, else the design; askExport adds the extension
   // of the type it starts with (the last export's, or DXF for a sketch).
   // A sketch's context-menu Export DXF… names it after the sketch.
   const QString suggested = QDir(dialogFolder(DialogGroup::Export))
-                                .filePath(safeFileName(given.isEmpty() ? exportName(m_selection) : featureName(given)));
+                                .filePath(safeFileName(given.isEmpty() ? exportName(items) : featureName(given)));
   // The design's print plates a 3MF file can carry (mitcad#1679), and the
   // slicer Send to Slicer would write them for: the design's.
   ExportPlates plates;
@@ -2389,13 +2389,18 @@ void MainWindow::exportFile(const QString& given) {
       command.insert(QStringLiteral("unit"), choice->unit);
     }
     if (choice->format == QStringLiteral("stl") || choice->format == QStringLiteral("obj") ||
-        choice->format == QStringLiteral("3mf") || choice->format == QStringLiteral("usdz")) {
+        choice->format == QStringLiteral("3mf") || choice->format == QStringLiteral("usdz") ||
+        choice->format == QStringLiteral("urdf")) {
       command.insert(QStringLiteral("refinement"), choice->refinement);
     }
     if (choice->format == QStringLiteral("usdz") && !m_filePath.isEmpty()) {
       // The bodies' appearances with their textures (mitcad#123), whose
       // paths are relative to the design's folder.
       command.insert(QStringLiteral("design_folder"), QFileInfo(m_filePath).absolutePath());
+    }
+    if (choice->format == QStringLiteral("urdf")) {
+      // The links' meshes in the colours the view shows (mitcad#2100).
+      command.insert(QStringLiteral("colors"), appearanceColors(QStringList()));
     }
     if (choice->format == QStringLiteral("3mf")) {
       // The parts in the colours the view shows (mitcad#13).
@@ -2471,6 +2476,13 @@ void MainWindow::exportFile(const QString& given) {
   // The print plates written (mitcad#1679): a file per plate names the
   // folder of its files.
   QString shown = choice->path;
+  if (choice->format == QStringLiteral("urdf")) {
+    // A ROS 2 package folder (mitcad#2100): its links and joints.
+    shown = result.value(QStringLiteral("folder")).toString(choice->path);
+    what = tr("%n link(s)", nullptr, static_cast<int>(result.value(QStringLiteral("links")).toArray().size())) +
+           QStringLiteral(", ") +
+           tr("%n joint(s)", nullptr, static_cast<int>(result.value(QStringLiteral("joints")).toArray().size()));
+  }
   if (!choice->plates.isEmpty()) {
     QStringList files;
     for (const QJsonValue& value : result.value(QStringLiteral("files")).toArray()) {

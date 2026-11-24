@@ -41,7 +41,7 @@ setup "$1" "$2" > "$UI_OUT/setup.log" 2>&1 || {
 }
 MITCAD_TEST_STEP_MS=70 MITCAD_TEST_INPUT=$here/ui-scripts/build-end-cap.mitcad-ui \
   ui_run_app build-end-cap --ui=qt --no-recovery --no-mcp --open "$files/build-end-cap.mitcad"
-ui_expect_log 'End Cap: 2 cap(s) outward' 'both ends capped outward in one step'
+ui_expect_log 'End Cap: 2 cap\(s\) outward' 'both ends capped outward in one step'
 ui_expect_log 'End Cap lists: Tube 40x40x3 L=600 595 mm x1; plates: 2 x Plate 40 x 40 x 5' \
   'end B switched to inward: the tube cut back, two plates'
 ui_expect_log 'Cut list plates: 2 x Plate 40 x 40 x 5' 'the lists show the plates'

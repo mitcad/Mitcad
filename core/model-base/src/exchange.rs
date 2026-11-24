@@ -43,6 +43,20 @@ pub struct ImportBody<S> {
     /// sRGB components in [0, 1].
     pub color: Option<[f64; 3]>,
     pub shape: S,
+    /// The faces coloured otherwise than the body (mitcad#2313: a STEP or
+    /// IGES file's faces with colours of their own); the import gives them
+    /// face appearances. Empty for most importers.
+    pub face_colors: Vec<FaceColor>,
+}
+
+/// A face of a body and its colour (mitcad#2313): the face's index in the
+/// body's shape, from 0 in the kernel's face order (the order of
+/// [`Kernel::faces`]; face `i` of an imported body is
+/// `<feature>:import(<first_face + i>)`), and sRGB components in [0, 1].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceColor {
+    pub face: usize,
+    pub color: [f64; 3],
 }
 
 /// What [`Kernel::read_file_structure`] read (mitcad#1274): a file's
@@ -102,6 +116,10 @@ pub struct ExportBody<'a, S> {
     pub color: Option<[f64; 3]>,
     pub shape: &'a S,
     pub placements: &'a [BodyPlacement],
+    /// The faces with appearances of their own, in their appearances'
+    /// colours (mitcad#2313): STEP and IGES write them as the faces'
+    /// colours beside the body's; the other formats leave them out.
+    pub face_colors: &'a [FaceColor],
 }
 
 /// Where [`Kernel::write_file`] puts a body: a rotation and a translation
@@ -134,11 +152,16 @@ pub enum ExportFormat {
     /// programs (mitcad#123): the bodies as shaded meshes in the component
     /// hierarchy, with their appearances.
     Usdz,
+    /// URDF robot description for ROS 2 (mitcad#2100): a package folder of
+    /// links from the parts that move as one, joints from the design's
+    /// joints, and a binary STL mesh per body. Written by the model.
+    Urdf,
 }
 
 impl ExportFormat {
     /// The format of a file name's extension (`.step`/`.stp`, `.iges`/`.igs`,
-    /// `.stl`, `.obj`, `.brep`/`.brp`, `.3mf`, `.usdz`), ignoring case.
+    /// `.stl`, `.obj`, `.brep`/`.brp`, `.3mf`, `.usdz`, `.urdf`), ignoring
+    /// case.
     pub fn of_path(path: &str) -> Option<Self> {
         let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
         Some(match extension.as_str() {
@@ -149,6 +172,7 @@ impl ExportFormat {
             "brep" | "brp" => Self::Brep,
             "3mf" => Self::ThreeMf,
             "usdz" => Self::Usdz,
+            "urdf" => Self::Urdf,
             _ => return None,
         })
     }
@@ -162,6 +186,7 @@ impl ExportFormat {
             Self::Brep => "brep",
             Self::ThreeMf => "3mf",
             Self::Usdz => "usdz",
+            Self::Urdf => "urdf",
         }
     }
 
@@ -169,7 +194,7 @@ impl ExportFormat {
     pub fn takes_meshes(self) -> bool {
         matches!(
             self,
-            Self::Stl | Self::Obj | Self::Brep | Self::ThreeMf | Self::Usdz
+            Self::Stl | Self::Obj | Self::Brep | Self::ThreeMf | Self::Usdz | Self::Urdf
         )
     }
 }

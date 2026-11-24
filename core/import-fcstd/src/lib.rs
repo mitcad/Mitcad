@@ -1292,6 +1292,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     // Colours are document appearances (mitcad#793).
                     color: None,
                     shape,
+                    face_colors: Vec::new(),
                 },
             ));
         }

@@ -464,6 +464,13 @@ void BrowserController::showIssues(bool warnings, const QPoint& globalPosition) 
 // ---------------------------------------------------------------------------
 // Keeping in step
 
+void BrowserController::setShownExplodeView(const QString& name) {
+  m_browser->setShownExplodeView(name);
+  if (m_shown) {
+    m_browser->rebuild(m_snapshot, m_originShown);
+  }
+}
+
 void BrowserController::refresh(const DocumentSnapshot& snapshot) {
   const bool origin = m_host.originShown();
   if (!m_shown || snapshot.key != m_snapshot.key || origin != m_originShown) {
@@ -1370,6 +1377,9 @@ void BrowserController::rename(const BrowserNode& node, const QString& name) {
   case BrowserNode::Type::Decal: // mitcad#2244
     command = cmd("rename_decal", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
     break;
+  case BrowserNode::Type::ExplodeView: // mitcad#2113
+    command = cmd("edit_explode_view", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
+    break;
   case BrowserNode::Type::SketchBlock: // mitcad#2110
     command = cmd("rename_sketch_block", {{QStringLiteral("block"), node.uid}, {QStringLiteral("name"), name}});
     break;
@@ -1472,6 +1482,9 @@ void BrowserController::browserDoubleClicked(const BrowserNode& node) {
     break;
   case BrowserNode::Type::Decal: // mitcad#2244: its panel
     m_host.editDecal(node.uid);
+    break;
+  case BrowserNode::Type::ExplodeView: // mitcad#2113: shown exploded, or assembled again
+    m_host.showExplodeView(m_host.shownExplodeView() == node.uid ? QString() : node.uid);
     break;
   case BrowserNode::Type::SketchBlock: // mitcad#2110: in a sketch of its own
     if (canChange()) {
@@ -1619,6 +1632,10 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& allNodes) {
     case BrowserNode::Type::Decal: // mitcad#2244
       command = cmd("delete_decal", {{QStringLiteral("name"), node.uid}});
       name = tr("decal %1").arg(node.name);
+      break;
+    case BrowserNode::Type::ExplodeView: // mitcad#2113: the design stays as it is
+      command = cmd("remove_explode_view", {{QStringLiteral("name"), node.uid}});
+      name = tr("explode view %1").arg(node.name);
       break;
     case BrowserNode::Type::SketchBlock: // mitcad#2110: refused in words while it has instances
       command = cmd("remove_sketch_block", {{QStringLiteral("block"), node.uid}});
@@ -2460,7 +2477,8 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   };
   // Save As Mesh (mitcad#734): the row's bodies, or those of the body and
   // component rows selected with it, to mesh files; disabled with the
-  // reason when none is a solid or mesh body. Last before Collapse All, which
+  // reason when none is a solid or mesh body; Export… (mitcad#2298) before
+  // it for the same rows. Last before Collapse All, which
   // ends every row's menu, so that the entries above keep their places.
   const auto saveAsMeshEntry = [&] {
     setEntries();
@@ -2481,7 +2499,16 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     if (!blocked.isEmpty()) {
       qDebug().noquote() << QStringLiteral("Save As Mesh disabled: %1").arg(blocked);
     }
+    // Export… (mitcad#2298) beside it, for the same items: File › Export's
+    // dialog with their bodies as its selected bodies; disabled with the
+    // reason when they stand for no body.
+    const QString exportReason = m_host.exportBlocked(meshItems);
+    if (!exportReason.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Export disabled: %1").arg(exportReason);
+    }
     menu.separator();
+    menu.add(QStringLiteral("export"), tr("Export…"), [this, meshItems] { m_host.exportItems(meshItems); },
+             exportReason);
     menu.add(QStringLiteral("export"), tr("Save as Mesh…"), [this, meshItems] { m_host.saveAsMesh(meshItems); },
              blocked);
   };
@@ -2707,6 +2734,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         menu.separator();
         menu.add(QStringLiteral("open"), tr("Open Linked Design"),
                  [this, component] { m_host.openLinkedDesign(component); });
+        // Its design edited inside this one (mitcad#2321).
+        menu.add(QStringLiteral("edit"), tr("Edit in Place"), [this, component] {
+          if (canChange()) {
+            m_host.editInPlace(component);
+          }
+        });
         menu.add(QStringLiteral("update"), tr("Update Link"), [this, component] {
           if (canChange()) {
             m_host.updateLink(component);
@@ -2728,6 +2761,10 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
             },
             c.linkTree ? tr("It is linked with its components") : QString());
       }
+    }
+    // A design edited in place (mitcad#2321): the root row finishes it.
+    if (root && m_host.editingInPlace()) {
+      menu.add(QStringLiteral("finish-sketch"), tr("Finish Edit in Place"), [this] { m_host.finishEditInPlace(); });
     }
     // The whole design turned by quarter turns (mitcad#502).
     if (root) {
@@ -3259,6 +3296,30 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     renameEntry();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
+  // Exploded views (mitcad#2113): the folder makes a new one, by hand or
+  // by Auto Explode; a view is shown exploded or assembled, edited and
+  // played in the Explode panel, renamed and deleted.
+  case BrowserNode::Type::ExplodeViews:
+    menu.add(QStringLiteral("explode-view"), tr("New Exploded View"), [this] {
+      if (canChange()) {
+        m_host.openExplodeView(QString());
+      }
+    });
+    break;
+  case BrowserNode::Type::ExplodeView: {
+    const bool shown = m_host.shownExplodeView() == node.uid;
+    menu.add(QStringLiteral("explode-view"), shown ? tr("Show Assembled") : tr("Show Exploded"),
+             [this, node, shown] { m_host.showExplodeView(shown ? QString() : node.uid); });
+    menu.add(QStringLiteral("edit"), tr("Edit Exploded View"), [this, node] {
+      if (canChange()) {
+        m_host.openExplodeView(node.uid);
+      }
+    });
+    menu.separator();
+    renameEntry();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    break;
+  }
   // Sketch blocks (mitcad#2110): a block edited in a sketch of its own,
   // renamed, deleted (not while it has instances).
   case BrowserNode::Type::SketchBlock: {
@@ -3849,17 +3910,15 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
       m_timeline->startRename(uid);
     }
   });
+  // The timeline's selection when the menu's feature is in it, as Delete
+  // and Auto Fix take it (GitHub mitcad/Mitcad#600), else the feature.
   menu.add(QStringLiteral("suppress"), suppressed ? tr("Unsuppress Features") : tr("Suppress Features"),
-           [this, uid, suppressed] {
-             const DocumentSnapshot::Feature* f = m_snapshot.feature(uid);
-             const QString name = f != nullptr ? f->name : uid;
-             if (canChange() &&
-                 m_host.runModelCommand(cmd("suppress_feature", {{QStringLiteral("uid"), uid},
-                                                                 {QStringLiteral("suppressed"), !suppressed}}))) {
-               qDebug().noquote() << QStringLiteral("%1 %2").arg(suppressed ? QStringLiteral("Unsuppressed")
-                                                                            : QStringLiteral("Suppressed"),
-                                                                 name);
+           [this, uid, row, suppressed] {
+             QStringList features = row.isValid() ? QStringList() : m_timeline->selectedFeatures();
+             if (!features.contains(uid)) {
+               features = QStringList{uid};
              }
+             setFeaturesSuppressed(features, !suppressed);
            });
   // Suppressed while a condition holds (mitcad#809).
   menu.add(QStringLiteral("suppress"), tr("Suppress When…"), [this, uid] { suppressWhen(uid); });
@@ -5222,6 +5281,114 @@ void BrowserController::openReorient() {
 }
 
 // Bindings (mitcad#809).
+
+void BrowserController::setFeaturesSuppressed(const QStringList& uids, bool suppress) {
+  if (!canChange()) {
+    return;
+  }
+  // In timeline order, the features whose suppression changes; one whose
+  // suppression follows a condition and is as asked keeps its condition.
+  const QSet<QString> requested(uids.cbegin(), uids.cend());
+  QStringList targets;
+  QStringList names;
+  for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
+    if (requested.contains(feature.uid) && feature.suppressed != suppress) {
+      targets.append(feature.uid);
+      names.append(feature.name);
+    }
+  }
+  if (targets.isEmpty()) {
+    return;
+  }
+  const QString name = names.join(QStringLiteral(", "));
+  // Suppressing asks once about the union of the active features that use
+  // them (mitcad#2314), as Delete does. One whose suppression follows a
+  // condition is left to it, as the model's `dependents` leaves it.
+  // Unsuppressing asks nothing: nothing records which dependents a
+  // Suppress All took, and Undo takes it back.
+  bool withDependents = false;
+  QStringList changed = names;
+  if (suppress) {
+    QSet<QString> users;
+    try {
+      for (const QString& uid : std::as_const(targets)) {
+        const QJsonArray dependents = m_host.model()
+                                         .queryObject({{QStringLiteral("query"), QStringLiteral("dependents")},
+                                                       {QStringLiteral("uid"), uid}})
+                                         .value(QStringLiteral("dependents"))
+                                         .toArray();
+        for (const QJsonValue& value : dependents) {
+          users.insert(value.toObject().value(QStringLiteral("uid")).toString());
+        }
+      }
+    } catch (const std::exception& e) {
+      m_host.showStatus(mitcad::modelMessage(e.what()), NoticeLevel::Error);
+      return;
+    }
+    const QSet<QString> targetSet(targets.cbegin(), targets.cend());
+    QStringList dependents;
+    QStringList all;
+    for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
+      const bool target = targetSet.contains(feature.uid);
+      const bool dependent = !target && users.contains(feature.uid) && !feature.suppressed &&
+                             feature.suppressedWhen.isEmpty();
+      if (dependent) {
+        dependents.append(feature.name);
+      }
+      if (target || dependent) {
+        all.append(feature.name);
+      }
+    }
+    if (!dependents.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Suppress %1: also %2?").arg(name, dependents.join(QStringLiteral(", ")));
+      QMessageBox box(QMessageBox::Question, tr("Suppress"),
+                      names.size() == 1 ? tr("Suppress %1?").arg(name)
+                                        : tr("Suppress %1 features?").arg(names.size()),
+                      QMessageBox::Cancel, m_window);
+      box.setInformativeText(
+          (names.size() == 1 ? tr("These features use it:\n%1") : tr("These features use them:\n%1"))
+              .arg(dependents.join(QLatin1Char('\n'))));
+      QPushButton* everything = box.addButton(tr("Suppress &All"), QMessageBox::AcceptRole);
+      QPushButton* only = box.addButton(names.size() == 1 ? tr("Suppress &Only This") : tr("Suppress &Only These"),
+                                        QMessageBox::AcceptRole);
+      box.setDefaultButton(everything);
+      prepareModal(&box);
+      execDialog(&box);
+      if (box.clickedButton() == everything) {
+        withDependents = true;
+        changed = all;
+      } else if (box.clickedButton() != only) {
+        qDebug().noquote() << QStringLiteral("Suppress %1 cancelled").arg(name);
+        return;
+      }
+    }
+  }
+  // Suppressed from the last one back, so that no selected feature fails
+  // for a moment because one it uses went first (each command recomputes);
+  // unsuppressed in timeline order, each after what it uses.
+  QStringList ordered = targets;
+  if (suppress) {
+    std::reverse(ordered.begin(), ordered.end());
+  }
+  QJsonArray commands;
+  for (const QString& uid : std::as_const(ordered)) {
+    QJsonObject command = cmd("suppress_feature", {{QStringLiteral("uid"), uid}, {QStringLiteral("suppressed"), suppress}});
+    if (withDependents) {
+      command.insert(QStringLiteral("dependents"), true);
+    }
+    commands.append(command);
+  }
+  // One feature's command is its own undo step, by the model's name.
+  const QString changedNames = changed.join(QStringLiteral(", "));
+  const bool done = commands.size() == 1
+                        ? m_host.runModelCommand(commands.first().toObject())
+                        : m_host.runModelCommands(commands, (suppress ? tr("Suppress %1") : tr("Unsuppress %1"))
+                                                                .arg(changedNames));
+  if (done) {
+    qDebug().noquote() << QStringLiteral("%1 %2").arg(
+        suppress ? QStringLiteral("Suppressed") : QStringLiteral("Unsuppressed"), changedNames);
+  }
+}
 
 void BrowserController::suppressWhen(const QString& feature) {
   const DocumentSnapshot::Feature* f = m_snapshot.feature(feature);

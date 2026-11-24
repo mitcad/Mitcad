@@ -365,6 +365,12 @@ vcpkg_from_github(
         2170-bopalgo-wiresplitter-vertex-met-a-period-apart.patch
         2050-brepoffset-intersection-round-a-periodic-curve-trimmed-over-its-edges-across-the-origin.patch
         1870-brepblend-approximation-solves-sections-on-the-walked-ball.patch
+        2228-chfi3d-rounding-whose-contact-line-folds-walked-in-pieces-the-twisted-one-filled-between-its-neighbours.patch
+        2291-chfi3d-tight-rim-corner-obtuse-by-the-walls-normal-at-the-ball.patch
+        2284-brepgprop-gauss-joints-of-a-faces-pcurves-integrated.patch
+        2229-chfi3d-cap-leaving-the-end-face-across-a-tangent-edge-cut-by-the-face-beyond.patch
+        2306-chfi3d-corner-of-four-chamfers-meeting-in-a-plane-closed-by-a-planar-face.patch
+        2272-brepblend-walk-ending-on-both-restrictions-takes-a-closed-guides-end-only-near-it.patch
 )
 
 # The compiler cache (docs/development.md, "The compiler cache of the vcpkg

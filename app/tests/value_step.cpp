@@ -65,6 +65,28 @@ void factorTests() {
   // The tooltip's line.
   CHECK(mitcad::valueStepHint(false) == QString::fromUtf8("Up/Down steps the value; Shift ×10, Ctrl ×0.1"));
   CHECK(mitcad::valueStepHint(true) == QString::fromUtf8("Up/Down steps the value; Shift ×10, Option ×0.1"));
+  // The step buttons' tooltip (mitcad#2327).
+  CHECK(mitcad::valueStepButtonHint(false) ==
+        QString::fromUtf8("Steps the value; Shift ×10, Ctrl ×0.1; hold to repeat"));
+  CHECK(mitcad::valueStepButtonHint(true) ==
+        QString::fromUtf8("Steps the value; Shift ×10, Option ×0.1; hold to repeat"));
+}
+
+// The step buttons are enabled for a plain value of the field's kind only
+// (mitcad#2327): an expression, a parameter's name, an empty field or a
+// unit of another kind shows them disabled.
+void steppableTests() {
+  CHECK(mitcad::valueSteppable(QStringLiteral("10 mm"), ParameterKind::Length));
+  CHECK(mitcad::valueSteppable(QStringLiteral("12,5"), ParameterKind::Length));
+  CHECK(mitcad::valueSteppable(QStringLiteral("w = 4 mm"), ParameterKind::Length));
+  CHECK(mitcad::valueSteppable(QString::fromUtf8("45°"), ParameterKind::Angle));
+  CHECK(mitcad::valueSteppable(QStringLiteral("4"), ParameterKind::Unitless));
+  CHECK(!mitcad::valueSteppable(QStringLiteral("d1*2"), ParameterKind::Length));
+  CHECK(!mitcad::valueSteppable(QStringLiteral("d1"), ParameterKind::Length));
+  CHECK(!mitcad::valueSteppable(QString(), ParameterKind::Length));
+  CHECK(!mitcad::valueSteppable(QStringLiteral("10 deg"), ParameterKind::Length));
+  CHECK(!mitcad::valueSteppable(QStringLiteral("4 mm"), ParameterKind::Unitless));
+  CHECK(!mitcad::valueSteppable(QStringLiteral("4"), ParameterKind::Text));
 }
 
 void unitTests() {
@@ -196,6 +218,7 @@ void leftAloneTests() {
 
 int valueStepTests() {
   factorTests();
+  steppableTests();
   unitTests();
   minimumTests();
   leftAloneTests();

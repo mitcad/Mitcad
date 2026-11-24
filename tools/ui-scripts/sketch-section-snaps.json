@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-section-snaps.mitcad-ui (mitcad#2324, GitHub #579): Cylinder1 (F1) of diameter 20 round (-40, 0) on XY, 30 high: Body1 (F1.b0), its caps at z = 0 and z = 30. Sphere1 (F2) of diameter 30 round (40, 0, 0): Body2 (F2.b0). Plane1 (F3) 10 above XY, parallel to the cylinder's caps; Sketch1 (F4) on it, empty (the sketch's x and y are the design's). The plane cuts the cylinder in a circle of radius 10 round (-40, 0) and the sphere in one of radius 11.18 round (40, 0); no body edge lies in it."},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [-40, 0], "diameter": 20, "height": 30, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "sphere", "plane": {"type": "origin", "plane": "xy"},
+    "center": [40, 0], "diameter": 30, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 10}}},
+  {"cmd": "sketch.create", "plane": "F3"},
+  {"expect": {"bodies": 2}}
+]

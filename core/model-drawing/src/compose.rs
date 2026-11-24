@@ -1378,11 +1378,12 @@ pub fn compose(options: &DrawingOptions, units: Units, input: &SheetInput) -> Co
 /// The pen of an edge: a thread's roots (ISO 6410) and tangent edges
 /// narrow, other visible edges wide; a Flat Pattern's bend lines
 /// (mitcad#2280) narrow, up bends long dash dotted, down bends long dash
-/// double dotted.
+/// double dotted; an explode's trail lines narrow phantom (mitcad#2113).
 pub fn edge_pen(visible: bool, kind: ViewEdgeKind) -> Pen {
     match (visible, kind) {
         (_, ViewEdgeKind::Bend { up: true }) => Pen::Chain,
         (_, ViewEdgeKind::Bend { up: false }) => Pen::Phantom,
+        (_, ViewEdgeKind::Trail) => Pen::Phantom,
         (false, _) => Pen::Hidden,
         (true, ViewEdgeKind::Smooth | ViewEdgeKind::ThreadRoot) => Pen::Thin,
         (true, _) => Pen::Thick,
@@ -1407,10 +1408,12 @@ pub fn render(
         Some(filled) => filled.template.frame(width, height),
         None => frame(width, height),
     };
-    // A template's block with its revision table's room (mitcad#722).
-    let title_height = title.template.as_ref().map_or(TITLE_HEIGHT, |filled| {
-        filled.template.title_block.height + filled.template.revision_room()
-    });
+    // A template's block with its revision table's room (mitcad#722),
+    // none when it draws no block (mitcad#2325).
+    let title_height = title
+        .template
+        .as_ref()
+        .map_or(TITLE_HEIGHT, |filled| filled.template.title_room());
     let mut groups = Vec::new();
     let views = &content.views;
     let specs: Vec<PlanView<'_>> = views.iter().map(PlanView::of).collect();

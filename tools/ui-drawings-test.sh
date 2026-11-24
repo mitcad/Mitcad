@@ -939,9 +939,11 @@ ui_step "open Drawing1 (double-click)"     ui_double_click_logged "Browser Root/
 ui_expect_new "Drawing opened: D1 Drawing1, sheet 1 of 1" "the drawing opened again"
 ui_expect_new "MATERIAL=PLA" "the title block's material follows the body's"
 ui_expect_new "REV=-" "no revision yet"
-settled "Drawing Add Revision"
+# Add Revision… is a row of the Sheet group's menu (mitcad#2066: Sheet… its
+# one button).
+settled "Ribbon DRAWING/SHEET"
 ui_mark
-ui_step "Add Revision"                     ui_click_logged "Drawing Add Revision"
+ui_step "Add Revision"                     ui_ribbon_menu_choose "Add Revision…" DRAWING/SHEET
 ui_expect_new "Drawing revision dialog opened: Add Revision" "its dialog"
 ui_focus_dialog '^Add Revision$'
 ui_step "its description"                  ui_type_text "First release"
@@ -987,9 +989,11 @@ ui_stop_app
 # The assembly's part runs in the Floating layout (mitcad#725): the
 # drawing shows the same inside the cards over the 3D view. Without labels
 # under the toolbar's icons, which the Floating toolbar panel shows by
-# default (mitcad#1990). Even so the DRAWING tab's groups at the right of
-# its Sheet group (mitcad#1990), the tables' tools among them, fold at
-# 1280 px: ui_drawing_tool takes a tool from its group's menu then.
+# default (mitcad#1990). ui_drawing_tool clicks a tool's button where the
+# DRAWING tab shows it and takes it from its group's menu otherwise (a row
+# of the menu only, or a group folded where the tab's groups do not fit;
+# tools/ui-drawing-ribbon-fit-test.sh checks that the common groups stay
+# whole at 1280 px, mitcad#2066).
 ui_icons_only
 ui_start_app --open "$ASSEMBLY" --no-native-dialogs --chrome=floating
 ui_expect_log "assembly.mitcad" "the assembly opened"

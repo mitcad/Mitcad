@@ -807,3 +807,113 @@ fn isolate_leaves_the_bodies_it_hides_out_of_the_sketch_geometry() {
         BTreeSet::from(["F4.b0".to_owned()])
     );
 }
+
+fn plane_section(doc: &Document<MockKernel>, sketch: &str) -> Vec<Value> {
+    query(
+        doc,
+        json!({"query": "plane_geometry", "sketch": sketch, "section": true}),
+    )
+    .as_array()
+    .unwrap()
+    .clone()
+}
+
+/// A sketch on a construction plane `distance` mm off the block's top face
+/// (negative: into the block): its uid.
+fn sketch_off_the_top(doc: &mut Document<MockKernel>, top: &FaceName, distance: f64) -> String {
+    let plane = command(
+        doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_plane",
+               "definition": {"type": "offset", "plane": {"body": "F2.b0", "face": top.to_string()},
+                              "distance": distance}}}),
+    )["uid"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command(doc, json!({"cmd": "sketch.create", "plane": plane}))["uid"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn a_sketch_through_the_block_has_its_section_by_face() {
+    // mitcad#2324: a plane parallel to the top face, 10 mm into the block,
+    // has no edge of it in the plane, but cuts it in a 60 x 40 rectangle;
+    // each side of it comes with the face it lies on, as the section of
+    // that face (`sketch.project` with `section`) would make it.
+    let Block {
+        mut doc,
+        top,
+        bottom,
+        sides,
+    } = block();
+    let sketch = sketch_off_the_top(&mut doc, &top, -10.0);
+    assert_eq!(plane_geometry(&doc, &sketch), Vec::<Value>::new());
+    let items = plane_section(&doc, &sketch);
+    assert_eq!(kinds(&items), ["line", "line", "line", "line"], "{items:?}");
+    let faces: BTreeSet<String> = sides
+        .iter()
+        .chain([&top, &bottom])
+        .map(ToString::to_string)
+        .collect();
+    let corners: Vec<[f64; 2]> = [[0.0, 0.0], [60.0, 0.0], [60.0, 40.0], [0.0, 40.0]]
+        .iter()
+        .map(|c| in_sketch(&doc, &sketch, [c[0], c[1], 10.0]))
+        .collect();
+    for item in &items {
+        assert_eq!(item["section"], true, "{item}");
+        assert_eq!(item["body"], "F2.b0", "{item}");
+        assert!(item.get("occurrence").is_none(), "{item}");
+        assert!(
+            faces.contains(item["source"].as_str().unwrap()),
+            "a face of the block: {item}"
+        );
+        let g = &item["geometry"];
+        assert!(corners.iter().any(|c| near(&g["start"], *c)), "{item}");
+        assert!(corners.iter().any(|c| near(&g["end"], *c)), "{item}");
+    }
+    // The section of the face an item names holds that item's line.
+    let item = &items[0];
+    let made = command(
+        &mut doc,
+        json!({"cmd": "sketch.project", "sketch": sketch, "source": item["source"],
+               "body": "F2.b0", "linked": true, "section": true}),
+    );
+    let ids: Vec<String> = made["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e.as_str().unwrap().to_owned())
+        .collect();
+    let answer = query(&doc, json!({"query": "sketch", "uid": sketch}));
+    let lines: Vec<&Value> = answer["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "line" && ids.iter().any(|id| *id == e["id"]))
+        .collect();
+    let g = &item["geometry"];
+    assert!(
+        lines.iter().any(|l| {
+            let (s, e) = (&l["geometry"]["start"], &l["geometry"]["end"]);
+            (near(s, xy(&g["start"])) && near(e, xy(&g["end"])))
+                || (near(s, xy(&g["end"])) && near(e, xy(&g["start"])))
+        }),
+        "{item} in {lines:?}"
+    );
+}
+
+#[test]
+fn a_sketch_off_the_block_or_a_hidden_block_has_no_section() {
+    let Block { mut doc, top, .. } = block();
+    let above = sketch_off_the_top(&mut doc, &top, 1.0);
+    assert_eq!(plane_section(&doc, &above), Vec::<Value>::new());
+    let through = sketch_off_the_top(&mut doc, &top, -10.0);
+    assert_eq!(plane_section(&doc, &through).len(), 4);
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F2.b0", "visible": false}),
+    );
+    assert_eq!(plane_section(&doc, &through), Vec::<Value>::new());
+}

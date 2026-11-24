@@ -163,4 +163,12 @@ ValueStepLimit sketchDimensionStepLimit(const QString& type, bool signedOffset) 
   return limit;
 }
 
+bool valueSteppable(const QString& text, ParameterKind kind) { return steppedValue(text, kind, 1.0).has_value(); }
+
+QString valueStepButtonHint(bool macKeys) {
+  return macKeys
+             ? QCoreApplication::translate("ValueStep", "Steps the value; Shift ×10, Option ×0.1; hold to repeat")
+             : QCoreApplication::translate("ValueStep", "Steps the value; Shift ×10, Ctrl ×0.1; hold to repeat");
+}
+
 } // namespace mitcad

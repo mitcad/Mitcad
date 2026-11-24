@@ -1,7 +1,8 @@
-# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695, 2170
+# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695, 2170, 2284
 
 OCCT's face merge after booleans (`ShapeUpgrade_UnifySameDomain`) and the
-boolean's wire splitter. The face merge's speed-ups are 0006 in
+boolean's wire splitter, and the volume integration that measures a
+boolean's result (2284). The face merge's speed-ups are 0006 in
 [repeated work](repeated-work.md) and 0592 in
 [multi-turn faces](multi-turn-faces.md). Back to the
 [port's README](../README.md).
@@ -38,6 +39,13 @@ boolean's wire splitter. The face merge's speed-ups are 0006 in
   the union of a reported design's finned rods with a ring and
   triangles left faces closed in space but not in the face's parameters,
   an invalid union (mitcad#2170).
+- **2284** lets the volume and area integration (`BRepGProp_Gauss`)
+  integrate across the joints of each face's loop of pcurves, where two
+  pcurves meet at their vertex within its tolerance but apart along v,
+  and the volume integration integrate the ribbon from each edge's curve
+  on a face to its 3D curve: a reported ring's common with a union
+  measured a volume that moved by 4.1e-6 relative with the point it was
+  integrated about (mitcad#2284).
 
 ## 0110: a chain that cannot be concatenated
 
@@ -348,11 +356,10 @@ curves are, and the integration's own error bound about each of the three
 points (each face's integral times the relative error the integration
 reports for it) to `common-volumes.txt` in its build folder: that record
 tells whether the spread is the integration's error or slivers between
-faces on two surfaces. The ring's limit is the measured spread rounded
-up, 5e-6 relative (`kRingExcessLimit` in
-`geometry/tests/test_join_holds_inputs.cpp`), and the test checks the
-ring's spread itself against it; every other body stays within 1e-6 both
-ways.
+faces on two surfaces. The ring's limit was then the measured spread
+rounded up, 5e-6 relative, until the cause was found and patched (2284,
+below); since then the ring is checked within 1e-6 both ways like every
+other body.
 
 #### Neither: the joints of a face's pcurves (mitcad#2267)
 
@@ -383,9 +390,9 @@ order of 1e-4 mm², the size of the net normal integral the spread along
 the ring's axis implies. The strips run round the axis, so their parts
 across it turn and largely cancel while their parts along it add up, as
 in the record, where the spread about the point along Z is 260 times the
-one along X. This is the cause being checked, not yet a found one.
+one along X. The record confirmed it (the cause found, below, 2284).
 
-The test now writes, for each face of the ring's common and of the ring
+The test writes, for each face of the ring's common and of the ring
 (`shell_flux`), the vector integral of its normal over its area as the
 integration gives it (its volume about the middle and about points along
 X, Y and Z), its share of the ring's surface from its edges' 3D curves
@@ -400,6 +407,121 @@ port patch integrating across each joint so the loop closes, the shape
 left as it is) and the ring's limit returns to 1e-6; if not, the faces
 whose integrated vector is off their share of the ring's surface by more
 than their strips carry the open part, and the record names them.
+
+## 2284: the joints of a face's pcurves integrated
+
+The record of mitcad#2267 found the cause. For the ring's common:
+
+```
+the common's 40 faces summed: their normals over their areas integrated
+  (-1.53e-06, 0.000108, 0.000396) mm2, the ring's surface within their
+  edges' 3D curves (2.31e-14, -1.87e-14, 4.12e-11), through their pcurves
+  with the joints closed (-6.38e-12, -6.66e-14, -4.24e-11), the strips the
+  joints leave out (-1.53e-06, 0.000108, 0.000396)
+the common's summed vector moves its volume from the middle to the points
+  along X and Z by +1.58e-08, -4.09e-06 relative to the body (measured
+  +1.58e-08, -4.09e-06); with every face's loop closed at its joints,
+  about the three points: common 21135.140974536, 21135.140974536,
+  21135.140974539, body 21135.140974537 (each)
+the common's face 10 (torus, forward, 12 wires, 159 edges, u 0 to 2pi,
+  v pi to 3pi): 159 joints of its pcurves, apart by up to 1.26e-10 along
+  u, 4.07e-08 along v, 9.17e-08 mm in space; the strips they leave out
+  (-1.57e-06, 0.000108, 0.000397) mm2
+```
+
+The common's shell closes in space (its faces' shares of the ring's
+surface sum to zero within 4e-11 mm²) and in the parameters once each
+loop is closed at its joints; the strips the joints leave out are the
+whole of the integrated normals' sum, almost all of it on the one torus
+face reaching round the ring, and with them integrated the common equals
+the ring within 1.2e-13 about every point. The pcurves meet at their
+vertices within the vertices' tolerance (up to 1e-6 mm), up to 9.2e-8 mm
+apart in space: each edge's pcurve ends at its own point of the vertex,
+and a section curve on the torus is an approximation the face-face
+intersection made, so two curves meeting at one vertex end within the
+vertex's tolerance of it, not at one point. A valid shape allows that (the
+common is valid; the checker accepts pcurves meeting within the vertex's
+tolerance), and making them meet would mean moving the curves of a valid
+result after the boolean, at every vertex of every such face. Which step
+of the boolean put each of the 159 joints apart (the section's
+approximation, the split of an edge at a vertex, the pcurve of a split
+piece of the ring's own edge) the record does not tell apart; the
+integration is fixed instead, which needs none of that.
+
+### 2284-brepgprop-gauss-joints-of-a-faces-pcurves-integrated
+
+`BRepGProp_Gauss` integrates across the joints of each face's loop of
+pcurves (`JointNodes`). In each wire of the forward face, each edge use's
+end (its pcurve's point at its end, in the edge's orientation) is paired
+with the start of a use there at the same vertex not yet paired, the
+nearest in the parameters. A joint whose two points and middle lie on the
+surface within the vertex's tolerance of it (so not a period apart, not
+across the domain) and whose points differ along v by more than 1e-14 of
+the face's v range (at least 1e-14; below that the gap is the parameters'
+rounding) is integrated as the straight segment from the end to the
+start: four Gauss points along the segment and, at each, the integrand
+integrated in u from the face's lowest u over the surface's u knot spans
+(at least eight points each), the parameters kept within the face's
+bounds as the pcurves' points are.
+The three `Compute` methods that integrate over a domain (the adaptive
+one `BRepGProp::VolumeProperties` and `SurfaceProperties` use with an
+epsilon, and the non-adaptive volume and area ones) add those nodes'
+integrand to the face's sums after the domain's edges, so every loop
+closes in the parameters. A joint apart only along u adds nothing, and
+faces whose pcurves meet exactly at their vertices are integrated as
+before.
+
+Closing the loops alone measures each face over the domain its pcurves
+bound. Where a pcurve lies off its edge's 3D curve, within the edge's
+tolerance (an approximated section curve's pcurve on a blend), the face
+reaches past the edge or stops short of it, and the face beside it on
+another surface, bounded by its own curve of the edge, does not meet it.
+The integration along the pcurves alone happened to hide such an offset
+where the pcurve runs along u (a v offset of a pcurve along u reads
+nothing, and the strips its joints left out took it back). The first form
+of this patch closed the joints only, and in the bundle check two
+roundings of radius 3 mitred at a short edge
+(`geometry.suite.fillet_corners`, `test_two_roundings_mitred_at_a_short_edge`)
+measured 16.0707129 mm³ removed against 16.0693324 from booleans of the
+analytic shapes, past the test's 5e-5 relative; the port's own test of a
+pcurve moved 1e-6 off its arc (`geometry.port.2284`) moved by 4.2e-7 with
+the point. So for the volume (and its moments) `RibbonNodes` also
+integrates the ribbon from each edge's curve on the face, A(t), to its 3D
+curve, C(t): R(t, s) = A(t) + s (C(t) − A(t)), oriented with the face (the
+face's orientation in the shape, the edge's in the face), at 8 Gauss
+points on each of the 3D curve's C2 intervals (at least 4 pieces, at most
+32) and 2 across (exact across: the integrand is of degree 2 in s). Faces
+and ribbons together close along the edges' 3D curves, the remaining
+holes at the vertices of the order of the tolerance squared, so a shell
+closed in space has one volume about every point. Two faces on one
+surface sharing their edge's pcurve (the ring's common) have opposite
+ribbons that cancel. Only edges whose tolerance is above the confusion
+tolerance (1e-7 mm) are looked at, since an edge's curves lie within its
+tolerance of each other, and of those only edges whose curve on the face
+lies off the 3D curve by more than 1e-7 mm at one of five points;
+degenerated edges, edges without a 3D curve and edges not SameParameter
+have none; the area gets no ribbons. A shape whose edges all lie within
+1e-7 mm costs one tolerance lookup per edge: the patch's second form
+looked at every edge, built both curves' adaptors and asked the curve on
+the face for its C2 intervals (on a spline face, its crossings with the
+surface's knot lines), and a sheet-metal board's script round trip
+(`cli.script_round_trip.sheet_board_0427`) ran past its 900 s in the
+bundle check. The shape is left as it is: no curve is moved, no tolerance
+changed, nothing is healed. The Gauss–Kronrod integration
+(`BRepGProp_VinertGK`, `BRepGProp::VolumePropertiesGK`) is a separate
+integrator and is not changed.
+
+In the OCCT lab (the cases `2284-tube-rim-volumes` and
+`2284-stored-bodies-closure`, each body's volume about its rough
+barycentre and about points 100 mm away), stored bodies whose volume the
+patch changes most moved with the point by 2.07 mm³ (a wall's run-on),
+0.148 (a convex mitre), 0.144, 0.132 and 0.087 (a tube's rim before and
+after its rounding, and OCCT's rounding of it), 0.097 (a three-face
+corner) and 0.024 mm³ (a tube's end) without the patch, and by 4e-6,
+0.0026, 3e-5 each, 1e-6 and 4e-5 mm³ with it: what the patch changes is
+the part of the volume that depended on the point it was integrated
+about. Over the 33 shared cases only volumes change (by up to 4.7e-5
+relative, on the wall's run-on); no case's validity, faces or success.
 
 ## Reports and tests
 
@@ -449,7 +571,27 @@ than their strips carry the open part, and the record names them.
   the rod's seam, its faces merged or not, joined with a plate, within
   1e-6 both ways; the reported design's five bare rods no more than 1e-6
   short in the union), so no patch of the common was needed. The
-  reported ring's common with the union is checked within 5e-6, the
+  reported ring's common with the union was checked within 5e-6, the
   spread of its volume about different points (mitcad#2262, above), with
   each face's vector integral of its normal and the joints of its pcurves
-  recorded (mitcad#2267, above).
+  recorded (mitcad#2267, above), until 2284.
+- 2284: mitcad#2284 and
+  `geometry/tests/port/p2284-joints-of-a-faces-pcurves-integrated.cpp`
+  (ctest `geometry.port.2284`): half a cylinder built from scratch, one of
+  whose edges' pcurves on its side face is changed by 1e-6 mm (the edge's
+  and its vertices' tolerances 1e-5 mm), its volume the same within 1e-9
+  about its middle and points 100 mm away along X, Y and Z and equal to
+  pi R² H / 2 within 1e-9: the side line's pcurve ending 1e-6 short of the
+  top (the joint; without the patch the volume moves by 4.2e-7 relative
+  along Y), the top arc's pcurve moved 1e-6 above its 3D curve (the
+  ribbon; with the joints closed alone it moves by 4.2e-7), and the half
+  cylinder as built. `geometry.suite.fillet_corners`,
+  `test_two_roundings_mitred_at_a_short_edge`: the removed volume within
+  5e-5 of the booleans' (it failed with the joints closed alone). In
+  `geometry/tests/test_join_holds_inputs.cpp` (ctest
+  `geometry.join_holds_inputs`, from `MITCAD_MITCAD_REPORTED`) the
+  reported ring's common with the union is checked within 1e-6 both ways
+  like every body, and its volume about each of three points within 1e-9
+  of the ring's; the record keeps the strips the joints leave out of an
+  integration along the pcurves alone and the volumes that integration
+  gave.

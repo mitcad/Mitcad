@@ -178,8 +178,8 @@ void environmentTests() {
 }
 
 // The start again when the window cannot draw with OpenGL (mitcad#2292):
-// the first option not tried yet of native Wayland (in a Wayland session
-// only), X11 with the EGL integration, X11 with GLX; nothing after an X11
+// the first option not tried yet of X11 with the EGL integration, X11 with
+// GLX, native Wayland (in a Wayland session only); nothing after an X11
 // integration the user chose other than those; the note keeps each
 // earlier start's.
 void graphicsFallbackTests() {
@@ -194,19 +194,27 @@ void graphicsFallbackTests() {
   CHECK(mitcad::graphicsOption(xcb, QStringLiteral("none")).isEmpty());
   CHECK(mitcad::graphicsOption(QStringLiteral("offscreen"), QString()).isEmpty());
 
-  // The reported case: XWayland with the EGL integration in a Wayland
-  // session, the window without an EGL surface: native Wayland next.
-  const std::optional<mitcad::GraphicsFallback> toWayland = mitcad::graphicsFallback(xcb, egl, true, {});
+  // The reported case (mitcad#2292): XWayland with the EGL integration in
+  // a Wayland session, the window without an EGL surface: X11 with GLX
+  // next, as 0.69 drew, not native Wayland (opt-in, mitcad#2031).
+  const std::optional<mitcad::GraphicsFallback> toGlxInSession = mitcad::graphicsFallback(xcb, egl, true, {});
+  CHECK(toGlxInSession.has_value());
+  if (toGlxInSession) {
+    CHECK(toGlxInSession->key == glx);
+    CHECK(toGlxInSession->platform == xcb);
+    CHECK(toGlxInSession->xcbGlIntegration == glx);
+    CHECK(toGlxInSession->description.contains(QStringLiteral("its own EGL context")));
+  }
+  // GLX failing after it in a Wayland session: native Wayland last.
+  const std::optional<mitcad::GraphicsFallback> toWayland = mitcad::graphicsFallback(xcb, glx, true, {egl});
   CHECK(toWayland.has_value());
   if (toWayland) {
     CHECK(toWayland->key == wl);
     CHECK(toWayland->platform == QStringLiteral("wayland;xcb"));
     CHECK(toWayland->xcbGlIntegration.isEmpty());
   }
-  // Native Wayland failing after it: GLX, not back to X11 with EGL.
-  const std::optional<mitcad::GraphicsFallback> afterWayland = mitcad::graphicsFallback(wl, egl, true, {egl});
-  CHECK(afterWayland.has_value() && afterWayland->key == glx);
-  // Native Wayland chosen by MITCAD_WAYLAND=1 failing: X11 with EGL first.
+  // Native Wayland chosen by MITCAD_WAYLAND=1 failing: X11 with EGL first,
+  // then GLX.
   const std::optional<mitcad::GraphicsFallback> toEgl = mitcad::graphicsFallback(wl, egl, true, {});
   CHECK(toEgl.has_value());
   if (toEgl) {
@@ -214,11 +222,9 @@ void graphicsFallbackTests() {
     CHECK(toEgl->platform == xcb);
     CHECK(toEgl->xcbGlIntegration == egl);
   }
-  // Native Wayland reached through Qt's fallback to X11 ("wayland;xcb"):
-  // X11 with EGL failing after both: GLX.
-  const std::optional<mitcad::GraphicsFallback> last = mitcad::graphicsFallback(xcb, egl, true, {egl, wl});
-  CHECK(last.has_value() && last->key == glx);
-  // An X11 session: GLX after the EGL integration.
+  const std::optional<mitcad::GraphicsFallback> afterWayland = mitcad::graphicsFallback(wl, egl, true, {egl});
+  CHECK(afterWayland.has_value() && afterWayland->key == glx);
+  // An X11 session: GLX after the EGL integration, never Wayland.
   const std::optional<mitcad::GraphicsFallback> toGlx = mitcad::graphicsFallback(xcb, QString(), false, {});
   CHECK(toGlx.has_value());
   if (toGlx) {
@@ -229,14 +235,16 @@ void graphicsFallbackTests() {
   // Nothing left.
   CHECK(!mitcad::graphicsFallback(xcb, glx, false, {egl}).has_value());
   CHECK(!mitcad::graphicsFallback(xcb, glx, true, {egl, wl}).has_value());
+  CHECK(!mitcad::graphicsFallback(wl, egl, true, {egl, glx}).has_value());
   CHECK(!mitcad::graphicsFallback(xcb, QStringLiteral("none"), true, {}).has_value());
   CHECK(!mitcad::graphicsFallback(QStringLiteral("offscreen"), QString(), true, {}).has_value());
 
   if (toWayland && toGlx) {
-    const QString first = mitcad::graphicsFallbackNote(QString(), QStringLiteral("no surface"), *toWayland);
-    CHECK(first == QStringLiteral("no surface; started again on native Wayland"));
-    const QString second = mitcad::graphicsFallbackNote(first, QStringLiteral("no context"), *toGlx);
-    CHECK(second.startsWith(first + QStringLiteral("; then no context; started again on X11 with GLX")));
+    const QString first = mitcad::graphicsFallbackNote(QString(), QStringLiteral("no surface"), *toGlx);
+    CHECK(first == QStringLiteral("no surface; started again on X11 with GLX, the 3D view through its own EGL "
+                                  "context"));
+    const QString second = mitcad::graphicsFallbackNote(first, QStringLiteral("no context"), *toWayland);
+    CHECK(second == first + QStringLiteral("; then no context; started again on native Wayland"));
   }
 
   // The note is read back from the environment by the next start.

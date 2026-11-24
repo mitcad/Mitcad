@@ -685,6 +685,9 @@ CommandDef measureCommand() {
   def.keywords = {QStringLiteral("distance"), QStringLiteral("angle"), QStringLiteral("dimension")};
   // A download or a dropped file comes in beside it (mitcad#2281).
   def.changesNoDesign = true;
+  // An explode view shown stays shown, and the picks are measured where
+  // it shows them (mitcad#2328).
+  def.keepsExplode = true;
   // Faces, edges and vertices, which Measure picks by default, or
   // whole bodies (the Selection Filter; a body would win over its faces
   // in the view, so it is a choice); datums that are shown (construction
@@ -747,6 +750,10 @@ CommandDef measureCommand() {
                         {QStringLiteral("a"), measureRef(first.first())}};
     if (!second.isEmpty()) {
       request.insert(QStringLiteral("b"), measureRef(second.first()));
+    }
+    // Where an explode view shows the picks (mitcad#2328).
+    if (const QJsonObject exploded = context.shownExplode(); !exploded.isEmpty()) {
+      request.insert(QStringLiteral("explode"), exploded);
     }
     const QJsonObject answer = context.queryObject(request);
     QStringList log;

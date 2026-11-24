@@ -6,8 +6,10 @@
 # of tools/ui-tutorials-test.py start-page (the page at launch, the last
 # design closed to the page, a modified design under the page), each in
 # the Floating and the Docked layout, the application run through
-# ui-macos-lib.sh in the Aqua session. Each time the example tutorial starts
-# in an empty design of its own and is done to its end.
+# ui-macos-lib.sh in the Aqua session. Each time the Start page's Tutorials
+# button shows the example tutorial's card (mitcad#2346), whose Start starts
+# it in an empty design of its own; its card shows its progress, and the
+# tutorial is done to its end.
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"

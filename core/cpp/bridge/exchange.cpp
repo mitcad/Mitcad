@@ -53,7 +53,7 @@ std::vector<io::Body> read_bodies(const std::string& path, double unit_mm) {
       std::vector<TopoDS_Shape> shapes;
       collect_bodies(file.shape, shapes);
       for (TopoDS_Shape& shape : shapes) {
-        bodies.push_back({file.name, std::move(shape), file.color, {}});
+        bodies.push_back({file.name, std::move(shape), file.color, {}, {}});
       }
     }
     return bodies;
@@ -175,11 +175,17 @@ rust::Vec<BodyInfo> read_file(rust::Str path, double unit_mm, ShapeList& shapes)
     BodyInfo info;
     info.name = rust::String(body.name);
     info.has_color = body.color.has_value();
+    // Colours pass through float and colour space conversions in files;
+    // 1e-6 is far below what a display shows.
+    const auto round = [](double c) { return std::round(c * 1e6) / 1e6; };
     if (body.color) {
-      // Colours pass through float and colour space conversions in files;
-      // 1e-6 is far below what a display shows.
-      const auto round = [](double c) { return std::round(c * 1e6) / 1e6; };
       info.color = {round(body.color->r), round(body.color->g), round(body.color->b)};
+    }
+    for (const io::FaceColor& face : body.face_colors) {
+      FaceColor out;
+      out.face = face.face;
+      out.color = {round(face.color.r), round(face.color.g), round(face.color.b)};
+      info.face_colors.push_back(out);
     }
     infos.push_back(std::move(info));
     shapes.push(std::make_shared<geometry::Shape>(std::move(body.shape)));
@@ -200,6 +206,9 @@ void write_file(rust::Str path_text, const ShapeList& shapes, rust::Slice<const 
     body.shape = shapes.at(i)->occt();
     if (infos[i].has_color) {
       body.color = io::Color{infos[i].color[0], infos[i].color[1], infos[i].color[2]};
+    }
+    for (const FaceColor& face : infos[i].face_colors) {
+      body.face_colors.push_back(io::FaceColor{face.face, io::Color{face.color[0], face.color[1], face.color[2]}});
     }
     for (const BodyPlacement& from : infos[i].placements) {
       io::Placement placement;

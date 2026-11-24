@@ -76,7 +76,8 @@ QJsonArray freeMatrixOf(const FreeMove& move, const gp_Pnt& pivot);
 // The motion of Rotate, Point to Point and Point to Position (mitcad#838)
 // from what the model worked it out of, an exact preview's `motion`
 // (commands.md): Rotate turns right-handed about the reported axis by its
-// Angle, Point to Point moves from the reported point to the other, Point
+// Angle, Point to Point moves from the reported point to the other (with
+// Along X, Y or Z only that distance, mitcad#2339), Point
 // to Position the reported point to its X, Y and Z. None when the basis is
 // of another type than the inputs, or a value is not a number.
 std::optional<gp_Trsf> basisMotion(const CommandState& state, const QJsonObject& basis);

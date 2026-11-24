@@ -1,0 +1,63 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+ChFi3d: a tight corner at a cylinder's rim (1590) is obtuse by the other
+wall's normal where the corner's ball touches it, not where the wall meets
+the face U (mitcad#2291, GitHub mitcad/Mitcad#592).
+
+The case: a block 30 long, 10 high and 20 deep whose top meets a concave
+quarter cylinder of radius 10 (a cut-out running down to the bottom), the
+cylinder's axis lying in the top's plane. The end face's edge with the
+cut-out is rounded with 2 (a torus K about the cut-out's axis), then the
+end face's edge with the top with 3: the chain runs on round K's arc on
+the top and along the top's edge with the cut-out. 1590's ChFi3d_TightArc
+takes the arc (K a torus between the end face Wp and the cut-out Wo,
+coaxial with it) and found the corner square: Wo's outward normal at its
+line on the top is square to the top's. The acute corner was built: the
+vertex blend's arc in the plane through the ball C parallel to the top,
+the torus about Wo's rounding's axis turning it to K's meridian at e0
+(Wo's normal at C's meridian), K cut there. But at C the cut-out's normal
+e0 turns R / (rw + R) = 3 / 13 towards the top's normal: Wo's rounding
+runs from the top's normal to e0, 13.3 degrees short of the direction
+along the end face's rounding (ep) where the vertex blend's arc lies. Its
+cylinder was carried on past its contact with Wo (a face of 0.0063 mm2),
+and the torus ran from ep back to e0 over the part of K that is kept,
+0.03 mm off it: the surface folded there, with a notch at each end of the
+corner.
+
+The condition: where Wo is a cylinder (KTorus), Obtuse is told by e0 as
+PerformTightCorners finds it (C on the line R inside U and rw - sO R from
+Wo's axis, sO +1 where Wo is convex): e0 . n = sO xU / (rw - sO R), xU the
+height of C's line above Wo's axis along U's normal. Where Wo turns
+towards U at C, the corner's own ball K rolls on between Wo and Wp's
+rounding and then between the two roundings (1590's obtuse corner). At
+the tube of 1590's case the two rules agree (the bore acute, -0.61; the
+outside obtuse, +0.63); where C has no meridian (rw - sO R not above the
+tolerance or below |xU|) the rule at Wo's line on U stays. Planar walls
+(0970) are not changed: there e0 is Wo's normal.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2291.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -5644,6 +5644,19 @@ static bool ChFi3d_TightArc(const TopoDS_Edge&   Ek,
+     }
+     (aSqT ? D.nb : D.na) = no;
+     D.Obtuse             = no.Dot(D.n) > angTol;
++    // (Obtuse by Wo's outward normal where the ball C touches it, e0 of
++    // PerformTightCorners, on the meridian of C, R inside U and R inside
++    // Wo: Wo's rounding runs from U's normal to e0, and the acute corner's
++    // vertex blend and torus need it to reach the direction along Wp's
++    // rounding. About a cylinder Wo, e0 is not Wo's normal at its line on
++    // U: where U holds K's axis, Wo is square to U along its line, but e0
++    // turns R / (rw + R) towards U's normal, mitcad#2291.)
++    const double xU   = gp_Vec(D.n).Dot(gp_Vec(D.CylO.Location(), PlU.Location())) - R;
++    const double rho0 = D.CylO.Radius() - sO * R;
++    if (rho0 > tol && rho0 * rho0 >= xU * xU)
++    {
++      D.Obtuse = sO * xU / rho0 > angTol;
++    }
+   }
+   else
+   {

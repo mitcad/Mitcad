@@ -3,7 +3,12 @@
 // vertices, the middles of body edges and the edges in the sketch plane
 // are found within the pixel tolerances when a tool's switch gives them,
 // never without it, and the sketch's own geometry wins ties against them;
-// those out of the plane (mitcad#866) are read but never snapped to. The sketch's x and y axes
+// those out of the plane (mitcad#866) are read but never snapped to, but for
+// the centres of circles and arcs (mitcad#2324). Where the sketch plane cuts
+// the bodies (mitcad#2324): points on the section curves, their ends and
+// the centres of circles and arcs, which body edges and vertices at the
+// same place win; a section item's existing projection is a section of its
+// face. The sketch's x and y axes
 // (mitcad#948) as curves to snap onto, and the coincident that holds a
 // point placed there on the axis's entity. What a drawing tool adds
 // automatically (mitcad#1024): a quadrant's coincident and centre
@@ -706,6 +711,200 @@ void extensionSnapTests() {
   CHECK(!snapAt(settings, V2{0.3, 30.0}).onExtension());
 }
 
+// Lines, circles and ellipses of the model's curve JSON, for the section
+// tests.
+Curve2 readCurve(const QString& type, const QJsonObject& geometry) {
+  const auto at = [&geometry](const char* key) {
+    const QJsonArray xy = geometry.value(QLatin1String(key)).toArray();
+    return V2{xy.at(0).toDouble(), xy.at(1).toDouble()};
+  };
+  const auto number = [&geometry](const char* key) { return geometry.value(QLatin1String(key)).toDouble(); };
+  if (type == QStringLiteral("circle")) {
+    return Curve2::circle(at("center"), number("radius"));
+  }
+  if (type == QStringLiteral("ellipse")) {
+    Curve2 c;
+    c.type = Curve2::Type::Ellipse;
+    c.center = at("center");
+    c.radius = number("major_radius");
+    c.minor = number("minor_radius");
+    c.rotation = number("rotation");
+    return c;
+  }
+  return readLine(type, geometry);
+}
+
+QJsonObject circleItem(const char* source, const V2& center, double radius) {
+  return {{QStringLiteral("source"), QLatin1String(source)},
+          {QStringLiteral("body"), QStringLiteral("F2.b0")},
+          {QStringLiteral("kind"), QStringLiteral("circle")},
+          {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("center"), QJsonArray{center.x, center.y}},
+                                                   {QStringLiteral("radius"), radius}}}};
+}
+
+QJsonObject sectionOf(QJsonObject item) {
+  item.insert(QStringLiteral("section"), true);
+  return item;
+}
+
+// The centres of circular body edges and where the sketch plane cuts the
+// bodies (mitcad#2324). A sketch on a plane parallel to a cylinder's cap,
+// through the cylinder: no edge lies in the plane, the caps' circles (out
+// of it) project onto the section's circle, and the centre is offered as
+// BodyEdgeCenter; the section's circle as a curve (BodySection) and its
+// centre (BodySectionCenter), which the cap's projected centre wins at the
+// same place. A sketch on a plane through a cylinder at an angle: its
+// section, an ellipse, as a curve to snap onto; a box cut by the plane: the
+// section lines' ends (BodySectionVertex). Section items are read with
+// their faces as sources, and only a section of the same face is their
+// existing projection.
+void sectionSnapTests() {
+  // The cylinder of radius 10 round (40, 30): its caps 10 above and 20
+  // below the sketch plane, as the query lists them out of the plane.
+  QJsonArray capPath;
+  for (int i = 0; i <= 4; ++i) {
+    const double a = i * kPi / 2.0;
+    capPath.append(QJsonArray{40.0 + 10.0 * std::cos(a), 30.0 + 10.0 * std::sin(a), 10.0});
+  }
+  QJsonObject cap = circleItem("E{cap}", V2{40.0, 30.0}, 10.0);
+  cap.insert(QStringLiteral("in_plane"), false);
+  cap.insert(QStringLiteral("path"), capPath);
+  cap.insert(QStringLiteral("height"), 10.0);
+  BodyGeometry body;
+  body.load(QJsonArray{cap}, &readCurve);
+  CHECK(body.items().size() == 1 && body.outOfPlaneCount() == 1 && body.edgeCount() == 0);
+  CHECK(!body.items()[0].section);
+
+  SketchModel model;
+  SnapSettings settings;
+  settings.model = &model;
+  settings.toScreen = screenOf;
+  settings.grid = false;
+
+  // Without body snaps (other tools): nothing.
+  CHECK(snapAt(settings, V2{40.3, 30.0}).kind == Snap::Kind::None);
+  settings.body = &body;
+  // The cap's centre, 3 pixels away, projected onto the plane.
+  Snap s = snapAt(settings, V2{40.3, 30.0});
+  CHECK(s.kind == Snap::Kind::BodyEdgeCenter);
+  CHECK(sameAt(s.at, V2{40.0, 30.0}));
+  CHECK(s.bodyItem.source == QStringLiteral("E{cap}"));
+  CHECK(s.onGeometry() && s.onBody() && !s.atPoint() && !s.alongCurve() && !s.onSection());
+  CHECK(s.describe() == QStringLiteral("center of body edge E{cap}"));
+  // The cap's circle itself, out of the plane, is not snapped to.
+  CHECK(snapAt(settings, V2{50.2, 30.0}).kind == Snap::Kind::None);
+  // A sketch point at the centre wins the tie.
+  PointData own;
+  own.id = QStringLiteral("p1");
+  own.at = V2{40.0, 30.0};
+  model.points.push_back(own);
+  CHECK(snapAt(settings, V2{40.3, 30.0}).kind == Snap::Kind::Point);
+  model.points.clear();
+
+  // The section: the side face's circle where the plane cuts it.
+  BodyGeometry section;
+  section.load(QJsonArray{sectionOf(circleItem("F2:side(c1)", V2{40.0, 30.0}, 10.0))}, &readCurve);
+  CHECK(section.items().size() == 1 && section.items()[0].section);
+  CHECK(section.items()[0].describe() == QStringLiteral("the section of the body face F2:side(c1)"));
+  settings.section = &section;
+  // Onto the section's circle, 2 pixels off it.
+  s = snapAt(settings, V2{50.2, 30.0});
+  CHECK(s.kind == Snap::Kind::BodySection);
+  CHECK(sameAt(s.at, V2{50.0, 30.0}));
+  CHECK(s.bodyItem.source == QStringLiteral("F2:side(c1)") && s.bodyItem.section);
+  CHECK(s.onBody() && s.onSection() && s.alongCurve() && !s.atPoint());
+  CHECK(s.describe() == QStringLiteral("on the section of body face F2:side(c1)"));
+  // At the centre the cap's projected centre wins over the section's.
+  CHECK(snapAt(settings, V2{40.3, 30.0}).kind == Snap::Kind::BodyEdgeCenter);
+  // Without the caps (a cylinder whose caps are not edges the query lists):
+  // the section's centre.
+  settings.body = nullptr;
+  s = snapAt(settings, V2{40.3, 30.0});
+  CHECK(s.kind == Snap::Kind::BodySectionCenter);
+  CHECK(sameAt(s.at, V2{40.0, 30.0}));
+  CHECK(s.onBody() && s.onSection() && !s.alongCurve());
+  CHECK(s.describe() == QStringLiteral("center of the section of body face F2:side(c1)"));
+  // A sketch circle on the section's place wins over it (away from the
+  // circle's quadrants, which would win either way).
+  CurveData drawn;
+  drawn.id = QStringLiteral("c9");
+  drawn.type = QStringLiteral("circle");
+  drawn.curve = Curve2::circle(V2{40.0, 30.0}, 10.0);
+  model.curves.push_back(drawn);
+  const V2 offCircle = V2{40.0, 30.0} + V2{1.0, 1.0} * (10.2 / std::sqrt(2.0));
+  s = snapAt(settings, offCircle);
+  CHECK(s.kind == Snap::Kind::OnCurve && s.curve == QStringLiteral("c9"));
+  model.curves.clear();
+  s = snapAt(settings, offCircle);
+  CHECK(s.kind == Snap::Kind::BodySection);
+  settings.body = &body;
+
+  // A plane through a cylinder at an angle: its section is an ellipse,
+  // 20 by 10 round (100, 50) here; points on it are offered, no centre.
+  Curve2 ellipse;
+  ellipse.type = Curve2::Type::Ellipse;
+  ellipse.center = V2{100.0, 50.0};
+  ellipse.radius = 20.0;
+  ellipse.minor = 10.0;
+  BodyItem slanted;
+  slanted.source = QStringLiteral("F7:side(c2)");
+  slanted.body = QStringLiteral("F7.b0");
+  slanted.type = QStringLiteral("ellipse");
+  slanted.curve = ellipse;
+  slanted.section = true;
+  BodyGeometry angled;
+  angled.set({slanted});
+  settings.section = &angled;
+  s = snapAt(settings, V2{120.3, 50.0});
+  CHECK(s.kind == Snap::Kind::BodySection);
+  CHECK(dist(s.at, V2{120.0, 50.0}) < 1e-6);
+  CHECK(s.bodyItem.source == QStringLiteral("F7:side(c2)"));
+  s = snapAt(settings, V2{100.0, 60.2});
+  CHECK(s.kind == Snap::Kind::BodySection && std::abs(s.at.y - 60.0) < 1e-6);
+  CHECK(snapAt(settings, V2{100.2, 50.0}).kind == Snap::Kind::None);
+
+  // A box cut by the plane: the ends of its section's lines are points.
+  BodyGeometry box;
+  box.load(QJsonArray{sectionOf(line("F3:side(c1)", 0.0, 0.0, 60.0, 0.0)),
+                      sectionOf(line("F3:side(c2)", 60.0, 0.0, 60.0, 40.0))},
+           &readCurve);
+  settings.section = &box;
+  s = snapAt(settings, V2{59.7, 0.2});
+  CHECK(s.kind == Snap::Kind::BodySectionVertex);
+  CHECK(sameAt(s.at, V2{60.0, 0.0}));
+  CHECK(s.describe().startsWith(QStringLiteral("end of the section of body face F3:side(c")));
+  CHECK(snapAt(settings, V2{30.0, 0.3}).kind == Snap::Kind::BodySection);
+  // A body vertex at the same place wins over the section's end.
+  BodyGeometry corner;
+  corner.load(QJsonArray{vertex("V{k}", 60.0, 0.0)}, &readCurve);
+  settings.body = &corner;
+  CHECK(snapAt(settings, V2{59.7, 0.2}).kind == Snap::Kind::BodyVertex);
+  settings.body = nullptr;
+  settings.section = nullptr;
+  CHECK(snapAt(settings, V2{59.7, 0.2}).kind == Snap::Kind::None);
+
+  // The existing projection of a section item: a section of the same face
+  // whose curve is where it is, not the face's projected outline.
+  SketchModel projected;
+  CurveData circle;
+  circle.id = QStringLiteral("c4");
+  circle.type = QStringLiteral("circle");
+  circle.curve = Curve2::circle(V2{40.0, 30.0}, 10.0);
+  projected.curves.push_back(circle);
+  ProjectionData outline;
+  outline.source = QStringLiteral("F2:side(c1)");
+  outline.body = QStringLiteral("F2.b0");
+  outline.entities << QStringLiteral("c4");
+  projected.projections.push_back(outline);
+  const BodyItem& cut = section.items()[0];
+  CHECK(!existingProjection(projected, cut).has_value());
+  projected.projections[0].section = true;
+  const auto found = existingProjection(projected, cut);
+  CHECK(found.has_value() && found->curve == QStringLiteral("c4"));
+  // A cap edge is never matched by a section.
+  CHECK(!existingProjection(projected, body.items()[0]).has_value());
+}
+
 } // namespace
 
 int sketchSnapTests() {
@@ -715,6 +914,7 @@ int sketchSnapTests() {
   axisSnapTests();
   autoConstraintTests();
   extensionSnapTests();
+  sectionSnapTests();
   return failures;
 }
 MITCAD_UNIT_TEST(sketchSnapTests);

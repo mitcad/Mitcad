@@ -38,15 +38,21 @@ enum class SheetPick {
   ArcPoints, // three clicks anywhere: an arc's centre, start and end (mitcad#729)
 };
 
-// An option of a tool's panel.
+// An option of a tool's panel. `Icons` is a choice shown as a grid of
+// icon buttons, one checked, each choice's icon `choiceIcon` (a weld
+// symbol's basic symbol, mitcad#2350).
 struct ToolOption {
-  enum class Kind { Choice, Check, Text };
+  enum class Kind { Choice, Check, Text, Icons };
   QString id;
   QString label;
   Kind kind = Kind::Choice;
   QList<QPair<QString, QString>> choices; // (value, label)
   QString defaultValue;                   // a check box's "true" or "false"
 };
+
+// The icon (app/icons) of an `Icons` option's choice: "weld-fillet" for
+// "fillet", "weld-flare-v" for "flare_v", "weld-none" for "none".
+QString choiceIcon(const ToolOption& option, const QString& value);
 
 // What the sheet gave a tool: the view it was used on (0: none), the
 // points (sheet millimetres) and a circle's radius on the sheet. A tool
@@ -113,7 +119,10 @@ struct DrawingToolDef {
 // its panel's Apply), Center Mark, Centerline, Line, Arc, Center Pattern,
 // Edge Extension (mitcad#729), Text, Note, Hole Callout (mitcad#2054),
 // Datum Label, Feature Control Frame, Surface Finish; then the tables' (mitcad#707 phase 3): Hole Table, Parts List,
-// Balloon. The bar shows them by their groups (`toolGroup`).
+// Balloon; then Weld Symbol and Propose Welds (mitcad#2350: a weld symbol
+// on an edge, its symbols chosen from icons first; weld symbols proposed
+// for the BUILD joints of the members clicked on a view, placed by a
+// click beside them). The bar shows them by their groups (`toolGroup`).
 //
 // Line and Arc (mitcad#729) draw outside the model, on the sheet or in the
 // view under their first click (their Drawn option), which they then move,
@@ -139,7 +148,8 @@ const DrawingToolDef* drawingTool(const QString& id);
 // (Center Mark, Centerline, Line, Arc, Center Pattern, Edge Extension;
 // mitcad#729), Dimensions (Dimension, Ordinate, Baseline, Model Items),
 // Text (Text, Note), Symbols (Datum Label, Feature Control Frame, Surface
-// Finish), Tables (Hole Table, Parts List, Balloon); the bar's Export
+// Finish, Weld Symbol, Propose Welds), Tables (Hole Table, Parts List,
+// Balloon); the bar's Export
 // group comes after them.
 constexpr int kToolGroups = 6;
 int toolGroup(const DrawingToolDef& tool);
@@ -308,5 +318,31 @@ std::optional<QPair<QString, QString>> lineStyleOf(const QJsonArray& lines, cons
 // phantom; body F4.b0 in O1 thin chain; occurrence O2 thin dashed", or
 // "none".
 QString lineStylesText(const QJsonArray& lines);
+
+// Weld symbols (mitcad#2350). The Weld Symbol tool's options and a
+// selected weld symbol's panel name its fields alike: "arrow_symbol" and
+// "other_symbol" (a basic symbol as the model names it, "fillet", "v", …,
+// or "none"), the arrow side's "size", "measure" ("throat", "leg"),
+// "penetration", "count", "length", "pitch", "contour" and "finish"
+// ("none" or the model's names) and "toes_blended", the other side's
+// "other_size", the symbol's "all_around", "field", "staggered" ("true",
+// "false") and "tail" (text). Numbers are plain numbers (a decimal comma
+// taken); empty is none.
+//
+// The basic symbols as the model names them, with their labels (their
+// icons app/icons/weld-*.svg, `choiceIcon`); with `none` first, "none"
+// (No Weld).
+QList<QPair<QString, QString>> weldSymbolChoices(bool none);
+// A weld symbol (the model's `weld`) with one field changed; empty when
+// the value is no number where one is wanted, or the field changes a side
+// that has no weld. A side's symbol "none" takes its weld away; a count,
+// length or pitch given to the arrow side is the other side's too when it
+// has none of its own (an intermittent weld on both sides).
+QJsonObject weldEdit(const QJsonObject& weld, const QString& field, const QString& value);
+// The weld symbol of the Weld Symbol tool's options (each as weldEdit
+// takes it, from none); empty when one is no number where one is wanted.
+QJsonObject weldOf(const QHash<QString, QString>& options);
+// A weld symbol's fields as the panel shows them.
+QHash<QString, QString> weldFields(const QJsonObject& weld);
 
 } // namespace mitcad::drawings

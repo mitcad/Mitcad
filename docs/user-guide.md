@@ -72,6 +72,7 @@ search: type the start of a command's name and press Enter.
   - [Patterns](#patterns)
 - [Modify features](#modify-features)
   - [Press Pull](#press-pull)
+  - [Move/Copy and Align](#movecopy-and-align)
   - [Move Face](#move-face)
   - [Fillet](#fillet)
   - [Chamfer](#chamfer)
@@ -141,6 +142,7 @@ search: type the start of a command's name and press Enter.
   - [Properties](#properties)
   - [Motion studies and contact sets](#motion-studies-and-contact-sets)
   - [Motion links](#motion-links)
+  - [Exploded views](#exploded-views)
 - [Build tab](#build-tab)
   - [Profile](#profile)
   - [Panel and Linear Component](#panel-and-linear-component)
@@ -202,6 +204,7 @@ search: type the start of a command's name and press Enter.
   - [3D printing](#3d-printing)
   - [USDZ for AR and 3D viewers](#usdz-for-ar-and-3d-viewers)
   - [glTF for the web and 3D viewers](#gltf-for-the-web-and-3d-viewers)
+  - [URDF robot for ROS 2](#urdf-robot-for-ros-2)
   - [Drawings](#drawings)
   - [Web viewer](#web-viewer)
 - [Preferences and diagnostics](#preferences-and-diagnostics)
@@ -599,11 +602,19 @@ view with OpenGL through EGL. At each start, before the window shows, it
 checks that the graphics driver gives it an OpenGL context and a surface
 for the window. If the driver refuses the usual OpenGL version, MitCad
 asks for the driver's own highest version instead. If nothing works,
-MitCad starts again on another platform. In a Wayland session it first
-runs natively on Wayland, where the 3D view draws too (as with
-`MITCAD_WAYLAND=1`). If that fails too, or outside a Wayland session,
-MitCad starts on X11 with GLX, as MitCad 0.69 did. Then the window,
-its panels and its menus show and work, and you can open, edit and save
+MitCad starts again on X11 with GLX, as MitCad 0.69 drew its window. The
+3D view then draws in an OpenGL context of its own through EGL, and each
+of its frames is copied into the window, which costs a little speed on
+large screens. Some NVIDIA drivers in a Wayland session need this: there
+the window stayed black, or did not show at all, in MitCad 0.70. The
+log's `3D view: drawn in its own EGL context` line says when this is
+used. You can choose it yourself by starting MitCad with
+`QT_XCB_GL_INTEGRATION=xcb_glx`.
+
+If the 3D view's own context cannot start either, MitCad in a Wayland
+session starts once more, natively on Wayland (as with
+`MITCAD_WAYLAND=1`). When nothing is left to try, the window, its panels
+and its menus still show and work, and you can open, edit and save
 designs, but the 3D view stays empty. It says "The 3D view cannot start
 with this graphics driver." The log's `Graphics check:` lines say what was
 tried and what failed (Help › Open Log Folder). In that case:
@@ -681,23 +692,34 @@ progress dialog and its report.
 
 ## Tutorials
 
-**Help › Tutorials…** lists MitCad's tutorials: short lessons shown in a
-pane beside your design. A tutorial's step outlines what to use next (a
-button, an input of the open panel, a row of the Browser, the view) and
-says in a callout what to do. Until you do it, MitCad holds back other
-commands and clicks, with a short note in the callout; you can still
-turn, pan and zoom the view.
+MitCad's tutorials are short lessons shown in a pane beside your design.
+**Tutorials** on the Start page (under User Guide), or **Help ›
+Tutorials…** from anywhere, shows them as cards in the Start page's
+center, in their recommended order: each with a picture of its result,
+what it teaches, how long it takes and its level (where the tutorial
+gives them), and where you are in it: *Not started*, *In progress (step
+3 of 8)* or *Done*. Its version, license and source are on the card's
+last line. **Recent designs** at the top leads back to your designs. A
+tutorial's step outlines what to use next (a button, an input of the
+open panel, a row of the Browser, the view) and says in a callout what to
+do. Until you do it, MitCad holds back other commands and clicks, with a
+short note in the callout; you can still turn, pan and zoom the view.
 
-- **Open** a tutorial in the list. The first time, MitCad fetches the
+- **Start** a tutorial on its card. The first time, MitCad fetches the
   tutorials' sources and, when it is not installed yet, offers to
   download its web browser component, which shows the tutorial's pages.
-  A tutorial is installed into your data folder; Open installs its newer
-  version when its source has one. A tutorial opened from the Start page
-  starts in an empty design of its own: your design stays as it is.
-- **Update** fetches the sources again. **Add Source…** adds a git
-  repository of tutorials of your own (a course), by its address or its
-  folder. The public repository of MitCad's tutorials is the default
-  source.
+  Start installs the tutorial into your data folder (its newer version
+  when its source has one) and starts it in an empty design of its own:
+  your design stays as it is. A tutorial in progress has **Continue**
+  instead, and its pages pick up where you left; **Start Over** in the
+  card's context menu starts it from the beginning. A finished one has
+  **Start Again**.
+- The tutorials in your language show first; when they are in several
+  languages, a choice at the top shows another language or all of them.
+- **Sources** at the top: **Update** fetches the sources again, **Add
+  Source…** adds a git repository of tutorials of your own (a course), by
+  its address or its folder. The public repository of MitCad's tutorials
+  is the default source.
 - **Escape** (with no command open) ends the step shown. **Leave
   Tutorial** (the callout's button, the pane's, or Help › Leave
   Tutorial) ends the tutorial and closes its pane; all input is free
@@ -805,9 +827,10 @@ covers the view:
 - Drop a CAD file anywhere on the page to open it, or to import it into
   the design, as on the window.
 - **Resources**: **Component Libraries** opens the component picker,
-  **User Guide** this guide, **Keyboard Shortcuts** the Keyboard and
-  Mouse Overview and **Connect AI Assistant** the assistant's setup
-  ([Connect an AI assistant](#connect-an-ai-assistant)).
+  **User Guide** this guide, **Tutorials** the tutorials to start in the
+  page's center ([Tutorials](#tutorials)), **Keyboard Shortcuts** the
+  Keyboard and Mouse Overview and **Connect AI Assistant** the
+  assistant's setup ([Connect an AI assistant](#connect-an-ai-assistant)).
 - **What's New in** and the version, at the top right, opens the release
   notes of your version in the web browser. **Report an Issue** at the
   bottom opens MitCad's issue list, **Preferences…** the Preferences.
@@ -927,7 +950,8 @@ of Windows and Linux has the same title bar row and toolbar panel):
   **Drawing** opens the design's drawing: the only one at once, one of
   several from a menu (with **Create Drawing…** after them), and with
   none the Create Drawing dialog; while a drawing is open its tab is the
-  only one, with **Sheet…** and **Add Revision…** in its Sheet group and
+  only one, with **Sheet…** and **Add Revision…** in its Sheet group (Add
+  Revision… in the group's menu) and
   **Print** beside its exports, and choosing Design, Make or Render
   closes it.
   Every workspace works on the same design; only the toolbar's tabs
@@ -1727,6 +1751,14 @@ holds an
 expression or a parameter name, such as `d1 * 2`, is not stepped. The
 field's tooltip shows these keys.
 
+The small up and down arrows at the right end of these fields do the
+same with the mouse: a click on the up arrow is Up, a click on the down
+arrow is Down, also with Shift or Ctrl (Option on macOS). Hold an arrow
+down to step again and again. The arrows show dimmed while the field
+holds an expression. The boxes beside a command's handles in the 3D
+view step too: click a box, then use Up, Down or the mouse wheel over
+it. The view does not turn or zoom while you do so.
+
 ### Long computations
 
 To open a large design, or to change it, can take a while. The window
@@ -2040,6 +2072,11 @@ option is on, the view shows the tool as the split uses it: an orange,
 see-through surface across the bodies, a little past their edges. It
 shows where the cut runs and which bodies it goes through. Turn the
 option off, and the view shows only the face that you selected.
+
+Split Body's tool can be a face or a body of another component. Pick
+it in the view where you see it. The split goes into the component of
+the bodies that you split, and you do not have to activate the other
+component. When you move either component, the cut follows the tool.
 
 **Assemble:** everything that builds an assembly ([Joints and
 constraints](#joints-and-constraints), [Motion studies and contact
@@ -2442,8 +2479,8 @@ thickness or fingers. Glue Flap tapers the flap's ends.
 
 The **CNC** tab turns bodies and sketches into toolpaths for a CNC
 router or mill and writes them as G-code for the machine's controller
-(grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4 and
-LinuxCNC); on a lathe it turns bodies and writes the lathe's G-code
+(grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4,
+LinuxCNC, and Makera's Carvera and Carvera Air); on a lathe it turns bodies and writes the lathe's G-code
 ([Turning on a lathe](#turning-on-a-lathe)). The setups and operations
 are kept with the design, not on the timeline: changing a toolpath
 recomputes nothing of the model, and a change of the model marks the
@@ -2522,8 +2559,17 @@ file, and every program starts with the same notice as comments.
    **Play**; the tool is drawn where it is.
 6. **Post Process…** asks for the setup, the controller and the units
    (the setup's by default) and the file to write; its type is the
-   controller's (`.nc`, `.gcode`, `.tap`, `.ngc`). The dialog repeats that
+   controller's (`.nc`, `.gcode`, `.tap`, `.ngc`, `.cnc`). The dialog repeats that
    CAM is highly experimental; check the program before it cuts.
+
+On Makera's **Carvera**, `M6` changes the tool from the machine's tool
+changer and measures it, so the tools are numbered 1 to 6 as the
+changer's slots. On the **Carvera Air** the same command stops at the
+change position for you to change the tool, then measures it; the
+program says which tool comes next before each change. Both machines
+blow air (choose **Air Blast** as the **Coolant**) and have no flood or mist
+coolant, and their spindle turns clockwise only. A program ends at the
+machine's clearance position. The optional 4th axis is not written.
 
 In the Browser, the **CAM** folder lists the setups with their
 operations in order. An operation's icon shows its state, its tooltip
@@ -2572,6 +2618,56 @@ one, the design's Z through the middle of the bodies).
    **Simulate** and **Post Process…** work as for milling; the toolpaths
    are drawn in the plane through the spindle axis, and Simulate shows
    the turned stock.
+
+#### Live tools on a lathe
+
+A lathe whose spindle is also a C axis and whose turret has driven tools
+mills and drills the turned part: holes and pockets on its face, cross
+holes and wrapped slots on its diameter.
+
+1. **Edit Machine…** of the lathe: tick **C axis and live tools**, give
+   the **Highest Live Tool Speed (rpm)** and check the codes your lathe's
+   builder gives the C axis and the live tools (**C Axis On**, **C Axis
+   Off**, the clamp, **Live Tool Forward**, **Reverse** and **Stop**,
+   `{rpm}` standing for the speed). The defaults are one common set:
+   compare them with your lathe's manual.
+2. **Add Tool…** then also offers the milling tools and drills; each is
+   a live tool in an **Axial** holder (it cuts the face) or a **Radial**
+   one (it cuts the diameter).
+3. **Facing**, **Contour**, **Pocket**, **Adaptive Clearing** and
+   **Drill** on a setup on this lathe cut with a live tool. **Live Tool**
+   says where: **On the Face** (pick as on a mill) or **On the Diameter**
+   (pick the faces round the spindle axis to mill, or the holes). On the
+   diameter, **Top**, **Bottom** and the heights are diameters.
+4. **Post Process…** writes the C axis: holes with the C axis turned to
+   each hole and clamped, other paths in polar interpolation on the face
+   and cylindrical interpolation on the diameter. **Simulate** sums up
+   what the live tools leave and whether they cut into the part.
+
+#### The Y axis, the B head and the sub-spindle
+
+A mill-turn lathe may also move its turret in Y, tilt a milling head
+(a B axis) and hand the part over to a sub-spindle.
+
+1. **Edit Machine…** of the lathe: under **C axis and live tools** tick
+   **Y axis** (give **Travel Y**, as far each way from the spindle
+   axis) and **B head**; tick **Sub-spindle** when the lathe has one.
+   A live tool may sit in the **B head**.
+2. **On a Plane** under **Live Tool** mills with the Y axis: pick a flat
+   face (a flat along the axis, a face off its center) or a hole, or give
+   the **C Angle** and the **B Angle** (0 on the face, 90 across the
+   axis, between them with the B head). **Top** and **Bottom** are then
+   measured along the tool.
+3. **On the Diameter** a contour or a pocket also takes a sketch drawn on
+   a plane along the spindle axis: it is wrapped onto the diameter (give
+   its **Bottom** diameter).
+4. **New Setup**: tick **Hand over to the sub-spindle**; a turning
+   operation with **On the sub-spindle** ticked turns the part's back
+   after the part-off.
+5. **Simulate** draws the whole program cut out of the bar in 3D;
+   **Post Process…** writes the planes, the tilted plane and the
+   hand-over with your lathe's codes (compare the defaults with its
+   manual).
 
 ### The selected body on the Make tabs
 
@@ -3171,7 +3267,20 @@ The condition is one of these:
 - For a profile: a Direction. MitCad measures the *Takeoff Angle* from
   the normal of the profile. A positive angle points outwards
 - For a face: Tangent or Smooth to the faces next to it
+- For a profile or a face: **Perpendicular to Face**. The loft leaves the
+  section at right angles to a face that the section lies on
 - For a point: a sharp tip, or a rounded (tangent) tip
+
+With Perpendicular to Face, select the face in **Face**, for example the
+wall of a cylinder whose top edge is the section. The section must lie
+on that face. If you do not select a face, MitCad uses the face or the
+plane of the section itself. Then the loft leaves a profile straight out
+of its plane, as a Direction of 0°. The loft meets the face at a right
+angle all along the section. Rails that leave the section at a right
+angle keep the condition.
+
+*Takeoff Weight* sets how far the loft goes in the direction of the
+condition before it turns towards the next section.
 
 A face with holes lofts from its outer edges. The loft is solid across
 the holes.
@@ -3888,6 +3997,39 @@ such edit.
 
 A double-click on a Press Pull's timeline item opens the same panel.
 
+### Move/Copy and Align
+
+**Move/Copy** (M) moves or copies bodies, or moves components. Its Move
+Type is Free Move, Translate, Rotate, Point to Point or Point to
+Position. **Point to Point** moves them from the Origin Point to the
+Target Point: a vertex, a sketch point, a construction point, or a
+circular edge, which stands for its center. Under Target Point,
+**Along** has four buttons:
+
+- **All** (the default) moves the whole way from the Origin Point to the
+  Target Point.
+- **X**, **Y** or **Z** moves only along that axis, by the distance
+  between the two points along it. The other two coordinates stay as
+  they are. The axes are those of the component the move is in.
+
+So you can bring a body level with another body's face, edge or point
+along one axis without moving it sideways, and without changing its size
+or making a joint. For example, to lower a cylinder onto the top of a
+block: Objects the cylinder, Origin Point its round bottom edge, Target
+Point a corner of the block's top, Along Z. The cylinder goes down onto
+the top's level and stays where it was in X and Y. Several bodies picked
+together go up or down by the same distance. Create Copy follows the same
+rule. The preview shows the result, and a double-click on the move's
+timeline item edits it, Along too.
+
+**Align** puts geometry of the moved bodies onto other geometry: a point
+onto a point, a line or a face, an axis onto an axis, a face onto a face.
+A point onto a flat face moves along the face's normal only, so the
+bodies do not move sideways: with a vertex of a body as From and a block's
+top as To, the body moves up or down until the vertex lies on the top's
+plane. To reach a point or an edge along one axis only, use Move/Copy's
+Point to Point with Along.
+
 ### Move Face
 
 **Move Face** moves faces of one body together by a rigid motion. You
@@ -3897,7 +4039,7 @@ select the motion as in Move/Copy:
 - Translate
 - Translate Along an axis or an edge
 - Rotate about an axis or an edge
-- Point to Point
+- Point to Point, with Along ([Move/Copy and Align](#movecopy-and-align))
 - Point to Position
 
 Each face keeps its surface, moved. The faces around it extend or
@@ -3983,6 +4125,14 @@ message says that it is wider than the face beside its edge, which it
 would take away; the edge and the faces are highlighted when you point
 at the message.
 
+A body rounded all round often keeps only a small flat face at the end of
+a straight edge, which then curves away into a rounding. A fillet or
+chamfer of that edge so wide that it touches neither face beside its edge
+fails, and the message says that it is wider than the body there and
+gives the largest radius or distance that fits. At exactly that largest
+size the fillet or chamfer takes both faces beside its edge away and is
+built at its size.
+
 The end of a shallow round groove (a circle swept along a line or an
 arc, ending in a flat end cap) rounded with a ball-mill radius is such a
 case: the edge between the end cap and the groove's floor, rounded wider
@@ -4005,6 +4155,15 @@ edges reach 1.73 and 0.577 mm into a face between them, which is only
 1.51 mm wide there". An eave 1.5 mm wide with an acute edge at its tip
 is such a face for a radius of 1 mm. Use a smaller radius, or leave one
 of the two edges out of the fillet.
+
+An edge can bend more tightly than the rounding is wide, for example the
+top edge of a wall shaped like a wave, rounded with a radius larger than
+the radius of the wave's crests. Where the rounding touches the top
+face, its line would then fold back over itself at each crest. MitCad
+builds the rounding in pieces there: the rounding along the edge up to
+the place where those lines cross, and a separate face across the crest
+that fills the gap between the pieces. You see seam lines on the
+rounding where the pieces meet.
 
 At a difficult corner, the geometry kernel can build a fillet or chamfer
 whose corner folds back on itself or ends in a spike. A rounding of
@@ -5369,6 +5528,24 @@ one step that Undo takes back.
 - Closed splines work the same way. The existing points keep their
   constraints and dimensions.
 
+**Remove Point on a spline.** To take a point out of a spline and keep
+the spline, right-click the point and choose **Remove Point**, or select
+only that point and press Delete. This is one step that Undo takes back.
+
+- A Fit Point Spline goes through the rest of its fit points. When you
+  remove an end point of an open spline, the next point becomes the end.
+- A Control Point Spline loses the control point and changes its shape
+  only near it. A point that you inserted and then remove gives back the
+  spline as it was.
+- The constraints and dimensions of the removed point go with it, and so
+  does a tangent at a removed end. The other constraints stay.
+- MitCad refuses Remove Point when too few points would remain (two for
+  an open Fit Point Spline, three for a closed one, the degree plus one
+  for a Control Point Spline), when another curve uses the point too,
+  for a projected spline and for a spline that an offset makes. The
+  reason shows in the status bar. In these cases Delete deletes the
+  point and its spline, as Delete does for any point.
+
 **Equation Curve** (Create, after the splines) draws a curve from
 formulas, such as an involute for a gear tooth, a spiral, a cam curve or
 a parabola. The formulas use the design's parameters, so the curve
@@ -5876,6 +6053,25 @@ changes. If the sketch already has a projection of the same corner or
 edge, MitCad uses that projection again. A Point tool click on a corner
 that already has a point does nothing.
 
+**Centers and sections of bodies:** the drawing tools also snap to the
+center of every round edge of a visible body (a circle or an arc), also
+when the edge is above or below the sketch plane: the snap is where the
+center lies when you look straight at the sketch. Thus on a sketch
+plane that cuts a cylinder parallel to its end faces, a line snaps to
+the cylinder's axis. The tools also snap to where the sketch plane cuts
+the visible bodies: onto the section curves, to their ends and to the
+center of a round section (a sphere cut by the plane, for example).
+MitCad draws a section curve only while the pointer is on it, dashed.
+A click on a round edge's center projects the edge, linked; a click on
+a section adds the section curves of that face, linked, as Intersect
+does. The point is held on the center, the curve or its end
+(Coincident), in the same undo step as the rest of the click, and
+follows the body when the design changes. The sketch's own geometry,
+then the corners and edges of a body in the plane, win when they are
+under the pointer too. MitCad works out the sections in the background
+when a drawing tool starts in a sketch, and again after the bodies
+change; the section snaps are there as soon as that is done.
+
 **Auto constraint:** when the line, circle or arc tool has drawn its
 first entity, the palette shows an *Auto constraint* section. The
 section constrains each next entity of the same tool to a reference
@@ -6278,7 +6474,8 @@ activates both.
 **Project** (P, in Create) projects references from the bodies into the
 sketch. Projected geometry is linked: it follows its source when the
 design changes. MitCad draws projected geometry purple. The drawing
-tools snap only to edges and corners in the sketch plane. Sketch Dimension
+tools snap to edges and corners in the sketch plane, to the centers of
+round edges out of it and to where the plane cuts the bodies. Sketch Dimension
 also takes edges and corners that are not in the plane. The drawing tools and
 Sketch Dimension project corners and edges of bodies as Project does it
 (refer to [Snaps and auto constraints](#snaps-and-auto-constraints) and
@@ -7553,7 +7750,7 @@ these entries:
 - Find in Timeline
 - Create Selection Set (for bodies, components, sketches, construction
   geometry, joints and features; refer to **Selection sets** below)
-- Save as Mesh… (for bodies and components)
+- Export… and Save as Mesh… (for bodies and components)
 
 **Delete Body** in the menu of a body's row deletes only that body. The
 Delete key does the same on the selected rows of bodies. The other bodies
@@ -7822,7 +8019,14 @@ these entries:
   timeline and in the Browser says that Auto Fix can fix its warning, and
   a click on the warnings badge offers Auto Fix for all of them.
 - Rename
-- Suppress
+- Suppress. Select several features to suppress or unsuppress them all
+  in one step. When other features use what you suppress, MitCad asks
+  once and lists them: **Suppress All** suppresses them too, so none of
+  them fails, **Suppress Only This** suppresses only what you selected
+  (the features that use it then fail), and **Cancel** changes nothing. A
+  feature that has a Suppress When… condition keeps following it.
+  Unsuppress brings back only the features you selected; one Undo takes
+  back a Suppress All.
 - Delete. MitCad asks you about the dependent features.
 - Move to Component. For a component made from bodies, the entry is
   **Move the Features That Made It into the Component**.
@@ -10314,6 +10518,7 @@ commands are:
 - Let It Hang
 - Animate Joint
 - Motion Study
+- Explode
 
 Insert Component and Insert from Library are in the Insert group of the
 Solid tab.
@@ -10368,7 +10573,10 @@ active component: the move goes into the timeline of the component it is
 placed in, and the active component stays active. When that component
 is used more than once, the part moves in every place it is used, and
 the panel says so; a point picked on the part where you picked it moves
-the part to its target there. The distances of Free Move and Translate
+the part to its target there. This also holds when both points are
+picked on the top-level design: the part moves by them where you picked
+it, and a target point on the top-level design is where the view shows
+it. The distances of Free Move and Translate
 go along the axes of the component the move is in, and their arrows
 point that way, also when that component is turned. Components placed
 in different components move in separate moves. With Point to Point, the Origin Point and the Target Point can
@@ -10406,6 +10614,26 @@ files: when one changes on disk, or you save it in another tab, the
 message band says "board.mitcad changed" with **Update**. Nothing is
 updated on its own; the message stays until you press Update or close it.
 In the Docked layout the message and its button are in the status bar.
+
+**Edit a linked design in place.** To change a linked design while you
+see the assembly around it, right-click its row in the browser, or the
+component in the view, and choose **Edit in Place**. The window then
+shows that design itself: the timeline, the browser, the commands, Undo
+and Redo are the design's, and the rest of the assembly is drawn around
+it where it is, so you can sketch on its faces, project its edges and
+measure it. What you pick on the assembly is fixed where it is now: the
+message band says so ("Sketch2: its plane on the assembly is fixed where
+it is now; it will not follow the assembly"), and the linked design stays
+a design that opens on its own. If the design is open in a tab, that tab's
+design is the one you edit, and the tab waits until you finish. **Save**
+writes the linked design's file. **Finish** in the message band (or Finish
+Edit in Place in the browser's top row menu, or Esc in the view with
+nothing selected) returns to the assembly, which takes the new bodies as
+one step that Undo takes back; undo it after saving the linked design and
+the message band offers **Update** to take the saved edits again. Edits you
+did not save are written when you save the assembly, and MitCad asks about
+them when you close it. Library parts and the components inside a design
+linked with its components are not edited in place.
 
 **A linked design with components.** When you link a whole design that
 has components, such as a key that slides on its base, the linked
@@ -11213,6 +11441,59 @@ by the cam. The motions linked to the driven joint let go of their own
 positions. The links are in the component's **Motion Links** folder in
 the browser and on the timeline. Edit, suppress or delete them there.
 
+### Exploded views
+
+An **exploded view** shows an assembly taken apart, for assembly
+instructions, a picture or a drawing. It moves components apart in
+steps and draws trail lines back to where they belong. It never changes
+the design: the components stay where their joints and placements put
+them, and the view is kept with the design.
+
+Open **Assemble › Explode…**. The Explode panel opens beside the window:
+
+1. Click **Auto Explode**. MitCad makes `Explode1` with a step for each
+   component. Each moves out from the middle of the assembly by its own
+   size times **Factor**: along the slide of a slider or cylindrical
+   joint where it has one, else along the main direction (X, Y or Z) from
+   the middle to the component. The outer components go first, the inner
+   ones last.
+2. Click **Add Step** for a step of your own. Pick the components in the
+   browser or in the view. Drag the arrow to move them along
+   **Direction**, or the ring to turn them about **Axis**, or type
+   **Distance** and **Angle**. A direction or an axis is X, Y or Z of
+   the assembly, or **Picked Geometry**: an edge, an axis, a face or a
+   plane. A step keeps the picked geometry itself, so when you edit the
+   design and the edge or face turns, the step moves along it where it
+   is now. **Trail Lines** draws thin dashed lines back to where the step
+   found the components; **Time** is the step's seconds in the
+   animation. Click **OK**.
+3. Edit a step with a double-click, move it with **Up** and **Down**, or
+   remove it. Each step starts where the earlier ones left the
+   components: a component moved in two steps ends at the sum of both.
+   Distances and angles may be expressions of parameters (`2 * gap`).
+4. **Play** runs the steps in order, from the design assembled to
+   exploded; **Play Back** runs them back. **Previous Step** and **Next
+   Step** go a step at a time, and the slider goes to any moment.
+
+The **Exploded Views** folder in the browser lists the views of a
+component. Double-click a view to show the design exploded, and again
+to show it assembled. The row is in bold while it is shown. While it is
+shown, you can select components and give them appearances where they
+are drawn, and **Measure** measures distances, angles and points
+between the components where they are drawn: the view stays exploded
+while Measure is open. Other commands work on the design as assembled,
+and the design is shown exploded again after them. If you move a
+component into another component (**Move to…**), the steps keep moving
+it while it stays in the view's component; if you delete a component
+that a view moves, or move it out of the view's component, the view no
+longer moves it, and MitCad says so.
+
+**In drawings.** Choose an exploded view in **Exploded View** of a Base
+View, or in the panel of a base view on the sheet. The view draws the
+components where the exploded view puts them, with the trail lines as
+thin phantom lines. Its projected, section and detail views show the
+same. Balloons and bills of materials work as on an assembled view.
+
 ## Build tab
 
 The **Build** tab is beside Solid. It builds frames of aluminum slot
@@ -11528,7 +11809,9 @@ generic panel takes any thickness.
   A. Leave them empty for the rail's ends; they then follow the rail's
   length
 - Slot-mounted carriage mounts
-- Bearings
+- Bearings. A bearing on its shaft slides along it as a carriage does
+  along its rail, within **Min** and **Max** measured from the shaft's
+  end A (empty: flush with the shaft's ends)
 - Motor plates
 
 ### Connect
@@ -11708,6 +11991,13 @@ either carriage, or change either one's Offset in Placement, and both
 move. Each stays within its own Min and Max: a drag stops both where
 the first of them reaches its limit, and Placement refuses an Offset
 that would take the other one past its limit.
+
+If the following carriage's Offset is a parameter's name, that parameter
+takes its new Offset, as long as nothing else uses the parameter and its
+value is a plain number. Any other expression stays as you wrote it, and
+a move that would change it is refused with a message saying why: type a
+number, or a parameter only that carriage uses, as its Offset to let it
+follow.
 
 Each joint BUILD makes is named after the two components it joins, such
 as *Carriage on Rail*. The name follows the components' names until you
@@ -12082,7 +12372,7 @@ follow when the sketch changes. The extents of the four features are:
 | Surface Extrude | A distance one way, both ways, or two distances |
 | Surface Revolve | A full turn or an angle about a sketch line, an axis or a straight edge |
 | Surface Sweep | Along a path of sketch curves or edges |
-| Surface Loft | Through sections in order. Each section is a sketch curve with the curves joined to it, or a profile. A 3D sketch's curves can be sections in any plane. Rails guide a loft of profiles; a rail can be curves of a 3D sketch |
+| Surface Loft | Through sections in order. Each section is a sketch curve with the curves joined to it, a profile, or a face of a body or a surface (its edges); a point can be the first or the last section. A 3D sketch's curves can be sections in any plane. Rails guide a loft of profiles or faces; a rail can be curves of a 3D sketch. Each end has a Start Condition or an End Condition, as a [Loft](#loft) has, Perpendicular to Face too |
 | Surface Helix | Revolutions and a pitch, revolutions and a height, or a height and a pitch about a sketch line, an axis or a straight edge, rising along it, with a growth ([Helix](#helix)) |
 
 **Offset Surface** copies the faces you select out along their normals
@@ -12169,7 +12459,10 @@ planar sketch (Tangent to Sketch Plane, shown when you picked curves of
 a planar sketch) or to the faces beside the edges (Edge Continuity,
 shown when you picked edges). Boundary Surface can also run through a
 network. The network has curves one way, lofted through in order, and
-curves that cross them.
+curves that cross them. Each curve one way must cross each crossing
+curve, but the curves may run on past the outer curves of the other
+way: the surface ends at the outer crossings. If a curve one way misses
+a crossing curve, MitCad says so and shows both curves.
 
 **Match Surface** rebuilds a face of a surface. The side of the face
 nearest to a chain of edges of another body then lies on that chain.
@@ -14718,8 +15011,8 @@ file's history.
 | DWG (`.dwg`, R13 to R2018) | Open, Import. 3D solids become bodies, 3D faces and meshes become mesh bodies, blocks become components with their occurrences | A drawing (R2000) | None. A drawing keeps no history |
 | `.3dm` (format versions 5 to 8) | Open, Import. Polysurfaces, surfaces and extrusions become bodies, meshes become mesh bodies, blocks become components with their occurrences | None | SubD objects as editable Forms. Otherwise none: a `.3dm` model keeps no history |
 | `.serp` (format versions 1 to 9) | Open, Import. Solids and surfaces become bodies, meshes become mesh bodies, layers become folders, blocks become components with their occurrences | None | None: a `.serp` file keeps no history MitCad reads |
-| STEP (`.step`, `.stp`) | Bodies. An assembly: its parts become components, each placed by an occurrence per instance | Bodies (AP214 or AP242). Components as an assembly | None |
-| IGES (`.iges`, `.igs`) | Bodies | Bodies | None |
+| STEP (`.step`, `.stp`) | Bodies with their colors; faces of another color get appearances in it. An assembly: its parts become components, each placed by an occurrence per instance | Bodies (AP214 or AP242) with their colors and the colors of faces with appearances of their own. Components as an assembly | None |
+| IGES (`.iges`, `.igs`) | Bodies with their colors; faces of another color get appearances in it | Bodies with their colors and the colors of faces with appearances of their own | None |
 | BRep (`.brep`, `.brp`) | Bodies | Bodies | None |
 | STL | Meshes | Meshes | None |
 | OBJ | Meshes | Meshes | None |
@@ -15250,6 +15543,14 @@ the exports:
   the web, catalogs and 3D viewers ([glTF for the web and 3D
   viewers](#gltf-for-the-web-and-3d-viewers)).
 
+**Export…** in the context menu of a body or a component, in the browser
+or in the view, opens this dialog with the bodies of what you
+right-clicked (and of the rows selected with it) as **Selected bodies**.
+A component means the bodies in it and in its subcomponents; the root
+component means every body. A selected component counts the same way
+when you use File › Export. When there is no body to export, the entry
+is unavailable, and its tooltip tells why.
+
 A 3MF file can carry the design's print plates, as Send to Slicer writes
 them. When the design has plates, **Plates** offers all plates in one
 file, a file per plate (named *file - plate.3mf*, beside the file you
@@ -15311,6 +15612,12 @@ A drawing's DXF file is the sheet in that unit of paper. In inches, an A3
 sheet is 16.54 by 11.69, and a view at 1:1 measures the model in inches.
 The texts are scaled with the sheet. DWG files stay in millimeters of
 paper.
+
+These DXF files are DXF R2000 files unless you choose R12 (a sketch's
+DXF and `export_flat_pattern` take R12). Besides the geometry, an R2000
+file carries the tables, the plot style of each layer and the objects
+that the DXF reference describes, in the order it gives, so programs
+that read DXF strictly open it as well as lenient ones (mitcad#2315).
 
 #### Save as Mesh
 
@@ -16591,6 +16898,25 @@ A file comes back from MitCad as it went: the same components and
 bodies with their names, placements and appearances. The bodies are
 mesh bodies; use Convert Mesh to make solids of them.
 
+### URDF robot for ROS 2
+
+File › Export with the type *URDF robot for ROS 2* writes the design's
+mechanism as a robot description for ROS 2 simulations. A file name that
+ends in `.urdf` selects the same type. MitCad writes a package folder
+beside the file, named after it: the URDF file in `urdf/`, a mesh of each
+body in `meshes/`, and the `package.xml` and `CMakeLists.txt` that a
+ROS 2 workspace builds as they are.
+
+Each group of components that moves as one is a link: the grounded
+components and the design's own bodies are the base, and rigid joints and
+rigid groups join components into one link. Each joint becomes a URDF
+joint with its axis and limits: a revolute joint without limits turns
+freely, a slider without limits gets ±1 m, and cylindrical, pin-slot,
+planar and ball joints become chains of single-axis joints. A link's mass
+and inertia come from its bodies' materials, as Physical Properties shows
+them. URDF holds a tree, so a joint that closes a loop is left out; the
+status bar names it. The file is in meters, radians and kilograms.
+
 ### Drawings
 
 A drawing shows the design on sheets of paper: views of it from the
@@ -16725,8 +17051,10 @@ Close Drawing: **Create** (the views' tools below), **Geometry** (center
 marks, centerlines, lines and arcs, center patterns and edge
 extensions), **Dimensions**, **Text**, **Symbols** (datum labels,
 feature control frames, surface finish symbols), **Tables** and
-**Export**. Each group's name opens a menu of its tools, as on the
-other tabs; the active tool's button shows pressed.
+**Export**. Each group shows buttons for its main tools, and its name
+opens a menu of all its tools, as on the other tabs; the active tool's
+button shows pressed. **Pin to Toolbar** in a tool's row menu gives it
+a button of its own.
 
 | Tool | What it makes |
 |---|---|
@@ -16880,6 +17208,8 @@ tools, as icons:
 | Datum Label | A datum label (A, B, …) on a face or an axis. The letters of the design's datum labels and the drawings' are one set: a new label takes the first letter no other has. |
 | Feature Control Frame | A geometric tolerance on a face or an axis. A dialog asks for it; its datums are the letters of the design's and the drawings' datum labels. |
 | Surface Finish | A surface finish symbol on a face, with its requirement (`Ra 1.6`). |
+| Weld Symbol | A weld symbol on an edge, a corner or a joint: choose the arrow side's symbol from the icons (fillet, square, V, bevel, Y, U, J, flare V, flare bevel, plug or slot, spot, seam, back weld, backing, surfacing), then its size and the rest, click the edge, then where the reference line starts. See *Weld symbols* below. |
+| Propose Welds | For a drawing of a BUILD design: click the members whose joints are welded, then beside them. Each of their joints the view shows gets a fillet weld symbol on an edge of the joint, all around where the joint closes round the member's section. See *Weld symbols* below. |
 
 A click picks an edge, a circle, a corner or a round face of the design
 as the view shows it; before you click, what the click would pick shows
@@ -17005,6 +17335,44 @@ for its panel:
   follows the hole: *Measured* under it shows the hole's lines as they
   are now. Clear it to write the hole's lines again.
 
+**Weld symbols.** A weld symbol is drawn by the drawing's *Standard*
+(the sheet's panel): under ISO by ISO 2553, under ASME by AWS A2.4.
+Its arrow points at the weld; the reference line starts where you
+clicked and runs away from the arrow; sizes stand left of the symbol and
+lengths right of it, read from below whichever way the line runs.
+
+- *Arrow Side* and *Other Side* each take a symbol from the icons (*No
+  Weld* for none). Under ISO the arrow side's weld stands on the
+  continuous line and the other side's hangs from the dashed line under
+  it; a weld of one kind on both sides (a double V) has no dashed line.
+  Under ASME the arrow side's weld is below the line and the other
+  side's above it.
+- *Size* is a fillet's throat or leg (*Fillet Size*: ISO writes `a5` or
+  `z7`, AWS the leg bare), a groove's depth, a spot's or a plug's
+  diameter. *Penetration* goes with it (`s8` under ISO, `10 (8)` under
+  AWS). *Count*, *Length* and *Pitch* (from one weld's middle to the
+  next) make an intermittent weld: ISO writes `4×50 (100)`, the gap
+  between the welds in brackets, AWS `50-150`; they go to the other
+  side too while it has none of its own, and *Staggered* offsets the
+  other side's welds.
+- *Contour* (flush, convex, concave), *Finish* (its letter: ground G,
+  machined M, …) and *Toes Blended* are drawn beyond the symbol.
+- *All Around* draws a circle and *Field Weld* a flag where the arrow
+  meets the line; *Tail* writes a process number or a note in the fork
+  at the line's other end.
+
+Select a weld symbol for the same fields in its panel; drag it to move
+its reference line. It follows its edge as the design changes and is
+printed and exported (PDF, SVG, DXF, DWG) as drawn.
+
+*Propose Welds* reads the BUILD joints of the members you click: each
+joint the view shows gets a fillet weld symbol on an edge where the
+members meet, all around when the meeting member's section closes round
+its end (a tube's end on another's side). *Size* and *Tail* go to every
+new one. Use it again after the frame changes: the welds you edited
+stay, new joints get one, and those of joints no longer there go. Each
+proposal is an ordinary weld symbol, to edit or delete.
+
 An annotation whose edge or face is gone (the feature deleted or
 suppressed, the body no longer in the view) is not drawn. A small red
 box beside its view marks it; select it to see why, and delete it or
@@ -17105,6 +17473,10 @@ A sheet's **template** gives it its frame, its title block and its
 revision table. Create Drawing and Sheet… offer:
 
 - **ISO** (A sizes) and **ANSI** (ANSI sizes), built in;
+- **Blank**, built in: no border and no title block, so the views can
+  use the whole sheet within its 10 mm margins. Sheet… then hides the
+  title, drawing number, author and date; they are kept and show again
+  when you choose a template with a title block;
 - your own templates, kept in your library beside your materials and
   print profiles;
 - the templates of the project the design is in, kept in the project;
@@ -17155,6 +17527,9 @@ company's block with its logo:
    it, Delete deletes it. Every click and move snaps to the **Grid**
    (1 mm at first) and stays inside the block; **Width** and **Height**
    size the block, which stays in the frame's lower right corner.
+   Clear **Frame** or **Title block** to leave the sheet's border or its
+   title block (with its revision table) out; the block keeps its
+   layout, so checking the box again brings it back as it was.
 5. **Done** keeps the block in the sheet, one step to undo; **Cancel**
    leaves it as it was.
 

@@ -29,6 +29,7 @@ namespace mitcad::bridge {
 enum class BodyKind : std::uint8_t;
 struct BodyInfo;
 struct BodyPlacement;
+struct FaceColor;
 struct ExportSettings;
 struct F3dBody;
 

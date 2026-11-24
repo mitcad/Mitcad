@@ -7,7 +7,9 @@
 #      plugins (X11, OpenGL on X11 through GLX and EGL, Wayland with its
 #      shell and EGL plugins (mitcad#2031), SVG images and icons, TLS, CUPS
 #      print support with the system's libcups, mitcad#1089) with a
-#      qt.conf, OCCT and the licences; every ELF file finds its libraries
+#      qt.conf, OCCT and the licences, the built-in texture images once
+#      (in usr/share/mitcad/textures, no copy built into a program,
+#      mitcad#2218, mitcad#2251); every ELF file finds its libraries
 #      inside it or in the system's library folders (ldd with an empty
 #      environment), none in the build's, Qt's or vcpkg's folders, and its
 #      RUNPATHs stay inside it. Static checks of what a user's system must
@@ -229,6 +231,30 @@ for image in "$ROOT"/core/model-base/textures/*.jpg; do
 done
 [ "$textures" -gt 0 ] || ui_fail "no texture images in core/model-base/textures"
 echo "ok   the $textures built-in texture images in usr/share/mitcad/textures"
+# ... and only there (mitcad#2251): no program in usr/bin carries a copy of
+# them built in, as mitcad and mitcad-cli each did with include_bytes!
+# before mitcad#2218 (the AppImage then had the images twice, about 4.6 MB
+# each). A run of 64 bytes from the middle of each image is looked
+# for in each file of usr/bin.
+copies=$(python3 - "$ROOT/core/model-base/textures" "$DIR/usr/bin" << 'EOF'
+import pathlib
+import sys
+
+needles = []
+for image in sorted(pathlib.Path(sys.argv[1]).glob("*.jpg")):
+    data = image.read_bytes()
+    needles.append((image.name, data[len(data) // 2:len(data) // 2 + 64]))
+for program in sorted(pathlib.Path(sys.argv[2]).iterdir()):
+    if program.is_file() and not program.is_symlink():
+        data = program.read_bytes()
+        for name, needle in needles:
+            if needle in data:
+                print(f"{program.name}: {name}")
+EOF
+) || ui_fail "could not look for texture images in the AppImage's programs"
+[ -z "$copies" ] ||
+  ui_fail "programs in usr/bin carry the texture images built in: $(echo "$copies" | head -3 | tr '\n' ' ')"
+echo "ok   no program in usr/bin carries a copy of the texture images"
 # Qt's D-Bus module: the keychain's (KWallet, the Secret Service); Print
 # Support: File › Print (mitcad#1089).
 for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6PrintSupport libQt6XcbQpa libQt6DBus libTKernel libTKV3d libTKOpenGl; do

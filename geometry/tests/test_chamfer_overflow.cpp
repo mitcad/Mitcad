@@ -205,32 +205,64 @@ TopoDS_Shape step_ring(bool split, bool turned) {
   return block;
 }
 
+// The step ring's inner rim: one circle or, split, two arcs.
+std::vector<TopoDS_Edge> step_ring_rim(const TopoDS_Shape& body) {
+  return edges_where(body, [](const gp_Pnt& p) {
+    return std::abs(p.Z() + 1.5) < 1e-6 && std::abs(std::hypot(p.X(), p.Y()) - 1.0) < 1e-6;
+  });
+}
+
 // The step's inner rim chamfered by 1, the ring's width (patch 0140): the
 // chamfer's cone runs from the hole's wall 1 above the step to the
 // counterbore's wall, the ring vanishes. The triangle taken away (legs 1)
 // turns about the axis at radius 4/3: 4 pi / 3. Before, the contact along
 // the ring's outer circle was hatched in part only and the rest walked
 // along the boundary ("Path failed"), or, for a whole circle, the chamfer
-// was valid but kept the ring as a face of zero width. With the
-// counterbore's seam turned away from the rim's vertex (`turned`), the
-// contact along the ring's outer circle passes that circle's vertex, on the
-// seam, inside the stripe (patch 0144): its edge was split there with one
-// p-curve on the counterbore's wall for both parts, the part past the seam a
-// period off, and the parts' p-curves on the chamfer's cone were shifted by
-// the vertex's parameter (an unorientable face for the whole circle; for the
-// rim in two arcs a valid shape whose p-curves on the cone missed their
-// edges by 2.8). Now the stripe is split there in two pieces of one face.
-// The fillet of radius 1 likewise: it takes the square of the ring's width
-// less the quarter disc about the counterbore's rim, turned about the axis:
-// 2 pi (11 / 6 - pi / 2).
+// was valid but kept the ring as a face of zero width. The rim a whole
+// circle with the counterbore's seam at its vertex, and in two arcs with
+// the seam there or turned away; the whole circle with the seam turned
+// away, the p-curves' fit and the fillet need 0144
+// (test_step_ring_rim_blends_past_the_seam).
 void test_chamfer_as_wide_as_a_step_ring() {
+  for (const bool split : {false, true}) {
+    for (const bool turned : {false, true}) {
+      if (!split && turned) {
+        continue; // (patch 0144: test_step_ring_rim_blends_past_the_seam)
+      }
+      const TopoDS_Shape body = step_ring(split, turned);
+      const std::vector<TopoDS_Edge> rim = step_ring_rim(body);
+      CHECK(rim.size() == (split ? 2u : 1u));
+      const TopoDS_Shape result = chamfered(body, rim, 1.0);
+      CHECK(!result.IsNull());
+      if (result.IsNull()) {
+        continue;
+      }
+      CHECK(BRepCheck_Analyzer(result).IsValid());
+      CHECK_NEAR(volume_of(result) - volume_of(body), -4.0 * kPi / 3.0);
+      // The ring gone, the cone in its place (in two pieces on two arcs).
+      CHECK(faces_of(result) == faces_of(body) + (split ? 1 : 0));
+    }
+  }
+}
+
+// The step ring's rim of test_chamfer_as_wide_as_a_step_ring chamfered by 1
+// in every form, and rounded. With the counterbore's seam turned away from
+// the rim's vertex (`turned`), the contact along the ring's outer circle
+// passes that circle's vertex, on the seam, inside the stripe (patch 0144):
+// its edge was split there with one p-curve on the counterbore's wall for
+// both parts, the part past the seam a period off, and the parts' p-curves
+// on the chamfer's cone were shifted by the vertex's parameter (an
+// unorientable face for the whole circle; for the rim in two arcs a valid
+// shape whose p-curves on the cone missed their edges by 2.8). Now the
+// stripe is split there in two pieces of one face. The fillet of radius 1
+// likewise: it takes the square of the ring's width less the quarter disc
+// about the counterbore's rim, turned about the axis: 2 pi (11 / 6 - pi / 2).
+void test_step_ring_rim_blends_past_the_seam() {
   for (const bool fillet : {false, true}) {
     for (const bool split : {false, true}) {
       for (const bool turned : {false, true}) {
         const TopoDS_Shape body = step_ring(split, turned);
-        const std::vector<TopoDS_Edge> rim = edges_where(body, [](const gp_Pnt& p) {
-          return std::abs(p.Z() + 1.5) < 1e-6 && std::abs(std::hypot(p.X(), p.Y()) - 1.0) < 1e-6;
-        });
+        const std::vector<TopoDS_Edge> rim = step_ring_rim(body);
         CHECK(rim.size() == (split ? 2u : 1u));
         TopoDS_Shape result;
         if (fillet) {
@@ -269,20 +301,8 @@ void test_chamfer_as_wide_as_a_step_ring() {
 
 // A block with a bore of radius 17 and inside it a lug: a ring sector
 // between radii 12.5 and 17 over 135 degrees from `start` degrees, 5 high,
-// joined to the bore's wall, whose seam lies at `seam` degrees. The concave
-// arc where the lug's top meets the wall above it is chamfered by 4.5, as
-// wide as the lug's top (patch 0140): the hatching of the circular contact
-// on the top's inner arc gave a domain without a first point, and the
-// contact was walked. The chamfer adds the triangle (legs 4.5, centroid at
-// radius 15.5) turned through 135 degrees; the lug's radial sides cut it.
-// With the lug's end on the bore's seam (patch 0147), the end's corner
-// prolonged the edge between the lug's end and the wall up to the chamfer
-// with the edge's p-curve on the wall's other side (an edge left from the
-// seam keeps both), and the seam above the lug was not cut: a
-// self-intersecting wire. The fillet of radius 4.5 likewise: it adds the
-// square of the lug's width less the quarter disc about the fillet's axis,
-// turned through 135 degrees.
-void test_chamfer_as_wide_as_a_lug_in_a_bore(double start, double seam, bool fillet) {
+// joined to the bore's wall, whose seam lies at `seam` degrees.
+TopoDS_Shape bore_with_a_lug(double start, double seam) {
   const gp_Dir up(0, 0, 1);
   const double a0 = start * kPi / 180.0, s0 = seam * kPi / 180.0;
   const gp_Dir from(std::cos(a0), std::sin(a0), 0);
@@ -292,11 +312,52 @@ void test_chamfer_as_wide_as_a_lug_in_a_bore(double start, double seam, bool fil
                          .Shape());
   TopoDS_Shape lug = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -6), up, from), 17.0, 5.0, 0.75 * kPi).Shape();
   lug = cut(lug, BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -7), up, from), 12.5, 7.0).Shape());
-  const TopoDS_Shape body = fuse(block, lug);
-  CHECK(BRepCheck_Analyzer(body).IsValid());
-  const std::vector<TopoDS_Edge> arc = edges_where(body, [](const gp_Pnt& p) {
+  return fuse(block, lug);
+}
+
+// The concave arc where the lug's top meets the bore's wall above it.
+std::vector<TopoDS_Edge> lug_top_arc(const TopoDS_Shape& body) {
+  return edges_where(body, [](const gp_Pnt& p) {
     return std::abs(p.Z() + 1) < 1e-6 && std::abs(std::hypot(p.X(), p.Y()) - 17.0) < 1e-6;
   });
+}
+
+// The lug from 112.5 degrees, its ends away from the bore's seam at 0
+// degrees. The concave arc where the lug's top meets the wall above it is
+// chamfered by 4.5, as wide as the lug's top (patch 0140): the hatching of
+// the circular contact on the top's inner arc gave a domain without a first
+// point, and the contact was walked. The chamfer adds the triangle (legs
+// 4.5, centroid at radius 15.5) turned through 135 degrees; the lug's
+// radial sides cut it. The lug's ends on the seam, the p-curves' fit and
+// the fillet need 0147 (test_lug_in_a_bore_blends_on_its_seam).
+void test_chamfer_as_wide_as_a_lug_in_a_bore() {
+  const TopoDS_Shape body = bore_with_a_lug(112.5, 0.0);
+  const std::vector<TopoDS_Edge> arc = lug_top_arc(body);
+  CHECK(arc.size() == 1u);
+  const TopoDS_Shape result = chamfered(body, arc, 4.5);
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(result).IsValid());
+  CHECK_NEAR(volume_of(result) - volume_of(body), 0.75 * kPi * 15.5 * 10.125);
+  // The lug's top gone, the cone in its place.
+  CHECK(faces_of(result) == faces_of(body));
+}
+
+// The lug's top arc of test_chamfer_as_wide_as_a_lug_in_a_bore chamfered,
+// or rounded (`fillet`), by 4.5 with the lug from `start` degrees and the
+// bore's seam at `seam` degrees. With the lug's end on the bore's seam
+// (patch 0147), the end's corner prolonged the edge between the lug's end
+// and the wall up to the chamfer with the edge's p-curve on the wall's
+// other side (an edge left from the seam keeps both), and the seam above
+// the lug was not cut: a self-intersecting wire. The fillet of radius 4.5
+// likewise: it adds the square of the lug's width less the quarter disc
+// about the fillet's axis, turned through 135 degrees.
+void test_lug_in_a_bore_blends_on_its_seam(double start, double seam, bool fillet) {
+  const TopoDS_Shape body = bore_with_a_lug(start, seam);
+  CHECK(BRepCheck_Analyzer(body).IsValid());
+  const std::vector<TopoDS_Edge> arc = lug_top_arc(body);
   CHECK(arc.size() == 1u);
   TopoDS_Shape result;
   if (fillet) {
@@ -397,23 +458,9 @@ void test_chamfer_of_a_rib_cut_by_its_sides(bool bottom_first) {
 
 // A plate 17 thick (z 0..17) whose corner is rounded with radius 20 about
 // (81.5, 20), and under it a boss of radius 7.5 on the same axis (z from
-// -13, or -14, to 0). The boss's foot is chamfered by 13: on the plate's
-// underside the contact (radius 20.5) runs 0.5 beyond the plate's outline
-// over a quarter turn and more (patch 0142). The chamfer adds material: the
-// plate's sides there, prolonged down, cut it, the edges between them
-// prolonged down to it, and the underside's edges under the chamfer go.
-// Before, the chain of faces beyond was not found (the blend crosses the
-// edges between them below their ends), and the gap was left to the
-// walking, which chamfers do not do. `exact`: the boss as long as the
-// chamfer (it vanishes, 0140); `away`: the boss's seam (and the closed
-// spine's start) away from the gap, else in it. With the seam in the gap
-// the pieces past the spine's start held their p-curves on the boss a
-// period on, beyond its seam (patch 0145: an unorientable face for the
-// longer boss); and the cone came in a face per piece where the piece
-// across the spine's start holds its parameters a period on, or the run of
-// pieces cut by the faces beyond goes on across the start (patch 0146), the
-// cone being one face in the file's body.
-void test_chamfer_of_a_boss_beyond_a_plate_corner(bool exact, bool away) {
+// -13, or -14, to 0). `exact`: the boss 13 long; `away`: the boss's seam
+// at 45 degrees, else at 180.
+TopoDS_Shape boss_under_a_rounded_plate_corner(bool exact, bool away) {
   TopoDS_Shape plate = BRepPrimAPI_MakeBox(gp_Pnt(61.5, 0, 0), gp_Pnt(200, 150, 17)).Shape();
   {
     BRepFilletAPI_MakeFillet round(plate);
@@ -429,21 +476,22 @@ void test_chamfer_of_a_boss_beyond_a_plate_corner(bool exact, bool away) {
       BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(81.5, 20, -length), gp_Dir(0, 0, 1), away ? gp_Dir(1, 1, 0) : gp_Dir(-1, 0, 0)),
                                7.5, length)
           .Shape();
-  const TopoDS_Shape body = fuse(plate, boss);
-  const std::vector<TopoDS_Edge> foot = edges_where(body, [](const gp_Pnt& p) {
+  return fuse(plate, boss);
+}
+
+// The boss's foot, a closed circle on the plate's underside.
+std::vector<TopoDS_Edge> boss_foot(const TopoDS_Shape& body) {
+  return edges_where(body, [](const gp_Pnt& p) {
     return std::abs(p.Z()) < 1e-6 && std::abs(std::hypot(p.X() - 81.5, p.Y() - 20) - 7.5) < 1e-6;
   });
-  CHECK(foot.size() == 1u);
-  const TopoDS_Shape result = chamfered(body, foot, 13.0);
-  CHECK(!result.IsNull());
-  if (result.IsNull()) {
-    return;
-  }
-  CHECK(BRepCheck_Analyzer(result).IsValid());
-  // The chamfer's ring (legs 13 from radius 7.5) less what lies beyond the
-  // outline: in the rounded corner's quarter beyond radius 20 (exact), and
-  // beyond each side half a circular segment of the ring's radius R
-  // (20 to 20.5 over the top 0.5), integrated with Simpson's rule.
+}
+
+// The volume the boss's foot chamfer of 13 adds: the chamfer's ring (legs
+// 13 from radius 7.5) less what lies beyond the outline: in the rounded
+// corner's quarter beyond radius 20 (exact), and beyond each side half a
+// circular segment of the ring's radius R (20 to 20.5 over the top 0.5),
+// integrated with Simpson's rule.
+double boss_foot_chamfer_volume() {
   const double ring = 2.0 * kPi * (7.5 + 13.0 / 3.0) * 84.5;
   const double corner = 0.5 * kPi * ((std::pow(20.5, 3) / 6.0 - 200.0 * 20.5) - (8000.0 / 6.0 - 4000.0));
   double sides = 0.0;
@@ -454,8 +502,54 @@ void test_chamfer_of_a_boss_beyond_a_plate_corner(bool exact, bool away) {
     sides += (i == 0 || i == n ? 1.0 : (i % 2 == 1 ? 4.0 : 2.0)) * segment;
   }
   sides *= 0.5 / n / 3.0;
+  return ring - corner - sides;
+}
+
+// The boss's foot is chamfered by 13: on the plate's underside the contact
+// (radius 20.5) runs 0.5 beyond the plate's outline over a quarter turn and
+// more (patch 0142). The chamfer adds material: the plate's sides there,
+// prolonged down, cut it, the edges between them prolonged down to it, and
+// the underside's edges under the chamfer go. Before, the chain of faces
+// beyond was not found (the blend crosses the edges between them below
+// their ends), and the gap was left to the walking, which chamfers do not
+// do. `exact`: the boss as long as the chamfer (it vanishes, 0140); `away`:
+// the boss's seam (and the closed spine's start) away from the gap, else in
+// it. The longer boss with its seam in the gap, the p-curves' fit and the
+// cone as one face need 0145 and 0146
+// (test_boss_foot_chamfer_across_its_seam).
+void test_chamfer_of_a_boss_beyond_a_plate_corner(bool exact, bool away) {
+  const TopoDS_Shape body = boss_under_a_rounded_plate_corner(exact, away);
+  const std::vector<TopoDS_Edge> foot = boss_foot(body);
+  CHECK(foot.size() == 1u);
+  const TopoDS_Shape result = chamfered(body, foot, 13.0);
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(result).IsValid());
+  CHECK_NEAR_TOL(exact_volume_of(result) - exact_volume_of(body), boss_foot_chamfer_volume(), 1e-8);
+}
+
+// The boss's foot of test_chamfer_of_a_boss_beyond_a_plate_corner chamfered
+// by 13 in every form. With the seam in the gap the pieces past the spine's
+// start held their p-curves on the boss a period on, beyond its seam (patch
+// 0145: an unorientable face for the longer boss); and the cone came in a
+// face per piece where the piece across the spine's start holds its
+// parameters a period on, or the run of pieces cut by the faces beyond goes
+// on across the start (patch 0146), the cone being one face in the file's
+// body.
+void test_boss_foot_chamfer_across_its_seam(bool exact, bool away) {
+  const TopoDS_Shape body = boss_under_a_rounded_plate_corner(exact, away);
+  const std::vector<TopoDS_Edge> foot = boss_foot(body);
+  CHECK(foot.size() == 1u);
+  const TopoDS_Shape result = chamfered(body, foot, 13.0);
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
+    return;
+  }
+  CHECK(BRepCheck_Analyzer(result).IsValid());
   CHECK(pcurves_fit(result));
-  CHECK_NEAR_TOL(exact_volume_of(result) - exact_volume_of(body), ring - corner - sides, 1e-8);
+  CHECK_NEAR_TOL(exact_volume_of(result) - exact_volume_of(body), boss_foot_chamfer_volume(), 1e-8);
   // The cone one face; the boss's side gone with the exact length.
   CHECK(faces_of(result) == faces_of(body) + (exact ? 0 : 1));
 }
@@ -1617,21 +1711,27 @@ void test_chamfer_of_a_sloped_boss_top_moved(double foot, double distance, doubl
 
 void chamfer_overflow_tests() {
   guarded("test_chamfer_as_wide_as_a_step_ring", test_chamfer_as_wide_as_a_step_ring);
+  guarded("test_step_ring_rim_blends_past_the_seam", test_step_ring_rim_blends_past_the_seam);
+  guarded("test_chamfer_as_wide_as_a_lug_in_a_bore", test_chamfer_as_wide_as_a_lug_in_a_bore);
   // (The lug's ends away from the bore's seam, its end and its start on it.)
   for (const bool fillet : {false, true}) {
     for (const auto& [start, seam] : {std::pair<double, double>{112.5, 0.0}, {225.0, 0.0}, {0.0, 0.0}}) {
-      guarded("test_chamfer_as_wide_as_a_lug_in_a_bore", [&, start = start, seam = seam] {
-        test_chamfer_as_wide_as_a_lug_in_a_bore(start, seam, fillet);
+      guarded("test_lug_in_a_bore_blends_on_its_seam", [&, start = start, seam = seam] {
+        test_lug_in_a_bore_blends_on_its_seam(start, seam, fillet);
       });
     }
   }
   for (const bool bottom_first : {false, true}) {
     guarded("test_chamfer_of_a_rib_cut_by_its_sides", [&] { test_chamfer_of_a_rib_cut_by_its_sides(bottom_first); });
   }
+  // (Not the longer boss with its seam in the gap: patch 0145.)
+  for (const auto& [exact, away] : {std::pair<bool, bool>{true, true}, {false, true}, {true, false}}) {
+    guarded("test_chamfer_of_a_boss_beyond_a_plate_corner",
+            [&, exact = exact, away = away] { test_chamfer_of_a_boss_beyond_a_plate_corner(exact, away); });
+  }
   for (const bool exact : {true, false}) {
     for (const bool away : {true, false}) {
-      guarded("test_chamfer_of_a_boss_beyond_a_plate_corner",
-              [&] { test_chamfer_of_a_boss_beyond_a_plate_corner(exact, away); });
+      guarded("test_boss_foot_chamfer_across_its_seam", [&] { test_boss_foot_chamfer_across_its_seam(exact, away); });
     }
   }
   for (const bool seam_at_corner : {false, true}) {

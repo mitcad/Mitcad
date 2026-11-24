@@ -227,6 +227,17 @@ QString MainWindow::exportName(const Selection& items) const {
   return meshItemsName(meshItems(items), bodyNames, components, design);
 }
 
+QStringList MainWindow::exportBodies(const Selection& items) const {
+  const QVector<MeshItem> chosen = meshItems(items);
+  QJsonArray instances;
+  if (std::any_of(chosen.begin(), chosen.end(),
+                  [](const MeshItem& item) { return item.kind == MeshItem::Kind::Component; })) {
+    instances = query({{QStringLiteral("query"), QStringLiteral("instances")}, {QStringLiteral("hidden"), true}})
+                    .toArray();
+  }
+  return meshItemsBodies(chosen, instances);
+}
+
 MeshPlan MainWindow::saveAsMeshPlan(const Selection& items) const {
   const QVector<MeshItem> chosen = meshItems(items);
   QHash<QString, MeshBody> bodies;

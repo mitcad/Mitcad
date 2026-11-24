@@ -214,6 +214,7 @@ impl<K: Kernel> Document<K> {
                     name: names.get(body).cloned(),
                     color: None,
                     shape: shape.value.clone(),
+                    face_colors: Vec::new(),
                 });
                 let instance = Instance {
                     path: path.clone(),

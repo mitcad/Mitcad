@@ -92,6 +92,7 @@ inline constexpr char kBridgeScript[] = R"JS((function () {
     endStep: function () { return call('end_step'); },
     state: function () { return call('state'); },
     openDesign: function (path) { return call('open_design', {path: path}); },
+    setProgress: function (progress) { return call('set_progress', progress); },
     leave: function () { return call('leave'); },
     on: function (name, listener) { (listeners[name] = listeners[name] || []).push(listener); },
     off: function (name, listener) {

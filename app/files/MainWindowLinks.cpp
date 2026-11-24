@@ -340,6 +340,11 @@ void MainWindow::linkedDesignSaved(const QString& path) {
   if (m_linkWatcher == nullptr) {
     return;
   }
+  // This design's Save writes it for edits made in place here, and its
+  // link records it (mitcad#2321).
+  if (!m_inPlaceSaving.isEmpty() && sameFile(m_inPlaceSaving, path)) {
+    return;
+  }
   for (const QString& file : m_linkWatcher->files()) {
     if (sameFile(file, path)) {
       qInfo().noquote() << QStringLiteral("Linked design saved in another tab: %1").arg(fileName(path));

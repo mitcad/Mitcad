@@ -66,7 +66,7 @@ std::vector<Body> read_file(const std::string& path, const Message_ProgressRange
     if (!BRepTools::Read(shape, path.c_str(), BRep_Builder()) || shape.IsNull()) {
       throw Error("cannot read BREP file " + path);
     }
-    return {Body{detail::file_stem(path), shape, std::nullopt, {}}};
+    return {Body{detail::file_stem(path), shape, std::nullopt, {}, {}}};
   }
   }
   return {};

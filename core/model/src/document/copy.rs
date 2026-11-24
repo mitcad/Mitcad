@@ -993,6 +993,14 @@ impl CopyReferences<'_> {
                     }
                 }
             }
+            // The occurrence of the parent a move of occurrences was picked
+            // through (mitcad#2307) follows the copied subtree too.
+            if let (FeatureDef::MoveOccurrence(to), FeatureDef::MoveOccurrence(from)) =
+                (copy, original)
+                && let Some(path) = &from.parent_occurrence
+            {
+                to.parent_occurrence = Some(self.path(path).unwrap_or_else(|| path.clone()));
+            }
             return Ok(());
         }
         match (copy, original) {

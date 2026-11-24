@@ -30,7 +30,7 @@ endif()
 include(cmake/VcpkgCompilerCache.cmake)
 
 project(Mitcad
-  VERSION 0.71.0
+  VERSION 0.72.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 mitcad_vcpkg_compiler_cache_done()
@@ -344,6 +344,9 @@ if(BUILD_TESTING)
   # Every list and tree takes the app's one compact indentation
   # (tools/tree-indentation-check).
   add_subdirectory(tools/tree-indentation-check)
+  # Every fixed choice's label is marked for the catalogues
+  # (tools/choice-labels).
+  add_subdirectory(tools/choice-labels)
   # Every widget of the app that paints itself names its AppKit
   # presentation (tools/native-coverage). Not in this branch: the AppKit
   # frontend is not built, macOS uses the shared Qt UI

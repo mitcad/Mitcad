@@ -17,15 +17,17 @@ use super::geom_ref::{GeomRef, Want};
 use super::path::{CurvePath, SketchCurves};
 use super::surface_sweeps;
 use super::{
-    BodyChange, CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References,
-    ToolUse, UNSUPPORTED, is_false,
+    BodyChange, CheckContext, EvalContext, Evaluate, FeatureDef, FeatureInfo, FeatureOutput,
+    References, ToolUse, UNSUPPORTED, is_false,
 };
 use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::parameters::ParamId;
 use crate::profile::ProfileRegion;
-use crate::sweeps::{LoftEnd, LoftEndKind, LoftSection, LoftSpec, PathCurve};
+use crate::sweeps::{LoftEnd, LoftEndKind, LoftFace, LoftSection, LoftSpec, PathCurve};
 use crate::topo::{FaceName, RegionKey};
+// The face of a curved face's sketch (mitcad#2345).
+use super::sketch::SketchPlane;
 // Frames along a centre line (mitcad#543).
 use super::sweep::SweepFrame;
 use crate::sweeps::PathFrame;
@@ -122,6 +124,25 @@ pub enum EndCondition<P = ParamId> {
     PointTangent {
         weight: P,
     },
+    /// At right angles to a face the section lies on (mitcad#2345): `face`,
+    /// or without it the face the section lies on (a face section's own
+    /// face, a sketch profile's or a planar sketch's plane, where it is
+    /// Direction at angle 0, a curved face's sketch's face).
+    Perpendicular {
+        weight: P,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        face: Option<EndFace>,
+    },
+}
+
+/// A face of a body or surface body that a Perpendicular end leaves at
+/// right angles (mitcad#2345): `{"body": "F2.b0", "face": "F2:side(c1)"}`.
+/// The section must lie on it (within 0.01 mm).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EndFace {
+    pub body: BodyUid,
+    pub face: FaceName,
 }
 
 impl<P> EndCondition<P> {
@@ -148,6 +169,10 @@ impl<P> EndCondition<P> {
             Self::PointTangent { weight } => EndCondition::PointTangent {
                 weight: f(&slot("weight"), weight)?,
             },
+            Self::Perpendicular { weight, face } => EndCondition::Perpendicular {
+                weight: f(&slot("weight"), weight)?,
+                face: face.clone(),
+            },
         })
     }
 
@@ -159,6 +184,15 @@ impl<P> EndCondition<P> {
             Self::Smooth { .. } => "smooth",
             Self::PointSharp => "point_sharp",
             Self::PointTangent { .. } => "point_tangent",
+            Self::Perpendicular { .. } => "perpendicular",
+        }
+    }
+
+    /// A Perpendicular end's face, when it names one.
+    fn face(&self) -> Option<&EndFace> {
+        match self {
+            Self::Perpendicular { face, .. } => face.as_ref(),
+            _ => None,
         }
     }
 
@@ -172,16 +206,21 @@ impl<P> EndCondition<P> {
     }
 
     /// Whether the condition can be given at the section: a direction at a
-    /// sketch profile, tangent and smooth at a face, point conditions at a
-    /// point; free anywhere.
+    /// sketch profile or curves, tangent and smooth at a face, point
+    /// conditions at a point, perpendicular at anything but a point
+    /// (mitcad#2345); free anywhere.
     fn fits(&self, section: &LoftSectionDef) -> bool {
         match self {
             Self::Free => true,
-            Self::Direction { .. } => matches!(section, LoftSectionDef::Profile { .. }),
+            Self::Direction { .. } => matches!(
+                section,
+                LoftSectionDef::Profile { .. } | LoftSectionDef::Curves { .. }
+            ),
             Self::Tangent { .. } | Self::Smooth { .. } => {
                 matches!(section, LoftSectionDef::Face { .. })
             }
             Self::PointSharp | Self::PointTangent { .. } => section.is_point(),
+            Self::Perpendicular { .. } => !section.is_point(),
         }
     }
 }
@@ -218,6 +257,9 @@ impl EndCondition {
             Self::Smooth { weight } => (LoftEndKind::Smooth, 0.0, weight_of(ctx, *weight)?),
             Self::PointTangent { weight } => {
                 (LoftEndKind::PointTangent, 0.0, weight_of(ctx, *weight)?)
+            }
+            Self::Perpendicular { weight, .. } => {
+                (LoftEndKind::Perpendicular, 0.0, weight_of(ctx, *weight)?)
             }
         };
         Ok(LoftEnd {
@@ -299,9 +341,75 @@ fn is_keep(tangent_edges: &TangentEdges) -> bool {
     *tangent_edges == TangentEdges::Keep
 }
 
+/// How the curves of a curve section lie (mitcad#2345): in their sketch's
+/// plane, on a curved face (a sketch on a cylindrical or conical face,
+/// mitcad#1768) or in space (a 3D sketch's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CurvesLie {
+    InPlane,
+    OnFace,
+    InSpace,
+}
+
+fn curves_lie(def: Option<&FeatureDef>) -> CurvesLie {
+    match def {
+        Some(FeatureDef::SpatialSketch(_)) => CurvesLie::InSpace,
+        Some(FeatureDef::Sketch(sketch)) if sketch.plane.is_developed() => CurvesLie::OnFace,
+        _ => CurvesLie::InPlane,
+    }
+}
+
+/// The checks of an end condition that depend on its section (mitcad#2345):
+/// a Perpendicular end's face must be there; at curves, a direction needs
+/// them in a plane, and a Perpendicular end without a face needs them in a
+/// plane or on a curved face's sketch (a 3D sketch's lie on no known face).
+fn check_end_section(
+    ctx: &CheckContext<'_>,
+    condition: &EndCondition,
+    section: &LoftSectionDef,
+    which: &str,
+) -> Result<(), String> {
+    if let Some(face) = condition.face() {
+        let at = |e: String| format!("the {which} condition's face: {e}");
+        ctx.body(face.body).map_err(at)?;
+        for feature in face.face.features() {
+            ctx.feature(feature).map_err(|e| {
+                at(crate::notice::about_place(
+                    crate::notice::NoticePlace::face(face.face.to_string()),
+                    &e.to_string(),
+                ))
+            })?;
+        }
+        return Ok(());
+    }
+    let LoftSectionDef::Curves { sketch, .. } = section else {
+        return Ok(());
+    };
+    let lie = curves_lie(ctx.feature(*sketch).ok().map(|entry| &entry.def));
+    match condition {
+        EndCondition::Direction { .. } if lie != CurvesLie::InPlane => Err(format!(
+            "the {which} condition direction needs curves that lie in a plane; give \
+             perpendicular with the face they lie on instead"
+        )),
+        EndCondition::Perpendicular { .. } if lie == CurvesLie::InSpace => Err(format!(
+            "the {which} condition perpendicular needs the face that the 3D sketch's curves \
+             lie on: give it as the condition's face"
+        )),
+        _ => Ok(()),
+    }
+}
+
 impl<P> LoftDef<P> {
     pub const TYPE: &'static str = "loft";
     pub const BASE_NAME: &'static str = "Loft";
+
+    /// The faces the Perpendicular ends name (mitcad#2345).
+    fn end_faces(&self) -> impl Iterator<Item = &EndFace> {
+        self.start_condition
+            .iter()
+            .chain(&self.end_condition)
+            .filter_map(EndCondition::<P>::face)
+    }
 
     // Written by hand: the end conditions map with their prefixes.
     pub fn map_params<Q, E>(
@@ -361,6 +469,11 @@ impl FeatureInfo for LoftDef {
         for body in &self.participants {
             references.body(*body);
         }
+        // The faces of Perpendicular ends (mitcad#2345).
+        for face in self.end_faces() {
+            references.body(face.body);
+            references.features.extend(face.face.features());
+        }
         references
     }
 
@@ -381,15 +494,10 @@ impl FeatureInfo for LoftDef {
             if !self.sections.iter().all(LoftSectionDef::is_curves) {
                 return Err("a loft of curve sections has only curve sections".to_owned());
             }
-            if self.start_condition.is_some()
-                || self.end_condition.is_some()
-                || self.centerline.is_some()
-                || !self.rails.is_empty()
-            {
-                return Err(
-                    "a loft of curve sections has no end conditions, center line or rails"
-                        .to_owned(),
-                );
+            // End conditions, since mitcad#2345; rails and a center line
+            // not.
+            if self.centerline.is_some() || !self.rails.is_empty() {
+                return Err("a loft of curve sections has no center line or rails".to_owned());
             }
         }
         for (i, section) in self.sections.iter().enumerate() {
@@ -449,6 +557,7 @@ impl FeatureInfo for LoftDef {
                         condition.name(),
                     ));
                 }
+                check_end_section(ctx, condition, section, which)?;
                 imposed |= condition.imposes();
             }
         }
@@ -534,15 +643,7 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
         if self.sections.iter().any(LoftSectionDef::is_curves) {
             return self.curve_loft(ctx);
         }
-        let mut ends = [LoftEnd::default(); 2];
-        for (end, (condition, which)) in ends.iter_mut().zip([
-            (&self.start_condition, "start"),
-            (&self.end_condition, "end"),
-        ]) {
-            if let Some(condition) = condition {
-                *end = condition.evaluate(ctx, which)?;
-            }
-        }
+        let ends = self.ends(ctx)?;
         let participants = participant_bodies(ctx, self.operation, &self.participants)?;
         let mut found: Vec<Found<K::Shape>> = Vec::new();
         for (i, section) in self.sections.iter().enumerate() {
@@ -631,6 +732,8 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
                 super::sweep::check_binormal(*binormal)?,
             )),
         };
+        // The faces of Perpendicular ends (mitcad#2345).
+        let faces = self.perpendicular_faces(ctx)?;
         let sections = found
             .iter()
             .map(|f| match f {
@@ -655,6 +758,8 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
             centerline_frame,
             centerline_parallel: self.orientation == SweepOrientation::Parallel,
             merge_tangent_edges: self.tangent_edges == TangentEdges::Merge,
+            start_face: loft_face(&faces[0]),
+            end_face: loft_face(&faces[1]),
         };
         let tool = ctx.kernel.loft(&spec).map_err(|e| e.to_string())?;
         if self.surface {
@@ -670,14 +775,98 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
     }
 }
 
+/// A Perpendicular end's face as evaluation finds it (mitcad#2345): its
+/// body's shape and its name now.
+type FoundFace<S> = Option<(S, FaceName)>;
+
+/// The kernel's form of a Perpendicular end's face (mitcad#2345).
+fn loft_face<S>(found: &FoundFace<S>) -> Option<LoftFace<'_, S>> {
+    found.as_ref().map(|(body, face)| LoftFace { body, face })
+}
+
 impl LoftDef {
+    /// The kernel's ends: the conditions evaluated and checked, free (or
+    /// sharp at a point) where none is given.
+    fn ends<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<[LoftEnd; 2], String> {
+        let mut ends = [LoftEnd::default(); 2];
+        for (end, (condition, which)) in ends.iter_mut().zip([
+            (&self.start_condition, "start"),
+            (&self.end_condition, "end"),
+        ]) {
+            if let Some(condition) = condition {
+                *end = condition.evaluate(ctx, which)?;
+            }
+        }
+        Ok(ends)
+    }
+
+    /// The faces the Perpendicular ends leave at right angles (mitcad#2345),
+    /// each with its body's shape and its name now: the condition's face,
+    /// or at curves of a sketch on a curved face that face. `None` where
+    /// the kernel takes the section's own face or plane.
+    fn perpendicular_faces<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+    ) -> Result<[FoundFace<K::Shape>; 2], String> {
+        let count = self.sections.len();
+        let mut found: [FoundFace<K::Shape>; 2] = [None, None];
+        for (slot, (condition, section, which)) in found.iter_mut().zip([
+            (&self.start_condition, &self.sections[0], "start"),
+            (&self.end_condition, &self.sections[count - 1], "end"),
+        ]) {
+            let Some(condition @ EndCondition::Perpendicular { .. }) = condition else {
+                continue;
+            };
+            let at = |e: String| format!("the {which} condition's face: {e}");
+            if let Some(face) = condition.face() {
+                let shape = ctx.surface_body(face.body).map_err(at)?;
+                let name = ctx
+                    .face_or(&shape, &face.face, || {
+                        crate::notice::placed(
+                            "the body has no such face",
+                            crate::notice::NoticePlace::face(face.face.to_string())
+                                .in_body(&face.body.to_string()),
+                            format!("body {} has no face {}", face.body, face.face),
+                        )
+                    })
+                    .map_err(at)?;
+                *slot = Some((shape, name));
+            } else if let LoftSectionDef::Curves { sketch, .. } = section {
+                // A sketch on a curved face (mitcad#1768): its curves lie
+                // on that face.
+                let developed = match ctx.env.feature(*sketch).map(|f| &f.def) {
+                    Some(FeatureDef::Sketch(def)) => match &def.plane {
+                        SketchPlane::Developed { face, body, .. } => {
+                            Some(((**face).clone(), *body))
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((face, body)) = developed {
+                    let shapes = match body {
+                        Some(body) => vec![(body, ctx.surface_body(body).map_err(at)?)],
+                        None => ctx.surface_bodies(),
+                    };
+                    let (_, shape, renamed) =
+                        super::sketch::face_body(ctx.kernel, &face, shapes).map_err(at)?;
+                    *slot = Some((shape, renamed.unwrap_or(face)));
+                }
+            }
+        }
+        Ok(found)
+    }
+
     /// A surface loft through sections of curves (mitcad#455): each
-    /// section's curves one chain, lofted by the kernel's `loft_sheet`.
+    /// section's curves one chain, lofted by the kernel's `loft_sheet`;
+    /// with end conditions (mitcad#2345) by its `loft`, the chains as
+    /// sections, a planar sketch's with its plane.
     fn curve_loft<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
     ) -> Result<FeatureOutput<K::Shape>, String> {
         let mut sections = Vec::new();
+        let mut normals = Vec::new();
         for (i, section) in self.sections.iter().enumerate() {
             let at = |e: String| format!("section {}: {e}", i + 1);
             let Some(curves) = section.sketch_curves() else {
@@ -695,17 +884,52 @@ impl LoftDef {
                 )));
             }
             sections.push(chains.remove(0));
+            let lie = curves_lie(ctx.env.feature(curves.sketch).map(|f| &f.def));
+            normals.push((lie == CurvesLie::InPlane).then(|| frame.normal()));
         }
-        let sheet = ctx
-            .kernel
-            .loft_sheet(
-                ctx.uid,
-                &sections,
-                self.ruled,
-                self.closed,
-                self.tangent_edges == TangentEdges::Merge,
-            )
-            .map_err(|e| e.to_string())?;
+        let conditioned = [&self.start_condition, &self.end_condition]
+            .into_iter()
+            .flatten()
+            .any(|condition| condition.imposes());
+        if !conditioned {
+            let sheet = ctx
+                .kernel
+                .loft_sheet(
+                    ctx.uid,
+                    &sections,
+                    self.ruled,
+                    self.closed,
+                    self.tangent_edges == TangentEdges::Merge,
+                )
+                .map_err(|e| e.to_string())?;
+            return surface_sweeps::output(ctx, vec![sheet]);
+        }
+        let ends = self.ends(ctx)?;
+        let faces = self.perpendicular_faces(ctx)?;
+        let spec = LoftSpec {
+            feature: ctx.uid,
+            sections: sections
+                .iter()
+                .zip(&normals)
+                .map(|(chain, normal)| LoftSection::Chain {
+                    curves: chain,
+                    normal: *normal,
+                })
+                .collect(),
+            ruled: self.ruled,
+            closed: self.closed,
+            solid: false,
+            centerline: None,
+            rails: Vec::new(),
+            start: ends[0],
+            end: ends[1],
+            centerline_frame: None,
+            centerline_parallel: false,
+            merge_tangent_edges: self.tangent_edges == TangentEdges::Merge,
+            start_face: loft_face(&faces[0]),
+            end_face: loft_face(&faces[1]),
+        };
+        let sheet = ctx.kernel.loft(&spec).map_err(|e| e.to_string())?;
         surface_sweeps::output(ctx, vec![sheet])
     }
 }

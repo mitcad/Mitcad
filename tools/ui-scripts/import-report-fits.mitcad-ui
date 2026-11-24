@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# The Import Report fits the screen however long it is (mitcad#2331): the
+# test part with a design (test_exchange --write-ipt-design) opened with a
+# long list of warnings added for the test
+# (MITCAD_TEST_IMPORT_REPORT_WARNINGS=150):
+#   - the report lists the 150 warnings;
+#   - the dialog stays within the screen's available height and its
+#     content scrolls (the buttons below it stay in sight);
+#   - the rows' filter still works: Errors shows none of the three rows,
+#     All rows all of them; Esc closes the report.
+# Run by tools/ui-import-report-status-test.sh (Linux),
+# tools/ui-windows-import-report-status-test.ps1 (Windows) and
+# tools/ui-macos-import-report-status-test.sh (macOS).
+wait-log '^Import report warnings: designed\.ipt: 150$' 180
+wait-log '^Import report size: designed\.ipt: height [0-9]+ of [0-9]+ available, within the screen, scrolls$' 30
+expect-never '^Import report size: designed\.ipt: .*past the screen'
+focus-dialog '^Import Report$' 30
+
+mark
+qt-choice importReportFilter 'Errors'
+wait-log '^Import report filter: designed\.ipt: 0 of 3 rows shown$' 10
+mark
+qt-choice importReportFilter 'All rows'
+wait-log '^Import report filter: designed\.ipt: 3 of 3 rows shown$' 10
+
+mark
+key Escape
+wait-idle 30
+expect-never 'TestDriver: FAIL'

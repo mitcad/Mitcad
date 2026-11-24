@@ -27,6 +27,7 @@ fn slow_file(doc: &Document<MockKernel>, path: &str) {
             name: Some("Bracket".to_owned()),
             color: None,
             shape: MockShape::imported("bracket", 6),
+            face_colors: Vec::new(),
         }],
     );
     doc.kernel().read_waits_for_cancel.set(true);

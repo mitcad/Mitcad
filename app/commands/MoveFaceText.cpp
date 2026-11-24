@@ -90,6 +90,11 @@ QString motionText(const QJsonObject& transform, const SlotValue& value) {
              referenceText(transform.value(QStringLiteral("axis"))));
   }
   if (type == QStringLiteral("point_to_point")) {
+    // Along one axis only (mitcad#2339).
+    const QString along = transform.value(QStringLiteral("along")).toString();
+    if (!along.isEmpty() && along != QStringLiteral("all")) {
+      return QStringLiteral("point to point along %1").arg(along);
+    }
     return QStringLiteral("point to point");
   }
   if (type == QStringLiteral("point_to_position")) {

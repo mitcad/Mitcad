@@ -39,6 +39,7 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QString>
 
 #include "platform/MacChrome.hpp"
@@ -1869,6 +1870,11 @@ QColor srgbOf(const QJsonValue& value, const QColor& fallback) {
 
 QJsonObject batchEvent(const char* name) { return {{QStringLiteral("event"), QLatin1String(name)}}; }
 
+struct BatchControl {
+  std::mutex mutex;
+  bool finished = false;
+};
+
 // --batch job.json (mitcad#48, docs/rendering.md "Final render"): renders
 // the job's scene, environment and view with its output settings to an
 // image file, reporting on stdout as JSON lines: "hello", "ready",
@@ -1925,9 +1931,18 @@ int runBatch(const QString& jobPath, bool control) {
   const QJsonArray previewSize = preview.value(QStringLiteral("size")).toArray();
   const QSize previewBox(previewSize.at(0).toInt(480), previewSize.at(1).toInt(360));
 
-  // Stops the render when the application asks or is gone.
-  if (control) {
-    std::thread([] {
+  // stdin may stay open until the worker exits. The reader retains its state,
+  // and the main thread disarms it before returning to process teardown.
+  const auto batchControl = control ? std::make_shared<BatchControl>() : nullptr;
+  const auto finishControl = [batchControl] {
+    if (batchControl) {
+      const std::lock_guard<std::mutex> lock(batchControl->mutex);
+      batchControl->finished = true;
+    }
+  };
+  const auto disarmControl = qScopeGuard(finishControl);
+  if (batchControl) {
+    std::thread([batchControl] {
       std::string line;
       while (std::getline(std::cin, line)) {
         const QJsonObject command = QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
@@ -1935,6 +1950,11 @@ int runBatch(const QString& jobPath, bool control) {
           break;
         }
       }
+      const std::lock_guard<std::mutex> lock(batchControl->mutex);
+      if (batchControl->finished) {
+        return;
+      }
+      // Keep the main thread out of process teardown until cancellation exits.
       emitEvent(batchEvent("cancelled"));
       // At once: Cycles stops a sample only when it is done, and nothing of
       // the render is kept.
@@ -2066,6 +2086,8 @@ int runBatch(const QString& jobPath, bool control) {
     return 1;
   }
   writePreview();
+  // The parent may close stdin as soon as it receives "done".
+  finishControl();
   emitEvent({{QStringLiteral("event"), QStringLiteral("done")},
              {QStringLiteral("path"), QString::fromStdString(file.path)},
              {QStringLiteral("size"), QJsonArray{width, height}},

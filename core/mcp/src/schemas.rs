@@ -38,6 +38,9 @@ mod print;
 // Flex items, hanging cables and the direction of gravity (mitcad#1713).
 mod flex;
 
+// Exploded views of assemblies (mitcad#2113).
+mod explode;
+
 /// A family's module: its commands with a schema, in the reference's
 /// order, and its schemas as [`spec`] writes them.
 type Family = (&'static [&'static str], fn(&str) -> Option<Value>);
@@ -57,6 +60,7 @@ const FAMILIES: &[Family] = &[
     (cam::COMMANDS, cam::spec),
     (form::COMMANDS, form::spec),
     (flex::COMMANDS, flex::spec),
+    (explode::COMMANDS, explode::spec),
 ];
 
 /// The JSON Schema dialect of the schemas.
@@ -230,14 +234,15 @@ fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "delete_feature", "uid": "F3"}, {"cmd": "delete_feature", "uid": "F1", "dependents": true}]
         }),
         "suppress_feature" => json!({
-            "description": "Suppresses a feature, takes the suppression away, or makes it follow a condition.",
+            "description": "Suppresses a feature, takes the suppression away, or makes it follow a condition. With dependents, the result lists in suppressed the features whose suppression changed (uids in timeline order).",
             "properties": {
                 "uid": feature_uid("The feature"),
                 "suppressed": {"type": "boolean", "default": true, "description": "true suppresses, false takes the suppression away"},
-                "expression": {"type": "string", "description": "Instead of suppressed: a condition the suppression follows (Holes = 'No'); \"\" removes it"}
+                "expression": {"type": "string", "description": "Instead of suppressed: a condition the suppression follows (Holes = 'No'); \"\" removes it"},
+                "dependents": {"type": "boolean", "default": false, "description": "When suppressing: also suppress the active features that depend on it, in the same undo step; one whose suppression follows a condition is left to it. Not with suppressed false or expression"}
             },
             "required": ["uid"],
-            "examples": [{"cmd": "suppress_feature", "uid": "F3"}, {"cmd": "suppress_feature", "uid": "F3", "suppressed": false}]
+            "examples": [{"cmd": "suppress_feature", "uid": "F3"}, {"cmd": "suppress_feature", "uid": "F3", "suppressed": false}, {"cmd": "suppress_feature", "uid": "F2", "dependents": true}]
         }),
         "rename_feature" => json!({
             "description": "Renames a feature.",

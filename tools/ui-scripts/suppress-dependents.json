@@ -1,0 +1,17 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"mitcad#2314: Extrude -> Cut -> Fillet. A 40 x 20 x 10 block (Block, F2.b0), a hole of 6 through it (Hole, a cut of the block alone) and one vertical edge rounded (Round). Hole and Round use Block."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":40,"height":20},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":10},"operation":"new_body"}},
+  {"cmd":"rename_feature","uid":"F2","name":"Block"},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F3","center":[20,10],"diameter":6},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1}"}],"extent":{"type":"through_all"},"operation":"cut","participants":["F2.b0"]}},
+  {"cmd":"rename_feature","uid":"F4","name":"Hole"},
+  {"cmd":"add_feature","def":{"type":"fillet","body":"F2.b0","edges":["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"],"radius":2}},
+  {"cmd":"rename_feature","uid":"F5","name":"Round"},
+  {"expect":{"feature":"Hole","status":"ok"}},
+  {"expect":{"feature":"Round","status":"ok"}},
+  {"expect":{"bodies":1}}
+]

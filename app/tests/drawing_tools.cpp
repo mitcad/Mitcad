@@ -63,7 +63,8 @@ int drawingToolsTests() {
                               QStringLiteral("Text"), QStringLiteral("Note"), QStringLiteral("Hole Callout"),
                               QStringLiteral("Datum Label"), QStringLiteral("Feature Control Frame"),
                               QStringLiteral("Surface Finish"), QStringLiteral("Hole Table"),
-                              QStringLiteral("Bill of Materials"), QStringLiteral("Balloon")}));
+                              QStringLiteral("Bill of Materials"), QStringLiteral("Balloon"),
+                              QStringLiteral("Weld Symbol"), QStringLiteral("Propose Welds")}));
   // The annotations' and the tables' tools pick on views (the model says
   // what) or take a view, and show their icons only; the views' tools
   // their names too.
@@ -80,9 +81,10 @@ int drawingToolsTests() {
   // The bar's groups (mitcad#725): Create, Geometry, Dimensions, Text,
   // Symbols, Tables, each with its caption; Geometry with Line, Arc, Center
   // Pattern and Edge Extension (mitcad#729); Dimensions with Model Items
-  // (mitcad#1406); Text with Hole Callout after Note (mitcad#2054).
+  // (mitcad#1406); Text with Hole Callout after Note (mitcad#2054); Symbols
+  // with Weld Symbol and Propose Welds (mitcad#2350).
   CHECK(groups.count(0) == 5 && groups.count(1) == 6 && groups.count(2) == 4 && groups.count(3) == 3 &&
-        groups.count(4) == 3 && groups.count(5) == 3);
+        groups.count(4) == 5 && groups.count(5) == 3);
   CHECK(toolGroupName(0) == QStringLiteral("Create") && toolGroupName(1) == QStringLiteral("Geometry") &&
         toolGroupName(2) == QStringLiteral("Dimensions") && toolGroupName(3) == QStringLiteral("Text") &&
         toolGroupName(4) == QStringLiteral("Symbols") && toolGroupName(5) == QStringLiteral("Tables"));
@@ -132,6 +134,12 @@ int drawingToolsTests() {
   CHECK(command.value(QStringLiteral("at")).toArray() == QJsonArray({150.0, 120.0}));
   CHECK(!command.contains(QStringLiteral("scale")));
   CHECK(!command.contains(QStringLiteral("subject")));
+  // Assembled unless an explode view is chosen (mitcad#2113).
+  CHECK(!command.contains(QStringLiteral("explode")));
+  CHECK(base->command(QStringLiteral("D1"), 0, picks(0, {QPointF(150, 120)}),
+                      {{QStringLiteral("explode"), QStringLiteral("Explode1")}})
+            .value(QStringLiteral("explode"))
+            .toString() == QStringLiteral("Explode1"));
   CHECK(command.value(QStringLiteral("style")).toObject().value(QStringLiteral("hidden_lines")).toBool() == false);
   QHash<QString, QString> options{{QStringLiteral("direction"), QStringLiteral("iso")},
                                   {QStringLiteral("scale"), QStringLiteral("1:2")},

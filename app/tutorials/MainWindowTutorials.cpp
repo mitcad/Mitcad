@@ -37,10 +37,12 @@
 #include "../webbrowser/BrowserComponent.hpp"
 #include "../webbrowser/BrowserModuleLoad.hpp"
 #include "../webbrowser/ComponentBrowserHost.hpp"
+#include "../files/StartPage.hpp"
+#include "../framework/Ribbon.hpp"
 #include "GuideStep.hpp"
+#include "TutorialChoice.hpp"
 #include "TutorialGuide.hpp"
 #include "TutorialSources.hpp"
-#include "TutorialsDialog.hpp"
 
 namespace mitcad {
 namespace {
@@ -88,12 +90,19 @@ QString tutorialWorkFolder(const QString& package) {
 } // namespace
 
 void MainWindow::showTutorials() {
-  TutorialsDialog dialog(this);
-  prepareModal(&dialog);
-  if (execDialog(&dialog) != QDialog::Accepted || !dialog.chosen()) {
+  // The Start page's tutorials (mitcad#2346, TutorialChoice), from a design
+  // too: the page shows them in its centre, where Start starts the chosen
+  // one in an empty design of its own.
+  if (m_ribbon == nullptr) {
+    qWarning().noquote() << QStringLiteral("Tutorials: no Start page in this window");
     return;
   }
-  openListedTutorial(dialog.chosen()->url, dialog.chosen()->tutorial);
+  createStartPage();
+  m_startPage->showTutorials();
+  if (!startPageShown()) {
+    m_ribbon->showTab(QStringLiteral("START"));
+  }
+  qInfo().noquote() << QStringLiteral("Start page tutorials shown");
 }
 
 void MainWindow::openListedTutorial(const QString& url, const QJsonObject& tutorial) {
@@ -130,21 +139,34 @@ void MainWindow::openTutorialInDesign(const QString& folder, const QString& page
     openTutorialPane(folder, page, title);
     return;
   }
+  // Over the Start page the web browser component comes first (mitcad#2311):
+  // a declined or failed download leaves the page, the design under it and
+  // the windows as they were, with no empty new design left open.
+  withTutorialComponent([this, folder, page, title](const BrowserComponentInfo& component) {
+    return showTutorialInDesign(component, folder, page, title);
+  });
+}
+
+bool MainWindow::showTutorialInDesign(const BrowserComponentInfo& component, const QString& folder,
+                                      const QString& page, const QString& title) {
+  if (!startPageShown()) {
+    // The page was left while the component was downloaded.
+    return showTutorialPane(component, folder, page, title);
+  }
   // Over the Start page (mitcad#2168) the tutorial starts in an empty
   // design of its own, never in the design under the page: its first
   // step's target is on the design's toolbar, and the page's own controls
   // are no part of any step.
   if (modelBusy()) {
-    whenIdle(this, [this, folder, page, title] { openTutorialInDesign(folder, page, title); });
-    return;
+    whenIdle(this, [this, component, folder, page, title] { showTutorialInDesign(component, folder, page, title); });
+    return true;
   }
   if (m_noDesign || emptyUntitledDesign()) {
     // The empty untitled design that waits under the page (the launch's,
     // or the one a close to the page installed): the page is left for it.
     qInfo().noquote() << QStringLiteral("Tutorial: starts in the empty design under the Start page");
     leaveStartPage();
-    openTutorialPane(folder, page, title);
-    return;
+    return showTutorialPane(component, folder, page, title);
   }
   // The user's design: New Design, in a new window or (Open in current
   // window) in this one after its unsaved-changes question.
@@ -152,20 +174,24 @@ void MainWindow::openTutorialInDesign(const QString& folder, const QString& page
   QPointer<MainWindow> target = newDocument();
   if (target.isNull()) {
     qInfo().noquote() << QStringLiteral("Tutorial: not opened (New Design was cancelled)");
-    return;
+    return false;
   }
-  target->openTutorialPane(folder, page, title);
+  return target->showTutorialPane(component, folder, page, title);
 }
 
 bool MainWindow::tutorialOpen() const { return !m_tutorialPageWidget.isNull(); }
 
 void MainWindow::openTutorialPane(const QString& folder, const QString& page, const QString& title) {
+  withTutorialComponent([this, folder, page, title](const BrowserComponentInfo& component) {
+    return showTutorialPane(component, folder, page, title);
+  });
+}
+
+void MainWindow::withTutorialComponent(const std::function<bool(const BrowserComponentInfo&)>& then) {
   withBrowserComponent(tr("Tutorials"),
                        tr("Tutorials are shown in MitCad's web browser component (the Chromium Embedded Framework "
                           "%1), a download of %2. Download it now?"),
-                       [this, folder, page, title](const BrowserComponentInfo& component) {
-                         return showTutorialPane(component, folder, page, title);
-                       });
+                       then);
 }
 
 bool MainWindow::showTutorialPane(const BrowserComponentInfo& component, const QString& folder, const QString& page,
@@ -323,7 +349,28 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
               {QStringLiteral("picked"), picked},
               {QStringLiteral("design"), QFileInfo(m_filePath).completeBaseName()},
               {QStringLiteral("modified"), isWindowModified()},
-              {QStringLiteral("version"), QCoreApplication::applicationVersion()}};
+              {QStringLiteral("version"), QCoreApplication::applicationVersion()},
+              // Where the tutorial was left (mitcad#2346): a page continues
+              // from it.
+              {QStringLiteral("progress"), loadTutorialProgress(QFileInfo(m_tutorialFolder).fileName()).toJson()}};
+  } else if (call == QLatin1String("set_progress")) {
+    // The step the user is at, or done (mitcad#2346): the Start page's card
+    // shows it, and a page continues from it.
+    TutorialProgress progress;
+    if (!tutorialProgressFromCall(args, &progress, error)) {
+      return false;
+    }
+    const QString id = QFileInfo(m_tutorialFolder).fileName();
+    if (id.isEmpty()) {
+      *error = QStringLiteral("set_progress needs an open tutorial");
+      return false;
+    }
+    if (!(loadTutorialProgress(id) == progress)) {
+      saveTutorialProgress(id, progress);
+      qInfo().noquote() << QStringLiteral("Tutorial: progress %1: %2").arg(id, progress.words());
+      TutorialChoice::progressChanged(id);
+    }
+    result = progress.toJson();
   } else if (call == QLatin1String("open_design")) {
     // A starting design of the package, as a copy of its own: the package
     // stays as it was downloaded.

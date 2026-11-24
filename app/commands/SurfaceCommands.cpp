@@ -456,20 +456,28 @@ const QString kLoftTangentEdges = QStringLiteral("tangent_edges");
 
 CommandDef surfaceLoftCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.loft", QObject::tr("Surface Loft"), "surface-loft",
-                                  QObject::tr("A surface through sections in order: sketch curves or profiles"));
+                                  QObject::tr("A surface through sections in order: curves, profiles, faces or "
+                                              "points"));
   def.featureType = QStringLiteral("loft");
   def.inputs = {
       // A 3D sketch's curves anywhere in space and its profiles (closed
-      // loops in its sketch plane) too (mitcad#1550).
+      // loops in its sketch plane) too (mitcad#1550); faces of bodies and
+      // surface bodies (their edges) and points at the ends as the solid
+      // Loft's (mitcad#2345).
       selectionInput(QStringLiteral("sections"), QObject::tr("Sections"),
-                     SelectKind::Profile | SelectKind::SketchCurve, 2, 0)
-          .withTooltip(QObject::tr("Sections in the order the surface goes through them: sketch or 3D sketch "
-                                   "curves, or profiles"))
+                     SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Face | kPointKinds, 2, 0)
+          .withTooltip(QObject::tr("Sections in order: sketch curves, or profiles and faces; points only first or "
+                                   "last"))
           .withAccepts([&context](const SelectionItem& item) { return spatialPathTakes(item, context); })
           .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
             return spatialPathRefusal(item, context);
           })
           .withOrdered(),
+  };
+  // Start and End Condition as the solid Loft's (mitcad#2345).
+  def.inputs += loftEndInputs(false);
+  def.inputs += loftEndInputs(true);
+  def.inputs += {
       // Rails guide a loft of profiles; a 3D sketch's curves in any plane
       // too, typed as a Pipe's path (mitcad#1550).
       listInput(kLoftRails, QObject::tr("Rails"),
@@ -493,8 +501,9 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
                   QStringLiteral("merge"))
           .withTooltip(QObject::tr("Merge: a section's smoothly joined curves make one face; Keep: a face per curve")),
   };
-  // A 3D sketch alone enables it (mitcad#1550).
-  def.enabled = [&context] { return hasSketches(context, true); };
+  // A 3D sketch alone enables it (mitcad#1550), and bodies, whose faces it
+  // takes (mitcad#2345).
+  def.enabled = [&context] { return hasSketches(context, true) || hasBodies(context); };
   def.build = [](const CommandState& state, const CommandContext& model) {
     Built result;
     QJsonArray sections;
@@ -506,17 +515,29 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
         sections.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("profile")},
                                     {QStringLiteral("sketch"), item.owner},
                                     {QStringLiteral("region"), item.name}});
-      } else {
+      } else if (item.kind == SelectKind::Face) {
+        // A face of a body or surface body: its outer edges (mitcad#2345).
+        profiles = true;
+        sections.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("face")},
+                                    {QStringLiteral("body"), item.owner},
+                                    {QStringLiteral("face"), item.name}});
+      } else if (item.kind == SelectKind::SketchCurve) {
         // A planar or a 3D sketch's curve, its chain the section.
         curves = true;
         sections.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("curves")},
                                     {QStringLiteral("sketch"), item.owner},
                                     {QStringLiteral("curves"), QJsonArray{item.name}},
                                     {QStringLiteral("chain"), true}});
+      } else {
+        // A point at the start or the end (mitcad#2345).
+        profiles = true;
+        sections.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("point")},
+                                    {QStringLiteral("point"), item.reference()}});
       }
     }
     if (curves && profiles) {
-      return Built::failure(QObject::tr("Select sketch curves or profiles as sections, not both."),
+      return Built::failure(QObject::tr("Select sketch curves as sections, or profiles, faces and points; not "
+                                        "both kinds."),
                             QStringLiteral("sections"));
     }
     QJsonArray rails;
@@ -535,7 +556,7 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
       }
     }
     if (curves && !rails.isEmpty()) {
-      return Built::failure(QObject::tr("Rails guide a loft of profiles: select profiles as sections, or "
+      return Built::failure(QObject::tr("Rails guide a loft of profiles or faces: select those as sections, or "
                                         "remove the rails."),
                             kLoftRails);
     }
@@ -543,6 +564,8 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
                            {QStringLiteral("sections"), sections},
                            {QStringLiteral("surface"), true},
                            {QStringLiteral("operation"), QStringLiteral("new_body")}};
+    // Start and End Condition (mitcad#2345).
+    addLoftEnds(definition, state);
     if (!rails.isEmpty()) {
       definition.insert(kLoftRails, rails);
     }
@@ -563,13 +586,23 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
     Selection sections;
     for (const QJsonValue& value : feature.value(QStringLiteral("sections")).toArray()) {
       const QJsonObject section = value.toObject();
-      if (str(section, "type") == QStringLiteral("profile")) {
+      const QString type = str(section, "type");
+      if (type == QStringLiteral("profile")) {
         sections.append({SelectKind::Profile, str(section, "sketch"), str(section, "region"), QStringLiteral("plane")});
+      } else if (type == QStringLiteral("face")) {
+        // Faces and points (mitcad#2345).
+        sections.append(itemOf(QJsonObject{{QStringLiteral("body"), section.value(QStringLiteral("body"))},
+                                           {QStringLiteral("face"), section.value(QStringLiteral("face"))}},
+                               context));
+      } else if (type == QStringLiteral("point")) {
+        sections.append(itemOf(section.value(QStringLiteral("point")), context));
       } else if (const auto items = pathItems(section, context)) {
         sections += *items;
       }
     }
     state.setItems(QStringLiteral("sections"), sections);
+    // Start and End Condition (mitcad#2345).
+    loadLoftEnds(feature, state, context);
     const QJsonArray rails = feature.value(kLoftRails).toArray();
     state.setRows(kLoftRails, static_cast<int>(rails.size()));
     bool chain = rails.isEmpty();
@@ -591,17 +624,13 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
                                            ? QStringLiteral("merge")
                                            : QStringLiteral("keep"));
   };
-  // Sections of one curve each (chained) or profiles, and rails of curves
-  // or edges chained alike (one Chain Selection holds them), without end
-  // conditions or a centre line.
+  // Sections of one curve each (chained), or profiles, faces and points
+  // that can be shown, and rails of curves or edges chained alike (one
+  // Chain Selection holds them), with end conditions (mitcad#2345) and
+  // without a centre line.
   def.canEdit = [&context](const QJsonObject& feature) {
-    if (!feature.value(QStringLiteral("surface")).toBool()) {
+    if (!feature.value(QStringLiteral("surface")).toBool() || feature.contains(QStringLiteral("centerline"))) {
       return false;
-    }
-    for (const char* key : {"start_condition", "end_condition", "centerline"}) {
-      if (feature.contains(QString::fromLatin1(key))) {
-        return false;
-      }
     }
     std::optional<bool> chained;
     for (const QJsonValue& rail : feature.value(kLoftRails).toArray()) {
@@ -622,7 +651,11 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
             !section.value(QStringLiteral("chain")).toBool()) {
           return false;
         }
-      } else if (type != QStringLiteral("profile")) {
+      } else if (type == QStringLiteral("point")) {
+        if (!isShowable(section.value(QStringLiteral("point")), context)) {
+          return false;
+        }
+      } else if (type != QStringLiteral("profile") && type != QStringLiteral("face")) {
         return false;
       }
     }

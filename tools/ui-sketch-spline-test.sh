@@ -8,8 +8,10 @@
 # fitted spline c1 through p2 (-30, -30), p3 (-10, -20) and p4 (10, -30),
 # a line c5 from (-70, -60) to its start p2 and a line c7 from its end p4
 # to (50, -60), each along the spline's end direction (slope 3/4: the
-# tangents hold as drawn, so the spline keeps its shape), and two points
-# that widen the fitted view.
+# tangents hold as drawn, so the spline keeps its shape), two points
+# that widen the fitted view, a fitted spline c11 through p12 (20, -20),
+# p13 (35, -10), p14 (50, -20) and p15 (65, -10), and one c16 through only
+# p17 (-65, -15) and p18 (-45, -10).
 #   0. Points over highlights (mitcad#897): the view draws the sketch's
 #      points in a layer after the curves and their highlights, against
 #      the scene's depth; the spline selected has its curve highlighted,
@@ -22,7 +24,11 @@
 #      was picked at (p2, p4), so one spline is tangent at both ends.
 #   2. Fit Point Spline: four points and a click on the first one close it
 #      into one smooth (periodic) spline, one profile.
-#   3. Extrude makes one body of it; saved, the file has the closed spline
+#   3. Remove Point (mitcad#2326): the context menu's Remove Point takes p13
+#      out of c11 and Delete on p14 alone takes it out too: c11 stays,
+#      straight through its last two points. Delete on p18, a point of a
+#      spline at its least two, deletes it with c16, as before.
+#   4. Extrude makes one body of it; saved, the file has the closed spline
 #      and both tangents' points.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh). With a file name, saves a
@@ -45,7 +51,9 @@ cat > "$WORK/model.json" << 'EOF'
   {"cmd": "sketch.add_line", "sketch": "F1", "start": [-70, -60], "end": "p2"},
   {"cmd": "sketch.add_line", "sketch": "F1", "start": "p4", "end": [50, -60]},
   {"cmd": "sketch.add_point", "sketch": "F1", "at": [-60, 50]},
-  {"cmd": "sketch.add_point", "sketch": "F1", "at": [60, 50]}
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [60, 50]},
+  {"cmd": "sketch.spline", "sketch": "F1", "points": [[20, -20], [35, -10], [50, -20], [65, -10]]},
+  {"cmd": "sketch.spline", "sketch": "F1", "points": [[-65, -15], [-45, -10]]}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -112,9 +120,46 @@ ui_step "spline: 3"                      ui_sketch_click 30 20
 ui_step "spline: 4"                      ui_sketch_click -10 40
 ui_step "spline: the first point again"  ui_sketch_click -50 20
 ui_expect_new "Fit Point Spline: a click here closes it" "the first point is marked before the click"
-ui_expect_new "Added closed spline c11 through 4 points" "the click on the first point closed it"
+ui_expect_new "Added closed spline c19 through 4 points" "the click on the first point closed it"
 ui_step "end the tool (Esc)"             ui_key Escape
 grep -q "Sketch command sketch.spline refused" "$UI_LOG" && ui_fail "the closed spline was refused"
+
+echo "--- Remove Point on a spline (mitcad#2326)"
+ui_mark
+ui_step "right-click p13"                ui_sketch_click 35 -10 3
+ui_expect_new "Selected: 1 sketch point" "the right click selected the fit point"
+ui_expect_new "Context menu: " "context menu opened"
+grep "Context menu: " "$UI_LOG" | tail -1 | grep -qE "(:|\|) Remove Point( \||$)" ||
+  ui_fail "no Remove Point in the context menu of a spline's fit point"
+echo "ok   Remove Point offered for a spline's own point"
+ui_mark
+ui_step "choose Remove Point"            ui_menu_choose "Remove Point"
+ui_expect_new "Removed point p13 from c11" "the point left the spline"
+grep -q "Deleted p13" "$UI_LOG" && ui_fail "the spline was deleted with p13"
+ui_mark
+ui_step "select p14"                     ui_sketch_click 50 -20
+ui_expect_new "Selected: 1 sketch point" "the fit point selected"
+ui_mark
+ui_step "delete (Delete)"                ui_key Delete
+ui_expect_new "Removed point p14 from c11" "Delete took the one point out of its spline"
+grep -q "Deleted p14" "$UI_LOG" && ui_fail "the spline was deleted with p14"
+# Two fit points left: the spline runs straight from (20, -20) to (65, -10).
+ui_mark
+ui_step "click the spline's middle"      ui_sketch_click 42.5 -15
+ui_expect_new "Selected: 1 sketch curve" "the spline stays"
+ui_mark
+ui_step "select p18"                     ui_sketch_click -45 -10
+ui_expect_new "Selected: 1 sketch point" "the end of the two-point spline selected"
+ui_mark
+ui_step "delete (Delete)"                ui_key Delete
+ui_expect_new "Remove Point refused: " "an open fitted spline keeps two points at least"
+ui_expect_new "Deleted p18" "Delete deleted the point with its spline, as before"
+ui_mark
+ui_step "select p15"                     ui_sketch_click 65 -10
+ui_expect_new "Selected: 1 sketch point" "a point of the kept spline selected"
+ui_mark
+ui_step "click where c16 was"            ui_sketch_click -55 -12.5
+ui_expect_new "Selected: nothing" "c16 is gone"
 ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "sketch finished"

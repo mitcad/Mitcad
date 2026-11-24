@@ -31,6 +31,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "keep_drawing_model_items",
     "edit_drawing_line",
     "edit_drawing_title_block",
+    "propose_drawing_welds",
     "add_cut_sheet",
     "edit_cut_sheet",
     "add_cut_sheet_parts",
@@ -76,6 +77,7 @@ const ANNOTATIONS: &[&str] = &[
     "center_pattern",
     "edge_extension",
     "hole_callout",
+    "weld",
 ];
 
 const PEN_WIDTHS: &[&str] = &["thin", "thick", "extra_thick"];
@@ -165,7 +167,7 @@ fn units() -> Value {
 }
 
 fn template() -> Value {
-    json!({"type": ["string", "object", "null"], "description": "The sheet's template: a built-in one's id (iso, ansi), a template's data as the drawing_templates query lists it, or \"\" or null for the simple title block"})
+    json!({"type": ["string", "object", "null"], "description": "The sheet's template: a built-in one's id (iso, ansi, blank: no frame and no title block), a template's data as the drawing_templates query lists it, or \"\" or null for the simple title block"})
 }
 
 fn scale() -> Value {
@@ -370,7 +372,8 @@ fn drawings(name: &str) -> Option<Value> {
                 "label": text("Its label; the default when left out"),
                 "center_marks": json!({"type": "boolean", "description": "Centre marks and centre lines worked out from the model (on when left out)"}),
                 "retrieved_dimensions": json!({"type": "boolean", "description": "The sketch dimensions it sees square on (off when left out)"}),
-                "model_annotations": json!({"type": "boolean", "description": "The model's annotations it sees square on (off when left out)"})
+                "model_annotations": json!({"type": "boolean", "description": "The model's annotations it sees square on (off when left out)"}),
+                "explode": text("A base view's explode view by name: its subject at the explode's places with thin phantom trail lines; assembled when left out")
             },
             "required": ["drawing", "type"],
             "examples": [
@@ -406,6 +409,7 @@ fn drawings(name: &str) -> Option<Value> {
                 "retrieved_dimensions": json!({"type": "boolean", "description": "The sketch dimensions it sees square on"}),
                 "model_annotations": json!({"type": "boolean", "description": "The model's annotations it sees square on"}),
                 "rotation": number("How far it is turned on the sheet, degrees counter-clockwise"),
+                "explode": text("A base view's explode view by name; \"\" shows the design assembled"),
                 "bend_notes": json!({"type": "boolean", "description": "A Flat Pattern view's bend notes (direction, angle and inside radius beside each bend line) on or off"})
             },
             "required": ["drawing", "view"],
@@ -439,6 +443,7 @@ fn drawings(name: &str) -> Option<Value> {
                 "letter": text("A datum label's letter"),
                 "frame": described("A feature control frame", "Annotations on drawing views"),
                 "finish": described("A surface finish symbol", "Annotations on drawing views"),
+                "weld": described("A weld symbol's welds, sizes and tail; a fillet on the arrow side when left out", "Weld symbols on drawing views"),
                 "height": number("Its letters' height, mm"),
                 "series": choice(&["baseline", "chain"], "Linear dimensions made at once: from the first pick to each other one (baseline) or from each to the next (chain)"),
                 "table": described("A hole table's or a parts list's settings (at: its place)", "Tables on drawing views"),
@@ -472,6 +477,7 @@ fn drawings(name: &str) -> Option<Value> {
                 "letter": text("A datum label's letter"),
                 "frame": described("A feature control frame", "Annotations on drawing views"),
                 "finish": json!({"type": ["object", "null"], "description": "A surface finish symbol; null removes it"}),
+                "weld": described("A weld symbol's welds, sizes and tail as a whole", "Weld symbols on drawing views"),
                 "line_offset": nullable("Its dimension line's offset, mm", "number"),
                 "text_offset": json!({"type": ["array", "null"], "items": {"type": "number"}, "description": "Its text's offset [x, y], mm; null sets it back"}),
                 "height": nullable("Its letters' height, mm (null: the drawing's)", "number"),
@@ -573,7 +579,7 @@ fn drawings(name: &str) -> Option<Value> {
             "examples": [{"cmd": "edit_drawing_line", "drawing": "D1", "view": 1, "at": [110, 140], "of": "body", "width": "thick"}]
         }),
         "edit_drawing_title_block" => json!({
-            "description": "Sets a sheet's title block as the title block editor leaves it: its size, lines, fields and images, kept in the sheet's copy of its template.",
+            "description": "Sets a sheet's title block as the title block editor leaves it: its size, lines, fields and images, kept in the sheet's copy of its template, and whether the template draws its frame and its title block.",
             "properties": {
                 "drawing": drawing(),
                 "sheet": sheet("The sheet, from 0 (default 0)"),
@@ -590,10 +596,26 @@ fn drawings(name: &str) -> Option<Value> {
                     },
                     "required": ["width", "height"],
                     "additionalProperties": false
-                }
+                },
+                "show_frame": {"type": "boolean", "description": "Whether the sheet's template draws its frame (mitcad#2325); as it is when left out"},
+                "show_title_block": {"type": "boolean", "description": "Whether the sheet's template draws its title block, its fields and the revision table (mitcad#2325); as it is when left out. A sheet without a title block is refused unless this is true"}
             },
             "required": ["drawing", "title_block"],
             "examples": [{"cmd": "edit_drawing_title_block", "drawing": "D1", "title_block": {"width": 180, "height": 40, "lines": [[0, 20, 180, 20], [90, 0, 90, 20]]}}]
+        }),
+        "propose_drawing_welds" => json!({
+            "description": "Proposes a weld symbol for each BUILD joint of the given members (all the view shows when left out) whose parts the view shows: a fillet round the meeting part's section, all around where the joint closes, on an edge of the joint. Proposing again keeps edited proposals, adds new joints' and removes those of joints no longer there. One undo step.",
+            "properties": {
+                "drawing": drawing(),
+                "view": view(),
+                "members": ids("The members (BUILD parts) by their components; every joint the view shows when left out"),
+                "picks": {"type": "array", "items": {"type": "object"}, "description": "Instead of members or with them: picks on the view (as an annotation's), each the member its body is of"},
+                "weld": described("The weld each new proposal gets (sizes, tail); a fillet on the arrow side when left out", "Weld symbols on drawing views")
+            },
+            "required": ["drawing", "view"],
+            "examples": [{"cmd": "propose_drawing_welds", "drawing": "D1", "view": 1},
+                         {"cmd": "propose_drawing_welds", "drawing": "D1", "view": 1, "members": ["C2", "C3"],
+                          "weld": {"arrow_side": {"symbol": "fillet", "size": 4}, "tail": "135"}}]
         }),
         _ => return None,
     };

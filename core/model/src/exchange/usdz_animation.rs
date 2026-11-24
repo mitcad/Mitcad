@@ -30,6 +30,13 @@
 //!   frame's step and solved as Play Study solves them
 //!   ([`Document::study_placements`]); the occurrences written whose
 //!   placement differs from the design's at some frame are sampled.
+//! - **Poses from an explode view** (mitcad#2113, mitcad#2328): as a
+//!   study's, the occurrences' placements in their parents at each frame's
+//!   time of the view's animation, the same at every placement of the
+//!   view's component (its offsets are in its coordinates); and the meshes
+//!   of the component's own bodies the view moves (the root's, or a
+//!   sub-component's at each of its placements), by their motions in the
+//!   component.
 //! - Millimetres and the design's Z up, as the still export: the root's
 //!   quarter turn (Z up to Y up) applies to the samples too.
 //! - Sampling changes nothing in the document: not its pose, not its undo
@@ -78,6 +85,18 @@ pub enum AnimationPoses {
     Study {
         name: String,
         placements: Vec<BTreeMap<OccurrenceUid, Transform>>,
+    },
+    /// An explode view played (mitcad#2113, mitcad#2328): per frame, the
+    /// occurrences' placements in their parents
+    /// ([`Document::explode_parent_placements`]; one per occurrence, the
+    /// same at every placement of the view's component) and the motions
+    /// of the view component's own bodies in its coordinates
+    /// ([`Document::explode_body_motions`]; each mesh of such a body moves
+    /// by it, at every placement of the component).
+    Explode {
+        name: String,
+        placements: Vec<BTreeMap<OccurrenceUid, Transform>>,
+        bodies: Vec<BTreeMap<BodyUid, Transform>>,
     },
 }
 
@@ -335,28 +354,67 @@ impl<K: Kernel> Document<K> {
                         placements.len()
                     )));
                 }
-                for (path, node) in nodes.iter_mut() {
-                    let occurrence = *path.last().expect("not the root");
-                    let own = local(occurrence);
-                    let poses: Vec<Transform> = placements
-                        .iter()
-                        .map(|frame| frame.get(&occurrence).copied().unwrap_or(own))
-                        .collect();
-                    if poses.iter().all(|p| same(p, &own)) {
-                        continue;
-                    }
-                    if moved.len().saturating_add(1).saturating_mul(frames) > MAX_SAMPLES {
-                        return Err(invalid(format!(
-                            "{name} moves too many occurrences over {frames} frames: more than \
-                             {MAX_SAMPLES} samples"
-                        )));
-                    }
-                    node.samples = poses.iter().map(placement).collect();
-                    moved.push(self.assembly().path_name(path));
-                }
+                self.sample_placements(name, placements, nodes, &mut moved)?;
                 if moved.is_empty() {
                     return Err(invalid(format!(
                         "{name} moves none of the occurrences written over the frames asked for"
+                    )));
+                }
+            }
+            AnimationPoses::Explode {
+                name,
+                placements,
+                bodies,
+            } => {
+                if placements.len() != frames || bodies.len() != frames {
+                    return Err(invalid(format!(
+                        "{name} was sampled at {} times for {frames} frames",
+                        placements.len().min(bodies.len())
+                    )));
+                }
+                self.sample_placements(name, placements, nodes, &mut moved)?;
+                // The view component's own bodies: each of their meshes,
+                // at every placement of the component written.
+                let moving: BTreeSet<BodyUid> = bodies
+                    .iter()
+                    .flat_map(|frame| frame.keys().copied())
+                    .collect();
+                for body in moving {
+                    let Some(places) = meshes.get(&body) else {
+                        continue; // not written (hidden, outside the export)
+                    };
+                    let poses: Vec<Transform> = bodies
+                        .iter()
+                        .map(|frame| frame.get(&body).copied().unwrap_or(Transform::IDENTITY))
+                        .collect();
+                    if poses.iter().all(|p| same(p, &Transform::IDENTITY)) {
+                        continue;
+                    }
+                    let samples = places.len().saturating_mul(frames);
+                    if moved.len().saturating_mul(frames).saturating_add(samples) > MAX_SAMPLES {
+                        return Err(invalid(format!(
+                            "{name} moves too many occurrences and bodies over {frames} frames: \
+                             more than {MAX_SAMPLES} samples"
+                        )));
+                    }
+                    for (path, index) in places {
+                        let node = if path.is_empty() {
+                            &mut *root
+                        } else if let Some(node) = nodes.get_mut(path) {
+                            node
+                        } else {
+                            continue;
+                        };
+                        if let Some(mesh) = node.meshes.get_mut(*index) {
+                            mesh.samples = poses.iter().map(placement).collect();
+                        }
+                    }
+                    moved.push(self.body_name(body));
+                }
+                if moved.is_empty() {
+                    return Err(invalid(format!(
+                        "the explode view {name} moves none of the occurrences or bodies written \
+                         over the frames asked for"
                     )));
                 }
             }
@@ -368,5 +426,39 @@ impl<K: Kernel> Document<K> {
             frames,
             moved,
         })
+    }
+
+    /// Sets the samples of the written occurrences whose placements in
+    /// their parents (`placements`, per frame, by occurrence; the design's
+    /// where left out) differ from the design's at some frame, and names
+    /// them in `moved` (a study's or an explode view's frames).
+    fn sample_placements(
+        &self,
+        name: &str,
+        placements: &[BTreeMap<OccurrenceUid, Transform>],
+        nodes: &mut BTreeMap<Vec<OccurrenceUid>, Node>,
+        moved: &mut Vec<String>,
+    ) -> Result<(), ModelError> {
+        let frames = placements.len();
+        for (path, node) in nodes.iter_mut() {
+            let occurrence = *path.last().expect("not the root");
+            let own = self.placement(occurrence).unwrap_or(Transform::IDENTITY);
+            let poses: Vec<Transform> = placements
+                .iter()
+                .map(|frame| frame.get(&occurrence).copied().unwrap_or(own))
+                .collect();
+            if poses.iter().all(|p| same(p, &own)) {
+                continue;
+            }
+            if moved.len().saturating_add(1).saturating_mul(frames) > MAX_SAMPLES {
+                return Err(invalid(format!(
+                    "{name} moves too many occurrences over {frames} frames: more than \
+                     {MAX_SAMPLES} samples"
+                )));
+            }
+            node.samples = poses.iter().map(placement).collect();
+            moved.push(self.assembly().path_name(path));
+        }
+        Ok(())
     }
 }

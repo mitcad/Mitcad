@@ -13,9 +13,13 @@ textures"), shipped with MitCad as files and read at run time
   running program; programs in a build tree and the tests read this
   folder. The package checks (`tools/appimage-test.sh`,
   `tools/installer-windows-test.ps1`, `tools/check-bundle-macos.sh`) check
-  that every image is there. Built into the programs with
-  `include_bytes!`, as before mitcad#2218, each program linking the model
-  carried its own copy.
+  that every image is there and that no program of the package carries a
+  copy built in (mitcad#2251, mitcad#2323: a run of 64 bytes from the
+  middle of each image is looked for in each program). Built
+  into the programs with `include_bytes!`, as before mitcad#2218, each
+  program linking the model carried its own copy: `mitcad` and
+  `mitcad-cli` (`mitcad-render` and `mitcad-thumbnailer` do not link the
+  model), so the packages had the images twice.
 
 - **Source:** MitCad's own images, made from noise by
   [`tools/wood-textures/generate.rs`](../../../tools/wood-textures/generate.rs)
@@ -26,9 +30,25 @@ textures"), shipped with MitCad as files and read at run time
 - **Licence:** MIT, as MitCad (`LICENSE`); the appearances' texture
   `source` says `{"id": "mitcad", "asset": "<id>", "resolution": "1k",
   "license": "MIT"}`.
-- **Size:** 1024 × 1024 pixels each, tileable; 42 files, about 4.7 MB
-  in all (the installer grows by about as much, once: JPEG data does not
-  compress further).
+- **Size:** 1024 × 1024 pixels each, tileable; 42 files, 4,612,244
+  bytes (4.6 MB) in all. The packages grow by about as much, once: JPEG
+  data does not compress further (mitcad#2251: the 42 images alone in a
+  squashfs with the AppImage's zstd and 128 KiB blocks take 4,567,040
+  bytes; built into `mitcad` and `mitcad-cli`, as before mitcad#2218,
+  twice that, about 9.1 MB, a figure derived from the two copies: no
+  release package of that state was made).
+- **Measured in the release AppImages (mitcad#2323):** 0.69.0, without
+  the textures, 288,287,224 bytes; 0.70.0, the first release with them
+  (as files, mitcad#2218 came before the release), 296,970,744 bytes;
+  0.71.0 300,452,344 bytes. 0.70.0 grew by 8,683,520 bytes: about
+  4,567,040 for the images, the rest from the programs, whose files
+  (without the images, uncompressed) grew by 12.4 MB from 0.69.0 to
+  0.70.0, as they grew by 10.6 MB (3.5 MB in the AppImage, no image
+  changed) from 0.70.0 to 0.71.0. The 0.71.0 AppImage has the 42 images,
+  identical to this folder's, in `usr/share/mitcad/textures` and none in
+  a program of `usr/bin`. The state with the images built in (between
+  mitcad#2186 and mitcad#2218) was on `dev` for six hours and in no
+  release, so no package of it was made.
 
 | Appearance id | Files | One repeat |
 |---|---|---|

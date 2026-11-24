@@ -310,6 +310,48 @@ int frameAt(const std::vector<int>& places, int index) {
   return static_cast<int>(after - places.begin()) - 1;
 }
 
+StockMesh solidStockMesh(const QJsonObject& solid) {
+  StockMesh mesh;
+  const QJsonObject surface = solid.value(QStringLiteral("mesh")).toObject();
+  const QJsonArray coords = surface.value(QStringLiteral("vertices")).toArray();
+  const QJsonArray corners = surface.value(QStringLiteral("triangles")).toArray();
+  const qsizetype count = coords.size() / 3;
+  if (coords.size() % 3 != 0 || corners.size() % 3 != 0) {
+    return mesh;
+  }
+  const auto point = [&coords](qsizetype v) {
+    return Point3{coords.at(3 * v).toDouble(), coords.at(3 * v + 1).toDouble(), coords.at(3 * v + 2).toDouble()};
+  };
+  // Each triangle with its own corners, its face's normal on them: the
+  // cubes' faces are flat.
+  for (qsizetype t = 0; t + 2 < corners.size(); t += 3) {
+    std::array<qsizetype, 3> ids{};
+    bool inside = true;
+    for (qsizetype k = 0; k < 3; ++k) {
+      ids[static_cast<std::size_t>(k)] = corners.at(t + k).toInteger(-1);
+      inside = inside && ids[static_cast<std::size_t>(k)] >= 0 && ids[static_cast<std::size_t>(k)] < count;
+    }
+    if (!inside) {
+      return StockMesh{};
+    }
+    const Point3 a = point(ids[0]);
+    const Point3 b = point(ids[1]);
+    const Point3 c = point(ids[2]);
+    const Point3 u{b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const Point3 w{c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    const Point3 normal = unitOr({u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]},
+                                 {0.0, 0.0, 1.0});
+    const int first = mesh.vertices();
+    for (const Point3& p : {a, b, c}) {
+      push3(mesh.points, p);
+      push3(mesh.normals, normal);
+      mesh.shades.push_back(0.0f);
+    }
+    mesh.triangles.insert(mesh.triangles.end(), {first, first + 1, first + 2});
+  }
+  return mesh;
+}
+
 QString stockLog(const QString& setup, const StockGrid& grid, int snapshots) {
   return QStringLiteral("CAM stock: %1, %2 x %3 nodes, %4 snapshots").arg(setup).arg(grid.nx).arg(grid.ny).arg(snapshots);
 }

@@ -61,6 +61,11 @@ std::optional<TitleBlockEditor> TitleBlockEditor::fromSheet(const QJsonObject& s
   editor.m_height = std::max(kMinBlock, layout.value(QStringLiteral("height")).toDouble());
   editor.m_right = pointOf(frame.at(1)).x();
   editor.m_bottom = pointOf(frame.at(0)).y();
+  // What the template draws (mitcad#2325); the simple block has no
+  // template and draws both.
+  const QJsonObject own = sheet.value(QStringLiteral("template")).toObject();
+  editor.m_showFrame = own.value(QStringLiteral("show_frame")).toBool(true);
+  editor.m_showTitleBlock = own.value(QStringLiteral("show_title_block")).toBool(true);
   for (const QJsonValue& value : layout.value(QStringLiteral("lines")).toArray()) {
     const QJsonArray l = value.toArray();
     editor.m_lines.append(QLineF(l.at(0).toDouble(), l.at(1).toDouble(), l.at(2).toDouble(), l.at(3).toDouble()));
@@ -402,6 +407,24 @@ bool TitleBlockEditor::setFieldHeight(double value) {
     return false;
   }
   m_fields[m_selectedIndex].height = h;
+  m_changed = true;
+  return true;
+}
+
+bool TitleBlockEditor::setShowFrame(bool shown) {
+  if (shown == m_showFrame) {
+    return false;
+  }
+  m_showFrame = shown;
+  m_changed = true;
+  return true;
+}
+
+bool TitleBlockEditor::setShowTitleBlock(bool shown) {
+  if (shown == m_showTitleBlock) {
+    return false;
+  }
+  m_showTitleBlock = shown;
   m_changed = true;
   return true;
 }

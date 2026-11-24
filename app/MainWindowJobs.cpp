@@ -161,7 +161,13 @@ QJsonObject MainWindow::command(const QJsonObject& command) {
   if (windowReadOnly() && !m_writeAnyway && !readOnlyModelCommand(name)) {
     throw ReadOnlyError(readOnlyReason().toStdString());
   }
-  return m_documentSession->command(command);
+  QJsonObject answer = m_documentSession->command(command);
+  // Edit in Place (mitcad#2321): what the command picked on the assembly,
+  // frozen, in the message band.
+  if (m_inPlaceHolder && answer.contains(QStringLiteral("in_place_notices"))) {
+    showInPlaceNotices(answer);
+  }
+  return answer;
 }
 
 QJsonObject MainWindow::modelPreview(const QByteArray& command, const QString& name) {

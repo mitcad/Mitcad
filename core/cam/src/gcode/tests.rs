@@ -382,7 +382,14 @@ fn rack() -> ToolChanger {
 
 #[test]
 fn every_dialects_program_reads_back_as_its_moves_within_the_rounding() {
-    let program = round_trip_program();
+    let shared = round_trip_program();
+    // The Carvera machines have air blast only.
+    let mut air = shared.clone();
+    for op in &mut air.operations {
+        if op.coolant == Coolant::Flood {
+            op.coolant = Coolant::Air;
+        }
+    }
     let mut variants = Vec::new();
     for units in [Units::Millimetres, Units::Inches] {
         for arcs in [true, false] {
@@ -397,6 +404,11 @@ fn every_dialects_program_reads_back_as_its_moves_within_the_rounding() {
     }
     let mut checked = 0;
     for d in dialects() {
+        let program = if d.id().starts_with("carvera") {
+            &air
+        } else {
+            &shared
+        };
         for changer in [ToolChanger::Manual, ToolChanger::Controller, rack()] {
             let m = machine(changer);
             for s in &variants {
@@ -407,7 +419,7 @@ fn every_dialects_program_reads_back_as_its_moves_within_the_rounding() {
                     s.units,
                     s.arcs
                 );
-                let posted = post_with_lines(&program, d.as_ref(), s, Some(&m)).unwrap();
+                let posted = post_with_lines(program, d.as_ref(), s, Some(&m)).unwrap();
                 assert_eq!(posted.moves.len(), 2, "{what}");
                 assert_eq!(posted.changes.len(), 2, "{what}");
                 let mut reader = plain();

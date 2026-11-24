@@ -37,7 +37,6 @@
 #include <QProcessEnvironment>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
 #include <QTimer>
@@ -76,10 +75,6 @@ int importThreads() {
   const unsigned cores = std::thread::hardware_concurrency();
   return static_cast<int>(std::clamp(cores, 1u, 8u));
 }
-
-const QRegularExpression kItemStart(QStringLiteral(R"(^import: \[[0-9.]+\] item ([0-9]+): (.*)$)"));
-const QRegularExpression kItemDone(
-    QStringLiteral(R"(^import: \[[0-9.]+\] (.+): (parametric|partial|fallback|skipped) in [0-9.]+ s$)"));
 
 bool writeFile(const QString& path, const QByteArray& data) {
   QSaveFile file(path);
@@ -893,8 +888,13 @@ void F3dImport::readProgress() {
   while ((end = m_errors.indexOf('\n')) >= 0) {
     const QString line = QString::fromUtf8(m_errors.left(end)).trimmed();
     m_errors.remove(0, end + 1);
-    if (line.startsWith(QStringLiteral("import-items "))) {
-      m_items = line.mid(13).toInt();
+    // The timeline's count, its items started and done, and their
+    // components (mitcad#2331).
+    const ImportItemProgress::Line progress = m_progress.read(line);
+    if (progress == ImportItemProgress::Line::Done) {
+      qDebug().noquote() << QStringLiteral("Import item %1: %2").arg(m_progress.done()).arg(m_progress.lastDone());
+    }
+    if (progress != ImportItemProgress::Line::Other) {
       continue;
     }
     if (line.startsWith(QStringLiteral("import-handed-over "))) {
@@ -924,8 +924,7 @@ void F3dImport::readProgress() {
       m_partName = part->file;
       if (part->outcome.isEmpty()) {
         // A new part's timeline, if it has one.
-        m_current.clear();
-        m_position = 0;
+        m_progress.startPart();
         qInfo().noquote()
             << QStringLiteral("Import of %1: part %2 of %3: %4").arg(name).arg(m_part).arg(m_parts).arg(m_partName);
       } else {
@@ -937,18 +936,6 @@ void F3dImport::readProgress() {
                                  .arg(m_partName, part->outcome)
                                  .arg(part->seconds, 0, 'f', 2);
       }
-      continue;
-    }
-    const QRegularExpressionMatch start = kItemStart.match(line);
-    if (start.hasMatch()) {
-      m_position = start.captured(1).toInt();
-      m_current = start.captured(2);
-      continue;
-    }
-    const QRegularExpressionMatch item = kItemDone.match(line);
-    if (item.hasMatch()) {
-      ++m_done;
-      qDebug().noquote() << QStringLiteral("Import item %1: %2 %3").arg(m_done).arg(item.captured(1), item.captured(2));
       continue;
     }
     if (line == QStringLiteral("import-listed")) {
@@ -1013,18 +1000,20 @@ void F3dImport::tick() {
   } else if (m_parts > 0) {
     // An .iam assembly's part being imported, and its timeline item when it
     // is replayed (mitcad#507).
-    const int part = std::clamp(m_part, 1, m_parts);
-    item = m_current.isEmpty() ? tr("Component %1 of %2: %3").arg(part).arg(m_parts).arg(m_partName)
-                               : tr("Component %1 of %2: %3, timeline item %4: %5")
-                                     .arg(part)
-                                     .arg(m_parts)
-                                     .arg(m_partName)
-                                     .arg(std::max(m_position, 1))
-                                     .arg(m_current);
-  } else if (m_items > 0) {
-    const int position = std::clamp(m_position, 1, m_items);
-    item = m_current.isEmpty() ? tr("Timeline item %1 of %2").arg(position).arg(m_items)
-                               : tr("Timeline item %1 of %2: %3").arg(position).arg(m_items).arg(m_current);
+    item = m_progress.partText(std::clamp(m_part, 1, m_parts), m_parts, m_partName);
+  } else {
+    // The items done so far plus one, never going back, and the item
+    // being worked on by its name and component (mitcad#2331).
+    item = m_progress.text();
+  }
+  // Each new number shown, for the tests (mitcad#2331).
+  const int shown = m_parts > 0 ? std::clamp(m_part, 1, m_parts) : m_progress.items() > 0 ? m_progress.shown() : 0;
+  if (shown > 0 && shown != m_shownNumber) {
+    m_shownNumber = shown;
+    qInfo().noquote() << QStringLiteral("Import progress: %1 %2 of %3")
+                             .arg(m_parts > 0 ? QStringLiteral("component") : QStringLiteral("timeline item"))
+                             .arg(shown)
+                             .arg(m_parts > 0 ? m_parts : m_progress.items());
   }
   const QString time = m_stopping ? tr("Stopping: the remaining items come in as the file's bodies (%1 s)").arg(seconds)
                                   : tr("%1 s elapsed").arg(seconds);
@@ -1035,7 +1024,8 @@ void F3dImport::tick() {
                                               .arg(m_batchCount)
                                         : tr("Importing %1").arg(QFileInfo(m_path).fileName());
   m_dialog->showProgress(file, item,
-                         m_parts > 0 ? m_partsDone : m_done, m_parts > 0 ? m_parts : m_items, time);
+                         m_parts > 0 ? m_partsDone : m_progress.done(), m_parts > 0 ? m_parts : m_progress.items(),
+                         time);
 }
 
 void F3dImport::stop() {
@@ -1081,12 +1071,15 @@ QString F3dImport::stoppedItem() const {
   if (m_parts > 0) {
     const QString part = m_partName.isEmpty() ? tr("component %1").arg(std::clamp(m_part, 1, m_parts))
                                               : tr("component %1").arg(m_partName);
-    return m_current.isEmpty() ? part
-                               : tr("timeline item %1 (%2) of %3").arg(std::max(m_position, 1)).arg(m_current, part);
+    return m_progress.current().isEmpty() ? part
+                                          : tr("timeline item %1 (%2) of %3")
+                                                .arg(std::max(m_progress.position(), 1))
+                                                .arg(m_progress.current(), part);
   }
-  if (m_position > 0) {
-    return m_current.isEmpty() ? tr("timeline item %1").arg(m_position)
-                               : tr("timeline item %1 (%2)").arg(m_position).arg(m_current);
+  if (m_progress.position() > 0) {
+    return m_progress.current().isEmpty()
+               ? tr("timeline item %1").arg(m_progress.position())
+               : tr("timeline item %1 (%2)").arg(m_progress.position()).arg(m_progress.current());
   }
   return QString();
 }

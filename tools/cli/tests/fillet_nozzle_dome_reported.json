@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #582's design (mitcad#2272; opened with --open, never committed; tools/cli/fillet-nozzle-dome-reported-test.cmake): a tube 40 to 50 about z, 50 high, with a hollow hemisphere of the same radii on it (Revolve1 F2; the dome's outer face F2:side(c17[c2+c3,c19]) runs on tangentially into the tube's F2:side(c2[c1,c3+c17]) along the circle at z = 50). A nozzle of radius 15 about z = 50 extruded from a plane 80 from the axis up to the dome's face continued (Extrude1 F5, joined), so that its side F5:side(c1) meets the dome above z = 50 and the tube below: its foot is a closed tangent chain of two edges. A flange on it, holes, a bore, Fillet1 (F17) round the flange's foot, all repeated four times about z (CircularPattern2 F18). Fillet2 (F19) rounds the three copies' feet with 1.5, picked by their dome edges."},
+  {"expect": {"feature": "Fillet2", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F19"}, "result": {"status": "ok", "level": null}}},
+  {"comment": "The original nozzle's foot rounded with 1.5, picked by its dome edge: the chain runs on over its tube edge. Before, it failed: 'the geometry kernel's computation of the rounding along edge E{F2:side(c17[c2+c3,c19])|F5:side(c1)} (and 1 more edges of its chain) fails'. One valid solid at the exact size, no note."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "edges": ["E{F2:side(c17[c2+c3,c19])|F5:side(c1)}"], "radius": 1.5}},
+  {"expect": {"feature": "F20", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F20"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "F2.b0", "has_face": "F20:fillet(E{F2:side(c17[c2+c3,c19])|F5:side(c1)})"}},
+  {"expect": {"body": "F2.b0", "no_edge": "E{F2:side(c2[c1,c3+c17])|F5:side(c1)}"}}
+]

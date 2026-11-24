@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# The window's accessibility tree (mitcad#2227), run by
+# tools/ui-windows-accessible-tree-test.ps1 on a design of a few components,
+# each with a sketch and a body, the browser open: the tree walked as a
+# client reads it, logged per subtree ("Accessible tree: N nodes ...",
+# "Accessible subtree: ..."), within ${MITCAD_TEST_TREE_NODES} nodes and
+# ${MITCAD_TEST_TREE_MS} ms; then the UI Automation client
+# ${MITCAD_TEST_UIA_WALK} (mitcad-uia-walk) reads the whole window in one
+# bulk read within ${MITCAD_TEST_UIA_MS} ms, and the log tells who can have
+# read: UI Automation calls the window from threads of its own, whose
+# process COM does not tell, so the client is unknown and the line of the
+# processes with UI Automation loaded names it among them (the build VM's
+# own explorer.exe, SearchHost.exe and OneDrive.exe read the window too,
+# every quarter of a second).
+wait-log 'Browser opened '
+wait-idle
+accessible-tree ${MITCAD_TEST_TREE_NODES} ${MITCAD_TEST_TREE_MS} 3
+mark
+uia-walk "${MITCAD_TEST_UIA_WALK}" ${MITCAD_TEST_UIA_MS}
+wait-log 'Accessibility client: unknown \(pid unknown\): bulk read, [0-9]+ nodes, [0-9]+ ms$' 10
+wait-log 'Accessibility client candidates: UI Automation loaded in .*mitcad-uia-walk\.exe \(pid [0-9]+\)' 10

@@ -4,6 +4,7 @@
 #include "TutorialSources.hpp"
 
 #include <algorithm>
+#include <utility>
 
 #include <QDir>
 #include <QFile>
@@ -19,6 +20,8 @@ namespace mitcad {
 namespace {
 
 constexpr char kSourcesKey[] = "tutorials/sources";
+// tutorials/progress/<id> (mitcad#2346).
+constexpr char kProgressKey[] = "tutorials/progress/";
 
 } // namespace
 
@@ -110,6 +113,160 @@ int compareVersions(const QString& a, const QString& b) {
     }
   }
   return 0;
+}
+
+QJsonObject TutorialProgress::toJson() const {
+  static const char* const states[] = {"not_started", "in_progress", "done"};
+  QJsonObject json{{QStringLiteral("state"), QLatin1String(states[static_cast<int>(state)])}};
+  if (step > 0) {
+    json.insert(QStringLiteral("step"), step);
+  }
+  if (steps > 0) {
+    json.insert(QStringLiteral("steps"), steps);
+  }
+  return json;
+}
+
+QString TutorialProgress::words() const {
+  switch (state) {
+  case State::NotStarted:
+    return QStringLiteral("not started");
+  case State::Done:
+    return QStringLiteral("done");
+  case State::InProgress:
+    break;
+  }
+  if (step > 0 && steps > 0) {
+    return QStringLiteral("in progress (step %1 of %2)").arg(step).arg(steps);
+  }
+  if (step > 0) {
+    return QStringLiteral("in progress (step %1)").arg(step);
+  }
+  return QStringLiteral("in progress");
+}
+
+TutorialProgress loadTutorialProgress(const QString& id) {
+  const QJsonObject json =
+      QJsonDocument::fromJson(QSettings().value(QLatin1String(kProgressKey) + id).toString().toUtf8()).object();
+  TutorialProgress progress;
+  const QString state = json.value(QStringLiteral("state")).toString();
+  if (state == QLatin1String("done")) {
+    progress.state = TutorialProgress::State::Done;
+  } else if (state == QLatin1String("in_progress")) {
+    progress.state = TutorialProgress::State::InProgress;
+    progress.step = std::max(0, json.value(QStringLiteral("step")).toInt());
+    progress.steps = std::max(0, json.value(QStringLiteral("steps")).toInt());
+  }
+  return progress;
+}
+
+void saveTutorialProgress(const QString& id, const TutorialProgress& progress) {
+  if (progress.state == TutorialProgress::State::NotStarted) {
+    forgetTutorialProgress(id);
+    return;
+  }
+  QSettings().setValue(QLatin1String(kProgressKey) + id,
+                       QString::fromUtf8(QJsonDocument(progress.toJson()).toJson(QJsonDocument::Compact)));
+}
+
+void forgetTutorialProgress(const QString& id) { QSettings().remove(QLatin1String(kProgressKey) + id); }
+
+bool tutorialProgressFromCall(const QJsonObject& args, TutorialProgress* progress, QString* error) {
+  if (args.value(QStringLiteral("done")).toBool()) {
+    *progress = TutorialProgress();
+    progress->state = TutorialProgress::State::Done;
+    return true;
+  }
+  const QJsonValue step = args.value(QStringLiteral("step"));
+  const QJsonValue steps = args.value(QStringLiteral("steps"));
+  // Whole numbers only: 2.5 is no step.
+  const auto whole = [](const QJsonValue& value) {
+    return value.isDouble() && value.toDouble() == static_cast<double>(value.toInt()) ? value.toInt() : -1;
+  };
+  const int at = whole(step);
+  const int of = steps.isUndefined() || steps.isNull() ? 0 : whole(steps);
+  if (at < 1 || of < 0 || (of > 0 && at > of) || of > 10000) {
+    *error = QStringLiteral("set_progress takes {\"step\": n, \"steps\": m} with 1 <= n <= m, or {\"done\": true}");
+    return false;
+  }
+  *progress = TutorialProgress();
+  progress->state = TutorialProgress::State::InProgress;
+  progress->step = at;
+  progress->steps = of;
+  return true;
+}
+
+QString ListedTutorial::id() const { return tutorial.value(QStringLiteral("id")).toString(); }
+
+QString ListedTutorial::language() const { return tutorial.value(QStringLiteral("language")).toString(); }
+
+QList<ListedTutorial> listedTutorials(const QJsonArray& sources, const QStringList& configured) {
+  QStringList keys;
+  for (const QString& url : configured) {
+    keys << repositoryKey(url);
+  }
+  QList<QJsonObject> ordered;
+  for (const QJsonValue& value : sources) {
+    ordered << value.toObject();
+  }
+  // The sources in the settings' order; a stable sort keeps the model's
+  // order among those that are not there.
+  const auto rank = [&keys](const QJsonObject& source) {
+    const qsizetype at = keys.indexOf(repositoryKey(source.value(QStringLiteral("url")).toString()));
+    return at < 0 ? keys.size() : at;
+  };
+  std::stable_sort(ordered.begin(), ordered.end(),
+                   [&rank](const QJsonObject& a, const QJsonObject& b) { return rank(a) < rank(b); });
+  QList<ListedTutorial> listed;
+  QStringList ids;
+  for (const QJsonObject& source : std::as_const(ordered)) {
+    const QString url = source.value(QStringLiteral("url")).toString();
+    const QString name = source.value(QStringLiteral("name")).toString();
+    for (const QJsonValue& entry : source.value(QStringLiteral("tutorials")).toArray()) {
+      ListedTutorial tutorial;
+      tutorial.url = url;
+      tutorial.source = name.isEmpty() ? url : name;
+      tutorial.rev = source.value(QStringLiteral("rev")).toString();
+      tutorial.tutorial = entry.toObject();
+      // One tutorial per id: it is installed into a folder by its id.
+      if (tutorial.id().isEmpty() || ids.contains(tutorial.id())) {
+        continue;
+      }
+      ids << tutorial.id();
+      listed << tutorial;
+    }
+  }
+  return listed;
+}
+
+QStringList tutorialLanguages(const QList<ListedTutorial>& tutorials) {
+  QStringList languages;
+  for (const ListedTutorial& tutorial : tutorials) {
+    const QString language = tutorial.language().section(QLatin1Char('-'), 0, 0).toLower();
+    if (!language.isEmpty() && !languages.contains(language)) {
+      languages << language;
+    }
+  }
+  languages.sort();
+  return languages;
+}
+
+bool tutorialInLanguage(const QString& tutorialLanguage, const QString& language) {
+  if (language.isEmpty()) {
+    return true;
+  }
+  return tutorialLanguage.compare(language, Qt::CaseInsensitive) == 0 ||
+         tutorialLanguage.section(QLatin1Char('-'), 0, 0).compare(language, Qt::CaseInsensitive) == 0;
+}
+
+QString defaultTutorialLanguage(const QStringList& languages, const QString& interface) {
+  const QString base = interface.section(QLatin1Char('-'), 0, 0).section(QLatin1Char('_'), 0, 0);
+  if (base.isEmpty()) {
+    return QString();
+  }
+  const bool any = std::any_of(languages.cbegin(), languages.cend(),
+                               [&base](const QString& language) { return tutorialInLanguage(language, base); });
+  return any ? base.toLower() : QString();
 }
 
 } // namespace mitcad

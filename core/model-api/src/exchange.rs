@@ -144,6 +144,16 @@ pub(super) struct ExportCommand {
     /// leave one body to the slicer.
     #[serde(default)]
     print_materials: BTreeMap<String, Option<String>>,
+    /// URDF (mitcad#2100): the ROS package's name, the file's made one
+    /// when left out.
+    #[serde(default)]
+    package: Option<String>,
+    /// URDF (mitcad#2100): the `effort` (N·m or N) and `velocity` (rad/s
+    /// or m/s) of revolute and prismatic joints.
+    #[serde(default)]
+    effort: Option<f64>,
+    #[serde(default)]
+    velocity: Option<f64>,
 }
 
 /// `export`'s `animation` (mitcad#1597; commands.md, *Animated USDZ*).
@@ -171,6 +181,13 @@ struct AnimationInput {
     /// step, both ends included).
     #[serde(default)]
     study: Option<String>,
+    /// Or an explode view (name, mitcad#2113; of the design or of any
+    /// assembly component, each placement of it moving, mitcad#2328), played from
+    /// `from` seconds (default 0, assembled) to `to` (default its end,
+    /// exploded) at `frames` frames (default `fps` per second, both ends
+    /// included).
+    #[serde(default)]
+    explode: Option<String>,
     #[serde(default)]
     from: Option<f64>,
     #[serde(default)]
@@ -274,6 +291,59 @@ fn animation_of<K: Kernel>(
         usdz_animation::check_timing(input.fps, &times).map_err(err)?;
         Ok(times)
     };
+    // An explode view's steps played (mitcad#2113): as a study's
+    // placements, sampled along its seconds.
+    if let Some(name) = &input.explode {
+        if input.tracks.is_some() || input.study.is_some() {
+            return Err(err(
+                "give tracks, study or explode (an explode view's name), one of them".to_owned(),
+            ));
+        }
+        if input.space.is_some() {
+            return Err(err(
+                "space is for tracks; an explode view's placements are its own".to_owned(),
+            ));
+        }
+        let seconds = doc.explode_view(name)?.seconds();
+        let from = input.from.unwrap_or(0.0);
+        let to = input.to.unwrap_or(seconds);
+        if !(from.is_finite() && to.is_finite()) {
+            return Err(err("from and to must be finite times in seconds".to_owned()));
+        }
+        let frames = match input.frames {
+            Some(frames) => frames,
+            None => (((to - from).abs() * input.fps).round() as usize).saturating_add(1),
+        };
+        if frames == 0 || frames > MAX_STUDY_FRAMES {
+            return Err(err(format!(
+                "frames must be 1 to {MAX_STUDY_FRAMES}, not {frames}"
+            )));
+        }
+        let times = times_for(frames)?;
+        // A view of any assembly component (mitcad#2328): the occurrences
+        // below it in their parents, and its own bodies' motions.
+        let mut placements = Vec::with_capacity(frames);
+        let mut bodies = Vec::with_capacity(frames);
+        for k in 0..frames {
+            let t = if frames == 1 {
+                from
+            } else {
+                from + (to - from) * k as f64 / (frames - 1) as f64
+            };
+            let state = doc.explode_state(name, Some(t))?;
+            placements.push(doc.explode_parent_placements(&state));
+            bodies.push(doc.explode_body_motions(&state));
+        }
+        return Ok(UsdzAnimation {
+            fps: input.fps,
+            times,
+            poses: AnimationPoses::Explode {
+                name: name.clone(),
+                placements,
+                bodies,
+            },
+        });
+    }
     let poses = match (&input.tracks, &input.study) {
         (Some(_), Some(_)) => {
             return Err(err(
@@ -282,7 +352,8 @@ fn animation_of<K: Kernel>(
         }
         (None, None) => {
             return Err(err(
-                "give tracks (poses per occurrence or body) or study (a motion study's name)"
+                "give tracks (poses per occurrence or body), study (a motion study's name) or \
+                 explode (an explode view's name)"
                     .to_owned(),
             ));
         }
@@ -575,6 +646,8 @@ pub(super) trait ExchangeOps<K: Kernel> {
     /// `&mut`: an animation from a motion study evaluates its steps with
     /// the document's cache (mitcad#1597); nothing else changes.
     fn export_command(&mut self, command: ExportCommand) -> Result<Value, ApiError>;
+    /// `export` with `format` `urdf` (mitcad#2100).
+    fn export_urdf_command(&mut self, command: ExportCommand) -> Result<Value, ApiError>;
 
     fn export_sketch_command(&self, command: ExportSketchCommand) -> Result<Value, ApiError>;
 
@@ -678,11 +751,20 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             Some(format) => format,
             None => ExportFormat::of_path(&command.path).ok_or_else(|| {
                 ApiError(format!(
-                    "{}: unknown file type; use .step, .iges, .stl, .obj, .brep, .3mf or .usdz, or give \"format\"",
+                    "{}: unknown file type; use .step, .iges, .stl, .obj, .brep, .3mf, .usdz or .urdf, or give \"format\"",
                     command.path
                 ))
             })?,
         };
+        // A URDF package of the whole design (mitcad#2100).
+        if format == ExportFormat::Urdf {
+            return self.export_urdf_command(command);
+        }
+        if command.package.is_some() || command.effort.is_some() || command.velocity.is_some() {
+            return Err(ApiError(
+                "package, effort and velocity are for URDF export (format urdf)".to_owned(),
+            ));
+        }
         let dialect = match command.dialect.as_deref() {
             None => None,
             Some(id) => {
@@ -1010,6 +1092,70 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         }
         with_shown_warnings(&mut result);
         Ok(result)
+    }
+
+    fn export_urdf_command(&mut self, command: ExportCommand) -> Result<Value, ApiError> {
+        // The whole design, where it places the bodies: the options of
+        // body files do not apply.
+        let given = [
+            (!command.bodies.is_empty(), "bodies"),
+            (command.coordinates.is_some(), "coordinates"),
+            (command.occurrence.is_some(), "occurrence"),
+            (command.dialect.is_some(), "dialect"),
+            (command.on_bed, "on_bed"),
+            (command.animation.is_some(), "animation"),
+            (
+                command.plates.is_some() || command.plate.is_some(),
+                "plates",
+            ),
+            (command.print_colors, "print_colors"),
+        ];
+        if let Some((_, field)) = given.iter().find(|(set, _)| *set) {
+            return Err(ApiError(format!(
+                "a URDF package is written from the whole design as it moves: {field} does not \
+                 apply"
+            )));
+        }
+        let mut colors = BTreeMap::new();
+        for (body, color) in &command.colors {
+            if !color.iter().all(|c| (0.0..=1.0).contains(c)) {
+                return Err(ApiError(format!(
+                    "the colour of {body} must have components from 0 to 1"
+                )));
+            }
+            colors.insert(self.body_by_uid_or_name(body)?, *color);
+        }
+        let options = mitcad_model::exchange::UrdfOptions {
+            package: command.package.clone(),
+            refinement: command.refinement,
+            effort: command.effort,
+            velocity: command.velocity,
+            colors,
+        };
+        let exported = self.export_urdf(&command.path, &options)?;
+        let text = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        Ok(json!({
+            "path": command.path,
+            "format": "urdf",
+            "folder": text(&exported.folder),
+            "package": exported.package,
+            "urdf": text(&exported.urdf),
+            "links": exported.links,
+            "joints": exported.joints,
+            "meshes": exported.meshes,
+            "bodies": exported.bodies,
+            "skipped": exported
+                .skipped
+                .iter()
+                .map(|(uid, why)| json!({"body": uid, "name": self.body_name(*uid), "reason": why}))
+                .collect::<Vec<_>>(),
+            "left_out": exported
+                .left_out
+                .iter()
+                .map(|uid| json!({"joint": uid, "name": self.feature(*uid).map(|e| e.name.clone())}))
+                .collect::<Vec<_>>(),
+            "warnings": exported.warnings,
+        }))
     }
 
     fn export_sketch_command(&self, command: ExportSketchCommand) -> Result<Value, ApiError> {

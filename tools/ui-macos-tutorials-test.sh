@@ -5,6 +5,7 @@
 # page outside it and the steps of tools/ui-tutorials-test.py, the
 # application run through ui-macos-lib.sh in the Aqua session; then the
 # example tutorials repository's tutorial taken to its end (mitcad#2078).
+# Both start from their cards on the Start page (mitcad#2346).
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"

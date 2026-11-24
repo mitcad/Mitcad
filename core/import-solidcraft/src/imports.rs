@@ -78,6 +78,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 name: Some(mesh.name.clone()),
                 color: mesh.color.map(|c| [c[0] as f64, c[1] as f64, c[2] as f64]),
                 shape,
+                face_colors: Vec::new(),
             });
         }
         self.add_bodies(f, component, Some(m.file.clone()), bodies)?;

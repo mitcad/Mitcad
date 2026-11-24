@@ -5,9 +5,11 @@
 // dimensions (both selectable), the active tool's preview, the snap marker,
 // the sketch's axes and origin, the pointer's place and the degrees of
 // freedom. Drawn with QPainter in view pixels, so text
-// and glyphs keep their size at any zoom; the widget lets the mouse
-// through to the view, and the controller asks it what lies under the
-// cursor.
+// and glyphs keep their size at any zoom. The view draws it itself, in its
+// overlay layer, painted with the frame that moves the camera (a
+// ViewPaintLayer, mitcad#2296): no widget over the view, which Qt would
+// paint and compose again after every frame. The mouse is the view's, and
+// the controller asks the overlay what lies under the cursor.
 
 #include <functional>
 #include <map>
@@ -16,20 +18,28 @@
 #include <vector>
 
 #include <QColor>
+#include <QFont>
 #include <QLineF>
+#include <QObject>
 #include <QPointF>
 #include <QPolygonF>
+#include <QRect>
 #include <QRectF>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
-#include <QWidget>
+#include <QWidget> // what the files that include this one draw on and over
 
 #include "PointMarkers.hpp"
 #include "SketchModel.hpp"
 
 class QFontMetricsF;
 class QPainter;
+
+namespace mitcad {
+class OcctViewer;
+class ViewPaintLayer;
+} // namespace mitcad
 
 namespace mitcad::sketch {
 
@@ -82,7 +92,7 @@ struct AngleRays {
 };
 std::optional<AngleRays> angleRays(const DimensionData& dimension, const SketchModel& model, bool byValue = true);
 
-class SketchOverlay : public QWidget {
+class SketchOverlay : public QObject {
   Q_OBJECT
 
 public:
@@ -100,7 +110,22 @@ public:
     QString entity;
   };
 
-  SketchOverlay(SketchController& controller, QWidget* view);
+  // Drawn by `view` (a layer of its own, hidden at first).
+  SketchOverlay(SketchController& controller, OcctViewer& view);
+
+  // Drawn by the view or not (as a widget's show and hide): hidden, the
+  // next sketch edit logs its axes, highlights and badge again.
+  void show();
+  void hide();
+  bool isVisible() const;
+  // What it draws changed: painted again with the view's next frame.
+  void update();
+  // The view's area, in view pixels, as it is drawn over.
+  QRect rect() const;
+  int width() const;
+  int height() const;
+  // Its text's font (Text size, mitcad#1556).
+  const QFont& font() const { return m_font; }
 
   Hit hitTest(const QPointF& position) const;
   // The dimensions' values and constraint glyphs a window holds (view
@@ -170,8 +195,9 @@ public:
   // y axis x,y to x,y" (window coordinates; "outside the view", "none")
   // when what paintAxes draws changes, for the UI tests (mitcad#739: the
   // sketch draws its origin and axes whatever the Origin folder's light
-  // bulb says). Called when the overlay paints and with the "Sketch view"
-  // line, as a session without a desktop may never paint it.
+  // bulb says). Called with the "Sketch view" line (SketchController::
+  // logView), once the camera rests: not at each frame of a navigation
+  // (mitcad#2296).
   void logAxes();
   // Logs "Sketch overlay: point markers over highlights; 1 curve, 0 points
   // highlighted, 3 markers over them" when it changes, for the UI tests
@@ -196,11 +222,9 @@ public:
   // stays transparent to the mouse; the controller asks it.
   bool badgeAt(const QPointF& position) const;
 
-protected:
-  void paintEvent(QPaintEvent* event) override;
-  void hideEvent(QHideEvent* event) override;
-
 private:
+  // Paints it, in view pixels (the view's frame, ViewPaintLayer).
+  void paint(QPainter& painter);
   struct Glyph {
     QString constraint; // k3, or empty for a fixed entity
     QString entity;     // what it is drawn at
@@ -301,6 +325,11 @@ private:
   void logThrough(int dimensions, int glyphs);
 
   SketchController& m_c;
+  OcctViewer& m_view;
+  ViewPaintLayer* m_layer = nullptr; // what the view draws it in
+  QFont m_font;
+  // The badge's room last given to the view (OcctViewer::setBadgeWidth).
+  int m_badgeRoom = 0;
   // The items' sight (behindBodies): where each was drawn and whether it
   // lay behind a body; the camera it was found for, and the wait for the
   // camera to rest.

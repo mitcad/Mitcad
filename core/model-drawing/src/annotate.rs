@@ -57,6 +57,9 @@ use mitcad_model::topo::{EdgeName, FaceName};
 pub const LINE_GAP: f64 = 10.0;
 /// A leader's text from its arrow (paper mm) when not moved.
 pub const NOTE_SHIFT: P2 = [10.0, 8.0];
+/// Where a weld symbol's reference line starts from its arrow (paper mm)
+/// when not moved (mitcad#2350).
+pub const WELD_SHIFT: P2 = [12.0, 10.0];
 /// A datum label's square (its lower middle) from its triangle's tip on
 /// the feature (paper mm) when not moved.
 pub const DATUM_SHIFT: P2 = [0.0, 12.0];
@@ -1017,6 +1020,7 @@ pub fn lay_out(
         AnnotationType::Frame => "feature-control-frame",
         AnnotationType::Finish => "surface-finish",
         AnnotationType::Balloon => "balloon",
+        AnnotationType::Weld => "weld-symbol",
         AnnotationType::HoleTable => "hole-table",
         AnnotationType::PartsList => "parts-list",
         _ => "dimension",
@@ -1119,6 +1123,14 @@ pub fn lay_out(
             let tip = leader_tip(annotation, &seen[0], frame);
             let shift = annotation.text_offset.unwrap_or(BALLOON_SHIFT);
             balloon(&mut g, tip, add2(tip, shift), &words().main, h);
+        }
+        AnnotationType::Weld => {
+            // Its reference line from where the arrow's line meets it, by
+            // the drawing's standard (mitcad#2350).
+            let tip = leader_tip(annotation, &seen[0], frame);
+            let knee = add2(tip, annotation.text_offset.unwrap_or(WELD_SHIFT));
+            let weld = annotation.weld.clone().unwrap_or_default();
+            super::weld::weld_symbol(&mut g, tip, knee, &weld, frame.standard, h);
         }
         AnnotationType::HoleTable | AnnotationType::PartsList => {
             return Err("a table is laid out with its rows (tables::lay_out_table)".to_owned());
@@ -2976,6 +2988,9 @@ pub fn moved(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'_>, 
         AnnotationType::Balloon => {
             annotation.text_offset = shift(annotation.text_offset, BALLOON_SHIFT);
         }
+        AnnotationType::Weld => {
+            annotation.text_offset = shift(annotation.text_offset, WELD_SHIFT);
+        }
         AnnotationType::HoleTable | AnnotationType::PartsList => {
             if let Some(table) = &mut annotation.table {
                 table.place = add2(table.place, delta);
@@ -3013,6 +3028,11 @@ pub fn leader_line(
     match annotation.kind {
         AnnotationType::Note | AnnotationType::HoleCallout => {
             Some(leader_ends(annotation, first, frame, NOTE_SHIFT))
+        }
+        // From the arrow to where its line meets the reference line
+        // (mitcad#2350).
+        AnnotationType::Weld => {
+            Some((tip, add2(tip, annotation.text_offset.unwrap_or(WELD_SHIFT))))
         }
         AnnotationType::Datum => {
             let at = add2(tip, annotation.text_offset.unwrap_or(DATUM_SHIFT));
@@ -3153,6 +3173,7 @@ pub fn placed_at(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'
         | AnnotationType::Frame
         | AnnotationType::Finish
         | AnnotationType::Balloon
+        | AnnotationType::Weld
         | AnnotationType::HoleCallout => match seen.first() {
             // A hole callout's text from the hole's centre (mitcad#2212).
             Some(Seen::Circle {
@@ -3201,6 +3222,7 @@ pub fn turned_with_view(annotation: &mut ViewAnnotation, angle: f64) {
         | AnnotationType::Balloon
         | AnnotationType::Radius
         | AnnotationType::Diameter
+        | AnnotationType::Weld
         | AnnotationType::HoleCallout => {
             if let Some(shift) = annotation.text_offset {
                 annotation.text_offset = Some(rotate(shift));

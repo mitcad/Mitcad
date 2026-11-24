@@ -22,6 +22,7 @@ fn body(name: Option<&str>, history: &str, faces: usize) -> ImportBody<MockShape
         name: name.map(str::to_owned),
         color: None,
         shape: MockShape::imported(history, faces),
+        face_colors: Vec::new(),
     }
 }
 

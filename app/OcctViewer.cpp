@@ -42,6 +42,7 @@
 #include "view/ViewEdges.hpp"
 #include "view/ViewTessellation.hpp"
 #include "view/TexturedBody.hpp"
+#include "view/ViewPaintLayer.hpp"
 #include "sketch/PointMarkers.hpp"
 #ifdef __APPLE__
 #include "render/MacFrameDisplay.hpp"
@@ -97,6 +98,8 @@
 #if !QT_CONFIG(egl)
 #error "OCCT draws through EGL (MITCAD_OCCT_EGL), but this Qt was built without EGL"
 #endif
+// The view's own EGL context where Qt runs on GLX (mitcad#2292).
+#include "framework/GraphicsStart.hpp"
 #endif
 
 #include <AIS_AnimationCamera.hxx>
@@ -1293,6 +1296,64 @@ double distanceToLine(const QPointF& position, const QPolygonF& line) {
 
 } // namespace
 
+#ifdef MITCAD_OCCT_EGL
+// Qt on X11 with GLX (mitcad#2292): the view's own EGL context, the
+// framebuffer OCCT draws the view into there (wrapped as Qt's is), and the
+// last frame read back from it, which paintGL() paints into Qt's.
+struct OcctViewer::ViewEgl {
+  std::unique_ptr<ViewEglContext> context;
+  occ::handle<OpenGl_FrameBuffer> framebuffer;
+  QImage frame;
+  // Why the context was not made: made once, not at every frame.
+  QString failure;
+};
+#endif
+
+OcctViewer::ViewGlCurrent::ViewGlCurrent(OcctViewer& viewer) {
+#ifdef MITCAD_OCCT_EGL
+  ViewEgl* own = viewer.m_viewEgl.get();
+  if (own == nullptr || own->context == nullptr || own->context->isCurrent()) {
+    return;
+  }
+  m_qtContext = QOpenGLContext::currentContext();
+  if (m_qtContext != nullptr) {
+    m_qtSurface = m_qtContext->surface();
+    GLint bound = 0;
+    m_qtContext->functions()->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &bound);
+    m_qtFramebuffer = bound;
+    m_qtContext->doneCurrent();
+  }
+  if (!own->context->makeCurrent()) {
+    m_ok = false;
+    if (m_qtContext != nullptr && m_qtSurface != nullptr && m_qtContext->makeCurrent(m_qtSurface)) {
+      m_qtContext->functions()->glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(m_qtFramebuffer));
+    }
+    return;
+  }
+  m_viewer = &viewer;
+#else
+  // OCCT draws with Qt's context: nothing to switch (AppleClang's
+  // -Wunused-private-field reads these as used).
+  (void)viewer;
+  (void)m_viewer;
+  (void)m_qtContext;
+  (void)m_qtSurface;
+  (void)m_qtFramebuffer;
+#endif
+}
+
+OcctViewer::ViewGlCurrent::~ViewGlCurrent() {
+#ifdef MITCAD_OCCT_EGL
+  if (m_viewer == nullptr) {
+    return;
+  }
+  m_viewer->m_viewEgl->context->doneCurrent();
+  if (m_qtContext != nullptr && m_qtSurface != nullptr && m_qtContext->makeCurrent(m_qtSurface)) {
+    m_qtContext->functions()->glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(m_qtFramebuffer));
+  }
+#endif
+}
+
 // The rendered view's image as a rectangle over the whole view (2D
 // persistence, in device pixels from the lower left corner), unlit and
 // textured with the image.
@@ -2099,12 +2160,23 @@ OcctViewer::~OcctViewer() {
   if (QCoreApplication::instance() != nullptr) {
     QCoreApplication::instance()->removeEventFilter(this);
   }
-  m_context->RemoveFilters();
-  m_context->RemoveAll(false);
-  m_context.Nullify();
-  m_view->Remove();
-  m_view.Nullify();
-  m_viewer.Nullify();
+  {
+    // OCCT's resources go in the context they were made in: the view's
+    // own EGL one where Qt runs on GLX (mitcad#2292).
+    const ViewGlCurrent current(*this);
+#ifdef MITCAD_OCCT_EGL
+    if (m_viewEgl != nullptr && m_viewEgl->context != nullptr && m_viewEgl->context->isCurrent() && m_glAttached &&
+        !m_viewEgl->framebuffer.IsNull()) {
+      m_viewEgl->framebuffer->Release(glContextOf(m_view).get());
+    }
+#endif
+    m_context->RemoveFilters();
+    m_context->RemoveAll(false);
+    m_context.Nullify();
+    m_view->Remove();
+    m_view.Nullify();
+    m_viewer.Nullify();
+  }
 
   makeCurrent();
   display.Nullify();
@@ -8890,14 +8962,31 @@ void OcctViewer::initializeGL() {
   const GlTestFailure testFailure = glTestFailure();
   const bool reconnect = m_glAttached;
   const bool noAnswer = testFailure == (reconnect ? GlTestFailure::Reconnect : GlTestFailure::Init);
-  QString problem = glContextProblem(context(), noAnswer);
+  // Called from paintGL() with the view's own EGL context current
+  // (mitcad#2292): Qt's is not then, and that one was checked as it was made.
+#ifdef MITCAD_OCCT_EGL
+  const bool viewEglCurrent = m_viewEgl != nullptr && m_viewEgl->context != nullptr && m_viewEgl->context->isCurrent();
+#else
+  const bool viewEglCurrent = false;
+#endif
+  QString problem = viewEglCurrent ? QString() : glContextProblem(context(), noAnswer);
+#ifdef MITCAD_OCCT_EGL
   if (problem.isEmpty()) {
+    problem = prepareViewEgl();
+  }
+#endif
+  if (problem.isEmpty()) {
+    const ViewGlCurrent current(*this);
     // An exception that leaves a Qt event handler ends the application.
     try {
-      if (reconnect && testFailure == GlTestFailure::Throw) {
-        throw Standard_NullObject("TCollection_ExtendedString : null parameter (MITCAD_TEST_GL_FAILURE)");
+      if (!current.ok()) {
+        problem = QStringLiteral("the view's own EGL context could not be made current (eglMakeCurrent)");
+      } else {
+        if (reconnect && testFailure == GlTestFailure::Throw) {
+          throw Standard_NullObject("TCollection_ExtendedString : null parameter (MITCAD_TEST_GL_FAILURE)");
+        }
+        problem = attachGl();
       }
-      problem = attachGl();
     } catch (const Standard_Failure& failure) {
       problem = QStringLiteral("OCCT failed: %1: %2")
                     .arg(QString::fromLatin1(failure.ExceptionType()), QString::fromUtf8(failure.what()));
@@ -8967,24 +9056,35 @@ QString OcctViewer::attachGl() {
 #ifdef MITCAD_OCCT_EGL
   // OCCT draws through EGL (mitcad#2031): its driver names Qt's context.
   // Qt on X11 with its GLX integration (QT_XCB_GL_INTEGRATION set by the
-  // user, or the start-up's fallback when EGL could not draw the window,
-  // mitcad#2292) has none: the reason goes to the log (reportGlFailure,
-  // mitcad#2125). Checked before OCCT's Init, which finds no current EGL
-  // context then and could only say it did not attach.
+  // user, or the start-up's restart when EGL could not draw the window,
+  // mitcad#2292) has none: the driver names the view's own EGL context
+  // then, current here (initializeGL), made by prepareViewEgl(). Checked
+  // before OCCT's Init, which finds no current EGL context otherwise and
+  // could only say it did not attach.
   auto* egl = context()->nativeInterface<QNativeInterface::QEGLContext>();
   const occ::handle<QtEglGraphicDriver> eglDriver = occ::handle<QtEglGraphicDriver>::DownCast(m_viewer->Driver());
-  if (egl == nullptr || eglDriver.IsNull()) {
+  const bool ownContext = m_viewEgl != nullptr && m_viewEgl->context != nullptr && m_viewEgl->context->isCurrent();
+  if ((egl == nullptr && !ownContext) || eglDriver.IsNull()) {
     return QStringLiteral("Qt's OpenGL context is not an EGL context (platform %1, QT_XCB_GL_INTEGRATION %2); "
                           "OCCT draws through EGL")
         .arg(QGuiApplication::platformName(), qEnvironmentVariable("QT_XCB_GL_INTEGRATION"));
   }
+  // The view's own context was made with the widget's format.
+  const QSurfaceFormat::OpenGLContextProfile profile =
+      ownContext ? format().profile() : context()->format().profile();
+#else
+  const QSurfaceFormat::OpenGLContextProfile profile = context()->format().profile();
 #endif
   const occ::handle<OpenGl_Context> glContext = new OpenGl_Context();
-  if (!glContext->Init(context()->format().profile() == QSurfaceFormat::CoreProfile)) {
+  if (!glContext->Init(profile == QSurfaceFormat::CoreProfile)) {
     return QStringLiteral("OCCT could not attach to the OpenGL context");
   }
 #ifdef MITCAD_OCCT_EGL
-  eglDriver->useEglContext(egl->display(), egl->nativeContext());
+  if (ownContext) {
+    eglDriver->useEglContext(m_viewEgl->context->display(), m_viewEgl->context->context());
+  } else {
+    eglDriver->useEglContext(egl->display(), egl->nativeContext());
+  }
 #endif
 
   occ::handle<Aspect_NeutralWindow> window =
@@ -9019,7 +9119,10 @@ QString OcctViewer::attachGl() {
   m_view->SetWindow(window, glContext->RenderingContext());
 #ifdef MITCAD_OCCT_EGL
   // OCCT bound a framebuffer of its own for a surfaceless view: Qt's again.
-  context()->functions()->glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+  // In the view's own context paintGL() binds the view's framebuffer.
+  if (!ownContext) {
+    context()->functions()->glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+  }
 #endif
   const occ::handle<OpenGl_Context> attached = glContextOf(m_view);
   logGlBinding("after SetWindow", this, attached);
@@ -9044,14 +9147,33 @@ QString OcctViewer::attachGl() {
     }
     m_context->Display(m_orientationCube, 0, 0, false);
     updateGrid(true);
-    const auto* renderer =
-        reinterpret_cast<const char*>(context()->functions()->glGetString(GL_RENDERER));
+    // Through OCCT's functions in the view's own context (mitcad#2292),
+    // where Qt's is not current.
+#ifdef MITCAD_OCCT_EGL
+    const auto glString = [&](GLenum name) {
+      return reinterpret_cast<const char*>(ownContext ? attached->core11fwd->glGetString(name)
+                                                      : context()->functions()->glGetString(name));
+    };
+#else
+    const auto glString = [this](GLenum name) {
+      return reinterpret_cast<const char*>(context()->functions()->glGetString(name));
+    };
+#endif
+    const char* renderer = glString(GL_RENDERER);
     // The driver's version, for error reports (mitcad#61).
-    const auto* version = reinterpret_cast<const char*>(context()->functions()->glGetString(GL_VERSION));
+    const char* version = glString(GL_VERSION);
     m_glVersion = QString::fromLatin1(version != nullptr ? version : "");
     if (timingLogged()) {
       GLint maxSamples = 0;
+#ifdef MITCAD_OCCT_EGL
+      if (ownContext) {
+        attached->core11fwd->glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+      } else {
+        context()->functions()->glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+      }
+#else
       context()->functions()->glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+#endif
       const QScreen* display = screen();
       qDebug().noquote() << QStringLiteral("Viewport timing environment: renderer=%1; GL=%2; "
                                           "scale=%3; logical=%4x%5; backing=%6x%7; refresh=%8 Hz; "
@@ -9136,7 +9258,11 @@ void OcctViewer::logComposition() {
   }
   QString surfaceText = QStringLiteral("not EGL");
 #ifdef MITCAD_OCCT_EGL
-  if (auto* egl = context()->nativeInterface<QNativeInterface::QEGLContext>()) {
+  if (m_viewEgl != nullptr && m_viewEgl->context != nullptr) {
+    // Qt on GLX (mitcad#2292).
+    surfaceText = QStringLiteral("the view's own EGL context (%1), read back into Qt's framebuffer")
+                      .arg(m_viewEgl->context->description());
+  } else if (auto* egl = context()->nativeInterface<QNativeInterface::QEGLContext>()) {
     const EGLSurface surface = eglGetCurrentSurface(EGL_DRAW);
     if (surface == EGL_NO_SURFACE) {
       surfaceText = QStringLiteral("surfaceless");
@@ -9309,7 +9435,129 @@ Aspect_Drawable OcctViewer::occtDrawable() {
 #endif
 }
 
+#ifdef MITCAD_OCCT_EGL
+QString OcctViewer::prepareViewEgl() {
+  // Qt's own EGL context: OCCT draws with it, nothing to make.
+  if (context() == nullptr || context()->nativeInterface<QNativeInterface::QEGLContext>() != nullptr) {
+    return QString();
+  }
+  if (m_viewEgl == nullptr) {
+    m_viewEgl = std::make_unique<ViewEgl>();
+  }
+  if (m_viewEgl->context != nullptr) {
+    return QString();
+  }
+  if (!m_viewEgl->failure.isEmpty()) {
+    return m_viewEgl->failure;
+  }
+  // Made while Qt's GLX context is not current: libglvnd makes no EGL
+  // context current while another API's is (ViewEglContext's check does).
+  QOpenGLContext* qt = QOpenGLContext::currentContext();
+  QSurface* surface = qt != nullptr ? qt->surface() : nullptr;
+  GLint bound = 0;
+  if (qt != nullptr) {
+    qt->functions()->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &bound);
+    qt->doneCurrent();
+  }
+  QString problem = QStringLiteral("forced by MITCAD_TEST_GL_FAILURE=start-view");
+  if (!viewEglTestFailure()) {
+    m_viewEgl->context = ViewEglContext::make(format(), problem);
+  }
+  if (qt != nullptr && surface != nullptr && qt->makeCurrent(surface)) {
+    qt->functions()->glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(bound));
+  }
+  const QString why = QStringLiteral("Qt's OpenGL context is not an EGL context (platform %1, QT_XCB_GL_INTEGRATION %2)")
+                          .arg(QGuiApplication::platformName(), qEnvironmentVariable("QT_XCB_GL_INTEGRATION"));
+  if (m_viewEgl->context == nullptr) {
+    m_viewEgl->failure = QStringLiteral("%1, and the view's own EGL context was not made: %2").arg(why, problem);
+    return m_viewEgl->failure;
+  }
+  qInfo().noquote() << QStringLiteral("3D view: drawn in its own EGL context and read back into the window, as %1: %2")
+                           .arg(why, m_viewEgl->context->description());
+  return QString();
+}
+
+bool OcctViewer::bindViewEglFramebuffer(const occ::handle<OpenGl_Context>& gl) {
+  // The size of Qt's framebuffer, which the frame is painted into.
+  const qreal ratio = devicePixelRatioF();
+  const NCollection_Vec2<int> size(std::max(1, qRound(width() * ratio)), std::max(1, qRound(height() * ratio)));
+  occ::handle<OpenGl_FrameBuffer>& framebuffer = m_viewEgl->framebuffer;
+  if (framebuffer.IsNull()) {
+    framebuffer = new OpenGl_FrameBuffer();
+  }
+  if (!framebuffer->IsValid() || framebuffer->GetVPSize() != size) {
+    framebuffer->Release(gl.get());
+    // As Qt's framebuffer: 8-bit RGBA, depth 24, stencil 8.
+    if (!framebuffer->Init(gl, size, GL_RGBA8, GL_DEPTH24_STENCIL8)) {
+      return false;
+    }
+  }
+  framebuffer->BindBuffer(gl);
+  return true;
+}
+
+void OcctViewer::readViewEglFrame(const occ::handle<OpenGl_Context>& gl) {
+  const occ::handle<OpenGl_FrameBuffer>& framebuffer = m_viewEgl->framebuffer;
+  if (gl.IsNull() || framebuffer.IsNull() || !framebuffer->IsValid()) {
+    return;
+  }
+  const int frameWidth = framebuffer->GetVPSizeX();
+  const int frameHeight = framebuffer->GetVPSizeY();
+  QImage& frame = m_viewEgl->frame;
+  if (frame.width() != frameWidth || frame.height() != frameHeight) {
+    frame = QImage(frameWidth, frameHeight, QImage::Format_RGBA8888);
+  }
+  if (frame.isNull()) {
+    return;
+  }
+  framebuffer->BindReadBuffer(gl);
+  gl->core11fwd->glReadBuffer(GL_COLOR_ATTACHMENT0);
+  gl->core11fwd->glPixelStorei(GL_PACK_ALIGNMENT, 4);
+  gl->core11fwd->glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+  // bits() detaches the image, so that Qt uploads it again when painted.
+  uchar* pixels = frame.bits();
+  gl->core11fwd->glReadPixels(0, 0, frameWidth, frameHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+  framebuffer->BindBuffer(gl);
+  // OpenGL's rows go up from the bottom, the image's down from the top.
+  const qsizetype line = frame.bytesPerLine();
+  for (int y = 0; y < frameHeight / 2; ++y) {
+    uchar* top = pixels + y * line;
+    std::swap_ranges(top, top + line, pixels + (frameHeight - 1 - y) * line);
+  }
+  frame.setDevicePixelRatio(devicePixelRatioF());
+}
+#endif
+
 void OcctViewer::paintGL() {
+#ifdef MITCAD_OCCT_EGL
+  if (m_viewEgl != nullptr && m_viewEgl->context != nullptr) {
+    // Qt on X11 with GLX (mitcad#2292): OCCT draws in the view's own EGL
+    // context, and the frame read back from it is painted into Qt's
+    // framebuffer, which Qt composes into the window with GLX.
+    {
+      const ViewGlCurrent current(*this);
+      if (!current.ok()) {
+        reportGlFailure(QStringLiteral("the view's own EGL context could not be made current (eglMakeCurrent)"));
+        return;
+      }
+      const quint64 before = m_framesDrawn;
+      paintView();
+      if (m_framesDrawn != before && m_glAttached && !m_view->Window().IsNull()) {
+        readViewEglFrame(glContextOf(m_view));
+      }
+    }
+    if (!m_viewEgl->frame.isNull()) {
+      QPainter painter(this);
+      painter.setCompositionMode(QPainter::CompositionMode_Source);
+      painter.drawImage(QPointF(0.0, 0.0), m_viewEgl->frame);
+    }
+    return;
+  }
+#endif
+  paintView();
+}
+
+void OcctViewer::paintView() {
   if (!m_documentVisible) return;
   if (m_glAttachFailed) {
     // The last attach failed (mitcad#2125): nothing is drawn until one
@@ -9375,6 +9623,15 @@ void OcctViewer::paintGL() {
   // shader manager with the wrapper that owns this view, as OCCT's context
   // activation does; native-context identity alone does not set that owner.
   glContext->ShaderManager()->SetContext(glContext.get());
+#ifdef MITCAD_OCCT_EGL
+  // In the view's own EGL context (mitcad#2292) OCCT draws into the view's
+  // framebuffer, wrapped as Qt's is.
+  const bool ownContext = m_viewEgl != nullptr && m_viewEgl->context != nullptr;
+  if (ownContext && !bindViewEglFramebuffer(glContext)) {
+    reportGlFailure(QStringLiteral("the view's own framebuffer was not made"));
+    return;
+  }
+#endif
   occ::handle<OpenGl_FrameBuffer> framebuffer = wrapQtFramebuffer(glContext);
   if (framebuffer.IsNull()) {
     reportGlFailure(QStringLiteral("OCCT could not wrap Qt's framebuffer"));
@@ -9404,8 +9661,13 @@ void OcctViewer::paintGL() {
     m_view->MustBeResized();
 #ifdef MITCAD_OCCT_EGL
     // A surfaceless EGL view's resize made OCCT a framebuffer of its own
-    // and bound it (OpenGl_Window::init): Qt's again for this frame.
-    context()->functions()->glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+    // and bound it (OpenGl_Window::init): Qt's again for this frame, or the
+    // view's own in its own context (mitcad#2292).
+    if (ownContext) {
+      bindViewEglFramebuffer(glContext);
+    } else {
+      context()->functions()->glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+    }
     framebuffer = wrapQtFramebuffer(glContext);
     if (framebuffer.IsNull()) {
       reportGlFailure(QStringLiteral("OCCT could not wrap Qt's framebuffer after a resize"));
@@ -9494,7 +9756,15 @@ void OcctViewer::paintGL() {
   // Optional diagnostic fence: include completion of this context's GPU
   // work in paint duration, excluding Qt composition and presentation.
   if (timingLogged() && qEnvironmentVariableIntValue("MITCAD_VIEWPORT_SYNC") != 0) {
+#ifdef MITCAD_OCCT_EGL
+    if (ownContext) {
+      glContext->core11fwd->glFinish(); // the view's own context (mitcad#2292)
+    } else {
+      context()->functions()->glFinish();
+    }
+#else
     context()->functions()->glFinish();
+#endif
   }
 }
 
@@ -9511,6 +9781,11 @@ void OcctViewer::updateNavigation() {
     m_navigationRepaints = 0;
     m_navigationRepainted.clear();
     m_navigationPrintOverlays = 0;
+    for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
+      if (layer) {
+        layer->takePaints(); // counted from here
+      }
+    }
   }
   if (change == ViewNavigation::Change::Ended) {
     // For UI tests (app/COMMANDS.md, "Logs that UI tests read"): what the
@@ -9520,6 +9795,13 @@ void OcctViewer::updateNavigation() {
                        .arg(m_navigationRepaints);
     if (!m_navigationRepainted.isEmpty()) {
       line += QStringLiteral(" (%1)").arg(m_navigationRepainted.join(QStringLiteral(", ")));
+    }
+    // The drawings over the view it draws itself (mitcad#2296), painted
+    // with its frames: "sketch overlay painted 12 time(s) by the view".
+    for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
+      if (layer && layer->isShown()) {
+        line += QStringLiteral(", %1 painted %2 time(s) by the view").arg(layer->name()).arg(layer->takePaints());
+      }
     }
     if (!m_loggedPrintOverlay.isEmpty() && m_loggedPrintOverlay != QStringLiteral("Print overlay: none")) {
       line += QStringLiteral(", Print Analysis overlay set %1 time(s)").arg(m_navigationPrintOverlays);
@@ -10525,8 +10807,24 @@ void OcctViewer::handleViewRedraw(const occ::handle<AIS_InteractiveContext>& con
   // the cube's own perspective the direction (mitcad#774).
   updateGrid();
   updateCubeEye();
+  // The drawings over the view it draws itself (mitcad#2296): painted for
+  // this frame's camera before OCCT draws it, so that they move with the
+  // scene in the same frame.
+  for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
+    if (layer) {
+      layer->beforeFrame(view);
+    }
+  }
   const gp_Dir drawnFrom = m_view->Camera()->Direction();
   AIS_ViewController::handleViewRedraw(context, view);
+  // A camera animation moved the camera as the frame was drawn: they are
+  // painted for it in the next frame.
+  for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
+    if (layer && layer->behindCamera(view)) {
+      requestFrame();
+      break;
+    }
+  }
   // A camera animation moved the camera as the frame was drawn: the cube's
   // perspective follows in the next one.
   if (m_cubeProjection == CubeProjection::Perspective && !m_view->Camera()->Direction().IsEqual(drawnFrom, 1e-9)) {

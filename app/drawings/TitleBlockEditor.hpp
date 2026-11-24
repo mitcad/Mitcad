@@ -7,6 +7,7 @@
 // template's for the simple block), `title_box` and `frame`, keeps the
 // block's lines, fields and images while they are drawn, moved and
 // deleted, and gives the block back as `edit_drawing_title_block` takes it
+// with whether the template draws its frame and its title block
 // (core/model-api/src/commands.md, "Drawing templates and revisions"):
 // Done in the workspace sends it, Cancel drops it. Points come in sheet
 // millimetres and go to the block's own (from its lower left corner), on
@@ -115,6 +116,15 @@ public:
   std::optional<QPointF> firstPoint() const { return m_first; }
   // The pointer, block mm, on the grid.
   QPointF pointer() const { return m_pointer; }
+  // Whether the sheet's template draws its frame and its title block
+  // (mitcad#2325: the panel's Frame and Title block check boxes; from the
+  // `drawing` query's `template`, both true for the simple block). A
+  // change counts as a change of the block.
+  bool showFrame() const { return m_showFrame; }
+  bool showTitleBlock() const { return m_showTitleBlock; }
+  // False when it was so already.
+  bool setShowFrame(bool shown);
+  bool setShowTitleBlock(bool shown);
   // Whether anything changed since it started.
   bool changed() const { return m_changed; }
   // "3 lines, 9 fields, 1 image".
@@ -136,6 +146,8 @@ private:
   QVector<QLineF> m_lines;
   QVector<BlockField> m_fields;
   QVector<BlockImage> m_images;
+  bool m_showFrame = true;
+  bool m_showTitleBlock = true;
   Tool m_tool = Tool::Select;
   std::optional<QPointF> m_first;
   QPointF m_pointer;

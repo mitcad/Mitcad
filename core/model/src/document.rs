@@ -442,6 +442,9 @@ pub struct DocState {
     /// Decals (mitcad#2244), in the order they were inserted: images put
     /// on faces of bodies.
     pub(crate) decals: Vec<Decal>,
+    /// Explode views of assemblies (mitcad#2113), in the order they were
+    /// added.
+    pub(crate) explode_views: Vec<crate::explode::ExplodeView>,
 }
 
 impl Default for DocState {
@@ -498,6 +501,7 @@ impl Default for DocState {
             selection_sets: Vec::new(),
             point_clouds: Vec::new(),
             decals: Vec::new(),
+            explode_views: Vec::new(),
         }
     }
 }
@@ -1954,6 +1958,9 @@ pub struct Document<K: Kernel> {
     /// in (mitcad#2207, [`Document::set_slicer_folders`]); the installed
     /// slicers' when None. Runtime context only.
     slicer_folders: Option<Vec<crate::print_files::installed::SlicerFolder>>,
+    /// The design edited in place in a holder (mitcad#2321,
+    /// `document/edit_in_place.rs`). Runtime context only.
+    in_place: Option<edit_in_place::InPlaceMode>,
 }
 
 /// A `sketch` query's answer with what it was made from (mitcad#679): the
@@ -2023,6 +2030,7 @@ impl<K: Kernel> Document<K> {
             recorded_sketch_step: None,
             sketch_step_changes: Vec::new(),
             slicer_folders: None,
+            in_place: None,
         }
     }
 
@@ -2415,6 +2423,7 @@ impl<K: Kernel> Document<K> {
             recorded_sketch_step: None,
             sketch_step_changes: Vec::new(),
             slicer_folders: self.slicer_folders.clone(),
+            in_place: self.in_place.clone(),
         })
     }
 
@@ -3167,6 +3176,8 @@ impl<K: Kernel> Document<K> {
         next.prune_motion();
         // Selection sets lose the items deleted (mitcad#2192).
         next.prune_selection_sets();
+        // Explode views lose the occurrences deleted (mitcad#2113).
+        next.prune_explode_views();
         // A sketch that got its first consumer hides, one that lost its
         // last shows (mitcad#7).
         next.follow_sketch_use(&self.state);
@@ -3183,7 +3194,7 @@ impl<K: Kernel> Document<K> {
         // A carriage that follows another keeps its offset where the
         // recompute left it, recomputed with it in this step.
         if let Some(computed) = &result
-            && next.take_followed_offsets(computed)
+            && next.take_followed_offsets(computed, &self.result.joints)?
         {
             result = Some(self.compute_after(&next)?);
         }
@@ -3500,6 +3511,52 @@ impl<K: Kernel> Document<K> {
             entry.suppressed = suppressed;
             let verb = if suppressed { "Suppress" } else { "Unsuppress" };
             Ok((format!("{verb} {}", entry.name), ()))
+        })
+    }
+
+    /// Suppresses a feature and every active feature that refers to it,
+    /// directly or through others (the `dependents` query's list), in one
+    /// undo step (mitcad#2314). A dependent whose suppression follows a
+    /// condition is left to it; the feature's own condition is removed, as
+    /// [`Document::set_suppressed`] does. Returns the features whose
+    /// suppression changed, in timeline order (empty: nothing changed).
+    pub fn suppress_with_dependents(
+        &mut self,
+        uid: FeatureUid,
+    ) -> Result<Vec<FeatureUid>, ModelError> {
+        let position = self.state.require(uid)?;
+        let own = &self.state.features[position];
+        let bound = &self.state.bindings.suppressed_when;
+        let own_changes = !own.suppressed || bound.contains_key(&uid);
+        let changed: Vec<FeatureUid> = own_changes
+            .then_some(uid)
+            .into_iter()
+            .chain(
+                self.state
+                    .dependents(&BTreeSet::from([uid]))
+                    .into_iter()
+                    .filter(|d| {
+                        !bound.contains_key(d)
+                            && self.state.entry(*d).is_some_and(|entry| !entry.suppressed)
+                    }),
+            )
+            .collect();
+        if changed.is_empty() {
+            return Ok(changed);
+        }
+        let name = own.name.clone();
+        self.apply(|state| {
+            state.bindings.suppressed_when.remove(&uid);
+            for feature in &changed {
+                let at = state.require(*feature)?;
+                Arc::make_mut(&mut state.features[at]).suppressed = true;
+            }
+            let label = if changed.as_slice() == [uid] {
+                format!("Suppress {name}")
+            } else {
+                format!("Suppress {name} and the features that use it")
+            };
+            Ok((label, changed.clone()))
         })
     }
 
@@ -5020,6 +5077,13 @@ impl<K: Kernel> Document<K> {
         let Some(step) = from.pop() else {
             return Ok(None);
         };
+        // While the design is edited in place (mitcad#2321): only the steps
+        // made in the mode.
+        if !self.in_place_step_allowed(&step.state) {
+            let from = if back { &mut self.undo } else { &mut self.redo };
+            from.push(step);
+            return Ok(None);
+        }
         let result = match self.compute(&step.state) {
             Ok(result) => result,
             Err(error) => {
@@ -5058,8 +5122,14 @@ impl<K: Kernel> Document<K> {
         }
     }
 
+    /// The label of the step Undo takes back; None when there is none, or
+    /// while the design is edited in place none made in the mode
+    /// (mitcad#2321).
     pub fn undo_label(&self) -> Option<&str> {
-        self.undo.last().map(|step| step.label.as_str())
+        self.undo
+            .last()
+            .filter(|step| self.in_place_step_allowed(&step.state))
+            .map(|step| step.label.as_str())
     }
 
     /// The definitions a history command would restore, for file-read
@@ -5097,7 +5167,10 @@ impl<K: Kernel> Document<K> {
     }
 
     pub fn redo_label(&self) -> Option<&str> {
-        self.redo.last().map(|step| step.label.as_str())
+        self.redo
+            .last()
+            .filter(|step| self.in_place_step_allowed(&step.state))
+            .map(|step| step.label.as_str())
     }
 
     // Revisions and the saved state (P8).
@@ -5843,6 +5916,14 @@ mod equation_curves;
 // following the faces (mitcad#2244).
 mod decals;
 pub use decals::{DEFAULT_DECAL_OPACITY, Decal, DecalEdit, DecalMesh, DecalSurface, DecalTarget};
+// Exploded views of assemblies: their commands, Auto Explode and the
+// explode worked out (mitcad#2113).
+mod explode;
+pub use explode::{ExplodePart, ExplodePlacements, ExplodeState, ExplodeTrail, ResolvedStep};
+// Edit in Place: a linked component edited inside the assembly that holds
+// it, saved to its design's file (mitcad#2321).
+mod edit_in_place;
+pub use edit_in_place::{InPlaceContext, InPlaceMode};
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

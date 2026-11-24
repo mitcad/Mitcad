@@ -314,6 +314,8 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("import_slicer_presets", FileIo),
     // Insert Point on a spline (mitcad#836).
     ("sketch.insert_spline_point", Model),
+    // Remove Point on a spline, its pair (mitcad#2326).
+    ("sketch.remove_spline_point", Model),
     // Tables of data that expressions look values up in (mitcad#667,
     // `tables.rs`).
     ("set_table", Model),
@@ -580,6 +582,13 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("delete_decal", Model),
     // End caps of profiles (mitcad#2243).
     ("build_end_cap", Model),
+    // Exploded views of assemblies (mitcad#2113).
+    ("add_explode_view", Model),
+    ("edit_explode_view", Model),
+    ("remove_explode_view", Model),
+    ("auto_explode", Model),
+    // Weld symbols proposed from BUILD's joints (mitcad#2350).
+    ("propose_drawing_welds", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -891,6 +900,9 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("decal_outline", Model),
     // The design's end caps and a preview of capping ends (mitcad#2243).
     ("build_end_caps", Model),
+    // Exploded views (mitcad#2113).
+    ("explode_views", Model),
+    ("explode_view", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

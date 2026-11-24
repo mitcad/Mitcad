@@ -413,6 +413,7 @@
 //   focus-document-path <path> activate the already open file's actual window
 //   capture-model-number <var> <query JSON> <dot.path> read a numeric result
 //                           (a number in the path indexes an array)
+//   capture-model-text <var> <query JSON> <dot.path> the same for a text
 //   expect-document-cache-sharing <total bytes> actual per-document budgets
 //   system-window-menu <entry> the owned macOS Window menu's actual action
 //   expect-system-menu-bar <titles...> the active macOS frame's usable menus and application roles
@@ -1075,6 +1076,14 @@ private:
   void testDesignChrome();
   void testInterfaceSize(double ratio);
   void testTextIconSize(int textPercent, int iconPercent, const QString& family);
+  // The accessibility tree of the window in front, walked as a client
+  // reads it, logged (mitcad#2227); over `maxNodes` nodes or `maxMs` ms
+  // fails (0: no limit); `detail` > 0 lists the subtrees of that many
+  // nodes, the hidden ones' too.
+  void testAccessibleTree(int line, int maxNodes, int maxMs, int detail);
+  // Windows: `client` (mitcad-uia-walk) reads the window through UI
+  // Automation in one bulk read; a failed read or one over `maxMs` fails.
+  void testUiaWalk(int line, const QString& client, int maxMs);
   void testNavigationRuntime();
   void testNavigationRelease();
   void testNavigationGestureState();

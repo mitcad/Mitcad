@@ -38,9 +38,11 @@
 // Every body of the reported design, the five bare rods too, is checked by
 // the volume it has in common with the union, both ways (mitcad#2217):
 // short by at most 1e-6 relative (no material lost), over by at most 1e-6
-// (the ring by at most kRingExcessLimit, 5e-6: its common's volume moves by
-// that much with the point it is integrated about, mitcad#2262, see
-// there), and the common's cut by the body empty; each body's numbers go
+// (the ring too: its common's volume moved by 4e-6 with the point it is
+// integrated about until port patch 2284 integrated across the joints of
+// its faces' pcurves, mitcad#2262, mitcad#2267, mitcad#2284, see there;
+// now the ring's common and the ring agree to 1e-9 about each of three
+// points), and the common's cut by the body empty; each body's numbers go
 // to common-volumes.txt in the work folder, for the ring with what its
 // common is made of, down to each face's vector integral of its normal
 // and the joints of its pcurves (mitcad#2267). The common of a bare rod
@@ -304,14 +306,18 @@ Integral volume_about(const TopoDS_Shape& shape, const gp_Pnt& point) {
 // along each of its edges' pcurves (the edge's orientation in the forward
 // face) the integrand is first integrated in u from the face's lowest u
 // (its UV bounds) to the pcurve's point, at the pcurve's v, and that is
-// integrated along the pcurve against dv. That is exact only for a loop of
-// pcurves that closes in the parameters. Where one pcurve ends at (u, v)
-// and the next one starts at (u', v'), within the vertex's tolerance in
-// space but not at the same parameters, the integral leaves out a strip
-// from the lowest u to u, (v' - v) wide: on a torus face reaching round the
-// ring a joint 1e-6 mm apart along v leaves out about 1e-6 mm times the
-// strip's length round the ring, some 1e-4 mm^2. A gap along u leaves out
-// nothing.
+// integrated along the pcurve against dv. Along the pcurves alone that is
+// exact only for a loop of pcurves that closes in the parameters. Where one
+// pcurve ends at (u, v) and the next one starts at (u', v'), within the
+// vertex's tolerance in space but not at the same parameters, such an
+// integral leaves out a strip from the lowest u to u, (v' - v) wide: on a
+// torus face reaching round the ring a joint 1e-6 mm apart along v leaves
+// out about 1e-6 mm times the strip's length round the ring, some 1e-4
+// mm^2. A gap along u leaves out nothing. Port patch 2284 integrates each
+// such joint as the segment from one pcurve's end to the next one's start
+// (mitcad#2284), so the loops close and the strips are integrated too, and
+// adds to the volume the ribbon from each edge's curve on the face to its
+// 3D curve, so the faces close along the edges' 3D curves.
 //
 // FaceFlux records for one face: `integrated`, A as the integration gives
 // it (its volume about the middle and about points `offset` away from it
@@ -320,14 +326,16 @@ Integral volume_about(const TopoDS_Shape& shape, const gp_Pnt& point) {
 // with straight chords across the joints; the joints of its pcurves (each
 // pcurve's end paired with the nearest start of another in the same wire),
 // their largest gaps along u and v and in space; `strips`, the vector
-// integral of the normal over the strips the joints leave out (minus the
-// sum of each joint's v gap times the integral of the normal from the
-// lowest u to the joint at its v), so that `integrated` should equal
-// `pcurves` plus `strips`; and `closure`, the volume about the middle
-// those strips leave out (each joint's v gap times the integral of
-// (P - middle) . n / 3 from the lowest u), which, added to the face's
-// volume, gives the volume of the domain its pcurves bound with the joints
-// closed.
+// integral of the normal over the strips an integration along the pcurves
+// alone leaves out (minus the sum of each joint's v gap times the integral
+// of the normal from the lowest u to the joint at its v): with port patch
+// 2284 `integrated` equals `edges` (the joints and the ribbons to the 3D
+// curves integrated), and `pcurves` where the pcurves lie on the 3D
+// curves; along the pcurves alone it was `pcurves` plus `strips`; and `closure`, the volume about the middle those
+// strips hold (each joint's v gap times the integral of (P - middle) . n /
+// 3 from the lowest u), which, taken from the face's volume, gives the
+// volume an integration along the pcurves alone, the joints left open,
+// gave.
 struct FaceFlux {
   gp_Vec integrated{0.0, 0.0, 0.0};
   gp_Vec edges{0.0, 0.0, 0.0};
@@ -521,15 +529,18 @@ ShellFlux shell_flux(const TopoDS_Shape& shape, const char* label, const gp_Pnt&
       out.closure[k] += flux.closure + gp_Vec(middle, points[k]).Dot(flux.strips) / 3.0;
     }
     const gp_Vec off_edges = flux.integrated - flux.edges;
-    const gp_Vec off_loop = flux.integrated - flux.pcurves - flux.strips;
+    // With the joints integrated (port patch 2284), off the loop of its
+    // pcurves closed by chords at the joints.
+    const gp_Vec off_loop = flux.integrated - flux.pcurves;
     char text[1400];
     std::snprintf(text, sizeof(text),
                   "%s face %d (%s, %s, %d wires, %d edges, u %.9f to %.9f, v %.9f to %.9f): its normal over "
                   "its area integrated (%.9g, %.9g, %.9g) mm2, the ring's surface within its edges' 3D curves "
                   "(%.9g, %.9g, %.9g), the integrated off it by (%.3g, %.3g, %.3g); %d joints of its pcurves "
                   "(%d unpaired, %d edges without a pcurve), apart by up to %.3g along u, %.3g along v, %.3g mm "
-                  "in space; the strips they leave out (%.3g, %.3g, %.3g) mm2, the integrated off its pcurves "
-                  "plus the strips by (%.3g, %.3g, %.3g); closing them adds %.3g mm3 about the middle",
+                  "in space; the strips the pcurves alone leave out (%.3g, %.3g, %.3g) mm2, the integrated off "
+                  "its pcurves with the joints closed by (%.3g, %.3g, %.3g); the strips hold %.3g mm3 about the "
+                  "middle",
                   label, out.faces, surface_type_name(BRepAdaptor_Surface(face, false).GetType()),
                   orientation_name(face.Orientation()), flux.wires, flux.edge_count, flux.u_low, flux.u_high,
                   flux.v_low, flux.v_high, flux.integrated.X(), flux.integrated.Y(), flux.integrated.Z(),
@@ -695,12 +706,14 @@ gp_Pnt middle_of(const TopoDS_Shape& shape, double& reach) {
 // vector integral of its normal, of the common and of the body
 // (shell_flux, mitcad#2267). `spread` is the largest difference,
 // relative, between the common's and the body's volume about one of the
-// three points; `closed_spread` the same with every face's loop of
-// pcurves closed at its joints (recorded, not checked).
+// three points (each face's loop closed at its joints by the integration,
+// port patch 2284); `open_spread` the same with the strips the joints
+// leave out of an integration along the pcurves alone taken away, as the
+// integration gave it before that patch (recorded, not checked).
 struct Makeup {
   std::vector<std::string> lines;
   double spread = 0.0;
-  double closed_spread = 0.0;
+  double open_spread = 0.0;
 };
 
 Makeup excess_makeup(const TopoDS_Shape& body, const TopoDS_Shape& common, const TopoDS_Shape& joined,
@@ -765,13 +778,14 @@ Makeup excess_makeup(const TopoDS_Shape& body, const TopoDS_Shape& common, const
                 body_at[1].error / scale, body_at[2].error / scale,
                 std::max({body_at[0].worst, body_at[1].worst, body_at[2].worst}));
   out.lines.emplace_back(text);
-  // Where the common's shell does not close (mitcad#2267): each face's
-  // vector integral of its normal over its area against its share of the
-  // ring's surface, the joints of its pcurves and the strips they leave out
-  // of the integration (shell_flux), for the common's faces and the
-  // body's; the spread the summed vectors give against the one measured;
-  // and the volumes about the three points with every face's loop closed
-  // at its joints.
+  // Where the common's shell closes (mitcad#2267, mitcad#2284): each
+  // face's vector integral of its normal over its area against its share
+  // of the ring's surface, the joints of its pcurves and the strips they
+  // leave out of an integration along the pcurves alone (shell_flux), for
+  // the common's faces and the body's; the spread the summed vectors give
+  // against the one measured; and the volumes about the three points with
+  // those strips taken away, as the integration gave them before port
+  // patch 2284 integrated across the joints.
   const gp_Pnt points[3] = {middle, along_x, along_z};
   const ShellFlux common_flux = shell_flux(common, "the common's", middle, 2.0 * reach, points);
   const ShellFlux body_flux = shell_flux(body, "the body's", middle, 2.0 * reach, points);
@@ -779,7 +793,8 @@ Makeup excess_makeup(const TopoDS_Shape& body, const TopoDS_Shape& common, const
     std::snprintf(text, sizeof(text),
                   "%s %d faces summed: their normals over their areas integrated (%.3g, %.3g, %.3g) mm2, the "
                   "ring's surface within their edges' 3D curves (%.3g, %.3g, %.3g), through their pcurves with "
-                  "the joints closed (%.3g, %.3g, %.3g), the strips the joints leave out (%.3g, %.3g, %.3g)",
+                  "the joints closed (%.3g, %.3g, %.3g), the strips the pcurves alone leave out at the joints "
+                  "(%.3g, %.3g, %.3g)",
                   flux == &common_flux ? "the common's" : "the body's", flux->faces, flux->integrated.X(),
                   flux->integrated.Y(), flux->integrated.Z(), flux->edges.X(), flux->edges.Y(), flux->edges.Z(),
                   flux->pcurves.X(), flux->pcurves.Y(), flux->pcurves.Z(), flux->strips.X(), flux->strips.Y(),
@@ -787,24 +802,26 @@ Makeup excess_makeup(const TopoDS_Shape& body, const TopoDS_Shape& common, const
     out.lines.emplace_back(text);
   }
   const double offset = 2.0 * reach;
-  double closed[3] = {0.0, 0.0, 0.0};
-  double closed_body[3] = {0.0, 0.0, 0.0};
-  double closed_relative[3] = {0.0, 0.0, 0.0};
+  double left_open[3] = {0.0, 0.0, 0.0};
+  double left_open_body[3] = {0.0, 0.0, 0.0};
+  double left_open_relative[3] = {0.0, 0.0, 0.0};
   for (int k = 0; k < 3; ++k) {
-    closed[k] = common_at[k].volume + common_flux.closure[k];
-    closed_body[k] = body_at[k].volume + body_flux.closure[k];
-    closed_relative[k] = closed_body[k] != 0.0 ? (closed[k] - closed_body[k]) / closed_body[k] : 0.0;
-    out.closed_spread = std::max(out.closed_spread, std::abs(closed_relative[k]));
+    left_open[k] = common_at[k].volume - common_flux.closure[k];
+    left_open_body[k] = body_at[k].volume - body_flux.closure[k];
+    left_open_relative[k] =
+        left_open_body[k] != 0.0 ? (left_open[k] - left_open_body[k]) / left_open_body[k] : 0.0;
+    out.open_spread = std::max(out.open_spread, std::abs(left_open_relative[k]));
   }
   std::snprintf(text, sizeof(text),
                 "the common's summed vector moves its volume from the middle to the points along X and Z by "
-                "%+.3g, %+.3g relative to the body (measured %+.3g, %+.3g); with every face's loop closed at "
-                "its joints, about the three points: common %.9f, %.9f, %.9f, body %.9f, %.9f, %.9f; the "
-                "common %+.3g, %+.3g, %+.3g relative to the body",
+                "%+.3g, %+.3g relative to the body (measured %+.3g, %+.3g); with the strips at the joints left "
+                "out (the integration before port patch 2284), about the three points: common %.9f, %.9f, "
+                "%.9f, body %.9f, %.9f, %.9f; the common %+.3g, %+.3g, %+.3g relative to the body",
                 -offset * common_flux.integrated.X() / 3.0 / scale,
                 -offset * common_flux.integrated.Z() / 3.0 / scale, (common_at[1].volume - common_at[0].volume) / scale,
-                (common_at[2].volume - common_at[0].volume) / scale, closed[0], closed[1], closed[2], closed_body[0],
-                closed_body[1], closed_body[2], closed_relative[0], closed_relative[1], closed_relative[2]);
+                (common_at[2].volume - common_at[0].volume) / scale, left_open[0], left_open[1], left_open[2],
+                left_open_body[0], left_open_body[1], left_open_body[2], left_open_relative[0], left_open_relative[1],
+                left_open_relative[2]);
   out.lines.emplace_back(text);
   for (std::string& line : edge_makeup(body, common, joined)) {
     out.lines.push_back(std::move(line));
@@ -1265,56 +1282,49 @@ void test_reported_hub_with_blades_and_ring() {
   // volume it has in common with the union, integrated to 1e-9, falls
   // short of its own volume by at most 1e-6 relative (no material lost),
   // and exceeds it by at most 1e-6, the bare rods too (a looser limit
-  // would hide a small wrong common of a rod with its finned rod). Only
-  // the ring's common may exceed it, by up to kRingExcessLimit
-  // (mitcad#2262). Its torus is cut by the section curves of the bodies
-  // crossing it into 40 faces, all on the ring's own surfaces, and it
-  // measured 1.09e-6 over the ring (21135.163943 against 21135.140975 mm3,
-  // the check of mitcad#2217), its cut by the ring empty. That excess is
-  // no material outside the ring: about the middle, a diagonal along X and
-  // one along Z the common measured 21135.163838, 21135.164173 and
-  // 21135.077405 mm3 while the ring measured 21135.140975 about each, so
-  // the common's volume is determined only to within a spread of 4.1e-6
-  // relative (from +1.1e-6 to -3.0e-6 of the ring), and the excess about
-  // the middle lies inside that spread. A shell that closes has one volume
-  // about every point. Its loose edges (tolerances up to 1e-6 mm, 1851 mm
-  // of them above 1e-7 mm) are where the other bodies cross the torus;
-  // where a plane cuts it, OCCT's face-face intersection walks the section,
-  // approximates it, and gives a plane's section with a torus a
-  // tolerance of at least 1e-6 mm whatever the approximation reached
-  // (IntTools_FaceFace::MakeCurve), so the tolerance alone shows no
-  // gap. The volume integration reads no 3D curves, only the faces'
-  // surfaces and the domains their pcurves bound; two faces on one surface
-  // share one pcurve of their edge. The record of mitcad#2262 ruled out
-  // both causes that text then offered (mitcad#2267): the integration's
-  // own error bound about the three points is at most 6.5e-10 of the ring,
-  // some 6000 times less than the spread; the 8 loose edges between faces
-  // on two surfaces (or a face's seam), pieces of the ring's own circular
-  // edges, leave no gap between the two faces' curves, and the 133 loose
-  // section edges lie between faces on one surface. What remains is inside
-  // each face: BRepGProp_Gauss integrates a face along its pcurves, each
-  // point's strip integrated from the face's lowest u (shell_flux), which
-  // is exact only where each pcurve starts at the parameters where the
-  // one before it ends. A joint of two pcurves 1e-6 mm apart along v, as
-  // the vertex's tolerance allows, leaves out a strip of that width from
-  // the lowest u, on a torus face up to the ring's circumference long; the
-  // strips run round the ring's axis, so their sideways parts turn and
-  // largely cancel while their parts along the axis add up, as the spread
-  // about the point along Z (260 times the one along X) does. That is the
-  // cause being checked, not yet a found one: excess_makeup now records,
-  // for each face of the common and of the ring, its vector integral of
-  // its normal as integrated, its share of the ring's surface from its
-  // edges' 3D curves, the gaps at the joints of its pcurves, the strips
-  // they leave out, and the volumes about the three points with every
-  // face's loop closed at its joints. Until that record shows where the
-  // shell opens, kRingExcessLimit stays the measured spread rounded up;
-  // the ring's spread itself is checked against it, so a common that
-  // opens wider fails. Material the common would hold outside the body is
-  // checked on its own, for every body within 1e-6: the common's cut by
-  // the body is empty. Each body's numbers, and for the ring and an excess
-  // above 1e-6 what the common is made of (excess_makeup), are written to
-  // common-volumes.txt in the work folder, kept after a passing run.
-  constexpr double kRingExcessLimit = 5e-6;
+  // would hide a small wrong common of a rod with its finned rod), the
+  // ring's too. The ring's torus is cut by the section curves of the
+  // bodies crossing it into 40 faces, all on the ring's own surfaces; its
+  // common measured 1.09e-6 over the ring (21135.163943 against
+  // 21135.140975 mm3, the check of mitcad#2217), its cut by the ring
+  // empty, and about the middle, a diagonal along X and one along Z it
+  // measured 21135.163838, 21135.164173 and 21135.077405 mm3 while the ring
+  // measured 21135.140975 about each: a spread of 4.1e-6 relative with the
+  // point it was integrated about (mitcad#2262), where a shell that closes
+  // has one volume about every point. The cause, found (mitcad#2267,
+  // mitcad#2284): not the integration's own error (its bound about the
+  // three points at most 6.5e-10 of the ring), not a gap between faces
+  // (the common's 40 faces' shares of the ring's surface from their
+  // edges' 3D curves sum to (2.3e-14, -1.9e-14, 4.1e-11) mm2, through
+  // their pcurves with the joints closed to (-6.4e-12, -6.7e-14, -4.2e-11)),
+  // but the joints of each face's pcurves: BRepGProp_Gauss integrated a
+  // face along its pcurves alone, each point's strip integrated from the
+  // face's lowest u (shell_flux), exact only where each pcurve starts at
+  // the parameters where the one before it ends. The pcurves of the
+  // common's faces meet at their vertices within the vertices' tolerance
+  // but apart along v; the strips they left out summed to (-1.53e-06,
+  // 0.000108, 0.000396) mm2, the whole of the integrated normals' sum,
+  // almost all of it on the one torus face reaching round the ring (159
+  // joints, apart by up to 4.07e-08 along v and 9.17e-08 mm in space,
+  // strips (-1.57e-06, 0.000108, 0.000397) mm2). With every face's loop
+  // closed at its joints the common measured 21135.140974536,
+  // 21135.140974536 and 21135.140974539 mm3 about the three points, the
+  // ring 21135.140974537 about each: within 1.2e-13. Port patch 2284
+  // integrates each such joint as the segment from one pcurve's end to the
+  // next one's start (and, for the volume, the ribbon from each edge's
+  // curve on a face to its 3D curve; the common's faces on one surface
+  // share their edges' pcurves, so theirs cancel), so the ring's common
+  // is checked within 1e-6 both
+  // ways like every body, and its volume about each of the three points
+  // within 1e-9 of the ring's (makeup.spread); the record keeps, for the
+  // ring, the strips the joints leave out of an integration along the
+  // pcurves alone and the volumes that integration gave. Material the
+  // common would hold outside the body is checked on its own, for every
+  // body within 1e-6: the common's cut by the body is empty. Each body's
+  // numbers, and for the ring and an excess above 1e-6 what the common is
+  // made of (excess_makeup), are written to common-volumes.txt in the work
+  // folder, kept after a passing run.
+  constexpr double kRingSpreadLimit = 1e-9;
   const std::string record_path = (std::filesystem::path(work_folder) / "common-volumes.txt").string();
   std::ofstream record(record_path);
   int wrong = 0;
@@ -1326,7 +1336,6 @@ void test_reported_hub_with_blades_and_ring() {
     const Measured outside = common.done ? measured<BRepAlgoAPI_Cut>(common.shape, input) : Measured{};
     const bool rod = std::find(inside.begin(), inside.end(), i) != inside.end();
     const bool ring = has_torus(input);
-    const double excess_limit = ring ? kRingExcessLimit : 1e-6;
     char line[400];
     std::snprintf(line, sizeof(line),
                   "body %zu%s: common %.9f (done %d, valid %d), own %.9f, %+.3g relative; the common's cut by the "
@@ -1343,8 +1352,8 @@ void test_reported_hub_with_blades_and_ring() {
         record << "  " << part << "\n";
       }
     }
-    const bool right = common.done && own - held <= 1e-6 * own && held - own <= excess_limit * own &&
-                       outside.done && outside.volume <= 1e-6 * own && (!ring || makeup.spread <= kRingExcessLimit);
+    const bool right = common.done && own - held <= 1e-6 * own && held - own <= 1e-6 * own && outside.done &&
+                       outside.volume <= 1e-6 * own && (!ring || makeup.spread <= kRingSpreadLimit);
     if (!right) {
       std::fprintf(stderr, "  %s\n", line);
       ++wrong;

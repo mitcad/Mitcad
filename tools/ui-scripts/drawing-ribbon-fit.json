@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The DRAWING tab's groups at 1280 px (mitcad#2066), tools/ui-scripts/drawing-ribbon-fit.mitcad-ui: a 60 x 40 x 10 box and one drawing (D1, A3) with its top view, which the test opens from the browser. All geometry is synthetic."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 60, "width": 40, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_drawing", "size": "A3"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "top",
+    "at": [210, 150], "scale": "2:1"}
+]

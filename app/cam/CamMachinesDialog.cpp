@@ -87,6 +87,14 @@ QString shapeName(const QString& kind) {
 // Whether a machine (`cam_machines`' `machine`) is a lathe.
 bool isLathe(const QJsonObject& body) { return body.value(QStringLiteral("lathe")).isObject(); }
 
+// Whether a lathe has a C axis and live tools (mitcad#2067): milling tools
+// and drills on its turret are its live tools.
+bool latheMills(const QJsonObject& body) {
+  const QJsonObject axes =
+      body.value(QStringLiteral("lathe")).toObject().value(QStringLiteral("axes")).toObject();
+  return axes.value(QStringLiteral("c")).toBool() && axes.value(QStringLiteral("live_tools")).toBool();
+}
+
 QString zoneAxis(int axis, bool lathe) {
   return lathe && axis == 0 ? CamMachinesDialog::tr("X (radius)") : QString(QLatin1Char("XYZ"[axis]));
 }
@@ -107,9 +115,12 @@ QLineEdit* field(const QString& objectName, const QString& shown, const QString&
 // `lathe` the lathe's tool kinds with their own fields (mitcad#2230): the
 // number is the turret station, the diameter the holder's size (a boring
 // bar's diameter), the flute length the depth of cut, the stick-out the
-// overhang; the milling fields are hidden there and keep their values.
+// overhang; the milling fields are hidden there and keep their values. On
+// a lathe that `mills` (a C axis and live tools, mitcad#2067) the milling
+// shapes are its live tools too, with their milling fields and the holder
+// they sit in on the turret: axial (the face) or radial (the diameter).
 std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int toolNumber, const QList<int>& taken,
-                                   bool lathe) {
+                                   bool lathe, bool mills) {
   QDialog dialog(parent);
   dialog.setObjectName(QStringLiteral("camToolDialog"));
   dialog.setWindowTitle(tool.isEmpty() ? CamMachinesDialog::tr("Add Tool") : CamMachinesDialog::tr("Edit Tool"));
@@ -127,14 +138,27 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
   form->addRow(CamMachinesDialog::tr("Name"), name);
   auto* shape = new QComboBox;
   shape->setObjectName(QStringLiteral("camToolShape"));
-  const QStringList& kinds = lathe ? latheKinds() : shapeKinds();
-  for (const QString& kind : kinds) {
+  QStringList kinds = lathe ? latheKinds() : shapeKinds();
+  if (lathe && mills) {
+    kinds += shapeKinds();
+  }
+  for (const QString& kind : std::as_const(kinds)) {
     shape->addItem(shapeName(kind), kind);
   }
   const QJsonObject shapeJson = tool.value(QStringLiteral("shape")).toObject();
   const QString kind = text(shapeJson, "kind").isEmpty() ? kinds.first() : text(shapeJson, "kind");
   shape->setCurrentIndex(std::max(0, static_cast<int>(kinds.indexOf(kind))));
   form->addRow(lathe ? CamMachinesDialog::tr("Kind") : CamMachinesDialog::tr("Shape"), shape);
+  // A live tool's holder on the turret (mitcad#2067).
+  auto* mount = new QComboBox;
+  mount->setObjectName(QStringLiteral("camToolMount"));
+  mount->addItem(CamMachinesDialog::tr("Axial: cuts the face"), QStringLiteral("axial"));
+  mount->addItem(CamMachinesDialog::tr("Radial: cuts the diameter"), QStringLiteral("radial"));
+  // The tilting milling head (mitcad#2319).
+  mount->addItem(CamMachinesDialog::tr("B head: tilts to any plane"), QStringLiteral("head"));
+  mount->setCurrentIndex(std::max(0, mount->findData(text(tool, "mount"))));
+  mount->setToolTip(CamMachinesDialog::tr("How the live tool's holder sits on the turret: along the spindle or across it"));
+  form->addRow(CamMachinesDialog::tr("Live Holder"), mount);
   qInfo().noquote() << QStringLiteral("CAM tool dialog: %1 kinds: %2")
                            .arg(lathe ? QStringLiteral("lathe") : QStringLiteral("milling"),
                                 kinds.join(QStringLiteral(", ")));
@@ -226,16 +250,21 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
   // A lathe's tools have no shank, flutes, spindle holder or speeds and
   // feeds per minute here (the turning operations set their own); a value
   // a tool already has is kept.
-  for (QWidget* milling : {static_cast<QWidget*>(shank), static_cast<QWidget*>(count), static_cast<QWidget*>(holder),
-                           static_cast<QWidget*>(rpm), static_cast<QWidget*>(feed), static_cast<QWidget*>(plunge)}) {
-    form->setRowVisible(milling, !lathe);
-  }
+  // A live tool on a lathe (mitcad#2067) has a milling tool's shank,
+  // flutes and speeds and feeds, and its holder on the turret.
+  form->setRowVisible(holder, !lathe);
   const auto shapeChanged = [form, shape, corner, point, angle, tip, noseRadius, width, threadAngle, inside,
-                             diameterLabel, diameter, lathe] {
+                             diameterLabel, diameter, lathe, mount, shank, count, rpm, feed, plunge] {
     const QString now = shape->currentData().toString();
-    form->setRowVisible(corner, !lathe && now == QStringLiteral("bull"));
-    form->setRowVisible(point, !lathe && now == QStringLiteral("drill"));
-    const bool angled = !lathe && (now == QStringLiteral("chamfer") || now == QStringLiteral("engraver"));
+    const bool milling = !lathe || shapeKinds().contains(now);
+    for (QWidget* row : {static_cast<QWidget*>(shank), static_cast<QWidget*>(count), static_cast<QWidget*>(rpm),
+                         static_cast<QWidget*>(feed), static_cast<QWidget*>(plunge)}) {
+      form->setRowVisible(row, milling);
+    }
+    form->setRowVisible(mount, lathe && milling);
+    form->setRowVisible(corner, milling && now == QStringLiteral("bull"));
+    form->setRowVisible(point, milling && now == QStringLiteral("drill"));
+    const bool angled = milling && (now == QStringLiteral("chamfer") || now == QStringLiteral("engraver"));
     form->setRowVisible(angle, angled);
     form->setRowVisible(tip, angled);
     const bool grooving = now == QStringLiteral("grooving");
@@ -245,8 +274,9 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
     form->setRowVisible(width, lathe && (grooving || now == QStringLiteral("parting")));
     form->setRowVisible(threadAngle, lathe && threading);
     form->setRowVisible(inside, lathe && (grooving || threading));
-    if (!lathe) {
+    if (milling) {
       diameterLabel->setText(CamMachinesDialog::tr("Diameter"));
+      diameter->setToolTip(CamMachinesDialog::tr("The cutting diameter; a length with its unit"));
     } else if (boring) {
       diameterLabel->setText(CamMachinesDialog::tr("Bar Diameter"));
       diameter->setToolTip(CamMachinesDialog::tr("The bar's diameter: it must fit the stock's bore"));
@@ -265,8 +295,10 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
       return;
     }
     const QString chosen = shape->currentData().toString();
+    // A milling tool or a drill on a lathe: a live tool (mitcad#2067).
+    const bool liveTool = lathe && shapeKinds().contains(chosen);
     if (diameter->text().trimmed().isEmpty()) {
-      message->setText(!lathe                              ? CamMachinesDialog::tr("Type the tool's diameter.")
+      message->setText(!lathe || liveTool                  ? CamMachinesDialog::tr("Type the tool's diameter.")
                        : chosen == QStringLiteral("boring") ? CamMachinesDialog::tr("Type the bar's diameter.")
                                                             : CamMachinesDialog::tr("Type the holder's size."));
       return;
@@ -290,7 +322,7 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
         shapeOut.insert(QLatin1String(key), edit->text().trimmed());
       }
     };
-    if (lathe) {
+    if (lathe && !liveTool) {
       if (chosen == QStringLiteral("turning") || chosen == QStringLiteral("boring")) {
         typed("nose_radius", noseRadius);
       } else if (chosen == QStringLiteral("grooving")) {
@@ -324,6 +356,9 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
       if (!edit->text().trimmed().isEmpty()) {
         result.insert(QLatin1String(key), edit->text().trimmed());
       }
+    }
+    if (liveTool) {
+      result.insert(QStringLiteral("mount"), mount->currentData().toString());
     }
     if (!holder->text().trimmed().isEmpty()) {
       result.insert(QStringLiteral("holder"), holder->text().trimmed());
@@ -573,7 +608,16 @@ void CamMachinesDialog::showMachine() {
     if (lathe) {
       const QJsonObject shape = tool.value(QStringLiteral("shape")).toObject();
       const QString kind = text(shape, "kind");
-      const QString kindShown = shape.value(QStringLiteral("inside")).toBool()
+      // A live tool (mitcad#2067) by its holder: the face or the diameter.
+      const bool liveTool = shapeKinds().contains(kind);
+      // In the B head (mitcad#2319).
+      const QString mount = text(tool, "mount");
+      const QString kindShown = liveTool ? (mount == QStringLiteral("radial")
+                                                ? tr("%1, live on the diameter").arg(shapeName(kind))
+                                            : mount == QStringLiteral("head")
+                                                ? tr("%1, in the B head").arg(shapeName(kind))
+                                                : tr("%1, live on the face").arg(shapeName(kind)))
+                                : shape.value(QStringLiteral("inside")).toBool()
                                     ? tr("%1, in a bore").arg(shapeName(kind))
                                     : shapeName(kind);
       const auto shapeLength = [this, &shape](const char* key) {
@@ -1017,6 +1061,87 @@ void CamMachinesDialog::editMachine() {
   form->setRowVisible(turret, lathe);
   form->setRowVisible(chuckDiameter, lathe);
   form->setRowVisible(chuckLength, lathe);
+  // A lathe's C axis and live tools (mitcad#2067): the live spindle's speed
+  // and the builder's codes, each one block (the C axis's on and off
+  // blocks separated by ";"), {rpm} in the live spindle's.
+  const QJsonObject millTurn = latheJson.value(QStringLiteral("mill_turn")).toObject();
+  auto* liveTools = new QCheckBox(tr("C axis and live tools"));
+  liveTools->setObjectName(QStringLiteral("camMachineLiveTools"));
+  liveTools->setChecked(latheMills(body));
+  liveTools->setToolTip(tr("The spindle holds the part as a C axis while driven tools on the turret mill and drill"));
+  form->addRow(QString(), liveTools);
+  const auto code = [&millTurn](const char* key, const QString& fallback) {
+    const QJsonValue value = millTurn.value(QLatin1String(key));
+    if (value.isArray()) {
+      QStringList lines;
+      for (const QJsonValue& line : value.toArray()) {
+        lines << line.toString();
+      }
+      return lines.join(QStringLiteral("; "));
+    }
+    return value.isString() ? value.toString() : fallback;
+  };
+  QLineEdit* liveMaxRpm =
+      field(QStringLiteral("camMachineLiveMaxRpm"),
+            millTurn.contains(QStringLiteral("live_max_rpm")) ? plain(numberOf(millTurn, "live_max_rpm"))
+                                                              : QStringLiteral("6000"),
+            tr("The live tools' fastest speed"));
+  form->addRow(tr("Highest Live Tool Speed (rpm)"), liveMaxRpm);
+  QLineEdit* cOn = field(QStringLiteral("camMachineCAxisOn"), code("c_axis_on", QStringLiteral("M154; G28 H0.")),
+                         tr("The blocks that switch the spindle to its C axis, separated by ;"));
+  form->addRow(tr("C Axis On"), cOn);
+  QLineEdit* cOff = field(QStringLiteral("camMachineCAxisOff"), code("c_axis_off", QStringLiteral("M155")),
+                          tr("The blocks that switch it back to turning, separated by ;"));
+  form->addRow(tr("C Axis Off"), cOff);
+  QLineEdit* cClamp = field(QStringLiteral("camMachineCClamp"), code("c_clamp", QStringLiteral("M14")),
+                            tr("Clamps the C axis where a hole is drilled"));
+  form->addRow(tr("C Axis Clamp"), cClamp);
+  QLineEdit* cUnclamp = field(QStringLiteral("camMachineCUnclamp"), code("c_unclamp", QStringLiteral("M15")));
+  form->addRow(tr("C Axis Unclamp"), cUnclamp);
+  QLineEdit* liveCw = field(QStringLiteral("camMachineLiveCw"), code("live_cw", QStringLiteral("M133 P{rpm}")),
+                            tr("Starts the live tool forward; {rpm} is its speed"));
+  form->addRow(tr("Live Tool Forward"), liveCw);
+  QLineEdit* liveCcw = field(QStringLiteral("camMachineLiveCcw"), code("live_ccw", QStringLiteral("M134 P{rpm}")),
+                             tr("Starts the live tool in reverse; {rpm} is its speed"));
+  form->addRow(tr("Live Tool Reverse"), liveCcw);
+  QLineEdit* liveStop = field(QStringLiteral("camMachineLiveStop"), code("live_stop", QStringLiteral("M135")));
+  form->addRow(tr("Live Tool Stop"), liveStop);
+  const QList<QWidget*> liveRows{liveMaxRpm, cOn, cOff, cClamp, cUnclamp, liveCw, liveCcw, liveStop};
+  const auto showLive = [form, liveTools, liveRows, lathe] {
+    for (QWidget* row : liveRows) {
+      form->setRowVisible(row, lathe && liveTools->isChecked());
+    }
+  };
+  form->setRowVisible(liveTools, lathe);
+  // A Y axis and a B head for the live tools, a sub-spindle that takes
+  // the part over (mitcad#2319); the travel's Y is the Y axis's.
+  const QJsonObject latheAxes = latheJson.value(QStringLiteral("axes")).toObject();
+  const auto axisBox = [&form, &latheAxes](const QString& objectName, const QString& label, const char* key,
+                                            const QString& tip) {
+    auto* box = new QCheckBox(label);
+    box->setObjectName(objectName);
+    box->setChecked(latheAxes.value(QLatin1String(key)).toBool());
+    box->setToolTip(tip);
+    form->addRow(QString(), box);
+    return box;
+  };
+  QCheckBox* yAxis = axisBox(QStringLiteral("camMachineYAxis"), tr("Y axis"), "y",
+                             tr("The turret moves in Y: live tools mill on planes off the spindle axis"));
+  QCheckBox* bHead = axisBox(QStringLiteral("camMachineBHead"), tr("B head"), "b",
+                             tr("A milling head that tilts about Y: live tools cut tilted planes"));
+  QCheckBox* subSpindle = axisBox(QStringLiteral("camMachineSubSpindle"), tr("Sub-spindle"), "sub_spindle",
+                                  tr("A second spindle that takes the part over and turns its back"));
+  const auto showAxes = [form, liveTools, yAxis, bHead, subSpindle, travelY, lathe] {
+    form->setRowVisible(yAxis, lathe && liveTools->isChecked());
+    form->setRowVisible(bHead, lathe && liveTools->isChecked());
+    form->setRowVisible(subSpindle, lathe);
+    form->setRowVisible(travelY, !lathe || (liveTools->isChecked() && yAxis->isChecked()));
+  };
+  connect(liveTools, &QCheckBox::toggled, &dialog, showLive);
+  connect(liveTools, &QCheckBox::toggled, &dialog, showAxes);
+  connect(yAxis, &QCheckBox::toggled, &dialog, showAxes);
+  showLive();
+  showAxes();
   qInfo().noquote() << QStringLiteral("CAM machine form: %1: %2")
                            .arg(text(machine, "id"), lathe ? QStringLiteral("lathe") : QStringLiteral("mill"));
   auto* message = new QLabel;
@@ -1048,8 +1173,11 @@ void CamMachinesDialog::editMachine() {
     // the rapid rate.
     double values[7] = {0.0, max.at(1).toDouble() - min.at(1).toDouble(), 0.0, numberOf(spindle, "nose_diameter"),
                         numberOf(spindle, "nose_length"), 0.0, 0.0};
+    // A lathe's Y axis travels as far each way from the spindle axis
+    // (mitcad#2319).
+    const bool latheY = lathe && liveTools->isChecked() && yAxis->isChecked();
     if (!lengthOf(travelX, tr("Travel X"), false, &values[0]) ||
-        (!lathe && !lengthOf(travelY, tr("Travel Y"), false, &values[1])) ||
+        ((!lathe || latheY) && !lengthOf(travelY, tr("Travel Y"), false, &values[1])) ||
         !lengthOf(travelZ, tr("Travel Z"), false, &values[2]) ||
         (!lathe && !lengthOf(noseDiameter, tr("Spindle Nose Diameter"), false, &values[3])) ||
         (!lathe && !lengthOf(noseLength, tr("Spindle Nose Length"), false, &values[4])) ||
@@ -1073,8 +1201,16 @@ void CamMachinesDialog::editMachine() {
         return;
       }
     }
+    // The live spindle's speed (mitcad#2067).
+    const bool mills = lathe && liveTools->isChecked();
+    double liveRpm = 0.0;
+    if (mills && (!evaluate(liveMaxRpm->text(), QStringLiteral("unitless"), &liveRpm) || liveRpm <= 0.0)) {
+      tabs->setCurrentIndex(0);
+      message->setText(tr("%1: a number above zero.").arg(tr("Highest Live Tool Speed (rpm)")));
+      return;
+    }
     const double x0 = min.at(0).toDouble();
-    const double y0 = min.at(1).toDouble();
+    const double y0 = latheY ? -0.5 * values[1] : min.at(1).toDouble();
     const double z1 = max.at(2).toDouble();
     body.insert(QStringLiteral("name"), name->text().trimmed());
     body.insert(QStringLiteral("controller"), controller->currentData().toString());
@@ -1101,8 +1237,42 @@ void CamMachinesDialog::editMachine() {
       latheJson.insert(QStringLiteral("turret_stations"), turret->value());
       latheJson.insert(QStringLiteral("chuck_diameter"), chuck[0]);
       latheJson.insert(QStringLiteral("chuck_length"), chuck[1]);
+      // The C axis and the live tools, with their codes (mitcad#2067).
+      QJsonObject axes = latheJson.value(QStringLiteral("axes")).toObject();
+      axes.insert(QStringLiteral("c"), mills);
+      axes.insert(QStringLiteral("live_tools"), mills);
+      // The Y axis and the B head mill with the live tools (mitcad#2319).
+      axes.insert(QStringLiteral("y"), mills && yAxis->isChecked());
+      axes.insert(QStringLiteral("b"), mills && bHead->isChecked());
+      axes.insert(QStringLiteral("sub_spindle"), subSpindle->isChecked());
+      latheJson.insert(QStringLiteral("axes"), axes);
+      if (mills) {
+        const auto blocks = [](const QLineEdit* edit) {
+          QJsonArray out;
+          for (const QString& line : edit->text().split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+            if (!line.trimmed().isEmpty()) {
+              out.append(line.trimmed());
+            }
+          }
+          return out;
+        };
+        QJsonObject codes = millTurn;
+        codes.insert(QStringLiteral("live_max_rpm"), liveRpm);
+        codes.insert(QStringLiteral("c_axis_on"), blocks(cOn));
+        codes.insert(QStringLiteral("c_axis_off"), blocks(cOff));
+        codes.insert(QStringLiteral("c_clamp"), cClamp->text().trimmed());
+        codes.insert(QStringLiteral("c_unclamp"), cUnclamp->text().trimmed());
+        codes.insert(QStringLiteral("live_cw"), liveCw->text().trimmed());
+        codes.insert(QStringLiteral("live_ccw"), liveCcw->text().trimmed());
+        codes.insert(QStringLiteral("live_stop"), liveStop->text().trimmed());
+        latheJson.insert(QStringLiteral("mill_turn"), codes);
+      }
       body.insert(QStringLiteral("lathe"), latheJson);
     }
+    qInfo().noquote() << QStringLiteral("CAM machine form accepted: %1: %2")
+                             .arg(text(machine, "id"), mills ? QStringLiteral("live tools on a C axis")
+                                                             : lathe ? QStringLiteral("lathe")
+                                                                     : QStringLiteral("mill"));
     dialog.accept();
   });
   prepareModal(&dialog);
@@ -1220,7 +1390,8 @@ void CamMachinesDialog::addTool() {
     ++next;
   }
   const std::optional<QJsonObject> tool =
-      askTool(this, QJsonObject(), next, taken, isLathe(machine.value(QStringLiteral("machine")).toObject()));
+      askTool(this, QJsonObject(), next, taken, isLathe(machine.value(QStringLiteral("machine")).toObject()),
+              latheMills(machine.value(QStringLiteral("machine")).toObject()));
   if (!tool) {
     return;
   }
@@ -1254,7 +1425,8 @@ void CamMachinesDialog::editTool() {
     }
   }
   const std::optional<QJsonObject> changed =
-      askTool(this, tool, number, taken, isLathe(machineJson(id).value(QStringLiteral("machine")).toObject()));
+      askTool(this, tool, number, taken, isLathe(machineJson(id).value(QStringLiteral("machine")).toObject()),
+              latheMills(machineJson(id).value(QStringLiteral("machine")).toObject()));
   if (!changed) {
     return;
   }

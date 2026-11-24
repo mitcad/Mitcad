@@ -171,6 +171,7 @@ impl<K: Kernel> Document<K> {
                         name: Some(planned.name),
                         color: colors[planned.part],
                         shape,
+                        face_colors: Vec::new(),
                     },
                     planned.part,
                 )),

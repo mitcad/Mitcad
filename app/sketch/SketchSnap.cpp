@@ -20,6 +20,12 @@ constexpr double kNearPixels = 40.0;
 // Body geometry is this much further than it is, so that the sketch's own
 // geometry wins ties (mitcad#258).
 constexpr double kBodyTiePixels = 1.0;
+// The curves where the plane cuts a body a little further still
+// (mitcad#2324): a body edge or vertex at the same place (a sketch on a
+// face, whose boundary is also the face's section) wins, and so does the
+// centre of a body's circular edge over its section's (a cylinder cut
+// parallel to its cap).
+constexpr double kSectionTiePixels = 1.5;
 // So are the sketch's axes (mitcad#948): a sketch curve along an axis wins.
 constexpr double kAxisTiePixels = 1.0;
 // And the acquired lines' extensions and where they meet (mitcad#2035):
@@ -101,6 +107,14 @@ QString Snap::describe() const {
     return QStringLiteral("midpoint of body edge %1").arg(bodyItem.source);
   case Kind::BodyOnEdge:
     return QStringLiteral("on body edge %1").arg(bodyItem.source);
+  case Kind::BodyEdgeCenter:
+    return QStringLiteral("center of body edge %1").arg(bodyItem.source);
+  case Kind::BodySection:
+    return QStringLiteral("on the section of body face %1").arg(bodyItem.source);
+  case Kind::BodySectionVertex:
+    return QStringLiteral("end of the section of body face %1").arg(bodyItem.source);
+  case Kind::BodySectionCenter:
+    return QStringLiteral("center of the section of body face %1").arg(bodyItem.source);
   }
   return QString();
 }
@@ -336,10 +350,27 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
   // (mitcad#1967), a little further than they are: the sketch's own point,
   // midpoint or curve at the same place wins, and so does an axis along
   // the edge.
+  // The centre of a circular body edge (mitcad#2324), in the plane or out
+  // of it, where it projects to: a point, as a body vertex.
+  const auto offerCenter = [&](const BodyItem& item, Snap::Kind kind, double tie) {
+    if (!item.hasCenter()) {
+      return;
+    }
+    const double d = screenDistance(toScreen(item.curve.center), screen);
+    if (d <= kPointPixels) {
+      Snap s;
+      s.kind = kind;
+      s.at = item.curve.center;
+      s.bodyItem = item;
+      best.offer(0, d + tie, s);
+    }
+  };
   if (settings.body != nullptr) {
     for (const BodyItem& item : settings.body->items()) {
-      // Only what lies in the plane: the items out of it (mitcad#866) are
+      // Only what lies in the plane, but for the centres of circles and
+      // arcs out of it: the other items out of the plane (mitcad#866) are
       // the Dimension tool's.
+      offerCenter(item, Snap::Kind::BodyEdgeCenter, kBodyTiePixels);
       if (!item.inPlane) {
         continue;
       }
@@ -376,6 +407,40 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
         s.at = onEdge;
         s.bodyItem = item;
         best.offer(2, d + kBodyTiePixels, s);
+      }
+    }
+  }
+
+  // Where the sketch plane cuts the bodies (mitcad#2324): the centres of
+  // circles and arcs and the ends of the section curves as points, the
+  // curves as curves to snap onto, with the body snaps' ranks and a little
+  // further than the body's own edges and vertices.
+  if (settings.section != nullptr) {
+    for (const BodyItem& item : settings.section->items()) {
+      if (item.isPoint() || item.type.isEmpty()) {
+        continue;
+      }
+      offerCenter(item, Snap::Kind::BodySectionCenter, kSectionTiePixels);
+      if (item.curve.isOpen()) {
+        for (const V2& end : {item.curve.startPoint(), item.curve.endPoint()}) {
+          const double d = screenDistance(toScreen(end), screen);
+          if (d <= kPointPixels) {
+            Snap s;
+            s.kind = Snap::Kind::BodySectionVertex;
+            s.at = end;
+            s.bodyItem = item;
+            best.offer(0, d + kSectionTiePixels, s);
+          }
+        }
+      }
+      const V2 onCurve = item.curve.nearest(raw);
+      const double d = screenDistance(toScreen(onCurve), screen);
+      if (d <= kCurvePixels) {
+        Snap s;
+        s.kind = Snap::Kind::BodySection;
+        s.at = onCurve;
+        s.bodyItem = item;
+        best.offer(2, d + kSectionTiePixels, s);
       }
     }
   }

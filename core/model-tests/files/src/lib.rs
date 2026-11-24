@@ -46,3 +46,14 @@ mod threemf_import_2156_tests;
 // The reporter's designs of GitHub mitcad/Mitcad#570: an offset arc's free
 // ends stay where they are dragged (mitcad#2277).
 mod sketch_offset_free_ends_reported_2277_tests;
+// The reporter's design of GitHub mitcad/Mitcad#588: a body split by a face of
+// another component, linked where both are seen (mitcad#2299).
+mod split_body_other_component_reported_2299_tests;
+// URDF robot descriptions for ROS 2 (mitcad#2100).
+mod urdf_tests;
+// Faces coloured on their own in STEP and IGES files as face appearances,
+// and face appearances written as the faces' colours (mitcad#2313).
+mod face_colors_2313_tests;
+// An explode view of a sub-component and the root's own bodies an explode
+// moves, as an animated USDZ (mitcad#2328).
+mod usdz_explode_2328_tests;

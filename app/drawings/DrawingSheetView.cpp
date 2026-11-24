@@ -266,6 +266,25 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
   }
   m_groups = sheet.value(QStringLiteral("groups")).toArray();
   m_pens = sheet.value(QStringLiteral("pens")).toObject();
+  // For UI tests: the views' thin phantom lines (an explode view's trail
+  // lines, mitcad#2113), when their count changes.
+  {
+    int phantom = 0;
+    for (const QJsonValue& groupValue : std::as_const(m_groups)) {
+      const QJsonObject group = groupValue.toObject();
+      if (!group.value(QStringLiteral("id")).toString().startsWith(QStringLiteral("view-"))) {
+        continue;
+      }
+      for (const QJsonValue& item : group.value(QStringLiteral("items")).toArray()) {
+        phantom += item.toObject().value(QStringLiteral("pen")).toString() == QLatin1String("phantom") ? 1 : 0;
+      }
+    }
+    const QString logged = QStringLiteral("Drawing phantom lines: %1").arg(phantom);
+    if (logged != m_loggedPhantom) {
+      m_loggedPhantom = logged;
+      qDebug().noquote() << logged;
+    }
+  }
   // Each annotation's lines and texts, from its group (`A<id>`).
   QVector<int> hasText;
   for (const QJsonValue& groupValue : std::as_const(m_groups)) {
@@ -361,17 +380,31 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
   sheetMoved();
   int items = 0;
   int marks = 0;
+  bool frame = false;
+  bool titleBlock = false;
   for (const QJsonValue& group : std::as_const(m_groups)) {
     const QJsonObject g = group.toObject();
     items += static_cast<int>(g.value(QStringLiteral("items")).toArray().size());
-    if (g.value(QStringLiteral("class")).toString() == QStringLiteral("center-mark")) {
+    const QString kind = g.value(QStringLiteral("class")).toString();
+    if (kind == QStringLiteral("center-mark")) {
       ++marks;
     }
+    frame = frame || kind == QStringLiteral("frame");
+    titleBlock = titleBlock || kind == QStringLiteral("title-block");
   }
   qDebug().noquote() << QStringLiteral("Drawing sheet drawn: %1 views, %2 items, %3 center marks")
                             .arg(m_views.size())
                             .arg(items)
                             .arg(marks);
+  // Whether the sheet shows a frame and a title block (mitcad#2325: a
+  // template may leave either out), when it changes.
+  const QString border = QStringLiteral("Drawing sheet border: frame %1, title block %2")
+                             .arg(frame ? QStringLiteral("yes") : QStringLiteral("no"),
+                                  titleBlock ? QStringLiteral("yes") : QStringLiteral("no"));
+  if (border != m_loggedBorder) {
+    m_loggedBorder = border;
+    qDebug().noquote() << border;
+  }
   logAnnotations();
   logPlaces();
   logLabels();

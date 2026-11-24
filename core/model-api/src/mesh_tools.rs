@@ -167,6 +167,7 @@ mod tests {
             name: Some("Scan".to_owned()),
             color: None,
             shape: MockShape::imported("mesh", 1),
+            face_colors: Vec::new(),
         }]))
         .unwrap();
         doc

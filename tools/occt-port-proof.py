@@ -59,13 +59,26 @@ geometry library, the test's own source) uses a later patch's API (a
 function, a member, a header it adds), that patch's declarations (its
 changes to the headers alone) are applied to both states (*carried*, at
 most --max-carry, 20); a function only declared there is bound, in the
-test's executable, to a stub that says so if it is called (the patch
-defining it is then carried whole, where it applies there; else the run
-shows nothing). Where the declarations do not apply or OCCT does not build
-with them, the patch is cherry-picked whole, with the patches between
+test's executable, to a stub that says so if it is called. The patch
+defining a called function (the one whose new functions define it by its
+class and name, not one whose header only calls it) is then carried with
+the definitions it adds whole to the sources (its new functions, static
+helpers and constants, with the #includes the file has with the patch,
+appended to each file; no change inside a function that was there before,
+mitcad#2310), and that patch alone whole where those do not apply or
+build there; else the run with its declarations stands. Where the declarations do not apply or OCCT does not
+build with them, the patch is cherry-picked whole, with the patches between
 whose lines its hunks build on where it does not cherry-pick alone;
 where the patch itself adds the API, the test does not build without the
-patch. A suite part whose
+patch. Where the later declarations carried build on the patch's own (an
+inline function calling one it adds, an enumerator added to its enum),
+the state before it carries the patch's own declarations, and a test
+that ends in the stub of a function the patch adds needs the API the patch
+adds (mitcad#2310). A Test paragraph may say that its test needs later
+patches too ("The test needs the later patch 1659 too"): those are
+carried whole in both states, and one that builds on the patch's lines
+(it does not cherry-pick or OCCT does not build without the patch) is
+shown together with the patch. A suite part whose
 executable has other parts that do not build at that state is linked
 without them. The --jobs workers (trees <work>/c<i>, MitCad builds
 <repo>/build/occt-chain-m<i>) each take a run of consecutive patches and
@@ -924,17 +937,19 @@ def enclosing_tests(path: str, line: int) -> set[str]:
             break
     if not name:
         return set()
-    if name.startswith("test_"):
-        return {name}
+    # The test functions calling it, also on their own first line
+    # (`void test_x_6() { test_x(6.0); }`): a test function with parameters
+    # is run by the ones that name its cases (mitcad#2310).
     callers = set()
     current = ""
     for ln in lines:
         m = FUNCTION.match(ln)
         if m:
             current = m.group(1)
-        elif current.startswith("test_") and re.search(rf"\b{re.escape(name)}\(", ln):
+        rest = ln[m.end():] if m else ln
+        if current.startswith("test_") and current != name and re.search(rf"\b{re.escape(name)}\(", rest):
             callers.add(current)
-    return callers
+    return ({name} | callers) if name.startswith("test_") else callers
 
 
 def failing_tests(log: str) -> tuple[set[str], bool]:
@@ -1112,8 +1127,14 @@ def chain_entry(rec: dict) -> dict:
     """A chain result as the table shows it."""
     cv, per = chain_verdict(rec)
     place = f"after {rec['base']}"
+    if rec.get("together"):
+        place += "; together with " + ", ".join(rec["together"]) + " (the test needs it, it builds on this patch)"
+    if rec.get("needed"):
+        place += "; carried " + ", ".join(rec["needed"]) + " (the test needs it)"
     if rec.get("carried"):
         place += "; carried " + carried_text(rec["carried"])
+    if rec.get("own"):
+        place += "; before it, its own declarations"
     if rec.get("needs"):
         place += f"; needs {len(rec['needs'])} later"
     return {"place": place, "cverdict": cv, "tests": list(rec["tests"] or ["-"]),
@@ -1203,10 +1224,18 @@ def write_table(args, plan: dict, results: dict) -> Path:
         "code the tests need uses an API a later patch adds, that patch's",
         "declarations (its changes to the headers) are applied to both states",
         "(*carried … (its declarations)*), a function only declared there bound",
-        "to a stub that ends the run if it is called; where they do not apply or",
-        "OCCT does not build with them, the patch is cherry-picked whole",
-        "(*carried*). Where the patch itself adds the API, the test does not",
-        "build without the patch. A suite part is linked without the parts of",
+        "to a stub that ends the run if it is called. Where a test calls such a",
+        "function, the patch is carried with the functions it adds whole to the",
+        "sources (*(its declarations and new functions)*, mitcad#2310), or whole;",
+        "where they do not apply or OCCT does not build with them, the patch is",
+        "cherry-picked whole (*carried*). Where the patch itself adds the API, the",
+        "test does not build without the patch; where the declarations carried",
+        "build on the patch's own, those are applied before it (*before it, its",
+        "own declarations*), and a test that ends in the stub of a function the",
+        "patch adds needs the API it adds. Later patches the `Test:` paragraph",
+        "says the test needs are carried whole in both states (*the test needs",
+        "it*), or shown together with the patch where they build on its lines",
+        "(*together with*). A suite part is linked without the parts of",
         "its executable that do not build at that state.",
         "",
         "Verdicts: " + "; ".join(f"{k}: {v}" for k, v in sorted(counts.items())) + ".",
@@ -1300,13 +1329,31 @@ def chain_sentence(rec: dict) -> str | None:
     v, _ = chain_verdict(rec)
     date = rec.get("date", datetime.date.today().isoformat())
     how = f"shown {date} by {TOOL} --in-chain"
+    # No parentheses inside: the sentence ends at its first ")." (SENTENCE).
+    if rec.get("needed"):
+        how += f", with {', '.join(rec['needed'])} carried in both states, which the test needs"
     if rec.get("carried"):
-        # No parentheses inside: the sentence ends at its first ")." (SENTENCE).
-        whole = [p for p in rec["carried"] if not p.startswith(API_ONLY)]
+        whole = [p for p in rec["carried"] if not partial(p)]
         decl = [pick_number(p) for p in rec["carried"] if p.startswith(API_ONLY)]
-        parts = ([", ".join(whole)] if whole else []) + ([f"the declarations of {', '.join(decl)}"] if decl else [])
+        bodies = [pick_number(p) for p in rec["carried"] if p.startswith(BODIES)]
+        parts = (([", ".join(whole)] if whole else []) + ([f"the declarations of {', '.join(decl)}"] if decl else [])
+                 + ([f"the declarations and new functions of {', '.join(bodies)}"] if bodies else []))
         verb = "adds" if len(rec["carried"]) == 1 else "add"
-        how += f", with {' and '.join(parts)} carried, which {verb} API the MitCad code uses"
+        how += f"{', and' if rec.get('needed') else ', with'} {' and '.join(parts)} carried, which {verb} API " \
+               f"the MitCad code uses"
+    if rec.get("own"):
+        how += ", the patch's own declarations in the state before it, which those use"
+    if rec.get("together"):
+        both = " and ".join(rec["together"])
+        one = len(rec["together"]) == 1
+        how += (f"; {both} {'builds' if one else 'build'} on the patch's lines, so the patch is shown together "
+                f"with {'it' if one else 'them'}")
+        if v.startswith("fails without the patch at its place"):
+            return (f"It fails without the patch and {both} at their place in the chain: OCCT with the patches "
+                    f"before them, without and with these ({how}).")
+    if v.startswith("fails without the patch at its place (the test needs the API"):
+        return (f"It fails without the patch at its place in the chain: with the patches before it, the "
+                f"test calls a function the patch adds ({how}).")
     if v.startswith("fails without the patch at its place (the test does not build"):
         return (f"It fails without the patch at its place in the chain: with the patches before it, the "
                 f"test does not build without the API the patch adds ({how}).")
@@ -1366,8 +1413,9 @@ def tip_sentence(item: str, rec: dict, plan: dict, date: str) -> str | None:
 
 # Raised when the way a state is built or judged changes, so that cached
 # states and results of an older tool are not reused.
-CHAIN_VERSION = 16
+CHAIN_VERSION = 18
 HEADER_GLOBS = ["*.hxx", "*.lxx", "*.gxx", "*.h"]
+SOURCE_GLOBS = ["*.cxx", "*.cpp", "*.c"]
 # Words an error message quotes that are no API a patch adds.
 CPP_WORDS = {"const", "class", "struct", "int", "double", "bool", "void", "auto", "char", "unsigned", "long",
              "float", "enum", "typename", "operator", "std", "this", "nullptr", "return", "static", "virtual"}
@@ -1395,10 +1443,21 @@ def chain_stamp(order: list[str]) -> str:
 # declarations: an enumerator, a function, a member), "h:<number>"; the rest
 # of it stays out of the state (mitcad#2121).
 API_ONLY = "h:"
+# A carried patch of which its declarations and the definitions it adds whole
+# to the sources are applied (its new functions, static helpers, constants
+# and #includes; no change inside a function that was there before),
+# "b:<number>" (mitcad#2310): a function the MitCad code calls is then the
+# patch's own, while the patch's changes to the code before it stay out.
+BODIES = "b:"
+
+
+def partial(pick: str) -> bool:
+    """Whether a pick carries a part of its patch (declarations, new functions)."""
+    return pick.startswith((API_ONLY, BODIES))
 
 
 def pick_number(pick: str) -> str:
-    return pick.removeprefix(API_ONLY)
+    return pick.removeprefix(API_ONLY).removeprefix(BODIES)
 
 
 def pick_order(nums: list[str]):
@@ -1407,20 +1466,118 @@ def pick_order(nums: list[str]):
 
 def carried_text(picks: list[str]) -> str:
     """The carried patches as the table and the test document name them."""
-    return ", ".join(pick_number(p) + (" (its declarations)" if p.startswith(API_ONLY) else "") for p in picks)
+    what = {API_ONLY: " (its declarations)", BODIES: " (its declarations and new functions)"}
+    return ", ".join(pick_number(p) + next((t for k, t in what.items() if p.startswith(k)), "") for p in picks)
 
 
 def chain_state(nums: list[str], base_idx: int, picks) -> tuple[str, list[str]]:
     """A state of the chain: the history's commit after nums[base_idx] and the
     later patches cherry-picked onto it, in order; picks that directly follow
     the base are folded into it, so that each state has one name. A patch
-    carried whole needs no carry of its declarations."""
-    full = {p for p in picks if not p.startswith(API_ONLY)}
-    picks = sorted({p for p in picks if pick_number(p) not in full or p in full}, key=pick_order(nums))
-    while picks and not picks[0].startswith(API_ONLY) and nums.index(picks[0]) == base_idx + 1:
+    carried whole needs no carry of its declarations or new functions, one
+    carried with its new functions no carry of its declarations alone."""
+    full = {p for p in picks if not partial(p)}
+    bodies = {pick_number(p) for p in picks if p.startswith(BODIES)}
+    picks = sorted({p for p in picks if p in full or (pick_number(p) not in full and not (
+        p.startswith(API_ONLY) and pick_number(p) in bodies))}, key=pick_order(nums))
+    while picks and not partial(picks[0]) and nums.index(picks[0]) == base_idx + 1:
         base_idx += 1
         picks.pop(0)
     return (f"p-{nums[base_idx]}" if base_idx >= 0 else "base"), picks
+
+
+def new_definitions(diff: str) -> list[list[str]]:
+    """The top-level definitions a file's diff adds whole: within each run of
+    added lines, each item from a line at column 0 (a function's first line,
+    a static helper's, a constant's, a struct's) to where its braces close
+    again, and each #include. A run that ends inside an item (a function
+    changed in part) gives nothing for it; lines added inside a function
+    are indented, so they start no item (OCCT's sources are formatted so)."""
+    runs: list[list[str]] = [[]]
+    for ln in diff.splitlines():
+        if ln.startswith("+") and not ln.startswith("+++"):
+            runs[-1].append(ln[1:])
+        elif runs[-1]:
+            runs.append([])
+    items: list[list[str]] = []
+    for lines in runs:
+        cur: list[str] | None = None
+        depth, opened = 0, False
+        for ln in lines:
+            if cur is None:
+                if ln.startswith("#include"):
+                    items.append([ln])
+                    continue
+                if not ln.strip() or ln[0].isspace() or ln.startswith(("//", "/*", "}", "{", "#")):
+                    continue
+                cur, depth, opened = [], 0, False
+            cur.append(ln)
+            code = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|//.*', "", ln)
+            depth += code.count("{") - code.count("}")
+            opened = opened or "{" in code
+            if depth <= 0 and (opened or code.rstrip().endswith(";")):
+                if depth == 0:
+                    items.append(cur)
+                cur = None
+    return items
+
+
+def defined_name(item: list[str]) -> str | None:
+    """The name of the function a definition defines (Name of Class::Name),
+    None for an #include, a constant or a type."""
+    head = " ".join(item).split("{", 1)[0]
+    if item[0].startswith("#") or "(" not in head or "=" in head.split("(", 1)[0]:
+        return None
+    m = re.search(r"(~?\w+)\s*$", head.split("(", 1)[0])
+    return m.group(1) if m else None
+
+
+def qualified_name(item: list[str]) -> str | None:
+    """The qualified name a definition defines (Class::Name, or Name for a
+    free function), None for an #include, a constant or a type."""
+    if not defined_name(item):
+        return None
+    m = re.search(r"([\w:~]+)\s*$", " ".join(item).split("(", 1)[0])
+    return m.group(1) if m else None
+
+
+def rewritten(item: list[str], removed: str) -> bool:
+    """Whether a definition replaces one the diff removes (a function written
+    anew, its signature changed): the same qualified name in the removed lines."""
+    q = qualified_name(item)
+    return bool(q) and re.search(rf"(?<![\w:]){re.escape(q)}\s*\(", removed) is not None
+
+
+def stub_symbols(log: str | None) -> set[str]:
+    """The functions (their qualified names, Class::Name) whose stubs a run's
+    log says were called."""
+    text = Path(log).read_text(errors="replace") if log and Path(log).exists() else ""
+    syms = sorted(set(re.findall(re.escape(STUB_CALLED) + r": (\w+)", text)))
+    if not syms:
+        return set()
+    names = run(["c++filt", *syms], check=False).stdout.split("\n")
+    return {m.group(1) for n in names if (m := re.search(r"([\w:~]+)\(", n))}
+
+
+def stub_names(log: str | None) -> set[str]:
+    """The functions (their names, without the class) whose stubs a run's
+    log says were called."""
+    return {q.split("::")[-1] for q in stub_symbols(log)}
+
+
+# The later patches a Test paragraph says its test needs too ("The test needs
+# the later patch 1659 too", "the later patches 1641 and 1642"): the chain
+# carries them whole in both states (mitcad#2310).
+NEEDS_LATER = re.compile(r"needs\s+the\s+later\s+patch(?:es)?\s+(\d{4}(?:(?:,\s+|,?\s+and\s+)\d{4})*)\s+too")
+
+
+def later_needs(item: str) -> list[str]:
+    """The later patches the Test paragraphs of the item's patches say their test needs."""
+    out: list[str] = []
+    for n in item.split("+"):
+        for m in NEEDS_LATER.finditer(re.sub(r"\s+", " ", tests_of(n))):
+            out += [k for k in re.findall(r"\d{4}", m.group(1)) if k not in out and k not in item.split("+")]
+    return out
 
 
 def state_key(tag: str, picks: list[str]) -> str:
@@ -1608,7 +1765,7 @@ def chain_verdict(rec: dict) -> tuple[str, dict]:
     if st != "ran":
         return f"not shown: {st}", per
     named = named_functions(rec["item"])
-    fails = api = passes = elsewhere = no_pass = no_build = stub = 0
+    fails = api = own_api = passes = elsewhere = no_pass = no_build = stub = 0
     for n in rec["tests"]:
         w = rec["runs"]["with"].get(n, {})
         wo = rec["runs"]["without"].get(n, {})
@@ -1628,7 +1785,12 @@ def chain_verdict(rec: dict) -> tuple[str, dict]:
             elif all(o["status"] == "passed" for o in alone_wo.values()):
                 wos = "passed"
         wotxt = wos + (f" ({wo['why']})" if wo.get("why") and wos != "failed" else "")
-        if "stub called" in (ws, wos):
+        if ws == "passed" and wos == "stub called" and wo.get("own_api"):
+            # Before it (its own declarations carried) the test calls a
+            # function the patch adds (mitcad#2310).
+            own_api += 1
+            wotxt += " (a function the patch adds)"
+        elif "stub called" in (ws, wos):
             stub += 1
         elif ws == "not built":
             no_build += 1
@@ -1650,6 +1812,8 @@ def chain_verdict(rec: dict) -> tuple[str, dict]:
         return "fails without the patch at its place", per
     if api:
         return "fails without the patch at its place (the test does not build without it)", per
+    if own_api:
+        return "fails without the patch at its place (the test needs the API it adds)", per
     if elsewhere:
         return ("passes without the patch at its place: the named test does not prove it "
                 "(its ctest fails in other tests)"), per
@@ -1745,6 +1909,7 @@ class ChainWorker:
         self.current: str | None = None  # the state the tree and both builds are at
         self.info: dict = {}
         self.added: dict[str, str] = {}
+        self.defs: dict[str, dict[str, list[list[str]]]] = {}
         self.conflict_files: list[str] = []
         self.api_picks: list[str] = []
         self.state_numbers: set[str] = set()
@@ -1757,8 +1922,9 @@ class ChainWorker:
         git(self.tree, "checkout", "-q", "-f", "--detach", tag)
         git(self.tree, "reset", "-q", "--hard", tag)
         for n in picks:
-            if n.startswith(API_ONLY):
-                if not self.apply_declarations(pick_number(n)):
+            if partial(n):
+                if not self.apply_declarations(pick_number(n)) or (
+                        n.startswith(BODIES) and not self.apply_bodies(pick_number(n))):
                     git(self.tree, "reset", "-q", "--hard", tag)
                     self.conflict_files = []
                     return n
@@ -1825,6 +1991,73 @@ class ChainWorker:
         path.write_text("\n".join(out), encoding="utf-8")
         return True
 
+    def added_definitions(self, n: str) -> dict[str, list[list[str]]]:
+        """The definitions patch n adds whole to each source file (its new
+        functions, static helpers, constants and #includes), by file."""
+        key = f"defs:{n}"
+        if key not in self.defs:
+            out: dict[str, list[list[str]]] = {}
+            diff = git(self.tree, "diff", f"p-{n}~1", f"p-{n}", "--", *SOURCE_GLOBS).stdout
+            for path, text in re.findall(r"^diff --git a/\S+ b/(\S+)\n(.*?)(?=^diff --git |\Z)", diff, re.M | re.S):
+                if re.search(r"^new file mode", text, re.M):
+                    # A new source file needs the build's file list too: not carried.
+                    continue
+                removed = "\n".join(ln[1:] for ln in text.splitlines()
+                                    if ln.startswith("-") and not ln.startswith("---"))
+                items = [d for d in new_definitions(text) if not rewritten(d, removed)]
+                if items:
+                    out[path] = items
+            self.defs[key] = out
+        return self.defs[key]
+
+    def changed_files(self, n: str) -> list[str]:
+        """The files patch n changes (paths in the OCCT tree)."""
+        key = f"files:{n}"
+        if key not in self.added:
+            self.added[key] = git(self.tree, "diff", "--name-only", f"p-{n}~1", f"p-{n}").stdout
+        return self.added[key].split()
+
+    def body_names(self, n: str) -> set[str]:
+        """The names of the functions patch n adds whole to the sources."""
+        return {nm for items in self.added_definitions(n).values() for d in items if (nm := defined_name(d))}
+
+    def body_symbols(self, n: str) -> set[str]:
+        """The qualified names (Class::Name) of the functions patch n adds whole."""
+        return {q for items in self.added_definitions(n).values() for d in items if (q := qualified_name(d))}
+
+    def apply_bodies(self, n: str) -> bool:
+        """Appends the definitions a later patch adds whole to the sources
+        (added_definitions) to the end of each file at this state, after its
+        declarations, and commits them; a definition whose first line the
+        file already has (the function was there before) is left out. False
+        where a file is missing at this state."""
+        for path, items in self.added_definitions(n).items():
+            f = self.tree / path
+            if not f.exists():
+                return False
+            body = f.read_text(encoding="utf-8", errors="replace")
+            have = set(body.splitlines())
+            # A function or #include by its first line; a block without a name
+            # (an anonymous namespace, a constant, a type) by its whole text.
+            keep = [d for d in items if (d[0] not in have if d[0].startswith("#") or defined_name(d)
+                                         else "\n".join(d) not in body)]
+            if not keep:
+                continue
+            # The #includes the file has with the patch, also those that patches
+            # between this state and it added (its new functions may use them).
+            post = git(self.tree, "show", f"p-{n}:{path}", check=False).stdout.splitlines()
+            includes = list(dict.fromkeys([d[0] for d in keep if d[0].startswith("#include")]
+                                          + [ln for ln in post if ln.startswith("#include") and ln not in have]))
+            text = (f"\n// {TOOL}: the definitions patch {n} adds, carried without the rest of it (mitcad#2310)\n"
+                    + "\n".join(includes)
+                    + "\n\n" + "\n\n".join("\n".join(d) for d in keep if not d[0].startswith("#include")) + "\n")
+            with open(f, "a", encoding="utf-8", errors="replace") as out:
+                out.write(text)
+        git(self.tree, "add", "-A")
+        git(self.tree, "-c", "user.name=port", "-c", "user.email=port@localhost", "commit", "-q", "--allow-empty",
+            "-m", f"new functions of {n}")
+        return True
+
     def build(self, tag: str, picks: list[str], names: list[str]) -> dict:
         """OCCT and the named tests' executables at a state (only what
         changed since the state before is rebuilt)."""
@@ -1832,7 +2065,7 @@ class ChainWorker:
         if self.current != key:
             self.current = None
             info = {"key": key, "occt": "ok", "tests": {}, "needs": [], "unprovided": []}
-            self.api_picks = [p for p in picks if p.startswith(API_ONLY)]
+            self.api_picks = [p for p in picks if partial(p)]
             self.state_numbers = {pick_number(p) for p in picks}
             bad = self.prepare(tag, picks)
             if bad:
@@ -2182,57 +2415,88 @@ class ChainWorker:
     def item(self, item: str, names: list[str]) -> dict:
         """The patch at its place; where a test calls a function only declared
         there, the patch that defines it is carried whole and the patch shown
-        again."""
-        forced: set[str] = set()
+        again: first its declarations and the functions it adds whole (where
+        the called function is one of those), then the whole patch; a carry
+        that does not apply or build there leaves the run before it."""
+        forced: dict[str, str] = {}  # patch -> "bodies" | "whole"
         rec: dict = {}
-        for _ in range(4):
-            prev, rec = rec, self.attempt(item, names, forced)
-            if prev and rec["state"] != "ran":
-                # Carried whole, the patch does not apply or build there: the
-                # run with its declarations stands.
-                return prev
+        best: dict = {}
+        last: dict[str, str] = {}
+        for _ in range(8):
+            rec = self.attempt(item, names, forced)
+            if rec["state"] != "ran":
+                up = {n for n, k in last.items() if k == "bodies"}
+                if best and up:
+                    # Its new functions do not apply or build there: the whole patch.
+                    last = {n: "whole" for n in up}
+                    forced.update(last)
+                    continue
+                return best or rec
+            best = rec
             called = self.stubs_called(rec)
-            if rec["state"] != "ran" or not called:
+            if not called:
                 break
-            hit = {pick_number(p) for p in rec["carried"] if p.startswith(API_ONLY) and any(
-                re.search(rf"\b{re.escape(nm)}\b", self.header_added(pick_number(p))) for nm in called)}
-            if not hit - forced:
+            up: dict[str, str] = {}
+            parts = [p for p in rec["carried"] if partial(p)]
+            for q in sorted(called):
+                # The carried patch whose new functions define the function
+                # (by its class and name, mitcad#2310: a header of another
+                # patch that only calls it, an inline wrapper, is no definer).
+                definers = [p for p in parts if q in self.body_symbols(pick_number(p))]
+                for p in definers:
+                    up[pick_number(p)] = "bodies" if p.startswith(API_ONLY) else "whole"
+                if definers:
+                    continue
+                # No new function of a carried patch defines it: the patch that
+                # declares it in that class's header, whole.
+                cls, _, nm = q.rpartition("::")
+                for p in parts:
+                    if re.search(rf"\b{re.escape(nm)}\b", self.header_added(pick_number(p), cls.split("::")[-1])):
+                        up[pick_number(p)] = "whole"
+            last = {n: k for n, k in up.items() if forced.get(n) != k}
+            if not last:
                 break
-            forced |= hit
-        return rec
+            forced.update(last)
+        return best or rec
 
     @staticmethod
     def stubs_called(rec: dict) -> set[str]:
-        """The names of the functions whose stubs the item's runs called."""
-        syms: set[str] = set()
+        """The qualified names (Class::Name) of the functions whose stubs the
+        item's runs called."""
+        names: set[str] = set()
         for runs in rec["runs"].values():
             for r in runs.values():
                 logs = [r.get("log")] if r.get("status") == "stub called" else []
                 logs += [o["log"] for o in r.get("only", {}).values() if o["status"] == "stub called"]
                 for lg in logs:
-                    text = Path(lg).read_text(errors="replace") if lg and Path(lg).exists() else ""
-                    syms |= set(re.findall(re.escape(STUB_CALLED) + r": (\w+)", text))
-        if not syms:
-            return set()
-        names = run(["c++filt", *sorted(syms)], check=False).stdout.split("\n")
-        return {m.group(1) for n in names if (m := re.search(r"(\w+)\(", n))}
+                    names |= stub_symbols(lg)
+        return names
 
-    def attempt(self, item: str, names: list[str], forced: set[str]) -> dict:
+    def attempt(self, item: str, names: list[str], forced: dict[str, str]) -> dict:
         group = item.split("+")
         base_idx = min(self.nums.index(n) for n in group) - 1
         named = named_functions(item)
         rec = {"item": item, "tests": names, "base": self.nums[base_idx] if base_idx >= 0 else "base",
                "carried": [], "state": "", "runs": {"without": {}, "with": {}},
                "date": datetime.date.today().isoformat()}
+        # The later patches the test needs (its Test paragraph says so),
+        # carried whole in both states (mitcad#2310).
+        needed = [n for n in later_needs(item) if n in self.nums and self.nums.index(n) > base_idx]
         # The later patches whose API the MitCad code needs, found state by
         # state: first their declarations alone (the changes to the headers),
-        # so that no later code comes in; whole where those do not apply or
-        # OCCT does not build with them.
-        carried: list[str] = []
+        # so that no later code comes in; with the functions they add whole
+        # or whole where a test calls one of those (item()); whole where
+        # those do not apply or OCCT does not build with them.
+        carried: list[str] = sorted(needed, key=self.nums.index)
+        # The patch's own declarations, in the state before it, where the
+        # later declarations carried there use them (mitcad#2310).
+        own: set[str] = set()
+        together: list[str] = []
         order = pick_order(self.nums)
 
         def declared(n: str) -> str:
-            return n if n in forced else API_ONLY + n
+            kind = forced.get(n)
+            return n if kind == "whole" else (BODIES if kind == "bodies" else API_ONLY) + n
 
         def numbers(picks: list[str]) -> set[str]:
             return {pick_number(p) for p in picks}
@@ -2240,29 +2504,79 @@ class ChainWorker:
         def whole(picks, more) -> list[str]:
             return sorted({p for p in picks if pick_number(p) not in more} | set(more), key=order)
 
-        for _ in range(2 * self.args.max_carry + 2):
-            info, _key = self.visit(base_idx, carried, names, [], named)
+        def before() -> list[str]:
+            return carried + [API_ONLY + n for n in sorted(own)]
+
+        def join(n: str) -> None:
+            # A needed patch that builds on the patch's lines: shown together with it.
+            carried.remove(n)
+            group.append(n)
+            together.append(n)
+
+        for _ in range(2 * self.args.max_carry + 2 + len(needed)):
+            info, _key = self.visit(base_idx, before(), names, [], named)
             if info["occt"] != "ok":
                 bad = info.get("conflict")
-                if bad and bad.startswith(API_ONLY):
+                if bad and partial(bad):
+                    if pick_number(bad) in own:
+                        break
                     carried = whole(carried, {pick_number(bad)})
                     continue
                 if not bad:
-                    api = {pick_number(p) for p in carried if p.startswith(API_ONLY)}
-                    if api and info["occt"].startswith("OCCT does not build"):
-                        # Declarations that use other later declarations: those too.
+                    errors = "\n".join(info.get("errors", []))
+                    late = [n for n in needed if n in carried and info["occt"].startswith("OCCT does not build")
+                            and any(f in errors for f in self.changed_files(n))]
+                    if late:
+                        # The needed patches' own code does not build without
+                        # what the patch adds: they are shown with it.
+                        for n in late:
+                            join(n)
+                        continue
+                    # New functions that do not build at this state (they use
+                    # what patches between add): that patch whole, the others
+                    # as they are (mitcad#2310).
+                    unbuilt = {pick_number(p) for p in carried if p.startswith(BODIES) and any(
+                        f in errors for f in self.changed_files(pick_number(p)) if f.endswith((".cxx", ".cpp", ".c")))}
+                    if unbuilt and info["occt"].startswith("OCCT does not build"):
+                        carried = whole(carried, unbuilt)
+                        continue
+                    api = {pick_number(p) for p in carried if partial(p)}
+                    if (api or own) and info["occt"].startswith("OCCT does not build"):
+                        # Declarations that use other later declarations: those
+                        # too; the patch's own where it adds them.
                         more, _ = self.providers("\n".join(info.get("errors", [])), base_idx)
+                        mine = (more & set(group)) - own
+                        if mine:
+                            own |= mine
+                            continue
                         more -= set(group) | numbers(carried)
                         if more and len(carried) + len(more) <= self.args.max_carry:
                             carried = sorted(set(carried) | {declared(n) for n in more}, key=order)
                             continue
-                        carried = whole(carried, api)
+                        if api:
+                            carried = whole(carried, api)
+                            continue
+                    rest = [n for n in needed if n in carried]
+                    if rest and info["occt"].startswith("OCCT does not build"):
+                        for n in rest:
+                            join(n)
                         continue
                     break
                 # A carried patch that does not cherry-pick takes with it the
                 # patches between whose lines its hunks build on.
                 more = self.pick_needs(base_idx, bad, info.get("conflict_files", []))
                 if more & set(group):
+                    if bad in needed:
+                        join(bad)
+                        continue
+                    mine = (more & set(group)) - own
+                    if mine:
+                        # Its lines build on the patch's: the patch's own
+                        # declarations before it, the carried ones back to theirs.
+                        own |= mine
+                        carried = sorted({declared(pick_number(p)) if pick_number(p) not in needed else p
+                                          for p in carried}, key=order)
+                        continue
                     rec["entangled"] = [bad, *sorted(more & set(group))]
                     break
                 new = more - numbers(carried)
@@ -2282,18 +2596,32 @@ class ChainWorker:
                 rec["needs"] = sorted(numbers(carried) | new, key=self.nums.index)
                 break
             carried = sorted(set(carried) | {declared(n) for n in new}, key=order)
-        rec["carried"] = carried
+        rec["carried"] = [p for p in carried if p not in needed]
+        if needed:
+            rec["needed"] = [n for n in needed if n in carried]
+        if own:
+            rec["own"] = sorted(own, key=self.nums.index)
+        if together:
+            rec["together"] = together
         if info.get("unprovided"):
             rec["unprovided"] = info["unprovided"]
         if rec.get("entangled"):
             rec["state"] = (f"the later patch {rec['entangled'][0]}, whose API the MitCad code needs, builds on "
                             f"this patch's lines, so it cannot be carried without it")
             return rec
-        info, key = self.visit(base_idx, carried, names, names, named)
+        info, key = self.visit(base_idx, before(), names, names, named)
         if info["occt"] != "ok":
             rec["state"] = info["occt"] + " (before the patch)"
             return rec
         rec["runs"]["without"] = self.runs(key, info, names)
+        if own:
+            # A run that ends in a stub of the patch's own function: the test
+            # needs the API the patch adds.
+            own_text = "\n".join(self.header_added(n) for n in own)
+            for r in rec["runs"]["without"].values():
+                hit = stub_names(r.get("log")) if r.get("status") == "stub called" else set()
+                if hit and all(re.search(rf"\b{re.escape(nm)}\b", own_text) for nm in hit):
+                    r["own_api"] = True
         info2, key2 = self.visit(base_idx, list(group) + carried, names, names, named)
         if info2["occt"] != "ok":
             rec["state"] = info2["occt"] + " (with the patch)"

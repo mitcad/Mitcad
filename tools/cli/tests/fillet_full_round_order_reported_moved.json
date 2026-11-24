@@ -1,0 +1,14 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #608's design (mitcad#2330; tools/cli/fillet-full-round-order-reported-test.cmake) with Fillet1 (11) moved before Fillet2 (14.2), the order that left a step: Fillet2's contact on the bottom runs off it onto Fillet1's rounding near the end face, and the rounding was ended on the end face's plane alone, a lip standing out past Fillet1's rounding at the step's height. Now the material Fillet2 adds ends at Fillet1's rounding continued down past the bottom: the same body as in the design's own order (the test compares the volumes the two runs report)."},
+  {"cmd": "reorder_feature", "uid": "F6", "index": 4},
+  {"expect": {"feature": "Fillet1", "status": "ok", "bodies": 1}},
+  {"expect": {"feature": "Fillet2", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F6"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"query": {"query": "feature", "uid": "F7"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "F2.b0", "min_face_area": 0.01}},
+  {"comment": "No plane facing up at the step's height (a lip's top); the top faces up."},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "none": {"surface": "plane", "normal": [0, 0, 1], "origin": [0, 0, 14.992968419619515]}}},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "some": {"surface": "plane", "normal": [0, 0, 1], "origin": [0, 0, 44.2263521302069]}}}
+]

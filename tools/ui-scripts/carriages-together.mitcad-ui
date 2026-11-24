@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: MIT
+# Two bearings on one shaft that a Rigid joint or a Rigid Group joins move
+# together (mitcad#2274, GitHub mitcad/Mitcad#575), on the reported design
+# (the private test files' MITCAD_MITCAD_REPORTED github-575; never
+# committed): a shaft 100 mm long (O2, grounded, along +Z from end A at
+# z = 0) and two bearings BUILD placed on it, each a carriage that slides
+# by its joint: O3 (body F3.b0) at Placement Offset 20 mm with its own
+# travel 0 to 100 mm, O4 (body F5.b0) at 80 mm with the default travel.
+# `build_parts` lists the shaft, O3 and O4 as parts 0, 1 and 2. In the
+# back view the shaft stands up, so a drag down lowers both offsets.
+#   1. A Rigid joint between them at their distance, as the reporter made
+#      it: Origin A O4's top end face, Origin B O3's (60 mm below it, both
+#      facing +Z), Offset 60 mm. It holds where they are (20 and 80).
+#   2. O3 dragged a little down: both offsets go down.
+#   3. O4 dragged far down: both stop where O3 reaches its Min, 0 mm, with
+#      O4 at 60 mm.
+#   4. Undone (three steps): back at 20 and 80.
+#   5. A Rigid Group of O3 and O4 (O3 first, O4 follows): it keeps them
+#      where they are. O3 dragged a little down moves both, O4 dragged far
+#      down stops both at O3's Min (0 and 60).
+# Run by tools/ui-carriages-together-test.sh (Linux),
+# tools/ui-windows-carriages-together-test.ps1 (Windows) and
+# tools/ui-macos-carriages-together-test.sh (macOS), which skip without
+# the design.
+expect-ever 'View area' 180
+wait-idle 180
+window-resize 1400 990
+wait-idle
+capture-model-number o3 '{"query": "build_parts"}' parts.1.offset
+expect-near ${o3} 20 1e-6 0.05
+capture-model-number o4 '{"query": "build_parts"}' parts.2.offset
+expect-near ${o4} 80 1e-6 0.05
+capture-undo-depth start
+
+# 1. The Rigid joint at their distance, the top end faces picked in the
+# iso view (the reporter's picks).
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 60
+wait-idle 60
+click-pick 'face F5[.]b0/F5:part[(]F1:import[(]3[)][)] in O4 at '
+wait-log '^Joint Origin A: 1 face' 60
+wait-idle 60
+click-pick 'face F3[.]b0/F3:part[(]F1:import[(]3[)][)] in O3 at '
+wait-log '^Joint Origin B: 1 face' 60
+wait-idle 60
+expect-no-log '^Joint component asked: '
+mark
+type-in '^Panel Joint input offset at ' '60 mm'
+wait-log '^Preview Joint: ok' 120
+wait-idle 60
+expect-no-log '^Panel Joint error: '
+mark
+button '^OK$'
+wait-log '^Added joint .+ [(]rigid[)]' 120
+wait-idle 60
+expect-undo-depth ${start} 1
+capture-model-number o3 '{"query": "build_parts"}' parts.1.offset
+expect-near ${o3} 20 1e-6 0.05
+capture-model-number o4 '{"query": "build_parts"}' parts.2.offset
+expect-near ${o4} 80 1e-6 0.05
+
+# 2. O3 a little down along the shaft: both bearings move.
+command view.back
+wait-idle
+command view.fit
+wait-idle
+mark
+drag-from '^Body F3[.]b0 in O3 at ' 0 50
+wait-log '^Drag of .+ started' 10
+wait-log '^Dragged .+ to [(]' 30
+wait-idle 30
+expect-no-log '^Drag refused'
+expect-undo-depth ${start} 2
+capture-model-number o3moved '{"query": "build_parts"}' parts.1.offset
+expect-less ${o3moved} ${o3}
+capture-model-number o4moved '{"query": "build_parts"}' parts.2.offset
+expect-less ${o4moved} ${o4}
+
+# 3. O4 far down: both stop where O3 reaches its Min.
+mark
+drag-from '^Body F5[.]b0 in O4 at ' 0 400
+wait-log '^Drag of .+ started' 10
+wait-log '^Dragged .+ to [(]' 30
+wait-idle 30
+expect-no-log '^Drag refused'
+expect-undo-depth ${start} 3
+capture-model-number o3stop '{"query": "build_parts"}' parts.1.offset
+expect-near ${o3stop} 0 1e-6 0.05
+capture-model-number o4stop '{"query": "build_parts"}' parts.2.offset
+expect-near ${o4stop} 60 1e-6 0.05
+
+# 4. Undone: the joint and both drags.
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle 60
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle 60
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle 60
+expect-undo-depth ${start} 0
+capture-model-number o3 '{"query": "build_parts"}' parts.1.offset
+expect-near ${o3} 20 1e-6 0.05
+capture-model-number o4 '{"query": "build_parts"}' parts.2.offset
+expect-near ${o4} 80 1e-6 0.05
+
+# 5. A Rigid Group of the two bearings, O3 first.
+command view.fit
+wait-idle
+mark
+command assemble.rigid_group
+expect-log '^Command Rigid Group started'
+wait-idle 60
+click-logged '^Body F3[.]b0 in O3 at '
+wait-log '^Rigid Group Components: 1 ' 30
+wait-idle 30
+click-logged '^Body F5[.]b0 in O4 at '
+wait-log '^Rigid Group Components: 2 ' 30
+expect-no-log '^Rigid Group component asked: '
+wait-log '^Preview Rigid Group: ok' 120
+wait-idle 60
+mark
+button '^OK$'
+wait-log '^Added rigid group [^:]+: ' 120
+wait-idle 60
+expect-undo-depth ${start} 1
+capture-model-number o3 '{"query": "build_parts"}' parts.1.offset
+expect-near ${o3} 20 1e-6 0.05
+capture-model-number o4 '{"query": "build_parts"}' parts.2.offset
+expect-near ${o4} 80 1e-6 0.05
+
+mark
+drag-from '^Body F3[.]b0 in O3 at ' 0 50
+wait-log '^Drag of .+ started' 10
+wait-log '^Dragged .+ to [(]' 30
+wait-idle 30
+expect-no-log '^Drag refused'
+expect-undo-depth ${start} 2
+capture-model-number o3moved '{"query": "build_parts"}' parts.1.offset
+expect-less ${o3moved} ${o3}
+capture-model-number o4moved '{"query": "build_parts"}' parts.2.offset
+expect-less ${o4moved} ${o4}
+
+mark
+drag-from '^Body F5[.]b0 in O4 at ' 0 400
+wait-log '^Drag of .+ started' 10
+wait-log '^Dragged .+ to [(]' 30
+wait-idle 30
+expect-no-log '^Drag refused'
+expect-undo-depth ${start} 3
+capture-model-number o3stop '{"query": "build_parts"}' parts.1.offset
+expect-near ${o3stop} 0 1e-6 0.05
+capture-model-number o4stop '{"query": "build_parts"}' parts.2.offset
+expect-near ${o4stop} 60 1e-6 0.05
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

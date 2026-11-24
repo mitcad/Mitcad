@@ -77,7 +77,13 @@ Language ([user guide](user-guide.md#language)).
   and translated as the panel shows them, in the context `Choice`; each is
   listed for the catalogues in `kChoiceNames`
   (`app/framework/CommandPanel.cpp`). A label the definition translated
-  already (its `tr()`) is shown as it is.
+  already (its `tr()`) is shown as it is. A new label is marked
+  `QT_TRANSLATE_NOOP("Choice", "…")` in the same change (or given through
+  its definition's `tr()`): the ctest `repo.choice-labels`
+  (`tools/choice-labels`, a source scan run with `python3 -I`, no build
+  needed) fails on a literal label of a fixed choice list in `app/` that is
+  neither, and `repo.choice-labels-self-test` checks the scan on planted
+  sources (mitcad#2362).
 - **English names.** MitCad remembers the English source of each text the
   catalogue translated (`englishText`): the command search finds a command
   by its shown name and by its English name.

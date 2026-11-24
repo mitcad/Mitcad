@@ -347,4 +347,52 @@ void WebDownloadFolders::removeAll() {
   m_folder.clear();
 }
 
+// ---------------------------------------------------------------------------
+// The browser's download reports
+
+QString WebDownloadReports::pathOf(quint32 id) const {
+  const auto running = m_running.find(id);
+  return running != m_running.end() ? running->second : QString();
+}
+
+void WebDownloadReports::started(quint32 id, const QString& path) {
+  if (path.isEmpty()) {
+    m_refused.insert(id);
+    return;
+  }
+  m_running[id] = path;
+  m_interrupted.erase(id);
+}
+
+WebDownloadReports::Verdict WebDownloadReports::report(quint32 id, WebDownloadState state,
+                                                       const QString& reportedPath) {
+  Verdict verdict;
+  if (m_refused.count(id) != 0) {
+    verdict.ignored = Ignored::Refused;
+    return verdict;
+  }
+  if (m_ended.count(id) != 0) {
+    verdict.ignored = Ignored::AfterEnd;
+    return verdict;
+  }
+  const auto running = m_running.find(id);
+  if (running == m_running.end()) {
+    verdict.ignored = m_interrupted.count(id) != 0 ? Ignored::AfterInterruption : Ignored::NotStarted;
+    return verdict;
+  }
+  verdict.path = reportedPath.isEmpty() ? running->second : reportedPath;
+  if (state != WebDownloadState::InProgress) {
+    m_running.erase(running);
+    // Complete and canceled are final; the browser may still resume an
+    // interrupted one by itself (mitcad#1716), and then asks again where
+    // it goes (started).
+    if (state == WebDownloadState::Failed) {
+      m_interrupted.insert(id);
+    } else {
+      m_ended.insert(id);
+    }
+  }
+  return verdict;
+}
+
 } // namespace mitcad

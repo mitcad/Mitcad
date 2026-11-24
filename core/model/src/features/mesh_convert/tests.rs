@@ -418,6 +418,7 @@ fn block_and_mesh() -> (Document<crate::testing::MockKernel>, crate::ids::BodyUi
                 name: Some("Scan".to_owned()),
                 color: None,
                 shape: MockShape::imported("mesh", 1),
+                face_colors: Vec::new(),
             }])
         })
         .unwrap();

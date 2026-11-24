@@ -375,17 +375,24 @@ fn a_split_takes_a_tool_body_of_another_component_by_its_link() {
         json!({"cmd": "add_feature", "def": {"type": "split_body", "bodies": [target],
                "tool": tool_def, "tool_links": link}})
     };
-    // Without the link the tool is A's, which B's split cannot see.
-    let unlinked = command(&mut doc, split(json!({"body": tool}), json!({})))["uid"].clone();
-    let status = doc
-        .status(unlinked.as_str().unwrap().parse().unwrap())
-        .unwrap()
-        .clone();
-    assert!(
-        status.error().is_some_and(|e| e.contains("belongs to A")),
-        "{status:?}"
-    );
-    doc.undo();
+    // Without the link the tool is A's, which B's split cannot see: said in
+    // words, without the body's id and without advising an activation
+    // (mitcad#2299).
+    for unlinked_tool in [json!({"body": tool}), json!({"body": tool, "face": face})] {
+        let unlinked = command(&mut doc, split(unlinked_tool, json!({})))["uid"].clone();
+        let status = doc
+            .status(unlinked.as_str().unwrap().parse().unwrap())
+            .unwrap()
+            .clone();
+        assert!(
+            status.error().is_some_and(|e| e
+                .contains("the splitting tool is in A, another component")
+                && !e.contains("activate")
+                && !e.contains(&tool.to_string())),
+            "{status:?}"
+        );
+        doc.undo();
+    }
 
     // Linked: the tool stays in A, the pieces are B's.
     let link = json!({tool.to_string(): {"source": "O1"}});

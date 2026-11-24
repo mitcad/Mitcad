@@ -92,6 +92,7 @@ fn body(name: &str, faces: usize) -> ImportBody<MockShape> {
         name: Some(name.to_owned()),
         color: None,
         shape: MockShape::imported(&name.to_lowercase(), faces),
+        face_colors: Vec::new(),
     }
 }
 

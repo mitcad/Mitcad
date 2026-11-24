@@ -32,3 +32,5 @@ mod standard_tests;
 mod hole_callout_tests;
 // A base view of a sheet-metal body's Flat Pattern (mitcad#2280).
 mod flat_pattern_view_tests;
+// Weld symbols by ISO 2553 and AWS A2.4 (mitcad#2350).
+mod weld_symbol_tests;

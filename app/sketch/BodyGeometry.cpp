@@ -48,6 +48,9 @@ bool sameType(const QString& itemType, Curve2::Type type) {
 } // namespace
 
 QString BodyItem::describe() const {
+  if (section) {
+    return QStringLiteral("the section of the body face %1").arg(source);
+  }
   return isVertex() ? QStringLiteral("the body vertex %1").arg(source)
                     : QStringLiteral("the body edge %1").arg(source);
 }
@@ -74,6 +77,8 @@ void BodyGeometry::load(const QJsonArray& answer, CurveReader read) {
     }
     // Out of the plane (mitcad#866): where it is.
     entry.inPlane = o.value(QStringLiteral("in_plane")).toBool(true);
+    // Where the plane cuts a body (mitcad#2324).
+    entry.section = o.value(QStringLiteral("section")).toBool(false);
     entry.height = o.value(QStringLiteral("height")).toDouble();
     for (const QJsonValue& p : o.value(QStringLiteral("path")).toArray()) {
       const QJsonArray xyz = p.toArray();
@@ -265,7 +270,7 @@ ProjectedItem matchIn(const SketchModel& model, const ProjectionData& p, const B
 
 std::optional<ProjectedItem> existingProjection(const SketchModel& model, const BodyItem& item) {
   for (const ProjectionData& p : model.projections) {
-    if (p.stale || p.section || p.source != item.source || p.body != item.body || p.linked != item.linked ||
+    if (p.stale || p.section != item.section || p.source != item.source || p.body != item.body || p.linked != item.linked ||
         (item.linked && p.occurrence != item.occurrence)) {
       continue;
     }

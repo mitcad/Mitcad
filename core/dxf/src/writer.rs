@@ -131,6 +131,28 @@ fn check(entity: &Entity) -> Result<(), String> {
     }
 }
 
+/// Fixed R2000 handles: the tables 1 to A, the root dictionary and its
+/// entries, then the two layout block records; entries and entities get
+/// handles from 0x20.
+const ROOT_DICTIONARY: u64 = 0xC;
+const GROUP_DICTIONARY: u64 = 0xD;
+/// The `ACAD_PLOTSTYLENAME` dictionary, a dictionary with a default
+/// (mitcad#2315).
+const PLOT_STYLE_DICTIONARY: u64 = 0xE;
+/// Its one entry `Normal`, the plot style every layer names with group 390.
+const NORMAL_PLOT_STYLE: u64 = 0xF;
+const MODEL_SPACE: u64 = 0x11;
+const PAPER_SPACE: u64 = 0x12;
+
+/// An angle in degrees in [0, 360), the range the reference program writes
+/// arc angles in (mitcad#2315: an end angle of 450 is the same arc, but
+/// not a value every reader takes).
+fn degrees(radians: f64) -> f64 {
+    let degrees = radians.to_degrees().rem_euclid(360.0);
+    // A rounding error below zero comes out as 360.
+    if degrees >= 360.0 { 0.0 } else { degrees }
+}
+
 /// A real number with a decimal point and enough digits to read back exactly.
 fn real(value: f64) -> String {
     let text = format!("{value}");
@@ -186,14 +208,14 @@ impl Writer {
     fn document(&mut self, drawing: &Drawing) -> Result<String, Error> {
         let layers = layers(drawing);
         // The body first: $HANDSEED in the header needs the last handle.
-        self.model_space = 0x11;
+        self.model_space = MODEL_SPACE;
         self.section("TABLES");
         self.tables(&layers, &drawing.linetypes);
         self.pair(0, "ENDSEC");
         self.section("BLOCKS");
         if self.r2000() {
-            self.layout_block(0x11, "*Model_Space", false);
-            self.layout_block(0x12, "*Paper_Space", true);
+            self.layout_block(MODEL_SPACE, "*Model_Space", false);
+            self.layout_block(PAPER_SPACE, "*Paper_Space", true);
         }
         self.pair(0, "ENDSEC");
         self.section("ENTITIES");
@@ -204,19 +226,7 @@ impl Writer {
         self.pair(0, "ENDSEC");
         if self.r2000() {
             self.section("OBJECTS");
-            // Root dictionary C with the group dictionary D.
-            self.pair(0, "DICTIONARY");
-            self.handle_pair(5, 0xC);
-            self.handle_pair(330, 0);
-            self.pair(100, "AcDbDictionary");
-            self.int(281, 1);
-            self.pair(3, "ACAD_GROUP");
-            self.handle_pair(350, 0xD);
-            self.pair(0, "DICTIONARY");
-            self.handle_pair(5, 0xD);
-            self.handle_pair(330, 0xC);
-            self.pair(100, "AcDbDictionary");
-            self.int(281, 1);
+            self.objects();
             self.pair(0, "ENDSEC");
         }
         self.pair(0, "EOF");
@@ -239,11 +249,69 @@ impl Writer {
         self.pair(0, "ENDSEC");
         if self.r2000() {
             self.section("CLASSES");
+            // The classes of the plot style objects (mitcad#2315).
+            for (record, class) in [
+                ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault"),
+                ("ACDBPLACEHOLDER", "AcDbPlaceHolder"),
+            ] {
+                self.pair(0, "CLASS");
+                self.pair(1, record);
+                self.pair(2, class);
+                self.pair(3, "ObjectDBX Classes");
+                self.int(90, 0);
+                self.int(280, 0);
+                self.int(281, 0);
+            }
             self.pair(0, "ENDSEC");
         }
         let mut out = std::mem::take(&mut self.out);
         out.push_str(&body);
         Ok(out)
+    }
+
+    /// The R2000 objects: the root dictionary with the group dictionary and
+    /// the plot style name dictionary, whose default `Normal` is the plot
+    /// style the layers point to with group 390 (mitcad#2315).
+    fn objects(&mut self) {
+        self.pair(0, "DICTIONARY");
+        self.handle_pair(5, ROOT_DICTIONARY);
+        self.handle_pair(330, 0);
+        self.pair(100, "AcDbDictionary");
+        self.int(281, 1);
+        self.pair(3, "ACAD_GROUP");
+        self.handle_pair(350, GROUP_DICTIONARY);
+        self.pair(3, "ACAD_PLOTSTYLENAME");
+        self.handle_pair(350, PLOT_STYLE_DICTIONARY);
+
+        self.pair(0, "DICTIONARY");
+        self.handle_pair(5, GROUP_DICTIONARY);
+        self.reactors(ROOT_DICTIONARY);
+        self.handle_pair(330, ROOT_DICTIONARY);
+        self.pair(100, "AcDbDictionary");
+        self.int(281, 1);
+
+        self.pair(0, "ACDBDICTIONARYWDFLT");
+        self.handle_pair(5, PLOT_STYLE_DICTIONARY);
+        self.reactors(ROOT_DICTIONARY);
+        self.handle_pair(330, ROOT_DICTIONARY);
+        self.pair(100, "AcDbDictionary");
+        self.int(281, 1);
+        self.pair(3, "Normal");
+        self.handle_pair(350, NORMAL_PLOT_STYLE);
+        self.pair(100, "AcDbDictionaryWithDefault");
+        self.handle_pair(340, NORMAL_PLOT_STYLE);
+
+        self.pair(0, "ACDBPLACEHOLDER");
+        self.handle_pair(5, NORMAL_PLOT_STYLE);
+        self.reactors(PLOT_STYLE_DICTIONARY);
+        self.handle_pair(330, PLOT_STYLE_DICTIONARY);
+    }
+
+    /// The reactor group naming an object's owning dictionary.
+    fn reactors(&mut self, owner: u64) {
+        self.pair(102, "{ACAD_REACTORS");
+        self.handle_pair(330, owner);
+        self.pair(102, "}");
     }
 
     fn section(&mut self, name: &str) {
@@ -263,16 +331,19 @@ impl Writer {
         self.int(70, count as i64);
     }
 
-    /// Starts a table entry with its R2000 handle, owner and subclass.
-    fn entry(&mut self, kind: &str, table: u64, subclass: &str) {
+    /// Starts a table entry with its R2000 handle, owner and subclass;
+    /// the handle (0 in R12).
+    fn entry(&mut self, kind: &str, table: u64, subclass: &str) -> u64 {
         self.pair(0, kind);
-        if self.r2000() {
-            let handle = self.handle();
-            self.handle_pair(if kind == "DIMSTYLE" { 105 } else { 5 }, handle);
-            self.handle_pair(330, table);
-            self.pair(100, "AcDbSymbolTableRecord");
-            self.pair(100, subclass);
+        if !self.r2000() {
+            return 0;
         }
+        let handle = self.handle();
+        self.handle_pair(if kind == "DIMSTYLE" { 105 } else { 5 }, handle);
+        self.handle_pair(330, table);
+        self.pair(100, "AcDbSymbolTableRecord");
+        self.pair(100, subclass);
+        handle
     }
 
     fn tables(&mut self, layers: &[Layer], own: &[Linetype]) {
@@ -344,12 +415,15 @@ impl Writer {
             self.pair(6, &linetype);
             if r2000 {
                 self.int(370, layer.lineweight.map_or(-3, i64::from));
+                // The layer's plot style (mitcad#2315): strict readers
+                // expect the pointer after the line weight.
+                self.handle_pair(390, NORMAL_PLOT_STYLE);
             }
         }
         self.pair(0, "ENDTAB");
 
         self.table("STYLE", 0x3, 1);
-        self.entry("STYLE", 0x3, "AcDbTextStyleTableRecord");
+        let standard_style = self.entry("STYLE", 0x3, "AcDbTextStyleTableRecord");
         self.pair(2, if r2000 { "Standard" } else { "STANDARD" });
         self.int(70, 0);
         self.real(40, 0.0);
@@ -373,15 +447,21 @@ impl Writer {
             self.int(70, 0);
             self.pair(0, "ENDTAB");
 
+            // The dimension style table's own subclass ends with group 71
+            // (no handles of its own follow); a strict reader refuses the
+            // table without it (mitcad#2315).
             self.table("DIMSTYLE", 0xA, 1);
             self.pair(100, "AcDbDimStyleTable");
+            self.int(71, 0);
             self.entry("DIMSTYLE", 0xA, "AcDbDimStyleTableRecord");
             self.pair(2, "Standard");
             self.int(70, 0);
+            // DIMTXSTY: the text style of the dimensions.
+            self.handle_pair(340, standard_style);
             self.pair(0, "ENDTAB");
 
             self.table("BLOCK_RECORD", 0x1, 2);
-            for (handle, name) in [(0x11, "*Model_Space"), (0x12, "*Paper_Space")] {
+            for (handle, name) in [(MODEL_SPACE, "*Model_Space"), (PAPER_SPACE, "*Paper_Space")] {
                 self.pair(0, "BLOCK_RECORD");
                 self.handle_pair(5, handle);
                 self.handle_pair(330, 0x1);
@@ -466,8 +546,8 @@ impl Writer {
                 if self.r2000() {
                     self.pair(100, "AcDbArc");
                 }
-                self.real(50, start_angle.to_degrees());
-                self.real(51, end_angle.to_degrees());
+                self.real(50, degrees(*start_angle));
+                self.real(51, degrees(*end_angle));
             }
             Geometry::Ellipse {
                 center,

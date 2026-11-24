@@ -1,0 +1,17 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #566's first design (mitcad#2229; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): GitHub #403's fifth design (the stepped block, Fillet1 F12 of radius d5 = 5 on eleven edges, the step's inner edge among them), then a second rounding (Fillet2, F14: the design's next uid) of the back's bottom edge. The rounding leaves a flat face at each end of that edge, which reaches 5 from it along the bottom and the back and ends in a rounding tangent to it; the bottom and the back reach 10 from the edge, to the half balls' tips. At 7 the new rounding's ends run out of those flat faces: the OCCT port's end of a blend (patch 2229) cuts them by the roundings beyond, built at its size with no warning or information and no face under 0.01 mm2. At 12 it touches neither the bottom nor the back: refused in words with the largest radius that fits, 10 (the command's error is the text for agents, naming the edge: \"the rounding of edge E{…} is wider than the body there and touches neither face beside it: …\"). At exactly 10, the width of the bottom and the back, the rounding touches each at one point and takes both away whole (the port's patch 2229, mitcad#2329; before it the kernel found no start and the rounding was built 0.1 % smaller with a warning and a sliver): built at its size with no warning or information and no face under 0.01 mm2."},
+  {"cmd": "add_parameter", "name": "r2", "value": 7},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:start(r{c1[c4,c2],c2[c1,c11],c4[c11,c1],c11[c2,c4]})|F3:side(c3[c2,c4])}"], "radius": "r2"}},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"feature": "Fillet2", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F14"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "min_face_area": 0.01}},
+  {"cmd": "set_parameter", "name": "r2", "value": 10},
+  {"expect": {"feature": "Fillet2", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F14"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "min_face_area": 0.01}},
+  {"cmd": "set_parameter", "name": "r2", "value": 12},
+  {"expect": {"feature": "Fillet2", "status": "error",
+    "error_contains": "is wider than the body there and touches neither face beside it: the largest radius that fits is 10.000 mm"}}
+]

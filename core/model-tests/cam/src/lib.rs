@@ -17,3 +17,10 @@ mod simulate_tests;
 
 // Turning on a lathe (mitcad#1869).
 mod turning_tests;
+
+// Live tools on a lathe with a C axis (mitcad#2067).
+mod live_tests;
+
+// The mill-turn's Y axis, B head, sub-spindle, 3D stock and wrapped
+// sketches (mitcad#2319).
+mod axes_tests;

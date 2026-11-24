@@ -379,6 +379,7 @@ impl Document {
                     name: None,
                     color: None,
                     shape: list.at(*index),
+                    face_colors: Vec::new(),
                 }])
             })
             .collect();
@@ -794,6 +795,7 @@ impl Document {
                         name: None,
                         color: None,
                         shape,
+                        face_colors: Vec::new(),
                     }])
                 }),
                 Err(e) => skipped.push(json!({"source": place, "error": e})),

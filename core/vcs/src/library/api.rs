@@ -86,6 +86,8 @@ pub fn command(
         // repositories, and one installed into the user's data folder.
         "tutorial_list" => super::tutorials::list(cache, &command),
         "tutorial_install" => super::tutorials::install(cache, &command)?,
+        // A tutorial's picture for the Start page's card (mitcad#2346).
+        "tutorial_picture" => super::tutorials::picture(cache, &command)?,
         // The suppliers' shops by region and the product links of
         // articles (mitcad#950, `mitcad_model::supplier_shops`).
         "supplier_shops" => supplier_shops(&command),

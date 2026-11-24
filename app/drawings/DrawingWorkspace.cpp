@@ -23,8 +23,10 @@
 #include <QEvent>
 #include <QFile>
 #include <QFileInfo>
+#include <QButtonGroup>
 #include <QFormLayout>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -270,6 +272,40 @@ QComboBox* comboOf(const QList<QPair<QString, QString>>& choices, const QString&
   return combo;
 }
 
+// A choice shown as icon buttons (ToolOption::Kind::Icons, mitcad#2350: a
+// weld symbol's basic symbols), one checked, each named
+// drawingOption_<id>_<value> with its label as its tooltip; `chosen` gets
+// the value clicked.
+QWidget* iconChoices(const ToolOption& option, const QString& current,
+                     const std::function<void(const QString&)>& chosen) {
+  constexpr int kColumns = 4;
+  auto* box = new QWidget;
+  box->setObjectName(QStringLiteral("drawingOption_") + option.id);
+  auto* grid = new QGridLayout(box);
+  grid->setContentsMargins(0, 0, 0, 0);
+  grid->setSpacing(2);
+  auto* group = new QButtonGroup(box);
+  group->setExclusive(true);
+  int i = 0;
+  for (const auto& [value, label] : option.choices) {
+    auto* b = new QToolButton;
+    b->setObjectName(QStringLiteral("drawingOption_%1_%2").arg(option.id, value));
+    b->setIcon(themeIcon(choiceIcon(option, value)));
+    b->setIconSize(QSize(24, 24));
+    b->setToolTip(label);
+    b->setAccessibleName(label);
+    b->setCheckable(true);
+    b->setAutoRaise(true);
+    b->setChecked(value == current);
+    group->addButton(b);
+    grid->addWidget(b, i / kColumns, i % kColumns);
+    const QString picked = value;
+    QObject::connect(b, &QToolButton::clicked, box, [chosen, picked] { chosen(picked); });
+    ++i;
+  }
+  return box;
+}
+
 // Delete deletes; on macOS the delete key of the keyboard (Backspace) too.
 bool isDeleteKey(int key) { return key == Qt::Key_Delete || key == Qt::Key_Backspace; }
 
@@ -343,10 +379,11 @@ bool spacedType(const QString& type) {
 
 // The annotations whose drag snaps their leader to multiples of 45 degrees
 // (mitcad#1294): a note's text, a datum's square, a frame, a hole
-// callout's text (mitcad#2054).
+// callout's text (mitcad#2054), a weld symbol's reference line
+// (mitcad#2350).
 bool leaderType(const QString& type) {
   return type == QStringLiteral("note") || type == QStringLiteral("datum") || type == QStringLiteral("frame") ||
-         type == QStringLiteral("hole_callout");
+         type == QStringLiteral("hole_callout") || type == QStringLiteral("weld");
 }
 
 // A tool whose clicks snap to a view's points (mitcad#1272): a line or an
@@ -1406,6 +1443,17 @@ void DrawingWorkspace::fillToolPanel(const DrawingToolDef& tool) {
           m_options[toolId].insert(id, chosen);
         }
       }
+      // Its Exploded View: the component's explode views (mitcad#2113); one
+      // no longer there, assembled.
+      if (toolId == QStringLiteral("drawing.base_view") && id == QStringLiteral("explode")) {
+        choices = explodeChoices();
+        const bool listed = std::any_of(choices.cbegin(), choices.cend(),
+                                        [&chosen](const QPair<QString, QString>& c) { return c.first == chosen; });
+        if (!listed) {
+          chosen = QString();
+          m_options[toolId].insert(id, chosen);
+        }
+      }
       QComboBox* combo = comboOf(choices, chosen);
       if (id == QStringLiteral("scale")) {
         // Any ratio typed too (mitcad#1169).
@@ -1444,6 +1492,14 @@ void DrawingWorkspace::fillToolPanel(const DrawingToolDef& tool) {
         qDebug().noquote() << QStringLiteral("Drawing option %1: %2").arg(id, text);
       });
       field = edit;
+      break;
+    }
+    case ToolOption::Kind::Icons: {
+      // A weld symbol's basic symbol chosen from icons first (mitcad#2350).
+      field = iconChoices(option, value, [this, toolId, id](const QString& chosen) {
+        m_options[toolId].insert(id, chosen);
+        qDebug().noquote() << QStringLiteral("Drawing option %1: %2").arg(id, chosen);
+      });
       break;
     }
     }
@@ -1676,6 +1732,20 @@ void DrawingWorkspace::fillViewPanel(int id) {
       edit(QStringLiteral("subject"), QStringLiteral(R"({"type": "design"})"));
     });
     m_form->addRow(named(update, "drawingViewUpdate"));
+    // Its explode view (mitcad#2113): the parts at their explode places
+    // with thin phantom trail lines; one undo step.
+    const QString explode = json.value(QStringLiteral("explode")).toString();
+    QComboBox* exploded = comboOf(explodeChoices(), explode);
+    exploded->setToolTip(tr("Shows the parts at an explode view's places, with trail lines"));
+    connect(exploded, &QComboBox::currentIndexChanged, this, [edit, exploded, explode] {
+      const QString chosen = exploded->currentData().toString();
+      if (chosen != explode) {
+        qDebug().noquote() << QStringLiteral("Drawing view exploded: %1")
+                                  .arg(chosen.isEmpty() ? QStringLiteral("assembled") : chosen);
+        edit(QStringLiteral("explode"), chosen);
+      }
+    });
+    m_form->addRow(tr("Exploded View"), named(exploded, "drawingViewExplode"));
   }
   if (type == QStringLiteral("projected")) {
     QComboBox* side = comboOf(sideChoices(), json.value(QStringLiteral("side")).toString());
@@ -1899,6 +1969,26 @@ QList<QPair<QString, QString>> DrawingWorkspace::subjects() const {
     qDebug().noquote() << QStringLiteral("Drawing subjects not listed: %1").arg(QString::fromUtf8(e.what()));
   }
   return subjectChoices(component, name, components, bodies, sheets);
+}
+
+QList<QPair<QString, QString>> DrawingWorkspace::explodeChoices() const {
+  QString component = m_answer.value(QStringLiteral("component")).toString();
+  if (component.isEmpty()) {
+    component = QStringLiteral("C0");
+  }
+  QList<QPair<QString, QString>> choices{{QString(), tr("Assembled")}};
+  try {
+    for (const QJsonValue& value : m_host.model().queryArray(QStringLiteral("explode_views"))) {
+      const QJsonObject view = value.toObject();
+      if (view.value(QStringLiteral("component")).toString() == component) {
+        const QString name = view.value(QStringLiteral("name")).toString();
+        choices.append({name, name});
+      }
+    }
+  } catch (const std::exception& e) {
+    qDebug().noquote() << QStringLiteral("Explode views not listed: %1").arg(QString::fromUtf8(e.what()));
+  }
+  return choices;
 }
 
 QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
@@ -2504,7 +2594,10 @@ void DrawingWorkspace::pickRequested(int view, QPointF at) {
   }
   const QJsonValue pick = answer->value(QStringLiteral("pick"));
   if (!pick.isObject()) {
-    if (needed == kOpenPicks && m_toolPicks.size() >= 2) {
+    // Propose Welds takes one member at least (mitcad#2350), a series two
+    // picks.
+    const qsizetype least = m_tool->id == QStringLiteral("drawing.propose_welds") ? 1 : 2;
+    if (needed == kOpenPicks && m_toolPicks.size() >= least) {
       // A free click places a series where it is.
       ToolPicks series;
       series.points = {at};
@@ -2875,6 +2968,71 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
       }
     });
     m_form->addRow(tr("Requirement"), named(text, "drawingAnnotationRequirement"));
+  }
+  if (type == QStringLiteral("weld")) {
+    // Its welds by the Weld Symbol tool's fields (mitcad#2350): the symbols
+    // from icons first, then their values; each change sent as the whole
+    // symbol, a proposal's joint kept with it.
+    const QJsonObject weld = json.value(QStringLiteral("weld")).toObject();
+    const QHash<QString, QString> shownFields = weldFields(weld);
+    qDebug().noquote() << QStringLiteral("Drawing panel weld symbol: arrow side %1, size %2, other side %3, tail %4")
+                              .arg(shownFields.value(QStringLiteral("arrow_symbol")),
+                                   shownFields.value(QStringLiteral("size")),
+                                   shownFields.value(QStringLiteral("other_symbol")),
+                                   shownFields.value(QStringLiteral("tail")));
+    const auto send = [this, id, weld](const QString& name, const QString& value) {
+      const QJsonObject changed = weldEdit(weld, name, value);
+      if (changed.isEmpty()) {
+        setStatus(tr("A weld's size, length, pitch or count is a number more than 0, not %1.").arg(value), true);
+        return;
+      }
+      if (changed != weld) {
+        editAnnotation({{QStringLiteral("cmd"), QStringLiteral("edit_drawing_annotation")},
+                        {QStringLiteral("drawing"), m_drawing},
+                        {QStringLiteral("annotation"), id},
+                        {QStringLiteral("weld"), changed}});
+      }
+    };
+    if (const DrawingToolDef* tool = drawingTool(QStringLiteral("drawing.weld"))) {
+      for (const ToolOption& option : tool->options) {
+        const QString optionId = option.id;
+        const QString value = shownFields.value(optionId);
+        QWidget* widget = nullptr;
+        switch (option.kind) {
+        case ToolOption::Kind::Choice: {
+          QComboBox* combo = comboOf(option.choices, value);
+          connect(combo, &QComboBox::currentIndexChanged, this,
+                  [send, combo, optionId] { send(optionId, combo->currentData().toString()); });
+          widget = combo;
+          break;
+        }
+        case ToolOption::Kind::Check: {
+          auto* check = new QCheckBox;
+          check->setChecked(value == QStringLiteral("true"));
+          connect(check, &QCheckBox::toggled, this, [send, optionId](bool on) {
+            send(optionId, on ? QStringLiteral("true") : QStringLiteral("false"));
+          });
+          widget = check;
+          break;
+        }
+        case ToolOption::Kind::Text: {
+          auto* edit = new QLineEdit(value);
+          connect(edit, &QLineEdit::editingFinished, this, [send, edit, optionId, value] {
+            if (edit->text() != value) {
+              send(optionId, edit->text());
+            }
+          });
+          widget = edit;
+          break;
+        }
+        case ToolOption::Kind::Icons:
+          widget = iconChoices(option, value, [send, optionId](const QString& chosen) { send(optionId, chosen); });
+          break;
+        }
+        widget->setObjectName(QStringLiteral("drawingAnnotationWeld_") + optionId);
+        m_form->addRow(option.label, widget);
+      }
+    }
   }
   if (type == QStringLiteral("hole_table") || type == QStringLiteral("parts_list")) {
     fillTablePanel(id, json);
@@ -3659,6 +3817,30 @@ void DrawingWorkspace::editSheet() {
   QLineEdit* number = field(QStringLiteral("number"), tr("Drawing Number"), QString());
   QLineEdit* author = field(QStringLiteral("author"), tr("Drawn By"), QString());
   QLineEdit* date = field(QStringLiteral("date"), tr("Date"), tr("Today"));
+  // A template without a title block (mitcad#2325: Blank) hides the
+  // block's fields; their values stay in the design. The sheet's own
+  // template at first (its copy may have the block turned off in the
+  // title block editor), another one chosen as the libraries give it.
+  const QList<QLineEdit*> blockFields{title, number, author, date};
+  bool blockShown = ownTemplate.value(QStringLiteral("show_title_block")).toBool(true);
+  const auto showBlockFields = [form, blockFields, &blockShown](bool shown, bool initial) {
+    if (!initial && shown == blockShown) {
+      return;
+    }
+    blockShown = shown;
+    for (QLineEdit* edit : blockFields) {
+      form->setRowVisible(edit, shown);
+    }
+    qDebug().noquote() << QStringLiteral("Drawing sheet dialog title block fields: %1")
+                              .arg(shown ? QStringLiteral("shown") : QStringLiteral("hidden"));
+  };
+  showBlockFields(blockShown, true);
+  connect(templateBox, &QComboBox::currentIndexChanged, &dialog, [templateBox, &choices, showBlockFields] {
+    const int at = templateIndex(choices, templateBox->currentData().toString());
+    if (at >= 0) {
+      showBlockFields(choices.at(at).titleBlock, false);
+    }
+  });
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -3673,11 +3855,14 @@ void DrawingWorkspace::editSheet() {
                       {QStringLiteral("size"), sizes.value()},
                       {QStringLiteral("orientation"), orientation->currentData().toString()},
                       {QStringLiteral("projection"), projection->currentData().toString()},
-                      {QStringLiteral("units"), units->currentData().toString()},
-                      {QStringLiteral("title_block"), QJsonObject{{QStringLiteral("title"), title->text()},
-                                                                  {QStringLiteral("number"), number->text()},
-                                                                  {QStringLiteral("author"), author->text()},
-                                                                  {QStringLiteral("date"), date->text()}}}};
+                      {QStringLiteral("units"), units->currentData().toString()}};
+  // The block's fields hidden: their values are left as they are.
+  if (blockShown) {
+    command.insert(QStringLiteral("title_block"), QJsonObject{{QStringLiteral("title"), title->text()},
+                                                               {QStringLiteral("number"), number->text()},
+                                                               {QStringLiteral("author"), author->text()},
+                                                               {QStringLiteral("date"), date->text()}});
+  }
   // A template another than its own: as the libraries give it now.
   const QString chosen = templateBox->currentData().toString();
   const int chosenAt = templateIndex(choices, chosen);
@@ -3850,6 +4035,9 @@ bool DrawingWorkspace::editTitleBlock(int sheet) {
   qDebug().noquote() << QStringLiteral("Title block editor: on, sheet %1: %2")
                             .arg(m_sheet + 1)
                             .arg(m_blockEditor->summary());
+  qDebug().noquote() << QStringLiteral("Title block options: frame %1, title block %2")
+                            .arg(m_blockEditor->showFrame() ? QStringLiteral("on") : QStringLiteral("off"),
+                                 m_blockEditor->showTitleBlock() ? QStringLiteral("on") : QStringLiteral("off"));
   showHint();
   fillPanel();
   return true;
@@ -3860,10 +4048,14 @@ bool DrawingWorkspace::finishTitleBlock(bool keep) {
     return true;
   }
   if (keep && m_blockEditor->changed()) {
+    // With what the template draws (mitcad#2325), always given: a sheet
+    // without a title block is otherwise refused.
     const QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("edit_drawing_title_block")},
                               {QStringLiteral("drawing"), m_drawing},
                               {QStringLiteral("sheet"), m_blockSheet},
-                              {QStringLiteral("title_block"), m_blockEditor->toJson()}};
+                              {QStringLiteral("title_block"), m_blockEditor->toJson()},
+                              {QStringLiteral("show_frame"), m_blockEditor->showFrame()},
+                              {QStringLiteral("show_title_block"), m_blockEditor->showTitleBlock()}};
     // Refused (a block too large for the frame, …): the editor stays on,
     // the reason in the status bar.
     if (!run(command)) {
@@ -3996,6 +4188,30 @@ void DrawingWorkspace::fillTitleBlockPanel() {
   connect(heightBox, &QDoubleSpinBox::valueChanged, this, resized);
   m_form->addRow(tr("Width"), widthBox);
   m_form->addRow(tr("Height"), heightBox);
+  // What the template draws (mitcad#2325): its frame and its title block;
+  // a block left out keeps its layout for when it is put back.
+  const auto optionBox = [this](const QString& name, const QString& text, const QString& tip, bool on,
+                                bool (TitleBlockEditor::*set)(bool), const QString& logged) {
+    auto* box = new QCheckBox(text);
+    box->setObjectName(name);
+    box->setChecked(on);
+    box->setToolTip(tip);
+    connect(box, &QCheckBox::toggled, this, [this, set, logged](bool shown) {
+      if (m_blockEditor && ((*m_blockEditor).*set)(shown)) {
+        qDebug().noquote() << QStringLiteral("Title block option: %1 %2")
+                                  .arg(logged, shown ? QStringLiteral("on") : QStringLiteral("off"));
+        m_sheetView->titleBlockChanged();
+      }
+    });
+    return box;
+  };
+  m_form->addRow(QString(), optionBox(QStringLiteral("titleBlockShowFrame"), tr("Frame"),
+                                      tr("Draws the frame inside the sheet's margins"), editor.showFrame(),
+                                      &TitleBlockEditor::setShowFrame, QStringLiteral("frame")));
+  m_form->addRow(QString(), optionBox(QStringLiteral("titleBlockShowTitleBlock"), tr("Title block"),
+                                      tr("Draws the title block, its fields and the revision table"),
+                                      editor.showTitleBlock(), &TitleBlockEditor::setShowTitleBlock,
+                                      QStringLiteral("title block")));
   // The selected field's label, text and text height.
   if (editor.selectedKind() == TitleBlockEditor::Kind::Field) {
     const int index = editor.selectedIndex();
@@ -4694,6 +4910,14 @@ void DrawingWorkspace::logButtons() {
                      .arg(field->objectName())
                      .arg(field->width())
                      .arg(field->sizeHint().width());
+      }
+      // A choice of icons, each of its buttons (mitcad#2350: a weld
+      // symbol's basic symbols).
+      for (const QToolButton* icon :
+           field->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (!icon->objectName().isEmpty()) {
+          lines << QStringLiteral("Drawing panel %1 at %2").arg(icon->objectName(), at(icon));
+        }
       }
       // A list's rows in sight, each by its text (a base view's Shows,
       // mitcad#1293): a click selects one, Space checks or clears it.

@@ -87,6 +87,8 @@
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
+#include "test_only.hpp"
+
 namespace {
 
 int failures = 0;
@@ -442,6 +444,17 @@ void test_wall_end_corners(const std::string& name, const std::vector<EndEdge>& 
   round_and_check(name + " (the other order)", body, edges, expected);
 }
 
+// The corners of three blends (1723): the end edges rounded past the ride's
+// point, on the prism or the box. Apart from test_wall_end_corners's cases
+// (1722), so that each patch's cases run alone (MITCAD_TEST_ONLY).
+void test_end_corners_of_three_blends(bool box) {
+  const std::string of = box ? " (a box)" : "";
+  test_wall_end_corners("wall, an end's edge at the 2 rounded with 1.2" + of, {{0, 0, 1.2}}, box);
+  test_wall_end_corners("wall, an end's edge at the 2 rounded with 1.5" + of, {{0, 0, 1.5}}, box);
+  test_wall_end_corners("wall, an end's edge at the 1 rounded with 1.7" + of, {{1, 0, 1.7}}, box);
+  test_wall_end_corners("wall, the other end's edge at the 2 rounded with 1.2" + of, {{0, 1, 1.2}}, box);
+}
+
 // The plate 30 x 20 x 5 below z = 0 and the tower: half a cylinder of
 // radius 6 and height 10 about (15, 20 - 6 - gap), its round side towards
 // the back edge (y = 20).
@@ -490,44 +503,64 @@ void test_tower_behind_a_rounded_rim(double gap, double x0) {
 
 } // namespace
 
+// Each test function runs where MITCAD_TEST_ONLY names it, or without it
+// (test_only.hpp).
 int main() {
+  using test_only::selected;
   try {
-    for (const double w : {2.9, 2.5, 2.127}) {
-      test_wall(w);
-    }
-    for (const double w : {2.9, 2.5, 2.2}) {
-      test_tower_foot(w);
-    }
-    for (const double h : {1.45, 1.3}) {
-      test_step(h);
-    }
-    test_wall_of_a_block();
-    for (const bool slant_b : {true, false}) {
-      for (const bool flipped : {false, true}) {
-        test_narrowing_wall(slant_b, flipped);
+    if (selected("test_wall")) {
+      for (const double w : {2.9, 2.5, 2.127}) {
+        test_wall(w);
       }
     }
-    test_falling_step();
-    for (const double gap : {2.3, 2.5}) {
-      test_tower_behind_the_back_edge(gap);
+    if (selected("test_tower_foot")) {
+      for (const double w : {2.9, 2.5, 2.2}) {
+        test_tower_foot(w);
+      }
     }
-    for (const double gap : {2.3, 2.5}) {
-      for (const double x0 : {15.0, 12.0}) {
-        test_tower_behind_a_rounded_rim(gap, x0);
+    if (selected("test_step")) {
+      for (const double h : {1.45, 1.3}) {
+        test_step(h);
+      }
+    }
+    if (selected("test_wall_of_a_block")) {
+      test_wall_of_a_block();
+    }
+    if (selected("test_narrowing_wall")) {
+      for (const bool slant_b : {true, false}) {
+        for (const bool flipped : {false, true}) {
+          test_narrowing_wall(slant_b, flipped);
+        }
+      }
+    }
+    if (selected("test_falling_step")) {
+      test_falling_step();
+    }
+    if (selected("test_tower_behind_the_back_edge")) {
+      for (const double gap : {2.3, 2.5}) {
+        test_tower_behind_the_back_edge(gap);
+      }
+    }
+    if (selected("test_tower_behind_a_rounded_rim")) {
+      for (const double gap : {2.3, 2.5}) {
+        for (const double x0 : {15.0, 12.0}) {
+          test_tower_behind_a_rounded_rim(gap, x0);
+        }
       }
     }
     for (const bool box : {false, true}) {
-      const std::string of = box ? " (a box)" : "";
-      test_wall_end_corners("wall, an end's edge at the 2 rounded with 0.5" + of, {{0, 0, 0.5}}, box);
-      test_wall_end_corners("wall, an end's edge at the 2 rounded with 1" + of, {{0, 0, 1}}, box);
-      test_wall_end_corners("wall, an end's edge at the 1 rounded with 0.5" + of, {{1, 0, 0.5}}, box);
-      test_wall_end_corners("wall, the other end's edges" + of, {{0, 1, 0.5}, {1, 1, 0.5}}, box);
-      test_wall_end_corners("wall, an end's two edges" + of, {{0, 0, 1}, {1, 0, 0.5}}, box);
-      test_wall_end_corners("wall, both ends' edges at the 2" + of, {{0, 0, 0.5}, {0, 1, 0.5}}, box);
-      test_wall_end_corners("wall, an end's edge at the 2 rounded with 1.2" + of, {{0, 0, 1.2}}, box);
-      test_wall_end_corners("wall, an end's edge at the 2 rounded with 1.5" + of, {{0, 0, 1.5}}, box);
-      test_wall_end_corners("wall, an end's edge at the 1 rounded with 1.7" + of, {{1, 0, 1.7}}, box);
-      test_wall_end_corners("wall, the other end's edge at the 2 rounded with 1.2" + of, {{0, 1, 1.2}}, box);
+      if (selected("test_wall_end_corners")) {
+        const std::string of = box ? " (a box)" : "";
+        test_wall_end_corners("wall, an end's edge at the 2 rounded with 0.5" + of, {{0, 0, 0.5}}, box);
+        test_wall_end_corners("wall, an end's edge at the 2 rounded with 1" + of, {{0, 0, 1}}, box);
+        test_wall_end_corners("wall, an end's edge at the 1 rounded with 0.5" + of, {{1, 0, 0.5}}, box);
+        test_wall_end_corners("wall, the other end's edges" + of, {{0, 1, 0.5}, {1, 1, 0.5}}, box);
+        test_wall_end_corners("wall, an end's two edges" + of, {{0, 0, 1}, {1, 0, 0.5}}, box);
+        test_wall_end_corners("wall, both ends' edges at the 2" + of, {{0, 0, 0.5}, {0, 1, 0.5}}, box);
+      }
+      if (selected("test_end_corners_of_three_blends")) {
+        test_end_corners_of_three_blends(box);
+      }
     }
   } catch (const Standard_Failure& e) {
     std::fprintf(stderr, "unexpected OCCT error: %s\n", e.what());

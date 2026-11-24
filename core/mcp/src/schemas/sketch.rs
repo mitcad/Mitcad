@@ -43,6 +43,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "sketch.trim",
     "sketch.extend",
     "sketch.insert_spline_point",
+    "sketch.remove_spline_point",
     "sketch.fillet",
     "sketch.chamfer",
     "sketch.offset",
@@ -653,6 +654,12 @@ fn planar(name: &str) -> Option<Value> {
             "properties": {"sketch": sketch(), "curve": id("The spline (c<n>)"), "at": position("Near where")},
             "required": ["sketch", "curve", "at"],
             "examples": [{"cmd": "sketch.insert_spline_point", "sketch": "F1", "curve": "c3", "at": [5, 2]}]
+        }),
+        "sketch.remove_spline_point" => json!({
+            "description": "Removes a point of a spline; the spline stays, fitted again through the rest or with one control point and one knot fewer. sketch.remove of the point deletes the spline instead.",
+            "properties": {"sketch": sketch(), "curve": id("The spline (c<n>)"), "point": id("Its fit or control point (p<n>)")},
+            "required": ["sketch", "curve", "point"],
+            "examples": [{"cmd": "sketch.remove_spline_point", "sketch": "F1", "curve": "c3", "point": "p5"}]
         }),
         "sketch.fillet" => json!({
             "description": "A tangent arc with a radius dimension at a corner, or at several corners.",

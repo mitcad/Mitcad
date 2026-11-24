@@ -1197,29 +1197,36 @@ void test_inflated_vertex_tolerances_tightened() {
 
 } // namespace
 
+// Each test is guarded by its name, so that MITCAD_TEST_ONLY runs a port
+// patch's tests alone at the patch's place in the chain, without the cases
+// of later patches.
 void fillet_result_tests() {
-  test_slot_end_beside_a_split_side();
-  test_rounding_ends_on_a_pads_split_foot();
-  test_closed_rounding_rolling_from_a_seam_vertex();
-  test_plate_edges_rounded_to_a_full_round();
-  test_top_rounded_past_a_corner_of_the_balls_radius();
-  test_closed_top_rounded_past_four_corners();
-  test_pocket_floor_rounded_past_its_corners();
-  test_rim_rounded_across_a_notch();
-  test_rounding_carried_across_a_notch();
-  test_closed_rim_rounded_across_a_notch();
-  test_extension_rolling_on_past_a_seam();
-  test_rib_rounded_to_a_full_round_out_of_a_plate();
-  test_rib_rounded_to_a_full_round_out_of_a_ring();
-  test_slot_rounded_to_a_full_round_into_a_floor();
-  test_roundings_cut_by_each_other_where_the_top_narrows();
-  test_concave_roundings_cut_by_each_other_where_a_channel_narrows();
-  test_rib_foot_rounded_across_the_rods_seam();
-  test_bowl_topped_boss_rounded_past_corners_of_the_balls_radius();
-  test_bar_top_rounded_into_a_bore_along_its_seam();
-  test_recess_rim_rounded_up_to_a_rib_across_it();
-  test_inflated_vertex_tolerances_tightened();
-  test_bar_top_rounded_into_a_bore_split_round_the_corner();
+  guarded("test_slot_end_beside_a_split_side", test_slot_end_beside_a_split_side);
+  guarded("test_rounding_ends_on_a_pads_split_foot", test_rounding_ends_on_a_pads_split_foot);
+  guarded("test_closed_rounding_rolling_from_a_seam_vertex", test_closed_rounding_rolling_from_a_seam_vertex);
+  guarded("test_plate_edges_rounded_to_a_full_round", test_plate_edges_rounded_to_a_full_round);
+  guarded("test_top_rounded_past_a_corner_of_the_balls_radius", test_top_rounded_past_a_corner_of_the_balls_radius);
+  guarded("test_closed_top_rounded_past_four_corners", test_closed_top_rounded_past_four_corners);
+  guarded("test_pocket_floor_rounded_past_its_corners", test_pocket_floor_rounded_past_its_corners);
+  guarded("test_rim_rounded_across_a_notch", test_rim_rounded_across_a_notch);
+  guarded("test_rounding_carried_across_a_notch", test_rounding_carried_across_a_notch);
+  guarded("test_closed_rim_rounded_across_a_notch", test_closed_rim_rounded_across_a_notch);
+  guarded("test_extension_rolling_on_past_a_seam", test_extension_rolling_on_past_a_seam);
+  guarded("test_rib_rounded_to_a_full_round_out_of_a_plate", test_rib_rounded_to_a_full_round_out_of_a_plate);
+  guarded("test_rib_rounded_to_a_full_round_out_of_a_ring", test_rib_rounded_to_a_full_round_out_of_a_ring);
+  guarded("test_slot_rounded_to_a_full_round_into_a_floor", test_slot_rounded_to_a_full_round_into_a_floor);
+  guarded("test_roundings_cut_by_each_other_where_the_top_narrows",
+          test_roundings_cut_by_each_other_where_the_top_narrows);
+  guarded("test_concave_roundings_cut_by_each_other_where_a_channel_narrows",
+          test_concave_roundings_cut_by_each_other_where_a_channel_narrows);
+  guarded("test_rib_foot_rounded_across_the_rods_seam", test_rib_foot_rounded_across_the_rods_seam);
+  guarded("test_bowl_topped_boss_rounded_past_corners_of_the_balls_radius",
+          test_bowl_topped_boss_rounded_past_corners_of_the_balls_radius);
+  guarded("test_bar_top_rounded_into_a_bore_along_its_seam", test_bar_top_rounded_into_a_bore_along_its_seam);
+  guarded("test_recess_rim_rounded_up_to_a_rib_across_it", test_recess_rim_rounded_up_to_a_rib_across_it);
+  guarded("test_inflated_vertex_tolerances_tightened", test_inflated_vertex_tolerances_tightened);
+  guarded("test_bar_top_rounded_into_a_bore_split_round_the_corner",
+          test_bar_top_rounded_into_a_bore_split_round_the_corner);
 }
 
 } // namespace test

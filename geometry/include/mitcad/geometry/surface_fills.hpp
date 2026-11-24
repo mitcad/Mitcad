@@ -68,7 +68,14 @@ ShapePtr boundary_fill(const std::string& feature, const std::vector<BoundaryCur
 // A new surface body of one face "<feature>:boundary" through a network:
 // lofted through the curves `u` in order (the first or the last may be a
 // point) when `v` is empty, else a Coons (two by two) or Gordon surface
-// through every curve of `u` and of `v`, which must cross each other.
+// through every curve of `u` and of `v`, which must cross each other
+// within 1e-3 mm. With `v`, each open curve is first cut back to its first
+// and last crossing (curves may run on past the outer crossing curves,
+// mitcad#2333). Refused in words (placed_error): a curve one way that does
+// not meet a crossing curve (each such pair, its gap and nearest points in
+// the detail, both curves painted by points along them), or curves that
+// cross but no surface runs through (the fit's report in the detail, the
+// crossings painted).
 ShapePtr boundary_network(const std::string& feature, const std::vector<BoundaryCurve>& u,
                           const std::vector<BoundaryCurve>& v);
 

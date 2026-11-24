@@ -164,6 +164,14 @@
 //! [`crate::SelectionSet`]. Members whose items are gone are left out when
 //! the design is read.
 //!
+//! Explode views (mitcad#2113), when there are any: `explode_views`
+//! (`name`, `component` unless the root, `steps`: each with `name`,
+//! `occurrences` as paths from the view's component, `bodies`, `distance`
+//! and `direction`, `angle` and `axis` (a direction or axis: `vector`, or
+//! `occurrence` and `geometry`, and `"flip": true`), `"trails": false`,
+//! `point`, `seconds`), see [`crate::explode`]. Steps' occurrences that
+//! are gone are refused, as the commands leave none.
+//!
 //! Point clouds (mitcad#2240), when there are any: `point_clouds` (`name`,
 //! `"visible": false`, `occurrence`, `placement` (`linear`, `translation`)
 //! unless it is the identity, `origin`, `file_name`, `file_points`,
@@ -567,8 +575,10 @@ impl<K: Kernel> Document<K> {
     /// base feature's data is missing (a reference that was not resolved),
     /// which keeps its reference and makes the file version 3.
     pub fn to_json(&self) -> String {
+        // Without the assembly shown while it is edited in place
+        // (mitcad#2321).
         v2::save_with(
-            self.state(),
+            &self.saved_state(),
             &self.design_statistics(),
             self.kept_design_preview().as_ref(),
         )
@@ -581,7 +591,10 @@ impl<K: Kernel> Document<K> {
     /// ([`Document::save_file`] keeps it apart). Without base features and
     /// display state it is the same as [`Document::to_json`].
     pub fn to_project_json(&self, store: &dyn BlobStore) -> std::io::Result<String> {
-        let state = self.state();
+        // Without the assembly shown while it is edited in place
+        // (mitcad#2321).
+        let saved = self.saved_state();
+        let state: &DocState = &saved;
         let statistics = self.design_statistics();
         let preview = self.kept_design_preview();
         if state.display.is_default()
@@ -825,7 +838,8 @@ impl<K: Kernel> Document<K> {
     /// while it is open; the application's autosave writes the marker the
     /// edit restores (P8). The document does not change.
     pub fn to_json_with_marker(&self, marker: usize) -> String {
-        let state = self.state();
+        let saved = self.saved_state();
+        let state: &DocState = &saved;
         let statistics = self.design_statistics();
         let preview = self.kept_design_preview();
         if marker == state.marker {

@@ -80,8 +80,9 @@ geometry::Path path(const rust::Vec<SweepCurve>& curves) {
 
 geometry::LoftEnd loft_end(std::uint8_t kind, double angle, double weight) {
   using Kind = geometry::LoftEnd::Kind;
-  static constexpr Kind kinds[] = {Kind::Free,       Kind::Direction, Kind::Tangent,
-                                   Kind::Smooth,     Kind::PointSharp, Kind::PointTangent};
+  // Perpendicular (mitcad#2345) last.
+  static constexpr Kind kinds[] = {Kind::Free,       Kind::Direction,    Kind::Tangent,      Kind::Smooth,
+                                   Kind::PointSharp, Kind::PointTangent, Kind::Perpendicular};
   if (static_cast<std::size_t>(kind) >= std::size(kinds)) {
     throw std::invalid_argument("unknown loft end condition");
   }
@@ -195,6 +196,18 @@ std::shared_ptr<geometry::Shape> loft_solid(rust::Str feature, const LoftInput& 
       result.kind = geometry::LoftSection::Kind::Point;
       result.point = point(section.point);
       break;
+    case 3:
+      // A chain of curves (mitcad#2345).
+      result.kind = geometry::LoftSection::Kind::Chain;
+      result.chain = path(section.chain);
+      if (section.has_normal) {
+        const gp_Vec normal(section.normal[0], section.normal[1], section.normal[2]);
+        if (normal.Magnitude() < 1.0e-12) {
+          throw std::invalid_argument("a loft section's plane has no normal");
+        }
+        result.normal = gp_Dir(normal);
+      }
+      break;
     default:
       throw std::invalid_argument("unknown loft section kind");
     }
@@ -233,6 +246,15 @@ std::shared_ptr<geometry::Shape> loft_solid(rust::Str feature, const LoftInput& 
   }
   spec.start = loft_end(input.start_kind, input.start_angle, input.start_weight);
   spec.end = loft_end(input.end_kind, input.end_angle, input.end_weight);
+  // The faces of Perpendicular ends (mitcad#2345).
+  if (input.start_has_face) {
+    spec.start.body = body_at(bodies, input.start_face_body);
+    spec.start.face = std::string(input.start_face);
+  }
+  if (input.end_has_face) {
+    spec.end.body = body_at(bodies, input.end_face_body);
+    spec.end.face = std::string(input.end_face);
+  }
   return geometry::loft(spec);
 }
 

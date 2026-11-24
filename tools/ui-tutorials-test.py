@@ -3,9 +3,12 @@
 # check-all sources: app/MainWindowStart.cpp app/WindowManager.cpp app/files/StartPage.cpp
 """In-app tutorials (mitcad#2012, docs/tutorials.md): a tutorials repository
 of the test's own (a bare clone in a folder) as the only source; Help >
-Tutorials... fetches and lists its two-step tutorial and opens it in the
-tutorial pane, through the real CEF view of the web browser component the
-build made. The page's bridge (window.mitcad) starts the guide step; a step
+Tutorials... shows the Start page's tutorials (mitcad#2346), fetches the
+source and shows its two-step tutorial's card, whose Start installs it and
+opens it in the tutorial pane in the empty design under the page, through
+the real CEF view of the web browser component the build made (the
+tutorial's block made then, in its design). The page's bridge
+(window.mitcad) starts the guide step; a step
 naming a command MitCad does not have is refused; Escape with no command open
 ends the step and the input is free, and the page shows it again; another
 command is refused and logged, and the page hears of it; opening the intended command and
@@ -15,23 +18,34 @@ step and closes the pane, and the input is free again.
 
 Then the example tutorials repository (docs/examples/tutorials, the seed of
 the public tutorials repository, mitcad#2078) as the only source, in a run of
-its own: its sketch-extrude tutorial is listed, installed and opened, and each
-of its steps is done as a user does it (Create Sketch on the XY plane, a
-rectangle, Finish Sketch, Extrude, 20 mm, OK) until the page hears that the
-last one is done and the design has the block. A UI change that breaks the
+its own: its sketch-extrude tutorial's card is shown by Help > Tutorials...,
+its Start installs and opens it, and each of its steps is done as a user
+does it (Create Sketch on the XY plane, a rectangle, Finish Sketch, Extrude,
+20 mm, OK) until the page hears that the last one is done, the design has
+the block and the tutorial's progress is done. A UI change that breaks the
 example fails here.
 
 With start-page (mitcad#2168, a test of its own): the example's tutorial
-opened while the Start page is shown, in the Floating and the Docked layout,
-in three cases: the page at launch, the last design closed to the page, and
-a modified design under the page. Each time the tutorial starts in an empty
-design of its own (the page left for the empty design under it, or New
-Design in a new window), its first step's Create Sketch button is outlined
-and the tutorial is done to its end; the modified design keeps its block
-and its unsaved changes.
+started while the Start page is shown, from its card that the page's own
+Tutorials button shows (mitcad#2346), in the Floating and the Docked
+layout, in three cases: the page at launch, the last design closed to the
+page, and a modified design under the page. Each time the tutorial starts
+in an empty design of its own (the page left for the empty design under
+it, or New Design in a new window), its first step's Create Sketch button
+is outlined, and the tutorial is done to its end. At launch and after the
+last design closed, the window's Start page, shown again after the first
+step, has the card In progress (step 1 of 5); over a modified design (the
+tutorial's design another tab of the window) the user's design, shown again
+at the end, keeps its block and its unsaved changes and its page's card
+says Done.
+
+With look (not a ctest): pictures of the Start page's tutorials, the
+example's card not started and in progress, in both layouts, light and
+dark, for a look.
 
 Usage: ui-tutorials-test.py <app> <cli> <output folder> [<Qt's bin> [<the built web browser component> [<example>]]]
        ui-tutorials-test.py start-page <app> <cli> <output folder> [<Qt's bin> [<component> [<example>]]]
+       ui-tutorials-test.py look <app> <output folder> [<Qt's bin> [<component> [<example>]]]
        ui-tutorials-test.py prepare <output folder> [<example>]   (the sources and the steps, for the macOS wrapper)
        ui-tutorials-test.py prepare-start-page <output folder> [<example>]   (the same for the Start page's runs)
        ui-tutorials-test.py verify <output folder>
@@ -52,6 +66,11 @@ EXAMPLE = Path(__file__).resolve().parent.parent / "docs" / "examples" / "tutori
 # Its tutorial the second run drives, and the folder of that run.
 EXAMPLE_TUTORIAL = "sketch-extrude"
 EXAMPLE_RUN = "example"
+# The longest one run of the application may take, in seconds; the ctests'
+# TIMEOUTs (cmake/SelectionUiTests.cmake) leave room for all their runs at
+# this length (two runs, the Start page's six), so that a run that hangs is
+# reported with its log rather than the whole test killed by CTest.
+RUN_TIMEOUT = 300
 
 STEPS = [
     {"id": "extrude", "text": "Open Extrude.", "target": {"command": "solid.extrude"},
@@ -208,22 +227,25 @@ def workflow(source):
                                            "operation": "new_body"}}
     lines = [
         "wait-idle",
-        # A block: Extrude is offered only in a design with a body, a
-        # sketch or a profile.
-        "model-command '%s'" % json.dumps(block),
-        "wait-idle",
-        "expect-model-bodies 1 6000",
         # The test's repository the only source.
         "set-setting tutorials/sources '%s'" % json.dumps([source]),
+        # Help > Tutorials...: the Start page's tutorials (mitcad#2346), a
+        # card for the test's tutorial; Start starts it in the empty design
+        # under the page.
         "mark",
         "command help.tutorials",
-        "focus-dialog '^Tutorials$' 30",
+        "expect-log '^Start page section: tutorials$' 20",
+        "expect-log '^Start page shown$' 20",
         "expect-log '^Library fetched: tutorials Test tutorials \\(\\) from ' 60",
-        "expect-log '^Tutorials: listed two-steps \\(Two steps\\) from .*, installed no$' 30",
-        "invoke-widget tutorialsDialog selectTutorial two-steps",
-        "button '^Open$'",
+        "expect-log '^Tutorials: listed two-steps \\(Two steps\\) from .*: not started$' 30",
+        "wait-idle",
+        "mark",
+        "button '^Start$' tutorialStart_two-steps",
+        "expect-log '^Tutorials: chosen two-steps \\(start\\)$' 20",
         "expect-log '^Tutorial: installed two-steps 1\\.0 \\(2 files\\) into ' 30",
+        "expect-log '^Tutorial: starts in the empty design under the Start page$' 30",
         "expect-log '^Tutorial: opened Two steps ' 30",
+        "expect-log '^Start page hidden$' 10",
         "focus-main",
         # The page has the bridge: the application's state, a step of a
         # command MitCad does not have refused, the first step shown.
@@ -234,6 +256,11 @@ def workflow(source):
         "expect-log '^Tutorial page says: started extrude$' 30",
         "expect-widget-property guideCallout visible true",
         "expect-widget-property guideCalloutText text 'Open Extrude.'",
+        # A block, in the tutorial's own design: Extrude is offered only in
+        # a design with a body, a sketch or a profile.
+        "model-command '%s'" % json.dumps(block),
+        "wait-idle",
+        "expect-model-bodies 1 6000",
         # Escape with no command open ends the step; the input is free (a
         # command the step held back runs); the page shows the step again.
         "mark",
@@ -303,25 +330,46 @@ def workflow(source):
 def example_workflow(source, manifest):
     """The test driver's steps for the example's tutorial in a new design:
     each step its page shows, done as the step's text asks."""
-    lines = ["wait-idle"] + example_open(source, manifest) + example_steps() + ["quit"]
+    lines = (["wait-idle"] + example_open(source, manifest) + example_first_step() + example_steps()
+             + ["quit"])
     return "\n".join(lines) + "\n"
 
 
-def example_open(source, manifest):
-    """The example's tutorial listed in Help > Tutorials..., installed and
+def example_listed(manifest, words):
+    """The log's line of the example's card on the Start page with its
+    progress (`words` a regular expression: TutorialProgress::words)."""
+    return "'^Tutorials: listed %s \\(%s\\) from .*: %s$'" % (EXAMPLE_TUTORIAL, re_text(manifest["title"]), words)
+
+
+def example_open(source, manifest, via="menu"):
+    """The example's tutorial shown as a card on the Start page (mitcad#2346)
+    by Help > Tutorials... (`via` "menu") or by the page's own Tutorials
+    button ("button", the page shown), started from its card, installed and
     opened: the driver's steps up to its page loaded with the bridge."""
     title = manifest["title"]
-    return [
+    lines = [
         # The example's repository the only source.
         "set-setting tutorials/sources '%s'" % json.dumps([source]),
         "mark",
-        "command help.tutorials",
-        "focus-dialog '^Tutorials$' 30",
+    ]
+    if via == "menu":
+        lines.append("command help.tutorials")
+    else:
+        # The Resources' Tutorials, under User Guide, clicked where it is.
+        lines += [
+            "expect-ever '^Start page resource Tutorials at ' 20",
+            "click-logged '^Start page resource Tutorials at '",
+            "expect-log '^Start page chosen: Tutorials$' 10",
+        ]
+    return lines + [
+        "expect-log '^Start page section: tutorials$' 20",
         "expect-log '^Library fetched: tutorials Example tutorials \\(\\) from ' 60",
-        "expect-log '^Tutorials: listed %s \\(%s\\) from .*, installed no$' 30" % (EXAMPLE_TUTORIAL, re_text(title)),
-        "invoke-widget tutorialsDialog selectTutorial %s" % EXAMPLE_TUTORIAL,
-        "button '^Open$'",
-        "expect-log '^Tutorial: installed %s %s \\(2 files\\) into ' 30"
+        # Its card, not started; Start is its one action.
+        "expect-log %s 30" % example_listed(manifest, "not started"),
+        "wait-idle",
+        "button '^Start$' tutorialStart_%s" % EXAMPLE_TUTORIAL,
+        "expect-log '^Tutorials: chosen %s \\(start\\)$' 20" % EXAMPLE_TUTORIAL,
+        "expect-log '^Tutorial: installed %s %s \\([0-9]+ files\\) into ' 30"
         % (EXAMPLE_TUTORIAL, re_text(manifest["version"])),
         "expect-log '^Tutorial: opened %s ' 30" % re_text(title),
         "focus-main",
@@ -329,14 +377,22 @@ def example_open(source, manifest):
     ]
 
 
-def example_steps():
-    """Each step of the example's tutorial done as its text asks, to the
-    page's end and Leave Tutorial."""
+def example_first_step():
+    """The example's first step shown, and its progress recorded (step 1 of
+    its 5, mitcad#2346)."""
     return [
         # 1. Create Sketch, then the XY plane. Its button is outlined: shown
         # in the window, not under the Start page (mitcad#2168).
         "expect-log '^Guide: step sketch started: target command sketch\\.create, navigation free$' 30",
         "expect-log '^Guide: step sketch target at -?[0-9]+,-?[0-9]+ [1-9][0-9]*x[1-9][0-9]*$' 30",
+        "expect-log '^Tutorial: progress %s: in progress \\(step 1 of 5\\)$' 30" % EXAMPLE_TUTORIAL,
+    ]
+
+
+def example_steps():
+    """Each step of the example's tutorial done as its text asks, to the
+    page's end and Leave Tutorial (after example_first_step)."""
+    return [
         "expect-widget-property guideCallout visible true",
         # The origin's planes keep their size on the screen; zooming out
         # about a point above the view's middle brings them up and left,
@@ -399,6 +455,7 @@ def example_steps():
         "expect-log '^Guide: step ok done: command solid\\.extrude finished$' 30",
         "expect-log '^Tutorial page says: done ok$' 20",
         "expect-log '^Tutorial page says: finished$' 20",
+        "expect-log '^Tutorial: progress %s: done$' 20" % EXAMPLE_TUTORIAL,
         "expect-no-log '^Guide: command'",
         "expect-model-bodies 1 12000",
         # Leave Tutorial closes the pane.
@@ -484,22 +541,48 @@ def start_page_workflow(case, source, manifest):
     if case == "modified":
         # The user's design as it was: its block, its one feature, its
         # unsaved changes; the tutorial's block in the tutorial's window.
+        # The user's design is shown again with its Start page's tutorials,
+        # where the card now says the tutorial is done (mitcad#2346).
         after = [
             "expect-model-bodies 1 12000",
+            "mark",
             "focus-document-window user",
             "focus-main",
             "wait-idle",
+            "expect-log %s 20" % example_listed(manifest, "done"),
             "expect-model-bodies 1 6000",
             "capture-model-number features '{\"query\": \"document\"}' features",
             "expect-near ${features} 1",
             "expect-document-modified yes",
         ]
-    open_lines = example_open(source, manifest)
+    # The Start page's own Tutorials button shows the cards (mitcad#2346).
+    open_lines = example_open(source, manifest, via="button")
     # The window's design choice is logged once the tutorial is installed,
     # before its page is loaded.
     split = next(i for i, line in enumerate(open_lines) if line.startswith("expect-log '^Tutorial: opened "))
-    lines = (before + open_lines[:split + 1] + opened + open_lines[split + 1:] + example_steps() + after
-             + ["quit"])
+    # Once its first step is shown, its card says it is in progress.
+    in_progress = "expect-log %s 20" % example_listed(manifest, "in progress \\(step 1 of 5\\)")
+    if case == "modified":
+        # The tutorial's design is another tab of the window: the user's
+        # design, with its Start page's tutorials, is out of sight, and its
+        # card is read again when it shows (at the end, Done).
+        progress = []
+    else:
+        # The tutorial took this window's design: its Start page shows the
+        # tutorials again, then the design is shown again.
+        progress = [
+            "mark",
+            "click-logged '^Ribbon tab START at '",
+            "wait-log '^Start page shown$' 10",
+            in_progress,
+            "wait-idle",
+            "mark",
+            "leave-start-page",
+            "wait-log '^Start page hidden$' 10",
+            "wait-idle",
+        ]
+    lines = (before + open_lines[:split + 1] + opened + open_lines[split + 1:] + example_first_step() + progress
+             + example_steps() + after + ["quit"])
     return "\n".join(lines) + "\n"
 
 
@@ -520,6 +603,14 @@ def environment_for(directory, temporary, qt_bin=None, component=None):
     environment.update(MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NEW_DESIGN_VIEW="0",
                        MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1", QT_FORCE_STDERR_LOGGING="1",
                        MITCAD_REMEMBER_PANEL_VALUES="0", MITCAD_LOG_TYPED_TEXT="1",
+                       # The places of the datums' clicks tried as a click lands
+                       # (MainWindow::logDatumPlaces: clear of the cards, the
+                       # command panel, the orientation cube and the guide's
+                       # callout), as ui-test-lib.sh, ui-windows-lib.ps1 and
+                       # the macOS wrappers' ui-macos-lib.sh have them; without
+                       # it the XY plane's place is its first candidate, unchecked
+                       # (mitcad#2311).
+                       MITCAD_LOG_PICKS="1",
                        MITCAD_LIBRARIES_DIR=str(directory / "cache"),
                        MITCAD_TUTORIALS_DIR=str(directory / "installed"),
                        MITCAD_WEB_PROFILE_DIR=str(directory / "profile"),
@@ -585,9 +676,13 @@ def run_app(app, directory, name, qt_bin=None, component=None, script=None, argu
         environment["MITCAD_START_PAGE"] = start_page
         log_path = directory / (name + ".log")
         with log_path.open("wb") as log:
-            result = subprocess.run([app, "--ui=qt", "--no-native-dialogs", "--no-recovery", "--no-mcp",
-                                     *arguments],
-                                    env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=300)
+            try:
+                result = subprocess.run([app, "--ui=qt", "--no-native-dialogs", "--no-recovery", "--no-mcp",
+                                         *arguments],
+                                        env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=RUN_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError("the tutorials' UI workflow did not end in %d s: %s"
+                                   % (RUN_TIMEOUT, log_path)) from None
         text = log_path.read_text(encoding="utf-8", errors="replace")
         if (result.returncode or any(line.startswith("TestDriver: FAIL") for line in text.splitlines())
                 or "TestDriver: quit" not in text):
@@ -603,6 +698,57 @@ def run(app, cli, directory, qt_bin=None, component=None, example=None):
     print("PASS: Tutorials: listed and opened from Help > Tutorials..., the bridge's steps, a command refused, "
           "the steps completed with their events, no bridge outside the tutorial, Leave Tutorial frees the input; "
           "the example tutorial's steps done to its end")
+
+
+def look_workflow(source, manifest, picture):
+    """The Start page's tutorials (mitcad#2346) shown by its Tutorials button
+    with the example's card, saved as `picture`; then the example started
+    and the page shown again, its card in progress, saved as
+    <picture>-in-progress.png."""
+    stem = picture[:-4] if picture.endswith(".png") else picture
+    open_lines = example_open(source, manifest, via="button")
+    # The cards shown, before the card's Start.
+    at = next(i for i, line in enumerate(open_lines) if line.startswith("button "))
+    lines = (["expect-ever '^Start page shown$' 30", "wait-idle"] + open_lines[:at]
+             + ["sleep 1000", "screenshot '%s'" % picture] + open_lines[at:] + example_first_step())
+    lines += [
+        "mark",
+        "click-logged '^Ribbon tab START at '",
+        "wait-log '^Start page shown$' 10",
+        "expect-log %s 20" % example_listed(manifest, "in progress \\(step 1 of 5\\)"),
+        "wait-idle",
+        "sleep 1000",
+        "screenshot '%s-in-progress.png'" % stem,
+        "quit",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def run_look(app, directory, qt_bin=None, component=None, example=None):
+    """Pictures of the Start page's tutorials for a look (not a ctest): in
+    the Floating and the Docked layout, light and dark (Qt's GTK platform
+    theme on Linux, MITCAD_TEST_COLOR_SCHEME), as
+    <directory>/tutorials-<layout>-<theme>.png and
+    tutorials-<layout>-<theme>-in-progress.png."""
+    directory = prepare_start_page(directory, example)
+    manifest = json.loads((directory / "source" / "course" / "tutorials" / EXAMPLE_TUTORIAL / "tutorial.json")
+                          .read_text(encoding="utf-8"))
+    source = (directory / "source" / "source.git").as_posix()
+    for layout in LAYOUTS:
+        for theme in ("light", "dark"):
+            name = "look-%s-%s" % (layout, theme)
+            run_directory = directory / name
+            remove(run_directory)
+            run_directory.mkdir()
+            picture = (directory / ("tutorials-%s-%s.png" % (layout, theme))).as_posix()
+            script = run_directory / (name + ".mitcad-ui")
+            script.write_text(look_workflow(source, manifest, picture), encoding="utf-8")
+            os.environ["MITCAD_TEST_COLOR_SCHEME"] = theme
+            if sys.platform.startswith("linux"):
+                os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3"
+            run_app(app, run_directory, name, qt_bin, component, script=script,
+                    arguments=("--chrome=" + layout,), start_page="1")
+            print("ok   " + picture)
 
 
 def run_start_page(app, cli, directory, qt_bin=None, component=None, example=None):
@@ -629,5 +775,7 @@ if __name__ == "__main__":
         run_start_page(*sys.argv[2:])
     elif sys.argv[1] == "prepare-start-page":
         prepare_start_page(*sys.argv[2:4])
+    elif sys.argv[1] == "look":
+        run_look(*sys.argv[2:])
     else:
         run(*sys.argv[1:])

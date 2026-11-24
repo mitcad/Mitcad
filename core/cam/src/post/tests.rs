@@ -109,7 +109,17 @@ const NOTICE_SEMICOLON: &str = "\
 
 fn run(id: &str) -> String {
     let d = dialect(id).expect("a dialect");
-    post(&program(), d.as_ref(), &PostSettings::default(), None).unwrap()
+    post(&program_for(id), d.as_ref(), &PostSettings::default(), None).unwrap()
+}
+
+/// The shared program for a dialect: air blast instead of flood coolant
+/// on the machines that have only air (the Carvera and the Carvera Air).
+fn program_for(id: &str) -> Program {
+    let mut p = program();
+    if id.starts_with("carvera") {
+        p.operations[1].coolant = Coolant::Air;
+    }
+    p
 }
 
 #[test]
@@ -124,7 +134,9 @@ fn every_dialect_is_listed_once_by_its_id() {
             "millenniumos",
             "mach3",
             "mach4",
-            "linuxcnc"
+            "linuxcnc",
+            "carvera",
+            "carvera_air"
         ]
     );
     assert!(dialect("fanuc").is_none());
@@ -325,6 +337,150 @@ G54"
     assert_eq!(dialect("linuxcnc").unwrap().extension(), "ngc");
 }
 
+/// The shared program on a Carvera machine, with `announce` before each
+/// tool change.
+fn carvera_like(announce: [&str; 2]) -> String {
+    let [first, second] = announce;
+    format!(
+        "\
+{NOTICE}
+(Bracket)
+(T1 6 mm flat end mill, D6 mm)
+(T2 3 mm flat end mill, D3 mm)
+G90 G94
+G17
+G21
+G54
+G0 Z15
+(Contour 1)
+{first}M6 T1
+G0 Z15
+M3 S18000
+{CIRCLE}
+(Drill)
+M5
+{second}M6 T2
+G0 Z15
+M3 S10000
+M7
+{HOLE}
+M5
+M9
+G28
+M30
+"
+    )
+}
+
+#[test]
+fn carvera_changes_tools_with_m6_and_ends_at_the_clearance_position() {
+    assert_eq!(run("carvera"), carvera_like(["", ""]));
+    assert_eq!(dialect("carvera").unwrap().extension(), "cnc");
+}
+
+#[test]
+fn carvera_air_announces_each_manual_change_before_m6() {
+    assert_eq!(
+        run("carvera_air"),
+        carvera_like([
+            "(Change to tool 1: 6 mm flat end mill)\n",
+            "(Change to tool 2: 3 mm flat end mill)\n",
+        ])
+    );
+    assert_eq!(dialect("carvera_air").unwrap().extension(), "cnc");
+}
+
+#[test]
+fn carvera_refuses_what_the_machines_have_no_command_for() {
+    let settings = PostSettings::default();
+    for d in [&Carvera as &dyn PostProcessor, &CarveraAir] {
+        // Flood and mist coolant: the machines have air blast only.
+        for c in [Coolant::Flood, Coolant::Mist] {
+            let mut p = program();
+            p.operations[1].coolant = c;
+            assert_eq!(
+                post(&p, d, &settings, None).unwrap_err().message,
+                format!("{} has no flood or mist coolant; use air blast.", d.label())
+            );
+        }
+        // A counter-clockwise spindle: not wired.
+        let mut p = program_for(d.id());
+        p.operations[0].spindle = SpindleDirection::Ccw;
+        assert_eq!(
+            post(&p, d, &settings, None).unwrap_err().message,
+            format!(
+                "{} has no command for a counter-clockwise spindle.",
+                d.label()
+            )
+        );
+        // Tool 0 is the probe.
+        let mut p = program_for(d.id());
+        p.operations[0].tool.number = 0;
+        assert_eq!(
+            post(&p, d, &settings, None).unwrap_err().message,
+            format!(
+                "{} uses tool 0 for its probe; give 6 mm flat end mill another number.",
+                d.label()
+            )
+        );
+    }
+    // The Carvera's changer holds six tools; the Air's are changed by hand.
+    let mut p = program_for("carvera");
+    p.operations[1].tool.number = 7;
+    assert_eq!(
+        post(&p, &Carvera, &settings, None).unwrap_err().message,
+        "Makera Carvera's tool changer holds tools 1 to 6; give 3 mm flat end mill a number from 1 to 6."
+    );
+    let air = post(&p, &CarveraAir, &settings, None).unwrap();
+    assert!(
+        air.contains("\n(Change to tool 7: 3 mm flat end mill)\nM6 T7\n"),
+        "{air}"
+    );
+}
+
+#[test]
+fn carvera_measures_the_tool_itself_and_parks_at_its_clearance_position() {
+    // M6 measures the tool and sets its length offset: none is written,
+    // even when asked for; the park position gives way to G28.
+    let settings = PostSettings {
+        tool_length_offset: Some(true),
+        ..PostSettings::default()
+    };
+    let g = post(
+        &program_for("carvera"),
+        &Carvera,
+        &settings,
+        Some(&machine(ToolChanger::Controller)),
+    )
+    .unwrap();
+    assert!(!g.contains("G43") && !g.contains("G53"), "{g}");
+    // The spin-up dwell is G4 P in seconds.
+    assert!(g.contains("\nM6 T1\nG0 Z15\nM3 S18000\nG4 P2.5\n"), "{g}");
+    assert!(g.ends_with("\nM9\nG28\nM30\n"), "{g}");
+    // A tool a program-driven changer has no slot for: M600 waits for the
+    // operator.
+    let changer = ToolChanger::Macro(MacroChanger {
+        slots: vec![RackSlot {
+            tool: 1,
+            position: [20.0, 780.0, -90.0],
+        }],
+        safe_z: -5.0,
+        unload: vec![],
+        load: vec!["G53 G0 X{x} Y{y}".into()],
+    });
+    let g = post(
+        &program_for("carvera"),
+        &Carvera,
+        &PostSettings::default(),
+        Some(&machine(changer)),
+    )
+    .unwrap();
+    assert!(
+        g.contains("\n(Drill)\nM5\n(Change to tool 2: 3 mm flat end mill)\nM600\nG0 Z15\n"),
+        "{g}"
+    );
+}
+
 #[test]
 fn inches_convert_lengths_and_feeds_but_not_speeds() {
     let settings = PostSettings {
@@ -385,7 +541,7 @@ fn every_program_starts_with_the_notice_that_cam_is_experimental() {
                 line_numbers: true,
                 ..PostSettings::default()
             };
-            let g = post(&program(), d.as_ref(), &settings, None).unwrap();
+            let g = post(&program_for(d.id()), d.as_ref(), &settings, None).unwrap();
             let body = g.strip_prefix("%\n").unwrap_or(&g);
             let notice = match d.comment_style() {
                 CommentStyle::Parentheses => NOTICE,
@@ -674,6 +830,14 @@ fn golden(id: &str) -> (&'static str, &'static str) {
             include_str!("golden/linuxcnc-inch.ngc"),
             include_str!("golden/linuxcnc-peck.ngc"),
         ),
+        "carvera" => (
+            include_str!("golden/carvera-inch.cnc"),
+            include_str!("golden/carvera-peck.cnc"),
+        ),
+        "carvera_air" => (
+            include_str!("golden/carvera_air-inch.cnc"),
+            include_str!("golden/carvera_air-peck.cnc"),
+        ),
         _ => panic!("no golden files for {id}"),
     }
 }
@@ -688,7 +852,7 @@ fn inches() -> PostSettings {
 #[test]
 fn every_dialect_writes_inches_with_every_length_and_feed_converted() {
     for d in dialects() {
-        let g = post(&program(), d.as_ref(), &inches(), None).unwrap();
+        let g = post(&program_for(d.id()), d.as_ref(), &inches(), None).unwrap();
         assert_eq!(g, golden(d.id()).0, "{}", d.id());
     }
 }

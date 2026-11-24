@@ -44,7 +44,7 @@ Body read_stl(const std::string& path, const StlReadOptions& options) {
       mesh->SetNode(i, gp_Pnt(p.XYZ() * options.unit_mm));
     }
   }
-  return Body{detail::file_stem(path), mesh_body(mesh), std::nullopt, {}};
+  return Body{detail::file_stem(path), mesh_body(mesh), std::nullopt, {}, {}};
 }
 
 } // namespace mitcad::io

@@ -7,7 +7,8 @@ brings in both checked, Move started once on the last (mitcad#1839); a PDF
 is refused with its note; a download the server breaks off fails with its
 reason in words (mitcad#1716). With Measure open the STEP file comes in at
 once and Measure stays open; with Extrude open it waits, its note says so,
-and it comes in with Move after Cancel (mitcad#2281). The downloads'
+and it comes in with Move after Cancel (mitcad#2281); downloaded once more,
+it comes in once more (mitcad#2289). The downloads'
 temporary folders, and MitCad's copy of the one that waited, are gone
 afterwards.
 
@@ -272,6 +273,24 @@ def workflow(port):
         "expect-log '^Command Move/Copy started$' 20",
         "expect-model-bodies 5 12000",
         "expect-undo-depth ${before} 5",
+        "focus-main",
+        "key Escape",
+        "expect-log '^Command Move/Copy cancelled$' 20",
+        # The same file once more, its earlier downloads' files all gone
+        # (mitcad#2289): it comes in once, from a file of its own; no report
+        # of an earlier one starts an import of a file that is gone.
+        "mark",
+        "focus-dialog '^Component from Web$'",
+        "invoke-widget componentBrowser clickLink 'Bearing 6494K13'",
+        "expect-log '^Component from Web: inserted %s as component .* \\(C[0-9]+, occurrence O[0-9]+, "
+        "1 body\\(ies\\)\\), part number 6494K13$' 60" % step,
+        "expect-log '^Command Move/Copy started$' 20",
+        "expect-log '^Component browser removed the temporary files of %s$' 20" % step,
+        "expect-widget-property componentBrowserNote text 'Imported %s.'" % STEP,
+        "wait-idle",
+        "expect-no-log '^Component browser (could not import|could not read|refused)'",
+        "expect-model-bodies 6 15000",
+        "expect-undo-depth ${before} 6",
         "focus-main",
         "key Escape",
         "expect-log '^Command Move/Copy cancelled$' 20",

@@ -1,0 +1,7 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The design tools/ui-scripts/move-along.mitcad-ui saved after MoveCylinder's edit chose Along Z (mitcad#2339): the definition keeps along z, and the cylinder went up 20 mm onto the block's top level only, not sideways."},
+  {"expect":{"query":{"query":"feature","uid":"F3"},"result":{"name":"MoveCylinder","def":{"transform":{"type":"point_to_point","along":"z"}}}}},
+  {"expect":{"feature":"MoveCylinder","status":"ok"}},
+  {"expect":{"body":"F2.b0","bbox":{"min":[75,5,20],"max":[85,15,35]},"tolerance":0.01}}
+]

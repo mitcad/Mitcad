@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/drawing-blank-sheet.mitcad-ui (mitcad#2325): a 40 x 30 x 20 block and Drawing1 (D1, A3, the ISO template: its frame and its title block) with one sheet and a base view, the sheet's title Kept."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}], "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"cmd": "add_drawing", "size": "A3", "template": "iso", "title_block": {"title": "Kept"}},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front", "scale": "1:1"}
+]

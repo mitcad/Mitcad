@@ -693,6 +693,32 @@ fn rewrite_references(
             updates.push(cloud.name.clone());
         }
     }
+    // Explode views whose steps lead through it (mitcad#2328): their paths
+    // from the views' components follow it when it is taken
+    // (`DocState::follow`); one that leaves a view's component is dropped
+    // from its steps with a warning.
+    for view in &state.explode_views {
+        let places = state.assembly.paths_to(view.component);
+        let leads = view.steps.iter().any(|step| {
+            let axes = step.direction.iter().chain(step.axis.iter());
+            step.occurrences
+                .iter()
+                .chain(axes.map(|axis| &axis.occurrence))
+                .filter(|path| !path.is_empty())
+                .any(|path| {
+                    places.iter().any(|place| {
+                        let mut full = place.clone();
+                        full.extend_from_slice(&path.0);
+                        rewrites
+                            .iter()
+                            .any(|r| r.through(&full) && !r.through(place))
+                    })
+                })
+        });
+        if leads {
+            updates.push(view.name.clone());
+        }
+    }
     // Occurrences made by Pattern at Points keep the paths they were made
     // from.
     for made in &state.assembly.occurrences {
@@ -1154,11 +1180,13 @@ impl Carry<'_> {
                 let subject = mine.first().copied().unwrap_or(self.moved[0]);
                 self.steady(index, subject)?;
                 let transform = self.motion(&m.transform, subject)?;
+                // The carried move works in the new parent: the occurrence
+                // of the old one it was picked through is no frame there
+                // (mitcad#2307).
                 if others.is_empty() {
-                    return Ok(whole(FeatureDef::MoveOccurrence(MoveOccurrenceDef {
-                        occurrences: mine,
-                        transform,
-                    })));
+                    return Ok(whole(FeatureDef::MoveOccurrence(MoveOccurrenceDef::new(
+                        mine, transform,
+                    ))));
                 }
                 if !matches!(m.transform, MoveSpec::Free { .. }) {
                     return Err(format!(
@@ -1172,12 +1200,12 @@ impl Carry<'_> {
                     def: FeatureDef::MoveOccurrence(MoveOccurrenceDef {
                         occurrences: others,
                         transform: m.transform.clone(),
+                        parent_occurrence: m.parent_occurrence.clone(),
                     }),
                     component: None,
-                    split: Some(FeatureDef::MoveOccurrence(MoveOccurrenceDef {
-                        occurrences: mine,
-                        transform,
-                    })),
+                    split: Some(FeatureDef::MoveOccurrence(MoveOccurrenceDef::new(
+                        mine, transform,
+                    ))),
                     params: Vec::new(),
                 })
             }

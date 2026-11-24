@@ -3249,6 +3249,12 @@ public:
                            "(linked)."));
     } else if (snap.kind == Snap::Kind::BodyOnEdge) {
       m_c.hint(QObject::tr("Point: on the body's edge; placing it projects the edge into the sketch (linked)."));
+    } else if (snap.kind == Snap::Kind::BodyEdgeCenter) {
+      m_c.hint(QObject::tr("Point: at the center of the body's round edge; placing it projects the edge into the "
+                           "sketch (linked)."));
+    } else if (snap.onSection()) {
+      m_c.hint(QObject::tr("Point: where the sketch plane cuts the body; placing it adds the face's section curves "
+                           "to the sketch (linked)."));
     } else {
       start();
     }
@@ -3315,6 +3321,10 @@ public:
     } else if (snap.kind == Snap::Kind::BodyOnEdge) {
       qDebug().noquote() << QStringLiteral("Point %1 on %2, the projected edge %3")
                                 .arg(point, projected.curve, snap.bodyItem.source);
+    } else if (snap.kind == Snap::Kind::BodyEdgeCenter || snap.onSection()) {
+      // At the centre of a round body edge, or where the plane cuts a body
+      // (mitcad#2324): what holds it, logged by SketchOp::constrain.
+      qDebug().noquote() << QStringLiteral("Point %1 at %2 of %3").arg(point, snap.describe(), projected.curve);
     }
   }
 

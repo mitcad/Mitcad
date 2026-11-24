@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: MIT
+# Split Body with a face of another component as the Splitting Tool
+# (mitcad#2299, GitHub mitcad/Mitcad#588, app/COMMANDS.md "Split Body"),
+# on split-body-other-component.json (A:1 with a 30 x 20 x 10 block F2.b0,
+# B:1 50 mm along X with a 30 x 20 x 20 block F4.b0; B active):
+#   1. Split Body: B's block as the body to split, the top face of A's
+#      block, picked where A:1 shows it, as the Splitting Tool. The preview
+#      builds, nothing is activated and nothing refused; OK adds the split
+#      in B: B holds two pieces of 6000 mm3, A keeps its block.
+#   2. Undo takes the split back (B holds its block again), Redo makes it.
+#   3. An edit of the split shows the tool face where A:1 shows it and the
+#      body where B:1 does; Esc leaves it as it was.
+#   4. A:1 moved 5 mm up: the cut follows A's face (B's lower piece 9000
+#      mm3, the upper one 3000 mm3).
+# Run by tools/ui-split-body-other-component-test.sh (Linux),
+# tools/ui-windows-split-body-other-component-test.ps1 (Windows) and
+# tools/ui-macos-split-body-other-component-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+capture-model-number aBefore '{"query":"properties","components":["A"]}' total.volume
+expect-near ${aBefore} 6000
+expect-model-bodies 2 18000
+
+# 1. B's block split by the top face of A's block.
+capture-undo-depth start
+mark
+command solid.split_body
+expect-log '^Command Split Body started'
+wait-idle
+click-logged '^Body F4[.]b0 in O2 at '
+wait-log '^Split Body Bodies to Split: 1 body [[]body F4[.]b0 in O2[]]'
+wait-idle
+mark
+click-logged '^Panel Split Body input tool at '
+wait-log '^Pick places:' 20
+click-pick 'occurrence face F2[.]b0/F2:end[(].* in O1'
+wait-log '^Split Body Splitting Tool: 1 face [[]face F2:end[(].* of F2[.]b0 in O1[]]'
+wait-log '^Preview Split Body: ok' 30
+wait-idle
+expect-no-log '^Panel Split Body error: |^Preview Split Body: (failed|not built)|activate that component|^Activated '
+mark
+button '^OK$'
+wait-log '^Added split body of 1 body' 30
+wait-idle
+expect-no-log '^Activated '
+expect-undo-depth ${start} 1
+expect-model-bodies 3 18000
+# Both pieces in B (a second body there), A's block where it was.
+capture-model-number lower '{"query":"properties","components":["B"]}' bodies.0.volume
+capture-model-number upper '{"query":"properties","components":["B"]}' bodies.1.volume
+expect-near ${lower} 6000
+expect-near ${upper} 6000
+capture-model-number aAfter '{"query":"properties","components":["A"]}' total.volume
+expect-near ${aAfter} ${aBefore}
+
+# 2. Undo takes the split back, Redo makes it again.
+mark
+command edit.undo
+expect-log '^Undo: Add SplitBody1'
+wait-idle
+expect-undo-depth ${start} 0
+expect-model-bodies 2 18000
+capture-model-number whole '{"query":"properties","components":["B"]}' total.volume
+expect-near ${whole} 12000
+mark
+command edit.redo
+wait-idle
+expect-undo-depth ${start} 1
+expect-model-bodies 3 18000
+
+# 3. The edit shows the tool face where A:1 shows it.
+mark
+dblclick-logged '^Timeline SplitBody1 at '
+wait-log '^Editing F5 with Split Body'
+wait-log '^Split Body Splitting Tool: 1 face [[]face F2:end[(].* of F2[.]b0 in O1[]]'
+wait-log '^Split Body Bodies to Split: 1 body [[]body F4[.]b0 in O2[]]'
+wait-log '^Preview Split Body: ok' 30
+wait-idle
+mark
+key Escape
+expect-log '^Command Split Body cancelled'
+wait-idle
+expect-undo-depth ${start} 1
+
+# 4. A:1 5 mm up: the cut moves with A's face, from z = 10 to z = 15. The
+#    pieces come in order along the face's normal (up): B's block keeps the
+#    lower one (F4.b0), the split's new body is the upper one (F5.b0).
+mark
+model-command '{"cmd":"set_occurrence_transform","occurrence":"A:1","transform":{"translation":[0,0,5]}}'
+wait-idle
+expect-model-bodies 3 18000
+capture-model-number lowerMoved '{"query":"properties","bodies":["F4.b0"]}' total.volume
+expect-near ${lowerMoved} 9000
+capture-model-number upperMoved '{"query":"properties","bodies":["F5.b0"]}' total.volume
+expect-near ${upperMoved} 3000
+capture-model-number moved '{"query":"properties","components":["B"]}' total.volume
+expect-near ${moved} 12000
+expect-never 'Recompute failed|TestDriver: FAIL|activate that component'

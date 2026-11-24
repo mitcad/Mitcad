@@ -1,0 +1,1925 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding of constant radius whose contact line folds over
+itself on a face, where its edge bends towards that face more tightly
+than the ball touches it from the edge, is walked across the folds and as
+several pieces, the twisted one across each fold between untwisted ones,
+so that OCCT's own filling of twisted pieces builds it (mitcad#2228).
+
+The case: a band 24 wide and 10 high between two vertical walls along two
+waves (amplitude 8, wavelength 30), its walls bending at the crests with
+a radius of 2.77 mm. Its top edge along a wave, rounded with 2.5, builds;
+with 3, 5 or 8.5 it fails: "the walk between the two faces stops part of
+the way" (one piece computed). A ball of radius r touches the top face
+r tan(a / 2) from the edge (r for the right angle here); where the edge
+bends towards the top face with a radius under that (each crest), the
+contact line, the edge moved that far into the face, runs backwards
+between two cusps and crosses itself in a swallowtail. The ball's
+sections exist all along. But BRepBlend_Walking::CheckDeflection takes a
+step whose chord on a face points against the contact's tangent at the
+point before as a step back of the walk (Blend_Backward, then too large):
+at a cusp the contact turns back, so every step across it was refused and
+the walk stopped there. Past the cusp the walk would be twisted on that
+face (BlendFunc_ConstRad::TwistOnS1: the contact's tangent against the
+guide). PerformSetOfKGen reprocesses a twisted piece between two
+untwisted neighbours on the same faces: it cuts the neighbours where
+their contact lines cross (ChFi3d_IntTraces: the corner where the
+swallowtail is cut away) and fills the piece between them with a
+constrained filling. A rounding along one edge is one walk, one piece,
+with no neighbour: "adjustment by reprocessing the non-written points:
+no neighbor", ChFiDS_TwistedSurface.
+
+- BRepBlend_Walking::CheckDeflection: where a contact's tangent points
+  along the guide at the point before and against it at the new point (or
+  the other way), and the contact moved no farther than the other contact
+  did, the contact turned back at a cusp of its line between them: the
+  step is not judged by that contact (Blend_OK for it), the other
+  contact's check stands, only where the other contact keeps moving (its
+  speed at both points at least a twentieth of the guide's: where the ball
+  itself nearly stands still a contact turning back is the walk going over
+  to another branch; on the reported wave with 8.5 the wall contact turned
+  so at w 12.80 and the walk ran back to the edge's start, "Chaining is
+  impossible"); only a short step (at most 5 % of the walk's
+  largest step, at least 2 tolgui) is taken so, a longer one is too large
+  and halved: the sections between the walk's points are solved again
+  from a cubic through the contacts and their tangents (patch 1870), which
+  follows a cusp only over a short step (with 8.5 the steps of 0.38 across
+  the cusps left the stripe failing after the walk).
+- BlendFunc_ConstRad (and BlendFunc_ConstRadInv)::SetSectionOnContact:
+  the guide's normal plane can hold the contact on one surface instead of
+  the contacts' mid-point. The mid-point's line, the edge moved half way
+  to the contacts, folds as well where the edge bends towards it more
+  tightly than that distance: there the mid-point's condition holds two
+  balls that meet (the equations singular), and the walk went over to the
+  other one (on the reported wave with 8.5, at w 9.8, where the fold ratio
+  on the top face passes 2: the wall contact, whose line is the edge
+  moved down, turned back there and ran to the edge's start by w 13.09,
+  and the stripe failed: "Standard_DomainError"). The contact whose line
+  does not fold picks one ball all along; where the guide is the edge and
+  the faces meet square, it is the same ball as the mid-point's.
+  ChFi3d_FoldCutsOf notes, per spine, each edge whose contact line folds,
+  its faces and stretches, and the face whose contact line does not fold
+  there (no stretch, the largest fold ratio below 0.9);
+  ChFi3d_FilBuilder::PerformSurf and PerformFirstSection walk across such
+  a stretch with that face's contact in the plane (ChFi3d_FoldWalkOf).
+- BRepBlend_Walking::InternalPerform: once the walk is twisted (has gone
+  over a cusp of a contact line), its steps are at most 5 % of its
+  largest step (at least 2 tolgui): the contact line folds back near the
+  walk there, and a long step's start lies nearer another branch of the
+  equations than the walk's own (on the reported wave with 8.5 a step of
+  0.168 from w 12.632 landed on a branch whose wall contact lay 0.086
+  off the walk's own, which folds at w 12.8015; the walk died there:
+  "CallPerformSurf : Path failed!").
+- BRepBlend_Walking::TestArret: a step in which a contact moves more than
+  fifty times the guide's own advance (and 100 tolpoint3d) is too large
+  and halved, also where the step is too short for the deflection's test:
+  the walk has gone over to another solution, a ball touching the face
+  elsewhere (on the reported wave with 8.5 the wall contact jumped 6.6 mm
+  to the crest's other flank in a step of 0.0007 at w 12.80, and the walk
+  ran back along that ball to the edge's start: "Chaining is
+  impossible").
+- BRepBlend_AppFuncRoot::SearchPoint: where the solver does not converge
+  from the linear start between two of the walk's points, it starts again
+  from each of those points, the nearer first (sections themselves); only
+  where neither converges is the section not found. A section (of a blend
+  of four variables) that lies farther from the linear start than twice
+  the two points lie apart, and at least 0.01, is solved again from each of them, and the
+  solution nearest the linear start kept: where the contact line folds
+  over itself the ball's centre may lie where a line crosses the contact
+  line's other branches (millimetres apart with 8.5), and the solver from
+  the linear start landed there; the approximation of the folded piece
+  through such sections reached 679 mm, and the body came out invalid.
+- ChFi3d_Builder::CompleteData (two faces), for a twisted piece: the
+  approximation takes the sections' values alone (GeomAbs_C0), not their
+  derivatives along the guide. With 8.5 the ball nearly stands still on
+  the crest (the wall contact kept still from w 12.85 to 13.0 while the
+  guide ran on), the derivatives through the near-singular Jacobian were
+  no measure of the smooth sections, and the approximation ran to 65006
+  poles and 679 mm off the walk ("done", as AdvApprox has a result
+  whatever its error). What the filling takes of the piece (its contacts'
+  curves and ends) the values give within the tolerance.
+- ChFi3d_Builder::CompleteData (two faces), for a twisted piece: its
+  contacts' curves on the faces are interpolated through the walk's own
+  contacts at the walk's parameters (taken before the approximation adds
+  its sections to the line), not taken from the approximation: between
+  the walk's points the approximation's sections lay on another branch of
+  the equations near the ball that nearly stands still (the wall contact
+  kept still at (-21.017, 19.617) from w 12.85 to 13.0 where the walk's
+  moved from u 12.63 to 12.96), and the filling's side on the wall through
+  them looped over itself (34.8 long where the walk's contact runs 7.5 at
+  the wall's v = -1.5): the wall's wire crossed itself and the body was
+  invalid.
+- ChFi3d_Builder::StoreData, for a twisted piece (whose surface
+  PerformSetOfKGen's filling replaces): its normals, which orient the
+  piece, count as vanishing only below Precision::Confusion(), not below
+  the tolerance its approximation reached (an area against a length;
+  with 8.5 the folded piece's approximation was done, then StoreData
+  found no orientation and the stripe failed: "PerformSurf : Failed
+  approximation!").
+- ChFi3d_Builder::PerformSetOfKPart: after its guides are made, for a
+  fillet of constant radius along an open spine (not a chamfer with
+  penetration), the stretches of each edge where the contact line on one
+  of its faces folds (ChFi3d_FoldsOfContact: the edge's curvature towards
+  the face's inside times r tan(a / 2) above 1, sampled about every
+  twentieth of the radius and halved to the border) split the guides a
+  tenth of each stretch's length (at least 10 tolesp) before and after
+  it (ChFi3d_FoldCuts, ChFi3d_SplitGuidesAtFolds); stretches whose
+  margins meet are one, one reaching within its margin of the spine's
+  ends is not split off (it would have no neighbour there).
+- ChFi3d_Builder::PerformSetOfSurfOnElSpine: a guide's end at such a cut
+  is not extended by the 1 % that helps rsnld: the walk ends there, where
+  the next guide's piece starts (extended, the first piece ran 1 % on
+  into the fold, and the next piece, starting from that piece's end past
+  its own first parameter, found no path).
+- ChFi3d_Builder::PerformSetOfKGen: a guide that starts at such a cut,
+  where the guide before it ends, starts from the last piece walked (its
+  Previous), as a guide after a particular piece does; without one its
+  walk removed the pieces walked before it (RemoveSD of two null ends).
+- With the walk traced (MITCAD_TRACE_FILLET_WALK, port patch 2141): each
+  edge's largest fold ratio on each face, each folding stretch, each fold
+  not split off, each split and each contact turning back at a cusp,
+  each section the approximation does not find or solves again far from
+  the walk (SearchPoint), each walked
+  line whose approximation is not done (CompleteData), each twisted
+  piece's walked sections (the arc between the contacts, the centre, the
+  axis and the contacts, jumps marked: CompleteData), the tolerance each twisted
+  piece's approximation reached and how far its surface's sides lie from
+  the walked contacts (StoreData), each piece StoreData finds no
+  orientation for (with the normals and tolerances), and
+  (ChFi3d_Builder::Compute) the exception that fails a stripe's
+  computation, on the standard error.
+
+Only a stripe that fails without them is computed with these rules, and
+in it only the walk across a fold takes the walk's rules:
+- ChFi3d_Builder::Compute: every stripe is computed first as before, no
+  fold looked for (ChFi3d_FoldCutsOf finds none while the fold stripes'
+  mode is off). A stripe that fails, along an edge where the contact line
+  on one of its faces folds (ChFi3d_ContactLineFolds), is computed again
+  with the mode on (ChFi3d_SetFoldStripes, per thread, restored after
+  it): its guides split around the folds, the walk across each fold
+  twisted; as it was where that fails too. A stripe that builds is never
+  computed so, whatever its contact lines do. (With the rules for every
+  walk, or with every edge whose contact line folds split, roundings that
+  built before failed: a three faces' corner whose short concave arcs
+  bend the edge more tightly than the ball of 3 touches the rod, the
+  ball leaving the arc's face before the contact on the rod would turn
+  back; an acute concave turn; a pierced face; a ball standing still.)
+- In that second pass ChFi3d_FilBuilder::PerformSurf and
+  PerformFirstSection mark a walk between an edge's faces whose guide
+  runs across a stretch where its contact line folds
+  (ChFi3d_FoldWalkOf), for the walk, its approximation and its storing
+  (BRepBlend_SetFoldWalk, per thread, restored after it): the cusp step,
+  the short twisted steps, the jump guard (BRepBlend_Walking), the
+  sections searched again (BRepBlend_AppFuncRoot), the twisted piece of
+  values alone, its contacts' curves and its orientation (CompleteData,
+  StoreData) and the section on the contact that does not fold apply
+  only to such a walk; the walks before and after it are OCCT's.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2228.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -18,6 +18,11 @@
+ #include <GCPnts_AbscissaPoint.hxx>
+ #include <OSD_Environment.hxx>
+ #include <cstdio>
++#include <algorithm>
++#include <functional>
++#include <utility>
++#include <vector>
++#include <BRepAdaptor_Curve2d.hxx>
+ #include <Adaptor2d_Curve2d.hxx>
+ #include <Approx_CurveOnSurface.hxx>
+ #include <Geom_BSplineCurve.hxx>
+@@ -170,6 +175,14 @@
+   return !OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty();
+ }
+ 
++// (Where a contact line folds: the guides' cuts around the folds, defined
++// with ChFi3d_SplitGuidesAtFolds below, mitcad#2228.)
++static std::vector<double> ChFi3d_FoldCutsOf(
++  const occ::handle<ChFiDS_Spine>&                                  Spine,
++  const std::function<void(const int, TopoDS_Face&, TopoDS_Face&)>& Faces,
++  const double                                                      Tol);
++static bool ChFi3d_IsFoldCut(const std::vector<double>& Cuts, const double W, const double Tol);
++
+ namespace
+ {
+ 
+@@ -5694,12 +5707,36 @@
+   {
+     // Now the ElSpine is artificially extended to help rsnld.
+     double prab = 0.01;
+-    Guide.FirstParameter(wf - prab * (wl - wf));
+-    Guide.LastParameter(wl + prab * (wl - wf));
++    // (Not at an end where the guides were split around a fold of a contact
++    // line, ChFi3d_SplitGuidesAtFolds: the walk ends there, where the next
++    // guide's piece starts; past it, it ran into the fold, mitcad#2228.)
++    double     aExtFirst = prab * (wl - wf), aExtLast = prab * (wl - wf);
++    const bool aInnerFirst = wf > Spine->FirstParameter(1) + 10. * tolesp;
++    const bool aInnerLast  = wl < Spine->LastParameter(Spine->NbEdges()) - 10. * tolesp;
++    if (aInnerFirst || aInnerLast)
++    {
++      const auto aFaces = [&](const int theEdge, TopoDS_Face& theF1, TopoDS_Face& theF2) {
++        occ::handle<BRepAdaptor_Surface> aHS1, aHS2;
++        ConexFaces(Spine, theEdge, aHS1, aHS2);
++        theF1 = aHS1->Face();
++        theF2 = aHS2->Face();
++      };
++      const std::vector<double> aCuts = ChFi3d_FoldCutsOf(Spine, aFaces, tolesp);
++      if (aInnerFirst && ChFi3d_IsFoldCut(aCuts, wf, tolesp))
++      {
++        aExtFirst = 0.;
++      }
++      if (aInnerLast && ChFi3d_IsFoldCut(aCuts, wl, tolesp))
++      {
++        aExtLast = 0.;
++      }
++    }
++    Guide.FirstParameter(wf - aExtFirst);
++    Guide.LastParameter(wl + aExtLast);
+     if (!OffsetHGuide.IsNull())
+     {
+-      OffsetHGuide->FirstParameter(wf - prab * (wl - wf));
+-      OffsetHGuide->LastParameter(wl + prab * (wl - wf));
++      OffsetHGuide->FirstParameter(wf - aExtFirst);
++      OffsetHGuide->LastParameter(wl + aExtLast);
+     }
+   }
+   // occ::handle<ChFiDS_Spine>&  Spine = Stripe->ChangeSpine();
+@@ -22734,6 +22771,528 @@
+   return found;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_FoldRatio
++// purpose  : How far the contact line of a rounding of radius R on face
++//            F folds where edge E is at parameter T (F's other face at
++//            the edge G): the edge's bending towards F's inside times the
++//            distance R tan(a / 2) from the edge at which the ball touches
++//            F (a the angle between the faces' outward normals). Above 1
++//            the contact line, the edge moved that far into F, runs
++//            backwards there (mitcad#2228). False where it cannot be told
++//            (no normal, a degenerate tangent, faces tangent or folded
++//            flat).
++//=======================================================================
++static bool ChFi3d_FoldRatio(const TopoDS_Edge&       E,
++                             const BRepAdaptor_Curve& C,
++                             const TopoDS_Face&       F,
++                             const TopAbs_Orientation OnF,
++                             const TopoDS_Face&       G,
++                             const double             R,
++                             const double             T,
++                             double&                  Ratio)
++{
++  const auto anOutward = [&](const TopoDS_Face& aFace, gp_Dir& aN) {
++    const BRepAdaptor_Curve2d aPC(E, aFace);
++    const gp_Pnt2d            aUV = aPC.Value(T);
++    const BRepAdaptor_Surface aS(aFace, false);
++    BRepLProp_SLProps         aProps(aS, aUV.X(), aUV.Y(), 1, 1.e-9);
++    if (!aProps.IsNormalDefined())
++    {
++      return false;
++    }
++    aN = aProps.Normal();
++    if (aFace.Orientation() == TopAbs_REVERSED)
++    {
++      aN.Reverse();
++    }
++    return true;
++  };
++  gp_Pnt aP;
++  gp_Vec aD1, aD2;
++  C.D2(T, aP, aD1, aD2);
++  const double aSpeed = aD1.Magnitude();
++  gp_Dir       aNF, aNG;
++  if (aSpeed < gp::Resolution() || !anOutward(F, aNF) || !anOutward(G, aNG))
++  {
++    return false;
++  }
++  const gp_Vec aT = aD1 / aSpeed;
++  // The curvature vector: towards the centre of the bending, 1 / radius
++  // long.
++  const gp_Vec aK     = (aD2 - aT * aD2.Dot(aT)) / (aSpeed * aSpeed);
++  const gp_Vec aAlong = OnF == TopAbs_FORWARD ? aT : -aT;
++  // Into F from the edge: its outward normal across the edge as F's
++  // boundary runs (F lies to the left of its boundary seen from outside).
++  const gp_Vec anInto = gp_Vec(aNF).Crossed(aAlong);
++  const double anAngle = aNF.Angle(aNG);
++  if (anInto.Magnitude() < gp::Resolution() || anAngle < 1.e-3 || anAngle > M_PI - 1.e-3)
++  {
++    return false;
++  }
++  Ratio = aK.Dot(anInto.Normalized()) * R * std::tan(anAngle / 2.);
++  return true;
++}
++
++//=======================================================================
++// function : ChFi3d_FoldsOfContact
++// purpose  : The stretches of edge IE of Spine (as spine parameters,
++//            appended to Starts and Ends) where the contact line of a
++//            rounding of radius R on one of its faces F1 and F2 folds over
++//            itself (ChFi3d_FoldRatio above 1, mitcad#2228): the crest of
++//            a wave-shaped wall bending with 2.77 mm, its top edge rounded
++//            with 3. The walk across such a stretch runs its contact
++//            backwards there and is twisted. Most:
++//            each face's largest fold ratio along the edge (-RealLast()
++//            where none was told); Folds: each face's number of stretches.
++//=======================================================================
++static void ChFi3d_FoldsOfContact(const occ::handle<ChFiDS_Spine>& Spine,
++                                  const int                        IE,
++                                  const TopoDS_Face&               F1,
++                                  const TopoDS_Face&               F2,
++                                  const double                     R,
++                                  NCollection_Sequence<double>&    Starts,
++                                  NCollection_Sequence<double>&    Ends,
++                                  double                           Most[2],
++                                  int                              Folds[2])
++{
++  Most[0] = Most[1] = -RealLast();
++  Folds[0] = Folds[1] = 0;
++  const TopoDS_Edge& E = Spine->Edges(IE);
++  if (E.IsNull() || BRep_Tool::Degenerated(E) || F1.IsNull() || F2.IsNull() || F1.IsSame(F2) || !(R > 0.))
++  {
++    return;
++  }
++  const BRepAdaptor_Curve C(E);
++  const double            aFirst = C.FirstParameter(), aLast = C.LastParameter();
++  const double            aLength = GCPnts_AbscissaPoint::Length(C);
++  const int aN = std::min(4000, std::max(64, int(aLength / (0.05 * R)) + 1));
++  for (int aSide = 0; aSide < 2; aSide++)
++  {
++    const TopoDS_Face& F = aSide == 0 ? F1 : F2;
++    const TopoDS_Face& G = aSide == 0 ? F2 : F1;
++    // The edge's orientation in F as its boundary runs (not a seam).
++    int                aSeen = 0;
++    TopAbs_Orientation anOn  = TopAbs_FORWARD;
++    for (TopExp_Explorer anEx(F, TopAbs_EDGE); anEx.More(); anEx.Next())
++    {
++      if (anEx.Current().IsSame(E))
++      {
++        anOn = anEx.Current().Orientation();
++        aSeen++;
++      }
++    }
++    if (aSeen != 1 || (anOn != TopAbs_FORWARD && anOn != TopAbs_REVERSED))
++    {
++      continue;
++    }
++    const auto aFolds = [&](const double T) {
++      double aRatio = 0.;
++      return ChFi3d_FoldRatio(E, C, F, anOn, G, R, T, aRatio) && aRatio > 1. + 1.e-6;
++    };
++    // (Just inside the edge's ends.)
++    const auto aParam = [&](const int K) {
++      return aFirst + (aLast - aFirst) * (0.001 + 0.998 * double(K) / double(aN));
++    };
++    // Where the fold starts or ends between two samples, by halving.
++    const auto aBorder = [&](double aA, double aB) {
++      const bool aFoldA = aFolds(aA);
++      for (int k = 0; k < 40; k++)
++      {
++        const double aM = 0.5 * (aA + aB);
++        if (aFolds(aM) == aFoldA)
++        {
++          aA = aM;
++        }
++        else
++        {
++          aB = aM;
++        }
++      }
++      return 0.5 * (aA + aB);
++    };
++    // Each sample's ratio once: whether it folds there, and the largest.
++    std::vector<char> aFoldsAt(size_t(aN) + 1, 0);
++    double            aMost = -RealLast();
++    for (int k = 0; k <= aN; k++)
++    {
++      double aRatio = 0.;
++      if (ChFi3d_FoldRatio(E, C, F, anOn, G, R, aParam(k), aRatio))
++      {
++        aMost       = std::max(aMost, aRatio);
++        aFoldsAt[k] = aRatio > 1. + 1.e-6 ? 1 : 0;
++      }
++    }
++    Most[aSide] = aMost;
++    if (ChFi3d_TracingWalkOnSpine())
++    {
++      std::fprintf(stderr,
++                   "fillet walk: edge %d, face %d: fold ratio at most %.6g (%d points; the contact line folds "
++                   "above 1)\n",
++                   IE, aSide + 1, aMost, aN + 1);
++    }
++    const int aStretchesBefore = Starts.Length();
++    bool      aIn              = aFoldsAt[0] != 0;
++    double    aStart           = aIn ? aParam(0) : 0.;
++    for (int k = 1; k <= aN; k++)
++    {
++      const bool aNow = aFoldsAt[k] != 0;
++      if (aNow == aIn)
++      {
++        continue;
++      }
++      const double aAt = aBorder(aParam(k - 1), aParam(k));
++      if (aNow)
++      {
++        aStart = aAt;
++      }
++      else
++      {
++        const double aW0 = Spine->Absc(aStart, IE), aW1 = Spine->Absc(aAt, IE);
++        Starts.Append(std::min(aW0, aW1));
++        Ends.Append(std::max(aW0, aW1));
++      }
++      aIn = aNow;
++    }
++    if (aIn)
++    {
++      const double aW0 = Spine->Absc(aStart, IE), aW1 = Spine->Absc(aParam(aN), IE);
++      Starts.Append(std::min(aW0, aW1));
++      Ends.Append(std::max(aW0, aW1));
++    }
++    Folds[aSide] = Starts.Length() - aStretchesBefore;
++    if (ChFi3d_TracingWalkOnSpine())
++    {
++      for (int i = aStretchesBefore + 1; i <= Starts.Length(); i++)
++      {
++        std::fprintf(stderr, "fillet walk: edge %d, face %d: the contact line folds from w %.9g to %.9g\n", IE,
++                     aSide + 1, Starts(i), Ends(i));
++      }
++    }
++  }
++}
++
++//=======================================================================
++// function : ChFi3d_FoldCuts
++// purpose  : Where the guides of Spine are split around the stretches
++//            where a contact line folds (Starts, Ends: spine parameters,
++//            mitcad#2228), in increasing order: a little before and after
++//            each stretch, a tenth of its length (at least 10 Tol) outside
++//            it; stretches whose margins meet are one; a stretch reaching
++//            within its margin of the spine's ends has no neighbour there
++//            and is not split off.
++//=======================================================================
++static std::vector<double> ChFi3d_FoldCuts(const occ::handle<ChFiDS_Spine>&    Spine,
++                                           const NCollection_Sequence<double>& Starts,
++                                           const NCollection_Sequence<double>& Ends,
++                                           const double                        Tol)
++{
++  std::vector<std::pair<double, double>> aFolds;
++  for (int i = 1; i <= Starts.Length(); i++)
++  {
++    const double aMargin = std::max(10. * Tol, 0.1 * (Ends(i) - Starts(i)));
++    aFolds.emplace_back(Starts(i) - aMargin, Ends(i) + aMargin);
++  }
++  std::sort(aFolds.begin(), aFolds.end());
++  std::vector<std::pair<double, double>> aMerged;
++  for (const std::pair<double, double>& aFold : aFolds)
++  {
++    if (!aMerged.empty() && aFold.first <= aMerged.back().second)
++    {
++      aMerged.back().second = std::max(aMerged.back().second, aFold.second);
++    }
++    else
++    {
++      aMerged.push_back(aFold);
++    }
++  }
++  const double        aW0 = Spine->FirstParameter(1), aW1 = Spine->LastParameter(Spine->NbEdges());
++  std::vector<double> aCuts;
++  for (const std::pair<double, double>& aFold : aMerged)
++  {
++    if (aFold.first > aW0 + 10. * Tol && aFold.second < aW1 - 10. * Tol)
++    {
++      aCuts.push_back(aFold.first);
++      aCuts.push_back(aFold.second);
++    }
++    else if (ChFi3d_TracingWalkOnSpine())
++    {
++      std::fprintf(stderr,
++                   "fillet walk: fold from w %.9g to %.9g (with its margins) not split off: it reaches the "
++                   "spine's end (%.9g to %.9g)\n",
++                   aFold.first, aFold.second, aW0, aW1);
++    }
++  }
++  return aCuts;
++}
++
++//=======================================================================
++// The edges, per spine, along which a contact line of the rounding folds
++// over itself on its face (ChFi3d_FoldCutsOf, mitcad#2228): the edge's two
++// faces, the stretches (spine parameters) and which face's contact does
++// not fold (0, 1 or 2 for none, the first or the second face). Only a walk
++// between those faces whose guide runs across such a stretch is a walk
++// across a fold (ChFi3d_FoldWalkOf), with its own rules (BRepBlend_Walking
++// and the rest); every other walk is OCCT's as it was. Kept per thread, as
++// the builder's other walk settings.
++//=======================================================================
++namespace
++{
++//! Whether the stripe under way is computed with its guides split around
++//! the folds of its contact lines and the walks across them twisted
++//! (ChFi3d_Builder::Compute's second pass, for a stripe that failed
++//! without: mitcad#2228). Off, no fold is looked for.
++bool& ChFi3d_FoldStripesFlag()
++{
++  static thread_local bool aFlag = false;
++  return aFlag;
++}
++
++struct ChFi3d_FoldedEdge
++{
++  const ChFiDS_Spine*                    Spine;
++  TopoDS_Face                            F1;
++  TopoDS_Face                            F2;
++  int                                    FoldFree;
++  std::vector<std::pair<double, double>> Stretches;
++};
++
++std::vector<ChFi3d_FoldedEdge>& ChFi3d_FoldedEdges()
++{
++  static thread_local std::vector<ChFi3d_FoldedEdge> anEdges;
++  return anEdges;
++}
++} // namespace
++
++//=======================================================================
++// function : ChFi3d_FoldWalkOf
++// purpose  : Whether the walk of Spine between F1 and F2 along the guide's
++//            First to Last runs across a stretch where a contact line
++//            folds (ChFi3d_FoldCutsOf); OnContact: 1 or 2 where the
++//            contact on F1 or on F2 does not fold there and holds the
++//            sections in the guide's normal plane
++//            (BlendFunc_ConstRad::SetSectionOnContact), 0 (the contacts'
++//            mid-point) otherwise. (Used by ChFi3d_FilBuilder, mitcad#2228.)
++//=======================================================================
++bool ChFi3d_FoldWalkOf(const occ::handle<ChFiDS_Spine>& Spine,
++                       const TopoDS_Face&               F1,
++                       const TopoDS_Face&               F2,
++                       const double                     First,
++                       const double                     Last,
++                       int&                             OnContact)
++{
++  OnContact = 0;
++  if (Spine.IsNull() || !ChFi3d_FoldStripesFlag())
++  {
++    return false;
++  }
++  const double aLow = std::min(First, Last), aHigh = std::max(First, Last);
++  for (const ChFi3d_FoldedEdge& anEdge : ChFi3d_FoldedEdges())
++  {
++    if (anEdge.Spine != Spine.get())
++    {
++      continue;
++    }
++    const bool aSame    = anEdge.F1.IsSame(F1) && anEdge.F2.IsSame(F2);
++    const bool aSwapped = anEdge.F1.IsSame(F2) && anEdge.F2.IsSame(F1);
++    if (!aSame && !aSwapped)
++    {
++      continue;
++    }
++    for (const std::pair<double, double>& aStretch : anEdge.Stretches)
++    {
++      if (aStretch.first < aHigh && aStretch.second > aLow)
++      {
++        OnContact = anEdge.FoldFree == 0 ? 0 : (aSame ? anEdge.FoldFree : 3 - anEdge.FoldFree);
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
++//=======================================================================
++// function : ChFi3d_FoldCutsOf
++// purpose  : ChFi3d_FoldCuts of a fillet of constant radius along Spine
++//            (not closed), the faces of its edge IE given by Faces (the
++//            builder's ConexFaces); none for another spine. Notes each
++//            edge whose contact line folds, its faces and stretches, and
++//            the face whose contact does not fold where the other's does
++//            (no stretch and a largest fold ratio below 0.9 on the one):
++//            ChFi3d_FoldWalkOf.
++//=======================================================================
++static std::vector<double> ChFi3d_FoldCutsOf(
++  const occ::handle<ChFiDS_Spine>&                                     Spine,
++  const std::function<void(const int, TopoDS_Face&, TopoDS_Face&)>& Faces,
++  const double                                                         Tol)
++{
++  std::vector<ChFi3d_FoldedEdge>& aFolded = ChFi3d_FoldedEdges();
++  aFolded.erase(std::remove_if(aFolded.begin(),
++                               aFolded.end(),
++                               [&](const ChFi3d_FoldedEdge& anEdge) { return anEdge.Spine == Spine.get(); }),
++                aFolded.end());
++  const occ::handle<ChFiDS_FilSpine> aFil = occ::down_cast<ChFiDS_FilSpine>(Spine);
++  if (!ChFi3d_FoldStripesFlag() || aFil.IsNull() || !aFil->IsConstant() || Spine->IsPeriodic())
++  {
++    return {};
++  }
++  NCollection_Sequence<double> aStarts, aEnds;
++  for (int iedge = 1; iedge <= Spine->NbEdges(); iedge++)
++  {
++    TopoDS_Face aF1, aF2;
++    Faces(iedge, aF1, aF2);
++    double    aMost[2];
++    int       aFolds[2];
++    const int aBefore = aStarts.Length();
++    ChFi3d_FoldsOfContact(Spine, iedge, aF1, aF2, aFil->Radius(), aStarts, aEnds, aMost, aFolds);
++    if (aStarts.Length() == aBefore)
++    {
++      continue;
++    }
++    ChFi3d_FoldedEdge anEdge{Spine.get(), aF1, aF2, 0, {}};
++    for (int i = aBefore + 1; i <= aStarts.Length(); i++)
++    {
++      anEdge.Stretches.emplace_back(aStarts(i), aEnds(i));
++    }
++    for (int aSide = 0; aSide < 2; aSide++)
++    {
++      const double aFree = aMost[aSide];
++      if (aFolds[aSide] == 0 && aFolds[1 - aSide] > 0 && aFree > -RealLast() && aFree < 0.9)
++      {
++        anEdge.FoldFree = aSide + 1;
++        if (ChFi3d_TracingWalkOnSpine())
++        {
++          std::fprintf(stderr,
++                       "fillet walk: edge %d: the contact on face %d (fold ratio at most %.6g) holds the "
++                       "sections, the one on face %d folds\n",
++                       iedge, aSide + 1, aFree, 2 - aSide);
++        }
++      }
++    }
++    aFolded.push_back(anEdge);
++  }
++  if (aStarts.IsEmpty())
++  {
++    return {};
++  }
++  return ChFi3d_FoldCuts(Spine, aStarts, aEnds, Tol);
++}
++
++//=======================================================================
++// function : ChFi3d_IsFoldCut
++// purpose  : Whether W is one of Cuts (ChFi3d_FoldCuts) within Tol.
++//=======================================================================
++static bool ChFi3d_IsFoldCut(const std::vector<double>& Cuts, const double W, const double Tol)
++{
++  for (const double aCut : Cuts)
++  {
++    if (std::abs(aCut - W) <= Tol)
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
++//=======================================================================
++// function : ChFi3d_SetFoldStripes
++// purpose  : Switches the fold stripes' mode (ChFi3d_FoldStripesFlag) on
++//            or off; returns how it was. (Used by ChFi3d_Builder::Compute,
++//            mitcad#2228.)
++//=======================================================================
++bool ChFi3d_SetFoldStripes(const bool On)
++{
++  const bool aBefore        = ChFi3d_FoldStripesFlag();
++  ChFi3d_FoldStripesFlag() = On;
++  return aBefore;
++}
++
++//=======================================================================
++// function : ChFi3d_ContactLineFolds
++// purpose  : Whether a contact line of the rounding along Spine folds over
++//            itself on a face of its edges (ChFi3d_FoldsOfContact; the
++//            faces of each edge given by Faces): a stripe that failed so
++//            is computed again with its guides split around the folds
++//            (ChFi3d_Builder::Compute, mitcad#2228).
++//=======================================================================
++bool ChFi3d_ContactLineFolds(
++  const occ::handle<ChFiDS_Spine>&                                     Spine,
++  const std::function<void(const int, TopoDS_Face&, TopoDS_Face&)>& Faces,
++  const double                                                         Tol)
++{
++  const bool aBefore = ChFi3d_SetFoldStripes(true);
++  ChFi3d_FoldCutsOf(Spine, Faces, Tol);
++  ChFi3d_SetFoldStripes(aBefore);
++  for (const ChFi3d_FoldedEdge& anEdge : ChFi3d_FoldedEdges())
++  {
++    if (anEdge.Spine == Spine.get())
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
++//=======================================================================
++// function : ChFi3d_SplitGuidesAtFolds
++// purpose  : The guides of Spine split at Cuts (ChFi3d_FoldCuts,
++//            mitcad#2228), so that the walk across each stretch where a
++//            contact line folds is a piece of its own, twisted, between
++//            untwisted pieces: PerformSetOfKGen fills a twisted piece
++//            between its neighbours, cut where their contact lines cross
++//            (the corner of the contact line where its swallowtail is cut
++//            away). The pieces after the first in a guide get the piece
++//            walked before them when they are walked (PerformSetOfKGen).
++//=======================================================================
++static void ChFi3d_SplitGuidesAtFolds(const occ::handle<ChFiDS_Spine>& Spine,
++                                      const std::vector<double>&       aCuts,
++                                      const double                     Tol)
++{
++  if (aCuts.empty())
++  {
++    return;
++  }
++  NCollection_List<occ::handle<ChFiDS_ElSpine>>& aGuides = Spine->ChangeElSpines();
++  NCollection_List<occ::handle<ChFiDS_ElSpine>>  aSplit;
++  for (NCollection_List<occ::handle<ChFiDS_ElSpine>>::Iterator anIt(aGuides); anIt.More(); anIt.Next())
++  {
++    occ::handle<ChFiDS_ElSpine> aCurrent = anIt.Value();
++    if (aCurrent->IsPeriodic())
++    {
++      aSplit.Append(aCurrent);
++      continue;
++    }
++    for (const double aCut : aCuts)
++    {
++      if (aCut <= aCurrent->FirstParameter() + 10. * Tol || aCut >= aCurrent->LastParameter() - 10. * Tol)
++      {
++        continue;
++      }
++      gp_Pnt aP, aLastP;
++      gp_Vec aT, aLastT;
++      Spine->D1(aCut, aP, aT);
++      aCurrent->LastPointAndTgt(aLastP, aLastT);
++      occ::handle<ChFiDS_ElSpine> aNext = new ChFiDS_ElSpine();
++      aNext->FirstParameter(aCut);
++      aNext->SetFirstPointAndTgt(aP, aT);
++      aNext->LastParameter(aCurrent->LastParameter());
++      aNext->SetLastPointAndTgt(aLastP, aLastT);
++      aNext->ChangeNext() = aCurrent->Next();
++      aCurrent->LastParameter(aCut);
++      aCurrent->SetLastPointAndTgt(aP, aT);
++      aCurrent->ChangeNext().Nullify();
++      if (ChFi3d_TracingWalkOnSpine())
++      {
++        std::fprintf(stderr, "fillet walk: guide split at %.9g where a contact line folds\n", aCut);
++      }
++      aSplit.Append(aCurrent);
++      aCurrent = aNext;
++    }
++    aSplit.Append(aCurrent);
++  }
++  aGuides = aSplit;
++}
++
+ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
+ {
+   TopOpeBRepDS_DataStructure&      DStr  = myDS->ChangeDS();
+@@ -23385,6 +23944,24 @@
+     }
+   }
+ 
++  // A rounding of constant radius whose contact line folds over itself on
++  // a face, where the edge bends towards that face more tightly than the
++  // ball touches it (a wave-shaped wall's crests): its guides split before
++  // and after each such stretch, so that the twisted walk there is a piece
++  // of its own between untwisted ones, which PerformSetOfKGen fills
++  // between them (mitcad#2228). Only the guides: the offset guides of a
++  // chamfer with penetration stay as they are.
++  if (Spine->Mode() != ChFiDS_ConstThroatWithPenetrationChamfer)
++  {
++    const auto aFaces = [&](const int theEdge, TopoDS_Face& theF1, TopoDS_Face& theF2) {
++      occ::handle<BRepAdaptor_Surface> aHS1, aHS2;
++      ConexFaces(Spine, theEdge, aHS1, aHS2);
++      theF1 = aHS1->Face();
++      theF2 = aHS2->Face();
++    };
++    ChFi3d_SplitGuidesAtFolds(Spine, ChFi3d_FoldCutsOf(Spine, aFaces, tolesp), tolesp);
++  }
++
+   // The ends of the spine no other blend meets: a guide wholly past such an
+   // end is the spine's straight extension (ChFi3d_PerformElSpine).
+   int aFreeEnds = 0;
+@@ -23449,9 +24026,38 @@
+   occ::handle<ChFiDS_Spine>&                              Spine = Stripe->ChangeSpine();
+   NCollection_List<occ::handle<ChFiDS_ElSpine>>&          ll    = Spine->ChangeElSpines();
+   NCollection_List<occ::handle<ChFiDS_ElSpine>>::Iterator ILES(ll);
++  occ::handle<ChFiDS_ElSpine>                             aGuideBefore;
++  std::vector<double>                                     aFoldCuts;
++  bool                                                    aFoldCutsKnown = false;
+   for (; ILES.More(); ILES.Next())
+   {
+     const occ::handle<ChFiDS_ElSpine>& ES = ILES.Value();
++    // (A guide split where a contact line folds, ChFi3d_SplitGuidesAtFolds:
++    // where it goes on from the guide before it, no piece between them, it
++    // starts from the last piece walked, as from a particular piece before
++    // it, also when the stripe is walked again. Without one its walk would
++    // remove the pieces walked before it.)
++    if (!aGuideBefore.IsNull() && !ES->IsPeriodic()
++        && std::abs(ES->FirstParameter() - aGuideBefore->LastParameter()) <= tolesp
++        && !Stripe->SetOfSurfData().IsNull() && !Stripe->SetOfSurfData()->IsEmpty())
++    {
++      if (!aFoldCutsKnown)
++      {
++        const auto aFaces = [&](const int theEdge, TopoDS_Face& theF1, TopoDS_Face& theF2) {
++          occ::handle<BRepAdaptor_Surface> aHS1, aHS2;
++          ConexFaces(Spine, theEdge, aHS1, aHS2);
++          theF1 = aHS1->Face();
++          theF2 = aHS2->Face();
++        };
++        aFoldCuts      = ChFi3d_FoldCutsOf(Spine, aFaces, tolesp);
++        aFoldCutsKnown = true;
++      }
++      if (ChFi3d_IsFoldCut(aFoldCuts, ES->FirstParameter(), tolesp))
++      {
++        ES->ChangePrevious() = Stripe->SetOfSurfData()->Last();
++      }
++    }
++    aGuideBefore = ES;
+     // (Computed again over a narrow face: a guide running past an end of the
+     // spine may fail past it; what lies past there is cut off, or made by
+     // ChamferEndPastTurnStop where the contour was stopped at a turn.)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -15,7 +15,10 @@
+ // commercial license or contractual agreement.
+ 
+ #include <cmath>
++#include <cstdio>
+ #include <initializer_list>
++#include <typeinfo>
++#include <OSD_Environment.hxx>
+ #include <Approx_SweepFunction.hxx>
+ #include <BRepBlend_AppFunc.hxx>
+ #include <BRepBlend_AppSurface.hxx>
+@@ -107,6 +110,7 @@
+ #include <BRepAdaptor_Curve.hxx>
+ #include <utility>
+ #include <cmath>
++#include <functional>
+ 
+ #ifdef OCCT_DEBUG
+   #include <OSD_Chronometer.hxx>
+@@ -130,6 +134,14 @@
+ extern bool ChFi3d_GettraceCHRON();
+ #endif
+ 
++// The fold stripes' mode and whether a contact line of a spine folds over itself
++// (ChFi3d_Builder_2.cxx, mitcad#2228): Compute's second pass for the stripes that failed.
++bool ChFi3d_SetFoldStripes(const bool On);
++bool ChFi3d_ContactLineFolds(
++  const occ::handle<ChFiDS_Spine>&                                     Spine,
++  const std::function<void(const int, TopoDS_Face&, TopoDS_Face&)>& Faces,
++  const double                                                         Tol);
++
+ //=================================================================================================
+ 
+ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr, const TopoDS_Shape& S)
+@@ -8181,6 +8193,16 @@
+       std::cout << "EXCEPTION Stripe compute " << anException << std::endl;
+ #endif
+       (void)anException;
++      // (Which exception failed the stripe, with the walk traced: port
++      // patch 2141's MITCAD_TRACE_FILLET_WALK, mitcad#2228.)
++      if (!OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty())
++      {
++        std::fprintf(stderr,
++                     "fillet walk: the stripe's computation raised %s: '%s' (error status %d)\n",
++                     typeid(anException).name(),
++                     anException.what(),
++                     int(itel.Value()->Spine()->ErrorStatus()));
++      }
+       badstripes.Append(itel.Value());
+       done = true;
+       if (itel.Value()->Spine()->ErrorStatus() == ChFiDS_Ok)
+@@ -8325,6 +8347,68 @@
+     }
+     st->Spine()->SetErrorStatus(aStatus);
+     itBad.Next();
++  }
++  // Stripes that failed along an edge where the contact line of the
++  // rounding on one of its faces folds over itself (the edge bending towards
++  // that face more tightly than the ball touches it from the edge, a wave's
++  // crests): computed again with their guides split around each fold and
++  // the walk across it twisted (ChFi3d_SetFoldStripes, mitcad#2228); as
++  // they were where that fails too. Only those: a stripe that builds is
++  // never computed so, whatever its contact lines do.
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itBad(badstripes); itBad.More();)
++  {
++    occ::handle<ChFiDS_Stripe> st      = itBad.Value();
++    const ChFiDS_ErrorStatus   aStatus = st->Spine()->ErrorStatus();
++    const auto aFaces = [&](const int theEdge, TopoDS_Face& theF1, TopoDS_Face& theF2) {
++      occ::handle<BRepAdaptor_Surface> aHS1, aHS2;
++      ConexFaces(st->Spine(), theEdge, aHS1, aHS2);
++      theF1 = aHS1->Face();
++      theF2 = aHS2->Face();
++    };
++    bool aFolds = false;
++    try
++    {
++      OCC_CATCH_SIGNALS
++      aFolds = ChFi3d_ContactLineFolds(st->Spine(), aFaces, tolesp);
++    }
++    catch (Standard_Failure const&)
++    {
++      aFolds = false;
++    }
++    if (!aFolds)
++    {
++      itBad.Next();
++      continue;
++    }
++    st->Reset();
++    st->Spine()->SetErrorStatus(ChFiDS_Ok);
++    const bool aFoldStripesBefore = ChFi3d_SetFoldStripes(true);
++    bool       aComputed          = true;
++    try
++    {
++      OCC_CATCH_SIGNALS
++      done = true;
++      PerformSetOfSurf(st);
++      aComputed = done;
++    }
++    catch (Standard_Failure const& anException)
++    {
++      ChFi3d_SetFoldStripes(aFoldStripesBefore);
++      // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
++      aComputed = false;
++    }
++    ChFi3d_SetFoldStripes(aFoldStripesBefore);
++    if (aComputed && st->Spine()->ErrorStatus() == ChFiDS_Ok)
++    {
++      badstripes.Remove(itBad);
++      continue;
++    }
++    st->Spine()->SetErrorStatus(aStatus);
++    itBad.Next();
+   }
+   done = (badstripes.IsEmpty());
+   // Stripes whose blends ran over a narrow face of their edge onto a face
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+@@ -70,6 +70,9 @@
+ #include <math_FunctionSetRoot.hxx>
+ #include <math_Vector.hxx>
+ #include <Precision.hxx>
++#include <Geom2dAPI_Interpolate.hxx>
++#include <NCollection_HArray1.hxx>
++#include <Standard_ErrorHandler.hxx>
+ #include <TopExp.hxx>
+ #include <TopoDS_Edge.hxx>
+ #include <TopoDS_Face.hxx>
+@@ -99,6 +102,11 @@
+   return !OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty();
+ }
+ 
++// Whether the walk under way runs across a fold of a contact line
++// (BRepBlend_Walking.cxx, mitcad#2228): only its twisted piece is stored
++// as such below.
++bool BRepBlend_FoldWalk();
++
+ #ifdef OCCT_DEBUG
+ extern bool ChFi3d_GettraceDRAWFIL();
+ extern bool ChFi3d_GettraceDRAWWALK();
+@@ -1373,16 +1381,106 @@
+                                   const bool                            Gf2,
+                                   const bool                            Reversed)
+ {
++  // (A twisted piece with the walk traced: each walked point's section,
++  // the arc between its contacts and its centre, a jump marked, before
++  // the approximation, mitcad#2228.)
++  if ((Data->TwistOnS1() || Data->TwistOnS2()) && ChFi3d_TracingWalkOnFaces())
++  {
++    if (BRepBlend_ConstRad* aConst = dynamic_cast<BRepBlend_ConstRad*>(&Func))
++    {
++      double aPrevArc = 0.;
++      gp_Pnt aPrevCentre;
++      for (int i = 1; i <= lin->NbPoints(); i++)
++      {
++        const Blend_Point& aP = lin->Point(i);
++        double             u1, v1, u2, v2, aDeb = 0., aFin = 0.;
++        aP.ParametersOnS1(u1, v1);
++        aP.ParametersOnS2(u2, v2);
++        gp_Circ aCirc;
++        aConst->Section(aP.Parameter(), u1, v1, u2, v2, aDeb, aFin, aCirc);
++        const gp_Pnt aCentre = aCirc.Location();
++        const bool   aJump   = i > 1
++                           && (std::abs(aFin - aPrevArc) > 0.3
++                               || aCentre.Distance(aPrevCentre)
++                                    > 2. * aP.PointOnS1().Distance(lin->Point(i - 1).PointOnS1()) + 1.e-6);
++        std::fprintf(stderr,
++                     "fillet walk: section %d at w %.9g: arc %.6g, centre (%.6f %.6f %.6f), axis (%.4f %.4f "
++                     "%.4f), contacts (%.6f %.6f %.6f) (%.6f %.6f %.6f) uv (%.9g %.9g) (%.9g %.9g)%s\n",
++                     i,
++                     aP.Parameter(),
++                     aFin - aDeb,
++                     aCentre.X(),
++                     aCentre.Y(),
++                     aCentre.Z(),
++                     aCirc.Axis().Direction().X(),
++                     aCirc.Axis().Direction().Y(),
++                     aCirc.Axis().Direction().Z(),
++                     aP.PointOnS1().X(),
++                     aP.PointOnS1().Y(),
++                     aP.PointOnS1().Z(),
++                     aP.PointOnS2().X(),
++                     aP.PointOnS2().Y(),
++                     aP.PointOnS2().Z(),
++                     u1,
++                     v1,
++                     u2,
++                     v2,
++                     aJump ? " JUMP" : "");
++        aPrevArc    = aFin;
++        aPrevCentre = aCentre;
++      }
++    }
++  }
+   occ::handle<BRepBlend_AppFunc> TheFunc = new (BRepBlend_AppFunc)(lin, Func, tolapp3d, 1.e-5);
+ 
+-  int                  Degmax = 20, Segmax = 5000;
++  int Degmax = 20, Segmax = 5000;
++  // A twisted piece is approximated by its sections' values alone (C0):
++  // where its ball nearly stands still (with 8.5 on the wave's crests the
++  // wall contact kept still from w 12.85 to 13.0 while the guide ran on),
++  // the sections' derivatives along the guide, through the near-singular
++  // Jacobian, were no measure of the sections, and the approximation
++  // through them ran to 65006 poles and 679 mm off the walk, where the
++  // sections themselves were smooth. Its surface is replaced by
++  // PerformSetOfKGen's filling; what that takes of the piece, its
++  // contacts' curves on the faces and its ends, the values give within
++  // the tolerance (mitcad#2228).
++  const bool          aTwistedPiece = BRepBlend_FoldWalk() && (Data->TwistOnS1() || Data->TwistOnS2());
++  const GeomAbs_Shape aConti        = aTwistedPiece ? GeomAbs_C0 : myConti;
++  // The walk's own contacts of a twisted piece, before the approximation
++  // inserts its sections into the line: its contacts' curves on the faces
++  // are taken through them (below). Between the walk's points the
++  // approximation's sections may lie on another branch of the equations
++  // near a ball that nearly stands still (with 8.5, w 12.85 to 13.0 on the
++  // wave's crest: the wall contact kept still where the walk's moved on),
++  // and the curve on the wall through them looped over itself, 34.8 long
++  // where the walk's runs 7.5 along the wall, and the wall's wire crossed
++  // itself (mitcad#2228).
++  const int                                  aNbWalked = lin->NbPoints();
++  occ::handle<NCollection_HArray1<double>>   aWalkedW;
++  occ::handle<NCollection_HArray1<gp_Pnt2d>> aWalkedUV1, aWalkedUV2;
++  if (aTwistedPiece && !Reversed && aNbWalked >= 2)
++  {
++    aWalkedW   = new NCollection_HArray1<double>(1, aNbWalked);
++    aWalkedUV1 = new NCollection_HArray1<gp_Pnt2d>(1, aNbWalked);
++    aWalkedUV2 = new NCollection_HArray1<gp_Pnt2d>(1, aNbWalked);
++    for (int i = 1; i <= aNbWalked; i++)
++    {
++      const Blend_Point& aP = lin->Point(i);
++      double             u, v;
++      aWalkedW->SetValue(i, aP.Parameter());
++      aP.ParametersOnS1(u, v);
++      aWalkedUV1->SetValue(i, gp_Pnt2d(u, v));
++      aP.ParametersOnS2(u, v);
++      aWalkedUV2->SetValue(i, gp_Pnt2d(u, v));
++    }
++  }
+   BRepBlend_AppSurface approx(TheFunc,
+                               lin->Point(1).Parameter(),
+                               lin->Point(lin->NbPoints()).Parameter(),
+                               tolapp3d,
+                               1.e-5,       // tolapp2d, tolerance max
+                               tolappangle, // Contact G1
+-                              myConti,
++                              aConti,
+                               Degmax,
+                               Segmax);
+   if (!approx.IsDone())
+@@ -1390,12 +1488,57 @@
+ #ifdef OCCT_DEBUG
+     std::cout << "Approximation non faite !!!" << std::endl;
+ #endif
++    if (ChFi3d_TracingWalkOnFaces())
++    {
++      std::fprintf(stderr,
++                   "fillet walk: the approximation of the line walked from w %.9g to %.9g (%d points, twisted "
++                   "%d %d) is not done\n",
++                   lin->Point(1).Parameter(),
++                   lin->Point(lin->NbPoints()).Parameter(),
++                   lin->NbPoints(),
++                   int(Data->TwistOnS1()),
++                   int(Data->TwistOnS2()));
++    }
+     return false;
+   }
+ #ifdef OCCT_DEBUG
+   approx.Dump(std::cout);
+ #endif
+-  return StoreData(Data, approx, lin, S1, S2, Or1, Gd1, Gd2, Gf1, Gf2, Reversed);
++  const bool aStored = StoreData(Data, approx, lin, S1, S2, Or1, Gd1, Gd2, Gf1, Gf2, Reversed);
++  // (A twisted piece: its contacts' curves on the faces through the walk's
++  // own contacts, at the walk's parameters, which the approximated
++  // surface's run along; PerformSetOfKGen's filling takes the untwisted
++  // side's. Where no curve goes through them, the approximation's stays.)
++  if (aStored && !aWalkedW.IsNull())
++  {
++    for (int aSide = 1; aSide <= 2; aSide++)
++    {
++      try
++      {
++        OCC_CATCH_SIGNALS
++        Geom2dAPI_Interpolate anInterpolation(aSide == 1 ? aWalkedUV1 : aWalkedUV2, aWalkedW, false, 1.e-9);
++        anInterpolation.Perform();
++        if (!anInterpolation.IsDone())
++        {
++          continue;
++        }
++        ChFiDS_FaceInterference& aFint =
++          aSide == 1 ? Data->ChangeInterferenceOnS1() : Data->ChangeInterferenceOnS2();
++        aFint.ChangePCurveOnFace() = anInterpolation.Curve();
++        if (ChFi3d_TracingWalkOnFaces())
++        {
++          std::fprintf(stderr,
++                       "fillet walk: twisted piece's contact %d on its face taken through the walk's %d points\n",
++                       aSide,
++                       aNbWalked);
++        }
++      }
++      catch (Standard_Failure const&)
++      {
++      }
++    }
++  }
++  return aStored;
+ }
+ 
+ //=======================================================================
+@@ -1499,6 +1642,18 @@
+   double             tolget3d, tolget2d, tolaux, tolC1, tolcheck;
+   double             tolC2 = 0.;
+   approx.TolReached(tolget3d, tolget2d);
++  // (A twisted piece, PerformSetOfKGen's filling replaces its surface:
++  // what its approximation reached, with the walk traced, mitcad#2228.)
++  const bool aTwisted = BRepBlend_FoldWalk() && (Data->TwistOnS1() || Data->TwistOnS2());
++  if (aTwisted && ChFi3d_TracingWalkOnFaces())
++  {
++    std::fprintf(stderr,
++                 "fillet walk: twisted piece from w %.9g to %.9g approximated within %.6g (3d) and %.6g (2d)\n",
++                 lin->Point(1).Parameter(),
++                 lin->Point(lin->NbPoints()).Parameter(),
++                 tolget3d,
++                 tolget2d);
++  }
+   tolaux = approx.TolCurveOnSurf(1);
+   tolC1  = tolget3d + tolaux;
+   if (!S2.IsNull())
+@@ -1576,6 +1731,60 @@
+     Surf->SetPole(Surf->NbUPoles(), Surf->NbVPoles(), P22);
+   }
+ 
++  // (A twisted piece with the walk traced: how far the approximated
++  // surface's sides lie from the walked contacts, at each walked point,
++  // mitcad#2228.)
++  if (aTwisted && ChFi3d_TracingWalkOnFaces())
++  {
++    double aU0, aU1, aV0, aV1;
++    Surf->Bounds(aU0, aU1, aV0, aV1);
++    double aWorst = 0., aWorstW = 0.;
++    for (int i = 1; i <= lin->NbPoints(); i++)
++    {
++      const Blend_Point& aP = lin->Point(i);
++      const double       aV = std::min(std::max(aP.Parameter(), aV0), aV1);
++      const gp_Pnt       aOn1 = Surf->Value(Reversed ? aU1 : aU0, aV);
++      const gp_Pnt       aOn2 = Surf->Value(Reversed ? aU0 : aU1, aV);
++      const double       aOff = std::max(aOn1.Distance(aP.PointOnS1()), aOn2.Distance(aP.PointOnS2()));
++      if (aOff > aWorst)
++      {
++        aWorst  = aOff;
++        aWorstW = aP.Parameter();
++      }
++      if (aOff > 1.)
++      {
++        std::fprintf(stderr,
++                     "fillet walk: the surface lies %.6g from the walked point %d at w %.9g: (%.6f %.6f %.6f) "
++                     "(%.6f %.6f %.6f) against (%.6f %.6f %.6f) (%.6f %.6f %.6f)\n",
++                     aOff,
++                     i,
++                     aP.Parameter(),
++                     aOn1.X(),
++                     aOn1.Y(),
++                     aOn1.Z(),
++                     aOn2.X(),
++                     aOn2.Y(),
++                     aOn2.Z(),
++                     aP.PointOnS1().X(),
++                     aP.PointOnS1().Y(),
++                     aP.PointOnS1().Z(),
++                     aP.PointOnS2().X(),
++                     aP.PointOnS2().Y(),
++                     aP.PointOnS2().Z());
++      }
++    }
++    std::fprintf(stderr,
++                 "fillet walk: twisted piece's surface (u %.6g to %.6g, v %.9g to %.9g, %d x %d poles) lies at "
++                 "most %.6g from the walk, at w %.9g\n",
++                 aU0,
++                 aU1,
++                 aV0,
++                 aV1,
++                 Surf->NbUPoles(),
++                 Surf->NbVPoles(),
++                 aWorst,
++                 aWorstW);
++  }
+   Data->ChangeSurf(DStr.AddSurface(TopOpeBRepDS_Surface(Surf, tolget3d)));
+ 
+   double UFirst, ULast, VFirst, VLast, pppdeb, pppfin;
+@@ -1768,6 +1977,11 @@
+ 
+   double aDelta = VLast - VFirst;
+   int    aDenom = 2;
++  // (A twisted piece's approximation may reach only a coarse tolerance,
++  // which the normals' cross products, areas, are no measure for; its
++  // surface is replaced by PerformSetOfKGen's filling: its normals count
++  // as vanishing only below the confusion, mitcad#2228.)
++  const double aVanish = aTwisted ? Precision::Confusion() : tolget3d;
+ 
+   for (;;)
+   {
+@@ -1787,7 +2001,7 @@
+ 
+     Surf->D1(UFirst, aParam, P, Du2, Dv2);
+     Du2.Cross(Dv2);
+-    if (Du2.Magnitude() <= tolget3d && Du1.Magnitude() > tolget3d)
++    if (Du2.Magnitude() <= aVanish && Du1.Magnitude() > aVanish)
+     {
+       // The side is a point (the ball turns about its contact there): the
+       // blend's normal a little inside the section, nearly the face's.
+@@ -1795,12 +2009,26 @@
+       Du2.Cross(Dv2);
+     }
+ 
+-    if (Du1.Magnitude() <= tolget3d || Du2.Magnitude() <= tolget3d)
++    if (Du1.Magnitude() <= aVanish || Du2.Magnitude() <= aVanish)
+     {
+       aDenom++;
+ 
+       if (std::abs(aDeltav) <= tolget2d)
+       {
++        if (ChFi3d_TracingWalkOnFaces())
++        {
++          std::fprintf(stderr,
++                       "fillet walk: no orientation of the piece from w %.9g to %.9g: normals %.6g (face) and "
++                       "%.6g (blend) at v %.9g within %.6g (3d %.6g, 2d %.6g)\n",
++                       lin->Point(1).Parameter(),
++                       lin->Point(lin->NbPoints()).Parameter(),
++                       Du1.Magnitude(),
++                       Du2.Magnitude(),
++                       aParam,
++                       aVanish,
++                       tolget3d,
++                       tolget2d);
++        }
+         return false;
+       }
+ 
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+@@ -47,6 +47,48 @@
+ #include <math_FunctionSetRoot.hxx>
+ #include <math_Gauss.hxx>
+ #include <BlendFunc_ConstRad.hxx>
++#include <OSD_Environment.hxx>
++#include <cstdio>
++
++//=======================================================================
++// function : BRepBlend_TracingWalk
++// purpose  : Whether the walk says on the standard error where a contact
++//            turns back at a cusp of its line (MITCAD_TRACE_FILLET_WALK
++//            set, as ChFi3d's trace of the walk, port patch 2141;
++//            mitcad#2228).
++//=======================================================================
++static bool BRepBlend_TracingWalk()
++{
++  return !OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty();
++}
++
++//=======================================================================
++// function : BRepBlend_FoldWalk, BRepBlend_SetFoldWalk
++// purpose  : Whether the walk under way runs across a stretch where a
++//            contact line of a rounding folds over itself on its face
++//            (set by ChFi3d_FilBuilder for that walk alone, mitcad#2228):
++//            only such a walk crosses the cusps of its contact line, keeps
++//            its steps short once twisted and refuses a contact's jump
++//            (here), searches the approximation's sections again
++//            (BRepBlend_AppFuncRoot) and is stored as a twisted piece of
++//            values alone (ChFi3d_Builder::CompleteData, StoreData). Every
++//            other walk is OCCT's as it was. Per thread, as the walks are.
++//=======================================================================
++static bool& BRepBlend_FoldWalkFlag()
++{
++  static thread_local bool aFlag = false;
++  return aFlag;
++}
++
++bool BRepBlend_FoldWalk()
++{
++  return BRepBlend_FoldWalkFlag();
++}
++
++void BRepBlend_SetFoldWalk(const bool theOn)
++{
++  BRepBlend_FoldWalkFlag() = theOn;
++}
+ 
+ namespace
+ {
+@@ -1053,6 +1095,41 @@
+       }
+     }
+ 
++    // A jump: a contact that moved far more than the step of the guide
++    // carries it (fifty times the guide's own advance, a ball's contacts
++    // moving at most a few times as fast) has gone over to another
++    // solution of the equations, a ball touching the face elsewhere: the
++    // step is too large and halved, also where the step is too short for
++    // the deflection's test. (On the reported wave with 8.5 the wall
++    // contact jumped 6.6 mm to the crest's other flank in a step of 0.0007
++    // at w 12.80, and the walk ran back along that ball to the edge's
++    // start: "Chaining is impossible", mitcad#2228.)
++    if (BRepBlend_FoldWalk() && !hguide.IsNull() && line->NbPoints() > 0)
++    {
++      gp_Pnt aOnGuide;
++      gp_Vec aGuideTg;
++      hguide->D1(previousP.Parameter(), aOnGuide, aGuideTg);
++      const double aAdvance = std::abs(param - previousP.Parameter()) * aGuideTg.Magnitude();
++      const double aMoved1  = pt1.Distance(previousP.PointOnS1());
++      const double aMoved2  = pt2.Distance(previousP.PointOnS2());
++      const double aMoved   = std::max(aMoved1, aMoved2);
++      if (aMoved > 50. * aAdvance + 100. * tolpoint3d)
++      {
++        if (BRepBlend_TracingWalk())
++        {
++          std::fprintf(stderr,
++                       "fillet walk: contact %d jumps %.6g between w %.9g and %.9g (the guide advances %.6g): "
++                       "step halved\n",
++                       aMoved1 >= aMoved2 ? 1 : 2,
++                       aMoved,
++                       previousP.Parameter(),
++                       param,
++                       aAdvance);
++        }
++        return Blend_StepTooLarge;
++      }
++    }
++
+     if (TestDefl && check)
+     {
+       // Verification du critere de fleche sur chaque surface
+@@ -1255,6 +1332,60 @@
+     tolv = Adaptor3d_HSurfaceTool::VResolution(surf2, tolpoint3d);
+   }
+ 
++  // A contact that turns back between the two points, its tangent along
++  // the guide at one and against it at the other: a cusp of its line,
++  // where the line folds over itself (the edge bends towards the face more
++  // tightly than the ball touches it, mitcad#2228). The chord and the
++  // tangents point opposite ways across the cusp, which is not a step back
++  // of the walk: the step is judged by the other contact, which moves on
++  // (this one moves less), and the walk goes on, twisted on this face
++  // past the cusp (TwistOnS1/S2; ChFi3d fills a twisted piece between its
++  // neighbours).
++  if (BRepBlend_FoldWalk() && !curpointistangent && !prevpointistangent && !hguide.IsNull())
++  {
++    gp_Pnt aOnGuide;
++    gp_Vec aGuidePrev, aGuideCur;
++    hguide->D1(previousP.Parameter(), aOnGuide, aGuidePrev);
++    hguide->D1(CurPoint.Parameter(), aOnGuide, aGuideCur);
++    const double aPrevAlong = prevTg.Dot(aGuidePrev);
++    const double aCurAlong  = Tgsurf.Dot(aGuideCur);
++    const gp_Pnt aOtherPrev = OnFirst ? previousP.PointOnS2() : previousP.PointOnS1();
++    const gp_Pnt aOtherCur  = OnFirst ? CurPoint.PointOnS2() : CurPoint.PointOnS1();
++    // (Only where the other contact keeps moving, its speed at both points
++    // at least a twentieth of the guide's: where the ball itself nearly
++    // stands still, both contacts slow down and one turning back is the
++    // walk going over to another branch of the equations, not a cusp. On
++    // the reported wave with 8.5 the wall contact turned back so at w 12.80
++    // and the walk ran back along the other branch to the edge's start:
++    // "Chaining is impossible", mitcad#2228.)
++    const double aGuideSpeed = std::min(aGuidePrev.Magnitude(), aGuideCur.Magnitude());
++    const gp_Vec aOtherPrevTg = OnFirst ? previousP.TangentOnS2() : previousP.TangentOnS1();
++    const gp_Vec aOtherCurTg  = OnFirst ? CurPoint.TangentOnS2() : CurPoint.TangentOnS1();
++    const bool   aOtherMoves  = aOtherPrevTg.Magnitude() >= 0.05 * aGuideSpeed
++                             && aOtherCurTg.Magnitude() >= 0.05 * aGuideSpeed;
++    if (aOtherMoves && aPrevAlong * aCurAlong < 0. && prevP.Distance(Psurf) <= aOtherPrev.Distance(aOtherCur))
++    {
++      // (Only a short step: the sections between the walk's points are
++      // solved again from a cubic through the contacts and their tangents
++      // (patch 1870), which follows a cusp only over a short step; a step of
++      // 0.38 across a cusp of a rounding of 8.5 left its approximation
++      // failing. A longer one is taken as too large and halved.)
++      const double aShort = std::max(0.05 * pasmax, 2. * tolgui);
++      if (std::abs(CurPoint.Parameter() - previousP.Parameter()) > aShort)
++      {
++        return Blend_StepTooLarge;
++      }
++      if (BRepBlend_TracingWalk())
++      {
++        std::fprintf(stderr,
++                     "fillet walk: contact %d turns back between w %.9g and %.9g at (%.6f %.6f %.6f)\n",
++                     OnFirst ? 1 : 2, previousP.Parameter(), CurPoint.Parameter(), Psurf.X(), Psurf.Y(),
++                     Psurf.Z());
++      }
++      return Blend_OK;
++    }
++  }
++
+   gp_Vec Corde(prevP, Psurf);
+   Norme = Corde.SquareMagnitude();
+   //  if(!curpointistangent) curNorme = Tgsurf.SquareMagnitude();
+@@ -2143,7 +2274,13 @@
+   double Cosi = 0., Cosi2 = 0.;
+ 
+   double stepw = pasmax;
+-  int    nbp   = line->NbPoints();
++  // mitcad#2228: once the walk has gone over a cusp of a contact line (twisted),
++  // its steps stay short: the line folds back near the walk there, and a long
++  // step's start lies nearer another branch of the equations than the walk's
++  // own (the reported wave with 8.5: a step of 0.168 from w 12.632 landed on a
++  // branch 0.086 off that folds at w 12.8015, and the walk died there).
++  const double aTwistedStep = std::max(0.05 * pasmax, 2. * tolgui);
++  int          nbp          = line->NbPoints();
+   if (nbp >= 2)
+   { // On reprend le dernier step s'il n est pas trop petit.
+     if (sens < 0.)
+@@ -2698,6 +2835,10 @@
+         }
+         else
+         {
++          if (BRepBlend_FoldWalk() && (twistflag1 || twistflag2) && stepw > aTwistedStep)
++          {
++            stepw = aTwistedStep; // mitcad#2228, see aTwistedStep
++          }
+           param = param + sens * stepw;
+           if (sens * (param - Bound) > -tolgui)
+           {
+@@ -2749,7 +2890,7 @@
+ 
+         parprec = param;
+ 
+-        stepw = std::min(1.5 * stepw, pasmax);
++        stepw = std::min(1.5 * stepw, (BRepBlend_FoldWalk() && (twistflag1 || twistflag2)) ? aTwistedStep : pasmax);
+         if (param == Bound)
+         {
+           Arrive = true;
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_AppFuncRoot.cxx
+@@ -22,9 +22,17 @@
+ #include <gp_Vec2d.hxx>
+ #include <math_FunctionSetRoot.hxx>
+ 
++#include <algorithm>
+ #include <cmath>
++#include <cstdio>
++#include <OSD_Environment.hxx>
+ #include <Standard_Type.hxx>
+ 
++// Whether the walk under way runs across a fold of a contact line
++// (BRepBlend_Walking.cxx, mitcad#2228): only its sections are searched
++// again below.
++bool BRepBlend_FoldWalk();
++
+ IMPLEMENT_STANDARD_RTTIEXT(BRepBlend_AppFuncRoot, Approx_SweepFunction)
+ 
+ BRepBlend_AppFuncRoot::BRepBlend_AppFuncRoot(occ::handle<BRepBlend_Line>& Line,
+@@ -450,11 +458,44 @@
+   Func.GetBounds(X1, X2);
+   mySolver->Perform(Func, XInit, X1, X2);
+ 
++  // Where the solver does not converge from the linear start, from the
++  // walk's own points either side of Param, the nearer first: a contact
++  // that turns back between them (a cusp of its line where it folds over
++  // itself, mitcad#2228) leaves the chord's middle far from the section
++  // there, while the walk's points are sections themselves.
++  if (BRepBlend_FoldWalk() && !mySolver->IsDone() && !Trouve)
++  {
++    const Blend_Point& aBefore = myLine->Point(Index);
++    const Blend_Point& anAfter = myLine->Point(Index + 1);
++    const bool         aBeforeFirst =
++      std::abs(Param - aBefore.Parameter()) <= std::abs(anAfter.Parameter() - Param);
++    for (const Blend_Point* aFrom : {aBeforeFirst ? &aBefore : &anAfter, aBeforeFirst ? &anAfter : &aBefore})
++    {
++      math_Vector aStart(1, dim);
++      Vec(aStart, *aFrom);
++      Func.Set(Param);
++      mySolver->Perform(Func, aStart, X1, X2);
++      if (mySolver->IsDone())
++      {
++        break;
++      }
++    }
++  }
++
+   if (!mySolver->IsDone())
+   {
+ #ifdef BREPBLEND_DEB
+     std::cout << "AppFunc : RNLD Not done en t = " << Param << std::endl;
+ #endif
++    if (!OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty())
++    {
++      std::fprintf(stderr,
++                   "fillet walk: the approximation finds no section at w %.9g (the line's points at w %.9g and "
++                   "%.9g)\n",
++                   Param,
++                   myLine->Point(Index).Parameter(),
++                   myLine->Point(std::min(Index + 1, myLine->NbPoints())).Parameter());
++    }
+     return false;
+   }
+   mySolver->Root(Sol);
+@@ -510,6 +551,81 @@
+       }
+     }
+   }
++
++  // A section far from the walk: where the equations have other solutions
++  // near the line (a rounding of 8.5 whose contact line folds over itself:
++  // the ball's centre where a line crosses the contact line's other
++  // branches, millimetres away), the solver from the linear start may land
++  // on one of them, and the approximation through such a section diverged
++  // (mitcad#2228). Where the solution lies farther from the linear start
++  // than twice the walk's two points either side lie apart, and at least
++  // 0.01 (a jump to another branch, not a curve's sagitta between points
++  // a hundred-thousandth apart, which the approximation inserts round a
++  // ball that nearly stands still), it is solved again from each of those
++  // points (sections of the walk's own branch), the nearer first, and the
++  // solution nearest the linear start is kept.
++  if (BRepBlend_FoldWalk() && !Trouve && dim == 4)
++  {
++    math_Vector aBefore(1, dim), anAfter(1, dim);
++    Vec(aBefore, myLine->Point(Index));
++    Vec(anAfter, myLine->Point(Index + 1));
++    const auto aDistance = [dim](const math_Vector& theA, const math_Vector& theB) {
++      double aSum = 0.;
++      for (int i = 1; i <= dim; i++)
++      {
++        aSum += (theA(i) - theB(i)) * (theA(i) - theB(i));
++      }
++      return std::sqrt(aSum);
++    };
++    const double aReach = std::max(2. * aDistance(aBefore, anAfter), 1.e-2);
++    double       aFar   = aDistance(Sol, XInit);
++    if (aFar > aReach)
++    {
++      const double aFarBefore = aFar;
++      math_Vector  aBest(Sol);
++      const bool   aBeforeFirst =
++        std::abs(Param - myLine->Point(Index).Parameter()) <= std::abs(myLine->Point(Index + 1).Parameter() - Param);
++      for (const math_Vector* aFrom : {aBeforeFirst ? &aBefore : &anAfter, aBeforeFirst ? &anAfter : &aBefore})
++      {
++        Func.Set(Param);
++        mySolver->Perform(Func, *aFrom, X1, X2);
++        if (!mySolver->IsDone())
++        {
++          continue;
++        }
++        math_Vector aRoot(1, dim);
++        mySolver->Root(aRoot);
++        const double aNear = aDistance(aRoot, XInit);
++        if (aNear < aFar)
++        {
++          aFar  = aNear;
++          aBest = aRoot;
++        }
++        if (aFar <= aReach)
++        {
++          break;
++        }
++      }
++      Sol = aBest;
++      // (The function's state with the solution kept.)
++      Func.Set(Param);
++      mySolver->Perform(Func, Sol, X1, X2);
++      if (mySolver->IsDone())
++      {
++        mySolver->Root(Sol);
++      }
++      if (!OSD_Environment("MITCAD_TRACE_FILLET_WALK").Value().IsEmpty())
++      {
++        std::fprintf(stderr,
++                     "fillet walk: the section at w %.9g lay %.6g from the line's start (its points %.6g apart), "
++                     "now %.6g\n",
++                     Param,
++                     aFarBefore,
++                     0.5 * aReach,
++                     aFar);
++      }
++    }
++  }
+ 
+   // (3) Storage of the point
+   Point(Func, Param, Sol, Pnt);
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+@@ -104,6 +104,42 @@
+ extern void ChFi3d_ResultChron(OSD_Chronometer& ch, double& time);
+ #endif
+ 
++// Whether a walk of Spine between F1 and F2 along the guide's First to Last runs across a
++// stretch where a contact line folds over itself, and which contact then holds the sections
++// in the guide's normal plane (ChFi3d_Builder_2.cxx, mitcad#2228).
++bool ChFi3d_FoldWalkOf(const occ::handle<ChFiDS_Spine>& Spine,
++                       const TopoDS_Face&               F1,
++                       const TopoDS_Face&               F2,
++                       const double                     First,
++                       const double                     Last,
++                       int&                             OnContact);
++// The walk under way runs across such a fold (BRepBlend_Walking.cxx).
++bool BRepBlend_FoldWalk();
++void BRepBlend_SetFoldWalk(const bool theOn);
++
++namespace
++{
++//! Marks the walks made while it lives as across a fold of a contact line (or not), and
++//! restores the mark it found (mitcad#2228): only those walks take the rules for one.
++class ChFi3d_FoldWalkScope
++{
++public:
++  explicit ChFi3d_FoldWalkScope(const bool theOn)
++      : myBefore(BRepBlend_FoldWalk())
++  {
++    BRepBlend_SetFoldWalk(theOn);
++  }
++
++  ~ChFi3d_FoldWalkScope() { BRepBlend_SetFoldWalk(myBefore); }
++
++  ChFi3d_FoldWalkScope(const ChFi3d_FoldWalkScope&)            = delete;
++  ChFi3d_FoldWalkScope& operator=(const ChFi3d_FoldWalkScope&) = delete;
++
++private:
++  bool myBefore;
++};
++} // namespace
++
+ //=======================================================================
+ // function : ChFi3d_RefSide
+ // purpose  : For a blend rolling on an edge: the side of the edge's
+@@ -2178,6 +2214,16 @@
+     BRepBlend_ConstRad Func(S1, S2, HGuide);
+     Func.Set(fsp->Radius(), Choix);
+     Func.Set(myShape);
++    // Across a fold of a contact line, the walk's own rules and the sections held by the
++    // contact that does not fold, as for the walk that follows (mitcad#2228).
++    int                        aOnContact = 0;
++    const ChFi3d_FoldWalkScope aFoldWalk(ChFi3d_FoldWalkOf(Spine,
++                                                           S1->Face(),
++                                                           S2->Face(),
++                                                           HGuide->FirstParameter(),
++                                                           HGuide->LastParameter(),
++                                                           aOnContact));
++    Func.SetSectionOnContact(aOnContact);
+     BRepBlend_Walking TheWalk(S1, S2, I1, I2, HGuide);
+     return TheWalk.PerformFirstSection(Func, Par, SolDep, tolapp3d, TolGuide, Pos1, Pos2);
+   }
+@@ -2446,6 +2492,19 @@
+     Func.Set(fsp->Radius(), Choix);
+     FInv.Set(fsp->Radius(), Choix);
+     Func.Set(myShape);
++    // A walk across a stretch where a contact line folds over itself takes the rules for one
++    // (BRepBlend_Walking and the rest, while aFoldWalk lives: the walk, its approximation and
++    // its storing below); where the contact on the other face does not fold, it holds the
++    // sections in the guide's normal plane (mitcad#2228). Every other walk is as it was.
++    int                        aOnContact = 0;
++    const ChFi3d_FoldWalkScope aFoldWalk(ChFi3d_FoldWalkOf(Spine,
++                                                           S1->Face(),
++                                                           S2->Face(),
++                                                           HGuide->FirstParameter(),
++                                                           HGuide->LastParameter(),
++                                                           aOnContact));
++    Func.SetSectionOnContact(aOnContact);
++    FInv.SetSectionOnContact(aOnContact);
+ 
+ #ifdef OCCT_DEBUG
+     ChFi3d_InitChron(ch); // init perf ComputeData
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.hxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.hxx
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.hxx
+@@ -125,6 +125,17 @@
+                                                 const double                          Ray,
+                                                 const occ::handle<Adaptor3d_Curve>&   Guide);
+ 
++  //! Which point of the ball's contacts the guide's normal plane holds: 0, the mid-point of
++  //! the contact points (the default); 1 or 2, the contact on S1 or on S2 itself. Where the
++  //! contact line on one surface folds over itself (its edge bends towards that surface more
++  //! tightly than the ball touches it from the edge) and the one on the other does not, the
++  //! mid-point's line can fold as well, and the mid-point's condition holds two balls that
++  //! meet there (the equations singular, the walk going over to the other); the contact that
++  //! does not fold picks one ball all along (mitcad#2228). Where that point lies on the
++  //! guide's polar axis the ball's centre is taken, as for the mid-point; the guide-plane
++  //! mode (BallBeyondSupport) has its own condition.
++  Standard_EXPORT void SetSectionOnContact(const int OnContact);
++
+   //! Sets the type of section generation for the
+   //! approximations.
+   Standard_EXPORT void Set(const BlendFunc_SectionShape TypeSection);
+@@ -344,6 +355,8 @@
+   BlendFunc_SectionShape         mySShape;
+   Convert_ParameterisationType   myTConv;
+   bool                           myInGuidePlane;
++  //! The weight of the contact on S1 in the section's point (SetSectionOnContact).
++  double                         mySecWeight1 = 0.5;
+ };
+ 
+ #endif // _BlendFunc_ConstRad_HeaderFile
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+@@ -455,6 +455,22 @@
+   mySShape = TypeSection;
+ }
+ 
++//=================================================================================================
++
++void BlendFunc_ConstRad::SetSectionOnContact(const int OnContact)
++{
++  const double aWeight1 = OnContact == 1 ? 1. : (OnContact == 2 ? 0. : 0.5);
++  if (aWeight1 != mySecWeight1)
++  {
++    // (The caches are of one condition.)
++    mySecWeight1 = aWeight1;
++    tval         = -9.876e100;
++    xval.Init(-9.876e100);
++    myXOrder = -1;
++    myTOrder = -1;
++  }
++}
++
+ //=======================================================================
+ // function : ComputeValues
+ // purpose  : OBLIGATORY passage for all calculations
+@@ -662,9 +678,17 @@
+   E(3) = resul.Y();
+   E(4) = resul.Z();
+ 
+-  // The section's point: the contact points' mid-point, or where that lies on the guide's
+-  // polar axis the ball's centre (the mean of the centres seen from both contacts).
+-  gp_XYZ     secpt    = (pts1.XYZ() + pts2.XYZ()) / 2;
++  // The section's point: the contact points' mid-point (or the contact on one surface,
++  // SetSectionOnContact, mitcad#2228), or where that lies on the guide's polar axis the
++  // ball's centre (the mean of the centres seen from both contacts).
++  const bool   onmid = (mySecWeight1 == 0.5);
++  const double w1    = mySecWeight1;
++  const double w2    = 1. - mySecWeight1;
++  gp_XYZ       secpt = onmid ? (pts1.XYZ() + pts2.XYZ()) / 2 : w1 * pts1.XYZ() + w2 * pts2.XYZ();
++  if (!onmid)
++  {
++    E(1) = nplan.XYZ().Dot(secpt) + theD;
++  }
+   const bool oncentre = OnPolarAxis(secpt, ptgui, dnplan, invnormtg);
+   if (oncentre)
+   {
+@@ -679,6 +703,13 @@
+     DEDX(1, 2) = nplan.Dot(d1v1) / 2;
+     DEDX(1, 3) = nplan.Dot(d1u2) / 2;
+     DEDX(1, 4) = nplan.Dot(d1v2) / 2;
++    if (!onmid)
++    {
++      DEDX(1, 1) = w1 * nplan.Dot(d1u1);
++      DEDX(1, 2) = w1 * nplan.Dot(d1v1);
++      DEDX(1, 3) = w2 * nplan.Dot(d1u2);
++      DEDX(1, 4) = w2 * nplan.Dot(d1v2);
++    }
+ 
+     // Derivatives of cdir = -N/|N|: -(N' - (n.N') n)/|N|
+     dndu1.SetLinearForm(n1.Dot(dns1u1), n1, -1., dns1u1);
+@@ -746,6 +777,15 @@
+       D2EDX2(1, 3, 3) = nplan.Dot(d2u2) / 2;
+       D2EDX2(1, 4, 3) = D2EDX2(1, 3, 4) = nplan.Dot(d2uv2) / 2;
+       D2EDX2(1, 4, 4)                   = nplan.Dot(d2v2) / 2;
++      if (!onmid)
++      {
++        D2EDX2(1, 1, 1) = w1 * nplan.Dot(d2u1);
++        D2EDX2(1, 2, 1) = D2EDX2(1, 1, 2) = w1 * nplan.Dot(d2uv1);
++        D2EDX2(1, 2, 2)                   = w1 * nplan.Dot(d2v1);
++        D2EDX2(1, 3, 3)                   = w2 * nplan.Dot(d2u2);
++        D2EDX2(1, 4, 3) = D2EDX2(1, 3, 4) = w2 * nplan.Dot(d2uv2);
++        D2EDX2(1, 4, 4)                   = w2 * nplan.Dot(d2v2);
++      }
+ 
+       // ==  Surface 1 ==
+       d2ns1u1.SetLinearForm(1, d3u1.Crossed(d1v1), 2, d2u1.Crossed(d2uv1), 1, d1u1.Crossed(d3uuv1));
+@@ -818,6 +858,13 @@
+         D2EDXDT(1, 2) = dnplan.Dot(d1v1) / 2;
+         D2EDXDT(1, 3) = dnplan.Dot(d1u2) / 2;
+         D2EDXDT(1, 4) = dnplan.Dot(d1v2) / 2;
++        if (!onmid)
++        {
++          D2EDXDT(1, 1) = w1 * dnplan.Dot(d1u1);
++          D2EDXDT(1, 2) = w1 * dnplan.Dot(d1v1);
++          D2EDXDT(1, 3) = w2 * dnplan.Dot(d1u2);
++          D2EDXDT(1, 4) = w2 * dnplan.Dot(d1v2);
++        }
+         if (oncentre)
+         {
+           for (int j = 1; j <= 4; j++)
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.hxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.hxx
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.hxx
+@@ -64,6 +64,10 @@
+ 
+   Standard_EXPORT void Set(const double R, const int Choix);
+ 
++  //! The section's point, as BlendFunc_ConstRad::SetSectionOnContact (mitcad#2228): 0, the
++  //! mid-point of the contact points (the default); 1 or 2, the contact on S1 or on S2.
++  Standard_EXPORT void SetSectionOnContact(const int OnContact);
++
+ private:
+   occ::handle<Adaptor3d_Surface> surf1;
+   occ::handle<Adaptor3d_Surface> surf2;
+@@ -75,6 +79,8 @@
+   bool                           first;
+   // Walked with the sections in the guide's normal plane (BlendFunc_ConstRad::Set, patch 1760).
+   bool myInGuidePlane;
++  // The weight of the contact on S1 in the section's point (SetSectionOnContact).
++  double mySecWeight1 = 0.5;
+ 
+   // OCCT 8.0.1's own equations, for myInGuidePlane (BlendFunc_ConstRad_GuidePlane.cxx).
+   bool ValueInGuidePlane(const math_Vector& X, math_Vector& F);
+diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.cxx
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRadInv.cxx
+@@ -91,6 +91,11 @@
+                    || BlendFunc_ConstRad::BallBeyondSupport(surf2, ray2, curv);
+ }
+ 
++void BlendFunc_ConstRadInv::SetSectionOnContact(const int OnContact)
++{
++  mySecWeight1 = OnContact == 1 ? 1. : (OnContact == 2 ? 0. : 0.5);
++}
++
+ void BlendFunc_ConstRadInv::Set(const bool OnFirst, const occ::handle<Adaptor2d_Curve2d>& C)
+ {
+   first = OnFirst;
+@@ -209,6 +214,14 @@
+           + nplan.Z() * (pts1.Z() + pts2.Z()))
+            / 2.
+          + theD;
++  // (The contact on one surface as the section's point, SetSectionOnContact, mitcad#2228.)
++  const bool   onmid = (mySecWeight1 == 0.5);
++  const gp_XYZ secpt =
++    onmid ? (pts1.XYZ() + pts2.XYZ()) / 2. : mySecWeight1 * pts1.XYZ() + (1. - mySecWeight1) * pts2.XYZ();
++  if (!onmid)
++  {
++    F(1) = nplan.XYZ().Dot(secpt) + theD;
++  }
+ 
+   gp_Vec ns1 = d1u1.Crossed(d1v1);
+   if (ns1.Magnitude() < Eps)
+@@ -266,7 +279,7 @@
+   gp_Vec       dnplan;
+   dnplan.SetLinearForm(-nplan.Dot(d2cur), nplan, d2cur);
+   dnplan /= normtg;
+-  if (OnPolarAxis((pts1.XYZ() + pts2.XYZ()) / 2., ptcur, dnplan, normtg))
++  if (OnPolarAxis(secpt, ptcur, dnplan, normtg))
+   {
+     const gp_XYZ centre = (pts1.XYZ() + ray1 * ns1.XYZ() + pts2.XYZ() + ray2 * ns2.XYZ()) / 2.;
+     F(1)                = nplan.XYZ().Dot(centre) + theD;
+@@ -334,6 +347,22 @@
+           + nplan.Z() * (pts1.Z() + pts2.Z()))
+            / 2.
+          + theD;
++  // (The contact on one surface as the section's point, SetSectionOnContact, mitcad#2228: X(1)
++  // runs on the held surface's curve, X(3) and X(4) on the other surface.)
++  const bool   onmid = (mySecWeight1 == 0.5);
++  const double w1    = mySecWeight1;
++  const double w2    = 1. - mySecWeight1;
++  const gp_XYZ secpt = onmid ? (pts1.XYZ() + pts2.XYZ()) / 2. : w1 * pts1.XYZ() + w2 * pts2.XYZ();
++  if (!onmid)
++  {
++    F(1) = nplan.XYZ().Dot(secpt) + theD;
++    const double wheld  = first ? w1 : w2;
++    const double wother = first ? w2 : w1;
++    D(1, 1)             = 2. * wheld * D(1, 1);
++    D(1, 2)             = dnplan.XYZ().Dot(secpt - ptcur.XYZ()) - normtgcur;
++    D(1, 3)             = 2. * wother * D(1, 3);
++    D(1, 4)             = 2. * wother * D(1, 4);
++  }
+ 
+   ns1 = d1u1.Crossed(d1v1);
+   if (ns1.Magnitude() < Eps)
+@@ -438,7 +467,7 @@
+     D(4, 4) = resul2.Z();
+   }
+ 
+-  if (OnPolarAxis((pts1.XYZ() + pts2.XYZ()) / 2., ptcur, dnplan, normtgcur))
++  if (OnPolarAxis(secpt, ptcur, dnplan, normtgcur))
+   {
+     // The section's point is the ball's centre: it moves by half each centre's move, and rows
+     // 2 to 4 are centre 1 less centre 2. X(1) is on surface 1 when first, X(3) and X(4) on the

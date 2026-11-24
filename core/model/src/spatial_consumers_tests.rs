@@ -370,7 +370,8 @@ fn a_loft_takes_a_3d_sketch_as_center_line_rails_and_sections() {
         .add_feature(&def(curves_railed), None)
         .unwrap_err()
         .to_string();
-    let refused = "no end conditions, center line or rails";
+    // End conditions are taken since mitcad#2345; rails still not.
+    let refused = "has no center line or rails";
     assert!(error.contains(refused), "{error}");
 }
 

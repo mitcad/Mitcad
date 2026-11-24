@@ -277,8 +277,9 @@ if(BUILD_TESTING AND TARGET mitcad AND Python3_Interpreter_FOUND
 endif()
 
 # In-app tutorials (mitcad#2012, docs/tutorials.md): a two-step tutorial of
-# a repository of the test's own listed and opened from Help > Tutorials...
-# in the real CEF view of the web browser component the build made; its
+# a repository of the test's own shown as a card on the Start page by Help >
+# Tutorials... (mitcad#2346) and started from it in the real CEF view of the
+# web browser component the build made; its
 # bridge's guide steps, a command refused, the steps completed with their
 # events, no bridge for a page outside the tutorial, Leave Tutorial; then, in
 # a run of its own, the example tutorials repository's tutorial
@@ -313,8 +314,15 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
   endif()
   # The example tutorial opened over the Start page (mitcad#2168): at
   # launch, after the last design closed and over a modified design, in the
-  # Floating and the Docked layout; each starts in an empty design of its own
-  # and is done to its end.
+  # Floating and the Docked layout; each time the page's Tutorials button
+  # shows its card and its Start starts it (mitcad#2346) in an empty design
+  # of its own, its card In progress (Done over the modified design), and it
+  # is done to its end. Six
+  # runs of the application, each stopped after
+  # 300 s (ui-tutorials-test.py's RUN_TIMEOUT, the macOS wrapper's
+  # UI_TIMEOUT): the test's TIMEOUT leaves room for all six at that length
+  # and the example's preparation, so that a run that hangs is reported with
+  # its log before CTest kills the test (mitcad#2311).
   set(tutorials_start_ui_test "app.ui-${selection_ui_platform}-tutorials-start-page")
   if(APPLE)
     add_test(NAME "${tutorials_start_ui_test}"
@@ -332,7 +340,7 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
               "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}"
               "${CMAKE_SOURCE_DIR}/docs/examples/tutorials")
   endif()
-  set_tests_properties("${tutorials_start_ui_test}" PROPERTIES TIMEOUT 1500 ${selection_ui_alone}
+  set_tests_properties("${tutorials_start_ui_test}" PROPERTIES TIMEOUT 1860 ${selection_ui_alone}
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   if(selection_ui_platform STREQUAL "linux")
     set_property(TEST "${tutorials_start_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")

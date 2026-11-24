@@ -27,6 +27,8 @@ fn op(name: &str, tool: &TurningTool, spindle: TurnSpindle, path: TurnPath) -> T
         direction: SpindleDirection::Cw,
         coolant: Coolant::Flood,
         path,
+        live: None,
+        sub: false,
     }
 }
 
@@ -408,6 +410,7 @@ fn lathe() -> Machine {
             chuck_diameter: 160.0,
             chuck_length: 50.0,
             axes: LatheAxes::default(),
+            mill_turn: MillTurn::default(),
         }),
     }
 }

@@ -56,6 +56,9 @@ use mitcad_vec3::{cross, norm, scale, sub};
 mod simulate;
 // Turning setups on a lathe (mitcad#1869).
 mod turning;
+// Live tools on a lathe with a C axis (mitcad#2067).
+mod live;
+use crate::cam::{LiveMount, LivePlace};
 
 /// A setup's work coordinates and stock at the timeline marker.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -760,10 +763,24 @@ impl<K: Kernel> Document<K> {
         machine: &CamMachine,
         op: &CamOperation,
     ) -> Result<ProgramOp, String> {
-        use ValueKind::{Length, Number};
         if op.kind.is_turning() {
             return Err("Turning operations need a lathe as the setup's machine.".to_owned());
         }
+        self.cam_compute_with(setup, sf, machine, op, None)
+    }
+
+    /// An operation's toolpath from its outlines (those of its inputs when
+    /// none are given: a live tool on a lathe's diameter gives its own,
+    /// mitcad#2067).
+    fn cam_compute_with(
+        &self,
+        setup: &CamSetup,
+        sf: &SetupFrame,
+        machine: &CamMachine,
+        op: &CamOperation,
+        outlines: Option<Outlines>,
+    ) -> Result<ProgramOp, String> {
+        use ValueKind::{Length, Number};
         let tool = machine.tools.get(op.tool).ok_or_else(|| {
             "The operation's tool is not in the machine's tool library.".to_owned()
         })?;
@@ -787,7 +804,10 @@ impl<K: Kernel> Document<K> {
                 .map(|c| c.plunge_feed)
                 .ok_or_else(|| "Set the operation's plunge feed: its tool has none.".to_owned())?,
         };
-        let outlines = self.cam_outlines(op, sf)?;
+        let outlines = match outlines {
+            Some(outlines) => outlines,
+            None => self.cam_outlines(op, sf)?,
+        };
         let top = self
             .cam_value(&op.depths.top, Length)?
             .unwrap_or(sf.stock_max[2]);
@@ -1007,7 +1027,7 @@ impl<K: Kernel> Document<K> {
             | OperationKind::TurnGroove { .. }
             | OperationKind::TurnPartOff { .. }
             | OperationKind::TurnThread { .. } => {
-                unreachable!("turning operations are refused above")
+                return Err("Turning operations need a lathe as the setup's machine.".to_owned());
             }
         };
         Ok(ProgramOp {
@@ -1067,7 +1087,9 @@ impl<K: Kernel> Document<K> {
         }
         // A 3-axis operation without bodies of its own machines the
         // setup's: their versions and placements.
-        if (op.kind.machines_surfaces() || op.kind.is_turning())
+        // So does an operation on a lathe: the turned part is the bodies'.
+        let on_lathe = machine.is_some_and(|m| m.machine.lathe.is_some());
+        if (op.kind.machines_surfaces() || op.kind.is_turning() || on_lathe)
             && !op.inputs.iter().any(|i| matches!(i, CamInput::Body { .. }))
         {
             match self.cam_setup_bodies(setup) {
@@ -1326,18 +1348,89 @@ impl<K: Kernel> Document<K> {
                 op.tool
             )));
         }
-        // Turning on a lathe, milling on a mill (mitcad#1869).
+        // Turning on a lathe, milling on a mill (mitcad#1869); on a lathe
+        // with a C axis and live tools, milling and drilling with them
+        // (mitcad#2067).
         if let Some(machine) = setup.machine.as_deref().and_then(|m| cam.machine(m)) {
-            let lathe = machine.machine.lathe.is_some();
-            if lathe && !op.kind.is_turning() {
-                return Err(invalid(
-                    "The setup's machine is a lathe: give it turning operations.",
-                ));
+            let lathe = machine.machine.lathe.as_ref();
+            let mills = lathe.is_some_and(|l| l.mills());
+            if let Some(lathe) = lathe
+                && !op.kind.is_turning()
+            {
+                if !lathe.mills() {
+                    return Err(invalid(
+                        "The setup's machine is a lathe: give it turning operations.",
+                    ));
+                }
+                if !op.kind.cuts_live() {
+                    return Err(invalid(
+                        "On a lathe, live tools face, contour, pocket, clear adaptively and drill.",
+                    ));
+                }
             }
-            if !lathe && op.kind.is_turning() {
+            if lathe.is_none() && op.kind.is_turning() {
                 return Err(invalid(
                     "Turning operations need a lathe as the setup's machine.",
                 ));
+            }
+            if !mills && op.live.is_some() {
+                return Err(invalid(
+                    "Live tools need a lathe with a C axis and live tools as the setup's machine.",
+                ));
+            }
+            // The part's back on the sub-spindle (mitcad#2319).
+            if op.sub_spindle && !lathe.is_some_and(|l| l.axes.sub_spindle) {
+                return Err(invalid(
+                    "The lathe has no sub-spindle to turn the part's back.",
+                ));
+            }
+            // A live tool for a live operation, held the way it cuts.
+            if let (Some(_), Some(tool)) = (lathe, machine.tools.get(op.tool)) {
+                let place = op.live.unwrap_or_default();
+                if op.kind.is_turning() && !tool.shape.is_turning() {
+                    return Err(invalid(format!(
+                        "Tool {} is a live tool: turning needs a lathe tool.",
+                        op.tool
+                    )));
+                }
+                if !op.kind.is_turning() {
+                    if tool.shape.is_turning() {
+                        return Err(invalid(format!(
+                            "Tool {} is a lathe tool: a live tool's operation needs a milling tool or a drill.",
+                            op.tool
+                        )));
+                    }
+                    let mount = tool.mount.unwrap_or_default();
+                    // The B head and the Y axis (mitcad#2319).
+                    if let Some(l) = lathe {
+                        if mount == LiveMount::Head && !l.has_b() {
+                            return Err(invalid(format!(
+                                "Tool {} sits in a B head, which the lathe does not have.",
+                                op.tool
+                            )));
+                        }
+                        if place == LivePlace::Plane && !l.has_y() {
+                            return Err(invalid(
+                                "A live tool cuts on a plane with the Y axis, which the lathe does not have.",
+                            ));
+                        }
+                    }
+                    match (place, mount) {
+                        (LivePlace::Face, LiveMount::Radial) => {
+                            return Err(invalid(format!(
+                                "Tool {} sits in a radial holder: it cuts the diameter, not the face.",
+                                op.tool
+                            )));
+                        }
+                        (LivePlace::Diameter, LiveMount::Axial) => {
+                            return Err(invalid(format!(
+                                "Tool {} sits in an axial holder: it cuts the face, not the diameter.",
+                                op.tool
+                            )));
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         for input in &op.inputs {
@@ -1522,6 +1615,9 @@ impl<K: Kernel> Document<K> {
             suppressed: false,
             generated: None,
             turning: None,
+            live: None,
+            plane: None,
+            sub_spindle: false,
         };
         input.apply(&mut op);
         self.check_cam_operation(&cam, &cam.setups[s], &op)?;
@@ -1649,15 +1745,9 @@ impl<K: Kernel> Document<K> {
         let index = self.cam_machine_index(machine)?;
         let tool = tool.resolve(self.parameters()).map_err(invalid)?;
         let mut cam = self.state.cam.clone();
-        // Lathe tools on a lathe, milling tools on a mill (mitcad#1869).
-        let m = &cam.machines[index].machine;
-        if tool.shape.is_turning() != m.lathe.is_some() {
-            return Err(invalid(if m.lathe.is_some() {
-                format!("The lathe {} takes lathe tools only.", m.name)
-            } else {
-                format!("The machine {} takes milling tools only.", m.name)
-            }));
-        }
+        // Lathe tools on a lathe, milling tools on a mill, and live tools on
+        // a lathe with a C axis and live tools (mitcad#1869, mitcad#2067).
+        crate::cam::tool_fits(&tool, &cam.machines[index].machine).map_err(invalid)?;
         let tools = &mut cam.machines[index].tools;
         if tools.get(tool.number).is_none() && tools.tools.len() >= crate::cam::MAX_TOOLS {
             return Err(invalid(format!(

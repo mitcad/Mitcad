@@ -471,13 +471,17 @@ CommandDef sweepCommand(const CommandContext& context) {
 namespace {
 
 // End conditions as the first or last section takes them: a direction at a
-// sketch profile, tangent and smooth at a face, a sharp or rounded tip at a
-// point.
+// sketch profile or sketch curves, tangent and smooth at a face, a sharp or
+// rounded tip at a point; at right angles to a face at all but a point
+// (Perpendicular to Face, mitcad#2345).
+const QString kPerpendicular = QStringLiteral("perpendicular");
 const Choices kProfileEnds = {{QStringLiteral("free"), QStringLiteral("Free")},
-                              {QStringLiteral("direction"), QStringLiteral("Direction")}};
+                              {QStringLiteral("direction"), QStringLiteral("Direction")},
+                              {kPerpendicular, QStringLiteral("Perpendicular to Face")}};
 const Choices kFaceEnds = {{QStringLiteral("free"), QStringLiteral("Free")},
                            {QStringLiteral("tangent"), QStringLiteral("Tangent")},
-                           {QStringLiteral("smooth"), QStringLiteral("Smooth")}};
+                           {QStringLiteral("smooth"), QStringLiteral("Smooth")},
+                           {kPerpendicular, QStringLiteral("Perpendicular to Face")}};
 const Choices kPointEnds = {{QStringLiteral("point_sharp"), QStringLiteral("Point Sharp")},
                             {QStringLiteral("point_tangent"), QStringLiteral("Point Tangent")}};
 
@@ -504,6 +508,7 @@ const Choices& endChoices(const CommandState& state, bool last) {
   const SelectionItem& section = last ? sections.last() : sections.first();
   switch (section.kind) {
   case SelectKind::Profile:
+  case SelectKind::SketchCurve: // Surface Loft's (mitcad#2345)
     return kProfileEnds;
   case SelectKind::Face:
     return kFaceEnds;
@@ -536,7 +541,14 @@ QVector<InputDef> endInputs(bool last) {
       choiceInput(endKey(last, "condition"), last ? QObject::tr("End Condition") : QObject::tr("Start Condition"),
                   kProfileEnds, QStringLiteral("free"))
           .withChoices([last](const CommandState& state) { return endChoices(state, last); })
-          .withTooltip(QObject::tr("How the loft leaves the section: free, a direction, tangent, smooth or a tip")),
+          .withTooltip(QObject::tr("How the loft leaves the section: free, a direction, tangent, smooth, perpendicular "
+                                   "or a tip")),
+      // Perpendicular to Face (mitcad#2345): the face to leave at right
+      // angles; none, the face or plane the section lies on.
+      selectionInput(endKey(last, "face"), QObject::tr("Face"), SelectKind::Face, 0, 1)
+          .withTooltip(QObject::tr("The face the section lies on, to leave at right angles; none: the "
+                                   "section's own face or plane"))
+          .withVisible(is([](const QString& c) { return c == kPerpendicular; })),
       valueInput(endKey(last, "angle"), QObject::tr("Takeoff Angle"), ValueKind::Angle, QStringLiteral("0 deg"))
           .withTooltip(QObject::tr("From the profile's normal, outwards for a positive angle"))
           .withVisible(is([](const QString& c) { return c == QStringLiteral("direction"); })),
@@ -548,6 +560,48 @@ QVector<InputDef> endInputs(bool last) {
 }
 
 } // namespace
+
+// --- A loft's end conditions, shared with Surface Loft (mitcad#2345)
+
+QVector<InputDef> loftEndInputs(bool last) { return endInputs(last); }
+
+void addLoftEnds(QJsonObject& def, const CommandState& state) {
+  for (const bool last : {false, true}) {
+    const QString condition = endCondition(state, last);
+    if (!imposes(condition)) {
+      continue;
+    }
+    QJsonObject end{{QStringLiteral("type"), condition},
+                    {QStringLiteral("weight"), state.expression(endKey(last, "weight"))}};
+    if (condition == QStringLiteral("direction")) {
+      end.insert(QStringLiteral("angle"), state.expression(endKey(last, "angle")));
+    }
+    // The face picked for Perpendicular to Face; none, the section's own.
+    const Selection& face = state.items(endKey(last, "face"));
+    if (condition == kPerpendicular && !face.isEmpty()) {
+      end.insert(QStringLiteral("face"),
+                 QJsonObject{{QStringLiteral("body"), face.first().owner}, {QStringLiteral("face"), face.first().name}});
+    }
+    def.insert(endKey(last, "condition"), end);
+  }
+}
+
+void loadLoftEnds(const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+  for (const bool last : {false, true}) {
+    const QJsonObject end = feature.value(endKey(last, "condition")).toObject();
+    const QString type = str(end, "type");
+    if (type.isEmpty()) {
+      continue;
+    }
+    state.setChoice(endKey(last, "condition"), type);
+    loadValue(state, endKey(last, "weight"), end.value(QStringLiteral("weight")), feature, context);
+    loadValue(state, endKey(last, "angle"), end.value(QStringLiteral("angle")), feature, context);
+    const QJsonObject face = end.value(QStringLiteral("face")).toObject();
+    if (!face.isEmpty()) {
+      state.setItems(endKey(last, "face"), {itemOf(face, context)});
+    }
+  }
+}
 
 CommandDef loftCommand(const CommandContext& context) {
   CommandDef def;
@@ -626,18 +680,7 @@ CommandDef loftCommand(const CommandContext& context) {
       }
     }
     result.def = {{QStringLiteral("type"), QStringLiteral("loft")}, {QStringLiteral("sections"), sections}};
-    for (const bool last : {false, true}) {
-      const QString condition = endCondition(state, last);
-      if (!imposes(condition)) {
-        continue;
-      }
-      QJsonObject end{{QStringLiteral("type"), condition},
-                      {QStringLiteral("weight"), state.expression(endKey(last, "weight"))}};
-      if (condition == QStringLiteral("direction")) {
-        end.insert(QStringLiteral("angle"), state.expression(endKey(last, "angle")));
-      }
-      result.def.insert(endKey(last, "condition"), end);
-    }
+    addLoftEnds(result.def, state);
     const QString guide = state.choice(QStringLiteral("guide"));
     if (guide == QStringLiteral("rails")) {
       const bool chain = state.checked(QStringLiteral("chain"));
@@ -700,16 +743,7 @@ CommandDef loftCommand(const CommandContext& context) {
       }
     }
     state.setItems(QStringLiteral("sections"), sections);
-    for (const bool last : {false, true}) {
-      const QJsonObject end = feature.value(endKey(last, "condition")).toObject();
-      const QString type = str(end, "type");
-      if (type.isEmpty()) {
-        continue;
-      }
-      state.setChoice(endKey(last, "condition"), type);
-      loadValue(state, endKey(last, "weight"), end.value(QStringLiteral("weight")), feature, context);
-      loadValue(state, endKey(last, "angle"), end.value(QStringLiteral("angle")), feature, context);
-    }
+    loadLoftEnds(feature, state, context);
     const QJsonArray rails = feature.value(kRails).toArray();
     if (!rails.isEmpty()) {
       state.setChoice(QStringLiteral("guide"), QStringLiteral("rails"));

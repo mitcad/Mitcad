@@ -452,10 +452,12 @@ impl Placed {
         if !self.bodies.contains_key(&key) {
             self.order.push(key.clone());
         }
-        self.bodies
-            .entry(key)
-            .or_default()
-            .push(ImportBody { name, color, shape });
+        self.bodies.entry(key).or_default().push(ImportBody {
+            name,
+            color,
+            shape,
+            face_colors: Vec::new(),
+        });
         self.counts.entry(component).or_insert((0, 0)).0 += 1;
         self.total += 1;
         self.solids += usize::from(b.solid);

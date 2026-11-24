@@ -283,6 +283,23 @@ fn rail_design() -> String {
     doc.to_json()
 }
 
+/// A shaft 8 wide, `L` long along +Z from its end A (mitcad#2274): its
+/// frame `shaft` at end A along the length, where a bearing's slide is
+/// measured from.
+fn shaft_design() -> String {
+    let mut doc: Document<MockKernel> =
+        Document::from_json(&profile_design(8.0, &[]), MockKernel::default()).unwrap();
+    fixed_frame(
+        &mut doc,
+        "shaft",
+        [0.0; 3],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+    );
+    doc.recompute();
+    doc.to_json()
+}
+
 pub const ALL_SIDES: [&str; 4] = ["x+", "x-", "y+", "y-"];
 
 /// A profile's `build` block.
@@ -952,6 +969,46 @@ impl TestLibrary {
         );
         // A profile whose row `20x40` widens its section (mitcad#2234).
         add("p20-rows", V1, rows_20());
+        // A shaft and a linear bearing that slides on it (mitcad#2274):
+        // the shaft 8 wide, `L` long along its frame `shaft`'s z axis; the
+        // bearing 24 long, its frame `bore` in its middle, sliding along z.
+        add(
+            "shaft8",
+            V1,
+            Part {
+                text: shaft_design(),
+                build: Some(json!({
+                    "role": "linear",
+                    "length": {"parameter": "L", "min": "10 mm", "max": "3000 mm"},
+                    "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"},
+                               {"name": "shaft", "kind": "shaft"}],
+                    "linear": {"kind": "shaft", "size": "8 mm"}
+                })),
+                part_number: "SH8".to_owned(),
+                name: "Shaft 8".to_owned(),
+                designation: "Shaft 8 L={L}".to_owned(),
+            },
+        );
+        add(
+            "bearing8",
+            V1,
+            Part {
+                text: block_design(
+                    [15.0, 15.0, 24.0],
+                    [-7.5, -7.5],
+                    &[("bore", [0.0, 0.0, 12.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0])],
+                ),
+                build: Some(json!({
+                    "role": "linear",
+                    "frames": [{"name": "bore", "kind": "bore"}],
+                    "linear": {"kind": "bearing", "size": "8 mm",
+                               "mate": {"frame": "bore", "on": "shaft", "joint": "slider", "axis": "z"}}
+                })),
+                part_number: "B8".to_owned(),
+                name: "Bearing 8".to_owned(),
+                designation: String::new(),
+            },
+        );
         Arc::new(library)
     }
 }

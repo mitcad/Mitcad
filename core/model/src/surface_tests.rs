@@ -434,6 +434,7 @@ fn surface_features_refuse_mesh_bodies() {
                 name: Some("Scan".to_owned()),
                 color: None,
                 shape: crate::testing::MockShape::imported("mesh", 1),
+                face_colors: Vec::new(),
             }])
         })
         .unwrap();

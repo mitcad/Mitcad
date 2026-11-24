@@ -24,7 +24,11 @@
 //! a constant speed (G97, rpm).
 //!
 //! The machine's kinematics are kept general (the lathe's [`LatheAxes`]):
-//! a C axis, live tools, a Y axis or a tilting head come later.
+//! a lathe with a C axis and live tools mills and drills on the part's
+//! face and diameter ([`live`], mitcad#2067); with a Y axis on planes off
+//! the spindle axis, with a tilting head (a B axis) on tilted planes, and a
+//! sub-spindle takes the part over for its back ([`HandOver`]); [`solid`]
+//! cuts the whole program out of the bar in 3D (mitcad#2319).
 
 use serde::{Deserialize, Serialize};
 
@@ -38,12 +42,21 @@ pub mod post;
 pub mod profile;
 pub mod stock;
 pub mod tool;
+// Live tools on the C axis (mitcad#2067).
+pub mod live;
+// The mill-turn's stock in 3D (mitcad#2319).
+pub mod solid;
 
+#[cfg(test)]
+mod axes_tests;
+#[cfg(test)]
+mod live_tests;
 #[cfg(test)]
 mod tests;
 
 pub use check::{ProgramCheck, ReadMove, TurnPlacement, check_lathe, check_program};
-pub use lathe::{Lathe, LatheAxes};
+pub use lathe::{Lathe, LatheAxes, MillTurn};
+pub use live::{LiveOp, LiveSide, LiveSim, simulate_live};
 pub use ops::{
     FaceOp, FinishOp, GrooveOp, PartOp, RoughOp, ThreadOp, TurnSide, face, finish, groove,
     part_off, rough, thread,
@@ -51,6 +64,7 @@ pub use ops::{
 pub use post::{DialectInfo, TurnOutput, decimal};
 pub use post::{FanucTurning, TurningPost, turning_dialect, turning_dialects, turning_post};
 pub use profile::{PV, TurnPart};
+pub use solid::{SolidSim, Voxels, simulate_solid};
 pub use stock::{TurnStock, TurnedStock, simulate_turning};
 pub use tool::{TurningTool, TurningToolKind};
 
@@ -295,6 +309,67 @@ pub struct TurningProgramOp {
     #[serde(default)]
     pub coolant: Coolant,
     pub path: TurnPath,
+    /// A live tool operation (mitcad#2067): its tool is the station's
+    /// ([`TurningToolKind::Live`]), its spindle the live tool's speed and its
+    /// `path` empty; the moves are the live operation's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<live::LiveOp>,
+    /// It turns the part's back on the sub-spindle, after the program's
+    /// hand-over (mitcad#2319): its moves in the sub-spindle's work
+    /// coordinates ([`HandOver`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sub: bool,
+}
+
+/// The sub-spindle taking the part over (mitcad#2319): it comes up to the
+/// part with its chuck open, both spindles synchronised, grips it, the
+/// parting off before the first operation on the sub-spindle (when the
+/// main spindle's last operation parts off) cuts the part free while both
+/// hold it, and the sub-spindle pulls it back. The operations after it
+/// turn the part's back in the sub-spindle's work coordinates: the zero on
+/// the spindle axis at the part's back (`back_z` in the main spindle's
+/// work Z), Z turned round (away from the sub-spindle's chuck), X as on
+/// the main spindle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HandOver {
+    /// Where the sub-spindle's jaws' face is when it grips the part, in
+    /// the main spindle's work Z; its axis is written there.
+    pub grip_z: f64,
+    /// How far the sub-spindle pulls the part back from where it gripped.
+    pub withdraw: f64,
+    /// The synchronised spindles' speed (rpm).
+    pub rpm: f64,
+    /// The sub-spindle's feed as it comes up to the part (mm/min).
+    pub feed: f64,
+    /// The sub-spindle's work offset: 1 to 6 for G54 to G59.
+    pub work_offset: u8,
+    /// The part's back in the main spindle's work Z: the sub-spindle's work
+    /// zero.
+    pub back_z: f64,
+}
+
+impl HandOver {
+    /// The main spindle's work Z of a point at `z` in the sub-spindle's.
+    pub fn main_z(&self, z: f64) -> f64 {
+        self.back_z - z
+    }
+
+    pub fn validate(&self) -> Result<(), CamError> {
+        let finite = [self.grip_z, self.withdraw, self.rpm, self.feed, self.back_z]
+            .iter()
+            .all(|v| v.is_finite());
+        if !finite || self.withdraw <= 0.0 || self.rpm <= 0.0 || self.feed <= 0.0 {
+            return Err(CamError::new(
+                "The hand-over needs where the sub-spindle grips, how far it pulls the part back, a speed and a feed above zero.",
+            ));
+        }
+        if !(1..=6).contains(&self.work_offset) {
+            return Err(CamError::new(
+                "The sub-spindle's work offset must be one of G54 to G59.",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn g54() -> u8 {
@@ -319,6 +394,14 @@ pub struct TurningProgram {
     /// stock and the chuck. The program starts and ends there.
     pub change_position: PXZ,
     pub operations: Vec<TurningProgramOp>,
+    /// The lathe's codes of the C axis and the live tools, for live tool
+    /// operations (mitcad#2067).
+    #[serde(default, skip_serializing_if = "MillTurn::is_default")]
+    pub mill_turn: MillTurn,
+    /// The sub-spindle's hand-over before the operations on the part's
+    /// back (mitcad#2319).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand_over: Option<HandOver>,
 }
 
 impl TurningProgram {
@@ -329,6 +412,32 @@ impl TurningProgram {
             work_offset: 1,
             change_position,
             operations: Vec::new(),
+            mill_turn: MillTurn::default(),
+            hand_over: None,
+        }
+    }
+
+    /// The index of the first operation on the sub-spindle.
+    pub fn first_sub(&self) -> Option<usize> {
+        self.operations.iter().position(|o| o.sub)
+    }
+
+    /// Where the hand-over is written: before the main spindle's parting
+    /// off that comes last before the first operation on the sub-spindle,
+    /// else before that operation; none without one (mitcad#2319).
+    pub fn hand_over_at(&self) -> Option<usize> {
+        let first = self.first_sub()?;
+        self.hand_over.as_ref()?;
+        match first.checked_sub(1) {
+            Some(last)
+                if matches!(
+                    self.operations[last].tool.kind,
+                    TurningToolKind::Parting { .. }
+                ) =>
+            {
+                Some(last)
+            }
+            _ => Some(first),
         }
     }
 
@@ -342,9 +451,63 @@ impl TurningProgram {
         if !self.change_position.iter().all(|v| v.is_finite()) {
             return Err(CamError::new("The tool change position must be numbers."));
         }
+        let live_ops = self.operations.iter().any(|o| o.live.is_some());
+        if live_ops || self.hand_over.is_some() {
+            self.mill_turn.validate().map_err(CamError::new)?;
+        }
+        // The sub-spindle's operations after the main spindle's, after a
+        // hand-over, turning (mitcad#2319).
+        if let Some(first) = self.first_sub() {
+            let Some(hand_over) = &self.hand_over else {
+                return Err(CamError::new(format!(
+                    "{} turns on the sub-spindle: the program needs a hand-over to it.",
+                    self.operations[first].name
+                )));
+            };
+            hand_over.validate()?;
+            if let Some(op) = self.operations[first..].iter().find(|o| !o.sub) {
+                return Err(CamError::new(format!(
+                    "{} is on the main spindle after the hand-over: put it before the sub-spindle's operations.",
+                    op.name
+                )));
+            }
+            if let Some(op) = self.operations[first..].iter().find(|o| o.live.is_some()) {
+                return Err(CamError::new(format!(
+                    "{}: live tools cut on the main spindle only.",
+                    op.name
+                )));
+            }
+        }
         for op in &self.operations {
             op.tool.validate().map_err(CamError::new)?;
             op.spindle.validate(&op.name)?;
+            // A live tool's operation has its moves in its live part
+            // (mitcad#2067).
+            let live_tool = op.tool.kind == TurningToolKind::Live;
+            match &op.live {
+                Some(live) => {
+                    if !live_tool || !op.path.moves.is_empty() {
+                        return Err(CamError::new(format!(
+                            "{} cuts with a live tool: its station must hold one.",
+                            op.name
+                        )));
+                    }
+                    if !matches!(op.spindle, TurnSpindle::Rpm { .. }) {
+                        return Err(CamError::new(format!(
+                            "{}: a live tool turns at a constant speed.",
+                            op.name
+                        )));
+                    }
+                    live.validate(&op.name)?;
+                }
+                None if live_tool => {
+                    return Err(CamError::new(format!(
+                        "{}: a live tool does not turn; give the operation a turning tool.",
+                        op.name
+                    )));
+                }
+                None => {}
+            }
             if !matches!(op.path.moves.first(), None | Some(TurnMove::Rapid { .. })) {
                 return Err(CamError::new(format!(
                     "The toolpath of {} must start with a rapid.",
@@ -372,9 +535,11 @@ impl TurningProgram {
             }
         }
         for (i, op) in self.operations.iter().enumerate() {
-            let other = self.operations[..i]
-                .iter()
-                .find(|o| o.tool.number == op.tool.number && o.tool != op.tool);
+            // A live station's cutter is part of its tool.
+            let cutter = |o: &TurningProgramOp| o.live.as_ref().map(|l| l.cutter.clone());
+            let other = self.operations[..i].iter().find(|o| {
+                o.tool.number == op.tool.number && (o.tool != op.tool || cutter(o) != cutter(op))
+            });
             if other.is_some() {
                 return Err(CamError::new(format!(
                     "Turret station {} holds a different tool in {} than before; give it its own station.",

@@ -9,6 +9,8 @@
 // query's occurrence tree (`occurrences`: nodes with `uid`, `component`,
 // `world` and `children`), so that it is tested without a model.
 
+#include <optional>
+
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
@@ -56,5 +58,28 @@ MoveTarget moveTargetOf(const QStringList& paths, const QString& home, const QJs
 // placed twice is drawn where it was picked), else the component's first
 // occurrence in the tree; empty for the root or when the tree has none.
 QString frameOccurrenceOf(const QStringList& paths, const QString& component, const QJsonArray& tree);
+
+// --- The paths a move's definition records (mitcad#2307)
+
+// The `<key>_occurrence` a move's point or axis picked at `path` is
+// written with, for a move in `component`: none for geometry of that
+// component (its own, at an occurrence of it), else the path, "" (the
+// root) for a root-level pick of a move that works in a deeper component,
+// so that the model reads it in the design's coordinates, not as the
+// move's own component's.
+std::optional<QString> pickedOccurrenceToWrite(const QString& path, const QString& component, const QJsonArray& tree);
+
+// A `move_occurrence`'s `parent_occurrence`: the occurrence of
+// `component` (the moved occurrences' parent) the first of `paths` is
+// placed in, when that component is used more than once, so that the
+// model takes root-level points through the occurrence the parts were
+// picked in; empty for the root, a component used once, or no such path.
+QString parentOccurrenceToWrite(const QStringList& paths, const QString& component, const QJsonArray& tree);
+
+// A moved occurrence's path as an edit loads it: `uid` under the recorded
+// `parentOccurrence` when the tree has it there, else `fallback` (its
+// first path), so that the edit keeps the occurrence it was picked in.
+QString loadedOccurrencePath(const QString& uid, const QString& parentOccurrence, const QString& fallback,
+                             const QJsonArray& tree);
 
 } // namespace mitcad::cmd

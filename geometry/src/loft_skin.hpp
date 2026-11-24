@@ -21,17 +21,21 @@
 
 namespace mitcad::geometry::detail {
 
-// A section to skin: its outer wire, or a vertex.
+// A section to skin: its outer wire, or a vertex; or an open wire, a
+// chain of curves (mitcad#2345: no corners at its ends, no rails, no caps).
 struct SkinSection {
   TopoDS_Shape shape;
   bool point = false;
-  std::optional<gp_Dir> normal; // the plane of a sketch region
+  std::optional<gp_Dir> normal; // the plane of a sketch region or of a chain
   ShapePtr body;                // a face of a body: the body and the face
   TopoDS_Face face;
   // Tangent Edges: Merge (mitcad#2162): each joined edge of `shape` with
   // the section's own edges it joins (a face's: tangent and smooth ends
   // follow the faces next to those).
   std::vector<std::pair<TopoDS_Edge, std::vector<TopoDS_Edge>>> sources;
+  // A Perpendicular end's face (mitcad#2345), found on its body; null: the
+  // section's own face, or its plane (`normal`).
+  TopoDS_Face perpendicular;
 };
 
 // The solid through the sections (two or more, points only first or last),
@@ -63,5 +67,14 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
                       const std::vector<Path>& rails, const NamedWire& named, const NameList& first,
                       const NameList& last, bool closed = false, bool solid = true, bool seams_only = false,
                       bool matched = false);
+
+// (mitcad#2271) Each face of the loft (built just now, owned by the
+// caller) on a B-spline surface that closes on itself round the sections,
+// smoothly, put on that surface made periodic (as skinned_loft makes its
+// sides), its edges' curves on it carried over: the same points within
+// 1e-6 mm, the same faces, edges and names. OCCT's through-sections closes
+// such a side as a clamped surface, which the kernel's offset does not take
+// outward. True when a face changed.
+bool periodic_closed_sides(const TopoDS_Shape& loft);
 
 } // namespace mitcad::geometry::detail

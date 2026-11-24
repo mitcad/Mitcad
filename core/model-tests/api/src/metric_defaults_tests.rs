@@ -124,6 +124,7 @@ fn import_and_export_default_to_millimetres() {
             name: None,
             color: None,
             shape: MockShape::imported("mesh", 4),
+            face_colors: Vec::new(),
         }],
     );
     command(&mut doc, json!({"cmd": "import_file", "path": "scan.stl"}));

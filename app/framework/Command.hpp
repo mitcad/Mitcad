@@ -91,6 +91,12 @@ public:
   // The keys held with the mouse's last move or click over the 3D view
   // (mitcad#1713: Flex's Shift and Alt); none without a view.
   virtual Qt::KeyboardModifiers pointerModifiers() const { return Qt::NoModifier; }
+  // The explode view the 3D view shows the bodies by now (mitcad#2328), as
+  // the model's `measure` query takes it: `{"name", "time"}` (no time:
+  // every step done); empty while it shows the design assembled (no view
+  // shown, or a command that changes the design). Measure's picks are
+  // measured where it shows them.
+  virtual QJsonObject shownExplode() const { return QJsonObject(); }
 };
 
 enum class ValueKind { Length, Angle, Unitless };
@@ -1440,6 +1446,12 @@ struct CommandDef {
   // arrives while a command is open"). Not `inspect`, which design-changing
   // commands set too for their panel's result, nor `closeOnly`.
   bool changesNoDesign = false;
+  // The command works on the bodies where the 3D view shows them
+  // (mitcad#2328): an explode view shown stays shown while its panel is
+  // open (outside sketch mode), and its picks are measured there
+  // (CommandContext::shownExplode). Measure. Other commands show the design
+  // assembled, as they change it.
+  bool keepsExplode = false;
   // Whether OK keeps an inspection's section shown (Section Analysis), or
   // its overlay (Print Analysis, mitcad#620). With
   // `build` it is kept in the document (mitcad#41): `build` gives the

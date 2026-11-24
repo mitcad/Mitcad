@@ -1331,18 +1331,19 @@ endif()
 add_subdirectory(webbrowser)
 # In-app tutorials (mitcad#2012, docs/tutorials.md): the guide step shown in
 # a design window (one engine for a tutorial page's bridge and live MCP's
-# ui_guide) and the tutorial pane on the web browser component's module.
+# ui_guide), the tutorial pane on the web browser component's module and the
+# Start page's choice of the tutorial to start (mitcad#2346).
 target_sources(mitcad PRIVATE
   tutorials/GuideStep.cpp
   tutorials/GuideStep.hpp
   tutorials/MainWindowGuide.cpp
   tutorials/MainWindowTutorials.cpp
+  tutorials/TutorialChoice.cpp
+  tutorials/TutorialChoice.hpp
   tutorials/TutorialGuide.cpp
   tutorials/TutorialGuide.hpp
   tutorials/TutorialSources.cpp
-  tutorials/TutorialSources.hpp
-  tutorials/TutorialsDialog.cpp
-  tutorials/TutorialsDialog.hpp)
+  tutorials/TutorialSources.hpp)
 # Windows Explorer's thumbnails of designs (mitcad#1695): the thumbnail
 # handler mitcad-thumbnails.dll; Windows only.
 if(WIN32)
@@ -2957,6 +2958,16 @@ target_sources(mitcad PRIVATE
 # command closes.
 target_sources(mitcad PRIVATE files/MainWindowArrivals.cpp)
 
+# Exploded views (mitcad#2113, app/COMMANDS.md "Exploded views"): Explode's
+# panel with its steps, Auto Explode and the play bar, Explode Step, the
+# Browser's Exploded Views and the view shown exploded with its trail lines.
+target_sources(mitcad PRIVATE
+  MainWindowExplode.cpp
+  commands/ExplodeCommands.cpp
+  motion/ExplodeViewDialog.cpp
+  motion/ExplodeViewDialog.hpp
+  view/ExplodeTrailOverlay.cpp)
+
 # Move/Copy of a component picked inside a sub-assembly (mitcad#2302,
 # app/COMMANDS.md "Move/Copy"): the component the move works in and the
 # occurrence whose placement is its frame.
@@ -2970,3 +2981,38 @@ target_sources(mitcad PRIVATE commands/MoveTarget.cpp commands/MoveTarget.hpp)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND OpenCASCADE_WITH_EGL)
   target_sources(mitcad PRIVATE framework/GraphicsStart.cpp framework/GraphicsStart.hpp)
 endif()
+
+# The accessibility tree as a client reads it, and the log line that names
+# the process reading it through UI Automation (mitcad#2227).
+target_sources(mitcad PRIVATE framework/AccessibleTree.cpp framework/AccessibleTree.hpp
+               framework/AccessibilityClients.cpp framework/AccessibilityClients.hpp)
+if(WIN32)
+  # CoGetCallerTID; the processes with UI Automation loaded.
+  target_link_libraries(mitcad PRIVATE ole32 psapi)
+endif()
+if(BUILD_TESTING AND WIN32)
+  # The UI Automation client of app.ui-windows-accessible-tree: one bulk
+  # read of the window's whole tree, timed.
+  add_executable(mitcad-uia-walk tests/uia_walk.cpp)
+  target_link_libraries(mitcad-uia-walk PRIVATE ole32 oleaut32)
+endif()
+
+# Drawings over the whole view that the view draws itself in its overlay
+# layer, not widgets over it (mitcad#2296): sketch mode's overlay and the
+# dimensions shown outside sketch mode.
+target_sources(mitcad PRIVATE view/ViewPaintLayer.cpp view/ViewPaintLayer.hpp)
+
+# Split Body's tools of other components (mitcad#2299, GitHub mitcad/Mitcad#588,
+# app/COMMANDS.md "Split Body"): a face or body picked in another
+# component's occurrence goes into `tool_links`, and an edit shows it there.
+target_sources(mitcad PRIVATE commands/SplitToolLinks.cpp commands/SplitToolLinks.hpp)
+
+# The import progress's timeline item (mitcad#2331): the items done so far
+# plus one against the file's count, never going back, with the current
+# item's name and component; read by the unit test import_item_progress.
+target_sources(mitcad PRIVATE files/ImportItemProgress.cpp files/ImportItemProgress.hpp)
+
+# Edit in Place (mitcad#2321, GitHub mitcad/Mitcad#598, app/COMMANDS.md
+# "Linked designs"): a linked component's design edited inside the assembly
+# that holds it, saved to its own file.
+target_sources(mitcad PRIVATE files/MainWindowEditInPlace.cpp)

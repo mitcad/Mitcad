@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include "mitcad/io/iges.hpp"
 
+#include <algorithm>
+#include <optional>
+#include <utility>
+#include <vector>
+
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRep_Tool.hxx>
 #include <IFSelect_ReturnStatus.hxx>
@@ -9,9 +14,12 @@
 #include <IGESControl_Controller.hxx>
 #include <IGESData_GlobalSection.hxx>
 #include <IGESData_IGESModel.hxx>
+#include <NCollection_IndexedMap.hxx>
 #include <Interface_Static.hxx>
 #include <ShapeFix_Solid.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
@@ -65,17 +73,85 @@ int face_count(const TopoDS_Shape& shape) {
   return n;
 }
 
-// Sews faces and turns closed shells into solids. The pieces take the name
-// and colour of `like` (with " (2)", ... for further pieces), or generic
-// names when it is null.
-void sew(const std::vector<TopoDS_Shape>& shapes, const Body* like, std::vector<Body>& bodies) {
+// The colour of each face of the bodies that has one (its own, else its
+// body's), each face as the sewing made it (mitcad#2313).
+std::vector<std::pair<TopoDS_Shape, Color>> sewn_face_colors(const BRepBuilderAPI_Sewing& sewing,
+                                                             const std::vector<const Body*>& loose) {
+  std::vector<std::pair<TopoDS_Shape, Color>> out;
+  for (const Body* body : loose) {
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+    TopExp::MapShapes(body->shape, TopAbs_FACE, faces);
+    std::vector<std::optional<Color>> colors(static_cast<std::size_t>(faces.Extent()), body->color);
+    for (const FaceColor& face_color : body->face_colors) {
+      if (face_color.face < colors.size()) {
+        colors[face_color.face] = face_color.color;
+      }
+    }
+    for (int i = 1; i <= faces.Extent(); ++i) {
+      if (const std::optional<Color>& color = colors[static_cast<std::size_t>(i - 1)]) {
+        out.emplace_back(sewing.ModifiedSubShape(faces(i)), *color);
+      }
+    }
+  }
+  return out;
+}
+
+// A sewn piece's colours: `like`'s colour, or without it the colour most
+// of its faces have; and its faces of another colour.
+void color_piece(Body& piece, const std::optional<Color>& like,
+                 const std::vector<std::pair<TopoDS_Shape, Color>>& face_colors) {
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapes(piece.shape, TopAbs_FACE, faces);
+  std::vector<std::optional<Color>> colors(static_cast<std::size_t>(faces.Extent()));
+  for (const auto& [face, color] : face_colors) {
+    const int index = faces.FindIndex(face);
+    if (index > 0) {
+      colors[static_cast<std::size_t>(index - 1)] = color;
+    }
+  }
+  piece.color = like;
+  if (!piece.color) {
+    std::vector<std::pair<Color, int>> counts;
+    for (const std::optional<Color>& color : colors) {
+      if (!color) {
+        continue;
+      }
+      auto found = std::find_if(counts.begin(), counts.end(),
+                                [&](const std::pair<Color, int>& entry) { return entry.first == *color; });
+      if (found == counts.end()) {
+        counts.emplace_back(*color, 1);
+      } else {
+        ++found->second;
+      }
+    }
+    if (!counts.empty()) {
+      piece.color = std::max_element(counts.begin(), counts.end(),
+                                     [](const std::pair<Color, int>& a, const std::pair<Color, int>& b) {
+                                       return a.second < b.second;
+                                     })
+                        ->first;
+    }
+  }
+  for (std::size_t i = 0; i < colors.size(); ++i) {
+    if (colors[i] && !(piece.color && *colors[i] == *piece.color)) {
+      piece.face_colors.push_back(FaceColor{i, *colors[i]});
+    }
+  }
+}
+
+// Sews the bodies' faces and turns closed shells into solids. The pieces
+// take the name and colour of `like` (with " (2)", ... for further
+// pieces), or generic names and the colour most of their faces have when
+// it is null; faces of another colour keep theirs (mitcad#2313).
+void sew(const std::vector<const Body*>& loose, const Body* like, std::vector<Body>& bodies) {
   // IGES stores each face with its own edges; this joins them.
   BRepBuilderAPI_Sewing sewing(1.0e-3);
-  for (const TopoDS_Shape& shape : shapes) {
-    sewing.Add(shape);
+  for (const Body* body : loose) {
+    sewing.Add(body->shape);
   }
   sewing.Perform();
   const TopoDS_Shape sewn = sewing.SewedShape();
+  const std::vector<std::pair<TopoDS_Shape, Color>> face_colors = sewn_face_colors(sewing, loose);
 
   std::vector<TopoDS_Shape> pieces;
   for (TopExp_Explorer it(sewn, TopAbs_SHELL); it.More(); it.Next()) {
@@ -94,10 +170,10 @@ void sew(const std::vector<TopoDS_Shape>& shapes, const Body* like, std::vector<
     body.shape = pieces[i];
     if (like != nullptr) {
       body.name = i == 0 ? like->name : like->name + " (" + std::to_string(i + 1) + ")";
-      body.color = like->color;
     } else {
       body.name = "Body" + std::to_string(bodies.size() + 1);
     }
+    color_piece(body, like != nullptr ? like->color : std::nullopt, face_colors);
     bodies.push_back(body);
   }
 }
@@ -105,18 +181,16 @@ void sew(const std::vector<TopoDS_Shape>& shapes, const Body* like, std::vector<
 // Bodies of several faces (an IGES group of one solid's faces) are sewn on
 // their own and keep their names; single faces are sewn together.
 void sew(const std::vector<Body>& loose, std::vector<Body>& bodies) {
-  std::vector<TopoDS_Shape> single_faces;
-  const Body* single_like = nullptr;
+  std::vector<const Body*> single_faces;
   for (const Body& body : loose) {
     if (face_count(body.shape) > 1) {
-      sew({body.shape}, &body, bodies);
+      sew({&body}, &body, bodies);
     } else {
-      single_faces.push_back(body.shape);
-      single_like = single_faces.size() == 1 ? &body : nullptr;
+      single_faces.push_back(&body);
     }
   }
   if (!single_faces.empty()) {
-    sew(single_faces, single_like, bodies);
+    sew(single_faces, single_faces.size() == 1 ? single_faces.front() : nullptr, bodies);
   }
 }
 

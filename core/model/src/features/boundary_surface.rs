@@ -498,8 +498,68 @@ fn curves_of<'a, S>(
         .collect()
 }
 
+/// A curve of a network as agents read it: `Sketch2 c4`, `Sketch2 c4 c5
+/// and its chain`, `edges E{…} of F2.b0`, `the point (5, 5, 10)`.
+fn network_curve<K: Kernel>(ctx: &EvalContext<'_, K>, curve: &BoundaryCurveRef) -> String {
+    if let Some([x, y, z]) = curve.point {
+        return format!("the point ({x}, {y}, {z})");
+    }
+    if let Some(body) = curve.body {
+        if curve.edges.is_empty() {
+            return format!("free edges of {body}");
+        }
+        let edges: Vec<String> = curve.edges.iter().map(ToString::to_string).collect();
+        return format!("edges {} of {body}", edges.join(", "));
+    }
+    let sketch = curve
+        .sketch
+        .map(|s| ctx.feature_name(s))
+        .unwrap_or_default();
+    let curves: Vec<String> = curve.curves.iter().map(|c| c.curve_name()).collect();
+    let chain = if curve.chain { " and its chain" } else { "" };
+    format!("{sketch} {}{chain}", curves.join(" "))
+}
+
+/// The network's curves by number as the kernel's messages count them
+/// (`curve one way 2`, `crossing curve 1`, from 1), with their sketches
+/// and curves (mitcad#2333): `curves one way: 1 Sketch1 c1, 2 Sketch1 c2;
+/// crossing curves: 1 Sketch2 c1, 2 Sketch3 c1`.
+fn network_legend<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    u: &[BoundaryCurveRef],
+    v: &[BoundaryCurveRef],
+) -> String {
+    let side = |curves: &[BoundaryCurveRef]| {
+        curves
+            .iter()
+            .enumerate()
+            .map(|(i, c)| format!("{} {}", i + 1, network_curve(ctx, c)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!("curves one way: {}; crossing curves: {}", side(u), side(v))
+}
+
+/// Whether the kernel's failure has a detail for agents (the geometry
+/// kernel's failures in words: a pair of the network's curves that does
+/// not meet or curves no surface runs through, named by number).
+fn names_network_curves(text: &str) -> bool {
+    text.contains(crate::notice::PLACED_TAIL)
+}
+
+/// The kernel's failure `text` with the network's legend after its detail
+/// (agents read which sketch's curve `curve one way 2` is); the message
+/// and the places as they were.
+fn with_legend(text: &str, legend: &str) -> String {
+    let error = crate::notice::FeatureError::from_text(text);
+    let detail = format!("{} ({legend})", error.agent_text());
+    error.with_detail(detail).text()
+}
+
 impl<K: Kernel> Evaluate<K> for BoundarySurfaceDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
+        // A network's failure names its curves by number (mitcad#2333).
+        let legend = (!self.v.is_empty()).then(|| network_legend(ctx, &self.u, &self.v));
         let read_all = |ctx: &mut EvalContext<'_, K>, curves: &[BoundaryCurveRef]| {
             curves
                 .iter()
@@ -535,7 +595,14 @@ impl<K: Kernel> Evaluate<K> for BoundarySurfaceDef {
                 BoundaryCurves::Loop(&boundary)
             },
         };
-        let surface = ctx.kernel.boundary_surface(&spec).map_err(kernel_error)?;
+        let surface = ctx
+            .kernel
+            .boundary_surface(&spec)
+            .map_err(kernel_error)
+            .map_err(|text| match &legend {
+                Some(legend) if names_network_curves(&text) => with_legend(&text, legend),
+                _ => text,
+            })?;
         let mut output = FeatureOutput {
             tool: Some(surface.clone()),
             ..FeatureOutput::default()

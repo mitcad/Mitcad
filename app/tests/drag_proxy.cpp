@@ -481,6 +481,20 @@ void testBasisMotions() {
                                            {QStringLiteral("from"), xyz(10, 5, 0)},
                                            {QStringLiteral("to"), xyz(0, 0, 30)}});
   CHECK(motion && at(gp_Pnt(10, 5, 0).Transformed(*motion), 0, 0, 30));
+  // Along Z (mitcad#2339): only the Z of the motion; Along X only its X;
+  // All the whole motion.
+  points.setChoice(QStringLiteral("along"), QStringLiteral("z"));
+  const QJsonObject pointsBasis{{QStringLiteral("type"), QStringLiteral("point_to_point")},
+                                {QStringLiteral("from"), xyz(10, 5, 0)},
+                                {QStringLiteral("to"), xyz(0, 0, 30)}};
+  motion = basisMotion(points, pointsBasis);
+  CHECK(motion && at(gp_Pnt(10, 5, 0).Transformed(*motion), 10, 5, 30));
+  points.setChoice(QStringLiteral("along"), QStringLiteral("x"));
+  motion = basisMotion(points, pointsBasis);
+  CHECK(motion && at(gp_Pnt(10, 5, 0).Transformed(*motion), 0, 5, 0));
+  points.setChoice(QStringLiteral("along"), QStringLiteral("all"));
+  motion = basisMotion(points, pointsBasis);
+  CHECK(motion && at(gp_Pnt(10, 5, 0).Transformed(*motion), 0, 0, 30));
   // Point to Position: the reported point to X, Y and Z.
   CommandState position;
   position.setChoice(QStringLiteral("type"), QStringLiteral("point_to_position"));

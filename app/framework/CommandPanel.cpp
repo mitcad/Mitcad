@@ -330,6 +330,7 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Height and Pitch"), QT_TRANSLATE_NOOP("Choice", "Mitered"),
     QT_TRANSLATE_NOOP("Choice", "Path + Guide Rail"), QT_TRANSLATE_NOOP("Choice", "Path + Guide Surface"),
     QT_TRANSLATE_NOOP("Choice", "Point Sharp"), QT_TRANSLATE_NOOP("Choice", "Point Tangent"),
+    QT_TRANSLATE_NOOP("Choice", "Perpendicular to Face"),
     QT_TRANSLATE_NOOP("Choice", "Rails"), QT_TRANSLATE_NOOP("Choice", "Revolution and Height"),
     QT_TRANSLATE_NOOP("Choice", "Revolution and Pitch"), QT_TRANSLATE_NOOP("Choice", "Scale"),
     QT_TRANSLATE_NOOP("Choice", "Single Path"), QT_TRANSLATE_NOOP("Choice", "Smooth"),
@@ -443,7 +444,23 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Circle"), QT_TRANSLATE_NOOP("Choice", "Polygon"),
     QT_TRANSLATE_NOOP("Choice", "Staggered"), QT_TRANSLATE_NOOP("Choice", "Through All"),
     QT_TRANSLATE_NOOP("Choice", "Whole"), QT_TRANSLATE_NOOP("Choice", "Snapped"),
-    QT_TRANSLATE_NOOP("Choice", "Trimmed")};
+    QT_TRANSLATE_NOOP("Choice", "Trimmed"),
+    // commands/ExplodeCommands.cpp: Explode Step's Direction and Axis
+    // (mitcad#2113; the axes' letters are not translated).
+    QT_TRANSLATE_NOOP("Choice", "Picked Geometry"),
+    // commands/MoveCommands.cpp: Point to Point's Along (mitcad#2339; the
+    // labels are the icon buttons' tooltips).
+    QT_TRANSLATE_NOOP("Choice", "All: the whole way to the Target Point"),
+    QT_TRANSLATE_NOOP("Choice", "X: along X only"), QT_TRANSLATE_NOOP("Choice", "Y: along Y only"),
+    QT_TRANSLATE_NOOP("Choice", "Z: along Z only"),
+    // Found unmarked by tools/choice-labels (mitcad#2362): End Cap's
+    // Direction (commands/BuildEndCapCommand.cpp), a flange's and Hem's
+    // Rolled form (commands/SheetCommands.cpp) and the hole fits' labels
+    // before the model's table is read (commands/HoleSizes.hpp; Normal is
+    // above).
+    QT_TRANSLATE_NOOP("Choice", "Outward: past the end"),
+    QT_TRANSLATE_NOOP("Choice", "Inward: the component cut back"), QT_TRANSLATE_NOOP("Choice", "Rolled"),
+    QT_TRANSLATE_NOOP("Choice", "Fine"), QT_TRANSLATE_NOOP("Choice", "Coarse")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -954,8 +971,13 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
           static_cast<QHBoxLayout*>(line->layout())->addWidget(cell->field, 0);
           continue;
         }
-        // Wide enough to type in beside its fx button (mitcad#656).
-        cell->field->setMinimumWidth(100);
+        // Wide enough to type in beside its fx button (mitcad#656: Hole's
+        // distances beside their references) and its step buttons
+        // (mitcad#2327).
+        const ParameterField* stepping = cell->edit != nullptr ? ParameterField::of(cell->edit) : nullptr;
+        cell->field->setMinimumWidth(100 + (stepping != nullptr && stepping->stepButtons() != nullptr
+                                                ? ParameterField::stepButtonsRoom(cell->edit)
+                                                : 0));
         static_cast<QHBoxLayout*>(line->layout())->addWidget(cell->field, 1);
       }
       continue;
@@ -1351,20 +1373,6 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       // Empty: the model works it out (mitcad#656), shown once a preview has it.
       row.edit->setPlaceholderText(tr("Auto"));
     }
-    if (input.type == InputDef::Type::Value && input.markFor) {
-      // A mark in the field (mitcad#980: a Hole field that no longer follows
-      // the screw size), shown by refreshRow; a click does its action.
-      row.mark = new QAction(row.edit);
-      row.mark->setObjectName(QStringLiteral("mark_") + key);
-      row.mark->setVisible(false);
-      row.edit->addAction(row.mark, QLineEdit::TrailingPosition);
-      connect(row.mark, &QAction::triggered, this, [this, key] {
-        auto call = CommandPresenter::actions().markClicked;
-        if (call) {
-          call(key);
-        }
-      });
-    }
     if (input.type == InputDef::Type::Value) {
       connect(row.edit, &QLineEdit::editingFinished, this, [this, key] { emit valueCommitted(key); });
       row.edit->installEventFilter(this); // its keyboard focus (mitcad#250)
@@ -1380,13 +1388,31 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       suggest.keepOwn = !suggest.own.isEmpty();
       suggest.label = QStringLiteral("%1 %2").arg(m_def.name, input.label);
       suggest.naming = true;
-      // Up, Down and the wheel step a plain value (mitcad#1254).
+      // Up, Down and the wheel step a plain value (mitcad#1254), and so do
+      // the step buttons at the field's right end (mitcad#2327).
       suggest.steps = true;
       suggest.stepLimit.minimum = input.stepMinimum;
       suggest.stepLimit.above = input.stepAboveMinimum;
       ParameterField::attach(row.edit, suggest);
     } else {
       row.edit->installEventFilter(this); // Tab to the next field (mitcad#1181)
+    }
+    if (input.type == InputDef::Type::Value && input.markFor) {
+      // A mark in the field (mitcad#980: a Hole field that no longer follows
+      // the screw size), shown by refreshRow; a click does its action.
+      // Added after the field's step buttons and fx (mitcad#2327): a line
+      // edit lays its trailing buttons out from its right end in the order
+      // they were added, and the step buttons stay at the end.
+      row.mark = new QAction(row.edit);
+      row.mark->setObjectName(QStringLiteral("mark_") + key);
+      row.mark->setVisible(false);
+      row.edit->addAction(row.mark, QLineEdit::TrailingPosition);
+      connect(row.mark, &QAction::triggered, this, [this, key] {
+        auto call = CommandPresenter::actions().markClicked;
+        if (call) {
+          call(key);
+        }
+      });
     }
     if (input.type == InputDef::Type::Text && !input.formulaVariable.isEmpty()) {
       // An equation curve's formula (mitcad#2237): the parameters while a
@@ -1459,7 +1485,12 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       auto* line = new QHBoxLayout(both);
       line->setContentsMargins(0, 0, 0, 0);
       line->addWidget(slider, 1);
-      row.edit->setMaximumWidth(row.edit->fontMetrics().horizontalAdvance(QStringLiteral("00.000")) + 24);
+      // Room for the value beside its fx and its step buttons (mitcad#2327).
+      const ParameterField* stepping = ParameterField::of(row.edit);
+      const int steps = stepping != nullptr && stepping->stepButtons() != nullptr
+                            ? ParameterField::stepButtonsRoom(row.edit)
+                            : 0;
+      row.edit->setMaximumWidth(row.edit->fontMetrics().horizontalAdvance(QStringLiteral("00.000")) + 24 + steps);
       line->addWidget(row.edit);
       field = both;
     }
@@ -3022,6 +3053,19 @@ QStringList CommandPanel::layoutLines() const {
           if (button->defaultAction() == row->mark && button->isVisibleTo(this)) {
             lines << QStringLiteral("Panel %1 mark %2 at %3").arg(m_def.name, row->key, position(button));
             break;
+          }
+        }
+      }
+      if (const ParameterField* stepping = row->edit != nullptr ? ParameterField::of(row->edit) : nullptr) {
+        // A value field's step buttons (mitcad#2327): the up and the down
+        // button at its right end.
+        if (const QWidget* buttons = stepping->stepButtons(); buttons != nullptr && buttons->isVisibleTo(this)) {
+          for (const bool up : {true, false}) {
+            const QPoint at = GlassCard::mapToHost(buttons, ParameterField::stepButtonCentre(buttons, up));
+            lines << QStringLiteral("Panel %1 step-%2 %3 at %4,%5")
+                         .arg(m_def.name, up ? QStringLiteral("up") : QStringLiteral("down"), row->key)
+                         .arg(at.x())
+                         .arg(at.y());
           }
         }
       }

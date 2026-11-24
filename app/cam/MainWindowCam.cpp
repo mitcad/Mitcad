@@ -244,6 +244,64 @@ bool onLatheMachine(const CommandState& state) {
       .contains(QStringLiteral("lathe"));
 }
 
+// Whether an operation panel's setup is on a lathe with a C axis and live
+// tools (mitcad#2067): its milling operations cut with live tools, on the
+// part's face or its diameter.
+// The axes of an operation panel's setup's lathe (none on a mill).
+QJsonObject setupAxes(const CommandState& state) {
+  const QJsonObject data = camData(state);
+  return machineOf(data, str(setupOf(data, state.choice(QStringLiteral("setup")).toInt()), "machine"))
+      .value(QStringLiteral("machine"))
+      .toObject()
+      .value(QStringLiteral("lathe"))
+      .toObject()
+      .value(QStringLiteral("axes"))
+      .toObject();
+}
+
+bool setupMills(const CommandState& state) {
+  const QJsonObject axes = setupAxes(state);
+  return axes.value(QStringLiteral("c")).toBool() && axes.value(QStringLiteral("live_tools")).toBool();
+}
+
+// Whether an operation panel's setup's lathe mills on planes with a Y axis
+// (mitcad#2319).
+bool setupHasY(const CommandState& state) {
+  return setupMills(state) && setupAxes(state).value(QStringLiteral("y")).toBool();
+}
+
+// Whether a live tool cuts on a plane in an operation panel (mitcad#2319).
+bool liveOnPlane(const CommandState& state) {
+  return setupHasY(state) && state.choice(QStringLiteral("live")) == QStringLiteral("plane");
+}
+
+// Whether a setup panel's machine is a lathe with a sub-spindle
+// (mitcad#2319).
+bool machineHasSub(const CommandState& state) {
+  return machineOf(camData(state), state.choice(QStringLiteral("machine")))
+      .value(QStringLiteral("machine"))
+      .toObject()
+      .value(QStringLiteral("lathe"))
+      .toObject()
+      .value(QStringLiteral("axes"))
+      .toObject()
+      .value(QStringLiteral("sub_spindle"))
+      .toBool();
+}
+
+// The operations a live tool cuts on a lathe: facing (on the face), and
+// contours, pockets, adaptive clearing and drilling on the face or the
+// diameter.
+bool cutsLive(const QString& type) {
+  return type == QStringLiteral("contour") || type == QStringLiteral("pocket") || type == QStringLiteral("adaptive") ||
+         type == QStringLiteral("drill") || type == QStringLiteral("facing");
+}
+
+// Whether a live tool cuts the diameter in an operation panel.
+bool liveOnDiameter(const CommandState& state) {
+  return setupMills(state) && state.choice(QStringLiteral("live")) == QStringLiteral("diameter");
+}
+
 // A value input as the model takes it (a CamValue): an expression with its
 // unit as typed ("40 in", "d1 + 2 mm"), a plain number for a unitless one;
 // null when left empty. Why not, when it does not evaluate.
@@ -534,6 +592,12 @@ QJsonObject setupFields(const CommandState& state, QString* why, QString* input)
     if (!number.isNull()) {
       lathe.insert(QStringLiteral("program_number"), static_cast<int>(std::lround(number.toDouble())));
     }
+    // The hand-over to the sub-spindle (mitcad#2319), its values kept.
+    if (machineHasSub(state) && state.checked(QStringLiteral("hand_over"))) {
+      lathe.insert(QStringLiteral("hand_over"), lathe.value(QStringLiteral("hand_over")).toObject());
+    } else {
+      lathe.remove(QStringLiteral("hand_over"));
+    }
     setup.insert(QStringLiteral("lathe"), lathe);
   } else if (edit) {
     setup.insert(QStringLiteral("lathe"), QJsonValue(QJsonValue::Null));
@@ -693,6 +757,30 @@ QJsonObject operationFields(const CommandState& state, const QString& type, QStr
               QJsonObject{{QStringLiteral("radius"), value("lead_radius", ValueKind::Length, MainWindow::tr("Lead Radius"))}});
   } else if (edit) {
     op.insert(QStringLiteral("lead"), QJsonValue(QJsonValue::Null));
+  }
+  // Where a live tool cuts on a lathe with a C axis (mitcad#2067): the
+  // face, or the diameter (its top, bottom and heights diameters there).
+  if (cutsLive(type) && setupMills(state)) {
+    op.insert(QStringLiteral("live"), liveOnDiameter(state) ? QStringLiteral("diameter")
+                                      : liveOnPlane(state)  ? QStringLiteral("plane")
+                                                            : QStringLiteral("face"));
+  } else if (edit) {
+    op.insert(QStringLiteral("live"), QJsonValue(QJsonValue::Null));
+  }
+  // A plane's angles (mitcad#2319); none: from the picks.
+  if (cutsLive(type) && liveOnPlane(state)) {
+    const QJsonValue c = value("plane_c", ValueKind::Angle, MainWindow::tr("C Angle"));
+    const QJsonValue b = value("plane_b", ValueKind::Angle, MainWindow::tr("B Angle"));
+    QJsonObject plane;
+    if (!c.isNull()) {
+      plane.insert(QStringLiteral("c"), c);
+    }
+    if (!b.isNull()) {
+      plane.insert(QStringLiteral("b"), b);
+    }
+    op.insert(QStringLiteral("plane"), plane.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(plane));
+  } else if (edit) {
+    op.insert(QStringLiteral("plane"), QJsonValue(QJsonValue::Null));
   }
   if (!why->isEmpty()) {
     return {};
@@ -896,6 +984,10 @@ CommandDef MainWindow::camSetupCommand() {
           .withAuto([](const CommandState&, const CommandContext&) { return QStringLiteral("1000"); })
           .withTooltip(tr("The number the lathe's control keeps the program under"))
           .withVisible(onLathe),
+      // The sub-spindle taking the part over (mitcad#2319).
+      checkInput(QStringLiteral("hand_over"), tr("Hand over to the sub-spindle"))
+          .withTooltip(tr("The sub-spindle grips the part before it is parted off and turns its back"))
+          .withVisible([](const CommandState& state) { return machineHasSub(state); }),
   };
   def.init = [this](CommandState& state, const CommandContext&) {
     state.setObject(QStringLiteral("cam"), camPanelData());
@@ -969,6 +1061,7 @@ CommandDef MainWindow::camSetupCommand() {
     loadCamValue(state, QStringLiteral("stock_bore"), lathe.value(QStringLiteral("stock_bore")), ValueKind::Length, context);
     loadCamValue(state, QStringLiteral("program_number"), lathe.value(QStringLiteral("program_number")),
                  ValueKind::Unitless, context);
+    state.setChecked(QStringLiteral("hand_over"), lathe.contains(QStringLiteral("hand_over")));
   };
   def.build = [](const CommandState& state, const CommandContext&) -> Built {
     QString why;
@@ -1078,9 +1171,13 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
     pickTip = tr("Planar faces or sketch profiles the tool's center stays within; none: the stock");
     least = 0;
   }
+  // Planar faces, and on a lathe's diameter the faces round the spindle
+  // axis (cylinders) a live tool mills there (mitcad#2067, the pick rule
+  // below takes the ones of the place chosen).
   const auto accepts = [drill](const SelectionItem& item) {
     if (item.kind == SelectKind::Face) {
-      return drill ? item.geometry == QStringLiteral("cylinder") : item.geometry == QStringLiteral("plane");
+      return drill ? item.geometry == QStringLiteral("cylinder")
+                   : item.geometry == QStringLiteral("plane") || item.geometry == QStringLiteral("cylinder");
     }
     if (drill && item.kind == SelectKind::Edge) {
       return item.geometry == QStringLiteral("circle") || item.geometry == QStringLiteral("arc");
@@ -1113,8 +1210,55 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
     def.inputs.append(selectionInput(QStringLiteral("bodies"), tr("Bodies"), SelectKind::Body, 0, 0)
                           .withTooltip(tr("The bodies whose surfaces are machined; none: the setup's bodies")));
   }
-  def.inputs.append(
-      selectionInput(QStringLiteral("geometry"), pickLabel, picks, least, 0).withAccepts(accepts).withTooltip(pickTip));
+  // A live tool on a lathe with a C axis (mitcad#2067): on the part's face
+  // or its diameter, shown when the setup's lathe has them.
+  const bool live = cutsLive(type) && !facing;
+  if (live) {
+    def.inputs.append(choiceInput(QStringLiteral("live"), tr("Live Tool"),
+                                  {{QStringLiteral("face"), tr("On the Face")},
+                                   {QStringLiteral("diameter"), tr("On the Diameter")}},
+                                  QStringLiteral("face"))
+                          // On a plane with a Y axis (mitcad#2319).
+                          .withChoices([](const CommandState& state) {
+                            Choices choices{{QStringLiteral("face"), MainWindow::tr("On the Face")},
+                                            {QStringLiteral("diameter"), MainWindow::tr("On the Diameter")}};
+                            if (setupHasY(state)) {
+                              choices.append(qMakePair(QStringLiteral("plane"), MainWindow::tr("On a Plane")));
+                            }
+                            return choices;
+                          })
+                          .withVisible([](const CommandState& state) { return setupMills(state); })
+                          .withTooltip(tr("Where the lathe's live tool cuts: the part's face, its diameter, or a "
+                                          "plane with the Y axis")));
+    // The plane's angles (mitcad#2319): from the picked face or hole when
+    // left empty.
+    const auto fromPicks = [](const CommandState&, const CommandContext&) { return MainWindow::tr("From the picks"); };
+    def.inputs.append(valueInput(QStringLiteral("plane_c"), tr("C Angle"), ValueKind::Angle, QString())
+                          .withAuto(fromPicks)
+                          .withVisible([](const CommandState& state) { return liveOnPlane(state); })
+                          .withTooltip(tr("Where the C axis turns the part for the plane, from the work X")));
+    def.inputs.append(valueInput(QStringLiteral("plane_b"), tr("B Angle"), ValueKind::Angle, QString())
+                          .withAuto(fromPicks)
+                          .withVisible([](const CommandState& state) { return liveOnPlane(state); })
+                          .withTooltip(tr("The tool's tilt from the spindle axis: 0 on the face, 90 across it, "
+                                          "between them with a B head")));
+  }
+  // On the diameter a contour or a pocket takes the faces round the
+  // spindle axis it mills (their floors), a drilling its holes.
+  def.inputs.append(selectionInput(QStringLiteral("geometry"), pickLabel, picks, least, 0)
+                        .withAccepts(accepts)
+                        // Sketch profiles and curves too, wrapped onto the
+                        // diameter (mitcad#2319).
+                        .withPickRule(
+                            [picks](const CommandState&) -> SelectFilter { return picks; },
+                            [drill](const SelectionItem& item, const CommandState& state) {
+                              if (drill || item.kind != SelectKind::Face) {
+                                return true;
+                              }
+                              return item.geometry == (liveOnDiameter(state) ? QStringLiteral("cylinder")
+                                                                             : QStringLiteral("plane"));
+                            })
+                        .withTooltip(pickTip));
   if (contour) {
     def.inputs.append(choiceInput(QStringLiteral("side"), tr("Side"),
                                   {{QStringLiteral("outside"), tr("Outside")},
@@ -1159,10 +1303,10 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
   def.inputs.append(valueInput(QStringLiteral("top"), tr("Top"), ValueKind::Length, QString())
                         .withHeading(tr("Depths"))
                         .withAuto([](const CommandState&, const CommandContext&) { return MainWindow::tr("Stock top"); })
-                        .withTooltip(tr("Where the cut starts, in the work's Z; empty: the stock's top")));
+                        .withTooltip(tr("Where the cut starts, in the work's Z (a diameter on the diameter); empty: the stock's top")));
   def.inputs.append(valueInput(QStringLiteral("bottom"), tr("Bottom"), ValueKind::Length, QString())
                         .withAuto(none)
-                        .withTooltip(tr("How deep the cut goes, in the work's Z; empty: from what is picked")));
+                        .withTooltip(tr("How deep the cut goes, in the work's Z (a diameter on the diameter); empty: from what is picked")));
   // Raster finishing has no levels.
   if (!raster) {
     QString stepTip = tr("The deepest pass; empty: the flutes or the diameter");
@@ -1268,6 +1412,11 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
     state.setChoice(QStringLiteral("tool"), defaultTool(camData(state), setup, type));
     qInfo().noquote() << QStringLiteral("CAM operation panel %1: setup %2, tool %3")
                              .arg(type, str(setupOf(camData(state), setup), "name"), state.choice(QStringLiteral("tool")));
+    // A live tool on a lathe with a C axis (mitcad#2067).
+    if (setupMills(state)) {
+      qInfo().noquote() << QStringLiteral("CAM operation panel %1: a live tool on the %2")
+                               .arg(type, liveOnDiameter(state) ? QStringLiteral("diameter") : QStringLiteral("face"));
+    }
   };
   def.modelChanged = [this](CommandState& state, const CommandContext&) {
     state.setObject(QStringLiteral("cam"), camPanelData());
@@ -1276,6 +1425,14 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
     state.setObject(QStringLiteral("edited"), op);
     state.setObject(QStringLiteral("cam"), camPanelData());
     state.setChoice(QStringLiteral("setup"), QString::number(op.value(QStringLiteral("setup_id")).toInt()));
+    const QString place = str(op, "live");
+    state.setChoice(QStringLiteral("live"), place == QStringLiteral("diameter") || place == QStringLiteral("plane")
+                                                ? place
+                                                : QStringLiteral("face"));
+    // A plane's angles (mitcad#2319).
+    const QJsonObject plane = op.value(QStringLiteral("plane")).toObject();
+    loadCamValue(state, QStringLiteral("plane_c"), plane.value(QStringLiteral("c")), ValueKind::Angle, context);
+    loadCamValue(state, QStringLiteral("plane_b"), plane.value(QStringLiteral("b")), ValueKind::Angle, context);
     state.setText(QStringLiteral("name"), str(op, "name"));
     state.setItems(QStringLiteral("geometry"), camItems(op.value(QStringLiteral("inputs")).toArray(), context));
     // The bodies of a 3-axis operation, each in its occurrence.

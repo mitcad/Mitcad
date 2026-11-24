@@ -66,6 +66,7 @@ QList<TemplateChoice> templateChoices(const QJsonObject& answer) {
     item.size = sheetSizeText(data.value(QStringLiteral("size")));
     item.projection = data.value(QStringLiteral("projection")).toString();
     item.standard = data.value(QStringLiteral("standard")).toString();
+    item.titleBlock = data.value(QStringLiteral("show_title_block")).toBool(true);
     if (library == QStringLiteral("user")) {
       item.label = QCoreApplication::translate("DrawingTemplates", "%1 (User)").arg(name);
     } else if (library == QStringLiteral("project")) {

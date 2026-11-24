@@ -126,6 +126,9 @@ mod web_downloads;
 use web_downloads::{zip_extract, zip_list};
 // Kernel calls given up by a Cancel or the time limit (mitcad#1917).
 use kernel::abandon::bridge::{kernel_time_limit, set_kernel_time_limit, set_test_kernel_hang};
+// Edit in Place: a linked component edited inside its holder (mitcad#2321).
+mod edit_in_place;
+use edit_in_place::{begin_edit_in_place, finish_edit_in_place, linked_saved_in_place};
 
 #[cxx::bridge(namespace = "mitcad")]
 mod ffi {
@@ -925,6 +928,33 @@ mod ffi {
         /// deaf to every cancel and limit, as a call that does not return
         /// (MITCAD_TEST_KERNEL_HANG).
         fn set_test_kernel_hang(seconds: f64);
+    }
+
+    // Edit in Place (mitcad#2321, edit_in_place.rs;
+    // app/files/MainWindowEditInPlace.cpp): a linked component's design
+    // edited inside the assembly that holds it. The JSON of each is
+    // commands.md's "Edit in Place".
+
+    extern "Rust" {
+        /// `linked` (the design of the holder's linked component) shows the
+        /// assembly around it, its root active, without an undo step;
+        /// `request`: `component`, `holder` (its name). JSON answer.
+        fn begin_edit_in_place(
+            linked: &mut Document,
+            holder: &Document,
+            request: &str,
+        ) -> Result<String>;
+        /// Ends it: the assembly goes from `linked`, and the holder takes
+        /// its bodies as one undo step when it changed; `request`:
+        /// `component`, `base` (the holder's folder). JSON answer.
+        fn finish_edit_in_place(
+            holder: &mut Document,
+            linked: &mut Document,
+            request: &str,
+        ) -> Result<String>;
+        /// The holder's Save wrote the design it took: its link records the
+        /// file's digest, without an undo step. JSON answer.
+        fn linked_saved_in_place(holder: &mut Document, request: &str) -> Result<String>;
     }
 }
 

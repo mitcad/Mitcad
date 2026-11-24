@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Boundary Surface's Network whose curves run on past the outer crossing curves (mitcad#2333, GitHub mitcad/Mitcad#609), on the reported network rebuilt as a design (opened with --open, never committed; tools/cli/boundary-network-reported-test.cmake). All in the xy plane: three curves one way in Sketch1 (F1: a cubic spline c5 from (0, 40) to (100, 75), a cubic spline c10 from (5, 0) to (105, 35) and a line c13 from (20, -40) to (115, -5)) and two crossing cubic splines, Sketch2's c5 (F2) from the top curve at (21.25, 50.95) to the line at (43.75, -31.25) and Sketch3's c5 (F3) from the top curve at (67.69, 64.23) to the line at (91.25, -13.75). The curves one way run on past both crossing curves. BoundarySurface1 (F4) failed with 'no surface runs through the network'; now each curve is cut back to its first and last crossing and the face spans the region between the outer crossings."},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"comment": "One face through all five curves: the region the top curve, the right crossing curve, the line and the left crossing curve close (4088.33 mm2, by the curves sampled), the parts beyond the crossings left off."},
+  {"expect": {"body": "F4.b0", "faces": 1, "has_face": "F4:boundary", "area": 4088.3319263649983, "tolerance": 1e-4}},
+  {"expect": {"body": "F4.b0", "bbox": {"min": [21.25, -31.25, 0], "max": [91.25, 64.227, 0]}, "tolerance": 1e-3}}
+]

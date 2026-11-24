@@ -868,6 +868,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 // (`apply_colors`, mitcad#793).
                 color: None,
                 shape,
+                face_colors: Vec::new(),
             }])
         };
         let imported = match self.doc.add_base_feature(base.clone()) {

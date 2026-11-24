@@ -330,6 +330,9 @@ private:
   // A base view's Shows list (subjectChoices): the drawing's component,
   // its occurrences and its bodies by name.
   QList<QPair<QString, QString>> subjects() const;
+  // A base view's Exploded View list (mitcad#2113): Assembled, then the
+  // drawing's component's explode views by name.
+  QList<QPair<QString, QString>> explodeChoices() const;
   // A base view's Shows in its panel (mitcad#1293): the component's
   // occurrences and bodies (subjectRows) checked as `subject` shows them;
   // a change sends the bodies checked as the view's subject.

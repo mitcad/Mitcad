@@ -431,7 +431,10 @@ fresh process with `info <design> --timings`, without a result store. Report
 the feature recompute times separately from process wall time and peak
 resident memory (`/usr/bin/time -l` on macOS reports the latter in bytes).
 The CLI's `--timings` report does not measure viewport meshing or display.
-`MITCAD_TEST_ONLY` selects `guarded` geometry tests by a name substring;
+`MITCAD_TEST_ONLY` selects `guarded` geometry tests by a name substring,
+and in the geometry tests that are executables of their own the test
+functions by their whole names (`geometry/tests/test_only.hpp`, a
+comma-separated list, mitcad#2310);
 `test_geometry --part <name>` runs one part of the suite (`--list` names
 them; each is the ctest `geometry.suite.<name>`, mitcad#832). The long
 thread and sweep groups are numbered parts of about equal time
@@ -898,7 +901,11 @@ subprocess helper and CEF's runtime.
   and locales, the notices `packaging/browser/THIRD-PARTY-NOTICES.txt` and
   CEF's licence); `MITCAD_BROWSER_COMPONENT_DIR=<build>/browser-component`
   makes a build's MitCad use it without a download (the UI test
-  `app.ui-<platform>-component-web` does). The target `browser-package`
+  `app.ui-<platform>-component-web` does). The UI tests that need it
+  (`component-web*`, `tutorials`, `tutorials-start-page`) are registered
+  only in a build that makes it: a Linux build or check machine without
+  `~/cef/<version>/` runs none of them until `tools/dev-env/fetch-cef.sh`
+  has run once as its user and the build is configured again. The target `browser-package`
   zips it as `mitcad-browser-<MITCAD_BROWSER_VERSION>-<platform>.zip`. The
   module's own code is C++17, compiled as C++20 for CEF's headers, which
   are included as system headers.
@@ -1369,7 +1376,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_CARGO_SWEEP=0`, `MITCAD_CARGO_JOB_MIB` | The crates' test builds (`core.cargo_build*`): no sweep of stale units after the build; MiB of available memory per cargo job instead of 2560 ([the crates' test builds](#the-crates-test-builds-sweep-jobs-debug-information)). |
 | `MITCAD_TEST_PRINT_PDF=<file>` | File › Print (mitcad#1089) shows no system print dialog: it prints to this PDF file through `QPrinter` (`printing::askPrinter`, logged `Print dialog skipped (test): printing to <file>`): `tools/ui-paper-print-test.sh`, `app.ui-windows-paper-print`, the print steps of `tools/ui-drawings-test.sh` and `tools/ui-build-test.sh`. |
 | `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
-| `MITCAD_TEST_GL_FAILURE=init\|reconnect\|throw` | The 3D view's attach to the graphics card fails (mitcad#2125, `OcctViewer::initializeGL`): `init` its first attach sees a driver that answers no GL version, as after a driver reset; `reconnect` the attaches after it; `throw` makes those throw `Standard_NullObject` where OCCT's `OpenGl_Context::Init` did. While it is set, a move of the view to another window, or a screen change of its window (the TestDriver's `screen-change`, which tells every shown window that its screen changed), counts as Qt making its surface again on every platform; `throw` also makes Component from Web's screen change (`CefView::screenChanged`) throw, which it catches and logs once. It is read at every attach: the TestDriver's `unset-env MITCAD_TEST_GL_FAILURE` (or `set-env NAME VALUE`, for `MITCAD_TEST_*` variables only) ends the failure while the app runs (`tools/ui-gl-failure-test.sh`, `app.ui-windows-gl-failure`). On Linux through EGL, `start` makes the start-up's graphics check fail for every EGL context (mitcad#2292, `framework/GraphicsStart.hpp`): MitCad then starts again in the same process on X11 with GLX, where the window draws and the 3D view says it cannot start (`tools/ui-gl-start-failure-test.sh`). |
+| `MITCAD_TEST_GL_FAILURE=init\|reconnect\|throw` | The 3D view's attach to the graphics card fails (mitcad#2125, `OcctViewer::initializeGL`): `init` its first attach sees a driver that answers no GL version, as after a driver reset; `reconnect` the attaches after it; `throw` makes those throw `Standard_NullObject` where OCCT's `OpenGl_Context::Init` did. While it is set, a move of the view to another window, or a screen change of its window (the TestDriver's `screen-change`, which tells every shown window that its screen changed), counts as Qt making its surface again on every platform; `throw` also makes Component from Web's screen change (`CefView::screenChanged`) throw, which it catches and logs once. It is read at every attach: the TestDriver's `unset-env MITCAD_TEST_GL_FAILURE` (or `set-env NAME VALUE`, for `MITCAD_TEST_*` variables only) ends the failure while the app runs (`tools/ui-gl-failure-test.sh`, `app.ui-windows-gl-failure`). On Linux through EGL, `start` makes the first start's graphics check fail for every EGL context of Qt's (mitcad#2292, `framework/GraphicsStart.hpp`): MitCad then starts again in the same process on X11 with GLX, where the window draws and the 3D view draws in its own EGL context, read back into the window; `start-view` does the same and makes the 3D view's own EGL context fail in every start, so that the window draws and the 3D view says it cannot start (`tools/ui-gl-start-failure-test.sh`). |
 | `MITCAD_SHELL_TRACE=1` | Shell prints `shell trace:` lines on standard error (mitcad#2050, `geometry/src/shell_cavity.cpp`): why the geometry kernel's offset failed, what the cavity it falls back on found (the plates, thin faces and faces under removed ones), each step of it that failed (an inward offset with its `BRepOffset_Error` code, a thin part or rounding that could not be taken away, a kept face the cavity cut into) and a refused result, for a design whose Shell fails. |
 | `MITCAD_TEST_3DXWARE=1` | Windows: the 3DxWare runtime's stand-in (mitcad#2152, `app/platform/windows/SpaceMouse3DxWare.cpp`) loads in place of the installed `siappdll.dll` and reports one device, `Test 3D mouse`, so the 3D mouse's backend asks for MitCad's window at the moment a real driver start does; it opens the device only for a window and sends no events (`app.ui-windows-space-mouse-3dxware`). |
 
@@ -2733,7 +2740,11 @@ A patch that does not revert at the tip (later patches change the same
 lines) is shown at its own place in the chain with `--in-chain`: OCCT with
 the patches before it and with the patches up to it, the MitCad tests
 built against each state's headers, a later patch carried onto both only
-where the MitCad code needs the API it adds (`--jobs` workers, resumable;
+where the MitCad code needs the API it adds: its declarations, with the
+functions it adds whole where a test calls one of them, or the whole
+patch; the patch's own declarations before it where those carried build
+on them; and the later patches its `Test:` paragraph says the test needs
+(mitcad#2310; `--jobs` workers, resumable;
 `--table-verdict` takes the patches by their verdict at the tip).
 The tool reads and writes only that document, never a `.patch` file, so a
 proof run or a test note leaves the port and its hash as they are (no OCCT

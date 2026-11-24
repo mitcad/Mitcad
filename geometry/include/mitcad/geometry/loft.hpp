@@ -21,15 +21,22 @@ namespace mitcad::geometry {
 
 // A sketch region (its outer loop; one with holes is refused), a face of a
 // body (its outer loop, also of a face with holes, mitcad#1183) or a point
-// (only first or last).
+// (only first or last). A chain (mitcad#2345): curves joined end to end,
+// open or closed, a surface loft's section; a loft of chains has only
+// chains, all open or all closed, and is a surface (`solid` false), its
+// faces side(<curve>) after the first chain's curves as loft_sheet's.
 struct LoftSection {
-  enum class Kind { Region, Face, Point };
+  enum class Kind { Region, Face, Point, Chain };
   Kind kind = Kind::Region;
   Frame frame;   // Region
   Region region; //
   ShapePtr body; // Face: a face name reference on the body
   std::string face;
   gp_Pnt point; // Point
+  Path chain;   // Chain
+  // Chain: the normal of the plane its curves lie in (a planar sketch's),
+  // none for curves in space (a 3D sketch's, a curved face's sketch).
+  std::optional<gp_Dir> normal;
 };
 
 // How the loft leaves its first section or reaches its last one. The
@@ -48,11 +55,25 @@ struct LoftSection {
 //   point of that section's distance from the line.
 // - Free and PointSharp impose nothing; with two sections the far end of
 //   a condition follows Mitcad's rule for it (loft_skin.cpp, commands.md).
+// - Perpendicular (mitcad#2345; a region, a face or a chain): at right
+//   angles to a face the section lies on, the face `face` of `body`, or
+//   without one the face the section lies on: a face section's own face,
+//   a region's or a chain's plane. At every point of the section the
+//   takeoff runs along the face's normal there, to the side of the next
+//   section; at the section's corners as Direction's and Tangent's. On a
+//   plane without a face it is Direction at angle 0 (the distance between
+//   the sections' centres); on a face the mean distance between the
+//   sections' corresponding vertices, as Tangent's. The section must lie on
+//   the face within 0.01 mm; the surface meets the face at right angles
+//   within 1e-6 rad all along the section (rails that leave the section
+//   otherwise bend it, as they bend every condition).
 struct LoftEnd {
-  enum class Kind { Free, Direction, Tangent, Smooth, PointSharp, PointTangent };
+  enum class Kind { Free, Direction, Tangent, Smooth, PointSharp, PointTangent, Perpendicular };
   Kind kind = Kind::Free;
   double angle = 0.0;
   double weight = 1.0;
+  ShapePtr body; // Perpendicular: the body of `face`; none: the section's own face or plane
+  std::string face;
 };
 
 // Faces: side(<key>) from the edges of the first section that is not a

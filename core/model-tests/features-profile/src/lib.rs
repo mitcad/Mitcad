@@ -45,3 +45,6 @@ mod pipe_helix_turns_tests;
 mod curve_tools_tests;
 // A loft's Tangent Edges, merged or kept (mitcad#2162).
 mod loft_tangent_edges_tests;
+// A loft's Perpendicular to Face end condition and a surface loft of
+// curves with end conditions (mitcad#2345).
+mod loft_perpendicular_tests;

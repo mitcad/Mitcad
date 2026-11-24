@@ -24,6 +24,19 @@ pub mod ffi {
         /// Writing: where the body goes (`mitcad::io::Placement`), once as
         /// it is when empty. Reading leaves it empty.
         placements: Vec<BodyPlacement>,
+        /// The faces coloured on their own (mitcad#2313,
+        /// `mitcad::io::Body::face_colors`): read, the faces whose colour
+        /// is not the body's; written, as the faces' colours (STEP and
+        /// IGES).
+        face_colors: Vec<FaceColor>,
+    }
+
+    /// A face of a body and its colour: the face's index in the body's
+    /// shape (the kernel's face order, from 0) and sRGB components in
+    /// [0, 1].
+    struct FaceColor {
+        face: usize,
+        color: [f64; 3],
     }
 
     /// A placement of a body to write (mitcad#19): the rotation's rows and

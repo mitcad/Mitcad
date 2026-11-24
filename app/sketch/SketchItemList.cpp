@@ -610,6 +610,8 @@ void SketchItemList::describeStep(const QString& kind, Cell& cell) const {
       // Equation curves (mitcad#2237).
       {"equation_curve", "equation-curve", tr("Equation Curve")},
       {"edit_equation_curve", "equation-curve", tr("Edit Equation Curve")},
+      // Remove Point on a spline (mitcad#2326).
+      {"remove_spline_point", "spline-fit", tr("Remove Spline Point")},
   };
   cell.name = tr("Sketch Step");
   cell.icon = QStringLiteral("sketch");

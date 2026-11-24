@@ -195,6 +195,9 @@ struct FileOut<'a> {
     // Decals with their images (mitcad#2244), when there are any.
     #[serde(skip_serializing_if = "<[crate::document::Decal]>::is_empty")]
     decals: &'a [crate::document::Decal],
+    // Explode views of assemblies (mitcad#2113), when there are any.
+    #[serde(skip_serializing_if = "<[crate::explode::ExplodeView]>::is_empty")]
+    explode_views: &'a [crate::explode::ExplodeView],
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -621,6 +624,7 @@ pub(super) fn save_with(
         selection_sets: &state.selection_sets,
         point_clouds: &state.point_clouds,
         decals: &state.decals,
+        explode_views: &state.explode_views,
         statistics,
         preview,
     };
@@ -949,7 +953,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 53] = [
+const TOP_FIELDS: [&str; 54] = [
     "format",
     "version",
     "units",
@@ -1034,6 +1038,8 @@ const TOP_FIELDS: [&str; 53] = [
     "point_clouds",
     // Decals (mitcad#2244).
     "decals",
+    // Explode views (mitcad#2113).
+    "explode_views",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1221,6 +1227,7 @@ fn assembly_in(
             policy: c.policy,
             build: c.build,
             listed: c.listed,
+            in_place: false,
         });
     }
     for (i, o) in array(top, "occurrences", false)?.into_iter().enumerate() {
@@ -1825,6 +1832,27 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
     }
+    // Explode views (mitcad#2113): names once each, their steps checked;
+    // their occurrences are checked once the assembly is read.
+    let explode_views = array(&mut top, "explode_views", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            let view = serde_json::from_value::<crate::explode::ExplodeView>(value)
+                .map_err(|e| schema(format!("explode_views[{i}]: {e}")))?;
+            view.check()
+                .map_err(|e| invalid(format!("explode_views[{i}]: {e}")))?;
+            Ok(view)
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    for (i, view) in explode_views.iter().enumerate() {
+        if explode_views[..i].iter().any(|v| v.name == view.name) {
+            return Err(invalid(format!(
+                "explode_views[{i}]: explode view {} is listed more than once",
+                view.name
+            )));
+        }
+    }
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -2341,6 +2369,28 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.selection_sets = selection_sets;
     state.prune_selection_sets();
     state.decals = decals;
+    // Explode views (mitcad#2113): of components that exist, their steps'
+    // occurrences where their paths say.
+    for (i, view) in explode_views.iter().enumerate() {
+        if !state.assembly.exists(view.component) {
+            return Err(invalid(format!(
+                "explode_views[{i}] ({}): there is no component {}",
+                view.name, view.component
+            )));
+        }
+        for step in &view.steps {
+            for path in step
+                .occurrences
+                .iter()
+                .chain(step.direction.iter().map(|d| &d.occurrence))
+                .chain(step.axis.iter().map(|d| &d.occurrence))
+            {
+                crate::joints::path_component(&state.assembly, view.component, &path.0)
+                    .map_err(|e| invalid(format!("explode_views[{i}] ({}): {e}", view.name)))?;
+            }
+        }
+    }
+    state.explode_views = explode_views;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(

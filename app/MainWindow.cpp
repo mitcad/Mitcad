@@ -1706,6 +1706,10 @@ void MainWindow::registerCommands() {
   registerTutorialCommands();
   // Insert › Decal (mitcad#2244).
   registerDecalCommands();
+  // Assemble › Explode and Explode Step (mitcad#2113).
+  registerExplodeCommands();
+  // Finish Edit in Place (mitcad#2321).
+  registerEditInPlaceCommands();
 }
 
 void MainWindow::showDiagnostics() {
@@ -3539,6 +3543,11 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   showStartingSketches(*session);
   m_session = session;
   m_lastCommand = def.id;
+  // Measure keeps an explode view shown (mitcad#2328): its bodies placed
+  // again now that the session is the window's, whatever its start showed.
+  if (def.keepsExplode && explodeDisplayed()) {
+    showBodies();
+  }
   connect(session, &CommandSession::finished, this, &MainWindow::onCommandFinished);
   // A Flex item's edit session: its handles read the previewed route again
   // (mitcad#1713, owner 14.11.2026).
@@ -3953,6 +3962,12 @@ void MainWindow::cancel() {
   }
   if (escapeDrawing()) {
     return; // an open drawing's Esc (mitcad#707)
+  }
+  // Esc on an idle view with nothing selected finishes Edit in Place
+  // (mitcad#2321).
+  if (m_inPlaceHolder && m_selection.isEmpty() && m_mode == Mode::Idle) {
+    finishEditInPlace();
+    return;
   }
   clearSelection();
 }
@@ -4996,6 +5011,8 @@ void MainWindow::refreshScene() {
   followComments();
   // The decals shown, on their faces (mitcad#2244).
   followDecals();
+  // The Explode panel's views and steps (mitcad#2113).
+  followExplodePanel();
   // The Origin folder and Isolate are the document's (P9).
   m_originShown = m_snapshot.originShown;
   m_isolation = m_snapshot.isolation;
@@ -5435,6 +5452,8 @@ void MainWindow::showBodies() {
   if (m_gravity != nullptr) {
     m_gravity->placeShown(bodies); // a hanging item's body faded (mitcad#1713)
   }
+  // At the shown explode view's places, with its trail lines (mitcad#2113).
+  explodeBodies(bodies);
   instances.finish();
   m_viewer->setBodies(bodies);
   showSectionCaps(bodies);
@@ -6157,6 +6176,9 @@ void MainWindow::logDatumPlaces() {
     // view's picking does (mitcad#1030: the XY plane's place seen beside
     // the blocks lay under it, and the click turned the view).
     const QRect cube = m_viewer->overlayCubeArea();
+    // Nor under a tutorial step's callout (mitcad#2311), a child of the
+    // window over the view in either layout, which takes the click.
+    const QRect callout = m_guide != nullptr ? m_guide->calloutRect() : QRect();
     const auto tryPlaces = [&](const std::vector<gp_Pnt>& places) {
       for (const gp_Pnt& candidate : places) {
         if (!picks) {
@@ -6165,7 +6187,8 @@ void MainWindow::logDatumPlaces() {
         const QPoint widget = m_viewer->toWidget(candidate);
         // Nor under a card over the view, which takes the click too
         // (mitcad#1524: Create Sketch's kind row on the command card).
-        if (cube.contains(widget) || m_viewer->isCovered(QPointF(widget))) {
+        if (cube.contains(widget) || m_viewer->isCovered(QPointF(widget)) ||
+            (!callout.isNull() && callout.contains(m_viewer->mapTo(this, widget)))) {
           continue;
         }
         const std::vector<SelectionItem> items = m_viewer->itemsAt(QPointF(widget));
@@ -7555,13 +7578,18 @@ void MainWindow::updateIdleCard() {
         if (!item.occurrence.isEmpty()) {
           reference.insert(QStringLiteral("occurrence"), item.occurrence);
         }
-        const QString key = QString::fromUtf8(compactJson(reference));
+        // Where an explode view shows it (mitcad#2328).
+        QJsonObject request{{QStringLiteral("query"), QStringLiteral("measure")}, {QStringLiteral("a"), reference}};
+        const QJsonObject exploded = shownExplode();
+        if (!exploded.isEmpty()) {
+          request.insert(QStringLiteral("explode"), exploded);
+        }
+        const QString key = QString::fromUtf8(compactJson(request));
         if (!m_idleMeasurements.contains(key)) {
           QElapsedTimer measureClock;
           measureClock.start();
           try {
-            const QJsonObject answer = queryObject({{QStringLiteral("query"), QStringLiteral("measure")},
-                                                    {QStringLiteral("a"), reference}});
+            const QJsonObject answer = queryObject(request);
             m_idleMeasurements.insert(key, selectionMeasurementText(answer.value(QStringLiteral("a")).toObject()));
           } catch (const std::exception&) {
             m_idleMeasurements.insert(key, tr("Measurements unavailable"));
@@ -7600,9 +7628,13 @@ void MainWindow::updateIdleCard() {
           picks[i].insert(QStringLiteral("occurrence"), m_selection[i].occurrence);
         }
       }
-      const QJsonObject query{{QStringLiteral("query"), QStringLiteral("measure")},
-                              {QStringLiteral("a"), picks[0]}, {QStringLiteral("b"), picks[1]},
-                              {QStringLiteral("face_range"), true}};
+      QJsonObject query{{QStringLiteral("query"), QStringLiteral("measure")},
+                        {QStringLiteral("a"), picks[0]}, {QStringLiteral("b"), picks[1]},
+                        {QStringLiteral("face_range"), true}};
+      // Where an explode view shows them (mitcad#2328).
+      if (const QJsonObject exploded = shownExplode(); !exploded.isEmpty()) {
+        query.insert(QStringLiteral("explode"), exploded);
+      }
       const QString key = QStringLiteral("pair:") + QString::fromUtf8(compactJson(query));
       if (!m_idleMeasurements.contains(key)) {
         QString pair = tr("<b>Between faces</b><br>Measurements unavailable");
@@ -7826,6 +7858,17 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
         if (m_sketch->splineAt(clicked) == spline && m_sketch->model().equationOf(spline) == nullptr) {
           addCall(QStringLiteral("point"), tr("Insert Point"),
                   [this, spline, clicked] { m_sketch->insertSplinePoint(spline, clicked); });
+        }
+      }
+      // A spline's own point right-clicked leaves the spline, which stays
+      // (Remove Point, mitcad#2326); a refusal shows its reason.
+      if (m_selection.size() == 1 && m_selection.first().kind == SelectKind::SketchPoint) {
+        const QString point = m_selection.first().name;
+        const QPointF clicked = m_viewer->mapFromGlobal(globalPosition);
+        const QString spline = m_sketch->splineOfPoint(point);
+        if (!spline.isEmpty() && m_sketch->entityAt(clicked, sketch::PickPoints) == point) {
+          addCall(QStringLiteral("point"), tr("Remove Point"),
+                  [this, spline, point] { m_sketch->removeSplinePoint(spline, point); });
         }
       }
       // Texts, patterns, offsets and equal spacings have edit panels (P3,
@@ -8647,6 +8690,11 @@ void MainWindow::undo() {
   // An undone conversion to a 3D sketch: the 2D editor again (mitcad#1544).
   followSketchKind();
   refreshScene();
+  // Edit in Place's step undone (mitcad#2321): the linked file keeps the
+  // edits it was saved with, offered with Update.
+  if (result.value(QStringLiteral("label")).toString().startsWith(QStringLiteral("Edit in Place "))) {
+    checkLinkedFiles();
+  }
 }
 
 void MainWindow::redo() {
@@ -8911,6 +8959,10 @@ bool MainWindow::save() {
     showHint(tr("Finish the current command before saving."));
     return false;
   }
+  // Edit in Place (mitcad#2321): in the mode the linked design's file.
+  if (m_inPlaceHolder) {
+    return saveInPlaceDesign();
+  }
   // A read-only window (mitcad#89): Save as Copy or as a new version.
   if (const std::optional<bool> readOnlySaved = readOnlySave(false)) {
     return *readOnlySaved;
@@ -8918,6 +8970,11 @@ bool MainWindow::save() {
   if (m_filePath.isEmpty()) {
     // On this computer or to a project (mitcad#2183).
     return saveNewDesign();
+  }
+  // The linked design's unsaved edits made in place here first
+  // (mitcad#2321), so that the link records the file it has.
+  if ((m_inPlaceKept || m_inPlaceKeptTab) && !saveInPlaceEdits()) {
+    return false;
   }
   // A recovered document's file may have changed since (P8c).
   const std::optional<bool> overwrite = askOverwriteChanged();
@@ -8930,6 +8987,11 @@ bool MainWindow::save() {
 bool MainWindow::saveAs() {
   if (m_session && (m_nativeUi || modelBusy())) {
     showHint(tr("Finish the current command before saving."));
+    return false;
+  }
+  // Edit in Place (mitcad#2321): Save writes the linked design's file.
+  if (m_inPlaceHolder) {
+    showHint(tr("Finish Edit in Place first: Save writes %1.").arg(QFileInfo(m_inPlaceFile).fileName()));
     return false;
   }
   // In a project with versions: the project, folder and name chosen in the
@@ -9161,6 +9223,19 @@ void MainWindow::afterSaved(const QString& path, QByteArrayView content, const Q
 }
 
 bool MainWindow::maybeSave() {
+  // Edit in Place (mitcad#2321): a tab whose design is edited in place
+  // elsewhere gets it back first; the window that edits it asks about the
+  // linked design's unsaved edits and ends the mode.
+  if (m_inPlaceBorrower) {
+    m_inPlaceBorrower->finishEditInPlace();
+    if (m_inPlaceBorrower) {
+      showWarning(lentReason());
+      return false;
+    }
+  }
+  if (!settleInPlaceEdits()) {
+    return false;
+  }
   // A read-only window (mitcad#89): only changes kept from editing count.
   if (const std::optional<bool> readOnlySaved = readOnlySave(true)) {
     return *readOnlySaved;
@@ -9271,6 +9346,12 @@ static void logOpenTimes(const QString& label, qint64 totalMs, qint64 readMs, do
 
 bool MainWindow::installDocument(const QString& label, const QString& path, const DocumentMaker& make,
                                  QString& error, const QString& handedOver) {
+  // Edit in Place (mitcad#2321): the holder's design waits for Finish, and
+  // a lent design for its holder's Finish; neither is replaced meanwhile.
+  if (m_inPlaceHolder || m_inPlaceBorrower) {
+    error = m_inPlaceBorrower ? lentReason() : tr("Finish Edit in Place first.");
+    return false;
+  }
   std::optional<rust::Box<Document>> made;
   QJsonObject recomputed;
   QJsonObject persisted;
@@ -9410,6 +9491,10 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   // any command or sketch on it, and its recovery data (P8).
   resetCommandState();
   m_document = std::move(*made);
+  // The old design's linked edits made in place were asked about
+  // (maybeSave, mitcad#2321).
+  m_inPlaceKept.reset();
+  m_inPlaceKeptTab = nullptr;
   clearDesignMessages(); // the old design's (mitcad#1174)
   m_measureHistory.clear(); // the old design's measurements (mitcad#648)
   m_measurementKept = false; // and a Keep of its (mitcad#649)
@@ -9634,7 +9719,11 @@ void MainWindow::updateWindowTitle() {
   // show it.
   // With no design open (the last one closed to the Start page,
   // mitcad#2142) no design's name: the page's.
-  const QString titleName = m_noDesign ? tr("Start") : documentName();
+  // Edit in Place (mitcad#2321): the linked design in this design.
+  const QString titleName = m_noDesign         ? tr("Start")
+                            : m_inPlaceHolder ? tr("%1 in place in %2")
+                                                    .arg(QFileInfo(m_inPlaceFile).fileName(), documentName())
+                                              : documentName();
   setWindowTitle(QStringLiteral("%1[*] - MitCad %2").arg(titleName, QApplication::applicationVersion()));
   const bool modified = isModified();
   setWindowModified(modified);

@@ -535,6 +535,18 @@ pub(crate) fn reach_along_x(
     rotate: f64,
     flip: bool,
 ) -> (f64, f64) {
+    reach_along(bounds, own, rotate, flip, 0)
+}
+
+/// [`reach_along_x`] along the frame's axis `axis` (0 x, 1 y, 2 z): a
+/// bearing on a shaft slides along the shaft frame's z (mitcad#2317).
+pub(crate) fn reach_along(
+    bounds: Option<&BoundingBox>,
+    own: &Transform,
+    rotate: f64,
+    flip: bool,
+    axis: usize,
+) -> (f64, f64) {
     let Some(bounds) = bounds else {
         return (0.0, 0.0);
     };
@@ -542,7 +554,7 @@ pub(crate) fn reach_along_x(
         mitcad_model::internal::joints::alignment(rotate, 0.0, flip).after(&inverse(own));
     bounds
         .corners()
-        .map(|c| to_frame.apply_point(c)[0])
+        .map(|c| to_frame.apply_point(c)[axis])
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
             (lo.min(x), hi.max(x))
         })
@@ -618,10 +630,14 @@ pub(crate) fn offset_of(from: SideFrom, tx: f64, near: f64, far: f64, length: Op
 /// The offset of a part on a side or a rail from what it is placed from
 /// (its record's `from`), measured as `build_edit`'s `at.offset` takes it,
 /// in mm (mitcad#1885: `build_parts`' `offset`, which the BUILD Placement
-/// panel fills its Offset from); none for a part placed otherwise.
+/// panel fills its Offset from); none for a part placed otherwise. A part
+/// that slides by its joint with no `from` recorded (a bearing placed on a
+/// shaft, whose slide is along the shaft frame's z: `plan_mate` records
+/// `from` only for a slide along x) is measured from end A, as
+/// `build_edit` takes it (mitcad#2274).
 pub fn side_offset<K: Kernel>(doc: &Document<K>, component: ComponentUid) -> Option<f64> {
     let info = doc.part_info(component)?;
-    let from = info.record.from?;
+    let from = info.record.from.unwrap_or_default();
     let joint = info.record.joint?;
     let Some(FeatureDef::Joint(j)) = doc.feature(joint).map(|e| &e.def) else {
         return None;

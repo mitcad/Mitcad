@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: MIT
+# Edit in Place (mitcad#2321, GitHub mitcad/Mitcad#598), on holder.mitcad
+# holding a 40 x 40 x 5 plate of its own (Plate) and linking part.mitcad (a
+# 10 mm cube) on it, both in one folder. The part is open in a tab of its
+# own first, so that Edit in Place (the browser's context menu) takes that
+# tab's document: the window shows the part with the plate around it; a
+# sketch on the plate's top face is frozen with its notice in the message
+# band; an extrusion of it in the part; Save writes the part's file; Finish
+# returns to the holder, whose part takes the new body as one undo step;
+# the part's tab shows the same edit, saved; the holder's step undone
+# offers "part.mitcad changed" with Update, which takes it again; Esc on an
+# idle view finishes a second Edit in Place that changed nothing. All
+# geometry is synthetic. Message band buttons are clicked where they are
+# logged (`Message band action <label> at x,y`), in either layout.
+wait-idle
+capture-document-window holder
+expect-model-bodies 2 9000
+capture-undo-depth holderUndo
+
+# The part in a tab of its own.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Open Linked Design'
+wait-log '^Open Linked Design: .*/part[.]mitcad$'
+wait-idle
+expect-document-windows 2
+capture-document-window part
+expect-model-bodies 1 1000
+focus-document-window holder
+
+# Edit in Place: the part's own document, lent by its tab, the plate around
+# it.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Edit in Place'
+wait-log '^Edit in Place C[0-9]+: part[.]mitcad from its tab, 1 bodies of the assembly$'
+expect-log '^Edit in Place: part[.]mitcad lent to holder[.]mitcad$'
+wait-idle
+expect-document-windows 2
+expect-model-bodies 2 9000
+expect-document-modified no
+capture-undo-depth partUndo
+screenshot '${MITCAD_TEST_WORK}/edit-in-place.png'
+
+# A sketch on the plate's top face: frozen at once, with its notice.
+capture-model-text around '{"query":"document"}' 'in_place.feature'
+capture-model-text aroundAt '{"query":"document"}' 'in_place.occurrence'
+capture-model-text plateTop '{"query":"faces","body":"${around}.b0","normal":[0,0,1]}' 'faces.0.names.0'
+mark
+model-command '{"cmd":"sketch.create","plane":{"face":"${plateTop}","body":"${around}.b0"},"occurrence":"${aroundAt}"}'
+wait-log '^Edit in Place notice: Sketch[0-9]+: its plane on the assembly is fixed where it is now; it will not follow the assembly$'
+wait-log '^Message band: info Sketch[0-9]+: its plane on the assembly is fixed where it is now'
+expect-undo-depth ${partUndo} 1
+
+# A block extruded from it, in the part.
+capture-model-text sketch '{"query":"timeline"}' 'features.2.uid'
+model-command '{"cmd":"sketch.add_rectangle","sketch":"${sketch}","corner":[-2,-2],"width":4,"height":4}'
+capture-model-text region '{"query":"profiles","sketch":"${sketch}"}' '0.region'
+model-command '{"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"${sketch}","region":"${region}"}],"extent":{"type":"distance","distance":3},"operation":"new_body","participants":[]}}'
+expect-model-bodies 3 9048
+expect-document-modified yes
+
+# Save writes the part's file.
+mark
+command file.save
+wait-log '^Edit in Place: saved .*/part[.]mitcad$'
+expect-document-modified no
+
+# Finish: the holder again, its part with the new body, one undo step.
+mark
+command assemble.finish_edit_in_place
+wait-log '^Finish Edit in Place C[0-9]+: changed, saved; Edit in Place part$'
+expect-log '^Edit in Place: part[.]mitcad back in its tab$'
+wait-idle
+expect-model-bodies 3 9048
+expect-undo-depth ${holderUndo} 1
+screenshot '${MITCAD_TEST_WORK}/edit-in-place-finished.png'
+
+# The part's tab shows the same edit, saved.
+focus-document-window part
+wait-idle
+expect-model-bodies 2 1048
+expect-document-modified no
+
+# The holder's step undone: the part's file keeps the edit, offered again.
+focus-document-window holder
+mark
+command edit.undo
+expect-model-bodies 2 9000
+expect-undo-depth ${holderUndo} 0
+wait-log '^Linked file changed: part[.]mitcad \(C[0-9]+\); Update offered$'
+mark
+click-logged '^Message band action Update at '
+wait-log '^Update Link C[0-9]+: 1 updated; part is updated from part[.]mitcad$'
+wait-idle
+expect-model-bodies 3 9048
+
+# Esc on an idle view finishes an Edit in Place that changed nothing.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Edit in Place'
+wait-log '^Edit in Place C[0-9]+: part[.]mitcad from its tab, 1 bodies of the assembly$'
+wait-idle
+key Escape
+wait-log '^Finish Edit in Place C[0-9]+: unchanged, saved; no undo step$'
+wait-idle
+expect-model-bodies 3 9048
+quit

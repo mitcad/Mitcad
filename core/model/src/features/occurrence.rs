@@ -21,8 +21,8 @@ use serde::{Deserialize, Serialize};
 use super::mapping::map_params;
 use super::moves::{MoveSpec, check_bodies};
 use super::{
-    BodyChange, CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, PlacementChange,
-    References,
+    BodyChange, CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, OccurrencePath,
+    PlacementChange, References,
 };
 use crate::assembly::{from_rows, matrix_rows};
 use crate::ids::{BodyUid, OccurrenceUid};
@@ -104,6 +104,28 @@ impl<K: Kernel> Evaluate<K> for ComponentFromBodiesDef {
 pub struct MoveOccurrenceDef<P = ParamId> {
     pub occurrences: Vec<OccurrenceUid>,
     pub transform: MoveSpec<P>,
+    /// The occurrence of the feature's component (the parent of the moved
+    /// occurrences) they were picked through, its absolute path from the
+    /// root (`"O7"`), when that component is used more than once
+    /// (mitcad#2307): a point or axis taken into the feature's component
+    /// goes through it when none of the motion's picked paths passes
+    /// through an occurrence of that component ([`MoveSpec::resolve`]), so
+    /// that a part picked through the second occurrence of its parent
+    /// lands on a root-level target there. A path that does not end in an
+    /// occurrence of the feature's component (moved since) is not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_occurrence: Option<OccurrencePath>,
+}
+
+impl<P> MoveOccurrenceDef<P> {
+    /// A move of occurrences without a recorded parent occurrence.
+    pub fn new(occurrences: Vec<OccurrenceUid>, transform: MoveSpec<P>) -> Self {
+        Self {
+            occurrences,
+            transform,
+            parent_occurrence: None,
+        }
+    }
 }
 
 impl<P> MoveOccurrenceDef<P> {
@@ -115,6 +137,7 @@ impl<P> MoveOccurrenceDef<P> {
         MoveOccurrenceDef {
             occurrences: clone,
             transform: map,
+            parent_occurrence: clone,
         }
     }
 }
@@ -146,7 +169,9 @@ impl FeatureInfo for MoveOccurrenceDef {
 
 impl<K: Kernel> Evaluate<K> for MoveOccurrenceDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
-        let transform = self.transform.resolve(ctx)?;
+        let transform = self
+            .transform
+            .resolve(ctx, self.parent_occurrence.as_ref())?;
         if !transform.is_rigid() {
             return Err("an occurrence moves only by a rotation and a translation".to_owned());
         }

@@ -30,6 +30,7 @@ fn body(name: &str, history: &str, faces: usize, color: Option<[f64; 3]>) -> Imp
         name: Some(name.to_owned()),
         color,
         shape: MockShape::imported(history, faces),
+        face_colors: Vec::new(),
     }
 }
 

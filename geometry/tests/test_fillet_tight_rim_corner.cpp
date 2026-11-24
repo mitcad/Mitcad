@@ -36,8 +36,10 @@
 // `body.brep`, the reported design's stored body before the rounding, and
 // `after.brep`, the stored body after it: the outlines of its two faces on
 // y = -10 rounded with 1.5; about them the result lies on the stored body
-// and the stored body on the result within 0.01 mm, and the material taken
-// is the stored body's.
+// and the stored body on the result within 0.01 mm, each body's volume is
+// its closed shell's (it moves by at most 1e-3 mm3 with the point it is
+// integrated about, mitcad#2284), and the material taken is the stored
+// body's within 0.02 mm3 (the two roundings' vertex blends differ).
 
 #include <algorithm>
 #include <cmath>
@@ -59,6 +61,9 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
+#include <BRepGProp_Domain.hxx>
+#include <BRepGProp_Face.hxx>
+#include <BRepGProp_Vinert.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
@@ -97,6 +102,47 @@ double volume_of(const TopoDS_Shape& shape) {
   GProp_GProps props;
   BRepGProp::VolumeProperties(shape, props, 1e-9, true);
   return props.Mass();
+}
+
+// The volume about `point` (each face's BRepGProp_Vinert to 1e-9): a shell
+// closed in space has one volume about every point (mitcad#2284).
+double volume_about(const TopoDS_Shape& shape, const gp_Pnt& point) {
+  double volume = 0.0;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    if (face.Orientation() != TopAbs_FORWARD && face.Orientation() != TopAbs_REVERSED) {
+      continue;
+    }
+    BRepGProp_Vinert integral;
+    integral.SetLocation(point);
+    BRepGProp_Face surface(face);
+    if (face.NbChildren() == 0) {
+      integral.Perform(surface, 1e-9);
+    } else {
+      BRepGProp_Domain domain(face);
+      integral.Perform(surface, domain, 1e-9);
+    }
+    volume += integral.Mass();
+  }
+  return volume;
+}
+
+// A shape's volume about its box's middle and the largest change of it
+// about points 100 mm away along X, Y and Z, written as `label`; returns
+// that change.
+double print_volume_about_points(const TopoDS_Shape& shape, const char* label) {
+  Bnd_Box box;
+  BRepBndLib::Add(shape, box);
+  const gp_Pnt middle = box.IsVoid() ? gp_Pnt(0, 0, 0) : gp_Pnt((box.CornerMin().XYZ() + box.CornerMax().XYZ()) / 2);
+  const double at_middle = volume_about(shape, middle);
+  double moved = 0.0;
+  for (const gp_Vec& away : {gp_Vec(100, 0, 0), gp_Vec(0, 100, 0), gp_Vec(0, 0, 100)}) {
+    const double change = volume_about(shape, middle.Translated(away)) - at_middle;
+    moved = std::abs(change) > std::abs(moved) ? change : moved;
+  }
+  std::printf("%s: volume %.6f mm3 (about its middle %.6f), moved by up to %+.3g mm3 about points 100 mm away\n",
+              label, volume_of(shape), at_middle, moved);
+  return moved;
 }
 
 double area_of(const TopoDS_Shape& shape) {
@@ -501,7 +547,23 @@ void test_reported_body() {
   const double taken = volume_of(shape) - volume_of(result);
   const double file = volume_of(shape) - volume_of(after);
   std::printf("the material taken %.6f mm3, the stored body's %.6f\n", taken, file);
-  CHECK(std::abs(taken - file) <= 0.01);
+  // Each body's volume is its closed shell's: it moves by at most 1e-3
+  // mm3 with the point it is integrated about, 100 mm away (mitcad#2284).
+  // Before port patch 2284 the volume integration left out strips at the
+  // joints of the faces' pcurves and the gaps between faces whose pcurves
+  // lie off their edges' 3D curves: the three bodies' volumes moved by
+  // 0.087, 0.144 and 0.132 mm3 about such points, and the material taken
+  // (83.349390 mm3) met the stored body's (83.349888) within 5e-4 only at
+  // the point it happened to be integrated about. Closed (each moving by
+  // 3e-5 mm3), the rounding takes 83.361347 mm3 and the stored body's
+  // 83.346460: OCCT's rounding holds 0.0149 mm3 less than the stored one,
+  // whose vertex blends are cubic B-splines lying up to 0.0057 mm from
+  // OCCT's (the outlines' distances above). The limit is that measured
+  // difference rounded up, 0.02 mm3 (2.4e-4 of the material taken).
+  CHECK(std::abs(print_volume_about_points(shape, "the stored body before the rounding")) <= 1e-3);
+  CHECK(std::abs(print_volume_about_points(result, "the result")) <= 1e-3);
+  CHECK(std::abs(print_volume_about_points(after, "the stored body after the rounding")) <= 1e-3);
+  CHECK(std::abs(taken - file) <= 0.02);
 }
 
 } // namespace

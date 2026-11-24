@@ -1,0 +1,15 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Point to Point along one axis (mitcad#2339), for tools/ui-scripts/move-along.mitcad-ui: a 40 x 30 x 20 block (F1.b0, its top corner (40, 30, 20)) and a cylinder of diameter 10 and height 15 beside it (F2.b0, its bottom circle about (80, 10, 0)), moved by MoveCylinder from its round bottom edge (its centre) to the block's top corner, the whole way: (-40, 20, 20)."},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[0,0],
+    "length":40,"width":30,"height":20,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"cylinder","plane":{"type":"origin","plane":"xy"},"center":[80,10],
+    "diameter":10,"height":15,"operation":"new_body"}},
+  {"expect":{"body":"F2.b0","bbox":{"min":[75,5,0],"max":[85,15,15]},"tolerance":0.01}},
+  {"cmd":"add_feature","name":"MoveCylinder","def":{"type":"move","bodies":["F2.b0"],
+    "transform":{"type":"point_to_point",
+      "from":{"body":"F2.b0","edge":"E{F2:bottom|F2:side0}"},
+      "to":{"body":"F1.b0","vertex":"V{F1:side1|F1:side2|F1:top}"}}}},
+  {"expect":{"feature":"MoveCylinder","status":"ok"}},
+  {"expect":{"body":"F2.b0","bbox":{"min":[35,25,20],"max":[45,35,35]},"tolerance":0.01}}
+]

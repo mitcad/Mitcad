@@ -776,10 +776,21 @@ ui_drawing_tool_group() {
   case "$1" in
   "Center Mark" | Centerline | Line | Arc | "Center Pattern" | "Edge Extension") echo DRAWING/GEOMETRY ;;
   Dimension | Ordinate | Baseline | "Model Items") echo DRAWING/DIMENSIONS ;;
-  Text | Note) echo DRAWING/TEXT ;;
+  Text | Note | "Hole Callout") echo DRAWING/TEXT ;;
   "Datum Label" | "Feature Control Frame" | "Surface Finish") echo DRAWING/SYMBOLS ;;
   "Hole Table" | "Bill of Materials" | Balloon) echo DRAWING/TABLES ;;
   *) echo DRAWING/CREATE ;;
+  esac
+}
+
+# ui_drawing_tool_button NAME: whether the drawing tool NAME has a button of
+# its own in the default layout (mitcad#2066: each group of the Drawing tab
+# shows buttons for its main tools only, the others are rows of the
+# group's menu).
+ui_drawing_tool_button() {
+  case "$1" in
+  "Base View" | "Projected View" | "Section View" | "Center Mark" | Dimension | Text | Note | "Surface Finish" | "Bill of Materials") return 0 ;;
+  *) return 1 ;;
   esac
 }
 
@@ -792,35 +803,30 @@ ui_drawing_group_collapsed() {
   [[ ", ${collapsed#*: }, " == *", ${1#*/}, "* ]]
 }
 
-# ui_drawing_tool_place NAME [TAB/GROUP]: the logged place a click on the
-# drawing tool NAME goes to: its button ("Drawing tool Line"), or, where its
+# ui_drawing_tool_place NAME [TAB/GROUP]: the logged place a click that
+# starts the drawing tool NAME goes to: its button ("Drawing tool Line"),
+# or, where the tool is a row of its group's menu only (mitcad#2066) or its
 # group is collapsed, the group's name ("Ribbon DRAWING/GEOMETRY"). For a
 # test's wait until that place has settled.
 ui_drawing_tool_place() {
   local group=${2:-$(ui_drawing_tool_group "$1")}
-  if ui_drawing_group_collapsed "$group"; then
-    echo "Ribbon $group"
-  else
+  if ui_drawing_tool_button "$1" && ! ui_drawing_group_collapsed "$group"; then
     echo "Drawing tool $1"
+  else
+    echo "Ribbon $group"
   fi
 }
 
-# ui_drawing_tool NAME [TAB/GROUP]: starts the drawing tool NAME of the
-# toolbar panel's group TAB/GROUP ("Datum Label" DRAWING/SYMBOLS; by
-# default the tool's own group, ui_drawing_tool_group): a click on its
-# button ("Drawing tool Datum Label at"), or, where the tab's groups do not
-# fit and that group is collapsed to its name ("Ribbon collapsed DRAWING:
-# SYMBOLS, TABLES"; mitcad#1990's Sheet group took the room at 1280 pixels,
-# and the Docked workspace block of mitcad#2082 more, so that Geometry,
-# Dimensions and Text collapse too), its entry in the group's menu, chosen
-# with the keys.
-ui_drawing_tool() {
-  set -- "$1" "${2:-$(ui_drawing_tool_group "$1")}"
+# ui_ribbon_menu_choose ENTRY TAB/GROUP: the entry ENTRY of the toolbar
+# group TAB/GROUP's menu ("Add Revision…" DRAWING/SHEET): a click on the
+# group's caption ("Ribbon DRAWING/SHEET at", the caption under its
+# buttons or the collapsed group's button), then the entry chosen with the
+# keys, by its place in the menu as logged ("Ribbon menu DRAWING/SHEET:
+# Sheet… | Add Revision…"). A name another command shares has its place
+# after it in the menu: "Bill of Materials (Drawing)" is ENTRY "Bill of
+# Materials" too.
+ui_ribbon_menu_choose() {
   local before menu entry downs=0 found=0
-  if ! ui_drawing_group_collapsed "$2"; then
-    ui_click_logged "Drawing tool $1"
-    return
-  fi
   before=$(grep -c "^Ribbon menu $2: " "$UI_LOG")
   ui_click_logged "Ribbon $2"
   for _ in $(seq 1 50); do
@@ -833,9 +839,9 @@ ui_drawing_tool() {
   while IFS= read -r entry; do
     [ "$entry" = "-" ] && continue
     downs=$((downs + 1))
-    # (A name another command shares has its place after it in the menu:
-    # "Bill of Materials (Drawing)".)
-    if [ "$entry" = "$1" ] || [[ $entry == "$1 ("*")" ]]; then
+    # (A single ellipsis and three dots match each other, mitcad#645.)
+    entry=${entry//…/...}
+    if [ "$entry" = "${1//…/...}" ] || [[ $entry == "${1//…/...} ("*")" ]]; then
       found=1
       break
     fi
@@ -843,6 +849,29 @@ ui_drawing_tool() {
   [ "$found" = 1 ] || ui_fail "$1 is not in the $2 menu: $menu"
   xdotool key --delay 80 --repeat "$downs" Down
   ui_key Return
+}
+
+# ui_drawing_tool NAME [TAB/GROUP]: starts the drawing tool NAME of the
+# toolbar panel's group TAB/GROUP ("Datum Label" DRAWING/SYMBOLS; by
+# default the tool's own group, ui_drawing_tool_group): a click on its
+# button where its group is not collapsed and the drawing's places, as
+# logged last (from "Drawing area" on, a line for each control in sight),
+# have it ("Drawing tool Datum Label at"), else its entry in the group's
+# menu (ui_ribbon_menu_choose): the tool is a row of the menu only
+# (mitcad#2066: each group shows buttons for its main tools), or its group
+# is collapsed to its name where the tab's groups do not fit ("Ribbon
+# collapsed DRAWING: SYMBOLS, TABLES").
+ui_drawing_tool() {
+  set -- "$1" "${2:-$(ui_drawing_tool_group "$1")}"
+  local start
+  if ! ui_drawing_group_collapsed "$2"; then
+    start=$(grep -n "^Drawing area " "$UI_LOG" | tail -1 | cut -d: -f1)
+    if [ -n "$start" ] && tail -n +"$start" "$UI_LOG" | grep -qF "Drawing tool $1 at "; then
+      ui_click_logged "Drawing tool $1"
+      return
+    fi
+  fi
+  ui_ribbon_menu_choose "$1" "$2"
 }
 
 # ui_start_page_shown: whether the Start page is shown, as logged last.

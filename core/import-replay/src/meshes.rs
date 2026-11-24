@@ -124,6 +124,7 @@ impl<K: ImportKernel> Importer<'_, K> {
                         name: mesh.name,
                         color: None,
                         shape,
+                        face_colors: Vec::new(),
                     });
                     sources.push(mesh.source);
                     records.push(record);

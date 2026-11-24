@@ -79,7 +79,7 @@ pub mod placement;
 // Items other Mitcad crates use; not part of this crate's API (mitcad#811).
 pub mod internal;
 // Insert Point on a spline: a fit point, or a control point by knot
-// insertion (mitcad#836).
+// insertion (mitcad#836); Remove Point, its pair (mitcad#2326).
 pub mod spline_points;
 // Scaling a sketch, and the first dimension that scales it (mitcad#860).
 pub mod scale;

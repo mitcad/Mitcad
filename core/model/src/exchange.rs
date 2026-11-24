@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Data exchange: base features from imported files and from bodies an
 //! importer built, export of bodies (STEP, IGES, STL, OBJ, BRep, 3MF,
-//! USDZ) and of a sketch's geometry (DXF).
+//! USDZ), of the design's mechanism (URDF, `urdf`) and of a sketch's
+//! geometry (DXF).
 //!
 //! File formats are the kernel's business ([`Kernel::read_file`],
 //! [`Kernel::write_file`], which takes each body's placements, mitcad#19);
@@ -72,12 +73,19 @@ pub use usdz_animation::{
     AnimationPoses, AnimationReport, AnimationSpace, AnimationTarget, AnimationTrack, UsdzAnimation,
 };
 
+// URDF robot descriptions for ROS 2 in a package folder (mitcad#2100).
+pub mod urdf;
+pub use urdf::{UrdfExported, UrdfOptions};
+// Faces coloured on their own in STEP and IGES files as face appearances,
+// and face appearances written as the faces' colours (mitcad#2313).
+mod face_colors;
+
 // The data the kernel reads and writes, below the model (mitcad#777).
 pub use mitcad_model_base::exchange::{
     BodyKind, BodyPlacement, ExportBody, ExportDefinition, ExportFormat, ExportInstance,
-    ExportOptions, ExportTree, FaceMeshes, FileRead, ImportAssembly, ImportBody, ImportInstance,
-    ImportPart, LengthUnit, MeshTolerance, ReadOptions, Refinement, RefinementPreset, StepSchema,
-    TriangleMesh,
+    ExportOptions, ExportTree, FaceColor, FaceMeshes, FileRead, ImportAssembly, ImportBody,
+    ImportInstance, ImportPart, LengthUnit, MeshTolerance, ReadOptions, Refinement,
+    RefinementPreset, StepSchema, TriangleMesh,
 };
 
 /// Where exported bodies are (mitcad#17, mitcad#19).
@@ -454,6 +462,7 @@ impl<K: Kernel> Document<K> {
             defs.push((def, base.name.clone(), component));
         }
         let mut taken: BTreeSet<String> = self.bodies().into_iter().map(|b| b.name).collect();
+        let depth = self.undo_depth();
         let added = self.with_written_from(written_from, |doc| {
             doc.apply(|state| {
                 taken.extend(state.body_names.values().cloned());
@@ -477,9 +486,39 @@ impl<K: Kernel> Document<K> {
                 Ok((label.to_owned(), added))
             })
         })?;
+        // Faces coloured on their own in the file (mitcad#2313): face
+        // appearances, in the same undo step.
+        let mut painted = vec![Vec::new(); added.len()];
+        let mut any_painted = false;
+        for (((feature, (def, _, _)), base), warnings) in
+            added.iter().zip(&defs).zip(&features).zip(&mut painted)
+        {
+            let FeatureDef::Base(def) = def else {
+                continue;
+            };
+            if !matches!(def.operation, Operation::NewBody | Operation::NewComponent) {
+                continue;
+            }
+            let inputs: Vec<face_colors::FaceInput> = (0..)
+                .zip(&base.bodies)
+                .filter(|(_, body)| !body.face_colors.is_empty())
+                .map(|(i, body)| face_colors::FaceInput {
+                    body: def.body_uid(feature.uid, i),
+                    color: body.color,
+                    faces: body.face_colors.clone(),
+                })
+                .collect();
+            if !inputs.is_empty() {
+                *warnings = self.paint_imported_faces(&inputs);
+                any_painted = true;
+            }
+        }
+        if any_painted {
+            self.merge_undo(depth, label);
+        }
         let all = self.bodies();
         let mut result = Vec::with_capacity(added.len());
-        for (feature, base) in added.into_iter().zip(&features) {
+        for ((feature, base), warnings) in added.into_iter().zip(&features).zip(painted) {
             let mut bodies = Vec::new();
             let mine = |uid: BodyUid| uid.feature == feature.uid || base.replaces.contains(&uid);
             for body in all.iter().filter(|b| mine(b.uid)) {
@@ -492,7 +531,7 @@ impl<K: Kernel> Document<K> {
             result.push(Imported {
                 feature,
                 bodies,
-                warnings: Vec::new(),
+                warnings,
             });
         }
         Ok(result)
@@ -608,6 +647,9 @@ impl<K: Kernel> Document<K> {
         if wrapper.is_some() {
             self.merge_undo(depth, &label);
         }
+        // The empty bodies left out, then what the faces' colours could not
+        // do (mitcad#2313).
+        warnings.append(&mut imported.warnings);
         imported.warnings = warnings;
         Ok((imported, wrapper))
     }
@@ -634,6 +676,12 @@ impl<K: Kernel> Document<K> {
         placement: &ExportPlacement,
     ) -> Result<Exported, ModelError> {
         let format = options.format;
+        // A URDF package has its own writer (mitcad#2100).
+        if format == ExportFormat::Urdf {
+            return Err(invalid(
+                "a URDF package is written from the whole design (export_urdf)",
+            ));
+        }
         // Print colours by height (mitcad#1596): a USDZ file's.
         if placement.print_colors && format != ExportFormat::Usdz {
             return Err(invalid(
@@ -1009,8 +1057,20 @@ impl<K: Kernel> Document<K> {
             .iter()
             .map(|b| if design { placed_at(b.uid) } else { Vec::new() })
             .collect();
+        // STEP and IGES write the faces' appearances as their colours
+        // (mitcad#2313).
+        let face_colors: Vec<Vec<FaceColor>> = chosen
+            .iter()
+            .map(|b| {
+                if matches!(format, ExportFormat::Step | ExportFormat::Iges) {
+                    self.face_colors(b.uid)
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
         let mut out = Vec::with_capacity(chosen.len());
-        for (body, placements) in chosen.iter().zip(&placed) {
+        for ((body, placements), face_colors) in chosen.iter().zip(&placed).zip(&face_colors) {
             let kind = self.kernel().body_kind(body.shape).map_err(kernel_error)?;
             if kind == BodyKind::Mesh && !options.format.takes_meshes() {
                 return Err(invalid(format!(
@@ -1027,6 +1087,7 @@ impl<K: Kernel> Document<K> {
                 color: color(body.uid),
                 shape: body.shape,
                 placements,
+                face_colors,
             });
         }
         // STEP keeps the design's components as its assemblies
@@ -1252,6 +1313,8 @@ impl<K: Kernel> Document<K> {
                 color: color(body.uid),
                 shape,
                 placements,
+                // Meshes: the body's colour only.
+                face_colors: &[],
             })
             .collect();
         self.kernel()

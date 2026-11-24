@@ -205,8 +205,8 @@ TopoDS_Shape holed_block() {
 }
 
 std::vector<Body> sample_bodies() {
-  return {Body{"Filleted block", filleted_block(), Color{0.8, 0.1, 0.1}, {}},
-          Body{"Holed block \xC3\xA4", holed_block(), Color{0.2, 0.4, 0.9}, {}}};
+  return {Body{"Filleted block", filleted_block(), Color{0.8, 0.1, 0.1}, {}, {}},
+          Body{"Holed block \xC3\xA4", holed_block(), Color{0.2, 0.4, 0.9}, {}, {}}};
 }
 
 bool same_color(const std::optional<Color>& a, const std::optional<Color>& b, double tolerance) {
@@ -394,8 +394,8 @@ void test_step_assembly_structure(const std::string& dir) {
 
   // A file of parts without an assembly has no structure.
   const std::string parts = dir + "/parts.step";
-  mitcad::io::write_step(parts, {Body{"Plate", plate_shape, std::nullopt, {}},
-                                 Body{"Pin", pin_shape, std::nullopt, {}}});
+  mitcad::io::write_step(parts, {Body{"Plate", plate_shape, std::nullopt, {}, {}},
+                                 Body{"Pin", pin_shape, std::nullopt, {}, {}}});
   const mitcad::io::StepRead plain = mitcad::io::read_step_structured(parts, true);
   CHECK(!plain.assembly && plain.bodies.size() == 2);
 
@@ -408,7 +408,7 @@ void test_step_assembly_structure(const std::string& dir) {
     TopoDS_Compound compound;
     builder.MakeCompound(compound);
     builder.Add(compound, BRepPrimAPI_MakeBox(gp_Pnt(30.0 * i, 0.0, 0.0), 10.0, 10.0, 10.0).Shape());
-    wrapped.push_back(Body{"Block " + std::to_string(i + 1), compound, std::nullopt, {}});
+    wrapped.push_back(Body{"Block " + std::to_string(i + 1), compound, std::nullopt, {}, {}});
   }
   const std::string compounds = dir + "/compounds.step";
   mitcad::io::write_step(compounds, wrapped);
@@ -460,20 +460,20 @@ void test_step_tree(const std::string& dir) {
   turned.rotation = {{{0.0, -1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}}};
   StepTree tree;
   tree.definitions.resize(5);
-  tree.definitions[0].bodies = {Body{"Loose", loose, std::nullopt, {}}};
+  tree.definitions[0].bodies = {Body{"Loose", loose, std::nullopt, {}, {}}};
   tree.definitions[0].instances = {
       StepTree::Instance{1, at(0.0, 0.0, -10.0, "Plate:1")}, StepTree::Instance{2, at(0.0, 100.0, 0.0, "Arm:1")},
       StepTree::Instance{2, turned}, StepTree::Instance{4, at(0.0, -100.0, 0.0, "Pair:1")}};
   tree.definitions[1].name = "Plate";
-  tree.definitions[1].bodies = {Body{"Plate body", plate_shape, Color{0.2, 0.4, 0.6}, {}}};
+  tree.definitions[1].bodies = {Body{"Plate body", plate_shape, Color{0.2, 0.4, 0.6}, {}, {}}};
   tree.definitions[2].name = "Arm";
   tree.definitions[2].instances = {StepTree::Instance{3, at(0.0, 0.0, 0.0, "Pin:1")},
                                    StepTree::Instance{3, at(0.0, 20.0, 0.0, "Pin:2")}};
   tree.definitions[3].name = "Pin";
-  tree.definitions[3].bodies = {Body{"Pin", pin_shape, std::nullopt, {}}};
+  tree.definitions[3].bodies = {Body{"Pin", pin_shape, std::nullopt, {}, {}}};
   tree.definitions[4].name = "Pair";
-  tree.definitions[4].bodies = {Body{"Left", left, Color{1.0, 0.0, 0.0}, {}},
-                                Body{"Right", right, Color{0.0, 0.0, 1.0}, {}}};
+  tree.definitions[4].bodies = {Body{"Left", left, Color{1.0, 0.0, 0.0}, {}, {}},
+                                Body{"Right", right, Color{0.0, 0.0, 1.0}, {}, {}}};
   const std::string path = dir + "/tree.step";
   mitcad::io::write_step_tree(path, tree);
 
@@ -585,9 +585,9 @@ void test_step_units(const std::string& dir) {
   const TopoDS_Shape box = BRepPrimAPI_MakeBox(25.4, 50.8, 76.2).Shape();
   const std::string inch_path = dir + "/box-inch.step";
   const std::string mm_path = dir + "/box-mm.step";
-  mitcad::io::write_step(inch_path, {Body{"Box", box, std::nullopt, {}}},
+  mitcad::io::write_step(inch_path, {Body{"Box", box, std::nullopt, {}, {}}},
                          {mitcad::io::StepSchema::AP214, mitcad::io::LengthUnit::Inch});
-  mitcad::io::write_step(mm_path, {Body{"Box", box, std::nullopt, {}}});
+  mitcad::io::write_step(mm_path, {Body{"Box", box, std::nullopt, {}, {}}});
   // The file stores inches, and the import converts them back.
   CHECK(read_text(inch_path).find("INCH") != std::string::npos);
   CHECK(near(max_step_coordinate(inch_path), 3.0, 1e-9));
@@ -611,7 +611,7 @@ void test_step_multi_solid_part() {
   builder.Add(pair, BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape());
   builder.Add(pair, BRepPrimAPI_MakeBox(gp_Pnt(20.0, 0.0, 0.0), 10.0, 10.0, 5.0).Shape());
   const std::string path = std::filesystem::temp_directory_path().string() + "/mitcad-io-pair.step";
-  mitcad::io::write_step(path, {Body{"Pair", pair, Color{0.0, 1.0, 0.0}, {}}});
+  mitcad::io::write_step(path, {Body{"Pair", pair, Color{0.0, 1.0, 0.0}, {}, {}}});
   const std::vector<Body> read = mitcad::io::read_step(path);
   std::filesystem::remove(path);
   CHECK(read.size() == 2);
@@ -634,7 +634,7 @@ std::vector<std::string> names_read_from_raw_bytes(const std::string& path,
     const double x = 20.0 * static_cast<double>(i);
     const std::string placeholder = std::string("MITCADRAWNAME") + static_cast<char>('A' + i);
     bodies.push_back(Body{placeholder, BRepPrimAPI_MakeBox(gp_Pnt(x, 0.0, 0.0), 10.0, 10.0, 10.0).Shape(),
-                          std::nullopt, {}});
+                          std::nullopt, {}, {}});
   }
   mitcad::io::write_step(path, bodies);
   std::string text = read_text(path);
@@ -3006,8 +3006,8 @@ void test_placements(const std::string& dir) {
   CHECK(!turned.is_identity() && Placement{}.is_identity());
   const TopoDS_Shape pin = BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape();
   const TopoDS_Shape block = BRepPrimAPI_MakeBox(gp_Pnt(-50.0, -50.0, 0.0), 10.0, 10.0, 10.0).Shape();
-  const std::vector<Body> bodies = {Body{"Pin", pin, Color{0.1, 0.6, 0.2}, {turned, moved}},
-                                    Body{"Block", block, std::nullopt, {}}};
+  const std::vector<Body> bodies = {Body{"Pin", pin, Color{0.1, 0.6, 0.2}, {turned, moved}, {}},
+                                    Body{"Block", block, std::nullopt, {}, {}}};
   const Box first{{90.0, 0.0, 0.0}, {100.0, 20.0, 5.0}};
   const Box second{{0.0, 50.0, 0.0}, {20.0, 60.0, 5.0}};
   const Box own = bbox(block);
@@ -3090,7 +3090,7 @@ void test_placements(const std::string& dir) {
   CHECK(from_brep.size() == 1 && count(from_brep[0].shape, TopAbs_SOLID) == 3);
   std::vector<Body> solids;
   for (TopExp_Explorer it(from_brep[0].shape, TopAbs_SOLID); it.More(); it.Next()) {
-    solids.push_back(Body{"", it.Current(), std::nullopt, {}});
+    solids.push_back(Body{"", it.Current(), std::nullopt, {}, {}});
   }
   CHECK(with_box(solids, first, 1e-6) && with_box(solids, second, 1e-6) && with_box(solids, own, 1e-6));
   const std::string stl = dir + "/placed.stl";
@@ -3100,7 +3100,7 @@ void test_placements(const std::string& dir) {
   // A mesh body moves too (OBJ, BRep), by its location.
   const std::string pin_stl = dir + "/pin.stl";
   mitcad::io::write_stl(pin_stl, {pin});
-  const Body scan{"Scan", mitcad::io::read_stl(pin_stl).shape, std::nullopt, {turned}};
+  const Body scan{"Scan", mitcad::io::read_stl(pin_stl).shape, std::nullopt, {turned}, {}};
   const std::string mesh_obj = dir + "/scan.obj";
   mitcad::io::write_obj(mesh_obj, {scan}, {mesh, mitcad::io::LengthUnit::Millimeter});
   const std::vector<Body> scan_obj = mitcad::io::read_obj(mesh_obj);
@@ -3141,6 +3141,142 @@ void test_dispatch(const std::string& dir) {
     threw = true;
   }
   CHECK(threw);
+}
+
+// The centre of face `index` of a shape (TopExp::MapShapes' order, from 0).
+gp_Pnt face_center(const TopoDS_Shape& shape, std::size_t index) {
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapes(shape, TopAbs_FACE, faces);
+  if (index >= static_cast<std::size_t>(faces.Extent())) {
+    return gp_Pnt(1e9, 1e9, 1e9);
+  }
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(faces(static_cast<int>(index) + 1), props);
+  return props.CentreOfMass();
+}
+
+// A body read with one face of its own colour (mitcad#2313): the body in
+// `body_color`, and among its faces coloured otherwise (beyond what a
+// file's colour rounding changes) only the face at `center`, in
+// `face_color`.
+void check_face_color(const Body& read, const Color& body_color, const gp_Pnt& center, const Color& face_color,
+                      const char* what) {
+  CHECK(same_color(read.color, body_color, 1e-2));
+  std::vector<mitcad::io::FaceColor> other;
+  for (const mitcad::io::FaceColor& face : read.face_colors) {
+    if (!same_color(face.color, read.color, 1e-2)) {
+      other.push_back(face);
+    }
+  }
+  CHECK(other.size() == 1);
+  if (other.size() != 1) {
+    std::fprintf(stderr, "%s: %zu faces of their own colour\n", what, other.size());
+    return;
+  }
+  CHECK(face_center(read.shape, other[0].face).Distance(center) < 1e-6);
+  CHECK(same_color(other[0].color, face_color, 1e-2));
+}
+
+// Faces coloured on their own (mitcad#2313): a STEP file of a grey block
+// whose top face is green, written by OCCT's own writer as another
+// program writes one, reads with that face's colour beside the body's;
+// written again by write_step (a part, an assembly's part and a part of a
+// component tree holding two bodies) and by write_iges (solids and faces),
+// it reads back the same. Bodies without face colours read without.
+void test_face_colors(const std::string& dir) {
+  const TopoDS_Shape block = BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape();
+  const std::size_t top = 5;
+  const gp_Pnt top_center = face_center(block, top);
+  const Color grey{0.5, 0.5, 0.5};
+  const Color green{0.0, 1.0, 0.0};
+
+  const occ::handle<TDocStd_Document> document = new TDocStd_Document("MDTV-XCAF");
+  XCAFApp_Application::GetApplication()->InitDocument(document);
+  XCAFDoc_DocumentTool::SetLengthUnit(document, 1.0, UnitsMethods_LengthUnit_Millimeter);
+  const occ::handle<XCAFDoc_ShapeTool> shapes = XCAFDoc_DocumentTool::ShapeTool(document->Main());
+  const occ::handle<XCAFDoc_ColorTool> colors = XCAFDoc_DocumentTool::ColorTool(document->Main());
+  const TDF_Label part = shapes->AddShape(block, false);
+  TDataStd_Name::Set(part, TCollection_ExtendedString("Block"));
+  colors->SetColor(part, Quantity_Color(0.5, 0.5, 0.5, Quantity_TOC_sRGB), XCAFDoc_ColorSurf);
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapes(block, TopAbs_FACE, faces);
+  const TDF_Label face = shapes->AddSubShape(part, faces(static_cast<int>(top) + 1));
+  CHECK(!face.IsNull());
+  colors->SetColor(face, Quantity_Color(0.0, 1.0, 0.0, Quantity_TOC_sRGB), XCAFDoc_ColorSurf);
+  const std::string path = dir + "/face-colors.step";
+  STEPCAFControl_Writer writer;
+  writer.SetNameMode(true);
+  writer.SetColorMode(true);
+  CHECK(writer.Perform(document, path.c_str()));
+
+  const std::vector<Body> read = mitcad::io::read_step(path);
+  CHECK(read.size() == 1);
+  if (read.size() != 1) {
+    return;
+  }
+  check_face_color(read[0], grey, top_center, green, "OCCT's STEP file");
+
+  // Written again as the import gives it, and read back.
+  const Body colored = read[0];
+  const std::string again = dir + "/face-colors-again.step";
+  mitcad::io::write_step(again, {colored});
+  const std::vector<Body> read_again = mitcad::io::read_step(again);
+  CHECK(read_again.size() == 1);
+  if (!read_again.empty()) {
+    check_face_color(read_again[0], grey, top_center, green, "write_step");
+  }
+
+  // An assembly's part: placed twice, each placed copy with the face.
+  Body placed = colored;
+  placed.placements.resize(2);
+  placed.placements[1].translation = {100.0, 0.0, 0.0};
+  const std::string assembly = dir + "/face-colors-placed.step";
+  mitcad::io::write_step(assembly, {placed});
+  const std::vector<Body> read_placed = mitcad::io::read_step(assembly);
+  CHECK(read_placed.size() == 2);
+  for (const Body& body : read_placed) {
+    const bool moved = bbox(body.shape).min[0] > 50.0;
+    check_face_color(body, grey, moved ? top_center.Translated(gp_Vec(100.0, 0.0, 0.0)) : top_center, green,
+                     "an assembly's part");
+  }
+
+  // A part of a component tree holding two bodies, one of them coloured.
+  mitcad::io::StepTree tree;
+  tree.definitions.resize(2);
+  tree.definitions[0].instances = {mitcad::io::StepTree::Instance{1, {}}};
+  tree.definitions[1].name = "Pair";
+  const TopoDS_Shape plain = BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 5.0, 5.0, 5.0).Shape();
+  tree.definitions[1].bodies = {colored, Body{"Plain", plain, Color{0.0, 0.0, 1.0}, {}, {}}};
+  const std::string tree_path = dir + "/face-colors-tree.step";
+  mitcad::io::write_step_tree(tree_path, tree);
+  const std::vector<Body> read_tree = mitcad::io::read_step(tree_path);
+  CHECK(read_tree.size() == 2);
+  for (const Body& body : read_tree) {
+    if (bbox(body.shape).min[0] > 25.0) {
+      CHECK(same_color(body.color, Color{0.0, 0.0, 1.0}, 1e-2));
+      CHECK(body.face_colors.empty());
+    } else {
+      check_face_color(body, grey, top_center, green, "a component tree's part");
+    }
+  }
+
+  // IGES, as solids and as faces (sewn on reading).
+  for (const bool solids : {true, false}) {
+    const std::string iges = dir + (solids ? "/face-colors-solids.igs" : "/face-colors-faces.igs");
+    mitcad::io::write_iges(iges, {colored}, {mitcad::io::LengthUnit::Millimeter, solids});
+    const std::vector<Body> read_iges = mitcad::io::read_iges(iges);
+    CHECK(read_iges.size() == 1);
+    if (!read_iges.empty()) {
+      check_face_color(read_iges[0], grey, top_center, green, solids ? "IGES solids" : "IGES faces");
+    }
+  }
+
+  // The sample bodies have no faces of their own colour.
+  const std::string plain_path = dir + "/face-colors-none.step";
+  mitcad::io::write_step(plain_path, sample_bodies());
+  for (const Body& body : mitcad::io::read_step(plain_path)) {
+    CHECK(body.face_colors.empty());
+  }
 }
 
 } // namespace
@@ -3188,6 +3324,7 @@ int main(int argc, char** argv) {
     test_obj(dir);
     test_placements(dir);
     test_dispatch(dir);
+    test_face_colors(dir);
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());
     return 1;

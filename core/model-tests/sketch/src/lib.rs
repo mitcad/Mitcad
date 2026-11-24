@@ -157,3 +157,6 @@ mod sketch_equation_curve_2237_tests;
 // Points held on derived offsets of splines and ellipses: on their curves,
 // at their ends and on their round corners (mitcad#2278).
 mod sketch_offset_points_2278_tests;
+// Remove Point on a spline, the pair of Insert Point: the spline stays
+// with one point fewer (mitcad#2326).
+mod sketch_spline_point_remove_2326_tests;

@@ -190,6 +190,7 @@ void TutorialGuide::start(const GuideStep& step) {
   m_callout->show();
   m_callout->raise();
   placeCallout(QRect());
+  emit calloutMoved();
   qApp->installEventFilter(this);
   m_tick.start();
   qInfo().noquote() << QStringLiteral("Guide: step %1 started: target %2, %3")
@@ -211,6 +212,7 @@ void TutorialGuide::end(const QString& reason) {
   }
   if (m_callout) {
     m_callout->hide();
+    emit calloutMoved();
   }
   qInfo().noquote() << QStringLiteral("Guide: step %1 left (%2)").arg(m_step.id, reason);
   emitEvent({{QStringLiteral("event"), QStringLiteral("step_left")}, {QStringLiteral("reason"), reason}});
@@ -244,6 +246,13 @@ QJsonObject TutorialGuide::state() const {
   return state;
 }
 
+QRect TutorialGuide::calloutRect() const {
+  if (!m_active || m_callout.isNull() || !m_callout->isVisible()) {
+    return QRect();
+  }
+  return m_callout->geometry();
+}
+
 void TutorialGuide::emitEvent(QJsonObject event) {
   event.insert(QStringLiteral("step"), m_step.id);
   event.insert(QStringLiteral("sequence"), m_sequence);
@@ -261,6 +270,7 @@ void TutorialGuide::finish(const QJsonObject& done, const QString& what) {
   }
   if (m_callout) {
     m_callout->hide();
+    emit calloutMoved();
   }
   qInfo().noquote() << QStringLiteral("Guide: step %1 done: %2").arg(m_step.id, what);
   emitEvent({{QStringLiteral("event"), QStringLiteral("step_done")}, {QStringLiteral("done"), done}});
@@ -365,7 +375,10 @@ void TutorialGuide::placeCallout(const QRect& target) {
   }
   at.setX(std::clamp(at.x(), 0, std::max(0, window->width() - size.width())));
   at.setY(std::clamp(at.y(), 0, std::max(0, window->height() - size.height())));
-  m_callout->setGeometry(QRect(at, size));
+  if (m_callout->geometry() != QRect(at, size)) {
+    m_callout->setGeometry(QRect(at, size));
+    emit calloutMoved();
+  }
   const QString logged = QStringLiteral("Guide callout at %1, leave button at %2")
                              .arg(centerText(m_callout, window), centerText(m_leaveButton, window));
   if (logged != m_calloutLogged) {

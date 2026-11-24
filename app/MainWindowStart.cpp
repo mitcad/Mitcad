@@ -18,6 +18,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QJsonObject>
 #include <QKeySequence>
 #include <QSaveFile>
 #include <QStringList>
@@ -44,6 +45,7 @@
 #include "projects/ProjectRowText.hpp"
 #include "projects/ProjectsTree.hpp"
 #include "report/ReportCenter.hpp"
+#include "tutorials/TutorialChoice.hpp"
 
 #ifdef MITCAD_MACOS_NATIVE_UI
 #include "platform/NativeMacWindow.hpp"
@@ -168,6 +170,14 @@ void MainWindow::createStartPage() {
                           remote.behind >= 0 ? remote.behind : row.behind, remote.problem, remote.conflict);
     }
     return projectMarks(row, row.ahead, row.behind, QString(), false);
+  };
+  // The tutorials to start (mitcad#2346): each installed when needed and
+  // started in an empty design of its own (openListedTutorial).
+  host.tutorials = [this](std::function<void()> back) -> QWidget* {
+    TutorialChoice::Host choice;
+    choice.back = std::move(back);
+    choice.start = [this](const QString& url, const QJsonObject& tutorial) { openListedTutorial(url, tutorial); };
+    return new TutorialChoice(std::move(choice));
   };
   host.version = QCoreApplication::applicationVersion();
   host.issuesUrl = issueList();

@@ -264,21 +264,48 @@ constexpr double kEnds[][3] = {{3.10129, 22.53762, 22.0},
                                {-2.52712, 22.60921, 22.0},
                                {-3.10129, 22.53762, 22.0}};
 
+// The case read and rounded once for both tests below, which also run each
+// alone (MITCAD_TEST_ONLY), so that 1530's checks and 1540's can be told
+// apart (mitcad#2310).
+struct RoundedCase {
+  bool         found = false; // MITCAD_GEOMETRY_CASES is set
+  TopoDS_Shape body;
+  TopoDS_Shape after;
+  TopoDS_Shape result;
+};
+
+const RoundedCase& rounded_case() {
+  static const RoundedCase rounded = [] {
+    RoundedCase r;
+    const std::string cases = geometry_cases();
+    if (cases.empty()) {
+      return r;
+    }
+    r.found                     = true;
+    const std::string      dir  = cases + "/hub-foot-tight-rim-ends/";
+    r.body                      = read(dir + "body.bin");
+    r.after                     = read(dir + "after.bin");
+    const std::vector<int> list = read_indices(dir + "edges.txt");
+    CHECK(!r.body.IsNull() && !r.after.IsNull() && list.size() == 9);
+    if (!r.body.IsNull() && !r.after.IsNull() && list.size() == 9) {
+      r.result = round_edges(r.body, list);
+    }
+    return r;
+  }();
+  return rounded;
+}
+
+// 1530: the rounding builds, valid and closed, with the stored body's
+// material and on it about both holes, its ends where the stored body's are.
 void test_ends_cut_by_the_rims() {
-  const std::string cases = geometry_cases();
-  if (cases.empty()) {
+  const RoundedCase& rounded = rounded_case();
+  if (!rounded.found) {
     std::printf("test_ends_cut_by_the_rims: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
     return;
   }
-  const std::string      dir   = cases + "/hub-foot-tight-rim-ends/";
-  const TopoDS_Shape     body  = read(dir + "body.bin");
-  const TopoDS_Shape     after = read(dir + "after.bin");
-  const std::vector<int> list  = read_indices(dir + "edges.txt");
-  CHECK(!body.IsNull() && !after.IsNull() && list.size() == 9);
-  if (body.IsNull() || after.IsNull() || list.size() != 9) {
-    return;
-  }
-  const TopoDS_Shape result = round_edges(body, list);
+  const TopoDS_Shape& body   = rounded.body;
+  const TopoDS_Shape& after  = rounded.after;
+  const TopoDS_Shape& result = rounded.result;
   CHECK(!result.IsNull());
   if (result.IsNull()) {
     return;
@@ -302,13 +329,31 @@ void test_ends_cut_by_the_rims() {
     const double d = nearest_vertex(result, p);
     std::printf("the end at (%.5f %.5f %.5f): a vertex of the result within %.6f mm\n", e[0], e[1], e[2], d);
     CHECK(d <= 0.01);
-    // One face from the section where the contact on the flange reaches the
-    // rim's torus to the end, as the stored body's (mitcad#1418): before, the
-    // piece walked up to the crossing onto the rim's face along the foot
-    // and the piece cut by that face were two faces, the one at the end
-    // about 0.05 mm2.
+  }
+}
+
+// 1540: each end one face from the section where the contact on the
+// flange reaches the rim's torus to the end, as the stored body's
+// (mitcad#1418): before, the piece walked up to the crossing onto the rim's
+// face along the foot and the piece cut by that face were two faces, the
+// one at the end about 0.05 mm2; the result has the stored body's faces.
+void test_end_faces_as_stored() {
+  const RoundedCase& rounded = rounded_case();
+  if (!rounded.found) {
+    std::printf("test_end_faces_as_stored: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    return;
+  }
+  const TopoDS_Shape& after  = rounded.after;
+  const TopoDS_Shape& result = rounded.result;
+  CHECK(!result.IsNull());
+  if (result.IsNull()) {
+    return;
+  }
+  for (const auto& e : kEnds) {
+    const gp_Pnt p(e[0], e[1], e[2]);
     const double a = end_face_area(result, p), s = end_face_area(after, p);
-    std::printf("  its face %.6f mm2, the stored body's %.6f mm2\n", a, s);
+    std::printf("the end at (%.5f %.5f %.5f): its face %.6f mm2, the stored body's %.6f mm2\n", e[0], e[1], e[2], a,
+                s);
     CHECK(s > 0. && std::abs(a - s) <= 0.01 * s);
   }
   const int faces = face_count(result), stored_faces = face_count(after);
@@ -321,6 +366,7 @@ void test_ends_cut_by_the_rims() {
 
 int main() {
   test::guarded("test_ends_cut_by_the_rims", test::test_ends_cut_by_the_rims);
+  test::guarded("test_end_faces_as_stored", test::test_end_faces_as_stored);
   if (test::failures == 0) {
     std::puts("test_fillet_tight_tangent_end: all checks passed");
   }

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Insert › Component from Web without the browser (mitcad#1579): the
 // part-number rule, the component's name, the format filter by name and by
-// content, typed addresses, the sites kept in the settings, and the
-// downloads' temporary folders (this run's held, an earlier run's removed).
+// content, typed addresses, the sites kept in the settings, the downloads'
+// temporary folders (this run's held, an earlier run's removed) and the
+// browser's download reports (a repeated download told once each).
 #include "UnitTests.hpp"
 #include "webbrowser/ComponentWebFiles.hpp"
 
@@ -237,6 +238,101 @@ void foldersTests(const QString& root) {
   qunsetenv("MITCAD_WEB_DOWNLOADS_DIR");
 }
 
+// A finished download's file, as the browser writes it into the folder the
+// component browser gave it.
+QString writeDownload(mitcad::WebDownloadFolders& folders, const char* name) {
+  const QString folder = folders.newDownloadFolder();
+  const QString path = QDir(folder).filePath(text(name));
+  QFile file(path);
+  CHECK(file.open(QIODevice::WriteOnly) && file.write("ISO-10303-21;\nHEADER;\n") > 0);
+  file.close();
+  return path;
+}
+
+// The browser's download reports (mitcad#2281, mitcad#2289): the same file
+// downloaded again and again, each finished download told once, never a
+// report after its end or of a download this window never started, which
+// had the import read a file that was gone ("... is empty.").
+void repeatedDownloadTests(const QString& root) {
+  using mitcad::WebDownloadReports;
+  using mitcad::WebDownloadState;
+  using Ignored = WebDownloadReports::Ignored;
+  qputenv("MITCAD_WEB_DOWNLOADS_DIR", root.toUtf8());
+  mitcad::WebDownloadFolders folders;
+  WebDownloadReports reports;
+
+  // The browser reports a download before it asks where it goes: not
+  // told, it has no file yet.
+  CHECK(reports.report(1, WebDownloadState::InProgress, QString()).ignored == Ignored::NotStarted);
+  CHECK(reports.pathOf(1).isEmpty());
+  const QString first = writeDownload(folders, "part.step");
+  reports.started(1, first);
+  CHECK(reports.pathOf(1) == first);
+  CHECK(reports.report(1, WebDownloadState::InProgress, first).told());
+  const WebDownloadReports::Verdict done = reports.report(1, WebDownloadState::Complete, first);
+  CHECK(done.told() && done.path == first);
+  CHECK(reports.pathOf(1).isEmpty());
+  // The import read it; its folder goes.
+  folders.remove(QFileInfo(first).absolutePath());
+  CHECK(!QFileInfo::exists(first));
+  // The browser finds its file gone and reports the finished download
+  // again: not told, so nothing reads the file that is gone.
+  CHECK(reports.report(1, WebDownloadState::Complete, first).ignored == Ignored::AfterEnd);
+  CHECK(reports.report(1, WebDownloadState::InProgress, first).ignored == Ignored::AfterEnd);
+
+  // The same file downloaded again: a download of its own, in a folder of
+  // its own, told once with its own file, which is there.
+  CHECK(reports.report(2, WebDownloadState::InProgress, QString()).ignored == Ignored::NotStarted);
+  const QString again = writeDownload(folders, "part.step");
+  CHECK(again != first && QFileInfo::exists(again));
+  reports.started(2, again);
+  const WebDownloadReports::Verdict second = reports.report(2, WebDownloadState::Complete, again);
+  CHECK(second.told() && second.path == again && QFileInfo::exists(second.path));
+  folders.remove(QFileInfo(again).absolutePath());
+  CHECK(reports.report(2, WebDownloadState::Complete, again).ignored == Ignored::AfterEnd);
+  // And a third time while the second's report comes again in between.
+  const QString third = writeDownload(folders, "part.step");
+  reports.started(3, third);
+  CHECK(reports.report(2, WebDownloadState::Complete, again).ignored == Ignored::AfterEnd);
+  CHECK(reports.report(3, WebDownloadState::Complete, third).path == third);
+  folders.remove(QFileInfo(third).absolutePath());
+
+  // A finished download this window never started (one of an earlier run
+  // that the browser's history brings back, its file long gone): not told.
+  const QString earlier = QDir(root).filePath(text("run-1-1/d1/part.step"));
+  CHECK(reports.report(40, WebDownloadState::Complete, earlier).ignored == Ignored::NotStarted);
+  CHECK(reports.report(41, WebDownloadState::Failed, earlier).ignored == Ignored::NotStarted);
+
+  // Interrupted: told once (its folder goes), a report again is not; when
+  // the browser resumes it by itself it asks again where it goes, and runs
+  // again. An item interrupted before it wrote anything reports no path:
+  // the one it was given names it (mitcad#1716).
+  const QString broken = writeDownload(folders, "broken.step");
+  reports.started(5, broken);
+  const WebDownloadReports::Verdict failed = reports.report(5, WebDownloadState::Failed, QString());
+  CHECK(failed.told() && failed.path == broken);
+  folders.remove(QFileInfo(broken).absolutePath());
+  CHECK(reports.report(5, WebDownloadState::Failed, broken).ignored == Ignored::AfterInterruption);
+  CHECK(reports.pathOf(5).isEmpty());
+  const QString resumed = writeDownload(folders, "broken.step");
+  reports.started(5, resumed);
+  CHECK(reports.report(5, WebDownloadState::InProgress, resumed).told());
+  CHECK(reports.report(5, WebDownloadState::Complete, resumed).path == resumed);
+  CHECK(reports.report(5, WebDownloadState::Complete, resumed).ignored == Ignored::AfterEnd);
+  folders.remove(QFileInfo(resumed).absolutePath());
+
+  // Canceled is an end too; a refused download (no path) is never told.
+  const QString canceled = writeDownload(folders, "big.step");
+  reports.started(6, canceled);
+  CHECK(reports.report(6, WebDownloadState::Canceled, canceled).told());
+  CHECK(reports.report(6, WebDownloadState::Canceled, canceled).ignored == Ignored::AfterEnd);
+  folders.remove(QFileInfo(canceled).absolutePath());
+  reports.started(7, QString());
+  CHECK(reports.refused(7) && !reports.refused(6));
+  CHECK(reports.report(7, WebDownloadState::InProgress, QString()).ignored == Ignored::Refused);
+  qunsetenv("MITCAD_WEB_DOWNLOADS_DIR");
+}
+
 } // namespace
 
 int componentWebFilesTests() {
@@ -258,6 +354,7 @@ int componentWebFilesTests() {
   downloadFailureTests();
   sitesTests();
   foldersTests(QDir(directory.path()).filePath(QStringLiteral("downloads")));
+  repeatedDownloadTests(QDir(directory.path()).filePath(QStringLiteral("repeated")));
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

@@ -9,8 +9,9 @@
 //! `{mass}`, `{Set/Key}`: `model-api/src/drawing_templates.rs`), so the block follows
 //! the design.
 //!
-//! Templates come from three places: the built-in ones (ISO and ANSI, the
-//! JSON files under `templates/`), the user's (`drawing-templates/` in the
+//! Templates come from three places: the built-in ones (ISO, ANSI and
+//! Blank, which draws neither frame nor title block: the JSON files under
+//! `templates/`), the user's (`drawing-templates/` in the
 //! user's library folder, beside its materials and print profiles,
 //! [`mitcad_model::print_library::user_library`]) and a project's (the same
 //! folder in the project's library, [`mitcad_model::print_library::project_library`]).
@@ -37,10 +38,12 @@ pub const TEMPLATES_DIR: &str = "drawing-templates";
 /// (mitcad#1625).
 const MAX_FILE: u64 = 16 << 20;
 
-/// The built-in templates' data.
-const BUILT_IN: [&str; 2] = [
+/// The built-in templates' data: ISO, ANSI and Blank (mitcad#2325: no
+/// frame, no title block).
+const BUILT_IN: [&str; 3] = [
     include_str!("templates/iso.json"),
     include_str!("templates/ansi.json"),
+    include_str!("templates/blank.json"),
 ];
 
 /// The height of a field's label and of a value without its own, mm.
@@ -91,12 +94,28 @@ pub struct Filled {
 }
 
 /// The groups a filled template draws on a sheet of this size: `frame`,
-/// `title-block` and, once the drawing has a revision, `revision-table`.
+/// `title-block` and, once the drawing has a revision, `revision-table`;
+/// a template without a frame or a title block leaves its group out, the
+/// revision table going with the block (mitcad#2325).
 pub fn draw(filled: &Filled, width: f64, height: f64) -> Vec<Group> {
     let t = &filled.template;
-    let (frame_min, frame_max) = t.frame(width, height);
-    let mut frame = Group::new("frame");
-    frame.rect(Pen::Frame, frame_min, frame_max);
+    let mut out = Vec::new();
+    if t.show_frame {
+        let (frame_min, frame_max) = t.frame(width, height);
+        let mut frame = Group::new("frame");
+        frame.rect(Pen::Frame, frame_min, frame_max);
+        out.push(frame);
+    }
+    if t.show_title_block {
+        out.extend(title_block(filled, width, height));
+    }
+    out
+}
+
+/// A filled template's title block and, once the drawing has a revision,
+/// its revision table.
+fn title_block(filled: &Filled, width: f64, height: f64) -> Vec<Group> {
+    let t = &filled.template;
     let (min, max) = t.title_box(width, height);
     let mut block = Group::new("title-block");
     let at = |p: P2| [min[0] + p[0], min[1] + p[1]];
@@ -139,7 +158,7 @@ pub fn draw(filled: &Filled, width: f64, height: f64) -> Vec<Group> {
     if let Some(p) = t.title_block.projection_symbol {
         projection_symbol(&mut block, filled.projection, at(p));
     }
-    let mut out = vec![frame, block];
+    let mut out = vec![block];
     if let Some(layout) = &t.revision_table
         && !filled.revisions.is_empty()
     {
@@ -201,7 +220,7 @@ fn revision_table(revisions: &[Revision], rows: usize, corner: P2, right: f64) -
 
 // --- Where templates come from ----------------------------------------------
 
-/// The built-in templates: ISO (A sizes) and ANSI.
+/// The built-in templates: ISO (A sizes), ANSI and Blank (mitcad#2325).
 pub fn built_in() -> Vec<SheetTemplate> {
     BUILT_IN
         .iter()
@@ -326,7 +345,7 @@ mod tests {
     fn the_built_in_templates_read_and_check() {
         let all = built_in();
         let ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["iso", "ansi"]);
+        assert_eq!(ids, ["iso", "ansi", "blank"]);
         for t in &all {
             t.check().unwrap();
             assert_eq!(t.choice(), t.id);
@@ -450,6 +469,86 @@ mod tests {
         assert!(all.iter().any(|t| t == "DESCRIPTION"));
         assert!(all.iter().any(|t| t == "change 5"));
         assert!(!all.iter().any(|t| t == "change 1"), "{all:?}");
+    }
+
+    #[test]
+    fn blank_and_a_template_without_a_frame_leave_their_groups_out() {
+        // mitcad#2325: Blank draws neither frame nor title block, nor a
+        // revision table once the drawing has a revision.
+        let all = built_in();
+        let blank = all.iter().find(|t| t.id == "blank").unwrap().clone();
+        assert!(!blank.show_frame && !blank.show_title_block);
+        assert_eq!(blank.name, "Blank");
+        assert_eq!(blank.size, None);
+        assert_eq!(blank.revision_room(), 0.0);
+        assert_eq!(blank.title_room(), 0.0);
+        assert!(blank.keys().is_empty());
+        let revision = Revision {
+            letter: "A".to_owned(),
+            description: "first".to_owned(),
+            date: None,
+            author: None,
+        };
+        let filled = Filled {
+            template: blank.clone(),
+            values: Vec::new(),
+            revisions: vec![revision.clone()],
+            projection: Projection::FirstAngle,
+        };
+        assert!(draw(&filled, 420.0, 297.0).is_empty());
+        // ISO without its frame: the block and the revision table only.
+        let mut iso = all[0].clone();
+        iso.show_frame = false;
+        let values = vec![String::new(); iso.title_block.fields.len()];
+        let filled = Filled {
+            template: iso.clone(),
+            values,
+            revisions: vec![revision],
+            projection: Projection::FirstAngle,
+        };
+        let classes: Vec<&str> = draw(&filled, 420.0, 297.0)
+            .iter()
+            .map(|g| g.class)
+            .collect();
+        assert_eq!(classes, ["title-block", "revision-table"]);
+        // Its block and the views' clearance as before.
+        assert_eq!(iso.title_box(420.0, 297.0), ([230.0, 10.0], [410.0, 46.0]));
+        assert_eq!(iso.title_room(), 36.0 + 25.0);
+        // The options are left out of the JSON while they are true, so
+        // that an old template reads and writes as before.
+        let old = serde_json::to_value(&all[0]).unwrap();
+        assert!(old.get("show_frame").is_none() && old.get("show_title_block").is_none());
+        let back: SheetTemplate = serde_json::from_value(old).unwrap();
+        assert!(back.show_frame && back.show_title_block);
+        assert_eq!(back, all[0]);
+        let written = serde_json::to_value(&blank).unwrap();
+        assert_eq!(written["show_frame"], false);
+        assert_eq!(written["show_title_block"], false);
+    }
+
+    #[test]
+    fn a_template_without_a_frame_or_a_block_skips_their_checks() {
+        // mitcad#2325: no title block, no block size and no block higher
+        // than the frame to refuse; no frame, no frame to leave.
+        let mut t = built_in().remove(0);
+        t.show_title_block = false;
+        t.title_block.width = 0.0;
+        t.title_block.height = 500.0;
+        t.check().unwrap();
+        t.fits(210.0, 297.0).unwrap();
+        t.margins = [150.0, 10.0, 150.0, 10.0];
+        assert!(t.fits(297.0, 210.0).unwrap_err().contains("leave no frame"));
+        t.show_frame = false;
+        t.fits(297.0, 210.0).unwrap();
+        // The block drawn again: its checks are back.
+        t.show_title_block = true;
+        assert!(t.check().unwrap_err().contains("has a size"));
+        t.title_block.width = 180.0;
+        assert!(t.fits(420.0, 297.0).unwrap_err().contains("do not fit"));
+        // Blank fits any sheet, its own margins and all.
+        let blank = built_in().remove(2);
+        blank.check().unwrap();
+        blank.fits(10.0, 10.0).unwrap();
     }
 
     #[test]

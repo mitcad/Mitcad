@@ -66,7 +66,28 @@ pub struct TutorialManifest {
     pub start: String,
     /// The starting designs, paths in its folder (opened by its pages).
     pub designs: Vec<String>,
+    /// What the Start page's card shows when the tutorial gives it
+    /// (mitcad#2346): its length in whole minutes,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u32>,
+    /// its level ([`LEVELS`]),
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub level: String,
+    /// a picture of its result (a PNG or JPEG file in its folder),
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub picture: String,
+    /// and its place in the recommended order of its repository (1 first;
+    /// those without one after those with one, each by title).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
 }
+
+/// The levels a tutorial may give.
+pub const LEVELS: [&str; 3] = ["beginner", "intermediate", "advanced"];
+/// The file types of a tutorial's picture.
+const PICTURE_TYPES: [&str; 3] = [".png", ".jpg", ".jpeg"];
+/// The largest picture `tutorial_picture` writes.
+const MAX_PICTURE_BYTES: usize = 4 << 20;
 
 impl TutorialManifest {
     /// What is wrong with it in the folder `folder`; empty when nothing is.
@@ -94,12 +115,43 @@ impl TutorialManifest {
                 problems.push(format!("{field} is missing"));
             }
         }
-        for path in std::iter::once(&self.start).chain(&self.designs) {
+        for path in std::iter::once(&self.start)
+            .chain(&self.designs)
+            .chain(std::iter::once(&self.picture))
+        {
             if !path.is_empty() && !super::manifest::valid_path(path) {
                 problems.push(format!("{path} is not a path inside the tutorial"));
             }
         }
+        if !self.picture.is_empty() {
+            let lower = self.picture.to_ascii_lowercase();
+            if !PICTURE_TYPES.iter().any(|kind| lower.ends_with(kind)) {
+                problems.push(format!(
+                    "picture {} is not a PNG or JPEG file",
+                    self.picture
+                ));
+            }
+        }
+        if !self.level.is_empty() && !LEVELS.contains(&self.level.as_str()) {
+            problems.push(format!(
+                "level \"{}\" is not one of {}",
+                self.level,
+                LEVELS.join(", ")
+            ));
+        }
+        if self.duration == Some(0) {
+            problems.push("duration is 0 minutes".to_string());
+        }
+        if self.order == Some(0) {
+            problems.push("order starts at 1".to_string());
+        }
         problems
+    }
+
+    /// The recommended order: by `order` (those without one last), then by
+    /// title.
+    fn order_key(&self) -> (u32, String) {
+        (self.order.unwrap_or(u32::MAX), self.title.to_lowercase())
     }
 
     /// The page shown first: `start`, else `index.html`.
@@ -171,7 +223,7 @@ impl LibraryRepo {
                 }
             }
         }
-        tutorials.sort_by_key(|t| t.title.to_lowercase());
+        tutorials.sort_by_key(TutorialManifest::order_key);
         Ok((manifest, tutorials, problems))
     }
 
@@ -340,6 +392,58 @@ pub fn install(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError>
         "start": target.join(tutorial.start_page()).to_string_lossy(),
         "files": files,
         "tutorial": tutorial,
+        "rev": head.to_string(),
+    }))
+}
+
+/// `tutorial_picture` (mitcad#2346): the picture of the tutorial `id` of the
+/// fetched repository `url`, at the repository's newest version, written to
+/// `file` for the Start page's card before the tutorial is installed.
+pub fn picture(cache: &LibraryCache, command: &Value) -> Result<Value, VcsError> {
+    let url = text(command, "url")?;
+    let id = text(command, "id")?;
+    let file = text(command, "file")?;
+    if !valid_id(id) {
+        return Err(VcsError::Command(format!(
+            "\"{id}\" is not a tutorial's id"
+        )));
+    }
+    let repo = cache
+        .open_url(url)
+        .ok_or_else(|| VcsError::NotFound(format!("{url} has not been fetched")))?;
+    let head = repo
+        .head()?
+        .ok_or_else(|| VcsError::NotFound(format!("{url} has no version")))?;
+    let (_, tutorials, _) = repo.tutorials(head)?;
+    let tutorial = tutorials
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| VcsError::NotFound(format!("{url} has no tutorial {id}")))?;
+    if tutorial.picture.is_empty() {
+        return Err(VcsError::NotFound(format!(
+            "the tutorial {id} has no picture"
+        )));
+    }
+    let path = format!("{TUTORIALS_DIR}/{id}/{}", tutorial.picture);
+    let data = repo
+        .read(head, &path)?
+        .ok_or_else(|| VcsError::NotFound(format!("{path} is not in the repository")))?;
+    if data.len() > MAX_PICTURE_BYTES {
+        return Err(VcsError::File(format!(
+            "{path} is {} bytes, more than the {} MB a tutorial's picture may have",
+            data.len(),
+            MAX_PICTURE_BYTES >> 20
+        )));
+    }
+    let target = Path::new(file);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| crate::io_error("make the folder", parent, e))?;
+    }
+    fs::write(target, &data).map_err(|e| crate::io_error("write", target, e))?;
+    Ok(json!({
+        "id": id,
+        "file": file,
+        "bytes": data.len(),
         "rev": head.to_string(),
     }))
 }

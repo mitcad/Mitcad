@@ -71,15 +71,18 @@ QString displayPlatformDescription(const DisplayPlatformChoice& choice, const QS
 // start, before any window, and starts the program again in its own
 // process on the first option of this order that this run has not tried:
 //
-// - in a Wayland session: native Wayland, X11 (XWayland) with Qt's EGL
-//   integration, X11 with GLX. The reported black window (0.70.0, NVIDIA's
-//   driver, XWayland) had a working context but no EGL surface for its X11
-//   window, while native Wayland drew everything, the 3D view too;
-// - elsewhere: X11 with Qt's EGL integration, X11 with GLX.
+// - X11 with Qt's EGL integration (the default since 0.70);
+// - X11 with GLX: Qt composes the window with GLX, as every window up to
+//   0.69 was, and the 3D view, which OCCT draws through EGL only, draws
+//   in an EGL context of its own without a window and is read back into
+//   the window each frame (GraphicsStart.hpp, ViewEglContext). The
+//   reported black or missing windows (0.70.0, NVIDIA's driver, XWayland
+//   in a Wayland session) had working EGL contexts but no EGL surface for
+//   their X11 window, while 0.69's GLX window drew;
+// - in a Wayland session only, native Wayland last: it is opt-in
+//   (MITCAD_WAYLAND=1) until the toolbar panel shows there (mitcad#2031).
 //
-// With GLX, as up to 0.69, the window and its panels draw; the 3D view,
-// which OCCT draws through EGL, stays empty and says so. Nothing after an
-// X11 integration the user chose other than these two.
+// Nothing after an X11 integration the user chose other than these two.
 struct GraphicsFallback {
   QString key;              // "wayland", "xcb_egl" or "xcb_glx"
   QString platform;         // QT_QPA_PLATFORM of the next start

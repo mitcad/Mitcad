@@ -3,6 +3,14 @@
 // vector fields in a curve's basis, polynomial forms of rational curves and
 // Gordon surfaces through curve networks.
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdio>
+#include <string>
+#include <vector>
+
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
@@ -779,6 +787,165 @@ void test_loft_rails_unmatched() {
   CHECK(faces_named(*squared, "F5:start(r{c1})") == 1 && faces_named(*squared, end_cap("F5", 5)) == 1);
 }
 
+// A `width` x `height` rectangle round the origin with its corners rounded
+// by `radius`: lines and arcs c<first>..c<first + 7> counter-clockwise from
+// its bottom line, keyed as the sketch keys them.
+Region rounded_rectangle(int first, double width, double height, double radius) {
+  const double a = width / 2;
+  const double b = height / 2;
+  const auto name = [first](int k) { return "c" + std::to_string(first + (k + 8) % 8); };
+  std::vector<Segment> segments(8);
+  for (int k = 0; k < 8; ++k) {
+    segments[static_cast<std::size_t>(k)].name = name(k) + "[" + name(k - 1) + "," + name(k + 1) + "]";
+  }
+  const auto line = [&](int k, double x0, double y0, double x1, double y1) {
+    Segment& s = segments[static_cast<std::size_t>(k)];
+    s.kind = SegmentKind::Line;
+    s.start = gp_Pnt2d(x0, y0);
+    s.end = gp_Pnt2d(x1, y1);
+  };
+  const auto arc = [&](int k, double cx, double cy, double from) {
+    Segment& s = segments[static_cast<std::size_t>(k)];
+    s.kind = SegmentKind::Arc;
+    s.center = gp_Pnt2d(cx, cy);
+    s.radius = radius;
+    s.start_angle = from;
+    s.end_angle = from + kPi / 2;
+  };
+  line(0, -a + radius, -b, a - radius, -b);
+  arc(1, a - radius, -b + radius, -kPi / 2);
+  line(2, a, -b + radius, a, b - radius);
+  arc(3, a - radius, b - radius, 0);
+  line(4, a - radius, b, -a + radius, b);
+  arc(5, -a + radius, b - radius, kPi / 2);
+  line(6, -a, b - radius, -a, -b + radius);
+  arc(7, -a + radius, -b + radius, kPi);
+  Region region;
+  region.name = "r{";
+  for (const Segment& s : segments) {
+    region.name += (region.name.size() > 2 ? "," : "") + s.name;
+  }
+  region.name += "}";
+  region.loops.push_back(Loop{segments});
+  return region;
+}
+
+// A cubic Bezier rail.
+Path cubic_rail(const std::array<gp_Pnt, 4>& poles) {
+  PathCurve piece;
+  piece.name = "c9";
+  piece.curve.kind = ModelCurveKind::BSpline;
+  piece.curve.degree = 3;
+  piece.curve.poles = {poles[0], poles[1], poles[2], poles[3]};
+  piece.curve.knots = {0, 0, 0, 0, 1, 1, 1, 1};
+  return {piece};
+}
+
+gp_Pnt bezier_point(const std::array<gp_Pnt, 4>& p, double t) {
+  const double s = 1 - t;
+  return gp_Pnt(p[0].XYZ() * (s * s * s) + p[1].XYZ() * (3 * s * s * t) + p[2].XYZ() * (3 * s * t * t) +
+                p[3].XYZ() * (t * t * t));
+}
+
+gp_Pnt mirrored_in_x(const gp_Pnt& p) { return gp_Pnt(-p.X(), p.Y(), p.Z()); }
+
+TopoDS_Shape shell_of(const Shape& body) {
+  TopoDS_Shape shell;
+  for (TopExp_Explorer s(body.occt(), TopAbs_SHELL); s.More(); s.Next()) {
+    shell = s.Current();
+  }
+  return shell;
+}
+
+double off_shell(const TopoDS_Shape& shell, const gp_Pnt& p) {
+  if (shell.IsNull()) {
+    return 1.0e9;
+  }
+  BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(p).Vertex(), shell);
+  return distance.IsDone() ? distance.Value() : 1.0e9;
+}
+
+// The largest distance from the body's boundary of points of the rail.
+double off_rail(const Shape& body, const std::array<gp_Pnt, 4>& rail) {
+  const TopoDS_Shape shell = shell_of(body);
+  double worst = 0.0;
+  for (int k = 0; k <= 16; ++k) {
+    worst = std::max(worst, off_shell(shell, bezier_point(rail, k / 16.0)));
+  }
+  return worst;
+}
+
+// The largest distance from the body's boundary of points of its side
+// faces mirrored in x: 0 for a body that is its own mirror image. The side
+// faces are whole surfaces, so every point of their parameter ranges is on
+// them; the planar caps are left out, their parameter ranges reaching
+// beyond their round outlines (points there are off the body, mirrored or
+// not).
+double off_mirror(const Shape& body) {
+  const TopoDS_Shape shell = shell_of(body);
+  double worst = 0.0;
+  for (TopExp_Explorer f(body.occt(), TopAbs_FACE); f.More(); f.Next()) {
+    const TopoDS_Face face = TopoDS::Face(f.Current());
+    const BRepAdaptor_Surface surface(face);
+    if (surface.GetType() == GeomAbs_Plane) {
+      continue;
+    }
+    double u0 = 0.0;
+    double u1 = 0.0;
+    double v0 = 0.0;
+    double v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    for (int i = 0; i <= 4; ++i) {
+      for (int j = 0; j <= 5; ++j) {
+        const gp_Pnt p = surface.Value(u0 + (u1 - u0) * (0.05 + 0.9 * i / 4), v0 + (v1 - v0) * j / 5);
+        worst = std::max(worst, off_shell(shell, mirrored_in_x(p)));
+      }
+    }
+  }
+  return worst;
+}
+
+// Two mirrored rails, bent, through rounded rectangles to a circle
+// (mitcad#2320, GitHub #607): 100 x 50 at z = 0 and 150 x 75 at z = 100,
+// rounded by 10, to a circle of radius 15 at z = 200, the rails through
+// the middles of the short sides and opposite points of the circle. The
+// body is its own mirror image in x and passes through both rails, with
+// Tangent Edges Merge (each section one closed edge, its seam off the
+// rails) and Keep (the circle starting off the rails too).
+void test_loft_rails_rounded() {
+  const std::array<gp_Pnt, 4> right{gp_Pnt(50, 0, 0), gp_Pnt(100, 0, 50), gp_Pnt(235.0 / 3, 0, 150),
+                                    gp_Pnt(15, 0, 200)};
+  const std::array<gp_Pnt, 4> left{mirrored_in_x(right[0]), mirrored_in_x(right[1]), mirrored_in_x(right[2]),
+                                   mirrored_in_x(right[3])};
+  // (The rail crosses the middle section where it meets it.)
+  CHECK(near_point(bezier_point(right, 0.5), gp_Pnt(75, 0, 100)));
+  Region neck = circle(21, 0, 0, 15);
+  neck.loops.front().segments.front().rotation = 0.7;
+  LoftSpec bottle;
+  bottle.feature = "F7";
+  bottle.sections = {region_at(0, rounded_rectangle(1, 100, 50, 10)),
+                     region_at(100, rounded_rectangle(11, 150, 75, 10)), region_at(200, neck)};
+  bottle.rails = {cubic_rail(right), cubic_rail(left)};
+  for (const bool merge : {true, false}) {
+    std::fprintf(stderr, "rounded sections, tangent edges %s\n", merge ? "merged" : "kept");
+    bottle.merge_tangent = merge;
+    const ShapePtr body = loft(bottle);
+    CHECK(valid(*body) && edge_names_unique(*body));
+    // Merged: each section one closed edge, its seam moved to a rail, so
+    // the side is the two halves between the rails, and the caps.
+    if (merge) {
+      CHECK(body->face_count() == 4);
+    }
+    CHECK(off_rail(*body, right) < 1e-4 && off_rail(*body, left) < 1e-4);
+    const double mirror = off_mirror(*body);
+    std::fprintf(stderr, "  side mirrored in x: %.3g mm off the body\n", mirror);
+    CHECK(mirror < 1e-6);
+    const BoundingBox box = bounding_box(*body);
+    CHECK(near(box.max.X(), -box.min.X(), 1e-6));
+    CHECK(volume(*body) > 0);
+  }
+}
+
 // The number of wires of the body's face `name`: its holes and its outer
 // boundary.
 int wires_of(const Shape& body, const std::string& name) {
@@ -872,6 +1039,7 @@ void skin_tests() {
   guarded("lofts with rails", test_loft_rails);
   guarded("lofts with rails on unmatched sections", test_loft_rails_unmatched);
   guarded("lofts from faces with holes", test_loft_face_holes);
+  guarded("lofts with mirrored rails on rounded sections", test_loft_rails_rounded);
 }
 
 } // namespace test

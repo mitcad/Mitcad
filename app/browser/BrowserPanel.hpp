@@ -129,6 +129,11 @@ struct BrowserNode {
     // name), each with its light bulb.
     Decals,
     Decal,
+    // Exploded views (mitcad#2113): a component's Exploded Views folder
+    // (the root's too) and its rows (uid and name: the view's name). A
+    // double-click shows the design exploded by it, or assembled again.
+    ExplodeViews,
+    ExplodeView,
   };
 
   Type type = Type::None;
@@ -258,6 +263,9 @@ public:
 
   // Rebuilds the rows, keeping what was expanded, selected and scrolled to.
   void rebuild(const DocumentSnapshot& snapshot, bool originShown);
+  // The explode view the 3D view shows (mitcad#2113; empty: none): its row
+  // in bold. Takes effect at the next rebuild.
+  void setShownExplodeView(const QString& name) { m_shownExplodeView = name; }
   // Show used sketches under their features (mitcad#1699, Preferences >
   // General; off by default): on, each component gets a Features folder
   // after its Bodies with its features in timeline order (those without
@@ -630,6 +638,10 @@ private:
   QHash<QTreeWidgetItem*, BrowserNode> m_nodes;
   QHash<QString, bool> m_expanded; // by row key
   QHash<QString, QString> m_loggedLevels; // the rows' levels last logged, by path (mitcad#1040)
+  // The explode view shown in the 3D view, and the Exploded Views rows as
+  // last logged (mitcad#2113).
+  QString m_shownExplodeView;
+  QString m_loggedExplodeViews;
   // The rows whose transparent eye was logged last, by path (mitcad#1093).
   QSet<QString> m_loggedTransparent;
   // The Sketch Blocks folder's rows as last logged (mitcad#2110).

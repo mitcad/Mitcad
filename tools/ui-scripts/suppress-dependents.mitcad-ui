@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: MIT
+# Suppress Features asks about the features that use it (mitcad#2314):
+# Cancel changes nothing, Suppress Only This leaves the dependents failing
+# as before, Suppress All (the default) leaves none failing and one Undo
+# brings the chain back; Unsuppress asks nothing; a selection holding
+# the dependents asks nothing and nothing fails on the way. The design
+# (suppress-dependents.json): Block, Hole (a cut of it) and Round (a
+# fillet of it). All geometry is synthetic.
+wait-idle
+key F6
+capture-undo-depth baseline
+capture-model-number volume '{"query": "bodies", "volumes": true}' 0.volume
+
+# Cancel: neither the geometry nor the undo depth changes.
+mark
+context-menu-logged '^Timeline Block at ' 'Suppress Features'
+wait-log '^Suppress Block: also Hole, Round\?$'
+focus-dialog '^Suppress$'
+screenshot '${MITCAD_TEST_WORK}/suppress-question.png'
+key Escape
+expect-log '^Suppress Block cancelled$'
+focus-main
+expect-undo-depth ${baseline} 0
+expect-no-log '^Suppressed '
+capture-model-number kept '{"query": "bodies", "volumes": true}' 0.volume
+expect-near ${kept} ${volume}
+
+# Suppress Only This: the block alone, as before; Hole and Round fail.
+mark
+context-menu-logged '^Timeline Block at ' 'Suppress Features'
+wait-log '^Suppress Block: also Hole, Round\?$'
+focus-dialog '^Suppress$'
+button '^Suppress Only This$'
+wait-log '^Suppressed Block$'
+expect-log '^Recompute failed: '
+focus-main
+expect-model-bodies 0 0
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-undo-depth ${baseline} 0
+
+# Suppress All, the default button: the chain in one undo step, nothing
+# failing.
+mark
+context-menu-logged '^Timeline Block at ' 'Suppress Features'
+wait-log '^Suppress Block: also Hole, Round\?$'
+focus-dialog '^Suppress$'
+key Return
+wait-log '^Suppressed Block, Hole, Round$'
+expect-no-log '^Recompute failed: '
+focus-main
+expect-model-bodies 0 0
+expect-undo-depth ${baseline} 1
+screenshot '${MITCAD_TEST_WORK}/suppressed-all.png'
+command edit.undo
+expect-undo-depth ${baseline} 0
+capture-model-number restored '{"query": "bodies", "volumes": true}' 0.volume
+expect-near ${restored} ${volume}
+
+# Unsuppress asks nothing and brings back only the block: Hole and Round
+# stay suppressed, the block is whole (40 x 20 x 10).
+mark
+context-menu-logged '^Timeline Block at ' 'Suppress Features'
+wait-log '^Suppress Block: also Hole, Round\?$'
+focus-dialog '^Suppress$'
+key Return
+wait-log '^Suppressed Block, Hole, Round$'
+focus-main
+mark
+context-menu-logged '^Timeline Block at ' 'Unsuppress Features'
+wait-log '^Unsuppressed Block$'
+expect-no-log '^Suppress Block: also '
+expect-no-log '^Recompute failed: '
+expect-model-bodies 1 8000
+expect-undo-depth ${baseline} 2
+command edit.undo
+command edit.undo
+expect-undo-depth ${baseline} 0
+capture-model-number back '{"query": "bodies", "volumes": true}' 0.volume
+expect-near ${back} ${volume}
+
+# A selection that holds the dependents already (GitHub mitcad/Mitcad#600):
+# the menu of a selected feature takes the whole selection, asks nothing,
+# and suppresses the last feature first, so none of them fails on the way.
+click-logged '^Timeline Block at '
+click-logged '^Timeline Hole at ' ctrl
+click-logged '^Timeline Round at ' ctrl
+mark
+context-menu-logged '^Timeline Round at ' 'Suppress Features'
+wait-log '^Suppressed Block, Hole, Round$'
+expect-no-log '^Suppress .*: also '
+expect-no-log '^Recompute failed: '
+expect-model-bodies 0 0
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-undo-depth ${baseline} 0
+capture-model-number again '{"query": "bodies", "volumes": true}' 0.volume
+expect-near ${again} ${volume}

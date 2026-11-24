@@ -88,17 +88,70 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
       m_camTurnedStock = true;
       m_viewer->setCamStock(turned);
     }
+    // The whole program cut out of the bar in 3D (mitcad#2319): drawn in
+    // place of the revolved section when it reads, its volumes logged.
+    const QJsonObject solid = answer.value(QStringLiteral("solid")).toObject();
+    const cam::StockMesh cubes = cam::solidStockMesh(solid);
+    qInfo().noquote() << QStringLiteral("CAM mill-turn stock: %1: %2 triangles, milled %3, left %4, gouge %5, %6 rapid "
+                                        "cut(s)")
+                             .arg(name)
+                             .arg(cubes.triangleCount())
+                             .arg(cam::shortNumber(solid.value(QStringLiteral("milled")).toDouble()),
+                                  cam::shortNumber(solid.value(QStringLiteral("left")).toDouble()),
+                                  cam::shortNumber(solid.value(QStringLiteral("gouge")).toDouble()))
+                             .arg(solid.value(QStringLiteral("rapid_cuts")).toArray().size());
+    if (!cubes.empty()) {
+      m_camTurnedStock = true;
+      m_viewer->setCamStock(cubes);
+    }
     const double left = answer.value(QStringLiteral("left")).toDouble();
     const int gouges = static_cast<int>(answer.value(QStringLiteral("gouges")).toArray().size());
-    const QJsonArray cuts = answer.value(QStringLiteral("rapid_cuts")).toArray();
+    QJsonArray cuts = answer.value(QStringLiteral("rapid_cuts")).toArray();
     qInfo().noquote() << QStringLiteral("CAM turned stock: %1: left %2, %3 gouge(s), %4 rapid cut(s)")
                              .arg(name, cam::shortNumber(left))
                              .arg(gouges)
                              .arg(cuts.size());
+    // The live tools' cuts on the face and the diameter (mitcad#2067), in
+    // words: the material they leave over the part and their cuts into it.
+    QStringList liveSummary;
+    for (const QJsonValue& value : answer.value(QStringLiteral("live")).toArray()) {
+      const QJsonObject side = value.toObject();
+      const QString kind = str(side.value(QStringLiteral("side")).toObject(), "kind");
+      const bool face = kind == QStringLiteral("face");
+      // A plane with the Y axis or the B head (mitcad#2319).
+      const bool plane = kind == QStringLiteral("plane");
+      const QJsonObject remaining = side.value(QStringLiteral("remaining")).toObject();
+      const QJsonArray liveCuts = side.value(QStringLiteral("rapid_cuts")).toArray();
+      const double liveLeft = remaining.value(QStringLiteral("max")).toDouble();
+      const double gouge = remaining.value(QStringLiteral("gouge")).toDouble();
+      qInfo().noquote() << QStringLiteral("CAM live tools: %1: %2, %3 operation(s), left %4, gouge %5, %6 rapid cut(s)")
+                               .arg(name, face    ? QStringLiteral("face")
+                                          : plane ? QStringLiteral("plane")
+                                                  : QStringLiteral("diameter"))
+                               .arg(side.value(QStringLiteral("operations")).toArray().size())
+                               .arg(cam::shortNumber(liveLeft), cam::shortNumber(gouge))
+                               .arg(liveCuts.size());
+      const QString cut = gouge > 0.0 ? tr("They cut into the part.") : tr("They cut nothing of the part.");
+      liveSummary << (face    ? tr("The live tools on the face: at most %1 mm left over the part. %2")
+                      : plane ? tr("The live tools on a plane: at most %1 mm left over the part. %2")
+                              : tr("The live tools on the diameter: at most %1 mm left over the part. %2"))
+                         .arg(cam::shortNumber(liveLeft), cut);
+      for (const QJsonValue& liveCut : liveCuts) {
+        cuts.append(liveCut);
+      }
+    }
     if (m_camSimulate != nullptr) {
       const QString cut = gouges > 0 ? tr("The tools cut into the part.") : tr("No tool cuts into the part.");
-      m_camSimulate->setRemaining(
-          tr("The turned part: at most %1 mm of material left over it. %2").arg(cam::shortNumber(left), cut), {});
+      QString summary = tr("The turned part: at most %1 mm of material left over it. %2").arg(cam::shortNumber(left), cut);
+      for (const QString& line : std::as_const(liveSummary)) {
+        summary += QLatin1Char(' ') + line;
+      }
+      if (!cubes.empty()) {
+        summary += QLatin1Char(' ') + tr("In 3D: %1 mm³ left over the part, %2 mm³ of it cut away.")
+                                          .arg(cam::shortNumber(solid.value(QStringLiteral("left")).toDouble()),
+                                               cam::shortNumber(solid.value(QStringLiteral("gouge")).toDouble()));
+      }
+      m_camSimulate->setRemaining(summary, {});
     }
     if (!cuts.isEmpty()) {
       showWarning(tr("The simulation found a problem. %1")

@@ -53,6 +53,11 @@ pub struct ComponentDef {
     /// cut list row and stock, kept by BUILD's cut list (opaque here; the
     /// cut list writes and reads it). None for other components.
     pub listed: Option<serde_json::Value>,
+    /// The assembly around a design edited in place (mitcad#2321,
+    /// `document/edit_in_place.rs`): shown for picks and measures only,
+    /// never changed, saved or undone. Runtime only: a design file never
+    /// has it.
+    pub in_place: bool,
 }
 
 /// A component linked from another design file: its bodies are the
@@ -608,6 +613,7 @@ impl Assembly {
             policy: Policy::GENERAL,
             build: None,
             listed: None,
+            in_place: false,
         });
         uid
     }

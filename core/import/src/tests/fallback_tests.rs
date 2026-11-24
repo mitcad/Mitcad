@@ -54,6 +54,7 @@ fn fallback_and_continue(known: bool, component: bool) {
                 name: None,
                 color: None,
                 shape: rounded[0].clone(),
+                face_colors: Vec::new(),
             }])
         })
         .unwrap();

@@ -188,6 +188,16 @@ pub enum LoftSection<'a, S> {
     Face { body: &'a S, face: &'a FaceName },
     /// A point, at the start or the end.
     Point([f64; 3]),
+    /// Curves joined end to end, open or closed (mitcad#2345): a surface
+    /// loft's section of sketch curves, given to the kernel's loft when it
+    /// has end conditions. A loft of chains has only chains, all open or
+    /// all closed, and is a surface; its faces are `side(<curve>)` after
+    /// the first chain's curves, as [`crate::Kernel::loft_sheet`]'s.
+    /// `normal`: the plane the curves lie in (a planar sketch's), if any.
+    Chain {
+        curves: &'a [PathCurve],
+        normal: Option<[f64; 3]>,
+    },
 }
 
 /// What an end condition of a loft imposes (see [`LoftEnd`]).
@@ -200,6 +210,10 @@ pub enum LoftEndKind {
     Smooth,
     PointSharp,
     PointTangent,
+    /// At right angles to a face the section lies on (mitcad#2345): the
+    /// spec's `start_face` or `end_face`, else the face section's own face
+    /// or the region's or chain's plane (there Direction at angle 0).
+    Perpendicular,
 }
 
 /// How a loft leaves its first section or reaches its last one. The
@@ -271,6 +285,18 @@ pub struct LoftSpec<'a, S> {
     /// after the first edge of its run (a section smooth all round after
     /// its edge whose name sorts first). False: every edge its own face.
     pub merge_tangent_edges: bool,
+    /// The faces Perpendicular ends leave at right angles (mitcad#2345),
+    /// a body's face each; `None`: the section's own face or plane.
+    pub start_face: Option<LoftFace<'a, S>>,
+    pub end_face: Option<LoftFace<'a, S>>,
+}
+
+/// A face of a body that a loft's Perpendicular end leaves at right angles
+/// (mitcad#2345); the section lies on it.
+#[derive(Debug, Clone, Copy)]
+pub struct LoftFace<'a, S> {
+    pub body: &'a S,
+    pub face: &'a FaceName,
 }
 
 /// The section of a pipe: a circle of diameter `size`, or a square or an

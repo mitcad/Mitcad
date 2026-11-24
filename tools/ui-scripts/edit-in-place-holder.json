@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The holder of tools/ui-edit-in-place-test.sh (mitcad#2321), run in the folder of part.mitcad: a plate of its own (40 x 40 x 5 in the component Plate, 8000 mm3) and the part linked on it at z = 5 (its cube 1000 mm3)."},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "create_component", "name": "Plate"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"}, "corner": [0, 0],
+    "length": 40, "width": 40, "height": 5, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "insert_component", "path": "part.mitcad", "transform": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 5]]},
+  {"expect": {"bodies": 2, "instances": 2, "world_volume": 9000}}
+]

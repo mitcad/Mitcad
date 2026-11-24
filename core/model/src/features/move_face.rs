@@ -59,7 +59,7 @@ impl FeatureInfo for MoveFaceDef {
 
 impl<K: Kernel> Evaluate<K> for MoveFaceDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
-        let motion = self.transform.resolve(ctx)?;
+        let motion = self.transform.resolve(ctx, None)?;
         if !motion.is_rigid() {
             return Err("the faces' motion must be a rotation and a translation".to_owned());
         }

@@ -505,6 +505,7 @@ impl<K: Kernel> Document<K> {
                             name: Some(b.name),
                             color,
                             shape,
+                            face_colors: Vec::new(),
                         });
                         materials.push(b.material);
                     }

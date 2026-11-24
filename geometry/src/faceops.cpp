@@ -600,7 +600,9 @@ ShapePtr fuse_walls(const Shape& inner, const Shape& outer) {
 // side of a loft through sections merged into one smooth edge each, and
 // above all its offset (mitcad#2271: a valid 2 mm wall of 85 900 mm3
 // measured -10 460, so Shell called it empty). Split there, each piece is
-// smooth and measured as well as any face.
+// smooth and measured as well as any face. The volumes MitCad reports do
+// not take this rule: the analysis library integrates every face span by
+// span between its surface's knots (mitcad#2309).
 double split_volume(const TopoDS_Shape& shape) {
   ShapeUpgrade_ShapeDivideContinuity divide(BRepBuilderAPI_Copy(shape).Shape());
   divide.SetBoundaryCriterion(GeomAbs_C2);

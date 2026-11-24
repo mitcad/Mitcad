@@ -121,3 +121,9 @@ mod parameter_users_2202_tests;
 // The timeline as a script, add_feature with a uid, run_script as one
 // undo step, and every CLI script's design replayed (mitcad#2245).
 mod script_export_tests;
+// Edit in Place: a linked component edited inside the assembly that holds
+// it (mitcad#2321).
+mod edit_in_place_tests;
+// suppress_feature with dependents: a chain in one undo step, conditions
+// left alone (mitcad#2314).
+mod suppress_dependents_2314_tests;

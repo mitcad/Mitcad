@@ -1232,6 +1232,9 @@ fn follow_references(
         })
         .collect();
     state.display.isolated = isolated;
+    // Explode views' steps of the moved bodies and their directions'
+    // geometry (mitcad#2328).
+    state.follow_explode_into(source, occurrence, moved, bodies);
     // Comments and drawings' recorded bodies and picks (mitcad#1318).
     state.follow(&Follow::Into {
         source,

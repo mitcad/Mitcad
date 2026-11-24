@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# Blank in Sheet… (mitcad#2325) on drawing-blank-sheet.json: Drawing1 with
+# one A3 sheet of the ISO template (its frame and title block, the title
+# Kept) and a base view.
+#   1. Sheet…: the title block's fields shown; Blank chosen hides them;
+#      OK sends the template without the block's fields, and the sheet
+#      shows no frame and no title block.
+#   2. Sheet… again: the fields hidden from the start; ISO chosen shows
+#      them; OK brings the frame and the block back, the title kept.
+# Run by tools/ui-drawing-blank-sheet-test.sh (Linux) and
+# tools/ui-windows-drawing-blank-sheet-test.ps1 (Windows).
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing sheet view '
+wait-log '^Drawing sheet border: frame yes, title block yes$'
+wait-log '^Drawing title block [(]iso[)]: .*TITLE=Kept'
+wait-log '^Drawing Sheet at '
+wait-idle
+
+# 1. Blank chosen: the fields hidden, the sheet without frame and block.
+mark
+click-logged '^Drawing Sheet at '
+focus-dialog '^Sheet$'
+wait-log '^Drawing sheet dialog opened: A3'
+wait-log '^Drawing sheet dialog title block fields: shown$'
+qt-choice drawingSheetTemplate 'Blank'
+wait-log '^Drawing sheet dialog title block fields: hidden$'
+button '^OK$'
+focus-main
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_sheet")(?=.*"template":"blank")'
+expect-no-log '^Drawing command: (?=.*"cmd":"edit_drawing_sheet")(?=.*"title_block")'
+wait-log '^Drawing sheet border: frame no, title block no$'
+wait-log '^Drawing title block [(]blank[)]:\s*$'
+expect-no-log '^Drawing command refused'
+wait-idle
+
+# 2. ISO again: the fields shown, the frame and the block back, the title
+# kept in the design.
+mark
+click-logged '^Drawing Sheet at '
+focus-dialog '^Sheet$'
+wait-log '^Drawing sheet dialog opened: A3'
+wait-log '^Drawing sheet dialog title block fields: hidden$'
+qt-choice drawingSheetTemplate 'ISO'
+wait-log '^Drawing sheet dialog title block fields: shown$'
+button '^OK$'
+focus-main
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_sheet")(?=.*"template":"iso")(?=.*"title":"Kept")'
+wait-log '^Drawing sheet border: frame yes, title block yes$'
+wait-log '^Drawing title block [(]iso[)]: .*TITLE=Kept'
+expect-no-log '^Drawing command refused'
+expect-never 'TestDriver: FAIL'

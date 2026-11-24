@@ -2276,6 +2276,10 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("decals");
   case BrowserNode::Type::Decal:
     return QStringLiteral("decal:") + node.uid;
+  case BrowserNode::Type::ExplodeViews: // mitcad#2113
+    return QStringLiteral("explode-views") + at;
+  case BrowserNode::Type::ExplodeView:
+    return QStringLiteral("explode-view:") + node.uid;
   case BrowserNode::Type::CenterOfMass:
     return QStringLiteral("center-of-mass");
   case BrowserNode::Type::Features:
@@ -2489,6 +2493,7 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                          node.type == BrowserNode::Type::ComponentFolder ||
                          node.type == BrowserNode::Type::SelectionSet || // mitcad#2192
                          node.type == BrowserNode::Type::PointCloud ||   // mitcad#2240
+                         node.type == BrowserNode::Type::ExplodeView ||  // mitcad#2113
                          (node.type == BrowserNode::Type::NamedView &&
                           node.uid.startsWith(QStringLiteral("named:")));
   if (renamable) {
@@ -2505,7 +2510,7 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                     node.type == BrowserNode::Type::ImageReferences || node.type == BrowserNode::Type::Features ||
                     node.type == BrowserNode::Type::CamFolder || node.type == BrowserNode::Type::CamSetup ||
                     node.type == BrowserNode::Type::SelectionSets || node.type == BrowserNode::Type::PointClouds ||
-                    node.type == BrowserNode::Type::Decals;
+                    node.type == BrowserNode::Type::Decals || node.type == BrowserNode::Type::ExplodeViews;
   item->setExpanded(m_expanded.value(key, open));
   return item;
 }
@@ -2680,6 +2685,49 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       if (sketches) {
         addFeatureRows(row, snapshot, *feature, occurrence, shown, uses);
       }
+    }
+  }
+
+  // Exploded views (mitcad#2113): the component's; a double-click shows the
+  // design exploded by one (the row in bold while it is), or assembled.
+  const QJsonArray explodeViews = snapshot.explodeViewsOf(component);
+  if (!explodeViews.isEmpty()) {
+    BrowserNode explodeFolder;
+    explodeFolder.type = BrowserNode::Type::ExplodeViews;
+    explodeFolder.occurrence = occurrence;
+    explodeFolder.component = component;
+    explodeFolder.name = tr("Exploded Views");
+    QTreeWidgetItem* explodeRows = addRow(parent, explodeFolder, QStringLiteral("folder"));
+    gray(explodeRows, shown);
+    QStringList logged;
+    for (const QJsonValue& value : explodeViews) {
+      const QJsonObject view = value.toObject();
+      BrowserNode node;
+      node.type = BrowserNode::Type::ExplodeView;
+      node.uid = view.value(QStringLiteral("name")).toString();
+      node.occurrence = occurrence;
+      node.component = component;
+      node.name = node.uid;
+      const int steps = static_cast<int>(view.value(QStringLiteral("steps")).toArray().size());
+      const bool active = !m_shownExplodeView.isEmpty() && m_shownExplodeView == node.uid;
+      QTreeWidgetItem* row =
+          addRow(explodeRows, node, QStringLiteral("explode-view"),
+                 active ? tr("%1: %n step(s), shown exploded", nullptr, steps).arg(node.name)
+                        : tr("%1: %n step(s)", nullptr, steps).arg(node.name));
+      if (active) {
+        QFont font = row->font(kName);
+        font.setBold(true);
+        row->setFont(kName, font);
+      }
+      gray(row, shown);
+      logged << QStringLiteral("%1 [%2 steps%3]").arg(node.name).arg(steps).arg(active ? QStringLiteral(", shown")
+                                                                                         : QString());
+    }
+    // For UI tests: the views and which is shown, when they change.
+    const QString line = QStringLiteral("Browser Exploded Views: %1").arg(logged.join(QStringLiteral(", ")));
+    if (line != m_loggedExplodeViews) {
+      m_loggedExplodeViews = line;
+      qDebug().noquote() << line;
     }
   }
 

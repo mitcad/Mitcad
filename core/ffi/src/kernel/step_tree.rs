@@ -24,6 +24,17 @@ pub mod ffi {
         /// sRGB components in [0, 1].
         color: [f64; 3],
         placements: Vec<TreePlacement>,
+        /// The faces' own colours, written beside the body's
+        /// (mitcad#2313).
+        face_colors: Vec<TreeFaceColor>,
+    }
+
+    /// A face of a body and its colour: the face's index in the body's
+    /// shape (the kernel's face order, from 0) and sRGB components in
+    /// [0, 1].
+    struct TreeFaceColor {
+        face: usize,
+        color: [f64; 3],
     }
 
     /// An instance of `definitions[definition]` in its parent definition.

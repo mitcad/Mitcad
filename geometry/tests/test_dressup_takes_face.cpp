@@ -37,11 +37,18 @@
 // the exact rounded cube; the stepped block rounded so on its sides' and
 // steps' edges a bent half cylinder with quarter balls at its ends, and with
 // the step's inner edge too the ball rolled between the roundings beside
-// it (GitHub #403, mitcad#1954; GitHub #375, mitcad#2068).
+// it (GitHub #403, mitcad#1954; GitHub #375, mitcad#2068); that block's
+// back's bottom edge then bevelled or rounded wider than the flat faces at
+// its ends, the dressup running on over the roundings beyond them, and
+// refused in words where it is wider than the body (GitHub #566,
+// mitcad#2229), and at exactly the body's width, the bottom and the back
+// beside the edge going whole, built at its size (mitcad#2329), as on a
+// ball swept over a square, whose bottom and back end in half circles.
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -51,6 +58,7 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -63,9 +71,11 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
@@ -1036,6 +1046,195 @@ void test_stepped_block_rounded_then_its_back_edge_dressed() {
                  volume_of(*rounded) - common_volume(*rounded, corner), 1e-6);
 }
 
+// The smallest face's area.
+double smallest_face_area(const Shape& shape) {
+  double smallest = 1e300;
+  for (int f = 0; f < shape.face_count(); ++f) {
+    GProp_GProps area;
+    BRepGProp::SurfaceProperties(shape.face(f), area);
+    smallest = std::min(smallest, area.Mass());
+  }
+  return smallest;
+}
+
+// GitHub #566 (mitcad#2229): GitHub #403's fifth design and GitHub #375's
+// second one, the stepped block rounded by 5 on its sides' and steps'
+// edges and the step's inner edge (the ball rolled between the roundings
+// beside it, test_stepped_block_rounded_where_corners_meet), then its back's
+// bottom edge (y = 10, z = 0) bevelled or rounded wider than the flat face
+// the rounding leaves on each side (x = 0 and x = 10: the core's flat
+// region between the bent line and the disc of 10, reaching 5 from the
+// edge along the bottom and the back and 2.89 along the diagonal; the
+// rounding of the disc's arc beyond it is tangent to it). Each end of the
+// edge lies on that face: a bevel wider than about 4.09, or a rounding
+// wider than 5, runs out of it, the edge's faces themselves reaching 10
+// from it (to the half balls' tips). The kernel stood the bevel out past
+// the face, the rounding beyond left untrimmed under it, or failed; it is
+// to cut the dressup's end by the roundings beyond the face where the cut
+// leaves the face (the OCCT port's end of a blend, ChFi3d): valid, no face under
+// 0.01 mm2 at the reported sizes (4.5 and 5), the rounding of 7 and both
+// dressups of 10, no note or information, one face of the dressup, the
+// volume the rounded block's less its common part with the bevel's wedge
+// (the triangle y - (10 - d) > z) or the rounding's corner (the square of r
+// less the circle about y = 10 - r, z = r), along x. At exactly 10 the
+// dressup takes the bottom and the back away up to the balls' tips, its
+// contacts touching each at one point (the port's patch 2229, mitcad#2329:
+// before it the kernel found no start and the rounding was built 0.1 %
+// smaller with a sliver). Wider than the body there (the contact past both
+// the bottom and the back): refused in words with the largest size that
+// fits, 10.
+void test_stepped_block_back_edge_past_its_end_faces() {
+  const std::vector<gp_Pnt> middles{gp_Pnt(0, 0, 2.5),  gp_Pnt(0, 2.5, 5),  gp_Pnt(0, 5, 7.5),  gp_Pnt(0, 7.5, 10),
+                                    gp_Pnt(10, 0, 2.5), gp_Pnt(10, 2.5, 5), gp_Pnt(10, 5, 7.5), gp_Pnt(10, 7.5, 10),
+                                    gp_Pnt(5, 0, 5),    gp_Pnt(5, 5, 10),   gp_Pnt(5, 5, 5)};
+  const ShapePtr body = stepped_block();
+  FilletSet round;
+  for (const gp_Pnt& m : middles) {
+    round.edges.push_back(edge_at(*body, m));
+    CHECK(!round.edges.back().empty());
+  }
+  round.radius = 5;
+  const ShapePtr rounded = fillet("F3", *body, {round});
+  CHECK(valid(*rounded));
+  const std::string back = edge_at(*rounded, gp_Pnt(5, 10, 0));
+  CHECK(!back.empty());
+  if (back.empty()) {
+    return;
+  }
+  for (const double d : {4.5, 5.0, 7.0, 10.0}) {
+    BRepBuilderAPI_MakePolygon triangle(gp_Pnt(-5, 10 - d, 0), gp_Pnt(-5, 10, 0), gp_Pnt(-5, 10, d), true);
+    const TopoDS_Shape wedge =
+        BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(triangle.Wire()).Face(), gp_Vec(20, 0, 0)).Shape();
+    ChamferSet bevel;
+    bevel.edges = {back};
+    bevel.spec.distance = d;
+    const ShapePtr bevelled = chamfer("F4", *rounded, {bevel});
+    CHECK(valid(*bevelled));
+    if (d <= 5.0 || d == 10.0) {
+      CHECK(smallest_face_area(*bevelled) > 0.01);
+    }
+    CHECK(bevelled->notes().empty() && bevelled->infos().empty());
+    CHECK(faces_holding(*bevelled, "F4:chamfer(" + back + ")") == 1);
+    CHECK(all_faces_named(*bevelled));
+    const double expected = volume_of(*rounded) - common_volume(*rounded, wedge);
+    CHECK_NEAR_TOL(volume_of(*bevelled), expected, 1e-6);
+    if (!near(volume_of(*bevelled), expected, 1e-6) || !bevelled->notes().empty()) {
+      std::fprintf(stderr, "bevel of %g: volume %.9g, expected %.9g\n", d, volume_of(*bevelled), expected);
+    }
+  }
+  for (const double r : {7.0, 10.0}) {
+    const TopoDS_Shape square = BRepPrimAPI_MakeBox(gp_Pnt(-5, 10 - r, 0), gp_Pnt(15, 10, r)).Shape();
+    const TopoDS_Shape ball =
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(-5, 10 - r, r), gp_Dir(1, 0, 0)), r, 20).Shape();
+    const TopoDS_Shape corner = BRepAlgoAPI_Cut(square, ball).Shape();
+    const ShapePtr rounding = fillet("F4", *rounded, {back}, r);
+    CHECK(valid(*rounding));
+    CHECK(smallest_face_area(*rounding) > 0.01);
+    CHECK(rounding->notes().empty() && rounding->infos().empty());
+    CHECK(faces_holding(*rounding, "F4:fillet(" + back + ")") == 1);
+    CHECK(all_faces_named(*rounding));
+    const double expected = volume_of(*rounded) - common_volume(*rounded, corner);
+    CHECK_NEAR_TOL(volume_of(*rounding), expected, 1e-6);
+    if (!near(volume_of(*rounding), expected, 1e-6) || !rounding->notes().empty()) {
+      std::fprintf(stderr, "rounding of %g: volume %.9g, expected %.9g\n", r, volume_of(*rounding), expected);
+    }
+  }
+  CHECK(throws_with([&] { fillet("F4", *rounded, {back}, 12); },
+                    "the rounding is wider than the body at its edge and touches neither face beside it: the "
+                    "largest radius that fits is 10.000 mm"));
+  ChamferSet wide;
+  wide.edges = {back};
+  wide.spec.distance = 12;
+  CHECK(throws_with([&] { chamfer("F4", *rounded, {wide}); },
+                    "the bevel is wider than the body at its edge and touches neither face beside it: the largest "
+                    "distance that fits is 10.000 mm"));
+}
+
+// A ball of 5 swept over the square x = 5, y 5..10, z 0..5 (mitcad#2329):
+// the slab x 0..10, y 5..10, z 0..5 with the half cylinders of 5 about
+// (x 5, y 5) upright and about (x 5, z 5) along y and the ball of 5 about
+// (5, 5, 5), its poles along x, one face per surface, the faces named N1,
+// N2, ... (the cube of 10 rounded by 5 on all its edges but those of its
+// bottom and its back). Its bottom (z = 0) and its back (y = 10) are
+// flat faces ending in half circles that reach y = 0 and z = 10 at x = 5
+// only.
+ShapePtr ball_swept_square() {
+  const TopoDS_Shape slab = BRepPrimAPI_MakeBox(gp_Pnt(0, 5, 0), gp_Pnt(10, 10, 5)).Shape();
+  const TopoDS_Shape upright = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(5, 5, 0), gp_Dir(0, 0, 1)), 5, 5).Shape();
+  const TopoDS_Shape along = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(5, 5, 5), gp_Dir(0, 1, 0)), 5, 5).Shape();
+  const TopoDS_Shape ball =
+      BRepPrimAPI_MakeSphere(gp_Ax2(gp_Pnt(5, 5, 5), gp_Dir(1, 0, 0), gp_Dir(0, 1, 0)), 5).Shape();
+  const TopoDS_Shape fused =
+      BRepAlgoAPI_Fuse(BRepAlgoAPI_Fuse(BRepAlgoAPI_Fuse(slab, upright).Shape(), along).Shape(), ball).Shape();
+  ShapeUpgrade_UnifySameDomain unify(fused, true, true, false);
+  unify.Build();
+  const TopoDS_Shape body = unify.Shape();
+  std::vector<Shape::NamedFace> faces;
+  int i = 0;
+  for (TopExp_Explorer f(body, TopAbs_FACE); f.More(); f.Next()) {
+    faces.push_back({f.Current(), {"N" + std::to_string(++i)}});
+  }
+  return std::make_shared<Shape>(body, faces);
+}
+
+// The faces of the shape on the plane through p square to the direction.
+int faces_on_plane(const Shape& shape, const gp_Pnt& p, const gp_Dir& normal) {
+  int count = 0;
+  for (int f = 0; f < shape.face_count(); ++f) {
+    const BRepAdaptor_Surface surface(shape.face(f), false);
+    if (surface.GetType() == GeomAbs_Plane && surface.Plane().Axis().Direction().IsParallel(normal, 1e-9) &&
+        surface.Plane().Distance(p) < 1e-7) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+// The ball-swept square's back's bottom edge (y = 10, z = 0) rounded with
+// exactly 10, the width of the bottom and the back beside it, and with 7
+// (mitcad#2329, the shape of GitHub #566's rounding of 10 on the stepped
+// block): at 10 the rounding's contacts touch each face at one point of its
+// half circle and both faces go, the rounding cut at its ends by the half
+// cylinders and the end squares (the OCCT port's patch 2229; before it the
+// kernel found no start and the rounding was built 0.1 % smaller with a
+// sliver). Built at its size: valid, no face under 0.01 mm2, no note or
+// information, one face of the rounding, every face named, the volume the
+// body's less its common part with the corner (the square of r less the
+// circle about y = 10 - r, z = r) along x, within 1e-5 (the end cuts on the
+// cylinders are approximated); at 10 no face left on the bottom's or the
+// back's plane.
+void test_ball_swept_square_rounded_as_wide_as_both_faces() {
+  const ShapePtr body = ball_swept_square();
+  CHECK(valid(*body));
+  const std::string back = edge_at(*body, gp_Pnt(5, 10, 0));
+  CHECK(!back.empty());
+  if (back.empty()) {
+    return;
+  }
+  for (const double r : {7.0, 10.0}) {
+    const TopoDS_Shape square = BRepPrimAPI_MakeBox(gp_Pnt(-5, 10 - r, 0), gp_Pnt(15, 10, r)).Shape();
+    const TopoDS_Shape disc =
+        BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(-5, 10 - r, r), gp_Dir(1, 0, 0)), r, 20).Shape();
+    const TopoDS_Shape corner = BRepAlgoAPI_Cut(square, disc).Shape();
+    const ShapePtr rounding = fillet("F1", *body, {back}, r);
+    CHECK(valid(*rounding));
+    CHECK(smallest_face_area(*rounding) > 0.01);
+    CHECK(rounding->notes().empty() && rounding->infos().empty());
+    CHECK(faces_holding(*rounding, "F1:fillet(" + back + ")") == 1);
+    CHECK(all_faces_named(*rounding));
+    const double expected = volume_of(*body) - common_volume(*body, corner);
+    CHECK_NEAR_TOL(volume_of(*rounding), expected, 1e-5);
+    if (r == 10.0) {
+      CHECK(faces_on_plane(*rounding, gp_Pnt(5, 5, 0), gp_Dir(0, 0, 1)) == 0);
+      CHECK(faces_on_plane(*rounding, gp_Pnt(5, 10, 2), gp_Dir(0, 1, 0)) == 0);
+    }
+    if (!near(volume_of(*rounding), expected, 1e-5) || !rounding->notes().empty()) {
+      std::fprintf(stderr, "ball-swept square rounded with %g: volume %.9g, expected %.9g\n", r,
+                   volume_of(*rounding), expected);
+    }
+  }
+}
+
 // A tube 10 high round a bore of radius 26, its outer radius `outer`, with
 // a shelf standing out from the bore's wall flush with the top: a block
 // from x = -8 to 8, y = 24.1 to 27.5 (into the wall), joined. The bore's top
@@ -1295,6 +1494,8 @@ void dressup_takes_face_tests() {
   });
   guarded("wall top rounded with two radii", test_wall_top_rounded_with_two_radii);
   guarded("strip between a parallel plane and a slope", test_strip_between_a_parallel_plane_and_a_slope);
+  guarded("stepped block's back edge past its end faces", test_stepped_block_back_edge_past_its_end_faces);
+  guarded("ball-swept square rounded as wide as both faces", test_ball_swept_square_rounded_as_wide_as_both_faces);
 }
 
 } // namespace test

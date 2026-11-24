@@ -28,6 +28,10 @@ pub enum TurningToolKind {
         #[serde(default)]
         inside: bool,
     },
+    /// A driven milling tool or drill on its station (mitcad#2067): it
+    /// cuts in a live tool operation ([`super::live::LiveOp`]), whose
+    /// cutter it carries; it takes no part in turning.
+    Live,
 }
 
 /// A turning tool. Its `number` is its turret station; `offset` the
@@ -64,7 +68,9 @@ impl TurningTool {
             TurningToolKind::Boring { .. } => true,
             TurningToolKind::Grooving { inside, .. }
             | TurningToolKind::Threading { inside, .. } => inside,
-            TurningToolKind::Turning | TurningToolKind::Parting { .. } => false,
+            TurningToolKind::Turning | TurningToolKind::Parting { .. } | TurningToolKind::Live => {
+                false
+            }
         }
     }
 
@@ -84,6 +90,7 @@ impl TurningTool {
             TurningToolKind::Grooving { .. } => "grooving tool",
             TurningToolKind::Parting { .. } => "parting tool",
             TurningToolKind::Threading { .. } => "threading tool",
+            TurningToolKind::Live => "live tool",
         }
     }
 
@@ -121,7 +128,7 @@ impl TurningTool {
                     ));
                 }
             }
-            TurningToolKind::Turning => {}
+            TurningToolKind::Turning | TurningToolKind::Live => {}
         }
         Ok(())
     }

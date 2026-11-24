@@ -219,7 +219,7 @@ impl<K: Kernel> Document<K> {
             .filter_map(|c| Some((c.uid, c.link.clone()?)))
             .collect();
         let mut updates = Vec::new();
-        for (component, mut link) in links {
+        for (component, link) in links {
             let name = self.state.assembly.name(component);
             let resolved = match followed_link(&link.path, base) {
                 Ok(resolved) => resolved,
@@ -245,90 +245,138 @@ impl<K: Kernel> Document<K> {
             if once && (link.looks || link.envelope.is_some()) {
                 continue;
             }
-            // With its components (mitcad#2209): read with them.
-            if link.tree.is_some() {
-                let read = match crate::file::load_state_at(&text, &resolved) {
-                    Ok((source, _)) => self.design_tree(
-                        &source,
-                        &link.path,
-                        &CopySource::Document(resolved.parent()),
-                    ),
-                    Err(e) => Err(invalid(e.to_string())),
-                };
-                match read {
-                    Ok(read) => {
-                        messages.push(format!("{name} is updated from {}", link.path));
-                        trees.push(TreeUpdate {
-                            component,
-                            digest: new_digest,
-                            file: super::components::file_label(&link.path),
-                            read,
-                        });
-                    }
-                    Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
-                    Err(e) => messages.push(format!(
-                        "{name}: {e}; it keeps the bodies saved with the project"
-                    )),
-                }
-                continue;
-            }
-            // The lines about chosen parts gone from the design
-            // (mitcad#2130).
-            let mut gone = Vec::new();
-            let parts = match crate::file::load_state_at(&text, &resolved) {
-                // A link shown by its envelope takes the file's envelope
-                // again (mitcad#1271), of the chosen parts when it has them
-                // (mitcad#2130).
-                Ok((source, _)) => match (link.envelope, link.parts.clone()) {
-                    (Some(detail), parts) => self
-                        .design_envelope_chosen(&source, &link.path, Some(detail), parts.as_deref())
-                        .map(|(bodies, mounts, _)| (bodies, mounts, Vec::new())),
-                    // Only the chosen parts (mitcad#2130); a part gone keeps
-                    // its saved bodies.
-                    (None, Some(parts)) => {
-                        let before = self.linked_bodies(&link);
-                        self.chosen_parts(
-                            &source,
-                            &link.path,
-                            &CopySource::Document(resolved.parent()),
-                            &parts,
-                            Some((before.as_slice(), false)),
-                        )
-                        .map(|read| {
-                            gone = read.messages;
-                            link.parts = Some(read.parts);
-                            (read.bodies, read.mounts, read.looks)
-                        })
-                    }
-                    // With the materials and appearances the design gives
-                    // its bodies (mitcad#1921).
-                    (None, None) => self.design_parts_looked(
-                        &source,
-                        &link.path,
-                        &CopySource::Document(resolved.parent()),
-                    ),
-                },
-                Err(e) => Err(invalid(e.to_string())),
+            let source = crate::file::load_state_at(&text, &resolved)
+                .map(|(source, _)| source)
+                .map_err(|e| invalid(e.to_string()));
+            let read = LinkRead {
+                component,
+                source,
+                resolved: &resolved,
+                digest: new_digest,
+                once,
             };
-            match parts {
-                Ok((bodies, mounts, looks)) => {
-                    if !once {
-                        messages.push(format!("{name} is updated from {}", link.path));
-                    } else if super::linked_looks::gives_any(&looks) {
-                        messages.push(format!("{name} takes the materials of {}", link.path));
-                    }
-                    messages.append(&mut gone);
-                    updates.push((component, link, new_digest, bodies, mounts, looks));
+            self.read_linked_design(link, read, messages, trees, &mut updates)?;
+        }
+        Ok(updates)
+    }
+
+    /// A linked design read (part of `file_link_updates`), or the design
+    /// edited in place taken by its holder (mitcad#2321,
+    /// `edit_in_place.rs`): the component's new bodies and mount frames
+    /// into `updates`, or, linked with its components, into `trees`, with a
+    /// line about it; a design that cannot be taken leaves the component as
+    /// it was, with a line saying why.
+    pub(super) fn read_linked_design(
+        &self,
+        mut link: ExternalLink,
+        read: LinkRead<'_>,
+        messages: &mut Vec<String>,
+        trees: &mut Vec<TreeUpdate>,
+        updates: &mut Vec<LinkUpdate>,
+    ) -> Result<(), ModelError> {
+        let LinkRead {
+            component,
+            source,
+            resolved,
+            digest: new_digest,
+            once,
+        } = read;
+        let name = self.state.assembly.name(component);
+        // With its components (mitcad#2209): read with them.
+        if link.tree.is_some() {
+            let read = match source {
+                Ok(source) => self.design_tree(
+                    &source,
+                    &link.path,
+                    &CopySource::Document(resolved.parent()),
+                ),
+                Err(e) => Err(e),
+            };
+            match read {
+                Ok(read) => {
+                    messages.push(format!("{name} is updated from {}", link.path));
+                    trees.push(TreeUpdate {
+                        component,
+                        digest: new_digest,
+                        file: super::components::file_label(&link.path),
+                        read,
+                    });
                 }
-                // Cancelled (P7): the document stays as it was.
                 Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
                 Err(e) => messages.push(format!(
                     "{name}: {e}; it keeps the bodies saved with the project"
                 )),
             }
+            return Ok(());
         }
-        Ok(updates)
+        // The lines about chosen parts gone from the design
+        // (mitcad#2130).
+        let mut gone = Vec::new();
+        let parts = match source {
+            // A link shown by its envelope takes the file's envelope
+            // again (mitcad#1271), of the chosen parts when it has them
+            // (mitcad#2130).
+            Ok(source) => match (link.envelope, link.parts.clone()) {
+                (Some(detail), parts) => self
+                    .design_envelope_chosen(&source, &link.path, Some(detail), parts.as_deref())
+                    .map(|(bodies, mounts, _)| (bodies, mounts, Vec::new())),
+                // Only the chosen parts (mitcad#2130); a part gone keeps
+                // its saved bodies.
+                (None, Some(parts)) => {
+                    let before = self.linked_bodies(&link);
+                    self.chosen_parts(
+                        &source,
+                        &link.path,
+                        &CopySource::Document(resolved.parent()),
+                        &parts,
+                        Some((before.as_slice(), false)),
+                    )
+                    .map(|read| {
+                        gone = read.messages;
+                        link.parts = Some(read.parts);
+                        (read.bodies, read.mounts, read.looks)
+                    })
+                }
+                // With the materials and appearances the design gives
+                // its bodies (mitcad#1921).
+                (None, None) => self.design_parts_looked(
+                    &source,
+                    &link.path,
+                    &CopySource::Document(resolved.parent()),
+                ),
+            },
+            Err(e) => Err(e),
+        };
+        match parts {
+            Ok((bodies, mounts, looks)) => {
+                if !once {
+                    messages.push(format!("{name} is updated from {}", link.path));
+                } else if super::linked_looks::gives_any(&looks) {
+                    messages.push(format!("{name} takes the materials of {}", link.path));
+                }
+                messages.append(&mut gone);
+                updates.push((component, link, new_digest, bodies, mounts, looks));
+            }
+            // Cancelled (P7): the document stays as it was.
+            Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
+            Err(e) => messages.push(format!(
+                "{name}: {e}; it keeps the bodies saved with the project"
+            )),
+        }
+        Ok(())
     }
+}
+
+/// What [`Document::read_linked_design`] reads a linked design from: its
+/// definition (or why it could not be read), the file it is followed to,
+/// the digest the link takes, and whether the file is unchanged (read only
+/// for the materials of a link made before them, mitcad#1923).
+pub(super) struct LinkRead<'a> {
+    pub(super) component: ComponentUid,
+    pub(super) source: Result<DocState, ModelError>,
+    pub(super) resolved: &'a Path,
+    pub(super) digest: String,
+    pub(super) once: bool,
 }
 
 /// Puts linked designs read again into a state (`update_links`,

@@ -57,7 +57,8 @@ const ParameterSource* parameterSourceOf(const QWidget* widget);
 // returned, for a name picked from the view to go there. Not when the
 // field's own context menu or a drop-down's popup takes the keyboard
 // (Qt::PopupFocusReason): the field keeps its caret and selection, which
-// the menu's Copy and Insert Parameter… act on (mitcad#756); -1 then.
+// the menu's Copy and Insert Parameter… act on (mitcad#756); nor when only
+// its window loses the keyboard (Qt::ActiveWindowFocusReason): -1 then.
 int leaveValueField(QLineEdit* edit, const QFocusEvent& event);
 
 // What a field is, for its suggestions.
@@ -226,6 +227,32 @@ public:
   bool nativeStepKey(int key, Qt::KeyboardModifiers modifiers);
   bool nativeStepWheel(int angle, Qt::KeyboardModifiers modifiers);
 
+  // Step buttons (mitcad#2327): a field that steps shows a small up and
+  // down arrow pair inside it at its right end, after its fx and any mark
+  // (a line edit's trailing button, in the field's height). A click on a
+  // button gives the field the keyboard and steps as Up or Down with the
+  // modifiers held (Shift ×10, the fine modifier ×0.1), a press held
+  // repeats after the platform's spin box delay; the buttons show disabled
+  // while the text is not a plain value (valueSteppable). Logged `Step
+  // buttons <label> up at x,y` and `... down at x,y` (the main window's
+  // coordinates) as the field shows and moves, `... off: <text>` and
+  // `... on` as they turn disabled and enabled, and each step as the keys'
+  // are ("Value field Extrude Distance: Shift+Up button stepped 20 mm to
+  // 30 mm", "... Down button held stepped ...").
+  // The buttons while the field steps; null otherwise.
+  QWidget* stepButtons() const;
+  // The middle of the up (`up`) or the down button, in the buttons' own
+  // coordinates.
+  static QPoint stepButtonCentre(const QWidget* buttons, bool up);
+  // The width the buttons take from a field's text: a line edit's
+  // trailing button and the margin before it, as QLineEdit places them. A
+  // narrow field (a slider's, one beside a reference, a sketch tool's) is
+  // that much wider where it steps.
+  static int stepButtonsRoom(const QWidget* field);
+  // A click on a step button (`held`: a repeat while it is held): the
+  // field takes the keyboard and its value steps up or down.
+  void stepButton(bool up, Qt::KeyboardModifiers modifiers, bool held);
+
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
 
@@ -304,6 +331,16 @@ private:
   bool m_nameBackspaced = false;
   bool m_inserting = false;
   int m_wheel = 0; // the wheel's turn not yet a step (1/8 degree units)
+  // The step buttons (mitcad#2327): a trailing action of the field, the
+  // first one, so that they are its rightmost; shown while it steps.
+  QAction* m_stepAction = nullptr;
+  QPointer<QWidget> m_stepWidget;
+  // Shown, and enabled for the text the field has (logged as it changes).
+  void updateStepButtons();
+  int m_stepsEnabled = -1; // -1 not yet known
+  void logStepPlaces();
+  bool m_stepPlacesQueued = false;
+  QString m_loggedStepPlaces;
   QString m_logged;
   QString m_loggedPlaces;
   QString m_loggedFx;

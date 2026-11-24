@@ -9,7 +9,10 @@
 //! (mitcad#866), projected along its normal as `sketch.project` projects
 //! them, with where they are above or below it. Only the bodies the view
 //! shows count: those hidden by their light bulbs and those Isolate leaves
-//! out are not looked at (mitcad#1702).
+//! out are not looked at (mitcad#1702). The curves where the plane cuts
+//! those bodies, by face, are the section form's (mitcad#2324, `section.rs`).
+
+mod section;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -202,6 +205,43 @@ fn out_of_plane(curve: &Curve3, frame: &SketchFrame, normal: [f64; 3]) -> OutOfP
         _ => path.get(path.len() / 2).map_or(0.0, |p| p[2]),
     };
     OutOfPlane { path, height }
+}
+
+/// How far the corners of a body's box `b` (in its component's coordinates,
+/// moved into the sketch's by `to_sketch`) are from the plane through
+/// `origin` with the unit `normal`, lowest and highest, and the box's
+/// diagonal.
+fn box_reach(
+    b: &BoundingBox,
+    to_sketch: Option<&Transform>,
+    origin: [f64; 3],
+    normal: [f64; 3],
+) -> (f64, f64, f64) {
+    let mut low = f64::INFINITY;
+    let mut high = f64::NEG_INFINITY;
+    for i in 0..8 {
+        let corner = [
+            if i & 1 == 0 { b.min[0] } else { b.max[0] },
+            if i & 2 == 0 { b.min[1] } else { b.max[1] },
+            if i & 4 == 0 { b.min[2] } else { b.max[2] },
+        ];
+        let p = to_sketch.map_or(corner, |t| t.apply_point(corner));
+        let off = dot(std::array::from_fn(|k| p[k] - origin[k]), normal);
+        low = low.min(off);
+        high = high.max(off);
+    }
+    let diagonal: f64 = (0..3)
+        .map(|k| (b.max[k] - b.min[k]).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    (low, high, diagonal)
+}
+
+/// Whether a box `box_reach` placed `low` to `high` from the plane stays
+/// off it by the model's linear tolerance for a body of `size`.
+fn off_plane(low: f64, high: f64, size: f64) -> bool {
+    let tolerance = mitcad_model_base::internal::datum::LINEAR * size;
+    low > tolerance || high < -tolerance
 }
 
 /// `v` divided by its length; `v` itself when it has none.
@@ -474,33 +514,7 @@ impl<K: Kernel> Document<K> {
         // not reach the plane has nothing in it (but what is out of it).
         // How far the box's corners are from the plane, lowest and highest,
         // and its diagonal.
-        let reach = |b: &BoundingBox| -> (f64, f64, f64) {
-            let mut low = f64::INFINITY;
-            let mut high = f64::NEG_INFINITY;
-            for i in 0..8 {
-                let corner = [
-                    if i & 1 == 0 { b.min[0] } else { b.max[0] },
-                    if i & 2 == 0 { b.min[1] } else { b.max[1] },
-                    if i & 4 == 0 { b.min[2] } else { b.max[2] },
-                ];
-                let p = match moved(Curve3::Point(corner)) {
-                    Curve3::Point(p) => p,
-                    _ => corner,
-                };
-                let off = dot(std::array::from_fn(|k| p[k] - frame.origin[k]), normal);
-                low = low.min(off);
-                high = high.max(off);
-            }
-            let diagonal: f64 = (0..3)
-                .map(|k| (b.max[k] - b.min[k]).powi(2))
-                .sum::<f64>()
-                .sqrt();
-            (low, high, diagonal)
-        };
-        let off_plane = |low: f64, high: f64, size: f64| {
-            let tolerance = mitcad_model_base::internal::datum::LINEAR * size;
-            low > tolerance || high < -tolerance
-        };
+        let reach = |b: &BoundingBox| box_reach(b, seen.to_sketch.as_ref(), frame.origin, normal);
         // A cheap box that holds the body first (mitcad#1656): one that
         // stays off the plane by its own tolerance has every edge and vertex
         // off it by the body's tighter one too (the tight box lies inside),

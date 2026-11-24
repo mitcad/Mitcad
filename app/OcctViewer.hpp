@@ -74,7 +74,11 @@
 #include "view/Navigation.hpp"
 #include "view/OrbitWrap.hpp"
 
+class OpenGl_Context;
 class QNativeGestureEvent;
+class QOpenGLContext;
+class QPainter;
+class QSurface;
 class QScreen;
 class QTimer;
 class QToolButton;
@@ -95,6 +99,7 @@ struct Look;
 class ViewCubeHomeButton;
 class ViewEdges;
 class PrintOverlayLabels;
+class ViewPaintLayer;
 class MeasurementOverlay;
 class PickList;
 struct PrintOverlay;
@@ -416,6 +421,14 @@ public:
   // roles for the view's background (mitcad#1041), drawn again when the
   // background turns from light to dark or back.
   void setPrintOverlay(const PrintOverlay& overlay);
+  // A drawing over the whole view painted with QPainter (in view pixels)
+  // that the view draws itself, in its overlay layer, instead of a widget
+  // over the view (mitcad#2296, view/ViewPaintLayer.hpp): `paint` is called
+  // while the view draws a frame, when the layer asked for it or the camera
+  // moved. Owned by `owner` (the view when null; one that ends with the
+  // view or before it), hidden until shown; `name` names it in the "View
+  // navigation" line.
+  ViewPaintLayer* addPaintLayer(const QString& name, std::function<void(QPainter&)> paint, QObject* owner);
   // Filament changes (mitcad#1643, view/FilamentChangeOverlay.cpp): while
   // Send to Slicer's Filament changes section is open, the bodies in their
   // print colours by height (triangles of one colour each, nine numbers per
@@ -424,6 +437,11 @@ public:
   // them. Logs "Filament change overlay: …" when it changes.
   void setFilamentChangeOverlay(const std::vector<std::pair<QColor, std::vector<float>>>& bands,
                                 const std::vector<float>& rings);
+  // An explode view's trail lines (mitcad#2113, view/ExplodeTrailOverlay.cpp):
+  // thin dashed lines over the bodies, in the edges' color, six numbers
+  // (design mm) per line; never picked. Empty clears them. Logs "Explode
+  // trails: n line(s)" when it changes.
+  void setExplodeTrails(const std::vector<float>& lines);
   // CAM toolpaths (mitcad#1013, view/CamToolpathOverlay.cpp): the shown
   // setups' toolpaths as lines over the bodies (rapids dashed, cuts solid,
   // entries in their own colour, the current operation's thicker in the
@@ -2075,6 +2093,45 @@ private:
   void watchGlTestScreen();
   QString attachGl();
   void reportGlFailure(const QString& reason);
+#ifdef MITCAD_OCCT_EGL
+  // Qt on X11 with GLX (mitcad#2292, framework/GraphicsStart.hpp's
+  // ViewEglContext): OCCT draws in the view's own EGL context into a
+  // framebuffer of the view's, which paintGL() reads back and paints into
+  // Qt's. Null where OCCT draws with Qt's own EGL context.
+  struct ViewEgl;
+  std::unique_ptr<ViewEgl> m_viewEgl;
+  // Makes the view's own context once Qt's is found not to be EGL; why it
+  // cannot, empty when it can (or is not needed).
+  QString prepareViewEgl();
+  // Binds the view's framebuffer at the view's size in pixels, made or
+  // resized first, in OCCT's context (the view's own one current).
+  bool bindViewEglFramebuffer(const occ::handle<OpenGl_Context>& gl);
+  // The framebuffer's pixels into the frame paintGL() paints.
+  void readViewEglFrame(const occ::handle<OpenGl_Context>& gl);
+#endif
+  // The frame as OCCT draws it (paintGL() without the view's own context).
+  void paintView();
+  // OCCT's context current while it lives (mitcad#2292): nothing to do
+  // where OCCT draws with Qt's context; the view's own EGL context where
+  // Qt runs on GLX, Qt's context released first (libglvnd makes no EGL
+  // context current while a GLX one is) and made current again after, with
+  // the framebuffer it had bound. Nested ones do nothing.
+  class ViewGlCurrent {
+  public:
+    explicit ViewGlCurrent(OcctViewer& viewer);
+    ~ViewGlCurrent();
+    ViewGlCurrent(const ViewGlCurrent&) = delete;
+    ViewGlCurrent& operator=(const ViewGlCurrent&) = delete;
+    // False when the view's own context could not be made current.
+    bool ok() const { return m_ok; }
+
+  private:
+    OcctViewer* m_viewer = nullptr; // set when it made the view's own context current
+    QOpenGLContext* m_qtContext = nullptr;
+    QSurface* m_qtSurface = nullptr;
+    int m_qtFramebuffer = 0;
+    bool m_ok = true;
+  };
   // How the window shows the view (mitcad#2031): the first frame after an
   // attach logs "View composition: ..." (logComposition), what a Wayland
   // session's report needs when the widgets over the view do not show.
@@ -2196,6 +2253,9 @@ private:
   occ::handle<AIS_InteractiveObject> m_filamentBands;
   occ::handle<AIS_InteractiveObject> m_filamentRings;
   QString m_loggedFilamentOverlay = QStringLiteral("Filament change overlay: none");
+  // An explode view's trail lines (setExplodeTrails, mitcad#2113).
+  occ::handle<AIS_InteractiveObject> m_explodeTrails;
+  QString m_loggedExplodeTrails = QStringLiteral("Explode trails: none");
   // CAM toolpaths and Simulate's tool (setCamToolpaths, mitcad#1013).
   occ::handle<AIS_InteractiveObject> m_camToolpaths;
   QString m_loggedCamToolpaths = QStringLiteral("CAM toolpath overlay: none");
@@ -2271,6 +2331,9 @@ private:
   int m_navigationRepaints = 0;
   QStringList m_navigationRepainted; // their object names
   int m_navigationPrintOverlays = 0;
+  // The drawings over the view it draws itself (addPaintLayer, mitcad#2296),
+  // painted before each frame; gone when their owners went.
+  std::vector<QPointer<ViewPaintLayer>> m_paintLayers;
   class RenderedImageQuad;
   occ::handle<RenderedImageQuad> m_renderedQuad;
   Graphic3d_ZLayerId m_renderedBodyLayer = Graphic3d_ZLayerId_UNKNOWN;

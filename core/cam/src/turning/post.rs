@@ -21,7 +21,7 @@
 use serde::Serialize;
 
 use super::tool::TurningTool;
-use super::{PXZ, TurnCycle, TurnMove, TurnSpindle, TurningProgram};
+use super::{HandOver, PXZ, TurnCycle, TurnMove, TurnSpindle, TurningProgram};
 use crate::CamError;
 use crate::post::{EXPERIMENTAL_NOTICE, PostSettings, Units, number};
 use crate::program::{Coolant, SpindleDirection};
@@ -127,6 +127,21 @@ impl TurnOutput {
         } else {
             decimal(mm, 4)
         }
+    }
+
+    /// A feed per minute (mm/min) in the program's units, as a live tool's
+    /// feeds are written (G98).
+    pub fn per_min(&self, mm: f64) -> String {
+        if self.inches {
+            decimal(mm / 25.4, 2)
+        } else {
+            decimal(mm, 1)
+        }
+    }
+
+    /// An angle of the C axis (degrees), with its decimal point.
+    pub fn angle(degrees: f64) -> String {
+        decimal(degrees, 3)
     }
 
     /// A length in the control's least increments (micrometres, or tenths
@@ -286,6 +301,18 @@ pub trait TurningPost {
     fn spindle_off(&self, out: &mut TurnOutput) {
         out.line("M5");
     }
+    /// The spindle's speed with the block that starts it: the
+    /// sub-spindle's (mitcad#2319).
+    fn spindle_on_with(&self, out: &mut TurnOutput, spindle: &TurnSpindle, code: &str) {
+        match *spindle {
+            TurnSpindle::Css { surface_speed, .. } => {
+                out.line(format!("G96 S{} {code}", out.surface_speed(surface_speed)));
+            }
+            TurnSpindle::Rpm { rpm } => {
+                out.line(format!("G97 S{} {code}", number(rpm.round(), 0)));
+            }
+        }
+    }
     fn coolant(&self, out: &mut TurnOutput, coolant: Coolant) -> Result<(), CamError> {
         let code = match coolant {
             Coolant::Off => "M9",
@@ -313,6 +340,28 @@ pub trait TurningPost {
     /// moves are written instead).
     fn thread_cycle(&self, _out: &mut TurnOutput, _cycle: &TurnCycle) -> bool {
         false
+    }
+    // Live tools on the C axis (mitcad#2067, `super::live`).
+    /// Whether it writes live tools on a C axis.
+    fn mills(&self) -> bool {
+        false
+    }
+    /// Feeds per minute (a live tool's) and per revolution (turning's).
+    fn feed_per_minute(&self, out: &mut TurnOutput) {
+        out.line("G98");
+    }
+    fn feed_per_rev(&self, out: &mut TurnOutput) {
+        out.line("G99");
+    }
+    /// Polar coordinate interpolation on the face, on and off.
+    fn polar(&self, _out: &mut TurnOutput, _on: bool) {}
+    /// Cylindrical interpolation on the cylinder of a radius, and off
+    /// (none).
+    fn cylindrical(&self, _out: &mut TurnOutput, _radius: Option<f64>) {}
+    /// The drilling cycle on the face or (`diameter`) the diameter; none
+    /// when it has none (the moves are written).
+    fn drill_cycle_code(&self, _diameter: bool) -> Option<&'static str> {
+        None
     }
 }
 
@@ -453,6 +502,41 @@ impl TurningPost for FanucTurning {
         ));
         true
     }
+
+    fn mills(&self) -> bool {
+        true
+    }
+
+    // G12.1 and G13.1 each in a block of its own, in the XY plane (X and
+    // the C axis's length across); back in the ZX plane after.
+    fn polar(&self, out: &mut TurnOutput, on: bool) {
+        if on {
+            out.line("G17");
+            out.line("G12.1");
+        } else {
+            out.line("G13.1");
+            out.line("G18");
+        }
+    }
+
+    // G7.1 with the cylinder's radius in the YZ plane (C for Y), G7.1 C0.
+    // off.
+    fn cylindrical(&self, out: &mut TurnOutput, radius: Option<f64>) {
+        match radius {
+            Some(r) => {
+                out.line("G19");
+                out.line(format!("G7.1 C{}", out.len(r)));
+            }
+            None => {
+                out.line("G7.1 C0.");
+                out.line("G18");
+            }
+        }
+    }
+
+    fn drill_cycle_code(&self, diameter: bool) -> Option<&'static str> {
+        Some(if diameter { "G87" } else { "G83" })
+    }
 }
 
 /// Every turning dialect.
@@ -513,6 +597,85 @@ fn with_feed(profile: &[TurnMove], feed: f64) -> Vec<TurnMove> {
             other => other,
         })
         .collect()
+}
+
+/// Stops the main spindle, or the sub-spindle after the hand-over
+/// (mitcad#2319).
+fn stop_spindle(
+    out: &mut TurnOutput,
+    dialect: &dyn TurningPost,
+    program: &TurningProgram,
+    sub: bool,
+) {
+    if sub {
+        out.line(program.mill_turn.sub_stop.trim());
+    } else {
+        dialect.spindle_off(out);
+    }
+}
+
+/// The hand-over's first half (mitcad#2319): the turret at its change
+/// position, the main spindle at the synchronised speed, the sub-spindle
+/// synchronised, up to the part with its chuck open, and gripping it.
+fn grip(
+    out: &mut TurnOutput,
+    dialect: &dyn TurningPost,
+    program: &TurningProgram,
+    hand_over: &HandOver,
+) {
+    let codes = &program.mill_turn;
+    let axis = codes.sub_letter();
+    out.comment("Hand-over to the sub-spindle");
+    out.forget();
+    out.motion(&TurnMove::Rapid {
+        to: program.change_position,
+    });
+    dialect.spindle_on(
+        out,
+        &TurnSpindle::Rpm { rpm: hand_over.rpm },
+        SpindleDirection::Cw,
+    );
+    out.line(codes.sync_on.trim());
+    out.line(codes.sub_chuck_open.trim());
+    out.line(format!(
+        "G0 {axis}{}",
+        out.len(hand_over.grip_z + hand_over.withdraw)
+    ));
+    dialect.feed_per_minute(out);
+    out.line(format!(
+        "G1 {axis}{} F{}",
+        out.len(hand_over.grip_z),
+        out.per_min(hand_over.feed)
+    ));
+    dialect.feed_per_rev(out);
+    out.line(codes.sub_chuck_close.trim());
+    out.forget();
+}
+
+/// The hand-over's second half (mitcad#2319): the main chuck opened when
+/// nothing parted the part off, the sub-spindle back with the part, the
+/// spindles apart and stopped, the sub-spindle's work offset.
+fn release(
+    out: &mut TurnOutput,
+    dialect: &dyn TurningPost,
+    program: &TurningProgram,
+    hand_over: &HandOver,
+    parted: bool,
+) {
+    let codes = &program.mill_turn;
+    if !parted {
+        out.line(codes.main_chuck_open.trim());
+    }
+    out.line(format!(
+        "G0 {}{}",
+        codes.sub_letter(),
+        out.len(hand_over.grip_z + hand_over.withdraw)
+    ));
+    out.line(codes.sync_off.trim());
+    dialect.spindle_off(out);
+    out.line(codes.sub_stop.trim());
+    out.line(format!("G{}", 53 + u32::from(hand_over.work_offset)));
+    out.forget();
 }
 
 /// Writes a turning program in a dialect.
@@ -578,8 +741,69 @@ pub fn turning_post(
     let mut limit: Option<f64> = None;
     let mut speed: Option<TurnSpindle> = None;
     let mut blocks: Vec<Option<(u32, u32)>> = vec![None; program.operations.len()];
+    // The C axis and the live tool (mitcad#2067).
+    let mut live_state = super::live::LiveState::default();
+    // The sub-spindle's hand-over (mitcad#2319): gripping before the
+    // parting off (or the first operation on the sub-spindle), released
+    // before that operation.
+    let grip_at = program.hand_over_at();
+    let first_sub = program.first_sub();
+    let mut sub = false;
     for (index, op) in program.operations.iter().enumerate() {
+        if let Some(hand_over) = &program.hand_over {
+            if Some(index) == grip_at {
+                if coolant != Coolant::Off {
+                    dialect.coolant(&mut out, Coolant::Off)?;
+                    coolant = Coolant::Off;
+                }
+                super::live::stop(&mut out, dialect, program, &mut live_state);
+                grip(&mut out, dialect, program, hand_over);
+                running = Some(SpindleDirection::Cw);
+                speed = Some(TurnSpindle::Rpm { rpm: hand_over.rpm });
+            }
+            if Some(index) == first_sub {
+                if coolant != Coolant::Off {
+                    dialect.coolant(&mut out, Coolant::Off)?;
+                    coolant = Coolant::Off;
+                }
+                release(&mut out, dialect, program, hand_over, grip_at != first_sub);
+                running = None;
+                speed = None;
+                limit = None;
+                sub = true;
+            }
+        }
         out.comment(&op.name);
+        if let Some(live) = &op.live {
+            if tool != Some(&op.tool) {
+                if coolant != Coolant::Off {
+                    dialect.coolant(&mut out, Coolant::Off)?;
+                    coolant = Coolant::Off;
+                }
+                super::live::stop_tool(&mut out, program, &mut live_state);
+                out.forget();
+                out.motion(&change);
+                dialect.tool_change(&mut out, &op.tool);
+                out.forget();
+                tool = Some(&op.tool);
+            }
+            // The main spindle stops for the C axis.
+            if running.is_some() {
+                dialect.spindle_off(&mut out);
+                running = None;
+                speed = None;
+            }
+            super::live::start(&mut out, dialect, program, op, &mut live_state)?;
+            if op.coolant != coolant {
+                dialect.coolant(&mut out, op.coolant)?;
+                coolant = op.coolant;
+            }
+            super::live::moves(&mut out, dialect, program, live, cycles, &mut live_state)?;
+            continue;
+        }
+        if live_state.c_axis || live_state.running.is_some() {
+            super::live::stop(&mut out, dialect, program, &mut live_state);
+        }
         let threads = op
             .path
             .moves
@@ -604,7 +828,7 @@ pub fn turning_post(
             speed = None;
         }
         if running.is_some_and(|d| d != op.direction) {
-            dialect.spindle_off(&mut out);
+            stop_spindle(&mut out, dialect, program, sub);
             running = None;
             speed = None;
         }
@@ -615,7 +839,15 @@ pub fn turning_post(
             limit = Some(max_rpm);
         }
         if speed != Some(op.spindle) {
-            dialect.spindle_on(&mut out, &op.spindle, op.direction);
+            if sub {
+                // The sub-spindle's own codes (mitcad#2319).
+                let code = program
+                    .mill_turn
+                    .sub_start(op.direction == SpindleDirection::Cw);
+                dialect.spindle_on_with(&mut out, &op.spindle, code.trim());
+            } else {
+                dialect.spindle_on(&mut out, &op.spindle, op.direction);
+            }
             speed = Some(op.spindle);
             running = Some(op.direction);
         }
@@ -686,9 +918,10 @@ pub fn turning_post(
     if coolant != Coolant::Off {
         dialect.coolant(&mut out, Coolant::Off)?;
     }
+    super::live::stop(&mut out, dialect, program, &mut live_state);
     out.motion(&change);
     if running.is_some() {
-        dialect.spindle_off(&mut out);
+        stop_spindle(&mut out, dialect, program, sub);
     }
     dialect.footer(&mut out, program);
     Ok(out.finish())

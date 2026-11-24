@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: MIT
+# CAM mill-turn with a Y axis, a B head and a sub-spindle in the CNC group
+# (mitcad#2319, app/COMMANDS.md "Live tools on a lathe"), the shared input
+# script of tools/ui-cam-mill-turn-axes-test.sh (Linux),
+# tools/ui-windows-cam-mill-turn-axes-test.ps1 and
+# tools/ui-macos-cam-mill-turn-axes-test.sh, on
+# tools/ui-scripts/cam-mill-turn-axes.json (a 40 x 30 block 10 high turned
+# about the design's Z, a rectangle on the XZ plane, a lathe with every
+# axis on the Fanuc turning dialect):
+#
+#   1. New Setup on the lathe, the bar 2 mm over the part's radius, 1 mm
+#      to face and 5 mm behind it; canned cycles on, the hand-over to the
+#      sub-spindle;
+#   2. Turn Facing from its panel;
+#   3. through the model's commands: a flat faced with the Y axis, a hole
+#      on a plane tilted 45 degrees by the B head, the XZ rectangle wrapped
+#      onto the diameter, the part-off, the back faced on the sub-spindle;
+#   4. Generate: every operation up to date, its toolpath drawn;
+#   5. Simulate: the stock cut in 3D, the plane's live cuts in words;
+#   6. Post Process… to the Fanuc turning dialect (the wrappers read the
+#      file: G19 with the C axis clamped, the tilted working plane, the
+#      wrapped rectangle's cylindrical interpolation, the hand-over and
+#      the sub-spindle's work offset and spindle).
+wait-idle
+command view.fit
+wait-idle
+
+mark
+# Make's workspace first in the Floating toolbar panel (mitcad#1990).
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+
+# 1. New Setup on the design's only machine, the mill-turn lathe.
+mark
+command make.cam_setup
+wait-log '^Command New Setup started'
+wait-log '^CAM setup panel: machine mill-turn$'
+type-in '^Panel New Setup input side at ' '2 mm'
+type-in '^Panel New Setup input top at ' '1 mm'
+type-in '^Panel New Setup input bottom at ' '5 mm'
+key Return
+wait-log '^CAM setup added: Setup 1$'
+mark
+model-command '{"cmd":"cam_setup_edit","setup":1,"changes":{"post":{"canned_cycles":true},"lathe":{"hand_over":{"withdraw":"40 mm"}}}}'
+wait-idle
+
+# 2. Turn Facing with the turning tool.
+mark
+command make.cam_turn_face
+wait-log '^Command Turn Facing started'
+wait-log '^CAM turning panel turn_face: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Turn Facing 1 to Setup 1$'
+
+# 3. The block's right side faced 1 mm deep with the Y axis (a flat at C 0
+#    across the spindle), a hole at its top right edge square to a plane
+#    tilted 45 degrees by the B head, the XZ rectangle engraved onto the
+#    diameter, the part-off, the back faced on the sub-spindle.
+mark
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"facing"},"tool":8,"live":"plane","plane":{"c":0,"b":90},"depths":{"bottom":"19 mm"}}}'
+wait-idle
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"drill"},"tool":9,"live":"plane","plane":{"c":0,"b":45},"inputs":[{"kind":"point","at":{"point":[40,15,10]}}],"depths":{"bottom":"10 mm"}}}'
+wait-idle
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"contour","side":"on"},"tool":10,"live":"diameter","inputs":[{"kind":"region","sketch":"F3","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"depths":{"bottom":"29 mm"}}}'
+wait-idle
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"turn_part_off"},"tool":2}}'
+wait-idle
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"turn_face"},"tool":1,"sub_spindle":true}}'
+wait-log '^CAM states: Setup 1: Turn Facing 1 not_generated, Facing 1 not_generated, Drill 1 not_generated, Contour 1 not_generated, Parting Off 1 not_generated, Turn Facing 2 not_generated$' 30
+
+# 4. Generate: up to date, the toolpaths drawn (the sub-spindle's on the
+#    part where it was).
+mark
+command make.cam_generate
+wait-log '^CAM generate Setup 1: Turn Facing 1 up_to_date, [1-9][0-9]* moves, .*; Turn Facing 2 up_to_date, [1-9][0-9]* moves, ' 90
+wait-log '^CAM states: Setup 1: Turn Facing 1 up_to_date, Facing 1 up_to_date, Drill 1 up_to_date, Contour 1 up_to_date, Parting Off 1 up_to_date, Turn Facing 2 up_to_date$' 30
+wait-log '^CAM toolpaths drawn: 6 operation\(s\), [1-9][0-9]* moves$' 30
+expect-never 'CAM generate .* failed'
+
+# 5. Simulate: the whole program cut out of the bar in 3D, the planes'
+#    live cuts in words.
+mark
+command make.cam_simulate
+wait-log '^CAM simulate: Setup 1, 6 operations, [1-9][0-9]* points$' 60
+wait-log '^CAM turned stock: Setup 1: left [0-9.]+, [0-9]+ gouge\(s\), 0 rapid cut\(s\)$' 120
+wait-log '^CAM mill-turn stock: Setup 1: [1-9][0-9]* triangles, milled [0-9.]+, left [0-9.]+, gouge [0-9.]+, [0-9]+ rapid cut\(s\)$' 120
+wait-log '^CAM live tools: Setup 1: plane, 1 operation\(s\), left [0-9.]+, gouge [0-9.]+, [0-9]+ rapid cut\(s\)$' 30
+wait-log '^CAM live tools: Setup 1: diameter, 1 operation\(s\), ' 30
+focus-dialog '^Simulate$'
+key Escape
+wait-log '^CAM simulate closed$'
+wait-log '^CAM stock overlay: none$'
+
+# 6. Post Process… to the lathe's Fanuc dialect.
+mark
+command make.cam_post
+focus-dialog '^Post Process$'
+wait-log '^CAM post dialog: setup Setup 1, fanuc_turning, millimetres$'
+button '^Post'
+focus-dialog '^Save G-code$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/setup1.nc"
+key Return
+wait-log '^CAM post written: .*setup1[.]nc: fanuc_turning, millimetres, [1-9][0-9]* lines$' 30
+expect-file "${MITCAD_TEST_WORK}/setup1.nc"
+expect-never 'TestDriver: FAIL|CAM operation refused|CAM setup refused|CAM post refused'

@@ -545,6 +545,8 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
       if (!component.isEmpty() && c.uid == component && c.linked && !c.library) {
         addCall(QStringLiteral("open"), tr("Open Linked Design"), [this, component] { openLinkedDesign(component); });
         if (!windowReadOnly()) {
+          // Its design edited inside this one (mitcad#2321).
+          addCall(QStringLiteral("edit"), tr("Edit in Place"), [this, component] { editInPlace(component); });
           addCall(QStringLiteral("update"), tr("Update Link"), [this, component] { updateLink(component); });
           addCall(QStringLiteral("update"), tr("Update All Links"), [this] { updateLink(QString()); });
           // Linked parts of the design only (mitcad#2130); not of one
@@ -564,6 +566,18 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
   // reason when none is a solid or mesh body.
   if (std::all_of(selection.begin(), selection.end(),
                   [](const SelectionItem& item) { return onBody(item) || item.kind == SelectKind::Component; })) {
+    // Export… (mitcad#2298) before it, for the same selection: File ›
+    // Export's dialog with their bodies as its selected bodies.
+    const QString exportReason = exportBlocked(selection);
+    QAction* exportAction = new QAction(themeIcon(QStringLiteral("export")), tr("Export…"), &menu);
+    connect(exportAction, &QAction::triggered, &menu, [this, selection] { exportItems(selection); });
+    if (!exportReason.isEmpty()) {
+      exportAction->setEnabled(false);
+      exportAction->setToolTip(exportReason);
+      menu.setToolTipsVisible(true);
+      qDebug().noquote() << QStringLiteral("Export disabled: %1").arg(exportReason);
+    }
+    add(exportAction);
     const QString meshBlocked = saveAsMeshBlocked(selection);
     QAction* meshAction = new QAction(themeIcon(QStringLiteral("export")), tr("Save as Mesh…"), &menu);
     connect(meshAction, &QAction::triggered, &menu, [this, selection] { saveAsMesh(selection); });
@@ -578,6 +592,10 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
   menu.addSeparator();
   addCall(QString(), tr("Clear Selection"), [this] { clearSelection(); });
   add(m_registry->action(QStringLiteral("edit.undo")));
+  // A design edited in place (mitcad#2321).
+  if (m_inPlaceHolder) {
+    add(m_registry->action(QStringLiteral("assemble.finish_edit_in_place")));
+  }
 }
 
 void MainWindow::deleteBuildParts(const QStringList& components, bool sets) {

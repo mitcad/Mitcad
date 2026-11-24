@@ -10,43 +10,34 @@
 #include <QFontMetricsF>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QResizeEvent>
 #include <QStringList>
 #include <QToolTip>
+#include <QWidget>
 
 #include "../OcctViewer.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/UiSizes.hpp"
+#include "../view/ViewPaintLayer.hpp"
 
 namespace mitcad::sketch {
 
-ShownDimensions::ShownDimensions(OcctViewer& viewer) : QWidget(&viewer), m_viewer(viewer) {
+ShownDimensions::ShownDimensions(OcctViewer& viewer) : QObject(&viewer), m_viewer(viewer), m_font(viewer.font()) {
   setObjectName(QStringLiteral("shownSketchDimensions"));
-  setAttribute(Qt::WA_TransparentForMouseEvents);
-  setAttribute(Qt::WA_NoSystemBackground);
-  setFocusPolicy(Qt::NoFocus);
   // The font of sketch mode's dimensions (SketchOverlay).
-  QFont small = font();
-  small.setPointSizeF(9.0 * uiTextScale());
-  setFont(small);
-  resize(viewer.size());
-  hide();
+  m_font.setPointSizeF(9.0 * uiTextScale());
+  // Drawn by the view itself, with the frame that moves the camera
+  // (mitcad#2296).
+  m_layer = viewer.addPaintLayer(QStringLiteral("shown dimensions"), [this](QPainter& painter) { paint(painter); },
+                                 this);
   viewer.installEventFilter(this);
-  // After the frame, which may have moved the camera.
-  connect(
-      &viewer, &OcctViewer::viewChanged, this,
-      [this] {
-        if (!m_sketches.empty()) {
-          update();
-        }
-      },
-      Qt::QueuedConnection);
-  connect(&viewer, &OcctViewer::backgroundToneChanged, this, qOverload<>(&QWidget::update));
+  connect(&viewer, &OcctViewer::backgroundToneChanged, this, [this] { m_layer->update(); });
   m_logTimer.setSingleShot(true);
   m_logTimer.setInterval(150);
   connect(&m_logTimer, &QTimer::timeout, this, &ShownDimensions::logPlaces);
   TestSync::watch(&m_logTimer);
   connect(&viewer, &OcctViewer::cameraRested, this, [this] { m_logTimer.start(); });
+  // Not while the view is navigated (logPlaces): when it ends.
+  connect(&viewer, &OcctViewer::navigationFinished, this, [this] { m_logTimer.start(); });
 }
 
 void ShownDimensions::setSketches(std::vector<ShownSketch> sketches, double lengthScale, const QString& lengthUnit,
@@ -66,12 +57,9 @@ void ShownDimensions::setSketches(std::vector<ShownSketch> sketches, double leng
   }
   if (m_sketches.empty()) {
     m_hovered.clear();
-    hide();
-  } else {
-    resize(m_viewer.size());
-    show();
   }
-  update();
+  m_layer->setShown(!m_sketches.empty());
+  m_layer->update();
   m_logTimer.start();
 }
 
@@ -94,7 +82,7 @@ Projection ShownDimensions::projection(const SketchModel& model) const {
 
 std::vector<ShownDimensions::Layout> ShownDimensions::layouts() const {
   std::vector<Layout> result;
-  const QFontMetricsF metrics(font());
+  const QFontMetricsF metrics(m_font);
   for (std::size_t s = 0; s < m_sketches.size(); ++s) {
     const SketchModel& model = m_sketches[s].model;
     const Projection proj = projection(model);
@@ -133,13 +121,11 @@ QString ShownDimensions::valueAt(const QPointF& position) const {
   return QString();
 }
 
-void ShownDimensions::paintEvent(QPaintEvent* event) {
-  Q_UNUSED(event);
+void ShownDimensions::paint(QPainter& painter) {
   if (m_sketches.empty()) {
     return;
   }
-  QPainter painter(this);
-  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setFont(m_font);
   const std::vector<Layout> all = layouts();
   // All the halos first, then the lines, so that a halo never cuts another
   // dimension's line (mitcad#633).
@@ -162,7 +148,7 @@ void ShownDimensions::hover(const QPointF& position, const QPoint& global) {
     return;
   }
   m_hovered = now;
-  update();
+  m_layer->update();
   if (now.isEmpty()) {
     QToolTip::hideText();
     return;
@@ -182,12 +168,9 @@ void ShownDimensions::hover(const QPointF& position, const QPoint& global) {
 
 bool ShownDimensions::eventFilter(QObject* watched, QEvent* event) {
   if (watched != &m_viewer) {
-    return QWidget::eventFilter(watched, event);
+    return QObject::eventFilter(watched, event);
   }
   switch (event->type()) {
-  case QEvent::Resize:
-    resize(static_cast<QResizeEvent*>(event)->size());
-    break;
   case QEvent::MouseMove: {
     const auto* e = static_cast<QMouseEvent*>(event);
     if (!m_sketches.empty() && e->buttons() == Qt::NoButton) {
@@ -199,7 +182,7 @@ bool ShownDimensions::eventFilter(QObject* watched, QEvent* event) {
     if (!m_hovered.isEmpty()) {
       m_hovered.clear();
       QToolTip::hideText();
-      update();
+      m_layer->update();
     }
     break;
   case QEvent::MouseButtonDblClick: {
@@ -221,19 +204,23 @@ bool ShownDimensions::eventFilter(QObject* watched, QEvent* event) {
   default:
     break;
   }
-  return QWidget::eventFilter(watched, event);
+  return QObject::eventFilter(watched, event);
 }
 
 void ShownDimensions::logPlaces() {
+  // Once the camera rests: a pause in an orbit is no rest (mitcad#2296).
+  if (m_viewer.isNavigating()) {
+    return;
+  }
   QStringList drawn;
   QStringList places;
-  if (isVisible()) {
+  if (m_layer->isShown() && m_viewer.isVisible()) {
     const std::vector<Layout> all = layouts();
-    QWidget* top = window();
+    QWidget* top = m_viewer.window();
     std::vector<int> counts(m_sketches.size(), 0);
     for (const Layout& layout : all) {
       ++counts[layout.sketch];
-      const QPoint at = mapTo(top, layout.textRect.center().toPoint());
+      const QPoint at = m_viewer.mapTo(top, layout.textRect.center().toPoint());
       places << QStringLiteral("Shown dimension %1 %2 at %3,%4")
                     .arg(m_sketches[layout.sketch].name,
                          m_sketches[layout.sketch].model.dimensions[layout.dimension].id)

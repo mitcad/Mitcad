@@ -70,6 +70,13 @@ impl<K: Kernel> Document<K> {
         &self.result.joints.groups
     }
 
+    /// The joints, rigid groups and constraint rows in effect at the
+    /// marker, as the joint solver takes them (the URDF export walks them,
+    /// mitcad#2100).
+    pub(crate) fn joints_state(&self) -> &crate::joints::JointsState {
+        &self.result.joints
+    }
+
     /// The remaining degrees of freedom of a component's top-level
     /// occurrences at the marker (the rank of the joint equations; see
     /// [`DofReport`]).

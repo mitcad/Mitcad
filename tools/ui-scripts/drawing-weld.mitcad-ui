@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# Weld symbols on a drawing (mitcad#2350) on drawing-weld.json: a
+# two-member BUILD frame, an arm's end A on an upright's side (a T joint),
+# in Drawing1's right view at 1:5, the arm's top edge at sheet y 152 from
+# x 172 to 232, its bottom edge at y 148.
+#   1. Weld Symbol (the Symbols group): its panel offers the symbols as
+#      icons, Fillet chosen; Size 5 typed; the arm's top edge clicked, then
+#      where the reference line starts: a fillet weld a5 on the arrow side.
+#   2. Propose Welds: the arm clicked, then a click beside the frame: the
+#      T joint gets a fillet weld all around (the arm's end closes round
+#      its section) on an edge of the joint.
+# Run by tools/ui-drawing-weld-test.sh (Linux),
+# tools/ui-windows-drawing-weld-test.ps1 (Windows) and
+# tools/ui-macos-drawing-weld-test.sh (macOS).
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing view 1 at '
+wait-idle
+
+# 1. A 5 mm fillet weld on the arm's top edge.
+mark
+command drawing.weld
+wait-log '^Drawing tool: Weld Symbol'
+wait-log '^Drawing panel drawingOption_arrow_symbol_fillet at '
+wait-log '^Drawing panel drawingOption_size at '
+wait-idle
+click-logged '^Drawing panel drawingOption_arrow_symbol_fillet at '
+wait-log '^Drawing option arrow_symbol: fillet$'
+click-logged '^Drawing panel drawingOption_size at '
+type '5'
+key Tab
+wait-log '^Drawing option size: 5$'
+wait-idle
+drawing-sheet-click 200 152
+wait-log '^Drawing picked '
+wait-log '^Drawing placing view'
+wait-idle
+drawing-sheet-click 215 175
+wait-log '^Drawing command: (?=.*"cmd":"add_drawing_annotation")(?=.*"type":"weld")(?=.*"symbol":"fillet")(?=.*"size":5)'
+wait-log '^Drawing annotations drawn: 1 = fillet a5 [(]arrow side[)]$'
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-log '^Drawing tool: selection'
+wait-idle
+
+# 2. Welds proposed for the arm's joint: the arm, then beside the frame.
+mark
+command drawing.propose_welds
+wait-log '^Drawing tool: Propose Welds'
+wait-idle
+drawing-sheet-click 200 148
+wait-log '^Drawing picked '
+wait-idle
+drawing-sheet-click 300 250
+wait-log '^Drawing command: (?=.*"cmd":"propose_drawing_welds")(?=.*"view":1)'
+wait-log '^Drawing annotations drawn: 1 = fillet a5 [(]arrow side[)] [|] 2 = fillet [(]arrow side[)] / all around$'
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-idle
+expect-never 'TestDriver: FAIL'

@@ -28,6 +28,7 @@
 
 #include "../OcctViewer.hpp"
 #include "MeasurementDrawing.hpp"
+#include "ViewPaintLayer.hpp"
 
 namespace mitcad {
 namespace {
@@ -133,10 +134,22 @@ QImage OcctViewer::snapshot(const QSize& size, bool transparent, bool withMeasur
     return QImage();
   }
   makeCurrent();
+  // OCCT draws the picture in its context: the view's own EGL one where
+  // Qt runs on GLX (mitcad#2292), Qt's made current again after.
+  std::optional<ViewGlCurrent> current;
+  current.emplace(*this);
   // The orientation cube stays out of the picture.
   const bool cube = !m_orientationCube.IsNull() && m_context->IsDisplayed(m_orientationCube);
   if (cube) {
     m_context->Erase(m_orientationCube, false);
+  }
+  // So do the drawings over the view it draws itself (mitcad#2296): a
+  // picture of the view's pixels, never in a snapshot as widgets.
+  std::vector<ViewPaintLayer*> layers;
+  for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
+    if (layer && layer->takeOutPicture()) {
+      layers.push_back(layer.data());
+    }
   }
   QImage image;
   try {
@@ -160,7 +173,11 @@ QImage OcctViewer::snapshot(const QSize& size, bool transparent, bool withMeasur
   if (cube) {
     m_context->Display(m_orientationCube, 0, 0, false);
   }
+  for (ViewPaintLayer* layer : layers) {
+    layer->putBackPicture();
+  }
   m_view->Invalidate();
+  current.reset();
   doneCurrent();
   update();
   if (image.isNull() || !withMeasurements || m_measurements.empty() || width() <= 0) {

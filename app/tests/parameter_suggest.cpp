@@ -8,8 +8,8 @@
 // Formula… keeping the `name =` (mitcad#755), and the context menu acting
 // on the field's caret and selection (mitcad#756); Up and Down stepping a
 // plain value with the list closed (mitcad#1254), and not while the model
-// computes (mitcad#1360); Remove Name in the browser and the menu
-// (mitcad#1577).
+// computes (mitcad#1360); the step buttons at a stepping field's right end
+// (mitcad#2327); Remove Name in the browser and the menu (mitcad#1577).
 #include "UnitTests.hpp"
 #include "framework/FormulaEditor.hpp"
 #include "framework/ModelBusy.hpp"
@@ -31,6 +31,7 @@
 #include <QColor>
 #include <QContextMenuEvent>
 #include <QEvent>
+#include <QEventLoop>
 #include <QFocusEvent>
 #include <QGuiApplication>
 #include <QHelpEvent>
@@ -43,6 +44,7 @@
 #include <QList>
 #include <QMenu>
 #include <QModelIndex>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QPlainTextEdit>
@@ -55,6 +57,7 @@
 #include <QStyleOptionViewItem>
 #include <QStyledItemDelegate>
 #include <QTimer>
+#include <QToolButton>
 #include <QToolTip>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -977,6 +980,160 @@ void stepTests() {
   QToolTip::hideText();
 }
 
+// A left click at `at` in `widget` with the modifiers held.
+void clickAt(QWidget* widget, const QPoint& at, Qt::KeyboardModifiers modifiers) {
+  const QPointF local(at);
+  const QPointF global(widget->mapToGlobal(at));
+  QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton, Qt::LeftButton, modifiers);
+  QApplication::sendEvent(widget, &press);
+  QMouseEvent release(QEvent::MouseButtonRelease, local, global, Qt::LeftButton, Qt::NoButton, modifiers);
+  QApplication::sendEvent(widget, &release);
+}
+
+// The event loop run for `ms` milliseconds (a held button's repeats).
+void runFor(int ms) {
+  QEventLoop loop;
+  QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+  loop.exec();
+}
+
+// The step buttons (mitcad#2327): in a field that steps only, the
+// rightmost of its trailing buttons (after its fx) within its height, one
+// trailing button's room wide; a click on the up button steps as Up does
+// (Shift ×10, the fine modifier ×0.1), the down button as Down, as typed
+// (textEdited) and logged; a held press repeats after the spin box delay
+// and stops when let go; an expression shows them disabled and a click
+// changes nothing; a field that no longer steps hides them and its fx is
+// at its end again.
+void stepButtonTests() {
+#ifdef Q_OS_MACOS
+  const Qt::KeyboardModifier fine = Qt::AltModifier;
+  const bool macKeys = true;
+#else
+  const Qt::KeyboardModifier fine = Qt::ControlModifier;
+  const bool macKeys = false;
+#endif
+  QWidget window;
+  window.resize(640, 480);
+  setParameterSource(&window, {[] { return designParameters(); },
+                               [](const QJsonObject&, QString*) { return true; },
+                               [] { return QStringLiteral("mm"); }});
+  auto* edit = new QLineEdit(&window);
+  edit->setGeometry(20, 20, 200, 24);
+  ParameterFieldOptions options;
+  options.label = QStringLiteral("test step distance");
+  options.create = false;
+  options.steps = true;
+  options.stepLimit.minimum = 0.0;
+  options.stepLimit.above = true;
+  ParameterField* field = ParameterField::attach(edit, options);
+  auto* other = new QLineEdit(&window);
+  other->setGeometry(20, 60, 200, 24);
+  ParameterFieldOptions cellOptions;
+  cellOptions.label = QStringLiteral("test step cell");
+  cellOptions.create = false;
+  ParameterField* cell = ParameterField::attach(other, cellOptions);
+  int edits = 0;
+  QObject::connect(edit, &QLineEdit::textEdited, [&edits](const QString&) { ++edits; });
+  edit->setText(QStringLiteral("10 mm"));
+  window.show();
+
+  QWidget* buttons = field->stepButtons();
+  CHECK(buttons != nullptr);
+  CHECK(cell->stepButtons() == nullptr);
+  if (buttons == nullptr) {
+    return;
+  }
+  CHECK(buttons->isVisible() && buttons->isEnabled());
+  CHECK(buttons->focusPolicy() == Qt::NoFocus);
+  CHECK(buttons->toolTip() == valueStepButtonHint(macKeys));
+  // The rightmost trailing button, after the fx, inside the field.
+  const QToolButton* fx = nullptr;
+  for (const QToolButton* button : edit->findChildren<QToolButton*>()) {
+    if (button->defaultAction() != nullptr &&
+        button->defaultAction()->objectName() == QStringLiteral("parameterFx")) {
+      fx = button;
+    }
+  }
+  CHECK(fx != nullptr && fx->isVisible());
+  const QRect place = buttons->geometry();
+  CHECK(place.right() < edit->width() && place.top() >= 0 && place.bottom() < edit->height());
+  if (fx != nullptr) {
+    CHECK(fx->geometry().right() < place.left());
+    // One trailing button's room: what a narrow field adds for them.
+    CHECK(place.left() - fx->geometry().left() == ParameterField::stepButtonsRoom(edit));
+  }
+  // The field without the buttons: its fx at its end.
+  const QToolButton* cellFx = nullptr;
+  for (const QToolButton* button : other->findChildren<QToolButton*>()) {
+    if (button->defaultAction() != nullptr &&
+        button->defaultAction()->objectName() == QStringLiteral("parameterFx")) {
+      cellFx = button;
+    }
+  }
+  CHECK(cellFx != nullptr && cellFx->geometry().left() == place.left());
+
+  const QPoint up = ParameterField::stepButtonCentre(buttons, true);
+  const QPoint down = ParameterField::stepButtonCentre(buttons, false);
+  CHECK(up.y() < down.y() && buttons->rect().contains(up) && buttons->rect().contains(down));
+
+  stepLog().clear();
+  const QtMessageHandler previous = qInstallMessageHandler(keepStepLog);
+  clickAt(buttons, up, Qt::NoModifier);
+  CHECK(edit->text() == QStringLiteral("11 mm") && edits == 1);
+  if (window.isActiveWindow()) {
+    CHECK(edit->hasFocus()); // the field takes the keyboard on the first click
+  }
+  clickAt(buttons, up, Qt::ShiftModifier);
+  CHECK(edit->text() == QStringLiteral("21 mm"));
+  clickAt(buttons, down, fine);
+  CHECK(edit->text() == QStringLiteral("20.9 mm"));
+  clickAt(buttons, down, Qt::NoModifier);
+  CHECK(edit->text() == QStringLiteral("19.9 mm") && edits == 4);
+  CHECK(stepLog().contains(QStringLiteral("Value field test step distance: Up button stepped 10 mm to 11 mm")));
+  CHECK(stepLog().contains(QStringLiteral("Value field test step distance: Shift+Up button stepped 11 mm to 21 mm")));
+  CHECK(stepLog().contains(QStringLiteral("Value field test step distance: Down button stepped 20.9 mm to 19.9 mm")));
+
+  // Held: a step at once, then repeats after the delay until let go.
+  edit->setText(QStringLiteral("10 mm"));
+  const int delay = buttons->style()->styleHint(QStyle::SH_SpinBox_ClickAutoRepeatThreshold, nullptr, buttons);
+  const int rate = buttons->style()->styleHint(QStyle::SH_SpinBox_ClickAutoRepeatRate, nullptr, buttons);
+  const QPointF local(down);
+  const QPointF global(buttons->mapToGlobal(down));
+  QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(buttons, &press);
+  CHECK(edit->text() == QStringLiteral("9 mm"));
+  runFor(delay + 2 * rate + 100);
+  QMouseEvent release(QEvent::MouseButtonRelease, local, global, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(buttons, &release);
+  const double held = edit->text().section(QLatin1Char(' '), 0, 0).toDouble();
+  CHECK(held <= 8.0 && held >= 1.0);
+  CHECK(stepLog().contains(QStringLiteral("Value field test step distance: Down button held stepped 9 mm to 8 mm")));
+  const QString letGo = edit->text();
+  runFor(2 * rate + 50);
+  CHECK(edit->text() == letGo); // no repeat once let go
+
+  // An expression: the buttons disabled, a click changes nothing.
+  edit->setText(QStringLiteral("d1*2"));
+  CHECK(!buttons->isEnabled());
+  edits = 0;
+  clickAt(buttons, up, Qt::NoModifier);
+  CHECK(edit->text() == QStringLiteral("d1*2") && edits == 0);
+  CHECK(stepLog().contains(QStringLiteral("Step buttons test step distance off: d1*2")));
+  edit->setText(QStringLiteral("5 mm"));
+  CHECK(buttons->isEnabled());
+  CHECK(stepLog().contains(QStringLiteral("Step buttons test step distance on")));
+  qInstallMessageHandler(previous);
+
+  // A field that no longer steps: no buttons, its fx at its end again.
+  options.steps = false;
+  ParameterField::attach(edit, options);
+  CHECK(field->stepButtons() == nullptr && !buttons->isVisible());
+  if (fx != nullptr) {
+    CHECK(fx->geometry().left() == place.left());
+  }
+}
+
 // Remove Name (mitcad#1577): a field that may take its `name =` off offers
 // it in the fx browser and the right-click menu while its text has one; the
 // value stays alone, as typed.
@@ -1269,6 +1426,7 @@ int parameterSuggestTests() {
   tooltipTests();
   tableTests();
   stepTests();
+  stepButtonTests();
   removeNameTests();
   rowLookTests();
   fxFormulaTests();

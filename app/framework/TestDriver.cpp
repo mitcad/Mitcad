@@ -431,6 +431,29 @@ QString plainText(QString text) {
 
 namespace {
 
+// Where a click types into a widget, in its own coordinates: its middle,
+// but in a line edit the middle of its text, left of its trailing buttons
+// (the fx and the step buttons, mitcad#2327), as CommandPanel::placeOf
+// logs a field's place: a narrow panel field's middle lies on its fx.
+QPoint typingPoint(const QWidget* input) {
+  QRect area = input->rect();
+  if (qobject_cast<const QLineEdit*>(input) != nullptr) {
+    int right = area.right();
+    for (const QWidget* child : input->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
+      // A trailing button: a tool button or the step buttons, off the
+      // field's left edge (a leading one's place).
+      const bool button = child->inherits("QToolButton") || child->objectName() == QStringLiteral("parameterSteps");
+      if (button && child->isVisibleTo(input) && child->geometry().left() > 8) {
+        right = std::min(right, child->geometry().left() - 1);
+      }
+    }
+    if (right - area.left() >= 4) {
+      area.setRight(right);
+    }
+  }
+  return area.center();
+}
+
 // The popups as the popup stage sees them, for its timeout message: the
 // active one and every menu Qt reports visible, with whether its window is
 // really shown (a menu effect shows the menu's window only when it ends).
@@ -527,7 +550,7 @@ bool revealedPanelPlace(QWidget* main, QWidget* top, const QString& logged, QPoi
       scroll->ensureWidgetVisible(target);
     }
   }
-  at = top->mapFromGlobal(target->mapToGlobal(target->rect().center()));
+  at = top->mapFromGlobal(target->mapToGlobal(typingPoint(target)));
   return true;
 }
 
@@ -2376,7 +2399,7 @@ void TestDriver::run(const Step& step) {
               for (QWidget* parent = input->parentWidget(); parent; parent = parent->parentWidget()) {
                 if (auto* scroll = qobject_cast<QScrollArea*>(parent)) { scroll->ensureWidgetVisible(input); }
               }
-              *at = topWindow()->mapFromGlobal(input->mapToGlobal(input->rect().center()));
+              *at = topWindow()->mapFromGlobal(input->mapToGlobal(typingPoint(input)));
               *editor = input;
               return true;
             }

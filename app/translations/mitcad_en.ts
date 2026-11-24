@@ -499,6 +499,20 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>%1: %n step(s), shown exploded</source>
+        <translation>
+            <numerusform>%1: %n step, shown exploded</numerusform>
+            <numerusform>%1: %n steps, shown exploded</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%1: %n step(s)</source>
+        <translation>
+            <numerusform>%1: %n step</numerusform>
+            <numerusform>%1: %n steps</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>%n degree(s) of freedom</source>
         <translation>
             <numerusform>%n degree of freedom</numerusform>
@@ -842,6 +856,20 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         </translation>
     </message>
     <message numerus="yes">
+        <source>%n link(s)</source>
+        <translation>
+            <numerusform>%n link</numerusform>
+            <numerusform>%n links</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n joint(s)</source>
+        <translation>
+            <numerusform>%n joint</numerusform>
+            <numerusform>%n joints</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>%n plate(s) in %1 files</source>
         <translation>
             <numerusform>%n plate in %1 files</numerusform>
@@ -1051,6 +1079,16 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>Timeline marker: %n feature of components not shown is rolled back</numerusform>
             <numerusform>Timeline marker: %n features of components not shown are rolled back</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::TutorialChoice</name>
+    <message numerus="yes">
+        <source>%n min</source>
+        <translation>
+            <numerusform>%n min</numerusform>
+            <numerusform>%n min</numerusform>
         </translation>
     </message>
 </context>

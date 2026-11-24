@@ -1027,6 +1027,8 @@ impl Backend for CadBackend {
                 let overwrite = boolean(arguments, "overwrite", false)?;
                 let path = self.export_path(string(arguments, "path")?, overwrite)?;
                 let plan = export_plan(arguments, &path)?;
+                // A URDF package's folder beside the path (mitcad#2100).
+                urdf_folder(arguments, &path, overwrite)?;
                 for extra in &plan.extra {
                     self.export_path(path_text(extra)?, overwrite)?;
                 }
@@ -1363,7 +1365,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
     let format = string(arguments, "format")?;
     if !matches!(
         format,
-        "step" | "iges" | "brep" | "stl" | "obj" | "3mf" | "usdz" | "dxf" | "pdf" | "svg"
+        "step" | "iges" | "brep" | "stl" | "obj" | "3mf" | "usdz" | "urdf" | "dxf" | "pdf" | "svg"
     ) {
         return Err(format!("unknown export format “{format}”"));
     }
@@ -1385,6 +1387,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
         .chain(THREE_MF_FIELDS)
         .chain(BED_FIELDS)
         .chain(["occurrence", "refinement", "animation", "print_colors"])
+        .chain(URDF_FIELDS)
         .find(|k| arguments.get(*k).is_some())
         {
             return Err(format!("cut_sheet does not take {key}"));
@@ -1478,12 +1481,20 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
         .into_iter()
         .chain(BED_FIELDS)
         .chain(["occurrence", "refinement", "animation", "print_colors"])
+        .chain(URDF_FIELDS)
         .filter(|k| arguments.get(*k).is_some())
         .collect();
-    if given.contains(&"refinement") && !matches!(format, "stl" | "obj" | "3mf" | "usdz") {
+    if given.contains(&"refinement") && !matches!(format, "stl" | "obj" | "3mf" | "usdz" | "urdf") {
         return Err(format!(
-            "refinement is for the mesh of an STL, OBJ, 3MF or USDZ export, not {format}"
+            "refinement is for the mesh of an STL, OBJ, 3MF, USDZ or URDF export, not {format}"
         ));
+    }
+    // A URDF package's name and its joints' effort and velocity
+    // (mitcad#2100).
+    if let Some(key) = given.iter().copied().find(|k| URDF_FIELDS.contains(k))
+        && format != "urdf"
+    {
+        return Err(format!("{key} is for URDF export (format urdf)"));
     }
     if given.contains(&"animation") && format != "usdz" {
         return Err(format!(
@@ -1565,6 +1576,32 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
 /// (mitcad#1490): the design's print plates, the slicer whose settings go
 /// with the bodies and the placements picked.
 const THREE_MF_FIELDS: [&str; 5] = ["plates", "plate", "dialect", "occurrences", "whole"];
+
+/// The `export` fields of a URDF package that `model_export` passes on
+/// (mitcad#2100).
+const URDF_FIELDS: [&str; 3] = ["package", "effort", "velocity"];
+
+/// The package folder a URDF export writes beside `path` (mitcad#2100):
+/// an existing one only with `overwrite`; nothing to check for other
+/// formats.
+fn urdf_folder(arguments: &Value, path: &Path, overwrite: bool) -> Result<(), String> {
+    if arguments.get("format").and_then(Value::as_str) != Some("urdf") {
+        return Ok(());
+    }
+    let package = match arguments.get("package").and_then(Value::as_str) {
+        Some(package) => package.to_owned(),
+        None => mitcad_model::exchange::urdf::package_name(
+            path.file_stem().and_then(|s| s.to_str()).unwrap_or("robot"),
+        ),
+    };
+    let folder = path.parent().map(|p| p.join(&package));
+    if !overwrite && folder.as_ref().is_some_and(|f| f.exists()) {
+        return Err(format!(
+            "the package folder {package} exists; model_export requires overwrite: true"
+        ));
+    }
+    Ok(())
+}
 
 /// The `export` fields of the print bed (3MF, STL and OBJ) that
 /// `model_export` passes on (mitcad#1490, mitcad#1491).

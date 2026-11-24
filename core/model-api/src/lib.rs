@@ -230,9 +230,18 @@ mod point_clouds;
 // Decals: images put on faces of bodies, their commands and queries
 // (mitcad#2244).
 mod decals;
+// Exploded views of assemblies: their commands, Auto Explode and the
+// explode worked out (mitcad#2113).
+mod explode;
 // A base view of a sheet-metal body's Flat Pattern: its developed blank,
 // bend lines and bend notes (mitcad#2280).
 mod drawing_flat;
+// Edit in Place: a linked component edited inside the assembly that holds
+// it, its start and end functions of both documents (mitcad#2321).
+mod edit_in_place;
+pub use edit_in_place::{begin_edit_in_place, finish_edit_in_place, linked_saved_in_place};
+// Weld symbols proposed from BUILD's joints on drawing views (mitcad#2350).
+mod drawing_welds;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -346,6 +355,8 @@ pub mod prelude {
     pub(crate) use super::mesh_tools::MeshToolsOps;
     // Flat Pattern views on drawings (mitcad#2280).
     pub(crate) use super::drawing_flat::DrawingFlatOps;
+    // Weld symbols proposed from BUILD's joints (mitcad#2350).
+    pub(crate) use super::drawing_welds::DrawingWeldsOps;
 }
 
 use std::fmt;
@@ -503,6 +514,10 @@ named_enum! {
             /// "" removes it.
             #[serde(default)]
             expression: Option<String>,
+            /// With `suppressed: true`, the active features that use it
+            /// are suppressed too, in the same undo step (mitcad#2314).
+            #[serde(default)]
+            dependents: bool,
         },
         "reorder_feature" => ReorderFeature {
             uid: FeatureUid,
@@ -1178,6 +1193,9 @@ named_enum! {
             // Also those out of the plane, projected (mitcad#866).
             #[serde(default)]
             out_of_plane: bool,
+            // Instead: where the plane cuts the bodies, by face (mitcad#2324).
+            #[serde(default)]
+            section: bool,
         },
         // Tangent chains of edges and faces (mitcad#290, `tangent_chains.rs`).
         "tangent_chains" => TangentChains(tangent_chains::TangentChainsQuery),
@@ -1528,6 +1546,10 @@ named_enum! {
         // The design's end caps and a preview of capping ends (mitcad#2243,
         // `build.rs`).
         "build_end_caps" => BuildEndCaps(build::EndCapsQuery),
+        // Exploded views: every view as kept, and one worked out at a time
+        // of its animation (mitcad#2113, `explode.rs`).
+        "explode_views" => ExplodeViews,
+        "explode_view" => ExplodeView(explode::ExplodeQuery),
     }
 }
 
@@ -1590,7 +1612,10 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             let command = parse(value, "flex command")?;
             return Ok(flex::run_flex_command(self, command)?.to_string());
         }
-        let result = match value {
+        // While the design is edited in place (mitcad#2321): the command, to
+        // freeze what it refers to in the assembly around it.
+        let in_place = self.in_place_mode().is_some().then(|| value.clone());
+        let mut result = match value {
             Value::Array(commands) => {
                 let mut results = Vec::with_capacity(commands.len());
                 for (i, command) in commands.into_iter().enumerate() {
@@ -1603,6 +1628,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             }
             command => self.run_command(command)?,
         };
+        if let Some(command) = &in_place {
+            edit_in_place::after_command(self, command, &mut result)?;
+        }
         // The comments' targets as the change left them (mitcad#1119): an
         // orphan keeps its last known place.
         self.settle_comments_now();
@@ -1638,6 +1666,10 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 // The Center of Mass marker (mitcad#1094), while there is one.
                 if let Some(marker) = self.display().center_of_mass {
                     value["display"]["center_of_mass"] = json!({"visible": marker.visible});
+                }
+                // Edited in place in a holder (mitcad#2321), while it is.
+                if self.in_place_mode().is_some() {
+                    value["in_place"] = edit_in_place::mode_json(self);
                 }
                 // View › Show of the whole design (mitcad#1287), while it
                 // hides a kind.
@@ -2114,7 +2146,8 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::PlaneGeometry {
                 sketch,
                 out_of_plane,
-            } => self.plane_geometry_json(sketch, out_of_plane)?,
+                section,
+            } => self.plane_geometry_json(sketch, out_of_plane, section)?,
             // Tangent chains of edges and faces (mitcad#290).
             Query::TangentChains(query) => self.tangent_chains_json(&query)?,
             // A thread's default end chamfer (mitcad#304).
@@ -2377,6 +2410,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::DecalOutline(query) => decals::outline_json(self, &query)?,
             // End caps (mitcad#2243).
             Query::BuildEndCaps(query) => self.build_end_caps_json(&query)?,
+            // Exploded views (mitcad#2113).
+            Query::ExplodeViews => explode::views_json(self),
+            Query::ExplodeView(query) => explode::view_json(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2515,7 +2551,11 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         // What it adds, kept in sight (mitcad#1995).
         let content =
             hidden_parents::adds_content(cmd).then(|| hidden_parents::ContentBefore::of(self));
+        // What the explode views move, to say what a deletion takes out of
+        // them (mitcad#2113).
+        let exploded = explode::ExplodeBefore::of(self, cmd);
         let mut result = action(self, value)?;
+        exploded.warn(self, &mut result);
         if let Some(content) = &content {
             hidden_parents::show_new_content(self, &mut result, content)?;
         }
@@ -2779,14 +2819,37 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 uid,
                 suppressed,
                 expression,
-            } => {
-                match (suppressed, expression) {
-                    (Some(_), Some(_)) => return Err(both("suppressed")),
-                    (_, Some(expression)) => self.bind_suppressed(uid, &expression)?,
-                    (suppressed, None) => self.set_suppressed(uid, suppressed.unwrap_or(true))?,
+                dependents,
+            } => match (suppressed, expression) {
+                (Some(_), Some(_)) => return Err(both("suppressed")),
+                // Its dependents are suppressed with it only by hand
+                // (mitcad#2314).
+                (_, Some(_)) if dependents => {
+                    return Err(ApiError(
+                        "`dependents` and `expression` are both given: the features that use it \
+                         are suppressed with it only by `suppressed: true`"
+                            .to_owned(),
+                    ));
                 }
-                json!({})
-            }
+                (_, Some(expression)) => {
+                    self.bind_suppressed(uid, &expression)?;
+                    json!({})
+                }
+                (Some(false), None) if dependents => {
+                    return Err(ApiError(
+                        "`dependents` is given with `suppressed: false`: the features that use \
+                         it are unsuppressed one by one"
+                            .to_owned(),
+                    ));
+                }
+                (_, None) if dependents => {
+                    json!({"suppressed": self.suppress_with_dependents(uid)?})
+                }
+                (suppressed, None) => {
+                    self.set_suppressed(uid, suppressed.unwrap_or(true))?;
+                    json!({})
+                }
+            },
             Command::ReorderFeature { uid, index } => {
                 self.move_feature(uid, index)?;
                 json!({})

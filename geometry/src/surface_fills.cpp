@@ -5,8 +5,11 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <iomanip>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -30,7 +33,9 @@
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
+#include <GeomAPI_ExtremaCurveCurve.hxx>
 #include <GeomAPI_Interpolate.hxx>
+#include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <GeomConvert.hxx>
 #include <GeomConvert_CompCurveToBSplineCurve.hxx>
 #include <GeomFill_Gordon.hxx>
@@ -45,6 +50,7 @@
 #include <NCollection_HArray1.hxx>
 #include <NCollection_List.hxx>
 #include <Precision.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -594,6 +600,328 @@ TopoDS_Wire boundary_wire(const BoundaryCurve& curve, std::vector<Chain>& keep) 
   return keep.back().wire;
 }
 
+// --- A network's crossings (mitcad#2333)
+//
+// GeomFill_Gordon builds the surface over each curve's whole range: it
+// snaps contacts near the curves' ends but does not cut back a curve that
+// runs on past the outer crossing curves (it takes crossings away from the
+// ends only for a closed seam), so such a network failed. Each open curve
+// is cut back to its first and last crossing first; a pair that does not
+// meet is reported by name.
+
+// The tolerance the curves of a network cross within (Gordon's too).
+constexpr double kNetwork = 1.0e-3;
+// Contacts of one pair closer together than this are one crossing.
+constexpr double kOneCrossing = 1.0e-2;
+
+// A place where two curves come near: the parameters on each and the points
+// there.
+struct Contact {
+  double a = 0.0;
+  double b = 0.0;
+  gp_Pnt pa;
+  gp_Pnt pb;
+
+  double gap() const { return pa.Distance(pb); }
+};
+
+// Where two curves meet: their crossings (each once) within kNetwork, and
+// their nearest points whether they meet or not.
+struct Meeting {
+  std::vector<Contact> crossings;
+  Contact nearest;
+  bool near_known = false;
+};
+
+void consider(Meeting& meeting, const Contact& contact) {
+  if (!meeting.near_known || contact.gap() < meeting.nearest.gap()) {
+    meeting.nearest = contact;
+    meeting.near_known = true;
+  }
+  if (contact.gap() > kNetwork) {
+    return;
+  }
+  for (Contact& known : meeting.crossings) {
+    if (known.pa.Distance(contact.pa) <= kOneCrossing) {
+      if (contact.gap() < known.gap()) {
+        known = contact;
+      }
+      return;
+    }
+  }
+  meeting.crossings.push_back(contact);
+}
+
+// The places where the curves `a` and `b` come near: their extrema, their
+// nearest points (also at their ends), each end on the other curve and the
+// ends together, as GeomFill_Gordon looks for its contacts.
+Meeting meeting_of(const occ::handle<Geom_BSplineCurve>& a, const occ::handle<Geom_BSplineCurve>& b) {
+  Meeting meeting;
+  const auto add = [&](double ua, double ub) {
+    Contact contact;
+    contact.a = ua;
+    contact.b = ub;
+    contact.pa = a->Value(ua);
+    contact.pb = b->Value(ub);
+    consider(meeting, contact);
+  };
+  try {
+    GeomAPI_ExtremaCurveCurve extrema(a, b);
+    if (!extrema.IsParallel()) {
+      for (int i = 1; i <= extrema.NbExtrema(); ++i) {
+        double ua = 0.0;
+        double ub = 0.0;
+        extrema.Parameters(i, ua, ub);
+        add(ua, ub);
+      }
+    }
+    double ua = 0.0;
+    double ub = 0.0;
+    if (extrema.TotalLowerDistanceParameters(ua, ub)) {
+      add(ua, ub);
+    }
+  } catch (const Standard_Failure&) {
+    // (Curves that run side by side: their ends below say where they meet.)
+  }
+  const std::array<double, 2> ends_a{a->FirstParameter(), a->LastParameter()};
+  const std::array<double, 2> ends_b{b->FirstParameter(), b->LastParameter()};
+  for (const double ua : ends_a) {
+    const GeomAPI_ProjectPointOnCurve on(a->Value(ua), b);
+    if (on.NbPoints() > 0) {
+      add(ua, on.LowerDistanceParameter());
+    }
+    for (const double ub : ends_b) {
+      add(ua, ub);
+    }
+  }
+  for (const double ub : ends_b) {
+    const GeomAPI_ProjectPointOnCurve on(b->Value(ub), a);
+    if (on.NbPoints() > 0) {
+      add(on.LowerDistanceParameter(), ub);
+    }
+  }
+  return meeting;
+}
+
+// A curve of a network as agents read it: "curve one way 2 (c5)",
+// "crossing curve 1 (E{…})" (1-based, in the order given; the model adds
+// the sketches).
+std::string network_label(bool one_way, std::size_t index, const BoundaryCurve& curve) {
+  std::string names;
+  const auto add = [&names](const std::string& name) {
+    if (!name.empty()) {
+      names += (names.empty() ? "" : ", ") + name;
+    }
+  };
+  if (curve.kind == BoundaryCurve::Kind::Curves) {
+    for (const PathCurve& piece : curve.curves) {
+      add(piece.name);
+    }
+  } else if (curve.kind == BoundaryCurve::Kind::Edges) {
+    for (const std::string& edge : curve.edges.edges) {
+      add(edge);
+    }
+    if (names.empty()) {
+      names = "free edges";
+    }
+  }
+  const std::string text = std::string(one_way ? "curve one way " : "crossing curve ") + std::to_string(index + 1);
+  return names.empty() ? text : text + " (" + names + ")";
+}
+
+// A length in an error's detail for agents: "0.4998 mm".
+std::string mm_text(double value) {
+  std::ostringstream out;
+  out << std::setprecision(4) << value << " mm";
+  return out.str();
+}
+
+// The detail for agents of a pair of a network's curves that does not
+// meet (the person reads only that a pair does not meet; the points are
+// painted, placed_error() in network_surface): its gap and its nearest
+// points.
+std::string miss_text(const std::string& pair, const Contact& closest) {
+  char text[256];
+  std::snprintf(text, sizeof text, " do not meet: %s apart at their nearest, (%g, %g, %g) and (%g, %g, %g)",
+                mm_text(closest.gap()).c_str(), closest.pa.X(), closest.pa.Y(), closest.pa.Z(), closest.pb.X(),
+                closest.pb.Y(), closest.pb.Z());
+  return pair + text;
+}
+
+std::string joined(const std::vector<std::string>& items, const char* between) {
+  std::string text;
+  for (const std::string& item : items) {
+    text += (text.empty() ? "" : between) + item;
+  }
+  return text;
+}
+
+// Points along the curve, its ends among them: the curve painted.
+void add_along(std::vector<ErrorPlace>& places, const occ::handle<Geom_BSplineCurve>& curve) {
+  constexpr int kSteps = 8;
+  const double first = curve->FirstParameter();
+  const double last = curve->LastParameter();
+  for (int i = 0; i <= kSteps; ++i) {
+    places.push_back(point_place(curve->Value(first + (last - first) * i / kSteps)));
+  }
+}
+
+// The curve from its first to its last crossing (`at`: its parameters
+// there), an end kept where the crossing lies within kNetwork of it. A
+// closed curve stays whole: GeomFill_Gordon opens a closed seam itself.
+// Null when the crossings are one point.
+occ::handle<Geom_BSplineCurve> between_crossings(const occ::handle<Geom_BSplineCurve>& curve,
+                                                 const std::vector<double>& at) {
+  const double first = curve->FirstParameter();
+  const double last = curve->LastParameter();
+  const gp_Pnt start = curve->Value(first);
+  const gp_Pnt end = curve->Value(last);
+  if (at.empty() || start.Distance(end) <= kNetwork) {
+    return curve;
+  }
+  double from = *std::min_element(at.begin(), at.end());
+  double to = *std::max_element(at.begin(), at.end());
+  if (curve->Value(from).Distance(start) <= kNetwork) {
+    from = first;
+  }
+  if (curve->Value(to).Distance(end) <= kNetwork) {
+    to = last;
+  }
+  if (!(to - from > Precision::PConfusion()) || curve->Value(from).Distance(curve->Value(to)) <= kNetwork) {
+    return {};
+  }
+  if (from <= first && to >= last) {
+    return curve;
+  }
+  occ::handle<Geom_BSplineCurve> part = occ::down_cast<Geom_BSplineCurve>(curve->Copy());
+  part->Segment(std::max(from, first), std::min(to, last));
+  return part;
+}
+
+// GeomFill_Gordon's result and stage in words, for agents.
+const char* gordon_status(GeomFill_Gordon::ResultStatus status) {
+  static const char* const names[] = {"not started",
+                                      "done",
+                                      "invalid input",
+                                      "conversion failed",
+                                      "intersection failed",
+                                      "ordering failed",
+                                      "reparametrization failed",
+                                      "compatibility failed",
+                                      "curve compatibility failed",
+                                      "rational reparametrization failed",
+                                      "skinning failed",
+                                      "reference surface failed",
+                                      "knot alignment failed",
+                                      "rational degree overflow",
+                                      "rational construction failed",
+                                      "periodicity failed",
+                                      "approximation failed",
+                                      "construction failed"};
+  const auto i = static_cast<std::size_t>(status);
+  return i < sizeof names / sizeof names[0] ? names[i] : "failed";
+}
+
+const char* gordon_stage(GeomFill_Gordon::BuildStage stage) {
+  static const char* const names[] = {"not started",       "input conversion",   "contact discovery",
+                                      "network ordering",  "reparametrization",  "exact construction",
+                                      "validation",        "approximation"};
+  const auto i = static_cast<std::size_t>(stage);
+  return i < sizeof names / sizeof names[0] ? names[i] : "unknown";
+}
+
+// The surface through the curves one way and the crossing curves (each a
+// B-spline, `u` and `v` the boundaries they are of, for the messages):
+// each curve cut back to its first and last crossing, then
+// GeomFill_Gordon. Refused in words: a curve one way that does not meet a
+// crossing curve (the pairs, their gaps and nearest points in the detail,
+// both curves painted), or curves that cross but no surface runs through
+// (Gordon's report in the detail, the crossings painted).
+occ::handle<Geom_BSplineSurface> network_surface(const std::vector<BoundaryCurve>& u,
+                                                 const std::vector<BoundaryCurve>& v,
+                                                 const std::vector<occ::handle<Geom_BSplineCurve>>& ways,
+                                                 const std::vector<occ::handle<Geom_BSplineCurve>>& across) {
+  const char* const every = " (every curve one way must cross every curve the other way)";
+  std::vector<std::vector<double>> at_way(ways.size());
+  std::vector<std::vector<double>> at_across(across.size());
+  std::vector<std::string> misses;
+  std::vector<std::string> repeats;
+  std::vector<ErrorPlace> missed;
+  std::vector<ErrorPlace> crossings;
+  std::vector<bool> painted_way(ways.size(), false);
+  std::vector<bool> painted_across(across.size(), false);
+  for (std::size_t i = 0; i < ways.size(); ++i) {
+    for (std::size_t j = 0; j < across.size(); ++j) {
+      const Meeting meeting = meeting_of(ways[i], across[j]);
+      const std::string pair = network_label(true, i, u[i]) + " and " + network_label(false, j, v[j]);
+      if (meeting.crossings.empty()) {
+        if (meeting.near_known) {
+          misses.push_back(miss_text(pair, meeting.nearest));
+          missed.push_back(point_place(meeting.nearest.pa));
+          missed.push_back(point_place(meeting.nearest.pb));
+        } else {
+          misses.push_back(pair + " do not meet");
+        }
+        if (!painted_way[i]) {
+          add_along(missed, ways[i]);
+          painted_way[i] = true;
+        }
+        if (!painted_across[j]) {
+          add_along(missed, across[j]);
+          painted_across[j] = true;
+        }
+        continue;
+      }
+      if (meeting.crossings.size() > 1) {
+        repeats.push_back(pair + " cross " + std::to_string(meeting.crossings.size()) + " times");
+      }
+      for (const Contact& crossing : meeting.crossings) {
+        at_way[i].push_back(crossing.a);
+        at_across[j].push_back(crossing.b);
+        crossings.push_back(point_place(crossing.pa));
+      }
+    }
+  }
+  if (!misses.empty()) {
+    const std::string said = misses.size() == 1 ? "boundary surface: a curve one way does not meet a crossing curve"
+                                                : "boundary surface: curves one way do not meet crossing curves";
+    throw std::invalid_argument(placed_error(said + every, "boundary surface: " + joined(misses, "; ") + every, missed));
+  }
+  const auto cannot = [&](const std::string& why) {
+    std::string detail = "boundary surface: no surface runs through the network: " + why;
+    if (!repeats.empty()) {
+      detail += "; " + joined(repeats, "; ");
+    }
+    return std::invalid_argument(
+        placed_error("boundary surface: the curves cross, but no surface runs through them", detail, crossings));
+  };
+  NCollection_Array1<occ::handle<Geom_Curve>> profiles(1, static_cast<int>(ways.size()));
+  NCollection_Array1<occ::handle<Geom_Curve>> guides(1, static_cast<int>(across.size()));
+  for (std::size_t i = 0; i < ways.size(); ++i) {
+    const occ::handle<Geom_BSplineCurve> part = between_crossings(ways[i], at_way[i]);
+    if (part.IsNull()) {
+      throw cannot(network_label(true, i, u[i]) + " crosses the others at one point only");
+    }
+    profiles(static_cast<int>(i) + 1) = part;
+  }
+  for (std::size_t j = 0; j < across.size(); ++j) {
+    const occ::handle<Geom_BSplineCurve> part = between_crossings(across[j], at_across[j]);
+    if (part.IsNull()) {
+      throw cannot(network_label(false, j, v[j]) + " crosses the others at one point only");
+    }
+    guides(static_cast<int>(j) + 1) = part;
+  }
+  GeomFill_Gordon gordon;
+  gordon.Init(profiles, guides, kNetwork);
+  gordon.Perform();
+  if (!gordon.IsDone()) {
+    const GeomFill_Gordon::BuildReport& report = gordon.Report();
+    throw cannot(std::string("the surface fit stopped (") + gordon_status(report.Status) + " at " +
+                 gordon_stage(report.FailedStage) + ", contacts up to " + mm_text(report.MaxContactGap) + " apart)");
+  }
+  return gordon.Surface();
+}
+
 ShapePtr network(const std::string& feature, const std::vector<BoundaryCurve>& u,
                  const std::vector<BoundaryCurve>& v) {
   if (u.size() < 2) {
@@ -633,28 +961,21 @@ ShapePtr network(const std::string& feature, const std::vector<BoundaryCurve>& u
     }
     return one_face(feature, "boundary", face);
   }
-  NCollection_Array1<occ::handle<Geom_Curve>> profiles(1, static_cast<int>(u.size()));
-  NCollection_Array1<occ::handle<Geom_Curve>> guides(1, static_cast<int>(v.size()));
-  for (std::size_t i = 0; i < u.size(); ++i) {
-    if (u[i].kind == BoundaryCurve::Kind::Point) {
+  std::vector<occ::handle<Geom_BSplineCurve>> ways;
+  std::vector<occ::handle<Geom_BSplineCurve>> across;
+  for (const BoundaryCurve& curve : u) {
+    if (curve.kind == BoundaryCurve::Kind::Point) {
       throw std::invalid_argument("boundary surface: a network with crossing curves has no points");
     }
-    profiles(static_cast<int>(i) + 1) = curve_of(boundary_wire(u[i], keep));
+    ways.push_back(curve_of(boundary_wire(curve, keep)));
   }
-  for (std::size_t i = 0; i < v.size(); ++i) {
-    if (v[i].kind == BoundaryCurve::Kind::Point) {
+  for (const BoundaryCurve& curve : v) {
+    if (curve.kind == BoundaryCurve::Kind::Point) {
       throw std::invalid_argument("boundary surface: a network with crossing curves has no points");
     }
-    guides(static_cast<int>(i) + 1) = curve_of(boundary_wire(v[i], keep));
+    across.push_back(curve_of(boundary_wire(curve, keep)));
   }
-  GeomFill_Gordon gordon;
-  gordon.Init(profiles, guides, 1.0e-3);
-  gordon.Perform();
-  if (!gordon.IsDone()) {
-    throw std::invalid_argument("boundary surface: no surface runs through the network (every curve one way "
-                                "must cross every curve the other way)");
-  }
-  return one_face(feature, "boundary", face_of(gordon.Surface()));
+  return one_face(feature, "boundary", face_of(network_surface(u, v, ways, across)));
 }
 
 // --- Match Surface and Fair Surface

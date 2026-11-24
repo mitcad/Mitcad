@@ -22,6 +22,13 @@
 //! [`Drawing::to_millimeters`] converts them. Angles are radians,
 //! counter-clockwise. Layers are kept as metadata.
 //!
+//! The R2000 files carry what strict readers expect besides the geometry
+//! (mitcad#2315): the dimension style table's group 71, a plot style (390)
+//! on each layer with the `ACAD_PLOTSTYLENAME` dictionary and its classes,
+//! the text style of the standard dimension style, arc angles in
+//! [0, 360). [`check_r2000`] holds written text to the DXF reference's
+//! group order and references, independently of the reader and writer.
+//!
 //! ```
 //! let text = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n10\n21\n5\n0\nENDSEC\n0\nEOF\n";
 //! let drawing = mitcad_dxf::read_str(text).unwrap();
@@ -33,6 +40,7 @@
 mod error;
 mod math;
 mod reader;
+mod testing;
 mod text;
 mod types;
 mod units;
@@ -41,6 +49,7 @@ mod writer;
 pub use error::Error;
 pub use math::{Affine, bulge_arc};
 pub use reader::{MAX_ARRAY_CELLS, READ_BUDGET, read, read_file, read_str, read_within};
+pub use testing::check_r2000;
 pub use types::{Drawing, Entity, Geometry, Layer, Linetype, Point2, Spline, Text};
 pub use units::Units;
 pub use writer::{DxfVersion, WriteOptions, write_file, write_string};

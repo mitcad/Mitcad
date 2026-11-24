@@ -38,10 +38,13 @@
 // downloaded. The row, the folder shown and the view are remembered for
 // the next start.
 // Then a drop area (a CAD file dropped anywhere on the page opens or is
-// imported); Resources: Component Libraries, User Guide, Keyboard
-// Shortcuts and Connect AI Assistant, each running the command that is
-// there today; and at the bottom Show start page at launch (on by
-// default), Preferences… and Report an Issue (the issue list).
+// imported); Resources: Component Libraries, User Guide, Tutorials,
+// Keyboard Shortcuts and Connect AI Assistant, each running the command
+// that is there today (Tutorials, Help › Tutorials…, shows the tutorials to
+// choose from in the page's centre in place of the designs' browser,
+// mitcad#2346, tutorials/TutorialChoice.hpp, whose breadcrumb leads back);
+// and at the bottom Show start page at launch (on by default),
+// Preferences… and Report an Issue (the issue list).
 //
 // Logs for UI tests (window coordinates, only what changed): "Start page
 // action New Design at x,y" (Open Design, Open Project, Import File),
@@ -69,8 +72,9 @@
 // <names>", "Start page at launch: on|off", "Start page browse view:
 // tree|cards" (a project shown, and each choice), "Start page tree: Shop |
 // Shop/parts/ | Shop/parts/sub/ (current Shop/parts/)" (start::treeLine)
-// "Start page tree folded: <place key>" (unfolded) and "Start page
-// keyboard: card <key>" (Enter on the tree).
+// "Start page tree folded: <place key>" (unfolded), "Start page
+// keyboard: card <key>" (Enter on the tree) and "Start page section:
+// tutorials|designs" (the centre's choice, mitcad#2346).
 
 #include <functional>
 
@@ -148,6 +152,10 @@ public:
     // A project's marks as the Projects panel shows them (its state icon,
     // the words for its tooltip); null: Local or Cloud only.
     std::function<RowMarks(const ProjectRow& row)> projectMarks;
+    // The tutorials to choose from (mitcad#2346,
+    // tutorials/TutorialChoice.hpp), made the first time the page shows
+    // them; `back` shows the designs' browser again. Null: no tutorials.
+    std::function<QWidget*(std::function<void()> back)> tutorials;
     QString version;    // "0.43.0"
     QString issuesUrl;  // the issue list
     QString releaseUrl; // this version's release page
@@ -162,6 +170,13 @@ public:
   void refresh();
   // Logs the places of its controls again when they changed.
   void logPlaces();
+  // The page's centre (mitcad#2346): the tutorials to choose from
+  // (Help › Tutorials…, the Resources' Tutorials) or the designs' browser.
+  // The choice stays while the window lives: the page shows it again when
+  // it shows again.
+  void showTutorials();
+  void showDesigns();
+  bool tutorialsShown() const { return m_tutorialsShown; }
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -281,6 +296,12 @@ private:
   // (StartBackdrop.hpp, mitcad#1439).
   int m_backdropTop = 0;
   int m_backdropBelow = 0;
+  // The centre's two panels (mitcad#2346): the designs' browser and the
+  // tutorials (made on first use), one of them shown.
+  QHBoxLayout* m_middle = nullptr;
+  QWidget* m_designsPanel = nullptr;
+  QWidget* m_tutorialsPanel = nullptr;
+  bool m_tutorialsShown = false;
 };
 
 } // namespace mitcad

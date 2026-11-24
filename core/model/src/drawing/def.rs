@@ -341,6 +341,13 @@ pub struct DrawingView {
     /// its own, not its parent's or its children's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<LineStyle>,
+    /// The explode view (by name, mitcad#2113) a base view shows its
+    /// subject in: the parts at their explode places and the trail lines
+    /// as thin phantom lines. Other views show their base view's. Left
+    /// out, the design as assembled; an explode view that is gone is drawn
+    /// assembled with a warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explode: Option<String>,
 }
 
 /// A width and a pattern chosen in a view (mitcad#1546) for the visible
@@ -1314,6 +1321,15 @@ impl DrawingSheet {
         }
     }
 
+    /// The explode view a view shows its subject in (mitcad#2113): its base
+    /// view's.
+    pub fn explode(&self, id: u32) -> Option<String> {
+        self.lineage(id)
+            .ok()?
+            .last()
+            .and_then(|v| v.explode.clone())
+    }
+
     /// The point of a view's coordinates that lies at its place: the
     /// origin, or a detail's centre.
     pub fn anchor(&self, id: u32) -> P2 {
@@ -1494,6 +1510,19 @@ impl DrawingSheet {
                 )
             {
                 return Err(format!("{at}: only a base view has a subject"));
+            }
+            if let Some(explode) = &view.explode {
+                if !matches!(
+                    view.kind,
+                    ViewKind::Base { .. } | ViewKind::Section { parent: None, .. }
+                ) {
+                    return Err(format!(
+                        "{at}: only a base view shows an explode view; the others show their base view's"
+                    ));
+                }
+                if explode.trim().is_empty() {
+                    return Err(format!("{at}: the explode view's name is empty"));
+                }
             }
             // A Flat Pattern's view (mitcad#2280) is seen square on alone:
             // details of it, no views from its sides or cuts of it.

@@ -14,6 +14,21 @@
 //!
 //! Closed splines work alike. Every existing point keeps its id, its
 //! constraints and its dimensions.
+//!
+//! Remove Point (mitcad#2326) is its pair: a spline's own point leaves the
+//! spline, which stays.
+//!
+//! - A fitted spline is fitted again through the rest of its points; an
+//!   end point of an open one makes the next point the end.
+//! - A spline by control points loses the control point and one interior
+//!   knot ([`Nurbs::remove_control_point`]): the change stays within that
+//!   knot's spans, and a point just inserted goes again exactly.
+//!
+//! Constraints and dimensions on the removed point go with it, as does a
+//! tangent or smooth constraint at a removed end (its `at` names the
+//! point); the others stay.
+
+use std::collections::BTreeSet;
 
 use super::EntityKind;
 use super::edit::SketchEdit;
@@ -197,5 +212,167 @@ impl SketchEdit<'_> {
             *knots = new.knots.clone();
         }
         Ok(point)
+    }
+}
+
+// Remove Point on a spline (mitcad#2326).
+impl SketchEdit<'_> {
+    /// Removes the point `point` from the spline `id`, which stays (see the
+    /// module documentation). Refused, with the reason in words, for a
+    /// curve that is no spline, a point it does not list, a point another
+    /// curve uses too, a projected spline or one a derived offset computes,
+    /// the one point where both ends of a spline by control points are, and
+    /// where fewer points would remain than the spline needs (an open
+    /// fitted spline 2, a closed one 3, a spline by control points its
+    /// degree + 1). A pattern's spline is first freed into plain sketch
+    /// geometry, as Trim frees it.
+    pub fn remove_spline_point(&mut self, id: EntityUid, point: EntityUid) -> Result<(), String> {
+        let kind = self.curve(id)?.kind.clone();
+        let listed = match &kind {
+            EntityKind::FittedSpline { points, .. } => points.clone(),
+            EntityKind::Spline { control, .. } => control.clone(),
+            _ => {
+                return Err(format!(
+                    "c{} is a {}: points are removed from splines only",
+                    id.0,
+                    kind.type_name()
+                ));
+            }
+        };
+        self.shape_editable(id)?;
+        let times = listed.iter().filter(|p| **p == point).count();
+        if times == 0 {
+            return Err(format!("p{} is not a point of c{}", point.0, id.0));
+        }
+        if let Some(other) = self
+            .def
+            .entities
+            .iter()
+            .find(|e| e.id != id && e.kind.points().contains(&point))
+        {
+            return Err(format!(
+                "p{} is also a point of {}: it can only be deleted with the curves that use it",
+                point.0,
+                other.as_ref()
+            ));
+        }
+        if times > 1 {
+            let closes = listed.first() == Some(&point) && listed.last() == Some(&point);
+            return Err(if closes {
+                format!(
+                    "p{} is where c{} closes, both its ends: the spline cannot lose it",
+                    point.0, id.0
+                )
+            } else {
+                format!(
+                    "p{} is listed more than once in c{}: the spline cannot lose it",
+                    point.0, id.0
+                )
+            });
+        }
+        let (least, what) = match &kind {
+            EntityKind::FittedSpline { closed: false, .. } => (2, "an open spline".to_owned()),
+            EntityKind::FittedSpline { closed: true, .. } => (3, "a closed spline".to_owned()),
+            EntityKind::Spline { degree, .. } => (
+                *degree as usize + 1,
+                format!("a spline of degree {degree} by control points"),
+            ),
+            _ => unreachable!("a spline"),
+        };
+        if listed.len() <= least {
+            return Err(format!(
+                "c{} would keep {} points, and {what} needs {least}: delete the spline instead",
+                id.0,
+                listed.len() - 1
+            ));
+        }
+        match kind {
+            EntityKind::FittedSpline { .. } => {
+                if let Some(EntityKind::FittedSpline { points, .. }) =
+                    self.def.entity_mut(id).map(|e| &mut e.kind)
+                {
+                    points.retain(|p| *p != point);
+                }
+            }
+            EntityKind::Spline { control, .. } => {
+                let solved = self.solved()?;
+                let curve = solved
+                    .curves
+                    .get(&id)
+                    .ok_or_else(|| format!("curve c{} is not solved", id.0))?;
+                let Curve2::Nurbs(spline) = curve else {
+                    return Err(format!("c{} is not solved as a spline", id.0));
+                };
+                self.remove_control_point(id, spline, &control, point)?;
+            }
+            _ => unreachable!("a spline"),
+        }
+        // A pattern makes its curves again from their originals: its
+        // spline is plain sketch geometry from now on (mitcad#2007).
+        self.free_patterns_of(&[id]);
+        // Its constraints and dimensions with it: a tangent or smooth at a
+        // removed end names it (`at`). One without `at` touches the spline
+        // anywhere or holds an end it shares with the other curve, which
+        // was refused above, so it stays.
+        self.drop_entities(&BTreeSet::from([point]));
+        Ok(())
+    }
+
+    /// The control point `point` and one knot out of the spline by control
+    /// points `id`, solved as `spline`.
+    fn remove_control_point(
+        &mut self,
+        id: EntityUid,
+        spline: &Nurbs,
+        control: &[EntityUid],
+        point: EntityUid,
+    ) -> Result<(), String> {
+        if control.len() != spline.control.len() {
+            return Err(format!("c{} is not solved with its control points", id.0));
+        }
+        let m = control
+            .iter()
+            .position(|p| *p == point)
+            .expect("a listed point");
+        let removal = spline.remove_control_point(m).ok_or_else(|| {
+            format!(
+                "c{} has no knot between its ends to remove with p{}",
+                id.0, point.0
+            )
+        })?;
+        // A point the spline uses twice cannot move to two places.
+        if let Some(twice) = removal
+            .moved
+            .iter()
+            .map(|i| control[*i])
+            .find(|p| control.iter().filter(|q| *q == p).count() > 1)
+        {
+            return Err(format!(
+                "p{} is twice a control point of c{} and cannot move to keep its shape",
+                twice.0, id.0
+            ));
+        }
+        let new = &removal.spline;
+        for i in &removal.moved {
+            let at = new.control[if *i < m { *i } else { *i - 1 }];
+            if let Some(EntityKind::Point { at: place }) =
+                self.def.entity_mut(control[*i]).map(|e| &mut e.kind)
+            {
+                *place = at;
+            }
+        }
+        let e = self.def.entity_mut(id).expect("a curve");
+        if let EntityKind::Spline {
+            control: ids,
+            weights,
+            knots,
+            ..
+        } = &mut e.kind
+        {
+            ids.remove(m);
+            *weights = new.weights.clone();
+            *knots = new.knots.clone();
+        }
+        Ok(())
     }
 }

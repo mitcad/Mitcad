@@ -17,6 +17,8 @@ void write_obj(const std::string& path, const std::vector<Body>& bodies,
   std::vector<Body> meshes = bodies;
   for (Body& body : meshes) {
     body.shape = triangulate(body.shape, options.mesh);
+    // A mesh format: the body's colour only (mitcad#2313).
+    body.face_colors.clear();
   }
   const auto lock = detail::exchange_lock();
   const occ::handle<TDocStd_Document> document = detail::new_document();
@@ -54,6 +56,10 @@ std::vector<Body> read_obj(const std::string& path, const ObjReadOptions& option
   std::vector<Body> bodies = detail::document_bodies(document);
   if (bodies.empty()) {
     throw Error("OBJ file " + path + " has no faces");
+  }
+  // A mesh format: the body's colour only (mitcad#2313).
+  for (Body& body : bodies) {
+    body.face_colors.clear();
   }
   return bodies;
 }

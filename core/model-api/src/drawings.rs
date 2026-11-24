@@ -231,6 +231,10 @@ pub(super) struct AddViewCommand {
     /// mitcad#1406).
     #[serde(default)]
     model_annotations: Option<bool>,
+    /// A base view's explode view, by name (mitcad#2113): its subject at
+    /// the explode's places with its trail lines; assembled when left out.
+    #[serde(default)]
+    explode: Option<String>,
 }
 
 /// A break picked on a view: two sheet points whose coordinates along the
@@ -308,6 +312,10 @@ pub(super) struct EditViewCommand {
     /// (mitcad#729).
     #[serde(default)]
     rotation: Option<f64>,
+    /// A base view's explode view by name (mitcad#2113); `""` shows the
+    /// design assembled.
+    #[serde(default)]
+    explode: Option<String>,
     /// A Flat Pattern view's bend notes on or off (mitcad#2280).
     #[serde(default)]
     bend_notes: Option<bool>,
@@ -363,6 +371,9 @@ named_enum! {
         // A sheet's title block edited on the sheet (mitcad#1625,
         // `drawing_templates.rs`).
         "edit_drawing_title_block" => EditTitleBlock(Box<TitleBlockCommand>),
+        // Weld symbols proposed from BUILD's joints (mitcad#2350,
+        // `drawing_welds.rs`).
+        "propose_drawing_welds" => ProposeWelds(Box<super::drawing_welds::ProposeWeldsCommand>),
     }
 }
 
@@ -726,24 +737,30 @@ pub(super) fn view_key(tag: &str, shown: &[(BodyUid, u128, Transform)], spec: &V
 }
 
 /// The area of a sheet the views go in: inside the frame, above the title
-/// block and its revision table's room (mitcad#722).
+/// block and its revision table's room (mitcad#722); a template without a
+/// title block gives the whole frame, one without a frame too the whole
+/// sheet within its margins (mitcad#2325): the views keep 4 mm off the
+/// lines drawn, and only off them.
 fn view_area(sheet: &DrawingSheet) -> (P2, P2) {
+    const GAP: f64 = 4.0;
     let (width, height) = sheet.dimensions();
-    let ((min, max), (_, title_max), revisions) = match &sheet.template {
-        Some(t) => (
-            t.frame(width, height),
-            t.title_box(width, height),
-            t.revision_room(),
-        ),
+    let ((min, max), bottom, gap, bottom_gap) = match &sheet.template {
+        Some(t) => {
+            let (min, max) = t.frame(width, height);
+            let gap = if t.show_frame { GAP } else { 0.0 };
+            let bottom_gap = if t.show_title_block { GAP } else { gap };
+            ((min, max), min[1] + t.title_room(), gap, bottom_gap)
+        }
         None => (
             compose::frame(width, height),
-            compose::title_box(width, height),
-            0.0,
+            compose::title_box(width, height).1[1],
+            GAP,
+            GAP,
         ),
     };
     (
-        [min[0] + 4.0, title_max[1] + revisions + 4.0],
-        [max[0] - 4.0, max[1] - 4.0],
+        [min[0] + gap, bottom + bottom_gap],
+        [max[0] - gap, max[1] - gap],
     )
 }
 
@@ -1046,6 +1063,66 @@ fn resolve_template(
     }
 }
 
+/// The bodies a view shows at an explode's places (mitcad#2113): each
+/// moved by the offset of its path (a body of the drawing's component
+/// itself by its own), in the component's coordinates.
+fn exploded(explode: &mitcad_model::ExplodeState, shown: &mut [Shown]) {
+    for s in shown {
+        let body = s.path.is_empty().then_some(s.body);
+        let offset = explode.offset(&s.path, body);
+        if !offset.is_identity() {
+            s.transform = offset.after(&s.transform);
+        }
+    }
+}
+
+/// A projection with an explode's trail lines (mitcad#2113): each a line
+/// from where a part was to where a step took it, in view coordinates,
+/// drawn as a thin phantom line.
+fn with_trails(
+    projection: &ViewProjection,
+    spec: &ViewSpec,
+    trails: &[(Vec3, Vec3)],
+) -> ViewProjection {
+    use mitcad_model::drawing::{ViewCurve, ViewEdge, ViewEdgeKind};
+    let mut out = projection.clone();
+    for (from, to) in trails {
+        let (a, b) = (spec.project(*from), spec.project(*to));
+        if (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-9 {
+            continue;
+        }
+        out.edges.push(ViewEdge {
+            visible: true,
+            kind: ViewEdgeKind::Trail,
+            curve: ViewCurve::Line(a, b),
+            source: None,
+        });
+    }
+    out
+}
+
+/// A drawing view's explode view (mitcad#2113): None for none or `""`;
+/// the view must explode the drawing's component.
+fn drawing_explode<K: Kernel>(
+    doc: &Document<K>,
+    name: Option<&str>,
+    component: ComponentUid,
+) -> Result<Option<String>, ApiError> {
+    let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
+        return Ok(None);
+    };
+    let view = doc.explode_view(name)?;
+    if view.component != component {
+        return Err(ApiError(format!(
+            "{} explodes {}, not the drawing's {}",
+            view.name,
+            doc.assembly().name(view.component),
+            doc.assembly().name(component)
+        )));
+    }
+    Ok(Some(view.name.clone()))
+}
+
 /// The polygons of a shading inside a detail's circle.
 fn shading_inside_circle(shading: &[(Vec<P2>, f64)], center: P2, radius: f64) -> Shading {
     clip::polygons_inside_circle(shading, center, radius)
@@ -1291,7 +1368,8 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     || c.aligned.is_some()
                     || c.center_marks.is_some()
                     || c.retrieved_dimensions.is_some()
-                    || c.model_annotations.is_some();
+                    || c.model_annotations.is_some()
+                    || c.explode.is_some();
                 if other {
                     return Err(ApiError(
                         "a cut sheet's part is moved and turned only (place, move, rotation)"
@@ -1345,6 +1423,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             DrawingCommand::KeepModelItems(c) => self.keep_drawing_model_items(*c),
             DrawingCommand::EditLine(c) => self.edit_drawing_line(*c),
             DrawingCommand::EditTitleBlock(c) => self.edit_drawing_title_block(*c),
+            DrawingCommand::ProposeWelds(c) => self.propose_drawing_welds(*c),
         }
     }
 
@@ -1711,13 +1790,36 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 // enlarges looks, and cut to its circle.
                 let spec = sheet.spec(view.id)?;
                 let style = sheet.style(view.id);
-                let (shown, gone) =
+                let (mut shown, gone) =
                     self.subject_shown(drawing.component, &sheet.subject(view.id))?;
                 // What of its subject is gone, said by the view that keeps
                 // it (mitcad#1293).
                 if view.subject.is_some() && !gone.is_empty() {
                     out.missing.insert(view.id, gone);
                 }
+                // Its base view's explode view (mitcad#2113): the bodies at
+                // their explode places, the trail lines drawn after the
+                // projection; one that is gone draws it assembled.
+                let trails = match sheet.explode(view.id) {
+                    None => Vec::new(),
+                    Some(name) => match self.explode_state(&name, None) {
+                        Ok(explode) if explode.component == drawing.component => {
+                            exploded(&explode, &mut shown);
+                            explode.trails.iter().map(|t| (t.from, t.to)).collect()
+                        }
+                        _ => {
+                            let text = notice::FeatureError::new(format!(
+                                "the explode view {name} is gone: the view shows the design assembled"
+                            ))
+                            .text();
+                            let missing = out.missing.entry(view.id).or_default();
+                            if !missing.contains(&text) {
+                                missing.push(text);
+                            }
+                            Vec::new()
+                        }
+                    },
+                };
                 let mut own: Vec<usize> = Vec::new();
                 for s in &shown {
                     let i = match out.shown.iter().position(|o| o == s) {
@@ -1761,6 +1863,11 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                         &spec,
                         &placed,
                     ));
+                }
+                // An explode's trail lines (mitcad#2113): thin phantom
+                // lines, before a detail's circle or a break cuts them.
+                if !trails.is_empty() {
+                    projection = Arc::new(with_trails(&projection, &spec, &trails));
                 }
                 // A Flat Pattern's bend lines and their notes (mitcad#2280),
                 // cut by a detail's circle and breaks as its edges are.
@@ -2195,6 +2302,9 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                         "name": t.name,
                         "library": t.library,
                         "choice": t.choice(),
+                        // What it draws (mitcad#2325).
+                        "show_frame": t.show_frame,
+                        "show_title_block": t.show_title_block,
                     })),
                     "units": sheet.units,
                     "annotations": sheet.annotations,
@@ -2638,6 +2748,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             rotation: 0.0,
             sketch: Vec::new(),
             lines: Vec::new(),
+            explode: drawing_explode(self, c.explode.as_deref(), old.component)?,
         });
         changed.check().map_err(ApiError)?;
         phases.mark("define");
@@ -2797,6 +2908,11 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             .map(|s| self.recorded_subject(old.component, s, true))
             .transpose()?;
         let update = c.subject == Some(Subject::Design);
+        // An explode view by name, `""` for none (mitcad#2113).
+        let explode = match c.explode.as_deref() {
+            None => None,
+            Some(name) => Some(drawing_explode(self, Some(name), old.component)?),
+        };
         // Turned on the sheet (mitcad#729): about the middle of its box,
         // which stays where it is (its box's middle on the sheet and in
         // the view's coordinates, before).
@@ -2931,6 +3047,10 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             }
             if let Some(on) = c.model_annotations {
                 view.model_annotations = on;
+            }
+            // Its explode view (mitcad#2113), or assembled again.
+            if let Some(explode) = explode {
+                view.explode = explode;
             }
             // A Flat Pattern view's direction is its pattern's (mitcad#2280).
             let flat = matches!(view.subject, Some(Subject::FlatPattern { .. }));
@@ -3351,6 +3471,9 @@ fn view_json(sheet: &DrawingSheet, view: &DrawingView) -> Value {
         // Its own widths and patterns of edges, bodies and occurrences
         // (mitcad#1546).
         "lines": view.lines,
+        // The explode view it shows, its base view's (mitcad#2113); null:
+        // assembled.
+        "explode": sheet.explode(view.id),
     });
     match &view.kind {
         ViewKind::Base { direction } => {

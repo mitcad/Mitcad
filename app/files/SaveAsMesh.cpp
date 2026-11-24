@@ -11,24 +11,13 @@
 #include "Print3d.hpp"
 
 namespace mitcad {
+namespace {
 
-MeshPlan planSaveAsMesh(const QVector<MeshItem>& items, const QJsonArray& instances,
-                        const QHash<QString, MeshBody>& bodies, const QHash<QString, QString>& components,
-                        const QString& design) {
-  MeshPlan plan;
-  // The items once each (two faces of a body are the body), and every body
-  // they stand for with the occurrences it came from.
+// The items once each (two faces of a body are the body); `add` gets every
+// body they stand for with the occurrence of the item it came from.
+template <typename Add>
+QVector<MeshItem> walkMeshItems(const QVector<MeshItem>& items, const QJsonArray& instances, Add add) {
   QVector<MeshItem> distinct;
-  QStringList found;
-  QHash<QString, QStringList> from;
-  const auto add = [&found, &from](const QString& body, const QString& occurrence) {
-    if (!found.contains(body)) {
-      found << body;
-    }
-    if (!from[body].contains(occurrence)) {
-      from[body] << occurrence;
-    }
-  };
   for (const MeshItem& item : items) {
     const bool seen = std::any_of(distinct.begin(), distinct.end(), [&item](const MeshItem& other) {
       return other.kind == item.kind && other.uid == item.uid && other.occurrence == item.occurrence;
@@ -56,6 +45,37 @@ MeshPlan planSaveAsMesh(const QVector<MeshItem>& items, const QJsonArray& instan
       }
     }
   }
+  return distinct;
+}
+
+} // namespace
+
+QStringList meshItemsBodies(const QVector<MeshItem>& items, const QJsonArray& instances) {
+  QStringList found;
+  walkMeshItems(items, instances, [&found](const QString& body, const QString& /*occurrence*/) {
+    if (!body.isEmpty() && !found.contains(body)) {
+      found << body;
+    }
+  });
+  return found;
+}
+
+MeshPlan planSaveAsMesh(const QVector<MeshItem>& items, const QJsonArray& instances,
+                        const QHash<QString, MeshBody>& bodies, const QHash<QString, QString>& components,
+                        const QString& design) {
+  MeshPlan plan;
+  // Every body the items stand for with the occurrences it came from.
+  QStringList found;
+  QHash<QString, QStringList> from;
+  const QVector<MeshItem> distinct =
+      walkMeshItems(items, instances, [&found, &from](const QString& body, const QString& occurrence) {
+        if (!found.contains(body)) {
+          found << body;
+        }
+        if (!from[body].contains(occurrence)) {
+          from[body] << occurrence;
+        }
+      });
   QStringList paths;
   for (const MeshItem& item : std::as_const(distinct)) {
     if (!paths.contains(item.occurrence)) {

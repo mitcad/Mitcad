@@ -2571,8 +2571,11 @@ if(BUILD_TESTING)
 endif()
 
 # A rounding as large as the side faces beside its edges (GitHub #353,
-# mitcad#1819) or whose rounded corners meet (GitHub #403, mitcad#1954): the
-# reported designs' roundings are built at their size, with no warning or
+# mitcad#1819) or whose rounded corners meet (GitHub #403, mitcad#1954, and
+# GitHub #536's four upright edges as one feature and as two, mitcad#2312),
+# and an edge of such a body rounded or bevelled past the flat faces at its
+# ends (GitHub #566, mitcad#2229): the reported designs' dressups are built
+# at their size, with no warning or
 # information, the side faces taken away, or refused in words (skipped
 # without the report's archives under MITCAD_MITCAD_REPORTED; the synthetic
 # cases are geometry.suite.dressup_takes_face's blocks and stepped block).
@@ -3042,6 +3045,61 @@ if(BUILD_TESTING)
     SKIP_REGULAR_EXPRESSION "fillet face end reported: skipped" TIMEOUT 600)
 endif()
 
+# The reported wave-shaped model and the other program's result of it
+# (mitcad#2228), found by their content ids in wavy-fillet/ under
+# MITCAD_MITCAD_REPORTED: each top edge along the waves rounded at 2.5, 3,
+# 5, 8.5 and 8.7 mm, one valid solid each; the .f3d's fillet (8.7 mm)
+# built, parametric with its bodies as the file's within 0.1 % with as
+# many faces, or within the difference the test names (skipped without
+# the files).
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.wavy_fillet_reported
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/wavy-fillet-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/wavy-fillet-reported")
+    set_tests_properties(cli.wavy_fillet_reported PROPERTIES TIMEOUT 1800
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+      SKIP_REGULAR_EXPRESSION "wavy fillet reported: skipped")
+  endif()
+endif()
+
+# GitHub #592's design (mitcad#2291), found by its content id under
+# MITCAD_MITCAD_REPORTED and opened in a copy: the top's edge rounded with 3
+# past a cut-out's rim rounded with 2, the cut-out's axis in the top's
+# plane: the roundings join at the rim's own ball (the port's patch 2291),
+# one valid solid without a warning and no face under 0.01 mm2; with 2 for
+# both as clean as before (skipped without the design; the synthetic case
+# is geometry.port.2291).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_tight_rim_corner_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-tight-rim-corner-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-tight-rim-corner-reported-test.cmake")
+  set_tests_properties(cli.fillet_tight_rim_corner_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet tight rim corner reported: skipped" TIMEOUT 600)
+endif()
+
+# GitHub #582's design (mitcad#2272), found by its content id under
+# MITCAD_MITCAD_REPORTED and opened in a copy: a nozzle's foot that crosses
+# the line where a dome runs on tangentially into a tube, rounded with 1.5
+# on the original nozzle (picked by either edge of its chain), on a pattern
+# copy, and in the rounding the pattern repeats together with the flange's
+# chamfer, every copy rounded and chamfered (mitcad#2372): one valid solid
+# at the exact size without a note each (skipped without the design; the synthetic
+# case is geometry.fillet_nozzle_dome_junction).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_nozzle_dome_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-nozzle-dome-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-nozzle-dome-reported-test.cmake")
+  set_tests_properties(cli.fillet_nozzle_dome_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet nozzle dome reported: skipped" TIMEOUT 900)
+endif()
+
 # A test's PASS_REGULAR_EXPRESSION is a list: a ';' in its text splits it
 # into alternatives of which any one passes, so that the test no longer
 # checks what it says (mitcad#1913). Write '.' for a ';' of the output.
@@ -3063,6 +3121,67 @@ endif()
 if(BUILD_TESTING)
   add_test(NAME cli.drawing_flat_pattern_view
            COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/drawing_flat_pattern_view.json")
+endif()
+
+# URDF export for ROS 2 (mitcad#2100): a small mechanism exported to a
+# package folder, its files and structure checked (check_urdf too where it
+# is installed).
+if(BUILD_TESTING)
+  add_test(NAME cli.export_urdf
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/tests/urdf_export.json"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/urdf-export"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/urdf-export-test.cmake")
+endif()
+
+# Split Body with a face of another component's body as the Splitting Tool
+# (mitcad#2318, follow-up of mitcad#2299), on GitHub #588's design found by
+# its content id under MITCAD_MITCAD_REPORTED, with the real kernel: the
+# body the reporter split, cut by the other component's face picked through
+# its occurrence (tool_links, as the panel writes it), gives two solids of
+# its volume at the face's height, and the other component stays as it was
+# (skipped without the design).
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.split_body_other_component_reported
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/split-body-other-component-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/split-body-other-component-reported")
+    set_tests_properties(cli.split_body_other_component_reported PROPERTIES TIMEOUT 1200
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+      SKIP_REGULAR_EXPRESSION "split body other component reported: skipped")
+  endif()
+endif()
+
+# GitHub #608's design (mitcad#2330, fillet-full-round-order-reported-test.cmake,
+# skipped without it): the rounding wider than the riser (Fillet2) and a
+# rounding of a corner of the bottom it touches (Fillet1, at 11 and as a
+# Full Round) in both orders: each ok without a note, no sliver face, no lip
+# of Fillet2's rounding past Fillet1's, the same volume in both orders.
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_full_round_order_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-full-round-order-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-full-round-order-reported-test.cmake")
+  set_tests_properties(cli.fillet_full_round_order_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet full round order reported: skipped" TIMEOUT 900)
+endif()
+
+# Boundary Surface's Network whose curves run on past the outer crossing
+# curves (mitcad#2333, GitHub #609): the reported network rebuilt as a
+# design, found by its content id under MITCAD_MITCAD_REPORTED, builds one
+# face through all five curves between the outer crossings (skipped
+# without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.boundary_network_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/boundary-network-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/boundary-network-reported-test.cmake")
+  set_tests_properties(cli.boundary_network_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "boundary network reported: skipped" TIMEOUT 600)
 endif()
 
 # Every mitcad-cli test (mitcad-cli loads Qt's DLLs, mitcad-cli render): on

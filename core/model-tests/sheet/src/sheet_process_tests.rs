@@ -306,3 +306,62 @@ fn another_number_of_tabs_makes_the_folders_blank_again() {
     assert_eq!(doc.undo_depth(), depth);
     assert_eq!(box_defs(&doc), three);
 }
+
+/// A flat FEFCO 0421 folder (Folded off: no Folds) of C flute board,
+/// `height` high with `tabs` locking tabs: its rules are F1, its outline
+/// F2, its creases F3 and its Face F4.
+fn flat_folder(tabs: u32, height: f64) -> Document<MockKernel> {
+    let mut doc = Document::new(MockKernel::default());
+    doc.command(
+        &json!({"cmd":"add_standard_box","style":"fefco_0421","length":300,"width":200,
+                "height":height,"board":"c_flute","radius":0.5,"tabs":tabs,
+                "folded":false})
+        .to_string(),
+    )
+    .unwrap();
+    doc
+}
+
+/// A flat box has no Folds to find its creases sketch by (mitcad#2301):
+/// Edit Standard Box makes that sketch again too, so the flat blank's
+/// outline and crease lines are the new box's, the box stays flat, and
+/// undo brings the old ones back. Another number of tabs gives the
+/// outline other slots on the same creases; another height moves the
+/// creases.
+#[test]
+fn a_flat_boxs_creases_follow_its_edit() {
+    let three = box_defs(&flat_folder(3, 100.0));
+    assert_eq!(three.len(), 3, "outline, creases and Face, no Folds");
+    assert_eq!(three[1]["type"], "sketch", "{}", three[1]);
+    for (edit, expected, other_creases) in [
+        (json!({"tabs": 4}), flat_folder(4, 100.0), false),
+        (json!({"height": 120}), flat_folder(3, 120.0), true),
+    ] {
+        let expected = box_defs(&expected);
+        assert_ne!(three, expected, "{edit}: the new box has another blank");
+        assert_eq!(
+            three[1]["entities"] != expected[1]["entities"],
+            other_creases,
+            "{edit}: the new box's creases"
+        );
+        let mut doc = flat_folder(3, 100.0);
+        let depth = doc.undo_depth();
+        let mut command = json!({"cmd":"edit_standard_box","rules":"F1"});
+        for (key, value) in edit.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        let answer: Value =
+            serde_json::from_str(&doc.command(&command.to_string()).unwrap()).unwrap();
+        assert_eq!(answer["creases"], "F3", "{edit}: {answer}");
+        assert_eq!(answer["folds"], json!([]), "{edit}: {answer}");
+        assert_eq!(doc.undo_depth(), depth + 1, "{edit}: one undo step");
+        assert_eq!(box_defs(&doc), expected, "{edit}");
+        doc.undo();
+        assert_eq!(doc.undo_depth(), depth, "{edit}");
+        assert_eq!(
+            box_defs(&doc),
+            three,
+            "{edit}: undo brings the old creases back"
+        );
+    }
+}

@@ -70,6 +70,11 @@ void otherMotionTests() {
                     {QStringLiteral("axis"), QStringLiteral("x")},
                     {QStringLiteral("distance"), 3.0}}) == QStringLiteral("translate 3 mm along x"));
   CHECK(motionText({{QStringLiteral("type"), QStringLiteral("point_to_point")}}) == QStringLiteral("point to point"));
+  // Along one axis only (mitcad#2339); All as without it.
+  CHECK(motionText({{QStringLiteral("type"), QStringLiteral("point_to_point")}, {QStringLiteral("along"), QStringLiteral("z")}}) ==
+        QStringLiteral("point to point along z"));
+  CHECK(motionText({{QStringLiteral("type"), QStringLiteral("point_to_point")}, {QStringLiteral("along"), QStringLiteral("all")}}) ==
+        QStringLiteral("point to point"));
   CHECK(motionText({{QStringLiteral("type"), QStringLiteral("point_to_position")},
                     {QStringLiteral("x"), 10.0},
                     {QStringLiteral("y"), 0.0},

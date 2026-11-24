@@ -71,7 +71,15 @@ TopoDS_Shape oriented_solids(const TopoDS_Shape& shape);
 // curves' ends lie apart in the parameter plane (an offset's cap bounded
 // by intersection curves of tolerance 8e-5 mm, ends 8.5e-5 mm apart) each
 // gap leaves out the strip between it and the face's first parameter, 3e-6
-// of a 1 mm shell of a loft; close_gaps here joins them (mitcad#325).
+// of a 1 mm shell of a loft; close_gaps here joins them (mitcad#325). A
+// face whose surface is joined only C1 inside it (the one side face of a
+// loft with Tangent Edges Merge, periodic, and its offsets) is split at
+// every knot like any other, an offset's at its basis's: OCCT's default
+// rule measured such a loft 11 % low and the 2 mm inside wall of its shell
+// negative; the reported volumes and areas of the merged lofts and their
+// shells are held within 1e-4 of OCCT's Gauss-Kronrod rule on a copy
+// split at their C1 lines and within 5e-3 of a mesh (mitcad#2309,
+// geometry.merged_loft_volumes).
 //
 // Every volume, area, centre and mass MitCad reports comes from here: the
 // bodies query, Physical Properties and the mass, the BOM, the print

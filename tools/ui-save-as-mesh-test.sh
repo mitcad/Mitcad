@@ -24,6 +24,10 @@
 #      starts as STEP named Plate in the last folder; 3MF with refinement
 #      High chosen and written. Lid selected next: the dialog starts with
 #      3MF, High and Lid's name, and Enter writes Lid.3mf.
+#   7. Export... (mitcad#2298) in the menus of Plate's row, Lid:1's row
+#      (its body), the root's row (every body: Plate, Lid, Skin and Body4)
+#      and the view's menu on Plate's top: File > Export's dialog with
+#      Selected bodies (n) and the file named as File > Export names it; cancelled.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-save-as-mesh-test.sh
@@ -231,5 +235,49 @@ ui_expect_new "Export dialog: 3MF for 3D printing (*.3mf) to $WORK/meshes/Lid.3m
 ui_expect_new "Exported $WORK/meshes/Lid.3mf: 3mf, 1 body" "Lid written as 3MF" 30
 [ -s "$WORK/meshes/Lid.3mf" ] || ui_fail "no Lid.3mf"
 echo "ok   both files written"
+
+echo "--- 7. Export... in the context menus (mitcad#2298)"
+# export_entry BODIES NAME: Export... chosen in the context menu logged
+# last; File > Export's dialog opens with BODIES as its Bodies row and the
+# file named NAME (in the last folder, as the last type: 3MF); cancelled.
+export_entry() {
+  ui_mark
+  ui_step "choose Export..."               ui_menu_choose "Export…"
+  ui_expect_new ", type 3mf, refinement high, file $WORK/meshes/$2.3mf" "the Export dialog named $2"
+  ui_expect_new "Export dialog bodies: $1" "it starts with $1"
+  ui_focus_dialog '^Export$'
+  ui_step "cancel (Esc)"                   ui_key Escape
+  ui_focus_main
+}
+ui_focus_main
+ui_step "Escape (clear the selection)"     ui_key Escape
+row_menu "Browser Root/Bodies/Plate"
+has "Export…"
+last_entry "Save as Mesh…"
+export_entry "Selected bodies (1)" "Plate"
+ui_step "Escape (clear the selection)"     ui_key Escape
+# A component's row: its body.
+row_menu "Browser Root/Lid:1"
+has "Export…"
+export_entry "Selected bodies (1)" "Lid"
+ui_step "Escape (clear the selection)"     ui_key Escape
+# The root's row: every body, also Skin and Body4 (the unstitch's other
+# body), which Save as Mesh leaves out.
+row_menu "Browser Root"
+has "Export…"
+export_entry "Selected bodies (4)" "bench"
+ui_step "Escape (clear the selection)"     ui_key Escape
+# The view's context menu on Plate's top.
+ui_mark
+ui_step "offset face (search)"             ui_command "Offset Face"
+ui_expect_new "Pick places:" "where the faces are picked"
+ui_step "cancel it (Esc)"                  ui_key Escape
+at=$(ui_pick_at "face F1.b0/F1:top at")
+ui_mark
+ui_step "right-click Plate's top"          xdotool mousemove $at click 3
+ui_expect_new "Selected: 1 face [face F1:top of F1.b0" "the top selected"
+ui_expect_new "Context menu: " "the context menu opened"
+has "Export…"
+export_entry "Selected bodies (1)" "Plate"
 
 ui_finish "UI save as mesh"

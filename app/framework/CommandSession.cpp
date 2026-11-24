@@ -23,6 +23,7 @@
 #include <QMouseEvent>
 #include <QRegularExpression>
 #include <QSet>
+#include <QWheelEvent>
 #include <QWidget>
 #include <QtLogging>
 
@@ -38,6 +39,7 @@
 #include "ModelShapes.hpp"
 #include "ModelWorker.hpp"
 #include "Numbers.hpp"
+#include "ParameterField.hpp"
 #include "PreviewBodies.hpp"
 #include "RememberedValues.hpp"
 #include "NoticeLevel.hpp"
@@ -106,8 +108,11 @@ struct InspectionShape {
 // document; calculations use private geometry copies, never the window.
 class WorkerInspectionContext final : public CommandContext {
 public:
-  WorkerInspectionContext(const Document& document, std::vector<InspectionShape> shapes)
-      : m_document(document), m_shapes(std::move(shapes)) {}
+  WorkerInspectionContext(const Document& document, std::vector<InspectionShape> shapes, QJsonObject explode)
+      : m_document(document), m_shapes(std::move(shapes)), m_explode(std::move(explode)) {}
+
+  // As the window showed it when the job started (mitcad#2328).
+  QJsonObject shownExplode() const override { return m_explode; }
 
   QJsonValue query(const QJsonObject& request) const override {
     const QJsonDocument answer = parseJson(m_document.query(rustStr(compactJson(request))));
@@ -141,6 +146,7 @@ public:
 private:
   const Document& m_document;
   std::vector<InspectionShape> m_shapes;
+  QJsonObject m_explode;
 };
 
 QString kindKey(ValueKind kind) {
@@ -190,6 +196,21 @@ QStringList answerNotes(const QJsonObject& answer) {
 // Notes for a preview's log line: ", note: a; b", or nothing.
 QString notesLog(const QStringList& notes) {
   return notes.isEmpty() ? QString() : QStringLiteral(", note: ") + notes.join(QStringLiteral("; "));
+}
+
+// How a handle's value box steps (mitcad#2327): as the input's panel field
+// does (CommandPanel::createRow), its kind, its name in the log and its
+// minimum.
+ParameterFieldOptions valueBoxSteps(const QString& command, const InputDef& input) {
+  ParameterFieldOptions options;
+  options.kind = input.valueKind == ValueKind::Angle      ? ParameterKind::Angle
+                 : input.valueKind == ValueKind::Unitless ? ParameterKind::Unitless
+                                                          : ParameterKind::Length;
+  options.label = QStringLiteral("%1 %2").arg(command, input.label);
+  options.steps = true;
+  options.stepLimit.minimum = input.stepMinimum;
+  options.stepLimit.above = input.stepAboveMinimum;
+  return options;
 }
 
 } // namespace
@@ -2401,6 +2422,10 @@ void CommandSession::openValueBox(const QString& key, const QPoint& at) {
   // As the value boxes in the view look (ManipulatorOverlay).
   box->setFixedWidth(96);
   box->setText(m_state.text(key));
+  // Up, Down and the wheel step its value as the panel's field's
+  // (mitcad#2327): the tooltip says how.
+  box->setToolTip(ParameterField::stepTooltip(QString()));
+  m_valueBoxWheel = 0;
   const QWidget* viewer = &m_host.viewer();
   const QSize size = box->sizeHint().expandedTo(QSize(box->width(), 0));
   box->move(std::clamp(at.x() - size.width() / 2, 0, std::max(0, viewer->width() - size.width())),
@@ -2442,6 +2467,25 @@ void CommandSession::stepValueBox(bool back) {
   if (const auto centre = m_manipulators->boxCentre(next)) {
     openValueBox(next, *centre);
   }
+}
+
+void CommandSession::stepBoxValue(double by, const QString& how) {
+  if (!m_valueBox) {
+    return;
+  }
+  const auto slot = slotOf(m_valueBoxKey);
+  if (!slot) {
+    return;
+  }
+  QLineEdit* box = m_valueBox;
+  // The panel field's rules and log ("Value field Box Height: Up stepped
+  // 10 mm to 11 mm"); the new text goes in as typed (textEdited: the input
+  // and its preview follow, openValueBox), with the box's own undo.
+  ParameterField::stepText(box->text(), valueBoxSteps(m_def.name, *slot->def), by, how, box,
+                           [box](const QString& after) {
+                             box->selectAll();
+                             box->insert(after);
+                           });
 }
 
 void CommandSession::markValueBox(bool invalid) {
@@ -2722,12 +2766,14 @@ void CommandSession::runInspection() {
     const CommandState state = m_state;
     const auto inspect = m_def.inspect;
     const quint64 generation = m_generation;
+    // The explode view shown, read here on the UI thread (mitcad#2328).
+    const QJsonObject explode = m_host.shownExplode();
     m_asyncPending = true;
     showPanelMessage(tr("Computing inspection…"), NoticeLevel::Progress);
     m_presenter->setOkEnabled(false);
     const bool started = m_host.modelInspectionAsync(m_def.name, this,
-        [state, inspect, shapes = std::move(shapes)](const Document& document) {
-          const WorkerInspectionContext context(document, shapes);
+        [state, inspect, shapes = std::move(shapes), explode](const Document& document) {
+          const WorkerInspectionContext context(document, shapes, explode);
           return inspect(state, context);
         }, [this, generation](const Inspection& result, const CommandHost::AsyncResult& outcome) {
           if (!asyncPresenterAvailable()) { return; }
@@ -5651,6 +5697,36 @@ bool CommandSession::eventFilter(QObject* watched, QEvent* event) {
     }
     if (stepping) {
       stepValueBox(key->key() == Qt::Key_Backtab || key->modifiers().testFlag(Qt::ShiftModifier));
+      return true;
+    }
+    // Up and Down step a plain value as the panel's field does
+    // (mitcad#2327, ParameterField's rules): the box keeps the keys, so the
+    // view's arrow keys (mitcad#1211) and other shortcuts do not fire.
+    if (key != nullptr) {
+      QString how;
+      if (const double by = ParameterField::keyStep(key->key(), key->modifiers(), &how); by != 0.0) {
+        if (event->type() == QEvent::ShortcutOverride) {
+          event->accept();
+        } else {
+          stepBoxValue(by, how);
+        }
+        return true;
+      }
+    }
+    // The wheel over the box steps it while it has the keyboard, a notch a
+    // step; the view under it does not zoom meanwhile.
+    if (event->type() == QEvent::Wheel) {
+      auto* wheel = static_cast<QWheelEvent*>(event);
+      if (m_valueBox->hasFocus()) {
+        const QPoint turned = wheel->angleDelta();
+        // Shift with a mouse wheel comes sideways on some systems (macOS).
+        const std::optional<double> by = ParameterField::wheelStep(turned.y() != 0 ? turned.y() : turned.x(),
+                                                                   wheel->modifiers(), m_valueBoxWheel);
+        if (by && *by != 0.0) {
+          stepBoxValue(*by, QStringLiteral("wheel"));
+        }
+      }
+      wheel->accept();
       return true;
     }
     if (event->type() == QEvent::FocusOut) {

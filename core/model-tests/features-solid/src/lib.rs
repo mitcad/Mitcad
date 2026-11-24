@@ -43,3 +43,5 @@ mod panelize_tests;
 mod cell_grid_tests;
 // Cone: a cone or a frustum beside the other primitives (mitcad#2239).
 mod cone_tests;
+// Point to Point along one axis only (mitcad#2339).
+mod move_along_tests;

@@ -1,0 +1,208 @@
+# SPDX-License-Identifier: MIT
+# Exploded views (mitcad#2113) on explode-view.json: Base:1 (40 x 30 x 10 at
+# the origin), Lid:1 (40 x 30 x 5 on it) and Pin:1 (10 x 10 x 20 standing
+# on the lid); the drawing Drawing1 without views.
+#   1. Explode (the Assemble group) opens the Explode panel without a view;
+#      Auto Explode makes Explode1, a step per component (the outermost
+#      first: Base, Pin, Lid), one undo step, and shows it exploded: the
+#      three bodies moved, three trail lines; the Browser's Exploded Views
+#      lists it shown.
+#   1b. Measure (mitcad#2328) keeps the view exploded and measures the
+#      pin's top and the lid's top where they are shown.
+#   2. Add Step: Explode Step's panel; Lid:1 picked in the Browser; its
+#      Distance arrow dragged up; OK adds a fourth step (one undo step),
+#      shown with four trail lines.
+#   3. Play Back plays the steps to the design assembled (no body moved, no
+#      trail line), Play back to the end, exploded.
+#   4. The Browser's row: a double-click shows the design assembled, another
+#      exploded again.
+#   4b. A fifth step (mitcad#2328): Pin:1 along an upright edge of its own
+#      picked as Direction's Picked Geometry, kept as the edge's reference.
+#   5. The drawing: a base view placed with Exploded View Explode1, its
+#      projection with the trail lines as thin phantom lines.
+#   6. Saved (the wrapper checks the file with explode-view-check.json).
+# Run by tools/ui-explode-view-test.sh (Linux),
+# tools/ui-windows-explode-view-test.ps1 (Windows) and
+# tools/ui-macos-explode-view-test.sh (macOS).
+wait-idle
+command view.fit
+wait-idle
+expect-ever '^Browser Root/Lid:1 at '
+expect-never '^Browser Root/Exploded Views'
+capture-undo-depth start
+
+# 1. Explode's panel, Auto Explode.
+mark
+command assemble.explode
+wait-log '^Explode panel: no view yet$'
+focus-dialog '^Explode$'
+wait-idle
+mark
+button '^Auto Explode$' explodeAuto
+wait-log '^Auto Explode Explode1: 3 step[(]s[)] by 1$'
+wait-log '^Explode panel Explode1: 3 step[(]s[)], 3[.]00 s$'
+wait-log '^Explode view shown: Explode1$'
+wait-log '^Explode view Explode1 at the end: 3 bodies moved, 3 trail line[(]s[)]$' 30
+wait-log '^Explode trails: 3 line[(]s[)]$'
+wait-log '^Browser Exploded Views: Explode1 \[3 steps, shown\]$'
+wait-idle
+expect-undo-depth ${start} 1
+
+# 1b. Measure on the shown places (mitcad#2328): the view stays exploded
+#     while Measure's panel is open (the pin 24.495 mm up, its box's
+#     diagonal), and the pin's top and the lid's top, 20 mm apart
+#     assembled, measure 94.744 mm apart as shown (the lid 50.249 mm down).
+mark
+focus-main
+command view.fit
+wait-idle
+mark
+command inspect.measure
+wait-log '^Command Measure started'
+wait-log '^Explode view Explode1 kept shown for Measure$'
+expect-no-log '^Explode view shown: none$'
+expect-shown-body F3.b0 O3 2000 15 10 39.495 25 20 59.495
+click-pick 'face F3[.]b0/F3:top in O3 at '
+wait-log '^Measure Selection 1: 1 face'
+mark
+click-pick 'face F2[.]b0/F2:top in O2 at '
+wait-log '^Panel Measure result values: Distance = 94[.]744 mm, Δx = -?0 mm, Δy = -?0 mm, Δz = -?94[.]744 mm' 30
+wait-idle
+mark
+key Escape
+wait-log '^Command Measure cancelled$'
+expect-no-log '^Explode view shown: none$'
+wait-idle
+expect-undo-depth ${start} 1
+focus-dialog '^Explode$'
+wait-idle
+
+# 2. A step by the handle: Lid:1 up by its Distance arrow.
+mark
+button '^Add Step$' explodeAddStep
+wait-log '^Explode Step for Explode1, a new step$'
+wait-log '^Editing explode view Explode1 with Explode Step$'
+focus-main
+wait-idle
+mark
+click-logged '^Browser Root/Lid:1 at '
+wait-log '^Manipulator Explode Step distance at ' 30
+wait-idle
+mark
+drag-from '^Manipulator Explode Step distance at ' 0 -40
+wait-log '^Manipulator Explode Step distance dragged to '
+expect-no-log '^Manipulator Explode Step distance dragged to 0$'
+wait-idle
+mark
+key Return
+wait-log '^Explode view Explode1: Base:1 [(]Base:1[)]; Pin:1 [(]Pin:1[)]; Lid:1 [(]Lid:1[)]; Step 4 [(]Lid:1[)]$' 30
+wait-log '^Browser Exploded Views: Explode1 \[4 steps, shown\]$'
+wait-log '^Explode trails: 4 line[(]s[)]$' 30
+wait-idle
+expect-undo-depth ${start} 2
+
+# 3. Played back to the design assembled, then to the end again.
+mark
+focus-dialog '^Explode$'
+button '^Play Back$' explodePlayBack
+wait-log '^Explode playback Explode1 back from 4[.]00 s$'
+wait-log '^Explode playback Explode1 ended assembled at 0[.]00 s$' 60
+wait-log '^Explode view Explode1 at 0[.]00 s: 0 bodies moved, 0 trail line[(]s[)]$'
+wait-idle
+mark
+button '^Play$' explodePlay
+wait-log '^Explode playback Explode1 forward from 0[.]00 s$'
+wait-log '^Explode playback Explode1 ended exploded at 4[.]00 s$' 60
+wait-log '^Explode view Explode1 at the end: 3 bodies moved, 4 trail line[(]s[)]$'
+wait-idle
+expect-undo-depth ${start} 2
+mark
+key Escape
+wait-log '^Explode panel Explode1 closed$'
+focus-main
+wait-idle
+
+# 4. The Browser's row: assembled, then exploded again.
+mark
+dblclick-logged '^Browser Root/Exploded Views/Explode1 at '
+wait-log '^Explode view shown: none$'
+wait-log '^Explode trails: none$'
+wait-log '^Browser Exploded Views: Explode1 \[4 steps\]$'
+wait-idle
+mark
+dblclick-logged '^Browser Root/Exploded Views/Explode1 at '
+wait-log '^Explode view shown: Explode1$'
+wait-log '^Explode trails: 4 line[(]s[)]$'
+wait-log '^Browser Exploded Views: Explode1 \[4 steps, shown\]$'
+wait-idle
+
+# 4b. A step along a picked edge (mitcad#2328): Pin:1 10 mm along one of
+#     its upright edges, kept as the edge's reference (the saved design's
+#     check, explode-view-check.json).
+mark
+command assemble.explode
+wait-log '^Explode panel Explode1: 4 step'
+focus-dialog '^Explode$'
+wait-idle
+mark
+button '^Add Step$' explodeAddStep
+wait-log '^Explode Step for Explode1, a new step$'
+wait-log '^Editing explode view Explode1 with Explode Step$'
+focus-main
+wait-idle
+mark
+click-logged '^Browser Root/Pin:1 at '
+wait-log '^Manipulator Explode Step distance at ' 30
+wait-idle
+mark
+qt-choice input_direction 'Picked Geometry'
+wait-log '^Explode Step: Direction = Picked Geometry'
+wait-idle
+click-logged '^Panel Explode Step input direction_geometry at '
+wait-idle
+mark
+click-pick 'edge F3[.]b0/E[{]F3:side[0-9][|]F3:side[0-9][}] in O3 at '
+wait-log '^Explode Step Direction Geometry: 1 edge'
+wait-idle
+mark
+type-in '^Panel Explode Step input distance at ' '10 mm'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Explode view Explode1: Base:1 [(]Base:1[)]; Pin:1 [(]Pin:1[)]; Lid:1 [(]Lid:1[)]; Step 4 [(]Lid:1[)]; Step 5 [(]Pin:1[)]$' 30
+wait-log '^Explode trails: 5 line[(]s[)]$' 30
+wait-idle
+expect-undo-depth ${start} 3
+mark
+focus-dialog '^Explode$'
+key Escape
+wait-log '^Explode panel Explode1 closed$'
+focus-main
+wait-idle
+
+# 5. A base view of the drawing with the explode view.
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-idle
+mark
+command drawing.base_view
+wait-log '^Drawing tool: Base View'
+wait-idle
+mark
+qt-choice drawingOption_explode Explode1
+wait-log '^Drawing option explode: Explode1$'
+wait-idle
+mark
+drawing-sheet-click 150 150
+wait-log '^Drawing view 1 at ' 60
+wait-log '^Drawing phantom lines: [1-9][0-9]*$' 60
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-idle
+
+# 6. Saved.
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

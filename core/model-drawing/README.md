@@ -14,6 +14,7 @@ them out.
 | `clip` | Detail views and breaks cut in the view's plane |
 | `convention` | Drawing conventions on the projected lines (mitcad#1112): fillets and chamfers smaller than the pen as sharp corners, tangent and short edges that would blot left out, threads drawn by ISO 6410 |
 | `annotate` | Annotations on views laid out from their picks |
+| `weld` | Weld symbols (mitcad#2350): the reference line, each side's basic symbol, sizes, contours and finishes, all around, field weld and tail, drawn by ISO 2553 or AWS A2.4 as the drawing's standard says |
 | `tables` | Hole tables and parts lists drawn from their rows |
 | `template` | Sheet templates drawn, with their title blocks' images (mitcad#1625); the built-in ones (`templates/*.json`) and the user's and projects' libraries |
 | `sheet` | The sheet's groups, pens (the one table of ISO 128 line widths, also for the application's sheet) and texts that the writers write |
@@ -39,4 +40,6 @@ of the layout without a document live beside the code here
 `core/model-tests/drawing` and `drawing-views`. One-off pictures of a
 layout come from an example of this crate run by a `tools/look-*.sh`
 script (`examples/radius_leader_look.rs`, a radius's arrow on its leader
-round a small fillet, mitcad#1770: `tools/look-drawing-radius-leader.sh`).
+round a small fillet, mitcad#1770: `tools/look-drawing-radius-leader.sh`;
+`examples/weld_look.rs`, every weld symbol by both standards, mitcad#2350:
+`tools/look-drawing-weld.sh`).

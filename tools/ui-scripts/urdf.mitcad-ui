@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+# URDF export through the real UI (mitcad#2100), the shared input script of
+# tools/ui-urdf-test.sh (Linux), tools/ui-windows-urdf-test.ps1 and
+# tools/ui-macos-urdf-test.sh, on tools/ui-scripts/urdf.json saved as
+# robot.mitcad (a grounded plate, a pin on a revolute joint, a shaft on a
+# cylindrical joint): File > Export to robot.urdf, the extension choosing
+# URDF robot for ROS 2; the package folder robot/ beside it holds the URDF,
+# package.xml and CMakeLists.txt, and the status names its 4 links and 3
+# joints (the log has the plurals the English translation makes, "4 links",
+# or the source text's "4 link(s)" where it has none yet).
+wait-idle
+
+mark
+command file.export
+focus-dialog '^Export$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/robot.urdf"
+sleep 300
+key Return
+focus-main
+wait-log 'Export dialog: URDF robot for ROS 2 \(\*\.urdf\) to ${MITCAD_TEST_WORK:re}/robot\.urdf, refinement [a-z]+'
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/robot\.urdf: urdf, 4 link(s|\(s\)), 3 joint(s|\(s\))'
+expect-file "${MITCAD_TEST_WORK}/robot/urdf/robot.urdf"
+expect-file "${MITCAD_TEST_WORK}/robot/package.xml"
+expect-file "${MITCAD_TEST_WORK}/robot/CMakeLists.txt"
+expect-never 'TestDriver: FAIL|Could not export'

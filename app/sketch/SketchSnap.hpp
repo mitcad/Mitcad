@@ -7,7 +7,9 @@
 // vertices and the midpoints of body edges in the sketch plane (mitcad#258),
 // which the sketch's own geometry wins ties against; onto the sketch's x
 // and y axes (mitcad#948); onto the extensions of the lines the pointer
-// rested on and where they meet (mitcad#2035). Tolerances are in screen
+// rested on and where they meet (mitcad#2035); to the centres of circular
+// body edges and onto where the sketch plane cuts the bodies (mitcad#2324).
+// Tolerances are in screen
 // pixels, so snapping feels the same at any zoom.
 
 #include <functional>
@@ -31,7 +33,13 @@ struct Snap {
   // BodyVertex, BodyMidpoint: a body vertex or the middle of a body edge in
   // the sketch plane (`bodyItem`), projected only when a point is placed
   // there (mitcad#258). BodyOnEdge: any point along a body edge in the
-  // plane, likewise (mitcad#1967).
+  // plane, likewise (mitcad#1967). BodyEdgeCenter: the centre of a body's
+  // circular or arc edge, in the plane or projected onto it (mitcad#2324).
+  // BodySection, BodySectionVertex, BodySectionCenter: a point on a curve
+  // where the sketch plane cuts a body, an end of one, the centre of a
+  // circle or arc of it (mitcad#2324; `bodyItem` the section curve, with
+  // its face as source), projected as the face's section when a point is
+  // placed there.
   enum class Kind {
     None,
     Grid,
@@ -45,6 +53,10 @@ struct Snap {
     BodyVertex,
     BodyMidpoint,
     BodyOnEdge,
+    BodyEdgeCenter,
+    BodySection,
+    BodySectionVertex,
+    BodySectionCenter,
   };
 
   Kind kind = Kind::None;
@@ -58,7 +70,7 @@ struct Snap {
   // (SketchOp::constrain).
   QString axis;
   QPointF screen; // where the cursor was
-  BodyItem bodyItem; // BodyVertex, BodyMidpoint, BodyOnEdge: the vertex or the edge
+  BodyItem bodyItem; // the body snaps: the vertex, the edge or the section curve
   // On an acquired line's extension, beyond its ends (mitcad#2035):
   // OnCurve onto the endless line of `curve` (a line); Intersection where
   // the endless line of `curve` (`extended`) meets that of `curve2`
@@ -72,10 +84,21 @@ struct Snap {
 
   // On existing geometry (a new point there gets a constraint).
   bool onGeometry() const { return kind != Kind::None && kind != Kind::Grid; }
-  // Onto a curve or a body edge anywhere along it, not at a point of it.
-  bool alongCurve() const { return kind == Kind::OnCurve || kind == Kind::BodyOnEdge; }
-  // Onto a body vertex or edge (projected when a point is placed there).
-  bool onBody() const { return kind == Kind::BodyVertex || kind == Kind::BodyMidpoint || kind == Kind::BodyOnEdge; }
+  // Onto a curve, a body edge or a section curve anywhere along it, not at
+  // a point of it.
+  bool alongCurve() const {
+    return kind == Kind::OnCurve || kind == Kind::BodyOnEdge || kind == Kind::BodySection;
+  }
+  // Onto a body vertex or edge, or where the plane cuts a body (projected
+  // when a point is placed there).
+  bool onBody() const {
+    return kind == Kind::BodyVertex || kind == Kind::BodyMidpoint || kind == Kind::BodyOnEdge ||
+           kind == Kind::BodyEdgeCenter || onSection();
+  }
+  // Where the sketch plane cuts a body (mitcad#2324).
+  bool onSection() const {
+    return kind == Kind::BodySection || kind == Kind::BodySectionVertex || kind == Kind::BodySectionCenter;
+  }
   // At an existing point, which a new curve can share.
   bool atPoint() const { return kind == Kind::Point || kind == Kind::Center; }
   // On a line's extension, or where one meets another curve (mitcad#2035).
@@ -92,8 +115,15 @@ struct SnapSettings {
   QSet<QString> skipCurves;
   // Body vertices, edge midpoints and edges to snap to (mitcad#258,
   // mitcad#1967): a tool's switch (SketchTool::bodySnaps), on for every
-  // drawing tool; none when null.
+  // drawing tool; none when null. Of the items out of the plane
+  // (mitcad#866) only the centres of circles and arcs (BodyEdgeCenter,
+  // mitcad#2324).
   const BodyGeometry* body = nullptr;
+  // The curves where the sketch plane cuts the visible bodies (mitcad#2324),
+  // with `body`: points on them, their ends and the centres of circles and
+  // arcs, with the body snaps' ranks and tolerances; the sketch's own
+  // geometry and the body's edges and vertices win ties. None when null.
+  const BodyGeometry* section = nullptr;
   // The sketch's x and y axes as lines across the view to snap onto
   // (mitcad#948), with the curves' tolerance; the sketch's own geometry and
   // the origin win ties. On for every tool that snaps.

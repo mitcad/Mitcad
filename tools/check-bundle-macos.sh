@@ -14,7 +14,8 @@
 # It also checks Info.plist, the executable, the icon and the licence
 # texts, signed OIDN CPU/Metal modules (including the embedded Metal kernels),
 # Cycles' complete Metal runtime source tree against its manifest,
-# and that no symbolic link leaves the bundle.
+# the built-in texture images once (in Resources/textures, no copy built
+# into a program, mitcad#2323), and that no symbolic link leaves the bundle.
 #
 # Runs on macOS only (otool, lipo, plutil). Bash 3.2 compatible.
 # Usage: tools/check-bundle-macos.sh <path to Mitcad.app>
@@ -160,6 +161,46 @@ for image in "$SCRIPT_DIR"/../core/model-base/textures/*.jpg; do
     fail "$contents/Resources/textures/$(basename "$image")" "the built-in texture image is missing"
   fi
 done
+# ... and only there (mitcad#2323, as tools/appimage-test.sh, mitcad#2251):
+# no program in Contents/MacOS carries a copy of them built in, as mitcad
+# and mitcad-cli each did with include_bytes! before mitcad#2218 (the
+# bundle then had the images twice). A run of 64 bytes from the middle of
+# each image is looked for in each file of Contents/MacOS (perl: macOS has
+# it, python3 only with the developer tools).
+if ! texture_copies=$(perl -e '
+  use strict;
+  use warnings;
+  sub slurp {
+    my ($path) = @_;
+    open(my $fh, "<:raw", $path) or die "$path: $!\n";
+    local $/;
+    my $data = <$fh>;
+    close($fh);
+    return defined($data) ? $data : "";
+  }
+  my ($images, $programs) = @ARGV;
+  opendir(my $dir, $images) or die "$images: $!\n";
+  my @needles;
+  for my $name (sort grep { /\.jpg\z/ } readdir($dir)) {
+    my $data = slurp("$images/$name");
+    push(@needles, [$name, substr($data, int(length($data) / 2), 64)]);
+  }
+  closedir($dir);
+  opendir($dir, $programs) or die "$programs: $!\n";
+  for my $name (sort readdir($dir)) {
+    my $path = "$programs/$name";
+    next if -l $path || !-f $path;
+    my $data = slurp($path);
+    for my $needle (@needles) {
+      print("$name: $needle->[0]\n") if index($data, $needle->[1]) >= 0;
+    }
+  }
+  closedir($dir);
+' "$SCRIPT_DIR/../core/model-base/textures" "$contents/MacOS"); then
+  fail "$contents/MacOS" "could not look for texture images in the programs"
+elif [ -n "$texture_copies" ]; then
+  fail "$contents/MacOS" "programs carry the texture images built in: $(echo "$texture_copies" | head -3 | tr '\n' ' ')"
+fi
 # QtKeychain is linked statically (cmake/Keychain.cmake): its licence text.
 if [ ! -f "$contents/Resources/licenses/QtKeychain-BSD-3-Clause.txt" ]; then
   fail "$contents/Resources/licenses/QtKeychain-BSD-3-Clause.txt" "QtKeychain's licence text is missing"

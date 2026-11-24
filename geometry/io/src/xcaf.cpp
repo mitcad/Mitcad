@@ -16,13 +16,16 @@
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
 #include <Message_PrinterOStream.hxx>
+#include <NCollection_IndexedMap.hxx>
 #include <NCollection_Sequence.hxx>
 #include <Quantity_Color.hxx>
 #include <Quantity_ColorRGBA.hxx>
 #include <TDF_Label.hxx>
 #include <TDataStd_Name.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Shape.hxx>
 #include <UnitsMethods_LengthUnit.hxx>
@@ -125,7 +128,38 @@ void require_shapes(const std::vector<Body>& bodies) {
 
 namespace {
 
-// A body's shape as a new label of the document, with its name and colour.
+Quantity_Color occt_color(const Color& color) {
+  return Quantity_Color(color.r, color.g, color.b, Quantity_TOC_sRGB);
+}
+
+// The faces of `body` coloured on their own (Body::face_colors), each a
+// sub-shape of `label` (whose shape holds the body's shape) with its
+// surface colour (mitcad#2313); indices past the body's faces are left
+// out.
+void add_face_colors(const occ::handle<XCAFDoc_ShapeTool>& shapes, const occ::handle<XCAFDoc_ColorTool>& colors,
+                     const TDF_Label& label, const Body& body) {
+  if (body.face_colors.empty()) {
+    return;
+  }
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapes(body.shape, TopAbs_FACE, faces);
+  for (const FaceColor& face_color : body.face_colors) {
+    if (face_color.face >= static_cast<std::size_t>(faces.Extent())) {
+      continue;
+    }
+    const TopoDS_Shape& face = faces(static_cast<int>(face_color.face) + 1);
+    TDF_Label sub;
+    if (!shapes->FindSubShape(label, face, sub)) {
+      sub = shapes->AddSubShape(label, face);
+    }
+    if (!sub.IsNull()) {
+      colors->SetColor(sub, occt_color(face_color.color), XCAFDoc_ColorSurf);
+    }
+  }
+}
+
+// A body's shape as a new label of the document, with its name, its
+// colour and its faces' own colours.
 TDF_Label add_body(const occ::handle<XCAFDoc_ShapeTool>& shapes, const occ::handle<XCAFDoc_ColorTool>& colors,
                    const Body& body) {
   const TDF_Label label = shapes->AddShape(body.shape, false);
@@ -133,9 +167,9 @@ TDF_Label add_body(const occ::handle<XCAFDoc_ShapeTool>& shapes, const occ::hand
     TDataStd_Name::Set(label, extended(body.name));
   }
   if (body.color) {
-    const Quantity_Color color(body.color->r, body.color->g, body.color->b, Quantity_TOC_sRGB);
-    colors->SetColor(label, color, XCAFDoc_ColorSurf);
+    colors->SetColor(label, occt_color(*body.color), XCAFDoc_ColorSurf);
   }
+  add_face_colors(shapes, colors, label, body);
   return label;
 }
 
@@ -269,10 +303,10 @@ struct TreeWriter {
           TDataStd_Name::Set(sub, extended(body.name));
         }
         if (body.color) {
-          colors->SetColor(sub, Quantity_Color(body.color->r, body.color->g, body.color->b, Quantity_TOC_sRGB),
-                           XCAFDoc_ColorSurf);
+          colors->SetColor(sub, occt_color(*body.color), XCAFDoc_ColorSurf);
         }
       }
+      add_face_colors(shapes, colors, label, body);
       if (!body.name.empty()) {
         names.push_back(ItemName{solid, body.name});
       }
@@ -424,12 +458,49 @@ struct Collector {
         ->first;
   }
 
+  // The faces of `shape` (a part's shape, or one of its solids as an
+  // explorer finds it in the part's shape) whose own colour, a surface or
+  // generic colour on a face sub-shape of the part `label` (as color_of
+  // reads it), is not `body_color` (mitcad#2313). The faces are numbered
+  // as TopExp::MapShapes finds them in `shape` (Body::face_colors), which
+  // moving the shape does not change.
+  static std::vector<FaceColor> own_face_colors(const TDF_Label& label, const TopoDS_Shape& shape,
+                                                const std::optional<Color>& body_color) {
+    NCollection_Sequence<TDF_Label> subs;
+    if (!XCAFDoc_ShapeTool::GetSubShapes(label, subs) || subs.IsEmpty()) {
+      return {};
+    }
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+    TopExp::MapShapes(shape, TopAbs_FACE, faces);
+    std::vector<std::optional<Color>> own(static_cast<std::size_t>(faces.Extent()));
+    for (const TDF_Label& sub : subs) {
+      const TopoDS_Shape face = XCAFDoc_ShapeTool::GetShape(sub);
+      if (face.IsNull() || face.ShapeType() != TopAbs_FACE) {
+        continue;
+      }
+      const int index = faces.FindIndex(face);
+      if (index == 0) {
+        continue;
+      }
+      if (const std::optional<Color> color = color_of(sub)) {
+        own[static_cast<std::size_t>(index - 1)] = color;
+      }
+    }
+    std::vector<FaceColor> out;
+    for (std::size_t i = 0; i < own.size(); ++i) {
+      if (own[i] && !(body_color && *own[i] == *body_color)) {
+        out.push_back(FaceColor{i, *own[i]});
+      }
+    }
+    return out;
+  }
+
   static void add(std::vector<Body>& out, std::optional<std::string> name, const TopoDS_Shape& shape,
-                  std::optional<Color> color) {
+                  std::optional<Color> color, std::vector<FaceColor> face_colors) {
     if (!name) {
       name = "Body" + std::to_string(out.size() + 1);
     }
-    out.push_back(Body{*name, shape, color, {}});
+    out.push_back(Body{*name, shape, color, {}, std::move(face_colors)});
   }
 
   // A part, an assembly or an instance's referred shape, placed at `location`.
@@ -482,7 +553,7 @@ struct Collector {
       std::optional<Color> color = instance_color ? instance_color
                                    : part_color   ? part_color
                                                   : face_color(shape);
-      add(out, name, shape.Moved(location), color);
+      add(out, name, shape.Moved(location), color, own_face_colors(label, shape, color));
       return;
     }
     for (std::size_t i = 0; i < solids.size(); ++i) {
@@ -502,7 +573,7 @@ struct Collector {
       std::optional<Color> color = instance_color ? instance_color
                                    : solid_color  ? solid_color
                                                   : part_color;
-      add(out, solid_name, solids[i].Moved(location), color);
+      add(out, solid_name, solids[i].Moved(location), color, own_face_colors(label, solids[i], color));
     }
   }
 };
@@ -794,6 +865,7 @@ std::vector<Body> placed_bodies(const std::vector<Body>& bodies) {
         copy.name += " (" + (placement.name.empty() ? std::to_string(i + 1) : placement.name) + ")";
       }
       copy.color = body.color;
+      copy.face_colors = body.face_colors;
       if (placement.is_identity()) {
         copy.shape = body.shape;
       } else {

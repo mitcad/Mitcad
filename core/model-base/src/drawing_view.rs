@@ -126,6 +126,10 @@ pub enum ViewEdgeKind {
     /// place of a thread's crests and helices
     /// (`mitcad_model_drawing::convention`).
     ThreadRoot,
+    /// An explode's trail line (mitcad#2113): thin phantom. Never from the
+    /// kernel: a view of an explode view adds it from where a part was to
+    /// where a step took it.
+    Trail,
     /// A bend line of a Flat Pattern view (mitcad#2280): `up` when the
     /// bend's inside is on the side the pattern is seen from. Never from
     /// the kernel: the drawing adds it on the developed blank, thin, up

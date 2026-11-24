@@ -61,7 +61,14 @@
 #include <gp_Ax2.hxx>
 #include <gp_Pnt2d.hxx>
 
+// A network whose curves run on past the outer crossing curves, and one
+// whose curves do not all meet (mitcad#2333).
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <stdexcept>
+
 #include "check.hpp"
+#include "mitcad/geometry/user_error.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/input_check.hpp"
 #include "mitcad/geometry/surface_edits.hpp"
@@ -1074,6 +1081,108 @@ void test_a_loop_through_three_sketches_fills_to_edges_on_its_curves() {
   CHECK(apart >= 0.0 && apart < 0.5 * plain);
 }
 
+// --- A network whose curves run on past the outer crossing curves
+// (mitcad#2333, GitHub #609)
+
+// The arc of the cylinder of radius 25 about the line y = 10, z = -20 in
+// the plane x = `x`, from y = 25 to y = -5 (z 0 at both ends, 5 at the top).
+g::BoundaryCurve cylinder_arc(const std::string& name, double x) {
+  g::PathCurve piece;
+  piece.name = name;
+  piece.curve.kind = g::ModelCurveKind::Conic;
+  piece.curve.center = gp_Pnt(x, 10, -20);
+  piece.curve.normal = gp_Dir(1, 0, 0);
+  piece.curve.x_axis = gp_Dir(0, 1, 0);
+  piece.curve.major = 25.0;
+  piece.curve.minor = 25.0;
+  piece.curve.first = std::acos(0.6);
+  piece.curve.last = std::acos(-0.6);
+  g::BoundaryCurve curve;
+  curve.kind = g::BoundaryCurve::Kind::Curves;
+  curve.curves = {piece};
+  curve.plane = gp_Pln(gp_Pnt(x, 0, 0), gp_Dir(1, 0, 0));
+  return curve;
+}
+
+// Three lines one way on that cylinder (y = 0, 10 and 20, from x = -5 to
+// 25) and two arcs across it (x = 0 and 20): every curve runs on 5 mm past
+// the outer curves of the other way. `lift` raises the middle line off its
+// crossing with the second arc (by `lift` at x = 20, still meeting the
+// first arc at x = 0).
+std::pair<std::vector<g::BoundaryCurve>, std::vector<g::BoundaryCurve>> overhanging_grid(double lift) {
+  const double h = std::sqrt(525.0) - 20.0; // the lines at y = 0 and 20
+  const auto middle = [lift](double x) { return 5.0 + lift * x / 20.0; };
+  return {{sketch_curve("c1", gp_Pnt(-5, 0, h), gp_Pnt(25, 0, h)),
+           sketch_curve("c2", gp_Pnt(-5, 10, middle(-5)), gp_Pnt(25, 10, middle(25))),
+           sketch_curve("c3", gp_Pnt(-5, 20, h), gp_Pnt(25, 20, h))},
+          {cylinder_arc("c4", 0.0), cylinder_arc("c5", 20.0)}};
+}
+
+double distance_to_shape(const gp_Pnt& p, const TopoDS_Shape& shape) {
+  BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(p).Vertex(), shape);
+  return distance.IsDone() ? distance.Value() : 1.0e9;
+}
+
+void test_a_network_runs_between_the_outer_crossings_of_curves_that_run_on() {
+  const auto [u, v] = overhanging_grid(0.0);
+  const g::ShapePtr grid = g::boundary_network("F6", u, v);
+  CHECK(named(*grid, "F6:boundary") == 1);
+  const TopoDS_Shape& face = grid->occt();
+  // The cylinder between the outer curves: 20 along it, an angle of
+  // 2 asin(10 / 25) round it; the ends past them left off.
+  CHECK_NEAR_TOL(area(*grid), 20.0 * 25.0 * 2.0 * std::asin(0.4), 1e-4);
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(face, box, false, false);
+  double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+  box.Get(x0, y0, z0, x1, y1, z1);
+  CHECK(std::abs(x0) < 1e-3 && std::abs(x1 - 20.0) < 1e-3);
+  CHECK(std::abs(y0) < 1e-3 && std::abs(y1 - 20.0) < 1e-3);
+  // Each of the five curves lies on the face between its outer crossings.
+  const auto height = [](double y) { return -20.0 + std::sqrt(625.0 - (y - 10.0) * (y - 10.0)); };
+  double worst = 0.0;
+  for (int i = 0; i <= 20; ++i) {
+    const double step = 20.0 * i / 20;
+    for (const double y : {0.0, 10.0, 20.0}) {
+      worst = std::max(worst, distance_to_shape(gp_Pnt(step, y, height(y)), face));
+    }
+    for (const double x : {0.0, 20.0}) {
+      worst = std::max(worst, distance_to_shape(gp_Pnt(x, step, height(step)), face));
+    }
+  }
+  CHECK(worst <= 1e-3);
+  if (worst > 1e-3) {
+    std::fprintf(stderr, "a curve lies %g mm off the network's face\n", worst);
+  }
+}
+
+void test_a_network_names_the_pair_that_does_not_meet() {
+  const auto [u, v] = overhanging_grid(0.5);
+  try {
+    g::boundary_network("F6", u, v);
+    CHECK(false);
+  } catch (const std::invalid_argument& error) {
+    const std::string text = error.what();
+    // The person reads which kind of problem it is, in words.
+    CHECK(g::error_message(text) == "boundary surface: a curve one way does not meet a crossing curve (every curve "
+                                    "one way must cross every curve the other way)");
+    // Agents read the pair, its gap (0.5 across the line's slope) and
+    // where.
+    CHECK(text.find("curve one way 2 (c2) and crossing curve 2 (c5) do not meet: 0.4998 mm apart") !=
+          std::string::npos);
+    CHECK(text.find("crossing curve 1 (c4) do not") == std::string::npos);
+    // Both curves painted: nine points along each and the nearest two.
+    std::size_t points = 0;
+    for (std::size_t at = text.find("\"kind\":\"point\""); at != std::string::npos;
+         at = text.find("\"kind\":\"point\"", at + 1)) {
+      ++points;
+    }
+    CHECK(points == 20);
+    if (text.find("crossing curve 2 (c5) do not meet") == std::string::npos) {
+      std::fprintf(stderr, "unexpected error: %s\n", text.c_str());
+    }
+  }
+}
+
 } // namespace
 } // namespace test
 
@@ -1105,6 +1214,10 @@ int main() {
                 test::test_a_trimmed_plane_falls_back_to_square_sides);
   test::guarded("test_a_loop_through_three_sketches_fills_to_edges_on_its_curves",
                 test::test_a_loop_through_three_sketches_fills_to_edges_on_its_curves);
+  test::guarded("test_a_network_runs_between_the_outer_crossings_of_curves_that_run_on",
+                test::test_a_network_runs_between_the_outer_crossings_of_curves_that_run_on);
+  test::guarded("test_a_network_names_the_pair_that_does_not_meet",
+                test::test_a_network_names_the_pair_that_does_not_meet);
   for (const std::string& change : mitcad::geometry::input_changes()) {
     std::fprintf(stderr, "an input changed: %s\n", change.c_str());
     ++test::failures;

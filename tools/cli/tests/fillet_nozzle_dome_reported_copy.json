@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #582's design (mitcad#2272; opened with --open, never committed; tools/cli/fillet-nozzle-dome-reported-test.cmake; the design as fillet_nozzle_dome_reported.json describes it)."},
+  {"comment": "Fillet2 taken out, then the pattern's second copy's foot rounded with 1.5, picked by its tube edge (picked so beside another copy's dome edge, it failed in the reporter's session, while picked by its dome edge it built). One valid solid at the exact size, no note."},
+  {"cmd": "delete_feature", "uid": "F19"},
+  {"expect": {"feature": "CircularPattern2", "status": "ok", "bodies": 1}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "edges": ["E{F18:inst2(F5:side(c1))|F2:side(c2[c1,c3+c17])}"], "radius": 1.5}},
+  {"expect": {"feature": "F20", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F20"}, "result": {"status": "ok", "level": null}}}
+]

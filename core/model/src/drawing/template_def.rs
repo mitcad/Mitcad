@@ -10,6 +10,11 @@
 //! A title block may hold images (a company's logo, mitcad#1625): PNG,
 //! JPEG or SVG files kept in the template as base64, so that a sheet's
 //! copy of its template carries them.
+//!
+//! A template may leave out its frame or its title block (mitcad#2325:
+//! `show_frame`, `show_title_block`, both true when left out); the
+//! built-in Blank has neither, its views using the whole sheet within its
+//! margins.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +33,14 @@ fn default_margins() -> [f64; 4] {
 
 fn default_rows() -> usize {
     4
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// A sheet template: its frame, title block and revision table.
@@ -59,11 +72,27 @@ pub struct SheetTemplate {
     /// top, mm (ISO 5457: 20 on the left for filing, 10 elsewhere).
     #[serde(default = "default_margins")]
     pub margins: [f64; 4],
+    /// Its title block's layout, given by every template (one without it
+    /// is no template); a template that draws none (`show_title_block`
+    /// false) keeps it for when the title block editor puts the block
+    /// back (Blank: an empty 180 x 36 mm block).
     pub title_block: BlockLayout,
     /// A revision table above the title block, drawn once the drawing has
     /// a revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision_table: Option<RevisionLayout>,
+    /// Whether it draws its frame (mitcad#2325; true when left out, as in
+    /// every template before): false leaves the frame's outline out, its
+    /// margins still bounding the views' area.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub show_frame: bool,
+    /// Whether it draws its title block (mitcad#2325; true when left out):
+    /// false leaves out the block, its fields and the revision table, and
+    /// the views' area reaches down to the frame's bottom. (The key
+    /// `title_block` is the block's layout, kept for when the block is
+    /// put back.)
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub show_title_block: bool,
 }
 
 /// A title block in the frame's lower right corner.
@@ -354,8 +383,10 @@ impl SheetTemplate {
             return Err(format!("{at}: its margins are not negative"));
         }
         let block = &self.title_block;
-        if !(block.width.is_finite() && block.width > 0.0)
-            || !(block.height.is_finite() && block.height > 0.0)
+        // A block it does not draw needs no size (mitcad#2325).
+        if self.show_title_block
+            && (!(block.width.is_finite() && block.width > 0.0)
+                || !(block.height.is_finite() && block.height > 0.0))
         {
             return Err(format!("{at}: its title block has a size"));
         }
@@ -402,15 +433,20 @@ impl SheetTemplate {
     /// Why it does not fit a sheet of this size, if it does not
     /// (mitcad#722: large margins on A4 gave a frame of negative width):
     /// its margins leave a frame, and its title block with the revision
-    /// table's room fits in the frame.
+    /// table's room fits in the frame. A template that draws no frame
+    /// needs none, one that draws no title block has none to fit
+    /// (mitcad#2325).
     pub fn fits(&self, width: f64, height: f64) -> Result<(), String> {
         let at = format!("template {}", self.id);
         let (min, max) = self.frame(width, height);
         let (w, h) = (max[0] - min[0], max[1] - min[1]);
-        if !(w > 0.0 && h > 0.0) {
+        if self.show_frame && !(w > 0.0 && h > 0.0) {
             return Err(format!(
                 "{at}: its margins leave no frame on a {width} × {height} mm sheet"
             ));
+        }
+        if !self.show_title_block {
+            return Ok(());
         }
         let block = &self.title_block;
         let high = block.height + self.revision_room();
@@ -431,7 +467,9 @@ impl SheetTemplate {
     }
 
     /// The title block's box on a sheet of this size: in the frame's lower
-    /// right corner, no wider than the frame.
+    /// right corner, no wider than the frame; where its layout goes also
+    /// when it draws no block (the title block editor's box), the views
+    /// keeping clear of [`Self::title_room`] only.
     pub fn title_box(&self, width: f64, height: f64) -> (P2, P2) {
         let (min, max) = self.frame(width, height);
         let w = self.title_block.width.min(max[0] - min[0]);
@@ -444,16 +482,36 @@ impl SheetTemplate {
     /// The height its revision table takes above the title block when it
     /// shows all its rows and its header, mm; 0 without one. Views and the
     /// hole table keep clear of it from the start, so that the first
-    /// revision overlaps nothing (mitcad#722).
+    /// revision overlaps nothing (mitcad#722). 0 without a title block
+    /// too: the table goes with it (mitcad#2325).
     pub fn revision_room(&self) -> f64 {
+        if !self.show_title_block {
+            return 0.0;
+        }
         self.revision_table
             .as_ref()
             .map_or(0.0, |t| REVISION_ROW * (t.rows.max(1) + 1) as f64)
     }
 
-    /// The names its fields fill in, each once, in order.
+    /// The height above the frame's bottom that views and the hole table
+    /// keep clear of: its title block's with its revision table's room;
+    /// 0 when it draws no title block (mitcad#2325), the views' area then
+    /// reaching the frame's bottom.
+    pub fn title_room(&self) -> f64 {
+        if self.show_title_block {
+            self.title_block.height + self.revision_room()
+        } else {
+            0.0
+        }
+    }
+
+    /// The names its fields fill in, each once, in order; none when it
+    /// draws no title block (mitcad#2325).
     pub fn keys(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
+        if !self.show_title_block {
+            return out;
+        }
         for field in &self.title_block.fields {
             for key in keys(&field.text) {
                 if !out.contains(&key) {
