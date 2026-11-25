@@ -498,9 +498,25 @@ pub struct SheetRulesDef<P = ParamId> {
     /// features it made, which `edit_standard_box` changes together.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub standard_box: Option<serde_json::Value>,
+    /// Whether a Flange whose bend meets another bend at a corner cuts
+    /// `corner_relief` there by itself (mitcad#2342,
+    /// [`SheetRulesDef::relieves_flange_corners`]). A version flag: rules
+    /// saved without it (designs made before) keep their corners as they
+    /// were until the rules are edited; adding or editing rules sets it
+    /// (`Document::resolve`), unless the command gives `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flange_corner_relief: Option<bool>,
 }
 
 impl<P> SheetRulesDef<P> {
+    /// Whether flanges cut the rules' corner relief at their corners
+    /// (mitcad#2342): rules of a new or edited design whose process folds
+    /// metal (corner reliefs are metal's, [`crate::sheet::process`]).
+    pub fn relieves_flange_corners(&self) -> bool {
+        self.flange_corner_relief == Some(true)
+            && self.process.is_none_or(|p| p == SheetProcess::Metal)
+    }
+
     pub const TYPE: &'static str = "sheet_rules";
     pub const BASE_NAME: &'static str = "SheetRules";
     // Written by hand: the allowance and the reliefs map under nested slots.
@@ -516,6 +532,7 @@ impl<P> SheetRulesDef<P> {
             kerf: self.kerf.as_ref().map(|k| f("kerf", k)).transpose()?,
             flute: self.flute.clone(),
             standard_box: self.standard_box.clone(),
+            flange_corner_relief: self.flange_corner_relief,
             reference_side: self.reference_side,
             bend_relief: Relief {
                 kind: self.bend_relief.kind,

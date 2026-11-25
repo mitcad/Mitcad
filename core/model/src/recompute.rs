@@ -488,6 +488,12 @@ pub enum Read {
     /// The design's direction of gravity (as bits), None without one
     /// (the hanging slack of Flex items, mitcad#1713).
     Gravity(Option<[u64; 3]>),
+    /// The Corner Relief features that name a bend of a flange (the
+    /// feature), by their uids and bends
+    /// (`sheet::folded::corner_reliefs_key`), None without one
+    /// (mitcad#2342): definitions later in the timeline, which take the
+    /// flange's corners from the rules' automatic corner relief.
+    CornerReliefs(FeatureUid, Option<u128>),
 }
 
 /// The design's direction of gravity as bits, for [`Read::Gravity`].
@@ -586,6 +592,9 @@ impl Read {
                     == *key
             }
             Self::Flexed(key, bits) => env.flexed.get(key).map(placement_bits) == *bits,
+            Self::CornerReliefs(flange, key) => {
+                crate::sheet::folded::corner_reliefs_key(env.features, *flange) == *key
+            }
         }
     }
 
@@ -694,6 +703,11 @@ impl Read {
                     for v in b {
                         f.u64(v);
                     }
+                });
+            }
+            Self::CornerReliefs(flange, key) => {
+                fingerprint.u8(20).u64(flange.0).option(*key, |f, k| {
+                    f.u128(k);
                 });
             }
         }
@@ -2269,6 +2283,11 @@ fn resume_point<'b, S>(before: &'b Recomputed<S>, state: &DocState) -> Option<&'
                     params,
                     *plane,
                 ) == *key
+            }
+            // A Corner Relief appended after the features may name a
+            // flange's corner among them (mitcad#2342).
+            Read::CornerReliefs(flange, key) => {
+                crate::sheet::folded::corner_reliefs_key(&state.features, *flange) == *key
             }
             // What earlier features made and the assembly: the same.
             _ => true,

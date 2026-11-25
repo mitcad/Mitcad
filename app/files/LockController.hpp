@@ -82,6 +82,12 @@ public:
   using std::runtime_error::runtime_error;
 };
 
+// How Edit in Place ends when a request for the lock it holds is answered
+// (mitcad#2397): its unsaved edits saved first (Save), dropped (Discard),
+// or kept to be saved later (Keep: nobody answered; saved first when
+// autosave is on).
+enum class InPlaceEnd { Save, Discard, Keep };
+
 class LockController : public QObject, public LockEvents {
   Q_OBJECT
 
@@ -120,6 +126,13 @@ public:
     // The project's live updates for the lock's details (the broker, the
     // connection's state, dropped messages); "" without any.
     std::function<QString(const QString& root)> liveDetails;
+    // Edit in Place (mitcad#2397): the design at `path` edited in place (a
+    // lock this window holds for its mode, or this window's own design lent
+    // to another window) has unsaved edits; and the mode ends for a
+    // request's hand-over as `how` says, false when it could not (a command
+    // open, a save that failed), said in the window.
+    std::function<bool(const QString& path)> inPlaceModified;
+    std::function<bool(const QString& path, InPlaceEnd how)> endInPlace;
   };
 
   LockController(QMainWindow& window, RemoteController& remote, ProjectIndicator& indicator, Host host,
@@ -178,6 +191,53 @@ public:
   bool newerVersion(const QString& file, const QJsonObject& incoming);
   // Save as New Version recorded the read-only window's changes.
   void changesSaved();
+  // Another design of the window's project written from this window, which
+  // has no window of its own here (Edit in Place, mitcad#2353: the linked
+  // design edited in place): its edit lock taken for the write with this
+  // window's session, as opening it would take it, under a progress
+  // dialog. `allowed` false, with `refusal` in words, when someone else
+  // holds it (or the same person elsewhere); true without a lock (`taken`
+  // false) when the project has none (not a Cloud project, edit locks off,
+  // a remote that refuses lock refs) or the remote is out of reach, as a
+  // design opened then is editable. Logs "Edit lock for writing: ...".
+  struct WriteLock {
+    bool allowed = true;
+    bool taken = false;
+    QString refusal;
+    // holdLock(): the remote has versions the project lacks (the lock's
+    // view, mitcad#2397): a fetch tells whether the design is one of them.
+    bool newer = false;
+  };
+  WriteLock takeForWrite(const QString& path);
+  // The lock takeForWrite() took released after the write.
+  void releaseAfterWrite(const QString& path);
+  // Another design of the window's project edited in this window for a
+  // whole mode (Edit in Place, mitcad#2389): its edit lock taken as
+  // takeForWrite() takes it, the refusal said for starting the mode
+  // ("... cannot be edited in place"), and held: refreshed every half idle
+  // time, as the window's own design's lock, until releaseHeld(). A lock
+  // found taken by someone else on a refresh is no longer held (heldLock()
+  // false), said in the status bar; a write then takes it again and is
+  // refused in words. Logs "Edit lock for Edit in Place: ...".
+  // While held, the lock's requests are read at every poll interval and
+  // answered as a design's own tab answers them (mitcad#2397): Finish and
+  // Release (Save, Finish and Release, or Release Without Saving, with
+  // unsaved edits), Keep 15 More Minutes, Decline...; releasing ends the
+  // mode (Host::endInPlace) and hands the lock over to the requester, and
+  // no answer within the idle time does the same, the edits kept.
+  WriteLock holdLock(const QString& path);
+  bool heldLock(const QString& path) const;
+  // The held design was saved: its lock's base is the version just
+  // recorded.
+  void heldSaved(const QString& path);
+  // The mode ended: the held lock released (nothing when none is held).
+  void releaseHeld(const QString& path);
+  // The window's design is lent to another window that edits it in place
+  // (mitcad#2389): its lock stays held and active, not released at the
+  // idle time, until it comes back. A request for it meanwhile is answered
+  // as for a held lock (mitcad#2397): releasing ends the mode in the other
+  // window first (Host::endInPlace), then hands the lock over.
+  void setLent(bool lent);
   // The indicator's menu entries (Release Edit Lock, Edit Lock Details...).
   QList<QAction*> actions() const;
 
@@ -210,9 +270,40 @@ private:
   // answer is dropped); its answer.
   // `limitSeconds` > 0: cancelled after that long (MitCad closes).
   QJsonObject runNow(RemoteTask* task, const QString& label, int limitSeconds = 0);
+  // A task while a progress dialog shows, after the running one, whose
+  // answer is still taken (mitcad#2353: a lock of another design).
+  QJsonObject runAside(RemoteTask* task, const QString& label);
+  // runNow's and runAside's dialog until the task ends; its answer.
+  QJsonObject waitWithProgress(RemoteTask* task, const QString& label, int limitSeconds);
   void dropRunning();
-  RemoteTask* lockTask(const QString& name, const QList<QJsonObject>& commands);
+  // In the project at `root` (the design's project when empty).
+  RemoteTask* lockTask(const QString& name, const QList<QJsonObject>& commands, const QString& root = QString());
   QJsonObject lockCommand(const char* name, QJsonObject fields = {}) const;
+  // takeForWrite() and holdLock(): `forMode` words the refusal for starting
+  // Edit in Place and logs "Edit lock for Edit in Place".
+  WriteLock takeAside(const QString& path, bool forMode);
+  // releaseAfterWrite() and releaseHeld(), in the project at `root`.
+  void releaseAside(const QString& absolute, const QString& root, bool forMode);
+  // The held locks refreshed (`base`: after a save, "" as it was).
+  void refreshHeld(const QString& absolute, const QString& base);
+  // A held lock taken by someone else (or removed): no longer held.
+  void heldLost(const QString& absolute, const QJsonObject& lock);
+  // The held locks' requests (mitcad#2397): read with lock_poll in their
+  // project, answered in a dialog of their own.
+  void pollHeld();
+  void handleHeldView(const QString& root, const QJsonObject& view);
+  void showHeldAnswerDialog(const QString& absolute, const QJsonObject& request, const QJsonArray& requests);
+  void closeHeldAnswerDialog();
+  void sendHeldAnswer(const QString& absolute, const QJsonObject& request, const QString& kind,
+                      const QString& message);
+  // Releasing a held lock to a requester: the mode ended as `how` says,
+  // the versions sent, the lock handed over.
+  void handOverHeld(const QString& absolute, const QJsonObject& request, InPlaceEnd how, const QString& why);
+  // Releasing the lent design's lock: the mode in the other window ended
+  // first, then handed over as the design's own (handOver).
+  void handOverLent(const QJsonObject& request, InPlaceEnd how, const QString& why);
+  // The answer dialog's text and its buttons for a design edited in place.
+  QString inPlaceRequestText(const QString& name, const QJsonObject& request) const;
 
   // The design.
   bool lockable(QString* why = nullptr) const;
@@ -354,6 +445,29 @@ private:
   QAction* m_detailsAction = nullptr;
   QString m_loggedState;
   QHash<QString, std::pair<bool, QString>> m_probes; // by remote address
+  // Locks held for Edit in Place (holdLock): the project folder, by the
+  // design's absolute path; refreshed by m_heldTimer.
+  QHash<QString, QString> m_held;
+  QTimer* m_heldTimer = nullptr;
+  bool m_lent = false; // the design is edited in place in another window
+  // Requests for the held locks (mitcad#2397): read every m_heldPollSeconds
+  // (m_heldPollTimer, single shot), the one shown (by its id, for the
+  // design at m_heldShownPath), those answered or kept, and the timers of
+  // a keep and of no answer within the idle time.
+  QTimer* m_heldPollTimer = nullptr;
+  QTimer* m_heldKeepTimer = nullptr;
+  QTimer* m_heldAnswerTimer = nullptr;
+  int m_heldIdleMinutes = 10;
+  int m_heldPollSeconds = 10;
+  bool m_heldOffline = false;
+  QPointer<QMessageBox> m_heldAnswerDialog;
+  QString m_heldShownRequest;
+  QString m_heldShownPath;
+  QJsonObject m_heldShown; // the request shown
+  QSet<QString> m_heldAnswered;
+  QString m_heldKeptRequest;
+  QSet<QString> m_heldReceipts;
+  QString m_handingOver; // a held design whose mode ends for a hand-over: not released
 };
 
 } // namespace mitcad

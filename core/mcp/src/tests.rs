@@ -2165,7 +2165,7 @@ fn live_ui_guide_resource_is_listed_read_and_notified() {
     };
     assert_eq!(
         read(&mut session, 4),
-        json!({"active": false, "sequence": 0})
+        json!({"active": false, "holding": false, "sequence": 0})
     );
     // Not subscribed: a change sends nothing.
     let started = json!({"active": true, "sequence": 1, "step": {"id": "sketch"}});

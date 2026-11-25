@@ -551,6 +551,15 @@ fn turn_fields(
             {
                 v(binormal);
             }
+            // The points that pick a section's free edges (mitcad#2395).
+            for section in &mut loft.sections {
+                if let crate::features::LoftSectionDef::Edges {
+                    openings: picked, ..
+                } = section
+                {
+                    openings(picked);
+                }
+            }
         }
         FeatureDef::Sweep(sweep) => {
             some(&mut sweep.binormal);

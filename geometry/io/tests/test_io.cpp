@@ -2683,6 +2683,31 @@ void test_indexed_mesh(const std::string& dir) {
       CHECK(mitcad::io::mesh_stats(shape).triangles == 0);
     }
   }
+  // Each triangle's face (mitcad#2385): one per triangle, in the shape's
+  // face order; every corner of a box's triangle on its face's plane, and
+  // every face with triangles.
+  {
+    const TopoDS_Shape box = BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape();
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+    TopExp::MapShapes(box, TopAbs_FACE, faces);
+    const mitcad::io::IndexedMesh mesh = mitcad::io::indexed_mesh(box, MeshOptions::from(Refinement::High));
+    CHECK(mesh.faces.size() == mesh.triangles.size());
+    std::vector<int> used(static_cast<std::size_t>(faces.Extent()), 0);
+    for (std::size_t t = 0; t < mesh.triangles.size() && t < mesh.faces.size(); ++t) {
+      const int face = static_cast<int>(mesh.faces[t]);
+      CHECK(face < faces.Extent());
+      if (face >= faces.Extent()) {
+        continue;
+      }
+      ++used[static_cast<std::size_t>(face)];
+      const gp_Pln plane = BRepAdaptor_Surface(TopoDS::Face(faces.FindKey(face + 1))).Plane();
+      for (const std::uint32_t v : mesh.triangles[t]) {
+        const auto& p = mesh.vertices[v];
+        CHECK(plane.Distance(gp_Pnt(p[0], p[1], p[2])) < 1e-9);
+      }
+    }
+    CHECK(std::all_of(used.begin(), used.end(), [](int n) { return n > 0; }));
+  }
   // Finer is closer.
   const TopoDS_Shape block = filleted_block();
   const double exact = volume(block);
@@ -2694,6 +2719,7 @@ void test_indexed_mesh(const std::string& dir) {
   const Body read = mitcad::io::read_stl(path);
   const mitcad::io::IndexedMesh mesh = mitcad::io::indexed_mesh(read.shape, MeshOptions::from(Refinement::High));
   CHECK(mesh.triangles.size() == mitcad::io::mesh_stats(read.shape).triangles);
+  CHECK(mesh.faces.size() == mesh.triangles.size());
   CHECK(closed(mesh));
   CHECK(near(mesh_volume(mesh), exact, area(block) * 0.03));
 }

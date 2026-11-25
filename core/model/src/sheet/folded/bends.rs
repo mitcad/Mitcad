@@ -1719,6 +1719,20 @@ pub(crate) fn flange<K: Kernel>(
     if d.corner == Some(SheetFlangeCorner::HalfOpen) {
         half_open_seam(ctx, &mut state, rules.thickness)?;
     }
+    // Where the bend meets another bend at a corner of its panel, the
+    // rules' corner relief (mitcad#2342); a flange with a relief of its
+    // own keeps its corners as they are.
+    if d.relief.is_none() && rules.relieves_flange_corners() {
+        let own = BendId {
+            feature: ctx.uid,
+            slot: 0,
+        };
+        let corners: Vec<[BendId; 2]> = super::relief::corner_bends(&state, d.boundary.panel, own)
+            .into_iter()
+            .map(|other| [own, other])
+            .collect();
+        state = super::relief::flange_corner_reliefs(ctx, state, &rules, &corners)?;
+    }
     publish(ctx, state, &rules, None)
 }
 

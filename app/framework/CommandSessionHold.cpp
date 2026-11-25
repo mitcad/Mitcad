@@ -100,7 +100,7 @@ QString CommandSession::previewHoldRefusal() const {
   // another), or one of its floating panels' windows.
   const QWidget* host = m_host.viewer().window();
   const QWidget* active = QApplication::activeWindow();
-  if (active == nullptr || (active != host && GlassCard::hostWindow(active) != host)) {
+  if (active == nullptr || (active != host && GlassCard::keyboardHost(active) != host)) {
     return QStringLiteral("the command's window is not active");
   }
   // In a text field Ctrl+A, C and V edit its text: not while the user

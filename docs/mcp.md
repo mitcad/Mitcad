@@ -826,7 +826,7 @@ A new bridge can connect again to the same document. `--workspace`,
 | `ui_screenshot` | `window` (default false). `max_size` (default 1280, 64 to 4096). `max_bytes` (the encoded image's bytes, 4096 to 5 MiB; default 5 MiB inline, none for a file). `format` (`png` default, `jpeg`), `quality` (JPEG, default 90). `width` and `height`, or `aspect`. `path`, `overwrite`. | An MCP image block, after the text: `format`, `mime_type`, `of`, `width`, `height`, `full_width`, `full_height`, `bytes`, `downscaled_for_bytes`, `max_bytes`; of the window, `windows`. With `path`, also `path` and no image. Refer to the text below the table. |
 | `ui_select` | `document`. `items` (entities) or `comment` (a comment's id). `reveal` (`none`, `pan` default, `fit`). | `document`, `selected`, `selection`, `view` (`none`, `pan`, `zoom`), `camera`. With a command panel open, also `picked`, `into_command` and `command`. With `comment`, also `comment`. Refer to the text below the table. |
 | `ui_command` | `document`. `id` or `edit`. `inputs`. `finish` (`ok` default, `cancel`, `keep_open`). Or `search` alone (words, `""` for all) to list the commands. | `document`, `command`, `panel`, `committed`, `open`, `mode`, `sketch`, `undo`, `previews`, `log`, `hint`. For a `view.*` command, also `camera`. A listing: `document`, `mode`, `search`, `commands` (`id`, `name`, `kind`, `agents`, `why`, `available`), `count`, `total`, and `note` when there was nothing to finish. Refer to the text below the table. |
-| `ui_guide` | `action` (`start`, `end`, `state` default). `step` with `start` ([docs/tutorials.md](tutorials.md#guide-steps)). | `active`, `sequence`, `step`, `last_event`, `target_shown` while active, `document`. Refer to [Guided tutorials](#guided-tutorials). |
+| `ui_guide` | `action` (`start`, `end`, `state` default). `step` with `start` ([docs/tutorials.md](tutorials.md#guide-steps)). | `active`, `holding`, `sequence`, `step`, `last_event`, `target_shown` while active, `document`. Refer to [Guided tutorials](#guided-tutorials). |
 | `ui_camera` | `eye`, `target`, `up`, `height`, `fov`, `projection`. `box`, `frame` (`none` default, `shown`, `selection`) or `comment` (a comment's id), optional `aspect` with them. | `camera`, `framed` (`none`, `box`, `shown`, `selection`, `comment`), `changed`, `aspect` when given, `comment` with it. Refer to the text below the table. |
 
 **`document_save`** without `path` saves to the document's own path, as
@@ -1305,7 +1305,9 @@ application, through the same engine as a MitCad tutorial's pages
 ([docs/tutorials.md](tutorials.md)). The step names its target as the UI
 names it: a command id at its button, an input of the open panel by its
 key (as `ui_state`'s `command.inputs` lists them), a Browser row by its
-name, or the view with the kinds of picks it takes; never pixels. MitCad
+name, the view with the kinds of picks it takes, the toolbar's workspace
+selector, a workspace or a tab by its name, or the timeline (mitcad#2370);
+never pixels. MitCad
 outlines the target and shows the step's text beside it. Until the step
 is done, the commands it does not allow are refused (from the user's
 keys, buttons, menus and the command search, and from `ui_command`, whose
@@ -1322,16 +1324,30 @@ it.
   that is not valid, or names a command MitCad does not have, is refused
   with the reason. `action: "end"` ends it. Without `action` (`state`) the
   tool only reads.
-- The result is the guide's state: `active`, `sequence` (one per step
+- A step with `"hold": true` keeps the input held once it is done (no
+  command but Leave Tutorial and the camera's, no picks in the view), its
+  callout hidden, until the next `start`, an `end` or Leave Tutorial
+  ([After a step with hold](tutorials.md#after-a-step-with-hold),
+  mitcad#2368); `holding` says whether one is on.
+- The result is the guide's state: `active`, `holding`, `sequence` (one per step
   started), `step` (as given, with its defaults), `last_event` and, while
-  active, `target_shown` (whether its target is on the screen now).
+  active, `target_shown` (whether its target is on the screen now),
+  `target` (its rectangle in the design window's pixels, while shown) and
+  `demonstrating` (a tutorial page's demonstration plays over it,
+  [docs/tutorials.md](tutorials.md#demonstrations)).
 - `last_event` is `{"event": "step_done", "done": …}` (what completed it:
   `{"started": <id>}`, `{"command": <id>, "committed": true}`,
   `{"input": <key>, "value": <text>}`, `{"pick": <kind>}`, `{"mode":
-  <mode>}`), `{"event":
+  <mode>}`, `{"navigate": <action>}`: the user orbited, panned or zoomed
+  the view as the navigation scheme binds it, mitcad#2369;
+  `{"opened": "workspace_selector"}`, `{"chosen": <workspace>}`,
+  `{"activated": <tab>}`; a step without `done` is shown until it is
+  ended), `{"event":
   "step_left", "reason": …}` (`escape`, `leave`, `ended`, `replaced`,
-  `closed`) or `{"event": "refused", "command": <id>}`, each with `step`
-  and `sequence`.
+  `closed`), `{"event": "refused", "command": <id>}`, `{"event": "held",
+  "place": …, "input": …}` (a click or the wheel the step held back,
+  mitcad#2366) or `{"event": "demonstration_ended", "reason": …}`, each
+  with `step` and `sequence`.
 - **The resource** `mitcad://ui-guide` (`application/json`, listed on a
   live connection) is the same state. `resources/subscribe` with its URI
   asks for `notifications/resources/updated` whenever it changes: a step

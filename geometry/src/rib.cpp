@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -14,6 +15,7 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -28,6 +30,7 @@
 #include <BRepFill.hxx>
 #include <BRepLib.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
@@ -39,13 +42,25 @@
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <GeomAPI.hxx>
 #include <GeomAdaptor_Surface.hxx>
+#include <Geom2dAPI_InterCurveCurve.hxx>
+#include <Geom2dAPI_ProjectPointOnCurve.hxx>
+#include <Geom2dAdaptor_Curve.hxx>
+#include <Geom2dConvert_ApproxCurve.hxx>
+#include <Geom2d_BSplineCurve.hxx>
+#include <Geom2d_Circle.hxx>
 #include <Geom2d_Curve.hxx>
+#include <Geom2d_Line.hxx>
+#include <Geom2d_OffsetCurve.hxx>
+#include <Geom2d_TrimmedCurve.hxx>
 #include <Geom_BSplineCurve.hxx>
+#include <Geom_Curve.hxx>
 #include <Geom_Surface.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_IndexedMap.hxx>
 #include <NCollection_List.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
@@ -56,11 +71,18 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <gp.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Ax2d.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Circ2d.hxx>
+#include <gp_Dir2d.hxx>
 #include <gp_Lin.hxx>
 #include <gp_Pnt2d.hxx>
+#include <gp_Vec2d.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Sphere.hxx>
 
@@ -1209,6 +1231,110 @@ ShapePtr drafted_rib(const RibSpec& spec, const Path& chain, const std::vector<T
   return sewn_solid(faces, "rib");
 }
 
+// The start (`first`) or end of an edge along its curve, whatever its
+// orientation in a wire.
+gp_Pnt edge_point(const TopoDS_Edge& edge, bool first) {
+  TopoDS_Vertex start;
+  TopoDS_Vertex end;
+  TopExp::Vertices(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD)), start, end, true);
+  return BRep_Tool::Pnt(first ? start : end);
+}
+
+// The name of a face of the far side of a rib grown Normal to Curves
+// (mitcad#2398): end(<curve>) for an offset, corner(<curve>) for a round
+// corner after the curve.
+std::string far_name(const RibSpec& spec, const RibFarCurve& piece) {
+  return face_name(spec.feature, piece.corner ? "corner" : "end", piece.curve.name);
+}
+
+// A side of a round corner of a drafted rib grown Normal to Curves
+// (mitcad#2398): the cone from `apex` (the chain's corner at the side's
+// height) to `arc` (the corner's arc at the side's far height, about the
+// apex's line along `normal`), the line from the apex to the arc's start
+// turned about that line until it reaches the arc's end.
+TopoDS_Face corner_cone(const gp_Pnt& apex, const TopoDS_Edge& arc, const gp_Dir& normal, const char* what) {
+  const gp_Pnt from = edge_point(arc, true);
+  const gp_Pnt to = edge_point(arc, false);
+  const gp_Vec axis(normal);
+  gp_Vec v0(apex, from);
+  v0 -= axis * v0.Dot(axis);
+  gp_Vec v1(apex, to);
+  v1 -= axis * v1.Dot(axis);
+  if (v0.Magnitude() <= Precision::Confusion() || v1.Magnitude() <= Precision::Confusion()) {
+    throw not_built(what);
+  }
+  double turn = std::atan2(axis.Dot(v0.Crossed(v1)), v0.Dot(v1));
+  gp_Dir about = normal;
+  if (turn < 0.0) {
+    about.Reverse();
+    turn = -turn;
+  }
+  if (turn <= 1.0e-9) {
+    throw not_built(what);
+  }
+  BRepPrimAPI_MakeRevol revolved(BRepBuilderAPI_MakeEdge(apex, from).Edge(), gp_Ax1(apex, about), turn);
+  revolved.Build();
+  if (revolved.IsDone()) {
+    for (TopExp_Explorer f(revolved.Shape(), TopAbs_FACE); f.More(); f.Next()) {
+      return TopoDS::Face(f.Current());
+    }
+  }
+  throw not_built(what);
+}
+
+// A rib grown Normal to Curves with its draft (mitcad#2398, mitcad#2102):
+// the curves' `edges` and the far side's `far_edges` (in the sketch plane),
+// its sides at `low` and `high` along the sketch normal at the curves and
+// leaning out by `lean` per unit of the `run` to the far side:
+// side(<curve>) across the curves; wall2 and wall1 the ruled faces between
+// each curve and its offset (planes between lines, cones between arcs),
+// a round corner's the cone about the chain's corner; the far side's
+// faces across it; tip0 and tip1 joining the chain's start `a` and end `b`
+// to the far side's `far_a` and `far_b`.
+ShapePtr drafted_normal_rib(const RibSpec& spec, const Path& chain, const std::vector<TopoDS_Edge>& edges,
+                            const std::vector<TopoDS_Edge>& far_edges, const gp_Pnt& a, const gp_Pnt& b,
+                            const gp_Pnt& far_a, const gp_Pnt& far_b, double run, double low, double high,
+                            double lean) {
+  const gp_Dir normal = spec.frame.normal();
+  const gp_Vec n(normal);
+  const double out = run * lean;
+  const double far_low = low - out;
+  const double far_high = high + out;
+  const std::string wall1 = face_name(spec.feature, "wall1");
+  const std::string wall2 = face_name(spec.feature, "wall2");
+  NamedFaces faces;
+  for (std::size_t i = 0; i < edges.size() && i < chain.size(); ++i) {
+    faces.emplace_back(swept_face(moved_edge(edges[i], n * low), n * (high - low), "rib"),
+                       face_name(spec.feature, "side", chain[i].name));
+  }
+  for (std::size_t k = 0; k < spec.far_curves.size() && k < far_edges.size(); ++k) {
+    const RibFarCurve& piece = spec.far_curves[k];
+    if (piece.chain_curve >= edges.size()) {
+      throw not_built("rib");
+    }
+    const TopoDS_Edge& near = edges[piece.chain_curve];
+    const TopoDS_Edge at_low = moved_edge(far_edges[k], n * far_low);
+    const TopoDS_Edge at_high = moved_edge(far_edges[k], n * far_high);
+    if (piece.corner) {
+      const gp_Pnt corner = edge_point(near, false);
+      faces.emplace_back(corner_cone(corner.Translated(n * low), at_low, normal, "rib"), wall2);
+      faces.emplace_back(corner_cone(corner.Translated(n * high), at_high, normal, "rib"), wall1);
+    } else {
+      faces.emplace_back(ruled_face(moved_edge(near, n * low), at_low, "rib"), wall2);
+      faces.emplace_back(ruled_face(moved_edge(near, n * high), at_high, "rib"), wall1);
+    }
+    faces.emplace_back(swept_face(at_low, n * (far_high - far_low), "rib"), far_name(spec, piece));
+  }
+  const auto tip = [&](const gp_Pnt& p, const gp_Pnt& q) {
+    return polygon_face({p.Translated(n * low), p.Translated(n * high), q.Translated(n * far_high),
+                         q.Translated(n * far_low)},
+                        "rib");
+  };
+  faces.emplace_back(tip(a, far_a), face_name(spec.feature, "tip0"));
+  faces.emplace_back(tip(b, far_b), face_name(spec.feature, "tip1"));
+  return sewn_solid(faces, "rib");
+}
+
 ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
   const Path& chain = spec.chains.front();
   const TopoDS_Wire wire = detail::path_wire(chain);
@@ -1220,8 +1346,14 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     throw std::invalid_argument("a rib needs an open chain of curves");
   }
   const gp_Dir normal = spec.frame.normal();
+  // Normal to Curves (mitcad#2398): the far side is given, the chain offset
+  // by the depth.
+  const bool to_far = !spec.far_curves.empty();
+  if (to_far && !spec.depth) {
+    throw std::invalid_argument("a rib grown Normal to Curves runs a depth");
+  }
   gp_Dir across = normal.Crossed(gp_Dir(chord));
-  if (spec.direction) {
+  if (spec.direction && !to_far) {
     // Its Direction (mitcad#1746), kept in the sketch plane.
     const gp_Vec given(*spec.direction);
     const gp_Vec flat = given - gp_Vec(normal) * given.Dot(gp_Vec(normal));
@@ -1236,15 +1368,28 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
   if (spec.flip) {
     across.Reverse();
   }
+  // The way the rib grows at arc length `s` along its curves: `across`, or
+  // Normal to Curves at right angles to them there, to their left (the
+  // sketch normal up) or with Flip to their right.
+  const auto grows_at = [&](double s) {
+    if (!to_far) {
+      return across;
+    }
+    gp_Dir way = normal.Crossed(spine.tangent(s));
+    if (spec.flip) {
+      way.Reverse();
+    }
+    return way;
+  };
   const auto [low, high] = sides(spec.location, spec.thickness);
   const double middle = (low + high) / 2.0;
   // A draft (mitcad#2102): the sides lean out by `lean` per unit the rib
   // grows, so that it widens from its curves to the faces it reaches.
   const double lean = std::tan(spec.draft_angle);
   std::string unreached;
-  const double length =
-      drafted_run(spec, lean, spec.depth ? *spec.depth : reach(spec, {wire}),
-                  spine.point(spine.length() / 2.0).Translated(gp_Vec(normal) * middle), across, "rib", unreached);
+  const double length = drafted_run(spec, lean, spec.depth ? *spec.depth : reach(spec, {wire}),
+                                    spine.point(spine.length() / 2.0).Translated(gp_Vec(normal) * middle),
+                                    grows_at(spine.length() / 2.0), "rib", unreached);
   const gp_Vec depth = gp_Vec(across) * length;
   // The band in the sketch plane: the curves in path order, the end at
   // their start, the far side back, and the end at their start.
@@ -1264,21 +1409,43 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     edges.push_back(detail::model_edge(piece.curve));
     add(edges.back(), face_name(spec.feature, "side", piece.name));
   }
-  add(BRepBuilderAPI_MakeEdge(b, b.Translated(depth)).Edge(), face_name(spec.feature, "tip1"));
-  for (auto it = edges.rbegin(); it != edges.rend(); ++it) {
-    add(TopoDS::Edge(BRepBuilderAPI_Transform(*it, shift, true).Shape()), face_name(spec.feature, "end"));
+  // The far side: the curves moved by the depth, or Normal to Curves the
+  // pieces given (mitcad#2398), from the point across from the chain's
+  // start to the one across from its end.
+  std::vector<TopoDS_Edge> far_edges;
+  for (const RibFarCurve& piece : spec.far_curves) {
+    far_edges.push_back(detail::model_edge(piece.curve.curve));
   }
-  add(BRepBuilderAPI_MakeEdge(a.Translated(depth), a).Edge(), face_name(spec.feature, "tip0"));
+  const gp_Pnt far_a = to_far ? edge_point(far_edges.front(), true) : a.Translated(depth);
+  const gp_Pnt far_b = to_far ? edge_point(far_edges.back(), false) : b.Translated(depth);
+  add(BRepBuilderAPI_MakeEdge(b, far_b).Edge(), face_name(spec.feature, "tip1"));
+  if (to_far) {
+    for (std::size_t k = far_edges.size(); k-- > 0;) {
+      add(far_edges[k], far_name(spec, spec.far_curves[k]));
+    }
+  } else {
+    for (auto it = edges.rbegin(); it != edges.rend(); ++it) {
+      add(TopoDS::Edge(BRepBuilderAPI_Transform(*it, shift, true).Shape()), face_name(spec.feature, "end"));
+    }
+  }
+  add(BRepBuilderAPI_MakeEdge(far_a, a).Edge(), face_name(spec.feature, "tip0"));
   const TopoDS_Face band = band_face(gp_Pln(a, normal), outline.Wire(), "rib");
-  const ShapePtr tool = lean == 0.0
-                            ? band_prism(band, names, gp_Vec(normal) * low, gp_Vec(normal) * (high - low),
-                                         {face_name(spec.feature, "wall2")}, {face_name(spec.feature, "wall1")})
-                            : drafted_rib(spec, chain, edges, a, b, depth, low, high, lean);
+  ShapePtr tool;
+  if (lean == 0.0) {
+    tool = band_prism(band, names, gp_Vec(normal) * low, gp_Vec(normal) * (high - low),
+                      {face_name(spec.feature, "wall2")}, {face_name(spec.feature, "wall1")});
+  } else if (to_far) {
+    tool = drafted_normal_rib(spec, chain, edges, far_edges, a, b, far_a, far_b, length, low, high, lean);
+  } else {
+    tool = drafted_rib(spec, chain, edges, a, b, depth, low, high, lean);
+  }
   // Extend Ends (mitcad#1746): each end continued along its tangent, far
   // enough to leave the bodies' bounds (and the offset's more); an end past
   // the walls the curves cross is cut back to them instead (mitcad#1968).
+  // Normal to Curves (mitcad#2398) each end grows at right angles to its
+  // curve there, its far face the far side's piece there.
   const auto end_of = [&](const gp_Pnt& point, const gp_Dir& outward, const char* which, const char* n,
-                          const char* other) {
+                          const char* other, const gp_Dir& way, const std::string& far_face) {
     RibEnd end;
     end.point = point;
     end.outward = outward;
@@ -1288,26 +1455,35 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     end.tip = face_name(spec.feature, std::string("tip") + n);
     end.extend = end.along;
     end.reach = face_name(spec.feature, std::string("reach") + n);
-    end.far = face_name(spec.feature, "end");
+    end.far = far_face;
     end.near_cap = face_name(spec.feature, "wall2");
     end.far_cap = face_name(spec.feature, "wall1");
     end.other_tip = face_name(spec.feature, std::string("tip") + other);
-    end.probe = point.Translated(gp_Vec(across) * probe_step(spec) + gp_Vec(normal) * middle);
+    end.probe = point.Translated(gp_Vec(way) * probe_step(spec) + gp_Vec(normal) * middle);
     return end;
   };
+  // The band of each end's continuation runs from the end to the far
+  // side's end: the depth along the way the rib grows there.
+  std::vector<gp_Vec> end_depths;
   std::vector<RibEnd> ends;
   if (spec.extend_ends) {
-    ends.push_back(end_of(a, spine.tangent(0.0).Reversed(), "start", "0", "1"));
-    ends.push_back(end_of(b, spine.tangent(spine.length()), "end", "1", "0"));
+    const std::string far0 = to_far ? far_name(spec, spec.far_curves.front()) : face_name(spec.feature, "end");
+    const std::string far1 = to_far ? far_name(spec, spec.far_curves.back()) : face_name(spec.feature, "end");
+    ends.push_back(end_of(a, spine.tangent(0.0).Reversed(), "start", "0", "1", grows_at(0.0), far0));
+    ends.push_back(end_of(b, spine.tangent(spine.length()), "end", "1", "0", grows_at(spine.length()), far1));
+    end_depths.push_back(to_far ? gp_Vec(a, far_a) : depth);
+    end_depths.push_back(to_far ? gp_Vec(b, far_b) : depth);
   }
-  const double run_out = reach(spec, {wire}) + std::abs(spec.end_offset);
+  // Normal to Curves the far side lies up to the depth beyond the curves.
+  const double run_out = reach(spec, {wire}) + std::abs(spec.end_offset) + (to_far ? length : 0.0);
   std::vector<std::string> keep;
   for (const PathCurve& piece : chain) {
     keep.push_back(face_name(spec.feature, "side", piece.name));
   }
   // Just inside the middle of the curves.
-  const gp_Pnt middle_point = spine.point(spine.length() / 2.0).Translated(gp_Vec(across) * probe_step(spec) +
-                                                                          gp_Vec(normal) * middle);
+  const gp_Pnt middle_point = spine.point(spine.length() / 2.0)
+                                  .Translated(gp_Vec(grows_at(spine.length() / 2.0)) * probe_step(spec) +
+                                              gp_Vec(normal) * middle);
   std::vector<bool> cut;
   const ShapePtr drawn =
       drawn_part(spec, tool, keep, face_name(spec.feature, "end"), ends, middle_point, run_out, "rib", cut, unreached);
@@ -1319,19 +1495,29 @@ ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     if (cut[i]) {
       continue;
     }
-    if (const ShapePtr more = extension(spec, *drawn, ends[i], depth, low, high, lean, run_out, notes, "rib")) {
+    if (const ShapePtr more =
+            extension(spec, *drawn, ends[i], end_depths[i], low, high, lean, run_out, notes, "rib")) {
       parts.push_back(more);
     }
   }
   return detail::fused(parts, "the rib");
 }
 
+// The sides of a free or closed web curve found so far, by their offsets.
+using SideCache = std::vector<std::pair<double, occ::handle<Geom2d_Curve>>>;
+
 // A web's curve as its wall sees it (mitcad#1968): a line or a circular
 // arc, where it starts and ends, the way it runs there, and the offsets of
-// its wall's sides to its left.
+// its wall's sides to its left. Any other curve (mitcad#2364: an ellipse,
+// an elliptical arc, a spline, a conic, an offset curve, a projected edge)
+// is `free`: its sides are its offsets, found in the sketch plane's
+// coordinates (`flat`, `plane`). A smooth closed curve (a circle, an
+// ellipse, a closed spline) is `closed`: its wall is a ring, with no ends.
 struct WebCurve {
   const PathCurve* curve = nullptr;
   bool arc = false;
+  bool free = false;
+  bool closed = false;
   gp_Pnt ends[2];   // its start and end
   gp_Dir travel[2]; // the way it runs at its start and at its end
   gp_Ax2 axes;      // an arc's circle, counter-clockwise from `first` to `last`
@@ -1343,12 +1529,206 @@ struct WebCurve {
   double high = 0.0;
   int nodes[2] = {-1, -1}; // the nodes its ends are at
   bool loose[2] = {false, false}; // touches no other curve
+  occ::handle<Geom2d_Curve> flat; // a free or closed curve in the sketch plane's coordinates
+  gp_Pln plane;                   // those coordinates: x and y in the plane, z the sketch normal
+  double ray = 0.0;               // how far a free curve's sides run on past its ends
+  // Its sides, shared by its copies (a drafted wall's far end).
+  std::shared_ptr<SideCache> sides = std::make_shared<SideCache>();
 };
 
-WebCurve web_curve(const PathCurve& curve, const gp_Dir& normal) {
+// The sketch plane's coordinates (mitcad#2364): x and y in it, z along the
+// sketch normal, so that the left of a curve there is its left looking
+// along the sketch normal.
+gp_Pln flat_plane(const RibSpec& spec) {
+  return gp_Pln(gp_Ax3(spec.frame.origin, spec.frame.normal(), spec.frame.x_axis));
+}
+
+gp_Pnt2d flat_point(const gp_Pln& plane, const gp_Pnt& point) {
+  double u = 0.0;
+  double v = 0.0;
+  ElSLib::Parameters(plane, point, u, v);
+  return gp_Pnt2d(u, v);
+}
+
+gp_Vec2d flat_vector(const gp_Pln& plane, const gp_Vec& vector) {
+  return gp_Vec2d(vector.Dot(gp_Vec(plane.XAxis().Direction())), vector.Dot(gp_Vec(plane.YAxis().Direction())));
+}
+
+gp_Pnt solid_point(const gp_Pln& plane, const gp_Pnt2d& point) { return ElSLib::Value(point.X(), point.Y(), plane); }
+
+gp_Vec solid_vector(const gp_Pln& plane, const gp_Vec2d& vector) {
+  return gp_Vec(plane.XAxis().Direction()) * vector.X() + gp_Vec(plane.YAxis().Direction()) * vector.Y();
+}
+
+// Where a curve's tangent turns by more than this (radians), it has a
+// corner: its walls on either side meet there as two curves' walls do.
+constexpr double kCorner = 1.0e-9;
+
+// Ends of a closed curve's tangents this close (radians) are smooth.
+constexpr double kSmoothClosure = 1.0e-6;
+
+// The pieces of a curve in the sketch plane between the points where its
+// tangent turns (a spline's corners, mitcad#2364): each smooth, so that its
+// sides are its offsets.
+std::vector<occ::handle<Geom2d_Curve>> smooth_pieces(const occ::handle<Geom2d_Curve>& curve) {
+  const occ::handle<Geom2d_BSplineCurve> spline = occ::down_cast<Geom2d_BSplineCurve>(curve);
+  if (spline.IsNull() || spline->IsCN(1)) {
+    return {curve};
+  }
+  std::vector<double> cuts{spline->FirstParameter()};
+  for (int k = spline->FirstUKnotIndex() + 1; k < spline->LastUKnotIndex(); ++k) {
+    if (spline->Multiplicity(k) < spline->Degree()) {
+      continue;
+    }
+    gp_Pnt2d point;
+    gp_Vec2d before;
+    gp_Vec2d after;
+    spline->LocalD1(spline->Knot(k), k - 1, k, point, before);
+    spline->LocalD1(spline->Knot(k), k, k + 1, point, after);
+    if (before.SquareMagnitude() <= gp::Resolution() || after.SquareMagnitude() <= gp::Resolution() ||
+        std::abs(before.Angle(after)) > kCorner) {
+      cuts.push_back(spline->Knot(k));
+    }
+  }
+  cuts.push_back(spline->LastParameter());
+  if (cuts.size() == 2) {
+    return {curve};
+  }
+  std::vector<occ::handle<Geom2d_Curve>> pieces;
+  for (std::size_t i = 0; i + 1 < cuts.size(); ++i) {
+    const occ::handle<Geom2d_BSplineCurve> piece = occ::down_cast<Geom2d_BSplineCurve>(spline->Copy());
+    piece->Segment(cuts[i], cuts[i + 1]);
+    pieces.push_back(occ::handle<Geom2d_Curve>(piece));
+  }
+  return pieces;
+}
+
+// A web that is thicker than one of its curves allows where it bends
+// (mitcad#2364): the curve bends with `radius` where its wall reaches
+// `reach` to that side, at `at`.
+std::invalid_argument too_thick(const WebCurve& w, double radius, double reach, const gp_Pnt& at) {
+  return std::invalid_argument(placed_error("the web is thicker than one of its curves allows where it bends most",
+                                            "the web is thicker than curve " + w.curve->name +
+                                                " allows: it bends with a radius of " + number_text(radius) +
+                                                " mm where its wall reaches " + number_text(reach) +
+                                                " mm to that side",
+                                            {point_place(at)}));
+}
+
+// Throws where a free or closed curve bends to the side at `offset` (to its
+// left; negative: to its right) as tightly as that or more: its side there
+// would fold back on itself.
+void check_bend(const WebCurve& w, double offset) {
+  if (offset == 0.0) {
+    return;
+  }
+  const Geom2dAdaptor_Curve curve(w.flat);
+  const int spans = std::max(1, curve.NbIntervals(GeomAbs_C3));
+  NCollection_Array1<double> bounds(1, spans + 1);
+  curve.Intervals(bounds, GeomAbs_C3);
+  const int steps = std::max(16, 512 / spans);
+  double worst = 0.0;
+  double at = curve.FirstParameter();
+  for (int s = 1; s <= spans; ++s) {
+    for (int i = 0; i <= steps; ++i) {
+      const double t = bounds(s) + (bounds(s + 1) - bounds(s)) * i / steps;
+      gp_Pnt2d point;
+      gp_Vec2d d1;
+      gp_Vec2d d2;
+      curve.D2(t, point, d1, d2);
+      const double speed = d1.Magnitude();
+      if (speed <= gp::Resolution()) {
+        continue;
+      }
+      // The curve's turn (positive to its left) times the offset: 1 where
+      // the side reaches the centre of the bend.
+      const double share = d1.Crossed(d2) / (speed * speed * speed) * offset;
+      if (share > worst) {
+        worst = share;
+        at = t;
+      }
+    }
+  }
+  if (worst >= 1.0 - 1.0e-9) {
+    throw too_thick(w, std::abs(offset) / worst, std::abs(offset), solid_point(w.plane, w.flat->Value(at)));
+  }
+}
+
+// A free or closed curve's side at `offset` to its left (mitcad#2364), in
+// the sketch plane's coordinates over the curve's parameters, so that a
+// point of the curve and of its side have one parameter: a circle's is a
+// circle; any other's is its offset, as a B-spline within 1e-7 mm of it
+// (the offset curve itself where that approximation cannot be had). Throws
+// where the curve bends to that side more tightly than the offset.
+occ::handle<Geom2d_Curve> offset_of(const WebCurve& w, double offset) {
+  const double first = w.flat->FirstParameter();
+  const double last = w.flat->LastParameter();
+  occ::handle<Geom2d_Curve> basis = w.flat;
+  const occ::handle<Geom2d_TrimmedCurve> trimmed = occ::down_cast<Geom2d_TrimmedCurve>(basis);
+  if (!trimmed.IsNull()) {
+    basis = trimmed->BasisCurve();
+  }
+  const occ::handle<Geom2d_Circle> circle = occ::down_cast<Geom2d_Circle>(basis);
+  if (!circle.IsNull()) {
+    gp_Circ2d side = circle->Circ2d();
+    // The left of a counter-clockwise circle is its inside.
+    const double radius = side.Radius() - (side.IsDirect() ? offset : -offset);
+    if (radius <= Precision::Confusion()) {
+      throw too_thick(w, side.Radius(), std::abs(offset), solid_point(w.plane, side.Location()));
+    }
+    side.SetRadius(radius);
+    const occ::handle<Geom2d_Curve> whole = new Geom2d_Circle(side);
+    if (trimmed.IsNull()) {
+      return whole;
+    }
+    return new Geom2d_TrimmedCurve(whole, first, last);
+  }
+  if (offset == 0.0) {
+    return w.flat;
+  }
+  check_bend(w, offset);
+  // Geom2d_OffsetCurve's positive offset is to the right of the curve. The
+  // curve is smooth (smooth_pieces): its continuity is not checked again.
+  const occ::handle<Geom2d_Curve> exact = new Geom2d_OffsetCurve(w.flat, -offset, true);
+  try {
+    Geom2dConvert_ApproxCurve approximation(exact, 1.0e-7, GeomAbs_C1, 400, 9);
+    if (approximation.IsDone() && approximation.HasResult()) {
+      return occ::handle<Geom2d_Curve>(approximation.Curve());
+    }
+  } catch (const Standard_Failure&) {
+    // The offset curve itself, below.
+  }
+  return exact;
+}
+
+occ::handle<Geom2d_Curve> flat_side(const WebCurve& w, double offset) {
+  for (const auto& [at, side] : *w.sides) {
+    if (std::abs(at - offset) <= 1.0e-12 * std::max(1.0, std::abs(offset))) {
+      return side;
+    }
+  }
+  const occ::handle<Geom2d_Curve> side = offset_of(w, offset);
+  w.sides->emplace_back(offset, side);
+  return side;
+}
+
+// The curve as its walls see it, in the sketch plane of normal `normal`
+// with the coordinates `plane`: a line or a circular arc as it is; any
+// other curve in those coordinates, closed (a ring) when its ends meet
+// smoothly, else as its smooth pieces, each a free curve (mitcad#2364).
+std::vector<WebCurve> web_curves(const PathCurve& curve, const gp_Dir& normal, const gp_Pln& plane) {
+  const ModelCurve& c = curve.curve;
+  if (c.kind == ModelCurveKind::Point) {
+    throw std::invalid_argument(
+        placed_error("a point is not a curve; a web needs curves", "web curve " + curve.name + " is a point"));
+  }
+  if (c.kind == ModelCurveKind::Helix) {
+    throw std::invalid_argument(placed_error("a helix does not lie in the web's sketch plane",
+                                             "web curve " + curve.name + " is a helix"));
+  }
   WebCurve w;
   w.curve = &curve;
-  const ModelCurve& c = curve.curve;
+  w.plane = plane;
   if (c.kind == ModelCurveKind::Line) {
     const gp_Vec along(c.start, c.end);
     if (along.Magnitude() <= Precision::Confusion()) {
@@ -1359,25 +1739,89 @@ WebCurve web_curve(const PathCurve& curve, const gp_Dir& normal) {
     w.ends[1] = c.end;
     w.travel[0] = gp_Dir(along);
     w.travel[1] = gp_Dir(along);
-    return w;
+    return {w};
   }
-  if (c.kind != ModelCurveKind::Conic || c.closed || std::abs(c.major - c.minor) > 1e-9 * std::max(1.0, c.major)) {
-    throw std::invalid_argument("unsupported: web curves other than lines and arcs (" + curve.name + ")");
+  const bool circular =
+      c.kind == ModelCurveKind::Conic && std::abs(c.major - c.minor) <= 1e-9 * std::max(1.0, c.major);
+  if (circular && !c.closed) {
+    w.arc = true;
+    w.axes = gp_Ax2(c.center, c.normal, c.x_axis);
+    w.radius = c.major;
+    w.first = c.first;
+    w.last = c.last;
+    w.turn = gp_Vec(c.normal).Dot(gp_Vec(normal)) > 0.0 ? 1.0 : -1.0;
+    const gp_Vec x(w.axes.XDirection());
+    const gp_Vec y(w.axes.YDirection());
+    const double at[2] = {c.first, c.last};
+    for (int k = 0; k < 2; ++k) {
+      w.ends[k] = c.center.Translated(x * (w.radius * std::cos(at[k])) + y * (w.radius * std::sin(at[k])));
+      w.travel[k] = gp_Dir(x * -std::sin(at[k]) + y * std::cos(at[k]));
+    }
+    return {w};
   }
-  w.arc = true;
-  w.axes = gp_Ax2(c.center, c.normal, c.x_axis);
-  w.radius = c.major;
-  w.first = c.first;
-  w.last = c.last;
-  w.turn = gp_Vec(c.normal).Dot(gp_Vec(normal)) > 0.0 ? 1.0 : -1.0;
-  const gp_Vec x(w.axes.XDirection());
-  const gp_Vec y(w.axes.YDirection());
-  const double at[2] = {c.first, c.last};
-  for (int k = 0; k < 2; ++k) {
-    w.ends[k] = c.center.Translated(x * (w.radius * std::cos(at[k])) + y * (w.radius * std::sin(at[k])));
-    w.travel[k] = gp_Dir(x * -std::sin(at[k]) + y * std::cos(at[k]));
+  // Any other curve, in the sketch plane's coordinates.
+  const TopoDS_Edge edge = detail::model_edge(c);
+  double first = 0.0;
+  double last = 0.0;
+  const occ::handle<Geom_Curve> solid = BRep_Tool::Curve(edge, first, last);
+  if (solid.IsNull()) {
+    throw std::invalid_argument(
+        placed_error("a web curve could not be read", "web curve " + curve.name + " has no geometry"));
   }
-  return w;
+  occ::handle<Geom2d_Curve> flat = GeomAPI::To2d(solid, plane);
+  if (flat.IsNull()) {
+    throw std::invalid_argument(placed_error("a web curve does not lie in its sketch plane",
+                                             "web curve " + curve.name + " could not be put in its sketch plane"));
+  }
+  const bool whole = flat->IsPeriodic() ? last - first >= flat->Period() - Precision::PConfusion()
+                                        : std::abs(first - flat->FirstParameter()) <= Precision::PConfusion() &&
+                                              std::abs(last - flat->LastParameter()) <= Precision::PConfusion();
+  if (!whole) {
+    flat = new Geom2d_TrimmedCurve(flat, first, last);
+  }
+  const double size = std::max(1.0, std::sqrt(detail::bounds_of(edge).SquareExtent()));
+  // Its start and end, and the way it runs there.
+  const auto end_of = [&](const occ::handle<Geom2d_Curve>& piece, int k, gp_Pnt& point, gp_Dir& travel) {
+    gp_Pnt2d at;
+    gp_Vec2d tangent;
+    piece->D1(k == 0 ? piece->FirstParameter() : piece->LastParameter(), at, tangent);
+    point = solid_point(plane, at);
+    if (tangent.SquareMagnitude() <= gp::Resolution()) {
+      throw std::invalid_argument(placed_error("a web curve has no direction at one of its ends",
+                                               "web curve " + curve.name + " has no tangent at an end",
+                                               {point_place(point)}));
+    }
+    travel = gp_Dir(solid_vector(plane, tangent));
+  };
+  const std::vector<occ::handle<Geom2d_Curve>> pieces = smooth_pieces(flat);
+  if (pieces.size() == 1) {
+    WebCurve ring = w;
+    ring.flat = flat;
+    for (int k = 0; k < 2; ++k) {
+      end_of(flat, k, ring.ends[k], ring.travel[k]);
+    }
+    const bool closes = (c.kind == ModelCurveKind::Conic && c.closed) ||
+                        (ring.ends[0].Distance(ring.ends[1]) <= 1.0e-6 * size &&
+                         ring.travel[0].Angle(ring.travel[1]) <= kSmoothClosure);
+    if (closes) {
+      ring.closed = true;
+      return {ring};
+    }
+  }
+  std::vector<WebCurve> curves;
+  for (const occ::handle<Geom2d_Curve>& piece : pieces) {
+    // Each its own: a copy would share the sides found of another.
+    WebCurve p;
+    p.curve = &curve;
+    p.plane = plane;
+    p.free = true;
+    p.flat = piece;
+    for (int k = 0; k < 2; ++k) {
+      end_of(piece, k, p.ends[k], p.travel[k]);
+    }
+    curves.push_back(p);
+  }
+  return curves;
 }
 
 // The left of a curve where it runs `travel`, in the sketch plane.
@@ -1386,19 +1830,35 @@ gp_Vec left_of(const gp_Dir& normal, const gp_Dir& travel) {
 }
 
 // One side of a wall: the curve's parallel at `offset` to its left, a line
-// or a circle.
+// or a circle; a free curve's offset (mitcad#2364), in the sketch plane's
+// coordinates, run on along its end tangents by `ray` past its ends, so
+// that a mitre's outer side can reach past the curve's end as a line's
+// does.
 struct WallSide {
   bool arc = false;
   gp_Pnt origin; // a line's point at the curve's start
   gp_Dir along;  // a line's direction
   gp_Ax2 axes;   // an arc's circle
   double radius = 0.0;
+  bool free = false;
+  occ::handle<Geom2d_Curve> flat;
+  gp_Pln plane;
+  gp_Dir2d before; // the way a free curve runs at its start
+  gp_Dir2d after;  // and at its end
+  double ray = 0.0;
 };
 
 WallSide side_of(const WebCurve& w, double offset, const gp_Dir& normal) {
   WallSide side;
   side.arc = w.arc;
-  if (!w.arc) {
+  side.plane = w.plane;
+  if (w.free) {
+    side.free = true;
+    side.flat = flat_side(w, offset);
+    side.before = gp_Dir2d(flat_vector(w.plane, gp_Vec(w.travel[0])));
+    side.after = gp_Dir2d(flat_vector(w.plane, gp_Vec(w.travel[1])));
+    side.ray = w.ray;
+  } else if (!w.arc) {
     side.along = w.travel[0];
     side.origin = w.ends[0].Translated(left_of(normal, w.travel[0]) * offset);
   } else {
@@ -1408,10 +1868,58 @@ WallSide side_of(const WebCurve& w, double offset, const gp_Dir& normal) {
   return side;
 }
 
+// A side's curves in the sketch plane's coordinates `plane` (mitcad#2364):
+// a line's line `span` either way of its point, an arc's whole circle, a
+// free curve's offset and its runs on past its ends.
+std::vector<occ::handle<Geom2d_Curve>> flat_pieces(const WallSide& side, const gp_Pln& plane, double span) {
+  std::vector<occ::handle<Geom2d_Curve>> pieces;
+  if (side.free) {
+    pieces.push_back(side.flat);
+    const gp_Pnt2d start = side.flat->Value(side.flat->FirstParameter());
+    const gp_Pnt2d end = side.flat->Value(side.flat->LastParameter());
+    const occ::handle<Geom2d_Curve> back = new Geom2d_Line(start, side.before.Reversed());
+    const occ::handle<Geom2d_Curve> on = new Geom2d_Line(end, side.after);
+    pieces.push_back(new Geom2d_TrimmedCurve(back, 0.0, side.ray));
+    pieces.push_back(new Geom2d_TrimmedCurve(on, 0.0, side.ray));
+  } else if (side.arc) {
+    if (side.radius > Precision::Confusion()) {
+      const gp_Ax2d axis(flat_point(plane, side.axes.Location()), gp_Dir2d(1.0, 0.0));
+      pieces.push_back(new Geom2d_Circle(axis, side.radius));
+    }
+  } else {
+    const occ::handle<Geom2d_Curve> line =
+        new Geom2d_Line(flat_point(plane, side.origin), gp_Dir2d(flat_vector(plane, gp_Vec(side.along))));
+    pieces.push_back(new Geom2d_TrimmedCurve(line, -span, span));
+  }
+  return pieces;
+}
+
+// Where the curves of two sides cross, in model space.
+std::vector<gp_Pnt> flat_crossings(const std::vector<occ::handle<Geom2d_Curve>>& a,
+                                   const std::vector<occ::handle<Geom2d_Curve>>& b, const gp_Pln& plane) {
+  std::vector<gp_Pnt> points;
+  for (const occ::handle<Geom2d_Curve>& p : a) {
+    for (const occ::handle<Geom2d_Curve>& q : b) {
+      Geom2dAPI_InterCurveCurve meet(p, q, 1.0e-9);
+      for (int i = 1; i <= meet.NbPoints(); ++i) {
+        points.push_back(solid_point(plane, meet.Point(i)));
+      }
+    }
+  }
+  return points;
+}
+
 // Where a side crosses the line through `at` along `dir`, in the sketch
 // plane of normal `normal`.
 std::vector<gp_Pnt> crossings(const WallSide& side, const gp_Pnt& at, const gp_Dir& dir, const gp_Dir& normal) {
   std::vector<gp_Pnt> points;
+  if (side.free) {
+    const double span = 100.0 * side.ray;
+    const occ::handle<Geom2d_Curve> line =
+        new Geom2d_Line(flat_point(side.plane, at), gp_Dir2d(flat_vector(side.plane, gp_Vec(dir))));
+    const std::vector<occ::handle<Geom2d_Curve>> across{new Geom2d_TrimmedCurve(line, -span, span)};
+    return flat_crossings(flat_pieces(side, side.plane, span), across, side.plane);
+  }
   if (!side.arc) {
     const gp_Vec m(normal.Crossed(dir));
     const double d = m.Dot(gp_Vec(side.along));
@@ -1437,6 +1945,11 @@ std::vector<gp_Pnt> crossings(const WallSide& side, const gp_Pnt& at, const gp_D
 
 // Where two sides cross.
 std::vector<gp_Pnt> crossings(const WallSide& a, const WallSide& b, const gp_Dir& normal) {
+  if (a.free || b.free) {
+    const gp_Pln& plane = a.free ? a.plane : b.plane;
+    const double span = 100.0 * std::max(a.ray, b.ray);
+    return flat_crossings(flat_pieces(a, plane, span), flat_pieces(b, plane, span), plane);
+  }
   if (!a.arc) {
     return crossings(b, a.origin, a.along, normal);
   }
@@ -1528,8 +2041,9 @@ void mitre(const WebCurve& a, int ka, const WebCurve& b, int kb, const gp_Dir& n
     const std::optional<gp_Pnt> x =
         nearest(crossings(side_of(a, offsets[i], normal), side_of(b, same ? offsets[i] : -offsets[i], normal), normal),
                 corner);
-    // An arc's sides that cross far away, or not at all, keep square ends.
-    if (!x || ((a.arc || b.arc) && x->Distance(corner) > 10.0 * limit)) {
+    // An arc's or a free curve's sides that cross far away, or not at all,
+    // keep square ends.
+    if (!x || ((a.arc || b.arc || a.free || b.free) && x->Distance(corner) > 10.0 * limit)) {
       return;
     }
     meet[i] = *x;
@@ -1564,9 +2078,65 @@ void mitre(const WebCurve& a, int ka, const WebCurve& b, int kb, const gp_Dir& n
   end_b = same ? WallEnd{side_b[0], side_b[1], cut_corner} : WallEnd{side_b[1], side_b[0], cut_corner};
 }
 
+// The edges of a free curve's side at `offset` (mitcad#2364) from `from` to
+// `to`, points on it or on its runs on past its ends: the run before its
+// start, the side between, the run past its end, as far as each goes.
+std::vector<TopoDS_Edge> free_side(const WebCurve& w, double offset, const gp_Pnt& from, const gp_Pnt& to,
+                                   const char* short_curve) {
+  const occ::handle<Geom2d_Curve> side = flat_side(w, offset);
+  const double u0 = side->FirstParameter();
+  const double u1 = side->LastParameter();
+  const gp_Pnt start = solid_point(w.plane, side->Value(u0));
+  const gp_Pnt end = solid_point(w.plane, side->Value(u1));
+  // Where a point lies: -1 on the run before the start, 1 on the run past
+  // the end, 0 on the side at `t`.
+  const auto locate = [&](const gp_Pnt& point, double& t) {
+    Geom2dAPI_ProjectPointOnCurve onto(flat_point(w.plane, point), side, u0, u1);
+    if (onto.NbPoints() > 0 && onto.LowerDistance() <= 1.0e-6) {
+      t = onto.LowerDistanceParameter();
+      return 0;
+    }
+    if (point.Distance(start) <= 1.0e-6) {
+      t = u0;
+      return 0;
+    }
+    if (point.Distance(end) <= 1.0e-6) {
+      t = u1;
+      return 0;
+    }
+    return point.Distance(start) <= point.Distance(end) ? -1 : 1;
+  };
+  double ta = u0;
+  double tb = u1;
+  const int a = locate(from, ta);
+  const int b = locate(to, tb);
+  if (a == 1 || b == -1 || (a == 0 && b == 0 && tb - ta <= 1.0e-9 * (u1 - u0))) {
+    throw std::invalid_argument(short_curve);
+  }
+  std::vector<TopoDS_Edge> edges;
+  if (a == -1) {
+    edges.push_back(BRepBuilderAPI_MakeEdge(from, start).Edge());
+  }
+  if (tb - ta > 1.0e-9 * (u1 - u0)) {
+    BRepBuilderAPI_MakeEdge piece(GeomAPI::To3d(side, w.plane), ta, tb);
+    if (!piece.IsDone()) {
+      throw std::invalid_argument(short_curve);
+    }
+    edges.push_back(piece.Edge());
+  }
+  if (b == 1) {
+    edges.push_back(BRepBuilderAPI_MakeEdge(end, to).Edge());
+  }
+  if (edges.empty()) {
+    throw std::invalid_argument(short_curve);
+  }
+  return edges;
+}
+
 // The band of a web's wall in the sketch plane between its sides, closed by
 // its two ends; edges named wall2 (the low side), wall1 (the high), tip0
-// and tip1 after the curve.
+// and tip1 after the curve. A free curve's side may be several edges
+// (mitcad#2364), each with its side's name.
 TopoDS_Face web_band(const RibSpec& spec, const WebCurve& w, const WallEnd& start, const WallEnd& end, Names& names) {
   const gp_Dir normal = spec.frame.normal();
   const std::string& key = w.curve->name;
@@ -1574,13 +2144,17 @@ TopoDS_Face web_band(const RibSpec& spec, const WebCurve& w, const WallEnd& star
   const gp_Pnt from[2] = {start.low, start.high};
   const gp_Pnt to[2] = {end.low, end.high};
   const double offsets[2] = {w.low, w.high};
-  TopoDS_Edge walls[2];
+  std::vector<TopoDS_Edge> walls[2];
   for (int i = 0; i < 2; ++i) {
+    if (w.free) {
+      walls[i] = free_side(w, offsets[i], from[i], to[i], short_curve);
+      continue;
+    }
     if (!w.arc) {
       if (gp_Vec(from[i], to[i]).Dot(gp_Vec(w.travel[0])) <= Precision::Confusion()) {
         throw std::invalid_argument(short_curve);
       }
-      walls[i] = BRepBuilderAPI_MakeEdge(from[i], to[i]).Edge();
+      walls[i] = {BRepBuilderAPI_MakeEdge(from[i], to[i]).Edge()};
       continue;
     }
     const double radius = w.radius - w.turn * offsets[i];
@@ -1592,7 +2166,7 @@ TopoDS_Face web_band(const RibSpec& spec, const WebCurve& w, const WallEnd& star
     if (t1 - t0 <= 1.0e-9 || t1 - t0 >= 2.0 * kPi) {
       throw std::invalid_argument(short_curve);
     }
-    walls[i] = BRepBuilderAPI_MakeEdge(gp_Circ(w.axes, radius), t0, t1).Edge();
+    walls[i] = {BRepBuilderAPI_MakeEdge(gp_Circ(w.axes, radius), t0, t1).Edge()};
   }
   BRepBuilderAPI_MakeWire outline;
   const auto add = [&](const TopoDS_Edge& edge, const char* role) {
@@ -1612,11 +2186,98 @@ TopoDS_Face web_band(const RibSpec& spec, const WebCurve& w, const WallEnd& star
       add(BRepBuilderAPI_MakeEdge(at.low, at.high).Edge(), role);
     }
   };
-  add(walls[0], "wall2");
+  for (const TopoDS_Edge& edge : walls[0]) {
+    add(edge, "wall2");
+  }
   shut(end, "tip1");
-  add(walls[1], "wall1");
+  // The high side from the end back to the start.
+  for (auto edge = walls[1].rbegin(); edge != walls[1].rend(); ++edge) {
+    add(*edge, "wall1");
+  }
   shut(start, "tip0");
   return band_face(gp_Pln(w.ends[0], normal), outline.Wire(), "web");
+}
+
+// The ring of a closed curve's wall (mitcad#2364) in the sketch plane,
+// between its sides at `low` and `high` to its left; edges named wall2
+// (the low side) and wall1 (the high) after the curve.
+TopoDS_Face ring_band(const RibSpec& spec, const WebCurve& w, double low, double high, Names& names) {
+  const std::string& key = w.curve->name;
+  const double offsets[2] = {low, high};
+  TopoDS_Wire wires[2];
+  TopoDS_Edge edges[2];
+  double areas[2] = {0.0, 0.0};
+  for (int i = 0; i < 2; ++i) {
+    const occ::handle<Geom2d_Curve> side = flat_side(w, offsets[i]);
+    const double u0 = side->FirstParameter();
+    const double u1 = side->LastParameter();
+    const gp_Pnt start = solid_point(w.plane, side->Value(u0));
+    // One vertex where it closes, wide enough for an approximated side
+    // whose ends lie a little apart.
+    const double gap = start.Distance(solid_point(w.plane, side->Value(u1)));
+    TopoDS_Vertex vertex;
+    BRep_Builder builder;
+    builder.MakeVertex(vertex, start, std::max(Precision::Confusion(), 1.01 * gap));
+    BRepBuilderAPI_MakeEdge edge(GeomAPI::To3d(side, w.plane), vertex, vertex, u0, u1);
+    if (!edge.IsDone()) {
+      throw std::invalid_argument(placed_error("the web's wall along a closed curve does not close",
+                                               "the side of web curve " + key + " at " + number_text(offsets[i]) +
+                                                   " mm does not close",
+                                               {point_place(start)}));
+    }
+    // The edge as its wire holds it, so that the face's edge is the one named.
+    wires[i] = BRepBuilderAPI_MakeWire(edge.Edge()).Wire();
+    edges[i] = TopoDS::Edge(TopExp_Explorer(wires[i], TopAbs_EDGE).Current());
+    // Its area, positive counter-clockwise about the sketch normal.
+    constexpr int kSteps = 512;
+    gp_Pnt2d previous = side->Value(u0);
+    for (int s = 1; s <= kSteps; ++s) {
+      const gp_Pnt2d next = side->Value(u0 + (u1 - u0) * s / kSteps);
+      areas[i] += (previous.X() * next.Y() - next.X() * previous.Y()) / 2.0;
+      previous = next;
+    }
+  }
+  // The outer side counter-clockwise about the sketch normal, the inner
+  // one clockwise.
+  const int outer = std::abs(areas[0]) >= std::abs(areas[1]) ? 0 : 1;
+  const auto wire_of = [&wires](int i, bool reversed) -> TopoDS_Wire {
+    if (reversed) {
+      return TopoDS::Wire(wires[i].Reversed());
+    }
+    return wires[i];
+  };
+  BRepBuilderAPI_MakeFace maker(w.plane, wire_of(outer, areas[outer] < 0.0), true);
+  if (maker.IsDone()) {
+    maker.Add(wire_of(1 - outer, areas[1 - outer] > 0.0));
+  }
+  if (!maker.IsDone() || !BRepCheck_Analyzer(maker.Face()).IsValid()) {
+    throw std::invalid_argument("the web cannot be built from its curves; they may fold back on themselves");
+  }
+  names.emplace_back(edges[0], face_name(spec.feature, "wall2", key));
+  names.emplace_back(edges[1], face_name(spec.feature, "wall1", key));
+  return maker.Face();
+}
+
+// A closed curve's wall (mitcad#2364): its ring `band` (its edges' names
+// `names`) grown by `height`, faces `start` and `end` at its caps; with a
+// draft (`out` not 0) between that ring and the ring at the far end, its
+// sides moved out by `out`, joined by ruled faces named after the sides.
+ShapePtr ring_wall(const RibSpec& spec, const WebCurve& w, const TopoDS_Face& band, const Names& names,
+                   const gp_Vec& height, double out, const std::string& start, const std::string& end) {
+  if (out == 0.0) {
+    return band_prism(band, names, gp_Vec(0, 0, 0), height, {start}, {end});
+  }
+  Names top_names;
+  const TopoDS_Face top = ring_band(spec, w, w.low - out, w.high + out, top_names);
+  gp_Trsf move;
+  move.SetTranslation(height);
+  BRepBuilderAPI_Transform moved(top, move, true);
+  NamedFaces faces{{band, start}, {TopoDS::Face(moved.Shape()), end}};
+  for (std::size_t k = 0; k < names.size() && k < top_names.size(); ++k) {
+    faces.emplace_back(ruled_face(names[k].first, TopoDS::Edge(moved.ModifiedShape(top_names[k].first)), "web"),
+                       names[k].second);
+  }
+  return sewn_solid(faces, "web");
 }
 
 // The convex hull of points in the sketch plane, in order round it: the
@@ -1669,43 +2330,199 @@ std::vector<std::size_t> hull(const std::vector<gp_Pnt>& points, const Frame& fr
 // (mitcad#2102), `top` holds the same points at the walls' far end (their
 // sides moved out): the hull's corners there, moved by `height`, are joined
 // to those in the sketch plane by ruled faces.
+// A band of the sketch plane that a wall or a node's piece grows from
+// (mitcad#2364): its edges with the names of the faces they sweep, and the
+// names of its caps.
+struct Band {
+  TopoDS_Face face;
+  Names names;
+  std::string start;
+  std::string end;
+};
+
+// The band of a node's piece without a draft: the convex hull of the node
+// and the walls' square ends there, its edges named `tip` after `curve`.
+// False when the hull has no area.
+bool node_band(const RibSpec& spec, const std::vector<gp_Pnt>& points, const std::string& curve, const char* tip,
+               Band& band) {
+  const std::vector<std::size_t> order = hull(points, spec.frame);
+  if (order.size() < 3) {
+    return false;
+  }
+  BRepBuilderAPI_MakeWire outline;
+  Names names;
+  for (std::size_t i = 0; i < order.size(); ++i) {
+    outline.Add(BRepBuilderAPI_MakeEdge(points[order[i]], points[order[(i + 1) % order.size()]]).Edge());
+    if (!outline.IsDone()) {
+      return false;
+    }
+    names.emplace_back(outline.Edge(), face_name(spec.feature, tip, curve));
+  }
+  band = Band{band_face(gp_Pln(points[order.front()], spec.frame.normal()), outline.Wire(), "web"), names,
+              face_name(spec.feature, "start", curve), face_name(spec.feature, "end", curve)};
+  return true;
+}
+
 ShapePtr node_piece(const RibSpec& spec, const std::vector<gp_Pnt>& points, const std::string& curve,
                     const char* tip, const gp_Vec& height, const std::vector<gp_Pnt>& top) {
+  if (top.size() != points.size()) {
+    Band band;
+    if (!node_band(spec, points, curve, tip, band)) {
+      return nullptr;
+    }
+    return band_prism(band.face, band.names, gp_Vec(0, 0, 0), height, {band.start}, {band.end});
+  }
   const std::vector<std::size_t> order = hull(points, spec.frame);
   if (order.size() < 3) {
     return nullptr;
   }
   std::vector<gp_Pnt> corners;
+  std::vector<gp_Pnt> far;
   for (const std::size_t i : order) {
     corners.push_back(points[i]);
+    far.push_back(top[i].Translated(height));
   }
-  if (top.size() == points.size()) {
-    std::vector<gp_Pnt> far;
-    for (const std::size_t i : order) {
-      far.push_back(top[i].Translated(height));
-    }
-    NamedFaces faces{{polygon_face(corners, "web"), face_name(spec.feature, "start", curve)},
-                     {polygon_face(far, "web"), face_name(spec.feature, "end", curve)}};
-    for (std::size_t i = 0; i < corners.size(); ++i) {
-      const std::size_t next = (i + 1) % corners.size();
-      faces.emplace_back(ruled_face(BRepBuilderAPI_MakeEdge(corners[i], corners[next]).Edge(),
-                                    BRepBuilderAPI_MakeEdge(far[i], far[next]).Edge(), "web"),
-                         face_name(spec.feature, tip, curve));
-    }
-    return sewn_solid(faces, "web");
-  }
-  BRepBuilderAPI_MakeWire outline;
-  Names names;
+  NamedFaces faces{{polygon_face(corners, "web"), face_name(spec.feature, "start", curve)},
+                   {polygon_face(far, "web"), face_name(spec.feature, "end", curve)}};
   for (std::size_t i = 0; i < corners.size(); ++i) {
-    outline.Add(BRepBuilderAPI_MakeEdge(corners[i], corners[(i + 1) % corners.size()]).Edge());
-    if (!outline.IsDone()) {
-      return nullptr;
-    }
-    names.emplace_back(outline.Edge(), face_name(spec.feature, tip, curve));
+    const std::size_t next = (i + 1) % corners.size();
+    faces.emplace_back(ruled_face(BRepBuilderAPI_MakeEdge(corners[i], corners[next]).Edge(),
+                                  BRepBuilderAPI_MakeEdge(far[i], far[next]).Edge(), "web"),
+                       face_name(spec.feature, tip, curve));
   }
-  const TopoDS_Face band = band_face(gp_Pln(corners.front(), spec.frame.normal()), outline.Wire(), "web");
-  return band_prism(band, names, gp_Vec(0, 0, 0), height, {face_name(spec.feature, "start", curve)},
-                    {face_name(spec.feature, "end", curve)});
+  return sewn_solid(faces, "web");
+}
+
+// True when a face of the shape has one of `names` (with or without a `#n`
+// index).
+bool holds_from(const Shape& shape, const std::set<std::string>& names) {
+  for (int i = 0; i < shape.face_count(); ++i) {
+    for (const std::string& name : shape.face_names(i)) {
+      if (names.count(name.substr(0, name.find('#'))) != 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The bands joined in the sketch plane and grown by `height` in one prism
+// (mitcad#2364): one planar boolean of all the walls' and node pieces'
+// bands instead of a solid per wall fused with all the others, so that a
+// dense grid of walls is quick. The faces swept by the bands' edges keep
+// their names (an edge split where walls cross passes its name to each
+// piece, one merged with the next in line takes both), and each joined
+// region's caps take the cap names of the bands it holds.
+ShapePtr grown_bands(const std::vector<Band>& bands, const gp_Vec& height) {
+  if (bands.size() == 1) {
+    return band_prism(bands.front().face, bands.front().names, gp_Vec(0, 0, 0), height, {bands.front().start},
+                      {bands.front().end});
+  }
+  BRepAlgoAPI_Fuse fuse;
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(bands.front().face);
+  NCollection_List<TopoDS_Shape> tools;
+  for (std::size_t i = 1; i < bands.size(); ++i) {
+    tools.Append(bands[i].face);
+  }
+  fuse.SetArguments(arguments);
+  fuse.SetTools(tools);
+  fuse.SetNonDestructive(true);
+  detail::build(fuse);
+  if (!fuse.IsDone() || fuse.HasErrors()) {
+    throw std::runtime_error("the web's walls could not be joined");
+  }
+  fuse.SimplifyResult();
+  const TopoDS_Shape joined = fuse.Shape();
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> present;
+  for (TopExp_Explorer e(joined, TopAbs_EDGE); e.More(); e.Next()) {
+    present.Add(e.Current());
+  }
+  // Each edge of the joined faces with the names and the bands of the
+  // bands' edges it comes from.
+  std::vector<std::vector<std::pair<std::string, std::size_t>>> sources(static_cast<std::size_t>(present.Extent()));
+  const auto note = [&](const TopoDS_Shape& image, const std::string& name, std::size_t band) {
+    const int index = present.FindIndex(image);
+    if (index > 0) {
+      sources[static_cast<std::size_t>(index - 1)].emplace_back(name, band);
+    }
+  };
+  for (std::size_t b = 0; b < bands.size(); ++b) {
+    for (const auto& [edge, name] : bands[b].names) {
+      const NCollection_List<TopoDS_Shape>& images = fuse.Modified(edge);
+      if (!images.IsEmpty()) {
+        for (const TopoDS_Shape& image : images) {
+          note(image, name, b);
+        }
+      } else if (!fuse.IsDeleted(edge)) {
+        note(edge, name, b);
+      }
+    }
+  }
+  BRepPrimAPI_MakePrism prism(joined, height);
+  prism.Build();
+  if (!prism.IsDone()) {
+    throw std::runtime_error("the web's walls could not be grown");
+  }
+  detail::FaceNamer namer(prism.Shape());
+  for (int i = 1; i <= present.Extent(); ++i) {
+    for (const auto& source : sources[static_cast<std::size_t>(i - 1)]) {
+      namer.generated(prism, present(i), source.first);
+    }
+  }
+  for (TopExp_Explorer f(joined, TopAbs_FACE); f.More(); f.Next()) {
+    std::set<std::size_t> held;
+    for (TopExp_Explorer e(f.Current(), TopAbs_EDGE); e.More(); e.Next()) {
+      const int index = present.FindIndex(e.Current());
+      if (index > 0) {
+        for (const auto& source : sources[static_cast<std::size_t>(index - 1)]) {
+          held.insert(source.second);
+        }
+      }
+    }
+    std::set<std::string> starts;
+    std::set<std::string> ends;
+    for (const std::size_t b : held) {
+      starts.insert(bands[b].start);
+      ends.insert(bands[b].end);
+    }
+    for (const std::string& name : starts) {
+      namer.add(prism.FirstShape(f.Current()), name);
+    }
+    for (const std::string& name : ends) {
+      namer.add(prism.LastShape(f.Current()), name);
+    }
+  }
+  return namer.shape();
+}
+
+// The joined walls (grown_bands) cut by the bodies up to the next faces
+// (mitcad#2364): the pieces that hold a start cap, none of which may hold an
+// end cap, as each wall's own are (drawn_part).
+ShapePtr grown_to_bodies(const RibSpec& spec, const ShapePtr& grown, const std::vector<Band>& bands) {
+  if (spec.bodies.empty()) {
+    throw std::invalid_argument("there are no bodies for the web to reach");
+  }
+  std::set<std::string> starts;
+  std::set<std::string> ends;
+  for (const Band& band : bands) {
+    starts.insert(band.start);
+    ends.insert(band.end);
+  }
+  std::vector<ShapePtr> kept;
+  for (const ShapePtr& piece : cut_pieces(grown, shapes_of(spec.bodies), "web")) {
+    if (!holds_from(*piece, starts)) {
+      continue;
+    }
+    if (holds_from(*piece, ends)) {
+      throw std::invalid_argument("the web does not end at faces of the bodies; flip it or give it a depth");
+    }
+    kept.push_back(piece);
+  }
+  if (kept.empty()) {
+    throw std::invalid_argument("the web lies inside the bodies");
+  }
+  return detail::fused(kept, "the web");
 }
 
 // Whether a web's curves lie on a face of the bodies (mitcad#2102): the
@@ -1760,8 +2577,16 @@ ShapePtr drafted_wall(const RibSpec& spec, const TopoDS_Face& band, const Names&
 // the wall it crosses when it lies past it. With a draft (mitcad#2102) each
 // wall, mitre and node piece is built between its outline in the sketch
 // plane and its outline at the far end, its sides moved out there.
+//
+// Every kind of curve makes a wall (mitcad#2364): a free curve (an ellipse,
+// a spline, a conic) between its offsets, a smooth closed one (a circle
+// too) a ring. Without a draft, the bands of the walls whose ends need no
+// continuing, and of the node pieces, are joined in the sketch plane and
+// grown at once (grown_bands), so that a dense grid takes one planar
+// boolean rather than a solid per wall fused with the rest.
 ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
   const gp_Dir normal = spec.frame.normal();
+  const gp_Pln plane = flat_plane(spec);
   gp_Dir up = normal;
   if (spec.flip) {
     up.Reverse();
@@ -1776,12 +2601,20 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
   Bnd_Box box;
   for (const Path& chain : spec.chains) {
     for (const PathCurve& curve : chain) {
-      curves.push_back(web_curve(curve, normal));
-      edges.push_back(detail::model_edge(curve.curve));
-      box.Add(detail::bounds_of(edges.back()));
+      for (const WebCurve& w : web_curves(curve, normal, plane)) {
+        edges.push_back(w.free || w.closed ? BRepBuilderAPI_MakeEdge(GeomAPI::To3d(w.flat, plane)).Edge()
+                                           : detail::model_edge(curve.curve));
+        box.Add(detail::bounds_of(edges.back()));
+        curves.push_back(w);
+      }
     }
   }
   const double tolerance = 1.0e-6 * std::max(1.0, std::sqrt(box.SquareExtent()));
+  // A free curve's sides run on past its ends far enough to meet any other
+  // wall's side there (mitre).
+  for (WebCurve& w : curves) {
+    w.ray = 2.0 * std::sqrt(box.SquareExtent()) + 10.0 * spec.thickness;
+  }
   // A draft (mitcad#2102), thicker where the web meets the bodies: the
   // sides lean out by `lean` per unit the web grows, narrowing it the way
   // it grows when its curves lie on a face of the bodies, else widening it.
@@ -1805,7 +2638,8 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
   std::vector<gp_Pnt> nodes;
   std::vector<std::vector<std::pair<std::size_t, int>>> at_node;
   for (std::size_t i = 0; i < curves.size(); ++i) {
-    for (int k = 0; k < 2; ++k) {
+    // A ring has no ends.
+    for (int k = 0; k < 2 && !curves[i].closed; ++k) {
       std::size_t n = 0;
       while (n < nodes.size() && nodes[n].Distance(curves[i].ends[k]) > tolerance) {
         ++n;
@@ -1819,15 +2653,21 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     }
   }
   // A free end touches no other curve: a T's stem on its bar is not free.
+  // (Only the curves whose bounds hold the end are measured, mitcad#2364.)
+  std::vector<Bnd_Box> bounds;
+  for (const TopoDS_Edge& edge : edges) {
+    bounds.push_back(detail::bounds_of(edge));
+    bounds.back().Enlarge(2.0 * tolerance);
+  }
   for (std::size_t i = 0; i < curves.size(); ++i) {
-    for (int k = 0; k < 2; ++k) {
+    for (int k = 0; k < 2 && !curves[i].closed; ++k) {
       if (at_node[static_cast<std::size_t>(curves[i].nodes[k])].size() != 1) {
         continue;
       }
       const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(curves[i].ends[k]).Vertex();
       bool touches = false;
       for (std::size_t j = 0; j < curves.size() && !touches; ++j) {
-        if (j != i) {
+        if (j != i && !bounds[j].IsOut(curves[i].ends[k])) {
           BRepExtrema_DistShapeShape distance(vertex, edges[j]);
           touches = distance.IsDone() && distance.Value() <= tolerance;
         }
@@ -1844,6 +2684,9 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
       continue;
     }
     turned[first] = 0;
+    if (curves[first].closed) {
+      continue;
+    }
     std::vector<std::size_t> todo{first};
     while (!todo.empty()) {
       const std::size_t i = todo.back();
@@ -1888,7 +2731,9 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
   const double limit = std::max(std::abs(low), std::abs(high)) + spec.thickness;
   const double top_limit = std::max(std::abs(low - out), std::abs(high + out)) + spec.thickness + 2.0 * out;
   for (const auto& meeting : at_node) {
-    if (meeting.size() == 2 && meeting[0].first != meeting[1].first) {
+    // Also a curve's own two ends (a closed spline with a corner where it
+    // closes, mitcad#2364; a smooth closure keeps its ends square).
+    if (meeting.size() == 2) {
       const std::size_t i = meeting[0].first;
       const std::size_t j = meeting[1].first;
       const int ki = meeting[0].second;
@@ -1922,15 +2767,30 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
   }
   const double run_out = reach(spec, wires) + std::abs(spec.end_offset);
   std::vector<ShapePtr> parts;
+  // Without a draft, the bands grown at once (mitcad#2364).
+  std::vector<Band> bands;
   for (std::size_t i = 0; i < curves.size(); ++i) {
     const WebCurve& w = curves[i];
     const std::string& key = w.curve->name;
     Names names;
-    const TopoDS_Face band = web_band(spec, w, ends[i][0], ends[i][1], names);
     const std::string start = face_name(spec.feature, "start", key);
     const std::string end = face_name(spec.feature, "end", key);
-    const ShapePtr tool = lean == 0.0 ? band_prism(band, names, gp_Vec(0, 0, 0), height, {start}, {end})
-                                      : drafted_wall(spec, band, names, tops[i], top_ends[i], height, start, end);
+    if (w.closed) {
+      // A ring (mitcad#2364).
+      const TopoDS_Face band = ring_band(spec, w, w.low, w.high, names);
+      if (lean == 0.0) {
+        bands.push_back(Band{band, names, start, end});
+        continue;
+      }
+      const ShapePtr tool = ring_wall(spec, w, band, names, height, out, start, end);
+      // Just inside the wall at the curve's start.
+      const gp_Pnt inside = w.ends[0].Translated(gp_Vec(up) * probe_step(spec) +
+                                                 left_of(normal, w.travel[0]) * ((w.low + w.high) / 2.0));
+      std::vector<bool> cut;
+      parts.push_back(drawn_part(spec, tool, {start}, end, {}, inside, run_out, "web", cut, unreached));
+      continue;
+    }
+    const TopoDS_Face band = web_band(spec, w, ends[i][0], ends[i][1], names);
     // Its free ends (with Extend Ends).
     std::vector<RibEnd> loose;
     for (int k = 0; spec.extend_ends && k < 2; ++k) {
@@ -1954,6 +2814,12 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
       e.probe = e.point.Translated(gp_Vec(up) * probe_step(spec) + gp_Vec(e.across) * ((w.low + w.high) / 2.0));
       loose.push_back(e);
     }
+    if (lean == 0.0 && loose.empty()) {
+      bands.push_back(Band{band, names, start, end});
+      continue;
+    }
+    const ShapePtr tool = lean == 0.0 ? band_prism(band, names, gp_Vec(0, 0, 0), height, {start}, {end})
+                                      : drafted_wall(spec, band, names, tops[i], top_ends[i], height, start, end);
     // Just inside the middle of the curve.
     const BRepAdaptor_Curve along(edges[i]);
     gp_Pnt mid;
@@ -1993,6 +2859,13 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
       }
     }
     const auto [i, k] = at_node[n].front();
+    if (lean == 0.0) {
+      Band band;
+      if (node_band(spec, points, curves[i].curve->name, k == 0 ? "tip0" : "tip1", band)) {
+        bands.push_back(band);
+      }
+      continue;
+    }
     ShapePtr piece = node_piece(spec, points, curves[i].curve->name, k == 0 ? "tip0" : "tip1", height, top);
     if (piece && !spec.depth) {
       piece = to_bodies(piece, spec.bodies, face_name(spec.feature, "start", curves[i].curve->name),
@@ -2001,6 +2874,15 @@ ShapePtr web_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt
     if (piece) {
       parts.push_back(piece);
     }
+  }
+  // The bands joined and grown at once, up to the next faces cut by the
+  // bodies once (mitcad#2364).
+  if (!bands.empty()) {
+    ShapePtr grown = grown_bands(bands, height);
+    if (!spec.depth) {
+      grown = grown_to_bodies(spec, grown, bands);
+    }
+    parts.insert(parts.begin(), grown);
   }
   return detail::fused(parts, "the web");
 }
@@ -2019,7 +2901,7 @@ ShapePtr rib(const RibSpec& spec) {
   if (!spec.web && spec.chains.size() != 1) {
     throw std::invalid_argument("a rib grows from one chain of curves");
   }
-  if (spec.web && spec.direction) {
+  if (spec.web && (spec.direction || !spec.far_curves.empty())) {
     throw std::invalid_argument("a web grows along the sketch normal");
   }
   if (!std::isfinite(spec.draft_angle) || std::abs(spec.draft_angle) >= kPi / 2.0) {

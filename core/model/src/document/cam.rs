@@ -1378,7 +1378,8 @@ impl<K: Kernel> Document<K> {
                     "Live tools need a lathe with a C axis and live tools as the setup's machine.",
                 ));
             }
-            // The part's back on the sub-spindle (mitcad#2319).
+            // The part's back on the sub-spindle (mitcad#2319), turned or
+            // cut with live tools (mitcad#2375).
             if op.sub_spindle && !lathe.is_some_and(|l| l.axes.sub_spindle) {
                 return Err(invalid(
                     "The lathe has no sub-spindle to turn the part's back.",
@@ -1851,18 +1852,30 @@ impl<K: Kernel> Document<K> {
             .as_deref()
             .and_then(|m| self.state.cam.machine(m));
         let frame = self.cam_setup_frame(setup);
-        let operations: Vec<Value> = setup
+        let mut operations: Vec<Value> = setup
             .operations
             .iter()
             .map(|op| {
                 Self::cam_operation_json(op, self.cam_fingerprint(setup, &frame, machine, op))
             })
             .collect();
+        let lathe = self.cam_on_lathe(setup);
+        if lathe {
+            // An operation on the main spindle after the sub-spindle's: its
+            // problem in words for the operation list and the panels, as
+            // Generate refuses it (mitcad#2392).
+            let misplaced = turning::main_after_sub(setup);
+            for (op, value) in setup.operations.iter().zip(operations.iter_mut()) {
+                if misplaced.contains(&op.id) {
+                    value["problem"] = json!(turning::MAIN_AFTER_SUB);
+                }
+            }
+        }
         let mut value = serde_json::to_value(setup).unwrap_or_else(|_| json!({}));
         // Always reported (the file writes it only when off).
         value["visible"] = json!(setup.visible);
         value["operations"] = json!(operations);
-        if self.cam_on_lathe(setup) {
+        if lathe {
             // A lathe setup's work: on the spindle axis (mitcad#1869).
             value["work"] = Self::turn_frame_json(&self.turn_frame(setup));
             value["turning"] = json!(true);

@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: MIT
+# A tutorial's guide steps on the toolbar's own places (mitcad#2370, GitHub
+# mitcad/Mitcad#630; docs/tutorials.md "Guide steps") through the real UI,
+# in the layout the run starts with (tools/ui-guide-toolbar-test.sh runs it
+# in the Floating and the Docked layout), on a box with one drawing
+# (workspaces.json), in a 1280 x 800 window. The steps are shown as a
+# tutorial page or live MCP's ui_guide shows them (the driver's guide-step),
+# without the tutorial pane:
+#   0. A workspace and a tab MitCad does not have: the step refused.
+#   1. The workspace selector outlined ("Guide: step selector target at",
+#      which the wrapper checks holds the selector's place); a click on it
+#      opens its list and completes the step.
+#   2. Choosing Design, which is the workspace shown, with the list open:
+#      the step is not done while the list stays open; Return chooses Design
+#      (the list's current entry) and completes it.
+#   3. Choosing Design again with the list closed: Design is shown already,
+#      so the step is done at once.
+#   4. Choosing Make: the selector outlined while its list is closed, Make's
+#      entry once it is open (outlined in the list too); Escape in the list
+#      closes the list and leaves the step shown; the selector's list again,
+#      Down and Return choose Make and complete it. Then Design chosen back
+#      the same way.
+#   5. The Surface tab outlined (the wrapper checks its place); a click on
+#      it completes the step.
+#   6. The timeline outlined, a step without done; the page (here the
+#      driver's guide-end) ends it.
+expect-ever 'View area' 30
+window-resize 1280 800
+wait-idle
+expect-ever '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET METAL, BUILD, MANAGE[)]$' 30
+expect-ever '^Ribbon workspace at ' 30
+expect-ever '^Ribbon tab SURFACE at ' 30
+wait-idle
+sleep 300
+
+# 0. No such workspace or tab.
+guide-step '{"id": "nowhere", "text": "Choose the garden.", "target": {"workspace": "Garden"}, "done": {"chosen": "Garden"}}' refused 'MitCad has no workspace Garden; the workspaces are Design, Make, Render, Drawing'
+guide-step '{"id": "notab", "text": "Open the kitchen.", "target": {"tab": "Kitchen"}, "done": {"activated": "Kitchen"}}' refused 'MitCad has no tab Kitchen'
+guide-step '{"id": "badopen", "text": "Open it.", "target": {"workspace_selector": true}, "done": {"opened": "menu"}}' refused 'The done opened is workspace_selector'
+
+# 1. The selector: outlined, opening it completes the step.
+mark
+guide-step '{"id": "selector", "text": "This is the workspace selector: it switches the toolbar between workspaces. Click it.", "target": {"workspace_selector": true}, "done": {"opened": "workspace_selector"}}'
+wait-log '^Guide: step selector started: target the workspace selector, navigation free$'
+wait-log '^Guide: step selector target at -?\d+,-?\d+ \d+x\d+$'
+expect-no-log '^Guide: step selector done'
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+wait-log '^Guide: step selector done: the workspace selector opened$'
+
+# 2. Design, the workspace shown, chosen in the open list.
+mark
+guide-step '{"id": "design", "text": "Choose Design.", "target": {"workspace": "Design"}, "done": {"chosen": "Design"}}'
+wait-log '^Guide: step design started: target workspace DESIGN, navigation free$'
+wait-log '^Ribbon workspace entry DESIGN outlined for the guide$'
+wait-log '^Guide: step design target at -?\d+,-?\d+ \d+x\d+$'
+sleep 500
+expect-no-log '^Guide: step design (done|left)'
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Guide: step design done: the workspace DESIGN chosen$'
+wait-idle
+
+# 3. Design again, the list closed: done at once.
+mark
+guide-step '{"id": "design-again", "text": "Choose Design.", "target": {"workspace": "design"}, "done": {"chosen": "DESIGN"}}'
+wait-log '^Guide: step design-again done: the workspace DESIGN chosen$'
+expect-no-log '^Ribbon workspace chosen: '
+wait-idle
+
+# 4. Make: the selector first, its entry in the open list; Escape closes the
+# list, not the step.
+mark
+guide-step '{"id": "make", "text": "Open the workspaces and choose Make.", "target": {"workspace": "Make"}, "done": {"chosen": "Make"}}'
+wait-log '^Guide: step make started: target workspace MAKE, navigation free$'
+wait-log '^Guide: step make target at -?\d+,-?\d+ \d+x\d+$'
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+wait-log '^Ribbon workspace entry MAKE outlined for the guide$'
+wait-log '^Guide: step make target at -?\d+,-?\d+ \d+x\d+$'
+mark
+key Escape
+sleep 500
+expect-no-log '^Guide: step make (done|left)'
+expect-no-log '^Ribbon workspace chosen: '
+mark
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [(]current[)] [|] Make [|] Render [|] Drawing$'
+key Down
+key Return
+wait-log '^Ribbon workspace chosen: MAKE$'
+wait-log '^Ribbon workspace: MAKE [(]tabs MAKE_PRINT, MAKE_LASER, MAKE_CNC[)]$'
+wait-log '^Guide: step make done: the workspace MAKE chosen$'
+wait-idle
+mark
+guide-step '{"id": "design-back", "text": "Choose Design.", "target": {"workspace": "Design"}, "done": {"chosen": "Design"}}'
+click-logged '^Ribbon workspace at '
+wait-log '^Ribbon workspace menu: Design [|] Make [(]current[)] [|] Render [|] Drawing$'
+key Up
+key Return
+wait-log '^Ribbon workspace chosen: DESIGN$'
+wait-log '^Guide: step design-back done: the workspace DESIGN chosen$'
+wait-log '^Ribbon tab shown: SOLID$'
+wait-idle
+wait-log '^Ribbon tab SURFACE at '
+
+# 5. The Surface tab: outlined, a click on it completes the step.
+mark
+guide-step '{"id": "surface", "text": "Open the Surface tab.", "target": {"tab": "Surface"}, "done": {"activated": "surface"}}'
+wait-log '^Guide: step surface started: target tab SURFACE, navigation free$'
+wait-log '^Guide: step surface target at -?\d+,-?\d+ \d+x\d+$'
+expect-no-log '^Guide: step surface done'
+click-logged '^Ribbon tab SURFACE at '
+wait-log '^Ribbon tab shown: SURFACE$'
+wait-log '^Guide: step surface done: the tab SURFACE activated$'
+wait-idle
+
+# 6. The timeline: outlined until the page ends the step.
+mark
+guide-step '{"id": "timeline", "text": "This is the timeline: the features of the design in order.", "target": {"timeline": true}}'
+wait-log '^Guide: step timeline started: target the timeline, navigation free$'
+wait-log '^Guide: step timeline target at -?\d+,-?\d+ \d+x\d+$'
+sleep 500
+expect-no-log '^Guide: step timeline (done|left)'
+guide-end
+wait-log '^Guide: step timeline left [(]ended[)]$'
+expect-never 'TestDriver: FAIL'

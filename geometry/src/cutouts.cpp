@@ -2434,7 +2434,7 @@ bool side_surface(const TopoDS_Face& face) {
 } // namespace
 
 std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std::vector<int>& owner,
-                                                   double contact) {
+                                                   double contact, bool rising) {
   if (!(contact > 0.0)) {
     return std::nullopt;
   }
@@ -2442,6 +2442,19 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
   return occt_guarded([&]() -> std::optional<FacesBeyondGrown> {
     const TopoDS_Shape& solid = body.occt();
     const double tolerance = std::max(1.0e-6, 2.0 * BRep_Tool::MaxTolerance(solid, TopAbs_VERTEX));
+    // Whether an edge lies wholly nearer the picked edge than `reach`: at
+    // its ends, its middle and its quarters (`rising`: a far edge across
+    // the narrow face from the picked edge, not one running away from it).
+    const auto wholly_within = [](const TopoDS_Edge& side, const TopoDS_Edge& from, double reach) {
+      const BRepAdaptor_Curve curve(side);
+      for (int i = 0; i <= 4; ++i) {
+        const double t = curve.FirstParameter() + 0.25 * i * (curve.LastParameter() - curve.FirstParameter());
+        if (!(distance(BRepBuilderAPI_MakeVertex(curve.Value(t)).Vertex(), from) < reach)) {
+          return false;
+        }
+      }
+      return true;
+    };
     const double body_volume = absolute_volume_of(solid);
     const EdgeFaces edge_faces(body);
     ShapeSet selected;
@@ -2474,7 +2487,8 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
       }
       const TopoDS_Edge& edge = TopoDS::Edge(body.edge(e));
       if (BRep_Tool::Degenerated(edge) ||
-          ChFi3d::DefineConnectType(edge, body.face(pair[0]), body.face(pair[1]), 1.0e-4, false) != ChFiDS_Concave) {
+          ChFi3d::DefineConnectType(edge, body.face(pair[0]), body.face(pair[1]), 1.0e-4, false) !=
+              (rising ? ChFiDS_Convex : ChFiDS_Concave)) {
         continue;
       }
       TopoDS_Vertex first;
@@ -2496,7 +2510,10 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
         // Its far edges (those that do not meet the picked edge), each with
         // the face beyond it: all nearer the edge than the rounding reaches,
         // all going on tangentially into a face of side_of's surfaces. The
-        // face holds no other selected edge.
+        // face holds no other selected edge. (`rising`: only the far edges
+        // wholly within the reach, each going on concavely into one and the
+        // same face beyond of side_of's surfaces; the face's other far edges
+        // lie past the rounding.)
         bool fits = true;
         std::vector<int> rims;
         std::vector<int> beyond;
@@ -2523,8 +2540,17 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
               b = f != n ? f : b;
             }
           }
-          fits = b >= 0 && b != other && side_surface(body.face(b)) && is_smooth(side, face, body.face(b)) &&
-                 distance(side, edge) < contact - tolerance;
+          if (rising) {
+            if (!wholly_within(side, edge, contact - tolerance)) {
+              continue;
+            }
+            fits = b >= 0 && b != other && side_surface(body.face(b)) &&
+                   ChFi3d::DefineConnectType(side, face, body.face(b), 1.0e-4, false) == ChFiDS_Concave &&
+                   (beyond.empty() || beyond.front() == b);
+          } else {
+            fits = b >= 0 && b != other && side_surface(body.face(b)) && is_smooth(side, face, body.face(b)) &&
+                   distance(side, edge) < contact - tolerance;
+          }
           if (fits && std::find(rims.begin(), rims.end(), r) == rims.end()) {
             rims.push_back(r);
             beyond.push_back(b);

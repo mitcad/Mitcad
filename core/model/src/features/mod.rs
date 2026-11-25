@@ -144,7 +144,7 @@ pub use coil::{CoilDef, Helix};
 pub use loft::{EndCondition, LoftDef, LoftSectionDef};
 pub use path::{CurvePath, SketchCurves};
 pub use pipe::PipeDef;
-pub use rib::{RibDef, RibDirection, RibExtent, WebDef};
+pub use rib::{RibCorners, RibDef, RibDirection, RibExtent, WebDef};
 pub use sweep::{PathExtent, SweepDef};
 
 // Components and occurrences (F6).

@@ -827,12 +827,21 @@ CommandDef loftCommand(const CommandContext& context) {
 
 namespace {
 
+// A rib's Direction Normal to Curves chosen while Depth Type is To Next
+// (mitcad#2398): it runs a depth, so the rib then grows as Perpendicular to
+// Chord.
+bool ribNormalToNext(const CommandState& state) {
+  return state.choice(QStringLiteral("direction")) == QStringLiteral("normal") &&
+         state.choice(QStringLiteral("depth_type")) != QStringLiteral("depth");
+}
+
 CommandDef ribOrWeb(const CommandContext& context, bool web) {
   CommandDef def;
   def.id = web ? QStringLiteral("solid.web") : QStringLiteral("solid.rib");
   def.name = web ? QObject::tr("Web") : QObject::tr("Rib");
   def.icon = web ? QStringLiteral("web") : QStringLiteral("rib");
-  def.tooltip = web ? QObject::tr("Thin walls along open sketch curves, grown along the sketch normal")
+  // A web takes every kind of curve, a closed one as a ring (mitcad#2364).
+  def.tooltip = web ? QObject::tr("Thin walls along sketch curves, grown along the sketch normal")
                     : QObject::tr("A thin wall from an open sketch curve to the faces it reaches");
   def.keywords = {QStringLiteral("stiffener"), QStringLiteral("wall"), QStringLiteral("gusset")};
   def.featureType = web ? QStringLiteral("web") : QStringLiteral("rib");
@@ -841,7 +850,8 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
       // (mitcad#1417), picked in the view, the Browser or the timeline.
       selectionInput(QStringLiteral("curves"), QObject::tr("Curves"), SelectKind::SketchCurve | SelectKind::Feature,
                      1, 0)
-          .withTooltip(QObject::tr("Open sketch curves of one sketch, or a flat intersection curve"))
+          .withTooltip(web ? QObject::tr("Sketch curves of one sketch, open or closed, or a flat intersection curve")
+                           : QObject::tr("Open sketch curves of one sketch, or a flat intersection curve"))
           // A 3D sketch's curves in its sketch plane too (mitcad#1550).
           .withAccepts([&context](const SelectionItem& item) {
             return (item.kind != SelectKind::Feature || isFeatureCurve(item)) && planeCurveTakes(item, context);
@@ -876,9 +886,19 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
                                   {{QStringLiteral("perpendicular"), QStringLiteral("Perpendicular to Chord")},
                                    {QStringLiteral("sketch_x"), QStringLiteral("Sketch X")},
                                    {QStringLiteral("sketch_y"), QStringLiteral("Sketch Y")},
-                                   {QStringLiteral("along"), QStringLiteral("Along Line")}},
+                                   {QStringLiteral("along"), QStringLiteral("Along Line")},
+                                   {QStringLiteral("normal"), QStringLiteral("Normal to Curves")}},
                                   QStringLiteral("perpendicular"))
-                          .withTooltip(QObject::tr("The way the rib grows in the sketch plane; Flip turns it")));
+                          .withTooltip(QObject::tr("The way the rib grows in the sketch plane; Flip turns it"))
+                          // Normal to Curves runs a depth (mitcad#2398): with
+                          // To Next the rib grows as Perpendicular to Chord,
+                          // and the panel says so.
+                          .withRowNote([](const CommandState& s, const CommandContext&) {
+                            return ribNormalToNext(s)
+                                       ? QObject::tr("With To Next the rib grows at right angles to the chord; "
+                                                     "Normal to Curves needs Depth Type Depth.")
+                                       : QString();
+                          }));
     def.inputs.insert(flipAt + 1,
                       selectionInput(QStringLiteral("direction_line"), QObject::tr("Direction Line"),
                                      SelectKind::Axis | SelectKind::Edge | SelectKind::SketchCurve, 0, 1)
@@ -886,6 +906,19 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
                           .withAccepts([](const SelectionItem& item) { return isStraightLine(item); })
                           .withVisible([](const CommandState& s) {
                             return s.choice(QStringLiteral("direction")) == QStringLiteral("along");
+                          }));
+    // How the far side of a rib grown Normal to Curves joins where the
+    // curves turn away from it, as the sketch's Offset joins its copies
+    // (mitcad#2398); shown for Normal to Curves by a depth.
+    def.inputs.insert(flipAt + 2,
+                      choiceInput(QStringLiteral("corners"), QObject::tr("Corners"),
+                                  {{QStringLiteral("sharp"), QStringLiteral("Sharp")},
+                                   {QStringLiteral("round"), QStringLiteral("Round")}},
+                                  QStringLiteral("sharp"))
+                          .withTooltip(QObject::tr("How the far side joins where the curves turn away from it"))
+                          .withVisible([](const CommandState& s) {
+                            return s.choice(QStringLiteral("direction")) == QStringLiteral("normal") &&
+                                   !ribNormalToNext(s);
                           }));
   }
   // The ends continued to the bodies' faces (a rib's mitcad#1746, a web's
@@ -962,6 +995,13 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
     } else if (type == QStringLiteral("rib") &&
                (direction == QStringLiteral("sketch_x") || direction == QStringLiteral("sketch_y"))) {
       result.def.insert(QStringLiteral("direction"), direction);
+    } else if (type == QStringLiteral("rib") && direction == QStringLiteral("normal") && !ribNormalToNext(state)) {
+      // Normal to Curves by a depth (mitcad#2398); Corners Sharp is written
+      // as nothing. With To Next nothing: Perpendicular to Chord.
+      result.def.insert(QStringLiteral("direction"), direction);
+      if (state.choice(QStringLiteral("corners")) == QStringLiteral("round")) {
+        result.def.insert(QStringLiteral("corners"), QStringLiteral("round"));
+      }
     }
     const Selection& objects = state.items(QStringLiteral("objects"));
     if (!objects.isEmpty()) {
@@ -998,6 +1038,9 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
     } else {
       state.setChoice(QStringLiteral("direction"), QStringLiteral("perpendicular"));
     }
+    // Normal to Curves' Corners (mitcad#2398): absent is Sharp.
+    state.setChoice(QStringLiteral("corners"),
+                    feature.value(QStringLiteral("corners")).toString(QStringLiteral("sharp")));
     state.setItems(QStringLiteral("objects"), bodiesOf(feature.value(QStringLiteral("participants")).toArray()));
   };
 

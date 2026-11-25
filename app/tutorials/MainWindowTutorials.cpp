@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: MIT
 // In-app tutorials (mitcad#2012, docs/tutorials.md): the tutorial pane, a
 // tutorial package's pages on MitCad's web browser component (CEF,
-// webbrowser/TutorialPageView in the component's module) docked at the left
-// of the design's window in both chrome styles, the component downloaded
-// first when it is missing; and the bridge window.mitcad that its pages (of
-// the package's own folder only) call: guide steps, the package's starting
-// design opened, the application's state read, Leave Tutorial, and the
-// guide's events back. No file access and no model edits through it.
+// webbrowser/TutorialPageView in the component's module) at the left of the
+// design's window in both chrome styles, at the right or centred over the
+// view as its page asks (mitcad#2367), the component downloaded first when
+// it is missing; and the bridge window.mitcad that its pages (of the
+// package's own folder only) call: guide steps, the pane's place, the page's
+// input demonstrations over a step's target and the learner's keys and
+// gestures (mitcad#2366), the package's starting design opened, the
+// application's state read, read-only queries of the window's design
+// (mitcad#2371), Leave Tutorial, and the guide's events back. No file access
+// and no model edits through it.
 #include "../MainWindow.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <exception>
 #include <functional>
 #include <utility>
 
@@ -23,6 +29,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QTimer>
@@ -34,11 +41,16 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/FloatingLayout.hpp"
 #include "../framework/GlassCard.hpp"
+#include "../framework/Json.hpp"
+#include "../framework/PaneMotion.hpp"
+#include "../sketch/SketchController.hpp"
 #include "../webbrowser/BrowserComponent.hpp"
 #include "../webbrowser/BrowserModuleLoad.hpp"
 #include "../webbrowser/ComponentBrowserHost.hpp"
 #include "../files/StartPage.hpp"
 #include "../framework/Ribbon.hpp"
+#include "GuideBindings.hpp"
+#include "GuideDemonstration.hpp"
 #include "GuideStep.hpp"
 #include "TutorialChoice.hpp"
 #include "TutorialGuide.hpp"
@@ -211,6 +223,10 @@ bool MainWindow::showTutorialPane(const BrowserComponentInfo& component, const Q
     delete m_tutorialPageWidget.data();
   }
   ensureTutorialPane();
+  // A tutorial opens at the left (mitcad#2367); its page places it.
+  if (m_tutorialPlace != TutorialPlace::Left) {
+    placeTutorialPane(TutorialPlace::Left, false);
+  }
   auto* host = new TutorialHost(
       [this](const QString& request, QString* answer, QString* reason) {
         return tutorialBridgeCall(request, answer, reason);
@@ -286,25 +302,183 @@ void MainWindow::ensureTutorialPane() {
     addDockWidget(Qt::LeftDockWidgetArea, dock, Qt::Horizontal);
     dock->hide();
     m_tutorialContainer = dock;
-    // 360 px wide, but never at the cost of the 3D view between the docks:
-    // in a 1024 px window the Browser, the tutorial and the command panel
-    // left it 100 px, the XY plane under the command panel (mitcad#2248).
+    // Its width once it shows (dockTutorialPane).
     QTimer::singleShot(0, this, [this, dock] {
-      constexpr int kWidth = 360;
-      constexpr int kViewRoom = 320;
-      int width = kWidth;
-      if (const QWidget* central = centralWidget(); central != nullptr && dock->isVisible()) {
-        width = std::min(width, dock->width() + central->width() - kViewRoom);
+      if (!dock->isFloating()) {
+        dockTutorialPane(dock, dockWidgetArea(dock));
       }
-      width = std::max(width, dock->minimumSizeHint().width());
-      resizeDocks({dock}, {width}, Qt::Horizontal);
     });
   }
+}
+
+void MainWindow::dockTutorialPane(QDockWidget* dock, Qt::DockWidgetArea area) {
+  if (dock->isFloating() || dockWidgetArea(dock) != area) {
+    addDockWidget(area, dock, Qt::Horizontal);
+  }
+  if (dock->isFloating()) {
+    // Docked where addDockWidget put it.
+    dock->setFloating(false);
+  }
+  if (layout() != nullptr) {
+    layout()->activate();
+  }
+  // 360 px wide, but never at the cost of the 3D view between the docks:
+  // in a 1024 px window the Browser, the tutorial and the command panel
+  // left it 100 px, the XY plane under the command panel (mitcad#2248).
+  constexpr int kWidth = 360;
+  constexpr int kViewRoom = 320;
+  int width = kWidth;
+  if (const QWidget* central = centralWidget(); central != nullptr && dock->isVisible()) {
+    width = std::min(width, dock->width() + central->width() - kViewRoom);
+  }
+  width = std::max(width, dock->minimumSizeHint().width());
+  resizeDocks({dock}, {width}, Qt::Horizontal);
+  if (layout() != nullptr) {
+    layout()->activate();
+  }
+}
+
+void MainWindow::placeTutorialPane(TutorialPlace place, bool animate) {
+  if (m_tutorialContainer.isNull()) {
+    return;
+  }
+  QWidget* pane = m_tutorialContainer.data();
+  const int move = ++m_tutorialMoves;
+  m_tutorialPlace = place;
+  const bool shown = pane->isVisible();
+  const int moveMs = animate && shown ? paneMoveMs() : 0;
+  const QString how = moveMs > 0 ? QStringLiteral("animated %1 ms").arg(moveMs) : QStringLiteral("at once");
+  // The view's picks held while the pane is centred over it, as a step
+  // holds them.
+  if (place == TutorialPlace::Centre || m_guide != nullptr) {
+    guide()->holdView(place == TutorialPlace::Centre && shown, QStringLiteral("the tutorial pane is centred"));
+  }
+  // Where it ends: logged (the UI tests read it), unless another move was
+  // asked for meanwhile.
+  const auto placed = [this, move](const QString& words) {
+    if (move == m_tutorialMoves) {
+      logTutorialPlace(words);
+    }
+  };
+  const QString atOnce = QStringLiteral("at once");
+  if (auto* card = qobject_cast<GlassCard*>(pane)) {
+    // Floating: the card's anchor; the card moves to its new slot.
+    FloatingLayout::Sizing sizing;
+    FloatingLayout::Anchor anchor = FloatingLayout::Anchor::TopLeft;
+    switch (place) {
+    case TutorialPlace::Left:
+      // In the left column, as tall as it lets it be (ensureTutorialPane).
+      sizing = {360, [] { return 4000; }, 1.0, false};
+      break;
+    case TutorialPlace::Right:
+      // The right column from the rows to the bottom card; the Browser's
+      // column at the left stays free.
+      anchor = FloatingLayout::Anchor::Right;
+      sizing = {360, [] { return 4000; }, 1.0, false};
+      break;
+    case TutorialPlace::Centre:
+      anchor = FloatingLayout::Anchor::Center;
+      sizing = {0, [] { return 4000; }, 1.0, false};
+      break;
+    }
+    m_floating->setCardAnchor(card, anchor, sizing, moveMs);
+    if (card->slotMoving()) {
+      connect(card, &GlassCard::slotMoveFinished, this, [placed, how] { placed(how); }, Qt::SingleShotConnection);
+    } else {
+      placed(atOnce);
+    }
+    return;
+  }
+  auto* dock = qobject_cast<QDockWidget*>(pane);
+  if (dock == nullptr) {
+    return;
+  }
+  // Docked: a move under way stops where it is; this one starts there.
+  if (auto* running = qobject_cast<QPropertyAnimation*>(m_tutorialDockMove.data())) {
+    running->stop();
+  }
+  const QRect from(dock->mapToGlobal(QPoint(0, 0)), dock->size());
+  const Qt::DockWidgetArea area = place == TutorialPlace::Right ? Qt::RightDockWidgetArea : Qt::LeftDockWidgetArea;
+  QRect to;
+  if (place == TutorialPlace::Centre) {
+    // A floating pane centred over the window, most of it.
+    to = centredPaneRect(QRect(mapToGlobal(QPoint(0, 0)), size()));
+    if (!dock->isFloating()) {
+      dock->setFloating(true);
+    }
+  } else {
+    // Docked there: where it ends.
+    dockTutorialPane(dock, area);
+    to = QRect(dock->mapToGlobal(QPoint(0, 0)), dock->size());
+  }
+  if (moveMs <= 0 || from == to || from.isEmpty() || to.isEmpty()) {
+    if (place == TutorialPlace::Centre) {
+      dock->setGeometry(to);
+    }
+    QTimer::singleShot(0, this, [placed, atOnce] { placed(atOnce); });
+    return;
+  }
+  // The move: the dock, floating, goes from where it was to where it ends,
+  // and is docked there at the end.
+  if (!dock->isFloating()) {
+    dock->setFloating(true);
+  }
+  dock->setGeometry(from);
+  dock->show();
+  auto* motion = new QPropertyAnimation(dock, "geometry", this);
+  motion->setDuration(moveMs);
+  motion->setEasingCurve(QEasingCurve::OutCubic);
+  motion->setStartValue(from);
+  motion->setEndValue(to);
+  m_tutorialDockMove = motion;
+  connect(motion, &QPropertyAnimation::finished, this, [this, dock, place, area, placed, how] {
+    if (place != TutorialPlace::Centre) {
+      dockTutorialPane(dock, area);
+    }
+    QTimer::singleShot(0, this, [placed, how] { placed(how); });
+  });
+  motion->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void MainWindow::logTutorialPlace(const QString& how) {
+  if (m_tutorialContainer.isNull()) {
+    return;
+  }
+  const QWidget* pane = m_tutorialContainer.data();
+  const QString place = tutorialPlaceName(m_tutorialPlace);
+  if (!pane->isVisible()) {
+    qInfo().noquote() << QStringLiteral("Tutorial: pane placed %1 (hidden)").arg(place);
+    return;
+  }
+  // In the window's coordinates, across windows (a floating dock, a card
+  // of native glass).
+  const QWidget* host = window();
+  const QPoint at = host->mapFromGlobal(pane->mapToGlobal(QPoint(0, 0)));
+  const QSize size = pane->size();
+  const int hostWidth = std::max(1, host->width());
+  const long middle = std::lround(100.0 * (at.x() + size.width() / 2.0) / hostWidth);
+  const long wide = std::lround(100.0 * size.width() / hostWidth);
+  qInfo().noquote() << QStringLiteral("Tutorial: pane placed %1 (%2) at %3,%4 %5x%6 in the window %7x%8")
+                               .arg(place, how)
+                               .arg(at.x())
+                               .arg(at.y())
+                               .arg(size.width())
+                               .arg(size.height())
+                               .arg(host->width())
+                               .arg(host->height()) +
+                           QStringLiteral(", its middle at %1% of the window's width, %2% of its width wide")
+                               .arg(middle)
+                               .arg(wide);
 }
 
 void MainWindow::closeTutorialPane() {
   if (m_tutorialPageWidget.isNull()) {
     return;
+  }
+  // The tutorial closed: its step ends and a hold after a step done is
+  // released, always (mitcad#2368); after Leave Tutorial nothing is left.
+  if (m_guide != nullptr) {
+    m_guide->end(QStringLiteral("closed"));
   }
   m_tutorialPage = nullptr;
   m_tutorialPageWidget->deleteLater();
@@ -315,6 +489,11 @@ void MainWindow::closeTutorialPane() {
     m_floating->requestLayout();
   } else if (!m_tutorialContainer.isNull()) {
     m_tutorialContainer->setVisible(false);
+  }
+  // Leaving restores the layout as it was (mitcad#2367): the pane, hidden,
+  // back at the left, where the next tutorial opens; the view free.
+  if (m_tutorialPlace != TutorialPlace::Left || (m_guide != nullptr && m_guide->viewHeld())) {
+    placeTutorialPane(TutorialPlace::Left, false);
   }
   qInfo().noquote() << QStringLiteral("Tutorial: pane closed");
   updateActions();
@@ -335,6 +514,11 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
   } else if (call == QLatin1String("end_step")) {
     guide()->end(QStringLiteral("ended"));
     result = guide()->state();
+  } else if (call == QLatin1String("release_hold")) {
+    // The input held after a step with "hold" is free again (mitcad#2368);
+    // nothing happens when none holds.
+    guide()->releaseHold(QStringLiteral("released"));
+    result = guide()->state();
   } else if (call == QLatin1String("state")) {
     static const char* const modes[] = {"idle", "pick_plane", "sketch", "command"};
     QJsonArray picked;
@@ -352,7 +536,9 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
               {QStringLiteral("version"), QCoreApplication::applicationVersion()},
               // Where the tutorial was left (mitcad#2346): a page continues
               // from it.
-              {QStringLiteral("progress"), loadTutorialProgress(QFileInfo(m_tutorialFolder).fileName()).toJson()}};
+              {QStringLiteral("progress"), loadTutorialProgress(QFileInfo(m_tutorialFolder).fileName()).toJson()},
+              // Where the pane is (mitcad#2367).
+              {QStringLiteral("place"), tutorialPlaceName(m_tutorialPlace)}};
   } else if (call == QLatin1String("set_progress")) {
     // The step the user is at, or done (mitcad#2346): the Start page's card
     // shows it, and a page continues from it.
@@ -400,6 +586,107 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
     // After the answer: the open may ask about unsaved changes.
     QTimer::singleShot(0, this, [this, target] { openPath(target); });
     result = {{QStringLiteral("opened"), QFileInfo(target).fileName()}};
+  } else if (call == QLatin1String("query")) {
+    // What the page reads of this window's design (mitcad#2371): the model's
+    // allow-list of read-only queries (core/model-api tutorial_bridge.rs),
+    // refused in words for a command, another query or another design.
+    if (modelBusy() || !m_import.isNull()) {
+      *error = QStringLiteral("The design is computing; ask again in a moment");
+      qInfo().noquote() << QStringLiteral("Tutorial bridge: query refused: %1").arg(*error);
+      return false;
+    }
+    const QString openSketch = m_sketch != nullptr && m_sketch->isActive() ? m_sketch->uid() : QString();
+    try {
+      const QJsonDocument read = parseJson(tutorial_query(idleDocument(), rustStr(compactJson(args)),
+                                                          rustStr(openSketch.toUtf8()),
+                                                          rustStr(QFileInfo(m_filePath).completeBaseName().toUtf8())));
+      result = read.object();
+    } catch (const std::exception& failure) {
+      *error = errorText(failure);
+      qInfo().noquote() << QStringLiteral("Tutorial bridge: query refused: %1").arg(modelText(failure));
+      return false;
+    }
+    qInfo().noquote() << QStringLiteral("Tutorial bridge: query %1 answered")
+                             .arg(args.value(QStringLiteral("query")).toString());
+  } else if (call == QLatin1String("place")) {
+    // Where the pane goes (mitcad#2367): left, right or centre, moved there
+    // after the answer; the page goes on meanwhile.
+    TutorialPlace place = TutorialPlace::Left;
+    if (!parseTutorialPlace(args.value(QStringLiteral("side")).toString(), &place)) {
+      *error = QStringLiteral("place takes \"left\", \"right\" or \"centre\"");
+      return false;
+    }
+    qInfo().noquote() << QStringLiteral("Tutorial: the page places the pane %1").arg(tutorialPlaceName(place));
+    QTimer::singleShot(0, this, [this, place] {
+      if (tutorialOpen()) {
+        placeTutorialPane(place, true);
+      }
+    });
+    result = {{QStringLiteral("place"), tutorialPlaceName(place)}};
+  } else if (call == QLatin1String("demonstrate")) {
+    // The page's input demonstration over the step's target (mitcad#2366):
+    // its pictures by their paths in the tutorial's folder or as data:
+    // addresses.
+    const QString folder = m_tutorialFolder;
+    const GuideDemonstration::Loader load = [folder](const QString& path, QByteArray* bytes, QString* reason) {
+      const QString file = QDir::cleanPath(QDir(folder).filePath(path));
+      const auto refuse = [reason] {
+        *reason = QStringLiteral("a picture is a file of the tutorial's own folder, by its relative path, "
+                                 "or a data: address");
+        return false;
+      };
+      if (folder.isEmpty() || QDir::isAbsolutePath(path) ||
+          !file.startsWith(QDir::cleanPath(folder) + QLatin1Char('/'))) {
+        return refuse();
+      }
+      if (!QFileInfo::exists(file)) {
+        *reason = QStringLiteral("the tutorial has no picture %1").arg(path);
+        return false;
+      }
+      if (!inside(folder, file)) {
+        return refuse(); // a link out of the folder
+      }
+      QFile input(file);
+      if (input.size() > 2 * 1024 * 1024) {
+        *reason = QStringLiteral("the picture is larger than 2 MB");
+        return false;
+      }
+      if (!input.open(QIODevice::ReadOnly)) {
+        *reason = QStringLiteral("%1 could not be read").arg(path);
+        return false;
+      }
+      *bytes = input.readAll();
+      return true;
+    };
+    const GuideDemonstration demonstration = GuideDemonstration::parse(args, load, devicePixelRatioF(), error);
+    if (demonstration.frames.isEmpty() || !guide()->demonstrate(demonstration, error)) {
+      qInfo().noquote() << QStringLiteral("Tutorial bridge: the demonstration was refused: %1").arg(*error);
+      return false;
+    }
+    result = guide()->state();
+  } else if (call == QLatin1String("stop_demonstration")) {
+    const bool playing = guide()->demonstrating();
+    guide()->stopDemonstration(QStringLiteral("stopped"));
+    result = {{QStringLiteral("stopped"), playing}};
+  } else if (call == QLatin1String("shortcut")) {
+    // A command's keys as the learner has them now (mitcad#2366, GitHub
+    // mitcad/Mitcad#625): an empty list for a command with none.
+    const QString id = args.value(QStringLiteral("command")).toString();
+    const CommandDef* def = m_registry->find(id);
+    if (def == nullptr) {
+      *error = QStringLiteral("MitCad has no command %1").arg(id);
+      return false;
+    }
+    result = {{QStringLiteral("command"), def->id},
+              {QStringLiteral("name"), def->name},
+              {QStringLiteral("shortcuts"), guideShortcutsJson(m_registry->effectiveShortcuts(def->id))}};
+  } else if (call == QLatin1String("navigation")) {
+    // The view's gestures of the learner's navigation scheme (mitcad#2366).
+    if (m_viewer == nullptr) {
+      *error = QStringLiteral("This window has no 3D view");
+      return false;
+    }
+    result = guideNavigationJson(m_viewer->navigation());
   } else if (call == QLatin1String("leave")) {
     // After the answer: the pane and its page go.
     QTimer::singleShot(0, this, [this] { trigger(QString::fromLatin1(kLeaveTutorialCommand)); });

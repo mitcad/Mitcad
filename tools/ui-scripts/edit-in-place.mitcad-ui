@@ -3,8 +3,9 @@
 # holding a 40 x 40 x 5 plate of its own (Plate) and linking part.mitcad (a
 # 10 mm cube) on it, both in one folder. The part is open in a tab of its
 # own first, so that Edit in Place (the browser's context menu) takes that
-# tab's document: the window shows the part with the plate around it; a
-# sketch on the plate's top face is frozen with its notice in the message
+# tab's document: the window shows the part with the plate around it, faded,
+# its timeline without the assembly (mitcad#2353); a sketch on the plate's
+# top face is frozen with its notice in the message
 # band; an extrusion of it in the part; Save writes the part's file; Finish
 # returns to the holder, whose part takes the new body as one undo step;
 # the part's tab shows the same edit, saved; the holder's step undone
@@ -38,6 +39,11 @@ expect-document-windows 2
 expect-model-bodies 2 9000
 expect-document-modified no
 capture-undo-depth partUndo
+# The timeline is the part's, with no row of the assembly, which is drawn
+# faded (mitcad#2353).
+wait-log '^Timeline feature colors: [^,()]* root$'
+expect-no-log '^Timeline feature colors: .*[(]assembly[)]'
+wait-log '^View inactive ghosts: 1 body [(]active the design edited in place[)]$'
 screenshot '${MITCAD_TEST_WORK}/edit-in-place.png'
 
 # A sketch on the plate's top face: frozen at once, with its notice.
@@ -50,8 +56,9 @@ wait-log '^Edit in Place notice: Sketch[0-9]+: its plane on the assembly is fixe
 wait-log '^Message band: info Sketch[0-9]+: its plane on the assembly is fixed where it is now'
 expect-undo-depth ${partUndo} 1
 
-# A block extruded from it, in the part.
-capture-model-text sketch '{"query":"timeline"}' 'features.2.uid'
+# A block extruded from it, in the part (the part's cube first in its
+# timeline, the sketch second: the assembly has no row).
+capture-model-text sketch '{"query":"timeline"}' 'features.1.uid'
 model-command '{"cmd":"sketch.add_rectangle","sketch":"${sketch}","corner":[-2,-2],"width":4,"height":4}'
 capture-model-text region '{"query":"profiles","sketch":"${sketch}"}' '0.region'
 model-command '{"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"${sketch}","region":"${region}"}],"extent":{"type":"distance","distance":3},"operation":"new_body","participants":[]}}'

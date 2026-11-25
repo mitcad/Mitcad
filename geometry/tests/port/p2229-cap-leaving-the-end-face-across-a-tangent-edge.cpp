@@ -43,9 +43,11 @@
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
@@ -141,6 +143,21 @@ double area_on_plane(const TopoDS_Shape& shape, double x) {
   return area;
 }
 
+// The length of the edges of the faces on the plane x = `x`.
+double boundary_on_plane(const TopoDS_Shape& shape, double x) {
+  double length = 0.0;
+  for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next()) {
+    const BRepAdaptor_Surface surface(TopoDS::Face(ex.Current()), false);
+    if (surface.GetType() == GeomAbs_Plane && std::abs(std::abs(surface.Plane().Axis().Direction().X()) - 1.0) < 1e-9 &&
+        std::abs(surface.Plane().Location().X() - x) < 1e-7) {
+      GProp_GProps props;
+      BRepGProp::LinearProperties(ex.Current(), props);
+      length += props.Mass();
+    }
+  }
+  return length;
+}
+
 // The smallest face's area.
 double smallest_face(const TopoDS_Shape& shape) {
   double smallest = 1e300;
@@ -175,11 +192,27 @@ void check_bevel(const TopoDS_Shape& body, double d, bool round = false, double 
               volume, expected,
               area_on_plane(result, 0.0), area_on_plane(result, 10.0), area_on_plane(reference, 0.0),
               area_on_plane(reference, 10.0));
+  // At least the baseline 1e-6 mm (the end cuts on the balls and the torus
+  // band are approximated, and their rounding differs by platform: arm64
+  // fuses multiply-adds): the volume within 1e-6 mm over the result's
+  // surface, an end face's area within 1e-6 mm along both shapes' edges on
+  // that plane. Both stay orders of magnitude below the patch's faults
+  // (0.0036 mm3 and 0.058 mm3 short, end faces of area -0.69 and -3.06).
+  const double volume_tolerance = std::max(relative * expected, 1e-6 * port::area_of(result));
   CHECK(port::valid(result));
   CHECK(port::count_of(result, TopAbs_SOLID) == 1);
-  CHECK(std::abs(volume - expected) <= relative * expected);
+  CHECK(std::abs(volume - expected) <= volume_tolerance);
+  if (std::abs(volume - expected) > volume_tolerance) {
+    std::printf("volume off by %.3g (tolerance %.3g)\n", volume - expected, volume_tolerance);
+  }
   for (const double x : {0.0, 10.0}) {
-    CHECK(std::abs(area_on_plane(result, x) - area_on_plane(reference, x)) <= 1e-6);
+    const double area_off = area_on_plane(result, x) - area_on_plane(reference, x);
+    const double area_tolerance =
+        std::max(1e-6, 1e-6 * (boundary_on_plane(result, x) + boundary_on_plane(reference, x)));
+    CHECK(std::abs(area_off) <= area_tolerance);
+    if (std::abs(area_off) > area_tolerance) {
+      std::printf("end face at x = %g: area off by %.3g (tolerance %.3g)\n", x, area_off, area_tolerance);
+    }
   }
 }
 

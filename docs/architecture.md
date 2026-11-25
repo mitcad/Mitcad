@@ -66,7 +66,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
 | `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images); its line art as SVG (mitcad#1736, `format: "svg"`) is a drawing view's projection along the camera (`core/model/src/preview/lines.rs`). |
-| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC, Makera Carvera and Carvera Air); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76, the program check, the turned section's simulation; live tools on the C axis in `turning/live.rs`, mitcad#2067: milling and drilling on the face and the diameter, polar and cylindrical interpolation; mitcad#2319: planes with the Y axis and tilted by a B head, the sub-spindle's hand-over, the whole program cut in 3D in `turning/solid.rs`). No model, no OCCT; offsets by cavalier_contours. |
+| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC, Makera Carvera and Carvera Air); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76, the program check, the turned section's simulation; live tools on the C axis in `turning/live.rs`, mitcad#2067: milling and drilling on the face and the diameter, polar and cylindrical interpolation; mitcad#2319: planes with the Y axis and tilted by a B head, the sub-spindle's hand-over, the whole program cut in 3D in `turning/solid.rs`; mitcad#2375: live tools on the sub-spindle with its own C axis, its speeds, travel and chuck in the lathe check; mitcad#2392: its body and moving zones in the lathe check and the simulation, a control that mirrors only Z on it; mitcad#2405: its own revolved profile, the turret's body against it, its outline and place per operation for Simulate). No model, no OCCT; offsets by cavalier_contours. |
 | `core/subdiv` (`mitcad-subdiv`) | Rust | Forms (mitcad#1757): control cages, their edits, Catmull-Clark subdivision with creases and boundaries and the limit surface as bicubic patches, below the model (re-exported as `mitcad_model::subdiv`); no OCCT ([Forms](#forms-subdivision-surfaces)). |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
@@ -802,7 +802,8 @@ design in a project.
   ISO 2553 or AWS A2.4 as the drawing's standard says;
   `api/drawing_welds.rs` proposes them from BUILD's joints
   (`build_junctions`), finding each joint's edge among the bodies the
-  view shows. A view sees what it shows
+  view shows (members side by side: the runs of each one's edges on the
+  other, mitcad#2379). A view sees what it shows
   (mitcad#717): a section what lies behind its plane, and the planar faces
   its plane cuts (their cut edges, matched in Rust against the projection's
   cut faces); a detail and a broken view the parts of edges they show; of
@@ -2008,7 +2009,15 @@ the `Shape` type.
   closed spline) keep OCCT's through-sections surface, put on the same
   surface made periodic where it closes smoothly, its edges' curves
   carried over (`periodic_closed_sides` in `loft_skin.cpp`): the geometry
-  and topology unchanged, the side offset outward as Merge's is.
+  and topology unchanged, the side offset outward as Merge's is. Where a
+  side is continuous in its second derivative where it closes (a merged
+  circle or spline outline), `periodic_where_closed` keeps that there
+  too, and `smooth_where_c2` does the same at the knot where a merged
+  ring was cut to start and joined again (mitcad#2308): kept C1, the
+  side's offset (a symmetric Thicken's half wall) was C0 along those
+  lines, which the kernel's offset refuses and which can neither be split
+  at nor cut out of the face. A join where the curvature jumps (a slot's
+  line and arc) stays C1.
 - Import of STEP assemblies (mitcad#1274): `Kernel::read_file_structure`
   reads the file once (`geometry/io` `read_step_structured`) and gives
   each distinct part's bodies once, in the part's coordinates, with the
@@ -2031,8 +2040,10 @@ the `Shape` type.
   `<feature>:import(<i>)` faces in the import's undo step
   (`core/model/src/exchange/face_colors.rs`). On export the faces' own
   appearances go out as `ExportBody::face_colors` and the writer sets them
-  as surface colours on face sub-shapes (`add_face_colors`). The mesh
-  formats ignore them.
+  as surface colours on face sub-shapes (`add_face_colors`). 3MF writes
+  them on the faces' triangles (mitcad#2385: `Kernel::triangle_mesh_faces`
+  gives each triangle's face, `mitcad_3mf::Mesh::triangle_colors` the
+  triangles' `pid` and `p1`); STL and OBJ ignore them.
 - Export: 3MF and STL are written by the model from
   `Kernel::triangle_mesh` (one closed, outward-facing mesh per body,
   placed by its occurrences). STEP, IGES, OBJ and BRep go through
@@ -3866,17 +3877,29 @@ it and compares the two.
   (`TutorialGuide`, the step's JSON in `GuideStep`, plain Qt Core) for
   a tutorial page's bridge and live MCP's `ui_guide`: it outlines the
   target the step names (a command's button, an open panel's input, a
-  Browser row, the view), holds back the window's other input through an
-  application event filter and `MainWindow::trigger`'s check, and reports
+  Browser row, the view; the toolbar's workspace selector, a workspace of
+  its list and a tab, through `Ribbon`'s places for the guide, and the
+  timeline, mitcad#2370), holds back the window's other input through an
+  application event filter and `MainWindow::trigger`'s check (a step with
+  `hold` keeps both after it is done, mitcad#2368, until the next step,
+  `release_hold`, or the tutorial left or closed), and reports
   what completed the step as an event (to the page, and as the resource
-  `mitcad://ui-guide`, `core/mcp/src/ui_guide.rs`). The pane is the web
+  `mitcad://ui-guide`, `core/mcp/src/ui_guide.rs`), input it held back
+  too (`held`, mitcad#2366). A page's input demonstration
+  (`GuideDemonstration`: its own pictures and timing, plain Qt Gui and
+  Svg) is played by the engine on a layer of the window that takes no
+  input, over the step's target read again every frame; the learner's
+  keys and navigation gestures come from `GuideBindings`. The pane is the web
   browser component's module (`webbrowser/TutorialPageView`, the
   component's interface 3) docked at the left; its bridge `window.mitcad`
   rides on CEF's message router (`cef/CefBridge*`): the subprocess
   helper's renderer side makes it only in the frames of the tutorial
   package's own folder (the browser's extra information) and the browser
   side checks each call's frame again; calls are answered from the event
-  loop, never inside CEF's callback. Tutorials repositories are fetched
+  loop, never inside CEF's callback. The router is used on CEF's UI
+  thread only, so the view lets its bridge go (handler removed, pending
+  queries cancelled) when it closes its browser: as it goes, or at CEF's
+  shutdown when its window outlives CEF (mitcad#2394). Tutorials repositories are fetched
   as libraries are (`RepoKind::Tutorials`,
   `core/vcs/src/library/tutorials.rs`: `tutorial_list`,
   `tutorial_install` into the user's data folder, `tutorial_picture`).
@@ -3885,7 +3908,11 @@ it and compares the two.
   needs nothing of `app/tutorials`, shows a card per tutorial in the
   page's center; a tutorial's progress, which its pages report through the
   bridge's `set_progress`, is a setting per tutorial id
-  (`TutorialSources`).
+  (`TutorialSources`). The bridge's `query` (mitcad#2371) reads the
+  window's design through the model's allow-list of read-only queries
+  (`tutorial_query`, `core/model-api/src/tutorial_bridge.rs`: `sketch`,
+  `feature`, `bodies`, each answer cut to what a lesson checks); commands,
+  other queries and other designs are refused in words.
 - **Texture sources** (`app/materials/`, mitcad#315): where Edit
   Appearances finds sets of texture maps. Each source is one class behind
   `TextureSource` (asynchronous categories, search, thumbnails and fetch;
@@ -5137,7 +5164,25 @@ expressions). Formats: [libraries.md](libraries.md).
   reading as Update Link (`link_updates.rs`'s `read_linked_design`) as one
   undo step. The start and the end are functions of both documents
   (`mitcad_model_api::begin_edit_in_place`, `finish_edit_in_place`), not
-  JSON commands of one.
+  JSON commands of one. The assembly's base feature is first in the
+  design's features and left out of the timeline the API gives
+  (mitcad#2353, `Document::in_place_leading`: the timeline query and the
+  positions commands take are the design's own), and the view draws its
+  occurrence faded (`OcctViewer::ActiveScope::outside`). The linked design
+  is written as from its own tab: a project version, and the project's
+  edit lock taken for the write (`LockController::takeForWrite`) or held
+  by the tab that lent it. The mode itself holds the design's edit lock
+  from its start to its end (mitcad#2389): the lending tab's, kept active
+  while lent (`LockController::setLent`), or one the holder's window takes
+  with its session, refreshes every half idle time and releases at the end
+  (`LockController::holdLock`, `releaseHeld`); held by someone else, the
+  mode does not start. A lock the mode takes brings the design up to date
+  first, as its tab's would (`RemoteController::bringUpToDate`: a fetch,
+  and a sync when the remote's version of that design is newer; refused
+  in words when that needs a choice), and a request for the held or lent
+  lock is answered as a tab's: releasing ends the mode
+  (`LockController::Host::endInPlace`) and hands the lock over
+  (mitcad#2397).
 - **Versions per part.** A part records the commit the user chose when
   inserting it; `update_links` reads that commit, never a newer one, and
   only `update_library_parts` (an undo step) moves a part to another

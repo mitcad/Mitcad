@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Sketch › Hide a sketch when a feature uses it (mitcad#2393,
+# GitHub mitcad/Mitcad#652, settings sketch/hideUsedSketches, on by
+# default), on a new design:
+#   1. Turned off in Preferences › Sketch (OK): logged and saved.
+#   2. Sketch1: a 20 x 10 rectangle on XY, shown after Finish Sketch.
+#   3. Extrude it (the profile preselected, 10 mm): Sketch1 is still shown.
+#   4. Turned on again: logged and saved.
+#   5. Sketch2: a 20 x 10 rectangle on XY beside the first; Extrude it:
+#      Sketch2 hides, and Sketch1 stays shown.
+# Run by tools/ui-sketch-hide-used-test.sh (Linux).
+expect-ever 'View area'
+wait-idle
+
+# 1. Turned off in Preferences › Sketch.
+mark
+command tools.preferences.sketch
+focus-dialog '^Preferences$'
+expect-widget-property hideUsedSketches checked true
+button '^Hide a sketch when a feature uses it$' hideUsedSketches
+expect-widget-property hideUsedSketches checked false
+button '^OK$'
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: hide a sketch when a feature uses it off$'
+expect-setting sketch/hideUsedSketches false
+wait-idle
+
+# 2. Sketch1: a rectangle on XY.
+mark
+command sketch.create
+expect-log 'Datum xy at '
+click-logged '^Datum xy at '
+wait-log 'Sketch started on xy'
+wait-idle
+mark
+command sketch.rectangle
+sketch-click 0 0
+# The width field opens with the corner's 0.00 selected; a window that Qt
+# activates only at the first key loses that selection, and the digits
+# would be appended (0.002). Select the field's text first.
+wait-log '^Sketch field width at '
+key ctrl+a
+type 20
+wait-log '^Sketch value width: 20 = 20 mm$'
+key Tab
+key ctrl+a
+type 10
+wait-log '^Sketch value height: 10 = 10 mm$'
+key Return
+wait-log '^Added rectangle 20 x 10 mm at '
+key Escape
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-feature-shown Sketch1 yes
+
+# 3. Extrude it: Sketch1 stays shown.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile ' 20
+wait-log '^Preview Extrude: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Added extrude' 30
+wait-idle
+expect-model-bodies 1 2000
+expect-feature-shown Sketch1 yes
+
+# 4. Turned on again.
+mark
+command tools.preferences.sketch
+focus-dialog '^Preferences$'
+expect-widget-property hideUsedSketches checked false
+button '^Hide a sketch when a feature uses it$' hideUsedSketches
+expect-widget-property hideUsedSketches checked true
+button '^OK$'
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: hide a sketch when a feature uses it on$'
+expect-setting sketch/hideUsedSketches true
+wait-idle
+
+# 5. Sketch2 beside the first, extruded: it hides; Sketch1 stays shown.
+mark
+command sketch.create
+expect-log 'Datum xy at '
+click-logged '^Datum xy at '
+wait-log 'Sketch started on xy'
+wait-idle
+mark
+command sketch.rectangle
+sketch-click 0 20
+wait-log '^Sketch field width at '
+key ctrl+a
+type 20
+wait-log '^Sketch value width: 20 = 20 mm$'
+key Tab
+key ctrl+a
+type 10
+wait-log '^Sketch value height: 10 = 10 mm$'
+key Return
+wait-log '^Added rectangle 20 x 10 mm at '
+key Escape
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-feature-shown Sketch2 yes
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile ' 20
+wait-log '^Preview Extrude: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Added extrude' 30
+wait-idle
+expect-model-bodies 2 4000
+expect-feature-shown Sketch2 no
+expect-feature-shown Sketch1 yes
+expect-never 'Recompute failed|TestDriver: FAIL'

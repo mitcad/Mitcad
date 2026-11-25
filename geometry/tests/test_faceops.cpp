@@ -210,6 +210,53 @@ void test_draft() {
   CHECK(throws_with([&] { draft("F5", *block(), spec); }, "draft"));
 }
 
+bool every_face_named(const Shape& shape) {
+  for (int i = 0; i < shape.face_count(); ++i) {
+    if (shape.face_names(i).empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Wherever the fixed plane lies, the drafted faces keep their names and
+// every face of the result has one: a sketch on a drafted face and a pick
+// of it find the face by its name (mitcad#2351).
+void test_draft_about_a_moved_plane() {
+  const double t = std::tan(5.0 * kPi / 180.0);
+  // The side x = 60 drafted 5 degrees about planes across y (pull +y): at
+  // the front, through the middle, at the back and beyond the block. It
+  // turns about its line at y = p, leaning in by t per mm towards +y.
+  for (const double p : {0.0, 20.0, 40.0, 55.0}) {
+    DraftSpec spec;
+    spec.faces = {side("F2", 1, 1)};
+    spec.plane = Tool::of_plane(plane(0, p, 0, 0, 1, 0));
+    spec.angle = 5.0 * kPi / 180.0;
+    const ShapePtr drafted = draft("F5", *block(), spec);
+    CHECK_NEAR(volume(*drafted), kBlock - 20.0 * t * (800.0 - 40.0 * p));
+    CHECK(faces_named(*drafted, side("F2", 1, 1)) == 1);
+    CHECK(drafted->face_count() == 6);
+    CHECK(every_face_named(*drafted));
+    CHECK(edge_names_unique(*drafted));
+  }
+
+  // A round pin's side drafted about planes across z: the cylinder becomes
+  // a cone, its seam along; the side keeps its name.
+  const ShapePtr pin = extrude("F2", {circle(5, 0, 0, 10)}, 0, 20);
+  for (const double p : {0.0, 10.0, 25.0}) {
+    DraftSpec cone;
+    cone.faces = {"F2:side(c5)"};
+    cone.plane = Tool::of_plane(plane(0, 0, p, 0, 0, 1));
+    cone.angle = 5.0 * kPi / 180.0;
+    const ShapePtr drafted = draft("F5", *pin, cone);
+    const double low = 10.0 + p * t;
+    const double high = 10.0 - (20.0 - p) * t;
+    CHECK_NEAR(volume(*drafted), kPi * 20.0 / 3.0 * (low * low + low * high + high * high));
+    CHECK(faces_named(*drafted, "F2:side(c5)") == 1);
+    CHECK(every_face_named(*drafted));
+  }
+}
+
 void test_offset_faces() {
   // T0 offset_face_top: the top 5 mm up.
   const ShapePtr taller = offset_faces("F5", *block(), {end_cap("F2", 1)}, 5);
@@ -1053,6 +1100,41 @@ void test_left_handed_face_split_order() {
   }
 }
 
+// The round top of a pin onto tilted planes (mitcad#2382, GitHub #643: a
+// cylinder's top onto a slanted planar face failed with "the target removes
+// the whole body"). The top has one vertex on its circle; moved only past
+// the target there, it still crossed the target where the plane rises
+// across the circle, and the cut left no piece without it. A pin of R = 10
+// from z = 0 to 20 under planes rising 1 in 4 along y, 2.5 above and below
+// their height at the axis on the circle: the pin keeps its section up to
+// the plane, its volume pi R^2 times the plane's height at the axis, and its
+// new top is the ellipse pi R^2 / cos(slope).
+void test_replace_tilted_round_top() {
+  const ShapePtr pin = extrude("F2", {circle(5, 0, 0, 10)}, 0, 20);
+  const std::string top = "F2:end(r{c5})";
+  const std::string name = "F5:replace(" + top + ")";
+  const gp_Dir slope(0, -1, 4);
+  const double section = kPi * 100.0;
+  const double ellipse = section * std::sqrt(17.0) / 4.0;
+  // Above the top everywhere (z = 27.5 to 32.5), across it (17.5 to 22.5)
+  // and below it everywhere (7.5 to 12.5).
+  for (const double height : {30.0, 20.0, 10.0}) {
+    const ShapePtr replaced =
+        replace_faces("F5", *pin, {top}, Tool::of_plane(gp_Pln(gp_Pnt(0, 0, height), slope)), true);
+    CHECK_NEAR_TOL(volume(*replaced), section * height, 1e-6);
+    CHECK(replaced->face_count() == 3);
+    CHECK(faces_named(*replaced, name) == 1);
+    CHECK(faces_named(*replaced, top) == 0);
+    CHECK(faces_named(*replaced, "F2:start(r{c5})") == 1);
+    const std::vector<int> found = replaced->find_faces(name);
+    if (found.size() == 1) {
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(replaced->face(found.front()), props);
+      CHECK_NEAR_TOL(props.Mass(), ellipse, 1e-6);
+    }
+  }
+}
+
 } // namespace
 
 void faceops_tests() {
@@ -1071,6 +1153,8 @@ void faceops_tests() {
   guarded("test_left_handed_face_replacement", test_left_handed_face_replacement);
   guarded("test_left_handed_face_draft", test_left_handed_face_draft);
   guarded("test_left_handed_face_split_order", test_left_handed_face_split_order);
+  guarded("test_replace_tilted_round_top", test_replace_tilted_round_top);
+  guarded("test_draft_about_a_moved_plane", test_draft_about_a_moved_plane);
 }
 
 } // namespace test

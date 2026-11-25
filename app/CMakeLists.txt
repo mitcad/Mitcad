@@ -1334,6 +1334,10 @@ add_subdirectory(webbrowser)
 # ui_guide), the tutorial pane on the web browser component's module and the
 # Start page's choice of the tutorial to start (mitcad#2346).
 target_sources(mitcad PRIVATE
+  tutorials/GuideBindings.cpp
+  tutorials/GuideBindings.hpp
+  tutorials/GuideDemonstration.cpp
+  tutorials/GuideDemonstration.hpp
   tutorials/GuideStep.cpp
   tutorials/GuideStep.hpp
   tutorials/MainWindowGuide.cpp
@@ -1344,6 +1348,12 @@ target_sources(mitcad PRIVATE
   tutorials/TutorialGuide.hpp
   tutorials/TutorialSources.cpp
   tutorials/TutorialSources.hpp)
+# The tutorial pane's places (mitcad#2367): left, right or centred, the
+# move animated unless the system asks for reduced motion.
+target_sources(mitcad PRIVATE
+  framework/PaneMotion.cpp
+  framework/PaneMotion.hpp
+  tutorials/TutorialPlace.hpp)
 # Windows Explorer's thumbnails of designs (mitcad#1695): the thumbnail
 # handler mitcad-thumbnails.dll; Windows only.
 if(WIN32)

@@ -18,6 +18,11 @@
 //!   mills the faces it is given round the spindle axis (the floors of a
 //!   wrapped slot or pocket, all at one radius), their boundaries unrolled
 //!   on that cylinder from the widest gap round the axis.
+//! - **On the sub-spindle** (`sub_spindle`, mitcad#2375) every place is
+//!   computed the same way in the sub-spindle's work coordinates (the
+//!   setup's turned round about its X at the part's back,
+//!   `Document::turn_sub_frame`); the view, the simulation and the checks
+//!   turn its places back to where the part was.
 
 use std::f64::consts::{PI, TAU};
 
@@ -821,10 +826,22 @@ impl<K: Kernel> Document<K> {
         let sf = self.live_face_frame(setup, tf)?;
         let bodies = self.cam_setup_bodies(setup)?;
         let mut out = Vec::new();
+        // The sub-spindle's work coordinates of a point in the setup's, and
+        // back (both the part turned round about X at its back,
+        // mitcad#2375).
+        let back = tf.part.back_z();
+        let turn_round = |p: P3| -> P3 { [p[0], -p[1], back - p[2]] };
         for s in &sims {
             let grid = s.initial.grid;
             let deviation = (grid.step[0].min(grid.step[1]) / 4.0).clamp(0.001, 0.05);
-            let mesh = self.cam_work_mesh(&bodies, &sf, deviation)?;
+            let mut mesh = self.cam_work_mesh(&bodies, &sf, deviation)?;
+            if s.sub {
+                for v in &mut mesh.vertices {
+                    *v = turn_round(*v);
+                }
+            }
+            let sub = s.sub;
+            let model = |w: P3| tf.frame.to_model(if sub { turn_round(w) } else { w });
             let part = match s.side {
                 LiveSide::Face => HeightMap::top_of_mesh(grid, s.initial.bottom, &mesh),
                 LiveSide::Diameter { radius } => {
@@ -849,7 +866,7 @@ impl<K: Kernel> Document<K> {
             let left = sim::remaining(&s.simulation.stock, &part, tolerance, spacing);
             let id = |i: usize| ids.get(i).copied().unwrap_or_default();
             let side = s.side;
-            let place = |p: P3| json!({"at": p, "model": tf.frame.to_model(side.to_work(p))});
+            let place = |p: P3| json!({"at": p, "model": model(side.to_work(p))});
             let rapid_cuts: Vec<Value> = s
                 .simulation
                 .rapid_cuts
@@ -861,7 +878,7 @@ impl<K: Kernel> Document<K> {
                         "move": c.move_index,
                         "depth": c.depth,
                         "at": c.at,
-                        "model": tf.frame.to_model(side.to_work(c.at)),
+                        "model": model(side.to_work(c.at)),
                     })
                 })
                 .collect();
@@ -877,6 +894,7 @@ impl<K: Kernel> Document<K> {
             };
             out.push(json!({
                 "side": side,
+                "sub_spindle": sub,
                 "operations": s.operations.iter().map(|&i| id(i)).collect::<Vec<u32>>(),
                 "grid": {
                     "origin": grid.origin,

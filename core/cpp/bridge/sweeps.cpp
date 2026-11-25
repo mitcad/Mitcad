@@ -331,6 +331,14 @@ std::shared_ptr<geometry::Shape> rib_solid(rust::Str feature, const Frame& frame
     spec.direction = direction(input.direction);
   }
   spec.draft_angle = input.draft_angle;
+  // Normal to Curves' far side (mitcad#2398).
+  for (std::size_t i = 0; i < input.far.size(); ++i) {
+    geometry::RibFarCurve piece;
+    piece.curve = path_curve(input.far[i]);
+    piece.chain_curve = i < input.far_near.size() ? input.far_near[i] : 0;
+    piece.corner = i < input.far_corner.size() && input.far_corner[i] != 0;
+    spec.far_curves.push_back(std::move(piece));
+  }
   for (std::size_t i = 0; i < bodies.size(); ++i) {
     spec.bodies.push_back(body_at(bodies, i));
   }

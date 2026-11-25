@@ -1063,8 +1063,8 @@ head and the sub-spindle".
   the zero there, Z away from the sub-spindle's chuck, the stock from
   where the part-off cut it; their spindle starts with the sub-spindle's
   codes (`G96 S M203`). The grip is written in the main spindle's work Z
-  of the sub-spindle's jaws' face; live tools cut on the main spindle
-  only.
+  of the sub-spindle's jaws' face; live tools cut there too
+  ([Live tools on the sub-spindle](#live-tools-on-the-sub-spindle)).
 - **Phase 4, the multi-axis stock** (`turning::solid`): the bar as cubes
   of one size (a sixth of the smallest live tool, at most 400 000 of
   them), cut by the whole program in its order: a turning operation
@@ -1095,8 +1095,8 @@ head and the sub-spindle".
   change or the end in one; a spindle started with `G96`/`G97 S` and a
   code of its own (the sub-spindle) turns. The lathe check wants the Y
   axis for a plane, the B head for a tilted one or a tool in the head,
-  the Y travel, and a sub-spindle for its operations (only their speeds
-  are checked there: its travel, zones and chuck are not modeled).
+  the Y travel, and a sub-spindle for its operations (its speeds, travel
+  and chuck: [Live tools on the sub-spindle](#live-tools-on-the-sub-spindle)).
 - **Tests:** `core/cam/src/turning/axes_tests.rs`: the exact Fanuc
   program of a flat at C 30 with the Y axis, an off-center hole on the
   face with Y and a hole on a plane tilted 45 degrees by the B head, read
@@ -1108,6 +1108,192 @@ head and the sub-spindle".
   (the api: a flat, a tilted hole, a wrapped sketch and the hand-over on
   the mock kernel), `app/tests/cam_solid_stock.cpp` and the UI test
   `tools/ui-cam-mill-turn-axes-test.sh` with its Windows and macOS twins.
+
+### Live tools on the sub-spindle
+
+What mitcad#2319 left out (mitcad#2375): live tools on the part's back
+while the sub-spindle holds it, the B head's and the sub-spindle's codes
+in the Machines dialog, and the sub-spindle's travel and chuck in the
+lathe check. The API in [commands.md](../core/model-api/src/commands.md),
+"CAM: live tools on the sub-spindle".
+
+- **The machine:** the sub-spindle has a C axis of its own, switched on
+  and off and clamped with its own codes in the lathe's `MillTurn`
+  (defaults `M254` with `G28 H0.`, `M255`, `M114`, `M115`; one common
+  set, to compare with the lathe's manual as the other codes), and its
+  own data (`turning::SubSpindle`): its speeds (none: the main
+  spindle's), its travel (the machine Z of its jaws' face, lowest to
+  highest; none: not checked) and its chuck's diameter. The Machines
+  dialog edits all the codes: the B head's clamp on the Machine page with
+  the B head, the sub-spindle's codes, speeds, travel and chuck on a
+  Sub-Spindle page with the sub-spindle (its C axis's rows with the live
+  tools).
+- **The operations:** every live operation (facing, contours, pockets,
+  adaptive clearing, drilling; on the face, the diameter, a plane with
+  the Y axis or a plane tilted by the B head) may be on the sub-spindle
+  after the hand-over, as a turning operation may. It is computed as on
+  the main spindle in the sub-spindle's work coordinates: the setup's
+  turned round about its work X at the part's back (X as on the main
+  spindle, Y and Z turned round, the zero on the axis at the part's
+  back), the inputs read there, C the angle there from its X towards its
+  Y. The sub-spindle's operations, turning and live, follow the main
+  spindle's.
+- **The post:** before the first live operation on the sub-spindle the
+  sub-spindle stops (its stop code), its C axis goes on with its codes
+  and feeds go per minute; the moves are written as on the main spindle
+  (the C axis indexed and clamped with the sub-spindle's clamp, the
+  drilling cycles, polar and cylindrical interpolation, the planes), in
+  the sub-spindle's work offset; the C axis goes off before the next
+  turning operation and at the end. The program check reads it with the
+  lathe's codes: the sub-spindle's stop stops the spindle that holds the
+  part, as `M5` does (`check_program_with`).
+- **The lathe check:** the hand-over's jaws' face where it grips and
+  where it pulls the part back to within the sub-spindle's travel, the
+  synchronized speed within both spindles'; the sub-spindle's turning at
+  its speeds; its operations' tools, turning and live, where the
+  sub-spindle holds the part (pulled back by the hand-over's withdrawal:
+  a point at `z` of its work coordinates is at `back + withdraw - z` of
+  the main spindle's work Z, Y turned round) within the turret's travel,
+  clear of the zones, the main chuck and the sub-spindle's chuck (no tool
+  behind its jaws' face within its diameter). Each finding in words, its
+  place where the view draws the move (on the part where it was).
+- **The simulation:** the sub-spindle's live operations are groups of
+  their own on maps of the stock as the sub-spindle holds it (the remnant
+  the part-off leaves on the main spindle gone, turned round into its
+  coordinates), compared with the bodies turned the same way; the stock
+  in 3D takes their cuts where their coordinates are in the main
+  spindle's, the remnant gone at the hand-over. *Simulate* sums them up
+  as the live tools on the sub-spindle; the toolpaths are drawn on the
+  part where it was.
+- **Done since** (mitcad#2392): the sub-spindle's own body and the zones
+  moving with it, a control that mirrors only Z for the sub-spindle, and
+  the main spindle's operations after the sub-spindle's refused at
+  Generate ([The sub-spindle's body, its moving zones and a Z-only
+  control](#the-sub-spindles-body-its-moving-zones-and-a-z-only-control)).
+- **Tests:** `core/cam/src/turning/sub_live_tests.rs`: the exact Fanuc
+  program of a pin parted off into the sub-spindle, its back faced, a
+  hole drilled with its C axis indexed and a flat milled with the Y axis,
+  read back; G83; the sub-spindle's own stop code in the check; the codes'
+  and data's refusals; the lathe check of its travel, speeds and chuck
+  and of the turret's travel where it holds the part; its maps and the
+  stock in 3D. `core/model-tests/cam/src/sub_live_tests.rs` (the api: a
+  hole and a flat on the sub-spindle, the program, the toolpaths, the
+  simulation, the travel's finding, the data kept with the machine) and
+  the UI test `tools/ui-cam-mill-turn-sub-test.sh` with its Windows and
+  macOS twins (`app.ui-windows-cam-mill-turn-sub`,
+  `app.ui-macos-cam-mill-turn-sub`).
+
+### The sub-spindle's body, its moving zones and a Z-only control
+
+What mitcad#2375 left out (mitcad#2392). The API in
+[commands.md](../core/model-api/src/commands.md), "CAM: the sub-spindle's
+body, its moving zones and a Z-only control".
+
+- **The body** (`turning::SubSpindle`): its chuck, `chuck_diameter`
+  across, reaching `chuck_length` back from its jaws' face (zero: without
+  end, as mitcad#2375 checked it), then its housing, a cylinder of
+  `housing_diameter` from the chuck's back, `housing_length` long (zero:
+  without end): a solid of revolution about the spindle axis behind the
+  jaws' face, which itself is free (the part is gripped there).
+  `SubSpindle::body_at` says which part a point is in.
+- **The zones moving with it** (`SubSpindle::zones`): boxes as the
+  machine's zones, X the machine's (a radius), Z measured from its jaws'
+  face (positive away from the main spindle); like a lathe's zones they
+  are entered and checked in X and Z, their Y kept.
+- **Where it is as each operation cuts** (`check::sub_face_at`): for its
+  own operations where the hand-over left it (its jaws' face at the grip
+  plus the withdrawal), for the parting off it holds the part through
+  where it grips, for the main spindle's operations where it waits:
+  `park` (the machine Z of its jaws' face), else the far end of its
+  travel; with neither (or without the setup's work zero on the machine)
+  those operations are not checked against it.
+- **The lathe check** (`check::sub_spindle_hits`, in `check_lathe`): each
+  operation's tool, its points at most half a millimetre apart along its
+  moves (turning and live; the sub-spindle's operations where it holds the
+  part, turned round about X), in the chuck, the housing or a moving
+  zone: one finding per operation and part in words ("Drill 1: the tool
+  runs into the sub-spindle's housing.", "Turn Facing 2: the tool runs
+  into Sub guard, which moves with the sub-spindle."), its place where
+  the view draws the move. The check's findings come by operation.
+- **The simulation:** `cam_simulate` gives the same hits
+  (`sub_spindle_hits`); *Simulate* counts them in its summary and shows
+  the first as its warning.
+- **A control that mirrors only Z** (`MillTurn::sub_mirror_z_only`, the
+  Machines dialog's *The control mirrors only Z*): there X, Y and C keep
+  the main spindle's senses on the sub-spindle, so its work coordinates
+  are the setup's mirrored in Z rather than turned round about X: they
+  differ from MitCad's sub-spindle coordinates by Y turned round. The
+  post writes the live operation mirrored in Y (`LiveOp::mirrored_y`):
+  on the face and on a plane the path's y (and the plane's C), on the
+  diameter the length round it; arcs across them the other way, the
+  drilling cycles' places too. The tool's tilt (B) is the same, as a turn
+  about Y is unchanged by Y turned round; turning moves (X and Z) and the
+  hand-over are as they were.
+- **The main spindle after the sub-spindle:** an operation on the main
+  spindle after the first (not suppressed) one on the sub-spindle cannot
+  be written (the part is no longer on the main spindle). Generate
+  refuses it in words and computes the others; the setups' data
+  (`cam_setups`) names its `problem`, which the browser shows in red with
+  the words in its row's tooltip and the operation panels show as a
+  warning when the operation would land there (a new one is added last).
+- **Tests:** `core/cam/src/turning/sub_body_tests.rs`,
+  `core/model-tests/cam/src/sub_body_tests.rs`,
+  `app/tests/cam_sub_order.cpp` and the UI test
+  `tools/ui-cam-mill-turn-sub-test.sh` with its Windows and macOS twins.
+- **Done since** (mitcad#2405): a revolved profile of its own, the
+  turret's body against its body and zones, and drawing it in *Simulate*
+  ([The sub-spindle drawn, the turret's body and the sub-spindle's
+  profile](#the-sub-spindle-drawn-the-turrets-body-and-the-sub-spindles-profile)).
+
+### The sub-spindle drawn, the turret's body and the sub-spindle's profile
+
+What mitcad#2392 left out (mitcad#2405). The API in
+[commands.md](../core/model-api/src/commands.md), "CAM: the sub-spindle
+drawn in Simulate, the turret's body against it, its own profile".
+
+- **Its own profile** (`SubSpindle::profile`): `[z, diameter]` points, z
+  from its jaws' face (negative for a nose in front of it), in order
+  along z, two points at one z a step; the body is what the profile
+  encloses about the spindle axis from its first z to its last, a third
+  part beside the chuck and the housing (`SubBody::Profile`, "the
+  sub-spindle's body"). Unlike theirs its part in front of the face is
+  checked too.
+- **The turret's body** (`Lathe::turret_body`, `TurretBody`): a box round
+  the tool's controlled point, X from it along the machine's X (a radius,
+  positive away from the spindle axis) and Z along the machine's Z
+  (positive away from the main spindle), in X and Z only as a lathe's
+  zones are. At each of the tool's points along its moves (half a
+  millimetre apart, where the sub-spindle is as the operation cuts) the
+  box is checked against the chuck, the housing and the profile (its
+  least distance from the spindle axis, with the machine's Y where a live
+  tool is off the axis, against their largest radius over its length:
+  `SubSpindle::body_across`) and against the moving zones (boxes
+  overlapping in X and Z); one finding per operation and part after the
+  tool's ("Turn Facing 2: the turret runs into the sub-spindle's
+  chuck."), its place the tool's where the view draws it. Without a
+  turret body only the tool's point is checked, as before.
+- **Drawn in Simulate:** `cam_simulate` gives the sub-spindle's outline
+  (`SubSpindle::outline`: each part as `[behind, radius]` points, a part
+  without end as long as its diameter, at least 20 mm) and per operation
+  where its jaws' face is drawn (`check::sub_face_shown`): the view keeps
+  the part where it was before the hand-over, so for the sub-spindle's
+  operations that is the grip (where it holds the part, less the
+  withdrawal it and the part moved together), for the parting off the
+  grip, for the main spindle's where it waits (not known without the
+  setup's work zero on the machine). *Simulate* draws the outline
+  revolved about the spindle axis in the edges' color at the slider's
+  operation, so it moves from where it waits to the grip through the
+  hand-over.
+- **Tests:** `core/cam/src/turning/sub_turret_tests.rs`,
+  `core/model-tests/cam/src/sub_turret_tests.rs`,
+  `app/tests/cam_sub_drawn.cpp` and the UI test
+  `tools/ui-cam-mill-turn-sub-test.sh` with its Windows and macOS twins.
+- **Not yet:** the zones moving with it are entered and checked in X and
+  Z only (their Y kept, not checked, also on a lathe with a Y axis); the
+  turret's body is one box for every station and is checked against the
+  sub-spindle only, not against the main chuck or the machine's fixed
+  zones (the tool's controlled point is checked there); *Simulate* draws
+  neither the fixed zones nor the moving ones, nor the turret.
 
 ## API
 

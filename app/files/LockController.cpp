@@ -274,6 +274,12 @@ LockController::LockController(QMainWindow& window, RemoteController& remote, Pr
     qInfo().noquote() << QStringLiteral("Edit lock request of %1 not answered within %2 min: handing over")
                              .arg(requesterName(request))
                              .arg(m_idleMinutes);
+    if (m_lent) {
+      // Edited in place in another window (mitcad#2397): that mode ends
+      // first, its edits kept (saved when autosave is on).
+      handOverLent(request, InPlaceEnd::Keep, QStringLiteral("no answer"));
+      return;
+    }
     // Autosave on: a version first; off: the changes stay in the window.
     if (m_host.modified() && m_host.autosaveOn() && m_host.canSaveNow()) {
       m_host.saveVersion(tr("Saved automatically before releasing the edit lock"));
@@ -291,6 +297,47 @@ LockController::LockController(QMainWindow& window, RemoteController& remote, Pr
   connect(m_detailsAction, &QAction::triggered, this, [this] {
     qInfo().noquote() << QStringLiteral("Project indicator menu chose Edit Lock Details");
     showDetails();
+  });
+  m_heldTimer = new QTimer(this);
+  connect(m_heldTimer, &QTimer::timeout, this, [this] {
+    // The locks held for Edit in Place (mitcad#2389), as the design's own.
+    const QList<QString> paths = m_held.keys();
+    for (const QString& path : paths) {
+      refreshHeld(path, QString());
+    }
+  });
+  // Their requests (mitcad#2397), as the design's own polls read them.
+  m_heldPollTimer = new QTimer(this);
+  m_heldPollTimer->setSingleShot(true);
+  connect(m_heldPollTimer, &QTimer::timeout, this, &LockController::pollHeld);
+  m_heldKeepTimer = new QTimer(this);
+  m_heldKeepTimer->setSingleShot(true);
+  connect(m_heldKeepTimer, &QTimer::timeout, this, [this] {
+    qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: the time kept for the request is over");
+    m_heldAnswered.remove(m_heldKeptRequest);
+    m_heldKeptRequest.clear();
+    if (!m_held.isEmpty()) {
+      m_heldPollTimer->start(0);
+    }
+  });
+  m_heldAnswerTimer = new QTimer(this);
+  m_heldAnswerTimer->setSingleShot(true);
+  connect(m_heldAnswerTimer, &QTimer::timeout, this, [this] {
+    // No answer within the idle time: handed over as the design's own tab
+    // does, the mode ended with its edits kept.
+    if (m_heldShownRequest.isEmpty() || !m_held.contains(m_heldShownPath)) {
+      return;
+    }
+    if (m_blocking > 0 || m_host.busy() || QApplication::activeModalWidget() != nullptr) {
+      m_heldAnswerTimer->start(1000); // after the job or the dialog
+      return;
+    }
+    const QJsonObject request = m_heldShown;
+    const QString path = m_heldShownPath;
+    qInfo().noquote() << QStringLiteral("Edit lock request of %1 not answered within %2 min: handing it over")
+                             .arg(requesterName(request))
+                             .arg(m_heldIdleMinutes);
+    handOverHeld(path, request, InPlaceEnd::Keep, QStringLiteral("no answer"));
   });
   m_lastActivity = QDateTime::currentDateTimeUtc();
   connect(&m_remote, &RemoteController::stateChanged, this, &LockController::finishSavedTransition,
@@ -370,12 +417,14 @@ QJsonObject LockController::lockCommand(const char* name, QJsonObject fields) co
   return fields;
 }
 
-RemoteTask* LockController::lockTask(const QString& name, const QList<QJsonObject>& commands) {
+RemoteTask* LockController::lockTask(const QString& name, const QList<QJsonObject>& commands,
+                                     const QString& in) {
   QList<QByteArray> jsons;
   for (const QJsonObject& command : commands) {
     jsons << compactJson(command);
   }
-  const QByteArray root = m_root.toUtf8();
+  const QString folder = in.isEmpty() ? m_root : in;
+  const QByteArray root = folder.toUtf8();
   RemoteTask* task = RemoteTask::custom(
       name,
       [root, jsons](const SyncControl& control) {
@@ -392,7 +441,7 @@ RemoteTask* LockController::lockTask(const QString& name, const QList<QJsonObjec
       this);
   // In the project's version queue (mitcad#1895): never beside its push,
   // fetch or sync.
-  task->setProject(m_root);
+  task->setProject(folder);
   return task;
 }
 
@@ -461,6 +510,31 @@ QJsonObject LockController::runNow(RemoteTask* task, const QString& label, int l
   ++m_blocking;
   m_pollTimer->stop();
   dropRunning();
+  const QJsonObject answer = waitWithProgress(task, label, limitSeconds);
+  --m_blocking;
+  if (m_blocking == 0 && m_task == nullptr && !m_queue.empty()) {
+    std::function<void()> next = std::move(m_queue.front());
+    m_queue.pop_front();
+    next();
+  }
+  return answer;
+}
+
+QJsonObject LockController::runAside(RemoteTask* task, const QString& label) {
+  // The running task goes on, its answer taken; the new one waits for it
+  // in the project's version queue, and the next ones for this one.
+  ++m_blocking;
+  const QJsonObject answer = waitWithProgress(task, label, 0);
+  --m_blocking;
+  if (m_blocking == 0 && m_task == nullptr && !m_queue.empty()) {
+    std::function<void()> next = std::move(m_queue.front());
+    m_queue.pop_front();
+    next();
+  }
+  return answer;
+}
+
+QJsonObject LockController::waitWithProgress(RemoteTask* task, const QString& label, int limitSeconds) {
   QJsonObject answer;
   {
     QProgressDialog dialog(label, tr("Cancel"), 0, 0, &m_window);
@@ -497,12 +571,6 @@ QJsonObject LockController::runNow(RemoteTask* task, const QString& label, int l
       answer = pending->answer();
       delete pending.data();
     }
-  }
-  --m_blocking;
-  if (m_blocking == 0 && m_task == nullptr && !m_queue.empty()) {
-    std::function<void()> next = std::move(m_queue.front());
-    m_queue.pop_front();
-    next();
   }
   return answer;
 }
@@ -847,6 +915,611 @@ void LockController::stoppingSync() {
 void LockController::changesSaved() {
   m_kept = false;
   updateBanner();
+}
+
+// ---------------------------------------------------------------------------
+// Another design written from this window (Edit in Place, mitcad#2353), or
+// edited in it for a whole mode (mitcad#2389)
+
+LockController::WriteLock LockController::takeForWrite(const QString& path) { return takeAside(path, false); }
+
+void LockController::releaseAfterWrite(const QString& path) {
+  const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+  releaseAside(absolute, QDir::cleanPath(m_host.project().root), false);
+}
+
+LockController::WriteLock LockController::holdLock(const QString& path) {
+  const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+  const WriteLock result = takeAside(absolute, true);
+  if (result.taken) {
+    const QString root = QDir::cleanPath(m_host.project().root);
+    m_held.insert(absolute, root);
+    // Refreshed as the window's own design's lock is: every half idle time.
+    const QJsonObject settings = localCommand(root, {{QStringLiteral("cmd"), QStringLiteral("project_settings")}});
+    const QJsonObject locks = obj(obj(settings, "shared"), "edit_locks");
+    m_heldIdleMinutes = std::clamp(locks.value(QStringLiteral("idle_minutes")).toInt(10), 1, 120);
+    m_heldPollSeconds = std::clamp(locks.value(QStringLiteral("poll_seconds")).toInt(10), 5, 600);
+    m_heldTimer->start(scaledMs(m_heldIdleMinutes * 60.0 / 2.0));
+    // Its requests read as the design's own polls read them (mitcad#2397).
+    m_heldOffline = false;
+    m_heldPollTimer->start(scaledMs(
+        m_live != nullptr && m_live->liveConnected(root) ? 120 : m_heldPollSeconds));
+  }
+  return result;
+}
+
+bool LockController::heldLock(const QString& path) const {
+  return m_held.contains(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+}
+
+void LockController::heldSaved(const QString& path) {
+  const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+  const auto held = m_held.constFind(absolute);
+  if (held == m_held.constEnd()) {
+    return;
+  }
+  refreshHeld(absolute, str(localCommand(*held, {{QStringLiteral("cmd"), QStringLiteral("info")}}), "head"));
+}
+
+void LockController::releaseHeld(const QString& path) {
+  const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+  const auto held = m_held.constFind(absolute);
+  if (held == m_held.constEnd()) {
+    return;
+  }
+  const QString root = *held;
+  m_held.erase(held);
+  if (m_held.isEmpty()) {
+    m_heldTimer->stop();
+    m_heldPollTimer->stop();
+  }
+  if (m_heldShownPath == absolute) {
+    closeHeldAnswerDialog();
+  }
+  if (absolute == m_handingOver) {
+    return; // handed over to a requester (handOverHeld), not released
+  }
+  releaseAside(absolute, root, true);
+}
+
+void LockController::setLent(bool lent) {
+  if (m_lent == lent) {
+    return;
+  }
+  m_lent = lent;
+  if (m_mode == Mode::Holding) {
+    qInfo().noquote() << QStringLiteral("Edit lock: %1 %2")
+                             .arg(fileName(), lent ? QStringLiteral("held while it is edited in place")
+                                                   : QStringLiteral("back from Edit in Place"));
+  }
+  // Edited, in place or here again: active.
+  activity();
+}
+
+void LockController::refreshHeld(const QString& absolute, const QString& base) {
+  const auto held = m_held.constFind(absolute);
+  if (held == m_held.constEnd()) {
+    return;
+  }
+  const QString root = *held;
+  QJsonObject fields{{QStringLiteral("path"), absolute},
+                     {QStringLiteral("active_at"), QStringLiteral("now")},
+                     {QStringLiteral("state"), QStringLiteral("active")},
+                     {QStringLiteral("poll_seconds"), pollSeconds()}};
+  if (!base.isEmpty()) {
+    fields.insert(QStringLiteral("base"), base);
+  }
+  startTask(lockTask(QStringLiteral("lock_refresh"), {lockCommand("lock_refresh", fields)}, root),
+            [this, absolute](const QJsonObject& answer) {
+              if (!m_held.contains(absolute)) {
+                return; // released meanwhile: the mode ended
+              }
+              const QString name = QFileInfo(absolute).fileName();
+              const QString cls = errorClassOf(answer);
+              if (!cls.isEmpty()) {
+                // Out of reach: tried again at the next refresh; the lock
+                // goes stale only after the idle time.
+                qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: %1 refresh failed (%2): %3")
+                                         .arg(name, cls, errorMessageOf(answer));
+                return;
+              }
+              if (str(answer, "outcome") != QLatin1String("lost")) {
+                return;
+              }
+              heldLost(absolute, obj(answer, "lock"));
+            });
+}
+
+void LockController::heldLost(const QString& absolute, const QJsonObject& lock) {
+  // Taken by someone else (or removed): not held any more; Save in the mode
+  // takes it again and is refused in words.
+  if (!m_held.remove(absolute)) {
+    return;
+  }
+  if (m_held.isEmpty()) {
+    m_heldTimer->stop();
+    m_heldPollTimer->stop();
+  }
+  if (m_heldShownPath == absolute) {
+    closeHeldAnswerDialog();
+  }
+  const QString name = QFileInfo(absolute).fileName();
+  const QString holder = lock.isEmpty() ? QString() : ownerName(lock);
+  qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: %1 lost%2")
+                           .arg(name, holder.isEmpty() ? QString() : QStringLiteral(" to %1").arg(holder));
+  m_host.status(holder.isEmpty()
+                    ? tr("The edit lock of %1 was removed: the changes made in place may not be saved to it.").arg(name)
+                    : tr("%1 took the edit lock of %2: the changes made in place cannot be saved to it.")
+                          .arg(holder, name),
+                true);
+}
+
+// ---------------------------------------------------------------------------
+// Requests for a lock held for Edit in Place, or lent to it (mitcad#2397)
+
+QString LockController::inPlaceRequestText(const QString& name, const QJsonObject& request) const {
+  const QString message = str(request, "message");
+  return message.isEmpty()
+             ? tr("%1 asks to edit %2, which you are editing in place.").arg(requesterName(request), name)
+             : tr("%1 asks to edit %2, which you are editing in place: \"%3\"")
+                   .arg(requesterName(request), name, message);
+}
+
+void LockController::pollHeld() {
+  if (m_held.isEmpty()) {
+    return;
+  }
+  if (m_task != nullptr || m_blocking > 0) {
+    m_heldPollTimer->start(500); // after the running work
+    return;
+  }
+  // One poll per project (the mode holds one design; its project is the
+  // window's): receipts written for the requests to this session's locks.
+  QSet<QString> roots;
+  for (auto it = m_held.cbegin(); it != m_held.cend(); ++it) {
+    roots.insert(it.value());
+  }
+  for (const QString& root : std::as_const(roots)) {
+    const bool live = m_live != nullptr && m_live->liveConnected(root);
+    const QJsonObject fields{{QStringLiteral("mqtt"), live},
+                             {QStringLiteral("poll_seconds"), live ? 120 : m_heldPollSeconds},
+                             {QStringLiteral("tidy"), false}};
+    startTask(lockTask(QStringLiteral("lock_poll"), {lockCommand("lock_poll", fields)}, root),
+              [this, root](const QJsonObject& view) { handleHeldView(root, view); });
+  }
+}
+
+void LockController::handleHeldView(const QString& root, const QJsonObject& view) {
+  const bool live = m_live != nullptr && m_live->liveConnected(root);
+  const auto again = [this, live] {
+    if (!m_held.isEmpty()) {
+      m_heldPollTimer->start(scaledMs(live ? 120 : m_heldPollSeconds));
+    }
+  };
+  const QString cls = errorClassOf(view);
+  if (!cls.isEmpty()) {
+    if (!m_heldOffline) {
+      qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: poll failed (%1): %2")
+                               .arg(cls, errorMessageOf(view));
+    }
+    m_heldOffline = unreachable(cls);
+    again();
+    return;
+  }
+  m_heldOffline = false;
+  const QJsonObject settings = obj(view, "settings");
+  m_heldIdleMinutes = std::clamp(settings.value(QStringLiteral("idle_minutes")).toInt(m_heldIdleMinutes), 1, 120);
+  m_heldPollSeconds = std::clamp(settings.value(QStringLiteral("poll_seconds")).toInt(m_heldPollSeconds), 5, 600);
+  const QList<QString> paths = m_held.keys();
+  for (const QString& absolute : paths) {
+    if (!m_held.contains(absolute) || !sameFolderPath(m_held.value(absolute), root)) {
+      continue;
+    }
+    const QString name = QFileInfo(absolute).fileName();
+    const QString relative = QDir::fromNativeSeparators(QDir(root).relativeFilePath(absolute));
+    const QString id =
+        QString::fromLatin1(QCryptographicHash::hash(relative.toUtf8(), QCryptographicHash::Sha256).toHex());
+    const QJsonObject lock = lockIn(view, id, relative);
+    if (lock.isEmpty() || !lock.value(QStringLiteral("mine")).toBool()) {
+      heldLost(absolute, lock);
+      continue;
+    }
+    // Requests the poll wrote receipts for: others learn of them at once.
+    QJsonArray requests;
+    for (const QJsonValue& value : lock.value(QStringLiteral("requests")).toArray()) {
+      const QJsonObject request = value.toObject();
+      const QString requestId = str(request, "id");
+      if (request.value(QStringLiteral("mine")).toBool()) {
+        continue;
+      }
+      if (request.value(QStringLiteral("seen")).toBool() && !m_heldReceipts.contains(requestId)) {
+        m_heldReceipts.insert(requestId);
+        qInfo().noquote() << QStringLiteral("Edit lock receipt: %1 for %2 (edited in place)")
+                                 .arg(name, requesterName(request));
+        if (m_live != nullptr) {
+          m_live->publishRequest(root, {{QStringLiteral("type"), QStringLiteral("receipt")},
+                                        {QStringLiteral("name"), str(localCommand(root, {{QStringLiteral("cmd"),
+                                                                                           QStringLiteral("identity")}}),
+                                                                     "name")},
+                                        {QStringLiteral("path"), relative},
+                                        {QStringLiteral("for"), str(request, "session")}});
+        }
+      }
+      // Waiting, in the order served: readable, not stale, not declined.
+      if (request.value(QStringLiteral("readable")).toBool() && !request.value(QStringLiteral("stale")).isString() &&
+          str(obj(request, "answer"), "answer") != QLatin1String("declined")) {
+        requests.append(request);
+      }
+    }
+    if (requests.isEmpty()) {
+      if (m_heldShownPath == absolute && !m_heldShownRequest.isEmpty()) {
+        qInfo().noquote() << QStringLiteral("Edit lock request withdrawn: %1 (edited in place)").arg(name);
+        closeHeldAnswerDialog();
+      }
+      continue;
+    }
+    const QJsonObject first = requests.first().toObject();
+    const QString firstId = str(first, "id");
+    if (m_heldAnswered.contains(firstId) || m_heldShownRequest == firstId) {
+      continue;
+    }
+    showHeldAnswerDialog(absolute, first, requests);
+  }
+  again();
+}
+
+void LockController::showHeldAnswerDialog(const QString& absolute, const QJsonObject& request,
+                                          const QJsonArray& requests) {
+  closeHeldAnswerDialog();
+  m_heldShownRequest = str(request, "id");
+  m_heldShownPath = absolute;
+  m_heldShown = request;
+  const QString name = QFileInfo(absolute).fileName();
+  const QString text = inPlaceRequestText(name, request);
+  QStringList waiting;
+  for (int i = 1; i < requests.size(); ++i) {
+    waiting << requesterName(requests.at(i).toObject());
+  }
+  const bool modified = m_host.inPlaceModified && m_host.inPlaceModified(absolute);
+  auto* box = new QMessageBox(QMessageBox::Question, tr("Edit Access Request"), text, QMessageBox::NoButton, &m_window);
+  box->setAttribute(Qt::WA_DeleteOnClose);
+  box->setTextFormat(Qt::PlainText);
+  box->setWindowModality(Qt::NonModal);
+  QString details = tr("Releasing finishes Edit in Place and hands the edit lock over.");
+  if (!waiting.isEmpty()) {
+    details += QLatin1Char(' ') + tr("Also waiting: %1.").arg(waiting.join(QStringLiteral(", ")));
+  }
+  box->setInformativeText(details);
+  QPushButton* release =
+      box->addButton(modified ? tr("&Save, Finish and Release") : tr("&Finish and Release"), QMessageBox::AcceptRole);
+  QPushButton* without = modified ? box->addButton(tr("Release &Without Saving"), QMessageBox::ActionRole) : nullptr;
+  QPushButton* keep = box->addButton(tr("&Keep 15 More Minutes"), QMessageBox::ActionRole);
+  QPushButton* decline = box->addButton(tr("&Decline…"), QMessageBox::ActionRole);
+  box->setDefaultButton(release);
+  QStringList names{release->text().remove(QLatin1Char('&'))};
+  if (without != nullptr) {
+    names << without->text().remove(QLatin1Char('&'));
+  }
+  names << keep->text().remove(QLatin1Char('&')) << decline->text().remove(QLatin1Char('&'));
+  qInfo().noquote() << QStringLiteral("Edit lock request: %1 [%2]").arg(text, names.join(QStringLiteral(", ")));
+  if (!waiting.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Edit lock request: also waiting %1").arg(waiting.join(QStringLiteral(", ")));
+  }
+  connect(box, &QMessageBox::buttonClicked, this,
+          [this, absolute, request, release, without, keep, decline](QAbstractButton* clicked) {
+            if (!m_held.contains(absolute)) {
+              return; // the mode ended meanwhile
+            }
+            m_heldAnswerTimer->stop();
+            if (clicked == release || (without != nullptr && clicked == without)) {
+              const bool withoutSaving = without != nullptr && clicked == without;
+              qInfo().noquote() << QStringLiteral("Edit lock request: %1")
+                                       .arg(withoutSaving ? QStringLiteral("Release Without Saving")
+                                                          : QStringLiteral("Finish and Release"));
+              QTimer::singleShot(0, this, [this, absolute, request, withoutSaving] {
+                handOverHeld(absolute, request, withoutSaving ? InPlaceEnd::Discard : InPlaceEnd::Save,
+                             QStringLiteral("released"));
+              });
+            } else if (clicked == keep) {
+              qInfo().noquote() << QStringLiteral("Edit lock request: Keep 15 More Minutes");
+              m_heldShownRequest.clear();
+              sendHeldAnswer(absolute, request, QStringLiteral("keep"), QString());
+            } else if (clicked == decline) {
+              qInfo().noquote() << QStringLiteral("Edit lock request: Decline");
+              m_heldShownRequest.clear();
+              QTimer::singleShot(0, this, [this, absolute, request] {
+                bool ok = false;
+                qInfo().noquote() << QStringLiteral("Decline dialog: %1").arg(requesterName(request));
+                const QString why = dialogText(&m_window, tr("Decline"),
+                                                tr("Decline %1's request (a message, optional):")
+                                                    .arg(requesterName(request)),
+                                                QString(), &ok);
+                sendHeldAnswer(absolute, request, QStringLiteral("declined"), ok ? why.left(200).trimmed() : QString());
+              });
+            }
+          });
+  m_heldAnswerDialog = box;
+  showDialog(box);
+  m_heldAnswerTimer->start(scaledMs(m_heldIdleMinutes * 60.0));
+}
+
+void LockController::closeHeldAnswerDialog() {
+  if (m_heldAnswerDialog != nullptr) {
+    m_heldAnswerDialog->close();
+  }
+  m_heldAnswerDialog = nullptr;
+  m_heldShownRequest.clear();
+  m_heldShownPath.clear();
+  m_heldShown = QJsonObject();
+  m_heldAnswerTimer->stop();
+}
+
+void LockController::sendHeldAnswer(const QString& absolute, const QJsonObject& request, const QString& kind,
+                                    const QString& message) {
+  const QString root = m_held.value(absolute);
+  if (root.isEmpty()) {
+    return;
+  }
+  const QString id = str(request, "id");
+  m_heldAnswered.insert(id);
+  QJsonObject fields{{QStringLiteral("path"), absolute},
+                     {QStringLiteral("request"), id},
+                     {QStringLiteral("answer"), kind}};
+  if (kind == QLatin1String("keep")) {
+    fields.insert(QStringLiteral("minutes"), 15);
+  }
+  if (!message.isEmpty()) {
+    fields.insert(QStringLiteral("message"), message);
+  }
+  startTask(lockTask(QStringLiteral("lock_answer"), {lockCommand("lock_answer", fields)}, root),
+            [this, absolute, root, request, kind, message, id](const QJsonObject& reply) {
+              const QString cls = errorClassOf(reply);
+              if (!cls.isEmpty()) {
+                qInfo().noquote() << QStringLiteral("Edit lock answer failed (%1): %2").arg(cls, errorMessageOf(reply));
+                m_heldAnswered.remove(id);
+                return;
+              }
+              const QString outcome = str(reply, "outcome");
+              if (outcome == QLatin1String("lost")) {
+                heldLost(absolute, obj(reply, "lock"));
+                return;
+              }
+              if (outcome != QLatin1String("answered")) {
+                qInfo().noquote() << QStringLiteral("Edit lock answer: %1").arg(outcome);
+                return;
+              }
+              QString until;
+              for (const QJsonValue& value : obj(reply, "lock").value(QStringLiteral("requests")).toArray()) {
+                if (str(value.toObject(), "id") == id) {
+                  until = str(obj(value.toObject(), "answer"), "until");
+                }
+              }
+              if (kind == QLatin1String("keep")) {
+                m_heldKeptRequest = id;
+                m_heldKeepTimer->start(scaledMs(15 * 60.0));
+                qInfo().noquote() << QStringLiteral("Edit lock request of %1: kept until %2 (edited in place)")
+                                         .arg(requesterName(request), until);
+              } else {
+                qInfo().noquote() << QStringLiteral("Edit lock request of %1 declined%2 (edited in place)")
+                                         .arg(requesterName(request),
+                                              message.isEmpty() ? QString() : QStringLiteral(": ") + message);
+              }
+              if (m_live != nullptr) {
+                QJsonObject published{
+                    {QStringLiteral("type"), QStringLiteral("answer")},
+                    {QStringLiteral("name"),
+                     str(localCommand(root, {{QStringLiteral("cmd"), QStringLiteral("identity")}}), "name")},
+                    {QStringLiteral("path"), QDir::fromNativeSeparators(QDir(root).relativeFilePath(absolute))},
+                    {QStringLiteral("for"), str(request, "session")},
+                    {QStringLiteral("answer"), kind}};
+                if (!until.isEmpty()) {
+                  published.insert(QStringLiteral("until"), until);
+                }
+                if (!message.isEmpty()) {
+                  published.insert(QStringLiteral("message"), message);
+                }
+                m_live->publishRequest(root, published);
+              }
+            });
+}
+
+void LockController::handOverHeld(const QString& absolute, const QJsonObject& request, InPlaceEnd how,
+                                  const QString& why) {
+  const QString root = m_held.value(absolute);
+  if (root.isEmpty()) {
+    return;
+  }
+  closeHeldAnswerDialog();
+  const QString name = QFileInfo(absolute).fileName();
+  const QString to = requesterName(request);
+  qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: handing %1 over to %2 (%3)").arg(name, to, why);
+  // The mode ends first (saved, its edits dropped or kept); its end does not
+  // release the lock, which goes to the requester below.
+  m_handingOver = absolute;
+  const bool ended = m_host.endInPlace && m_host.endInPlace(absolute, how);
+  m_handingOver.clear();
+  if (!ended) {
+    if (m_held.contains(absolute)) {
+      qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: hand-over of %1 cancelled: the mode goes on")
+                               .arg(name);
+      m_host.status(tr("%1 was not released: Edit in Place goes on, and the edit lock stays yours.").arg(name), true);
+      m_heldPollTimer->start(scaledMs(m_heldPollSeconds));
+      return;
+    }
+    // The mode ended all the same (its end failed after leaving it): the
+    // lock is handed over as asked.
+  }
+  if (m_held.remove(absolute) && m_held.isEmpty()) {
+    m_heldTimer->stop();
+    m_heldPollTimer->stop();
+  }
+  // The versions sent, as before a design's own tab hands its lock over: the
+  // requester's MitCad brings the design up to date when it takes the lock.
+  if (sameFolderPath(m_host.project().root, root)) {
+    const QJsonObject synced = m_remote.syncNow(tr("Sending the versions of %1 to %2…").arg(name, to));
+    const QString cls = errorClassOf(synced);
+    if (!cls.isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: the versions of %1 were not sent (%2)")
+                               .arg(name, cls);
+      m_host.status(tr("The versions of %1 could not be sent: %2. Sync sends them later.")
+                        .arg(name, errorMessageOf(synced)),
+                    true);
+    }
+  }
+  const QJsonObject handed =
+      runAside(lockTask(QStringLiteral("lock_hand_over"),
+                        {lockCommand("lock_hand_over", {{QStringLiteral("path"), absolute},
+                                                        {QStringLiteral("to"), str(request, "session")}})},
+                        root),
+               tr("Handing the edit lock of %1 over to %2…").arg(name, to));
+  const QString failure = errorClassOf(handed);
+  const QString outcome = str(handed, "outcome");
+  if (failure.isEmpty() && outcome == QLatin1String("handed_over")) {
+    qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: %1 handed over to %2").arg(name, to);
+    if (m_live != nullptr) {
+      const QString relative = QDir::fromNativeSeparators(QDir(root).relativeFilePath(absolute));
+      m_live->publishRequest(
+          root, {{QStringLiteral("type"), QStringLiteral("answer")},
+                 {QStringLiteral("name"),
+                  str(localCommand(root, {{QStringLiteral("cmd"), QStringLiteral("identity")}}), "name")},
+                 {QStringLiteral("path"), relative},
+                 {QStringLiteral("for"), str(request, "session")},
+                 {QStringLiteral("answer"), QStringLiteral("released")}});
+      m_live->publishLock(root, relative, obj(handed, "lock"));
+    }
+    m_host.status(tr("You handed the edit lock of %1 to %2.").arg(name, to), false);
+    return;
+  }
+  // Not handed over (the request is gone, the lock changed): the mode has
+  // ended, so its lock goes.
+  qInfo().noquote() << QStringLiteral("Edit lock for Edit in Place: %1 not handed over (%2)")
+                           .arg(name, failure.isEmpty() ? outcome : failure);
+  if (outcome != QLatin1String("lost") && outcome != QLatin1String("free")) {
+    releaseAside(absolute, root, true);
+  }
+}
+
+void LockController::handOverLent(const QJsonObject& request, InPlaceEnd how, const QString& why) {
+  if (m_mode != Mode::Holding || !m_lent) {
+    return;
+  }
+  closeAnswerDialog();
+  const QString to = requesterName(request);
+  qInfo().noquote() << QStringLiteral("Edit lock: %1 is edited in place: ending that for %2 (%3)")
+                           .arg(fileName(), to, why);
+  if (!m_host.endInPlace || !m_host.endInPlace(m_path, how) || m_lent) {
+    qInfo().noquote() << QStringLiteral("Edit lock hand-over cancelled: %1 is still edited in place").arg(fileName());
+    m_host.status(tr("%1 was not released: Edit in Place goes on, and the edit lock stays yours.").arg(fileName()),
+                  true);
+    schedulePoll();
+    return;
+  }
+  // Back in this window: saved in place (or its edits dropped there), or
+  // kept unsaved here, as Release Without Saving keeps them.
+  handOver(request, true, why);
+}
+
+LockController::WriteLock LockController::takeAside(const QString& path, bool forMode) {
+  WriteLock result;
+  const QString absolute = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+  const QString name = QFileInfo(absolute).fileName();
+  const QString prefix =
+      forMode ? QStringLiteral("Edit lock for Edit in Place") : QStringLiteral("Edit lock for writing");
+  const ProjectState project = m_host.project();
+  if (project.kind != ProjectState::Kind::Cloud || !inside(absolute, project.root) || remoteRefuses()) {
+    return result; // no edit locks there
+  }
+  const QString root = QDir::cleanPath(project.root);
+  const QJsonObject settings = localCommand(root, {{QStringLiteral("cmd"), QStringLiteral("project_settings")}});
+  if (!obj(obj(settings, "shared"), "edit_locks").value(QStringLiteral("enabled")).toBool(true)) {
+    qInfo().noquote() << QStringLiteral("%1: none for %2 (edit locks off)").arg(prefix, name);
+    return result;
+  }
+  QJsonObject answer;
+  // A lock that changed while it was taken is taken again, as take() does.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    QList<QJsonObject> commands{lockCommand("lock_take", {{QStringLiteral("path"), absolute},
+                                                          {QStringLiteral("poll_seconds"), pollSeconds()}})};
+    if (forMode) {
+      // The view after it, as a design's own tab reads it: whether the
+      // remote has newer versions (mitcad#2397).
+      commands << lockCommand("lock_status", {{QStringLiteral("network"), false}, {QStringLiteral("path"), absolute}});
+    }
+    answer = runAside(lockTask(QStringLiteral("lock_take"), commands, root), tr("Taking the edit lock of %1…").arg(name));
+    if (!errorClassOf(answer).isEmpty() || str(answer, "outcome") != QLatin1String("changed")) {
+      break;
+    }
+  }
+  const QString cls = errorClassOf(answer);
+  if (cls == QLatin1String("cancelled")) {
+    qInfo().noquote() << QStringLiteral("%1: %2 cancelled").arg(prefix, name);
+    result.allowed = false;
+    return result;
+  }
+  if (!cls.isEmpty()) {
+    // As a design opened while the remote is out of reach: written (or
+    // edited), the lock not confirmed.
+    qInfo().noquote() << QStringLiteral("%1: %2 not confirmed (%3): %4")
+                             .arg(prefix, name, cls, errorMessageOf(answer));
+    return result;
+  }
+  const QString outcome = str(answer, "outcome");
+  const QJsonObject lock = obj(answer, "lock");
+  if (outcome == QLatin1String("taken") || outcome == QLatin1String("refreshed")) {
+    result.taken = true;
+    result.newer = obj(answer, "view").value(QStringLiteral("newer")).toBool();
+    qInfo().noquote() << QStringLiteral("%1: %2 %3").arg(prefix, name, outcome);
+    return result;
+  }
+  result.allowed = false;
+  const QString refused = forMode ? QStringLiteral("not started") : QStringLiteral("not written");
+  if (outcome == QLatin1String("held")) {
+    const QString since = clockText(timeOf(lock.value(QStringLiteral("taken_at"))));
+    const bool sameOwner = lock.value(QStringLiteral("same_owner")).toBool();
+    if (forMode) {
+      result.refusal = sameOwner ? tr("You are editing %1 in another window or on another computer (since %2): it "
+                                      "cannot be edited in place here. Close it there first.")
+                                       .arg(name, since)
+                                 : tr("%1 is being edited by %2 (since %3): it cannot be edited in place. Ask them "
+                                      "to release its edit lock first.")
+                                       .arg(name, ownerName(lock), since);
+    } else {
+      result.refusal = sameOwner ? tr("You are editing %1 in another window or on another computer (since %2): the "
+                                      "changes made in place are not saved to it. Close it there first.")
+                                       .arg(name, since)
+                                 : tr("%1 is being edited by %2 (since %3): the changes made in place are not saved "
+                                      "to it. Ask them to release its edit lock first.")
+                                       .arg(name, ownerName(lock), since);
+    }
+    qInfo().noquote() << QStringLiteral("%1: %2 held by %3%4: %5")
+                             .arg(prefix, name, ownerName(lock),
+                                  sameOwner ? QStringLiteral(", another session") : QString(), refused);
+    return result;
+  }
+  result.refusal = forMode ? tr("The edit lock of %1 changed while it was taken: try again.").arg(name)
+                           : tr("The edit lock of %1 changed while it was taken: save again.").arg(name);
+  qInfo().noquote() << QStringLiteral("%1: %2 %3: %4").arg(prefix, name, outcome, refused);
+  return result;
+}
+
+void LockController::releaseAside(const QString& absolute, const QString& root, bool forMode) {
+  const QString name = QFileInfo(absolute).fileName();
+  const QString prefix =
+      forMode ? QStringLiteral("Edit lock for Edit in Place") : QStringLiteral("Edit lock for writing");
+  if (root.isEmpty()) {
+    return;
+  }
+  const QJsonObject answer =
+      runAside(lockTask(QStringLiteral("lock_release"),
+                        {lockCommand("lock_release", {{QStringLiteral("path"), absolute}})}, root),
+               tr("Releasing the edit lock of %1…").arg(name));
+  const QString cls = errorClassOf(answer);
+  if (cls.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("%1: %2 released").arg(prefix, name);
+  } else {
+    // Not refreshed any more, it goes stale.
+    qInfo().noquote() << QStringLiteral("%1: %2 not released (%3): %4").arg(prefix, name, cls, errorMessageOf(answer));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,6 +2001,12 @@ void LockController::idleTimeout() {
   if (m_mode != Mode::Holding || m_idle) {
     return;
   }
+  if (m_lent) {
+    // Edited in place in another window (mitcad#2389): held for that mode,
+    // as active as the editing there.
+    activity();
+    return;
+  }
   if (m_blocking > 0 || m_host.busy() || QApplication::activeModalWidget() != nullptr ||
       QApplication::activePopupWidget() != nullptr) {
     m_idleTimer->start(1000); // after the job or the dialog
@@ -1678,13 +2357,20 @@ void LockController::showAnswerDialog(const QJsonObject& request, const QJsonArr
   m_shownRequest = str(request, "id");
   const QString name = requesterName(request);
   const QString message = str(request, "message");
-  const QString text = message.isEmpty() ? tr("%1 asks to edit %2.").arg(name, fileName())
-                                         : tr("%1 asks to edit %2: \"%3\"").arg(name, fileName(), message);
+  // Lent to another window that edits it in place (mitcad#2397): releasing
+  // ends that mode first.
+  const bool lent = m_lent;
+  const QString text = lent              ? inPlaceRequestText(fileName(), request)
+                       : message.isEmpty() ? tr("%1 asks to edit %2.").arg(name, fileName())
+                                           : tr("%1 asks to edit %2: \"%3\"").arg(name, fileName(), message);
   QStringList waiting;
   for (int i = 1; i < requests.size(); ++i) {
     waiting << requesterName(requests.at(i).toObject());
   }
   QStringList details;
+  if (lent) {
+    details << tr("Releasing finishes Edit in Place and hands the edit lock over.");
+  }
   if (!waiting.isEmpty()) {
     details << tr("Also waiting: %1.").arg(waiting.join(QStringLiteral(", ")));
   }
@@ -1692,7 +2378,7 @@ void LockController::showAnswerDialog(const QJsonObject& request, const QJsonArr
   if (!also.isEmpty()) {
     details << also;
   }
-  const bool modified = m_host.modified();
+  const bool modified = lent ? m_host.inPlaceModified && m_host.inPlaceModified(m_path) : m_host.modified();
   auto* box = new QMessageBox(QMessageBox::Question, tr("Edit Access Request"), text, QMessageBox::NoButton, &m_window);
   box->setAttribute(Qt::WA_DeleteOnClose);
   box->setTextFormat(Qt::PlainText);
@@ -1700,8 +2386,9 @@ void LockController::showAnswerDialog(const QJsonObject& request, const QJsonArr
   if (!details.isEmpty()) {
     box->setInformativeText(details.join(QLatin1Char(' ')));
   }
-  QPushButton* release = box->addButton(modified ? tr("&Release (Save First)") : tr("&Release"),
-                                        QMessageBox::AcceptRole);
+  const QString releaseText = lent ? (modified ? tr("&Save, Finish and Release") : tr("&Finish and Release"))
+                                   : (modified ? tr("&Release (Save First)") : tr("&Release"));
+  QPushButton* release = box->addButton(releaseText, QMessageBox::AcceptRole);
   QPushButton* without = modified ? box->addButton(tr("Release &Without Saving"), QMessageBox::ActionRole) : nullptr;
   QPushButton* keep = box->addButton(tr("&Keep 15 More Minutes"), QMessageBox::ActionRole);
   QPushButton* decline = box->addButton(tr("&Decline…"), QMessageBox::ActionRole);
@@ -1721,7 +2408,16 @@ void LockController::showAnswerDialog(const QJsonObject& request, const QJsonArr
               return;
             }
             m_answerTimer->stop();
-            if (clicked == release || (without != nullptr && clicked == without)) {
+            if (m_lent && (clicked == release || (without != nullptr && clicked == without))) {
+              const bool withoutSaving = without != nullptr && clicked == without;
+              qInfo().noquote() << QStringLiteral("Edit lock request: %1")
+                                       .arg(withoutSaving ? QStringLiteral("Release Without Saving")
+                                                          : QStringLiteral("Finish and Release"));
+              QTimer::singleShot(0, this, [this, request, withoutSaving] {
+                handOverLent(request, withoutSaving ? InPlaceEnd::Discard : InPlaceEnd::Save,
+                             QStringLiteral("released"));
+              });
+            } else if (clicked == release || (without != nullptr && clicked == without)) {
               const bool withoutSaving = without != nullptr && clicked == without;
               qInfo().noquote() << QStringLiteral("Edit lock request: Release%1")
                                        .arg(withoutSaving ? QStringLiteral(" Without Saving") : QString());
@@ -2352,10 +3048,19 @@ void LockController::probe(QObject* context, std::function<void(bool accepted, c
 // Live updates
 
 void LockController::liveEvent(const QString& root, const QJsonObject& event) {
+  const QString type = str(event, "type");
+  if ((type == QLatin1String("request") || type == QLatin1String("lock")) && !event.value(QStringLiteral("own")).toBool()) {
+    // A lock held for Edit in Place (mitcad#2397): its refs read at once.
+    for (auto it = m_held.cbegin(); it != m_held.cend(); ++it) {
+      if (sameFolderPath(it.value(), root)) {
+        m_heldPollTimer->start(0);
+        break;
+      }
+    }
+  }
   if (m_root.isEmpty() || !sameFolderPath(root, m_root)) {
     return;
   }
-  const QString type = str(event, "type");
   const QString me = m_host.session().toLower();
   if (type == QLatin1String("lock") || type == QLatin1String("request") || type == QLatin1String("version")) {
     if (!event.value(QStringLiteral("own")).toBool()) {

@@ -1,0 +1,63 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: ChFi3d_FilBuilder::SplitSurf does not cut a blend at a minimum
+of its section's width from which the sections stay narrower than its
+singular tolerance on to an end of the line (mitcad#2390).
+
+The case: the rim between a loft's side and a cylinder pulled from its end
+face, split at the points where the faces are tangent, each piece's
+rounding vanishing in a point at both ends. Rounded with 2, the last
+sections of a walk into a vanishing end have no width (1e-7 to 1e-5 mm)
+and minima of noise among them: SplitSurf, which cuts a blend into two
+faces where its contacts meet inside it (a point the blend runs through,
+mitcad#1420: within 100 times the approximation's 3d tolerance), cut the
+blends 0.0002 before or after their vanishing ends into a piece and a
+sliver of no width. With the top convex piece the build of the stripe
+(ChFi3d_FilDS) then took the meeting of the two at the end vertex for the
+spine going on with its next edge, read past the end of a spine of one
+edge and crashed; with all the pieces at once the slivers' contacts of a
+convex and a concave piece crossed at their common vertex, and both were
+refused as overlapping; with 5 the bottom convex piece got a sliver face
+and a volume 2600 mm3 off those with 2 and 10.
+
+- ChFi3d_FilBuilder::SplitSurf: a minimum is taken only where the
+  sections widen past that tolerance on both sides of it before the
+  line's ends. A blend that narrows to a point and widens again is cut
+  there as before.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2303.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+index 0bda9110..e84a2dc8 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+@@ -3391,7 +3391,27 @@ void ChFi3d_FilBuilder::SplitSurf(NCollection_Sequence<occ::handle<ChFiDS_SurfDa
+         // the mitre of earlier roundings of its radius), a minimum of noise
+         // split the blend into two faces about a vertex as wide as the
+         // ball.
+-        if (Courbe1->Value(racine).Distance(Courbe2->Value(racine)) <= 100. * tolapp3d)
++        // Nor where the sections stay that narrow from there on to an end
++        // of the line (mitcad#2390): the end of a rounding that vanishes
++        // where its faces come tangent, its last sections of no width, has
++        // minima of noise there (of 5e-6, 0.0002 from the end of a loft's
++        // rim rounded with 2), and the blend was cut into a piece and a
++        // sliver of no width at the vertex, which the corners there and
++        // the build of the stripe took for a point the blend runs through.
++        const auto aNarrowOn = [&](const bool theAfter) {
++          for (int k = 1; k <= Nbpnt; k++)
++          {
++            const Blend_Point& aPk = Line->Point(k);
++            if ((theAfter ? aPk.Parameter() > racine : aPk.Parameter() < racine)
++                && aPk.PointOnS1().Distance(aPk.PointOnS2()) > 100. * tolapp3d)
++            {
++              return false;
++            }
++          }
++          return true;
++        };
++        if (Courbe1->Value(racine).Distance(Courbe2->Value(racine)) <= 100. * tolapp3d
++            && !aNarrowOn(true) && !aNarrowOn(false))
+         {
+           // the solution (avoiding the risks of confusion)
+           if (LesVi.Length() == 0)

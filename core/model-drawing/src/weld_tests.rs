@@ -2,8 +2,8 @@
 //! Weld symbols laid out (mitcad#2350): each basic symbol on its side of
 //! the reference line by ISO 2553 and by AWS A2.4, the identification line,
 //! sizes and lengths written by each standard, the supplementary symbols
-//! and the tail, a line running left; and the checks of what a symbol
-//! keeps.
+//! and the tail, a line running left, staggered welds (ISO 2553's mark,
+//! mitcad#2379); and the checks of what a symbol keeps.
 
 use super::*;
 use crate::annotate::{
@@ -454,7 +454,7 @@ fn contours_finishes_and_blended_toes_stand_beyond_the_symbol() {
 }
 
 #[test]
-fn staggered_welds_offset_the_other_side() {
+fn aws_staggered_welds_offset_the_other_side() {
     let intermittent = WeldSide {
         length: Some(50.0),
         pitch: Some(200.0),
@@ -476,6 +476,142 @@ fn staggered_welds_offset_the_other_side() {
             .fold(f64::INFINITY, f64::min)
     };
     assert!(left_of(false) > left_of(true) + 1.0);
+    // AWS A2.4 has no staggered mark: its texts written whole.
+    assert_eq!(
+        texts(&g).iter().filter(|t| *t == "50-200").count(),
+        2,
+        "{:?}",
+        texts(&g)
+    );
+}
+
+/// ISO 2553's staggered intermittent weld (mitcad#2379): both sides'
+/// symbols in one column, and the staggered mark, a `Z` through the
+/// reference line, between each side's `n×l` and its gap `(e)`.
+#[test]
+fn iso_staggered_welds_draw_the_staggered_mark() {
+    let intermittent = WeldSide {
+        size: Some(4.0),
+        count: Some(3),
+        length: Some(50.0),
+        pitch: Some(150.0),
+        ..WeldSide::new(WeldKind::Fillet)
+    };
+    let weld = WeldSymbol {
+        arrow_side: Some(intermittent.clone()),
+        other_side: Some(intermittent.clone()),
+        staggered: true,
+        ..WeldSymbol::default()
+    };
+    let g = drawn(&weld, Standard::Iso);
+    let all = texts(&g);
+    // The gap split off the length: `3×50`, the mark, `(100)`; twice each.
+    assert_eq!(all.iter().filter(|t| *t == "3×50").count(), 2, "{all:?}");
+    assert_eq!(all.iter().filter(|t| *t == "(100)").count(), 2, "{all:?}");
+    assert!(!all.iter().any(|t| t.contains("3×50 (100)")), "{all:?}");
+    // A symmetrical weld: no dashed line, the mark spans the texts above
+    // and below the one reference line.
+    assert!(identification(&g).is_none());
+    let s = SYMBOL * H;
+    let top = KNEE[1] + 0.5 * s + H / 2.0;
+    let bottom = KNEE[1] - 0.5 * s - H / 2.0;
+    let width = STAGGER_MARK * H;
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    let all_lines = lines(&g);
+    let bar = |y: f64| {
+        all_lines
+            .iter()
+            .find(|(a, b)| near(a[1], y) && near(b[1], y) && near((b[0] - a[0]).abs(), width))
+            .copied()
+            .unwrap_or_else(|| panic!("a level bar of the mark at {y}: {all_lines:?}"))
+    };
+    let (t0, t1) = bar(top);
+    let (b0, b1) = bar(bottom);
+    let (left, right) = (t0[0].min(t1[0]), t0[0].max(t1[0]));
+    assert!(near(b0[0].min(b1[0]), left) && near(b0[0].max(b1[0]), right));
+    // Its slant from the top bar's right end to the bottom bar's left
+    // end, through the reference line: a `Z`, not an `S`.
+    assert!(
+        all_lines.iter().any(|(a, b)| {
+            let pair = |p: P2, q: P2| {
+                near(p[0], right) && near(p[1], top) && near(q[0], left) && near(q[1], bottom)
+            };
+            pair(*a, *b) || pair(*b, *a)
+        }),
+        "the mark's slant: {all_lines:?}"
+    );
+    // Both symbols in one column (no offset), the mark right of the
+    // symbols and of the `n×l`, the gaps right of it.
+    let points: Vec<P2> = symbol_points(&g)
+        .into_iter()
+        .filter(|p| p[0] < left - 1e-9)
+        .collect();
+    let left_of = |below: bool| {
+        points
+            .iter()
+            .filter(|p| (p[1] < KNEE[1]) == below && (p[1] - KNEE[1]).abs() > 1e-6)
+            .map(|p| p[0])
+            .fold(f64::INFINITY, f64::min)
+    };
+    assert!((left_of(false) - left_of(true)).abs() < 1e-9);
+    for item in &g.items {
+        let Item::Text {
+            text,
+            at,
+            anchor,
+            height,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        let (from, to) = match anchor {
+            Anchor::Start => (at[0], at[0] + text_width(text, *height)),
+            Anchor::End => (at[0] - text_width(text, *height), at[0]),
+            Anchor::Middle => {
+                let w = text_width(text, *height) / 2.0;
+                (at[0] - w, at[0] + w)
+            }
+        };
+        match text.as_str() {
+            "3×50" => assert!(to < left, "{text} ends before the mark: {to} {left}"),
+            "(100)" => assert!(from > right, "{text} starts after the mark: {from} {right}"),
+            _ => {}
+        }
+        // The texts stand within the mark's height.
+        if text == "3×50" || text == "(100)" {
+            assert!(
+                at[1] >= bottom - 1e-9 && at[1] + height <= top + 1e-9,
+                "{text} {at:?}"
+            );
+        }
+    }
+    let (_, end) = reference(&g);
+    assert!(end[0] > right, "the line runs under the mark and the gaps");
+    // A line running left keeps the mark (texts read from below).
+    let mut left_run = Group::new("weld-symbol");
+    weld_symbol(&mut left_run, [110.0, 90.0], KNEE, &weld, Standard::Iso, H);
+    assert_eq!(texts(&left_run).iter().filter(|t| *t == "(100)").count(), 2);
+    // Two kinds of weld (a dashed identification line): the mark reaches
+    // to the bottom of the other side's texts under the dashed line.
+    let other = WeldSymbol {
+        arrow_side: Some(WeldSide {
+            symbol: WeldKind::Bevel,
+            ..intermittent.clone()
+        }),
+        other_side: Some(intermittent),
+        staggered: true,
+        ..WeldSymbol::default()
+    };
+    let g = drawn(&other, Standard::Iso);
+    assert!(identification(&g).is_some());
+    let lowest = KNEE[1] - IDENTIFICATION_GAP * H - 0.5 * s - H / 2.0;
+    assert!(
+        lines(&g)
+            .iter()
+            .any(|(a, b)| near(a[1], lowest) && near(b[1], lowest)),
+        "the mark's bottom bar under the dashed line's texts"
+    );
 }
 
 #[test]

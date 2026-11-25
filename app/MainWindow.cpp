@@ -3822,6 +3822,14 @@ void MainWindow::onCommandFinished(bool committed) {
   CommandSketches sketches = std::exchange(m_commandSketches, CommandSketches());
   refreshScene();
   endCommandSketches(std::move(sketches));
+  // The keys back to the view, also when the panel's own window had them
+  // (the floated Command panel, mitcad#2391): a window of this main window
+  // gives the activation back; a popup or another application keeps it.
+  if (const QWidget* active = QApplication::activeWindow();
+      active != nullptr && active != m_viewer->window() && QApplication::activePopupWidget() == nullptr &&
+      GlassCard::keyboardHost(active) == GlassCard::keyboardHost(m_viewer)) {
+    m_viewer->window()->activateWindow();
+  }
   m_viewer->setFocus();
   // A new component placed beside a part says so rather than "Done."
   // (mitcad#292).
@@ -5050,7 +5058,20 @@ void MainWindow::refreshScene() {
   place(m_snapshot.occurrences);
   // Everything outside the active component as ghosts (mitcad#420), set
   // before the items are shown, which then take their look at once.
-  m_viewer->setActiveScope(activeScopeOf(m_snapshot, editingSketchUid()));
+  OcctViewer::ActiveScope scope = activeScopeOf(m_snapshot, editingSketchUid());
+  // Edit in Place (mitcad#2353): the assembly around the design faded, as
+  // context, the design drawn as usual.
+  if (m_inPlaceHolder && !m_inPlaceOccurrence.isEmpty() && !scope.on) {
+    scope.on = true;
+    scope.outside = QStringList{m_inPlaceOccurrence};
+    scope.name = QStringLiteral("the design edited in place");
+    scope.normal = kOriginDatums;
+    const QString sketch = editingSketchUid();
+    if (!sketch.isEmpty()) {
+      scope.normal << sketch;
+    }
+  }
+  m_viewer->setActiveScope(scope);
   // The direction of gravity's marker, and a hanging item the model let go
   // (mitcad#1713), before the bodies are shown.
   if (m_gravity != nullptr) {

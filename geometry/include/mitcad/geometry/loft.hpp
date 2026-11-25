@@ -24,7 +24,9 @@ namespace mitcad::geometry {
 // (only first or last). A chain (mitcad#2345): curves joined end to end,
 // open or closed, a surface loft's section; a loft of chains has only
 // chains, all open or all closed, and is a surface (`solid` false), its
-// faces side(<curve>) after the first chain's curves as loft_sheet's.
+// faces side(<curve>) after the first chain's curves as loft_sheet's. A
+// loose chain of a body's edges (mitcad#2377) comes as a chain of their
+// curves (curves_of), each named after its edge: side(E{...}).
 struct LoftSection {
   enum class Kind { Region, Face, Point, Chain };
   Kind kind = Kind::Region;
@@ -65,8 +67,13 @@ struct LoftSection {
 //   the sections' centres); on a face the mean distance between the
 //   sections' corresponding vertices, as Tangent's. The section must lie on
 //   the face within 0.01 mm; the surface meets the face at right angles
-//   within 1e-6 rad all along the section (rails that leave the section
-//   otherwise bend it, as they bend every condition).
+//   within 1e-6 rad all along the section. With rails (mitcad#2377) the
+//   takeoff is as long as each rail's speed at its point (the rail's
+//   point's derivative by the loft's parameter) and in between shared out
+//   as the rails' bends are, the weight setting nothing; every rail must
+//   leave the section along the face's normal (within 5e-7 rad), else the
+//   loft is refused in words ("rail 1 leaves the start section 36.9
+//   degrees off the face's normal; ...").
 struct LoftEnd {
   enum class Kind { Free, Direction, Tangent, Smooth, PointSharp, PointTangent, Perpendicular };
   Kind kind = Kind::Free;

@@ -242,6 +242,10 @@ mod edit_in_place;
 pub use edit_in_place::{begin_edit_in_place, finish_edit_in_place, linked_saved_in_place};
 // Weld symbols proposed from BUILD's joints on drawing views (mitcad#2350).
 mod drawing_welds;
+// What a tutorial's page reads of its design through the bridge: an
+// allow-list of read-only queries (mitcad#2371).
+mod tutorial_bridge;
+pub use tutorial_bridge::{TUTORIAL_QUERIES, tutorial_query};
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -1646,9 +1650,12 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
         let mut result = match query {
             Query::Document => {
                 let context = self.parameters().context();
+                // The timeline the user sees: without the assembly around a
+                // design edited in place (mitcad#2353).
+                let leading = self.in_place_leading();
                 let mut value = json!({
-                    "features": self.features().count(),
-                    "marker": self.marker(),
+                    "features": self.features().count() - leading,
+                    "marker": self.marker().saturating_sub(leading),
                     "bodies": self.bodies().len(),
                     "undo": self.undo_label(),
                     "redo": self.redo_label(),
@@ -2036,10 +2043,12 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     .collect();
                 json!({"dependents": dependents})
             }
-            Query::CanReorder { uid, index } => match self.check_reorder(uid, index) {
-                Ok(()) => json!({"ok": true}),
-                Err(error) => json!({"ok": false, "error": error.to_string()}),
-            },
+            Query::CanReorder { uid, index } => {
+                match self.check_reorder(uid, index + self.in_place_leading()) {
+                    Ok(()) => json!({"ok": true}),
+                    Err(error) => json!({"ok": false, "error": error.to_string()}),
+                }
+            }
             // Named views (U5).
             Query::NamedViews => json!(self.named_views()),
             // Recompute speed (P10).
@@ -2659,7 +2668,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                                     ApiError(format!("feature {after} does not exist"))
                                 })?,
                         ),
-                        (None, index) => index,
+                        (None, index) => index.map(|i| i + self.in_place_leading()),
                     };
                     self.check_two_side_distances(&def, None)?;
                     let pieces = pieces.unwrap_or_default();
@@ -2700,7 +2709,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                             .map(|i| i + 1)
                             .ok_or_else(|| ApiError(format!("feature {after} does not exist")))?,
                     ),
-                    (None, index) => index,
+                    (None, index) => index.map(|i| i + self.in_place_leading()),
                 };
                 self.check_two_side_distances(&def, None)?;
                 // A thread with its faces fitted to it (mitcad#1632).
@@ -2851,7 +2860,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 }
             },
             Command::ReorderFeature { uid, index } => {
-                self.move_feature(uid, index)?;
+                // Positions are those of the timeline the user sees, which
+                // leaves out the assembly around a design edited in place
+                // (mitcad#2353), as the marker's and an insert's.
+                self.move_feature(uid, index + self.in_place_leading())?;
                 json!({})
             }
             Command::RenameFeature { uid, name } => {
@@ -2866,6 +2878,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 position,
                 temporary,
             } => {
+                let position = position + self.in_place_leading();
                 if temporary {
                     self.set_temporary_marker(position)?;
                 } else {
@@ -3520,10 +3533,15 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     def,
                     auto_operation: false,
                     through,
-                } => self.preview_edit_through(uid, &def, through)?,
+                } => {
+                    // A marker of the timeline the user sees (mitcad#2353).
+                    let through = through.map(|t| t + self.in_place_leading());
+                    self.preview_edit_through(uid, &def, through)?
+                }
                 PreviewCommand::EditFeature {
                     uid, def, through, ..
                 } => {
+                    let through = through.map(|t| t + self.in_place_leading());
                     let (report, choice) = self.preview_edit_auto_through(uid, &def, through)?;
                     auto = choice;
                     report
@@ -3583,9 +3601,13 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
     fn timeline_json(&self) -> Value {
         let used = self.state().used_sketches();
         let sketches = self.state().sketches_used_by();
+        // Without the assembly around a design edited in place, which comes
+        // first (mitcad#2353): the design's own features and marker.
+        let leading = self.in_place_leading();
         let features: Vec<Value> = self
             .timeline()
             .into_iter()
+            .skip(leading)
             .map(|item| {
                 // A feature that succeeded with warnings is `warning` (P9:
                 // yellow in the timeline). Its notices and their worst
@@ -3679,7 +3701,8 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 value
             })
             .collect();
-        let mut value = json!({"marker": self.marker(), "features": features});
+        let mut value =
+            json!({"marker": self.marker().saturating_sub(leading), "features": features});
         // Timeline groups (P9), when there are any.
         if !self.timeline_groups().is_empty() {
             value["groups"] = json!(self.timeline_groups());

@@ -344,9 +344,11 @@ const PreferencePage kPreferencePages[] = {
     // Click adds to the selection in sketches (mitcad#1403).
     // Esc leaves an unchanged sketch (mitcad#1623).
     // Show profiles when a sketch opens (mitcad#1670).
+    // Hide a sketch when a feature uses it (mitcad#2393).
     {"sketch", QT_TRANSLATE_NOOP("View", "Sketch"),
      "sketch dimension first scale proportion drawn size click select selection add ctrl multiple "
-     "esc escape leave exit finish unchanged profile profiles shade shading project edges face"},
+     "esc escape leave exit finish unchanged profile profiles shade shading project edges face "
+     "hide hidden show shown visible visibility used extrude feature eye"},
     // The suppliers' shops: the region of the product links and the shops
     // the Supplier filters start with (mitcad#950).
     {"suppliers", QT_TRANSLATE_NOOP("View", "Suppliers"),
@@ -2031,6 +2033,26 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     connect(projectFace, &QCheckBox::toggled, host, saving(applyProjectFace));
   } else {
     connect(dialog.get(), &QDialog::accepted, projectFace, applyProjectFace);
+  }
+  // Hide a sketch when a feature uses it (mitcad#2393), on by default: off,
+  // a shown sketch stays shown when a feature starts to use it.
+  auto* hideUsed = new QCheckBox(tr("&Hide a sketch when a feature uses it"));
+  hideUsed->setObjectName(QStringLiteral("hideUsedSketches"));
+  hideUsed->setChecked(sketch::hideUsedSketches());
+  hideUsed->setToolTip(tr("A shown sketch hides when a feature such as Extrude first uses it"));
+  control(sketchForm, hideUsed);
+  const auto applyHideUsed = [hideUsed] {
+    const bool on = hideUsed->isChecked();
+    if (on == sketch::hideUsedSketches()) {
+      return;
+    }
+    sketch::saveHideUsedSketches(on);
+    qDebug().noquote() << QStringLiteral("Preferences: hide a sketch when a feature uses it %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(hideUsed, &QCheckBox::toggled, host, saving(applyHideUsed));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, hideUsed, applyHideUsed);
   }
   groups.insert(QStringLiteral("sketch"), sketchBox);
   // Suppliers (mitcad#950): the region of the product links and the shops

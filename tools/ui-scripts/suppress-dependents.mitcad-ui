@@ -3,7 +3,11 @@
 # Cancel changes nothing, Suppress Only This leaves the dependents failing
 # as before, Suppress All (the default) leaves none failing and one Undo
 # brings the chain back; Unsuppress asks nothing; a selection holding
-# the dependents asks nothing and nothing fails on the way. The design
+# the dependents asks nothing and nothing fails on the way. Unsuppress
+# Features on one feature of a selection of three unsuppresses all three in
+# one undo step, and Suppress Features on an unselected feature while two
+# others are selected changes only it: in the timeline and on the
+# browser's feature rows (mitcad#2376). The design
 # (suppress-dependents.json): Block, Hole (a cut of it) and Round (a
 # fillet of it). All geometry is synthetic.
 wait-idle
@@ -96,3 +100,117 @@ command edit.undo
 expect-undo-depth ${baseline} 0
 capture-model-number again '{"query": "bodies", "volumes": true}' 0.volume
 expect-near ${again} ${volume}
+
+# Unsuppress Features on one feature of a suppressed selection of three
+# (mitcad#2376): all three come back in one undo step; one Undo suppresses
+# all three again.
+wait-idle
+click-logged '^Timeline Block at '
+click-logged '^Timeline Hole at ' ctrl
+click-logged '^Timeline Round at ' ctrl
+mark
+context-menu-logged '^Timeline Round at ' 'Suppress Features'
+wait-log '^Suppressed Block, Hole, Round$'
+expect-model-bodies 0 0
+expect-undo-depth ${baseline} 1
+wait-idle
+click-logged '^Timeline Block at '
+click-logged '^Timeline Hole at ' ctrl
+click-logged '^Timeline Round at ' ctrl
+mark
+context-menu-logged '^Timeline Hole at ' 'Unsuppress Features'
+wait-log '^Unsuppressed Block, Hole, Round$'
+expect-no-log '^Recompute failed: '
+expect-undo-depth ${baseline} 2
+capture-model-number unsuppressed '{"query": "bodies", "volumes": true}' 0.volume
+expect-near ${unsuppressed} ${volume}
+command edit.undo
+expect-undo-depth ${baseline} 1
+expect-model-bodies 0 0
+command edit.undo
+expect-undo-depth ${baseline} 0
+
+# With two other features selected, Suppress Features on a feature that is
+# not selected changes only that feature (mitcad#2376): Round, which no
+# feature uses, so nothing is asked.
+wait-idle
+click-logged '^Timeline Block at '
+click-logged '^Timeline Hole at ' ctrl
+mark
+context-menu-logged '^Timeline Round at ' 'Suppress Features'
+wait-log '^Suppressed Round$'
+expect-no-log '^Suppressed Block'
+expect-no-log '^Suppress .*: also '
+expect-no-log '^Recompute failed: '
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-undo-depth ${baseline} 0
+capture-model-number unselected '{"query": "bodies", "volumes": true}' 0.volume
+expect-near ${unselected} ${volume}
+
+# The same three checks from the browser's feature rows (mitcad#2376): the
+# Features folder of Preferences › General › Show used sketches under their
+# features lists Block, Hole and Round as feature rows.
+mark
+command tools.preferences.general
+focus-dialog '^Preferences$'
+focus-widget browserConsumeSketches
+key Space
+expect-widget-property browserConsumeSketches checked true
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Browser used sketches under their features: on$'
+wait-log '^Browser Root/Features/Block at '
+wait-log '^Browser Root/Features/Hole at '
+wait-log '^Browser Root/Features/Round at '
+wait-idle
+
+# The menu of a selected feature row takes every selected feature row:
+# the three suppressed in one undo step, nothing asked.
+click-logged '^Browser Root/Features/Block at '
+click-logged '^Browser Root/Features/Hole at ' ctrl
+click-logged '^Browser Root/Features/Round at ' ctrl
+mark
+context-menu-logged '^Browser Root/Features/Round at ' 'Suppress Features'
+wait-log '^Suppressed Block, Hole, Round$'
+expect-no-log '^Suppress .*: also '
+expect-no-log '^Recompute failed: '
+expect-model-bodies 0 0
+expect-undo-depth ${baseline} 1
+
+# Unsuppress Features on one row of the three: all three come back in one
+# undo step.
+wait-idle
+click-logged '^Browser Root/Features/Block at '
+click-logged '^Browser Root/Features/Hole at ' ctrl
+click-logged '^Browser Root/Features/Round at ' ctrl
+mark
+context-menu-logged '^Browser Root/Features/Hole at ' 'Unsuppress Features'
+wait-log '^Unsuppressed Block, Hole, Round$'
+expect-no-log '^Recompute failed: '
+expect-undo-depth ${baseline} 2
+capture-model-number browserBack '{"query": "bodies", "volumes": true}' 0.volume
+expect-near ${browserBack} ${volume}
+command edit.undo
+expect-undo-depth ${baseline} 1
+expect-model-bodies 0 0
+command edit.undo
+expect-undo-depth ${baseline} 0
+
+# Two other feature rows selected, Suppress Features on a row that is not
+# selected: that row's feature alone.
+wait-idle
+click-logged '^Browser Root/Features/Block at '
+click-logged '^Browser Root/Features/Hole at ' ctrl
+mark
+context-menu-logged '^Browser Root/Features/Round at ' 'Suppress Features'
+wait-log '^Suppressed Round$'
+expect-no-log '^Suppressed Block'
+expect-no-log '^Suppress .*: also '
+expect-no-log '^Recompute failed: '
+expect-undo-depth ${baseline} 1
+command edit.undo
+expect-undo-depth ${baseline} 0
+capture-model-number browserUnselected '{"query": "bodies", "volumes": true}' 0.volume
+expect-near ${browserUnselected} ${volume}

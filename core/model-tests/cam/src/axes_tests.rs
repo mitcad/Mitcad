@@ -241,27 +241,31 @@ fn what_the_lathe_lacks_is_refused_in_words() {
         sub.contains("The lathe has no sub-spindle to turn the part's back."),
         "{sub}"
     );
-    // Live tools cut on the main spindle only.
+    // On the sub-spindle an operation turns or cuts with a live tool
+    // (mitcad#2375): a rest machining does neither.
     command(
         &mut doc,
         json!({"cmd": "cam_machine_put", "machine": lathe(true, true, true)}),
     );
     command(&mut doc, tool(8, "flat", 6.0, "radial"));
-    let live_sub = refused(
+    let rest_sub = refused(
         &mut doc,
         json!({"cmd": "cam_operation_add", "setup": 1, "operation": {
-            "kind": {"type": "facing"}, "tool": 8, "live": "plane", "sub_spindle": true,
-            "plane": {"c": 0, "b": 90}}}),
+            "kind": {"type": "rest"}, "tool": 8, "sub_spindle": true}}),
     );
     assert!(
-        live_sub.contains("Only turning operations turn the part's back on the sub-spindle"),
-        "{live_sub}"
+        rest_sub.contains(
+            "On the sub-spindle an operation turns the part's back or cuts it with a live tool."
+        ),
+        "{rest_sub}"
     );
-    // A wrapped sketch needs its bottom.
+    // A wrapped sketch needs its bottom. Added second, before the
+    // sub-spindle's operations (after them Generate refuses it for its
+    // place, mitcad#2392).
     command(&mut doc, tool(10, "flat", 1.0, "radial"));
     let added = command(
         &mut doc,
-        json!({"cmd": "cam_operation_add", "setup": 1, "operation": {
+        json!({"cmd": "cam_operation_add", "setup": 1, "index": 1, "operation": {
             "kind": {"type": "contour", "side": "on"}, "tool": 10, "live": "diameter",
             "inputs": [{"kind": "region", "sketch": "F3", "region": R}]}}),
     );

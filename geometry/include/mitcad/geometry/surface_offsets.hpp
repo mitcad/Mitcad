@@ -13,6 +13,8 @@
 #include <gp_Pnt.hxx>
 
 #include "mitcad/geometry/shape.hpp"
+// Curves of free edges (mitcad#2395).
+#include "mitcad/geometry/sketch_ref.hpp"
 
 namespace mitcad::geometry {
 
@@ -74,5 +76,17 @@ enum class ExtendMode { Natural, Tangent, Curvature };
 // The faces keep their names; the body's faces are sewn again.
 ShapePtr extend_surface(const Shape& body, const std::vector<std::string>& edges,
                         const std::vector<OpeningEdges>& openings, double distance, ExtendMode mode);
+
+// Curves of free edges (mitcad#2395: a loft's section of a surface body's
+// free edges): the free edges `opening` picks, as the features above pick
+// an opening's edges, in the opening's order, each with its curve as
+// curves_of gives an edge's (sketch_ref.hpp) and the name of the face it
+// bounds (empty when that face has none). Throws for an opening the body
+// does not have.
+struct FreeEdgeCurve {
+  ModelCurve curve;
+  std::string face;
+};
+std::vector<FreeEdgeCurve> opening_curves(const Shape& body, const OpeningEdges& opening);
 
 } // namespace mitcad::geometry

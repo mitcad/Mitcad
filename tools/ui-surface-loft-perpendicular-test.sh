@@ -7,7 +7,9 @@
 # Surface Loft's Start and End Condition (mitcad#2345) through the real UI:
 # Perpendicular to Face at both ends, the start's Face picked (a post's
 # wall, the section its top face), the end's weight 2; the surface builds
-# as one side face. The shared input script
+# as one side face. Then (mitcad#2395) chains of a box's edges picked as
+# two sections, edge by edge, and the loft opened in its panel again. The
+# shared input script
 # tools/ui-scripts/surface-loft-perpendicular.mitcad-ui (also run by
 # tools/ui-windows-surface-loft-perpendicular-test.ps1 and
 # tools/ui-macos-surface-loft-perpendicular-test.sh) on a design that
@@ -36,5 +38,6 @@ done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'surface loft perpendicular driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
 ui_expect_log 'Added surface loft through 2 sections' 'the surface loft builds with Perpendicular to Face at both ends'
-ui_expect_log 'TestDriver: done' 'the surface is one side face'
+ui_expect_log 'Edited F7' 'the loft of two chains of edges opens in its panel again'
+ui_expect_log 'TestDriver: done' 'the surfaces have the faces they should'
 ui_finish 'UI surface loft perpendicular'

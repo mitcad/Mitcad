@@ -74,6 +74,7 @@
 #include "platform/MacTestApplication.hpp"
 #include "platform/WindowsTheme.hpp"
 #include "print/MaterialProperties.hpp"
+#include "sketch/SketchPreferences.hpp"
 #include "report/CrashHandler.hpp"
 #include "report/ReportCenter.hpp"
 #include "update/InstallationCheck.hpp"
@@ -410,6 +411,8 @@ int runApplication(int argc, char* argv[]) {
   // The preferred temperature unit, which every temperature of materials
   // follows (mitcad#1213).
   mitcad::applyTemperaturePreference();
+  // Whether a sketch hides when a feature uses it (mitcad#2393).
+  mitcad::sketch::applyHideUsedSketches();
 
   // UI tests: MITCAD_TEST_INPUT=<script> runs the script in this process with
   // synthesised events (framework/TestDriver.hpp); inert without it. Before
@@ -757,7 +760,9 @@ int runApplication(int argc, char* argv[]) {
         {"view.home", "Home"},                                {"view.front", "1"},
         {"view.back", "2"},                                   {"view.left", "3"},
         {"view.right", "4"},                                  {"view.top", "5"},
-        {"view.bottom", "6"},                                 {"view.iso", "7"}};
+        {"view.bottom", "6"},                                 {"view.iso", "7"},
+        // Hide/Show of the selection (mitcad#2356), in the 3D view.
+        {"view.toggle_visibility", "V"}};
     bool expectedKeys = true;
     for (const auto& entry : expected) {
       const QString id = QString::fromLatin1(entry[0]);
@@ -885,8 +890,9 @@ int runApplication(int argc, char* argv[]) {
       qInfo().noquote() << QStringLiteral("Headless Qt component palette: %1").arg(scheme);
     } else QTimer::singleShot(0, &window, [scheme] {
       qDebug().noquote() << QStringLiteral("Asking the platform for the %1 colour scheme").arg(scheme);
-      QGuiApplication::styleHints()->setColorScheme(scheme == QStringLiteral("dark") ? Qt::ColorScheme::Dark
-                                                                                    : Qt::ColorScheme::Light);
+      // Where the platform keeps its palette (Qt's GTK theme under Xvfb,
+      // mitcad#2404), MitCad's own; logged as "Colour scheme in effect: …".
+      mitcad::applyTestColorScheme(scheme == QStringLiteral("dark"));
     });
   }
 

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! Rib and web: thin walls grown from open sketch curves and joined to the
-//! bodies they reach. A rib grows from a chain of curves in the sketch
-//! plane, its thickness across the plane; a web grows from each curve along
-//! the sketch normal, its thickness in the plane. Either runs a depth, or
-//! up to the next faces of the bodies.
+//! Rib and web: thin walls grown from sketch curves and joined to the
+//! bodies they reach. A rib grows from an open chain of curves in the
+//! sketch plane, its thickness across the plane; a web grows from each
+//! curve along the sketch normal, its thickness in the plane: lines, arcs,
+//! ellipses, splines, conics, and closed curves as rings (mitcad#2364; the
+//! kernel offsets them). Either runs a depth, or up to the next faces of
+//! the bodies.
 //!
 //! Instead of sketch curves either takes the curve of an Intersection Curve
 //! (mitcad#1417), `{"feature": "F5"}`, when it lies in one plane: that
@@ -37,11 +39,18 @@
 //! kernel builds it into the tool ([`RibSpec::draft_angle`]), so To Next,
 //! Extend Ends and End Offset are solved on the drafted wall. Absent, the
 //! sides are parallel, as ribs and webs made before it.
+//!
+//! A rib's Direction Normal to Curves (`"normal"`, mitcad#2398, by a depth
+//! only) grows it from each point of its curves at right angles to them:
+//! its far side is the chain offset by the depth in the sketch plane, as
+//! the sketch's Offset offsets it (what vanishes left out, the corners
+//! sharp or round by `corners`), computed here ([`normal_far`]) and given
+//! to the kernel ([`RibSpec::far`]).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use mitcad_vec3::{dot, scale, sub, unit};
+use mitcad_vec3::{distance, dot, scale, sub, unit};
 
 use super::extrude::{Operation, apply_operation, check_participants, participant_bodies};
 use super::geom_ref::{GeomRef, Want};
@@ -55,7 +64,10 @@ use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::{Curve3, Kernel};
 use crate::parameters::ParamId;
 use crate::profile::SketchFrame;
-use crate::sweeps::{PathCurve, RibSpec, ThicknessLocation};
+use crate::sketch::geometry::{Curve2, P2};
+use crate::sketch::offset;
+use crate::sketch::project::{Projected, project};
+use crate::sweeps::{PathCurve, RibFarCurve, RibSpec, ThicknessLocation};
 use crate::transform::Transform;
 
 /// How far a rib or a web grows.
@@ -74,7 +86,11 @@ pub enum RibExtent<P = ParamId> {
 /// to its chain's chord (`"perpendicular"`, the default, written as
 /// nothing), along the sketch's x or y axis (`"sketch_x"`, `"sketch_y"`),
 /// or along a straight line, edge or axis in or parallel to the sketch
-/// plane (`{"along": <reference>}`). `flip` turns it.
+/// plane (`{"along": <reference>}`). `flip` turns it. Normal to Curves
+/// (`"normal"`, mitcad#2398, by a depth only): from each point of the
+/// curves at right angles to them, so that the far side is the chain
+/// offset by the depth as the sketch's Offset offsets it ([`normal_far`],
+/// its corners [`RibCorners`]).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RibDirection {
@@ -83,6 +99,7 @@ pub enum RibDirection {
     SketchX,
     SketchY,
     Along(GeomRef),
+    Normal,
 }
 
 impl RibDirection {
@@ -92,14 +109,15 @@ impl RibDirection {
 
     /// The unit vector it grows along in model space before `flip`, in
     /// the plane of `frame`; none for Perpendicular to Chord, which the
-    /// kernel takes from the chain.
+    /// kernel takes from the chain, and Normal to Curves, which has a far
+    /// side instead.
     fn resolve<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
         frame: &SketchFrame,
     ) -> Result<Option<[f64; 3]>, String> {
         let along = match self {
-            Self::Perpendicular => return Ok(None),
+            Self::Perpendicular | Self::Normal => return Ok(None),
             Self::SketchX => frame.x_axis,
             Self::SketchY => frame.y_axis,
             Self::Along(reference) => {
@@ -120,6 +138,30 @@ impl RibDirection {
         Ok(Some(unit(flat).unwrap_or(along)))
     }
 }
+
+/// How the far side of a rib grown Normal to Curves (mitcad#2398) joins
+/// where the chain turns away from it, as the sketch's Offset joins its
+/// copies (its Corners): `"sharp"` (the default, written as nothing), the
+/// offsets on either side run on to where they cross; `"round"`, an arc
+/// about the chain's corner, its radius the depth. Where the chain turns
+/// toward the far side the offsets meet where they cross either way. A
+/// chain with an ellipse, an elliptical arc or a spline is joined round, as
+/// Offset joins it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RibCorners {
+    #[default]
+    Sharp,
+    Round,
+}
+
+fn is_sharp(corners: &RibCorners) -> bool {
+    *corners == RibCorners::Sharp
+}
+
+/// Why a rib grown Normal to Curves needs a depth.
+const NORMAL_NEEDS_DEPTH: &str = "a rib grown Normal to Curves runs a depth: its far side is its \
+     curves offset by the depth; set Depth Type to Depth, or choose another Direction for To Next";
 
 /// What a rib or a web grows from: curves of a sketch
 /// (`{"sketch": "F6", "curves": ["c1"]}`), or the curve of an Intersection
@@ -265,6 +307,11 @@ macro_rules! thin_feature {
             /// the body (mitcad#2102), radians; absent: 0, no draft.
             #[serde(default = "none", skip_serializing_if = "Option::is_none")]
             pub draft_angle: Option<P>,
+            /// How the far side of a rib grown Normal to Curves joins at
+            /// the corners the chain turns away from it at (mitcad#2398);
+            /// absent: sharp.
+            #[serde(default, skip_serializing_if = "is_sharp")]
+            pub corners: RibCorners,
         }
 
         impl<P> $name<P> {
@@ -300,6 +347,7 @@ macro_rules! thin_feature {
                         .as_ref()
                         .map(|v| f("draft_angle", v))
                         .transpose()?,
+                    corners: self.corners,
                 })
             }
 
@@ -316,6 +364,7 @@ macro_rules! thin_feature {
                     end_offset: self.end_offset.as_ref(),
                     direction: &self.direction,
                     draft_angle: self.draft_angle.as_ref(),
+                    corners: self.corners,
                 }
             }
         }
@@ -374,8 +423,9 @@ thin_feature!(
     false
 );
 thin_feature!(
-    /// A web from sketch curves (lines and arcs), one wall per curve,
-    /// joined where the curves meet (mitcad#1968).
+    /// A web from sketch curves of any kind (mitcad#2364; a closed one a
+    /// ring), one wall per curve, joined where the curves meet
+    /// (mitcad#1968).
     WebDef,
     "web",
     "Web",
@@ -399,6 +449,7 @@ struct Thin<'a, P> {
     end_offset: Option<&'a P>,
     direction: &'a RibDirection,
     draft_angle: Option<&'a P>,
+    corners: RibCorners,
 }
 
 impl Thin<'_, ParamId> {
@@ -421,6 +472,17 @@ impl Thin<'_, ParamId> {
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         if self.web && !self.direction.is_perpendicular() {
             return Err("a web grows along the sketch normal: Direction is a rib's".to_owned());
+        }
+        // Normal to Curves (mitcad#2398): by a depth, its Corners its own.
+        if *self.direction == RibDirection::Normal && matches!(self.extent, RibExtent::ToNext) {
+            return Err(NORMAL_NEEDS_DEPTH.to_owned());
+        }
+        if !is_sharp(&self.corners) && *self.direction != RibDirection::Normal {
+            return Err(
+                "Corners joins the far side of a rib grown Normal to Curves: set its direction \
+                 to \"normal\", or leave corners out"
+                    .to_owned(),
+            );
         }
         if let RibDirection::Along(reference) = self.direction {
             reference
@@ -593,9 +655,14 @@ impl Thin<'_, ParamId> {
             )
         };
         let chains = if self.web {
+            // Every kind of curve makes a wall, a closed one a ring
+            // (mitcad#2364); only a point is no curve.
             for curve in &curves {
-                if path::curve_ends(&curve.curve).is_none() {
-                    return Err(format!("{} is closed; a web needs open curves", curve.name));
+                if matches!(curve.curve, Curve3::Point(_)) {
+                    return Err(format!(
+                        "a point is not a curve; a web needs curves ({})",
+                        curve.name
+                    ));
                 }
             }
             curves.into_iter().map(|c| vec![c]).collect()
@@ -605,6 +672,20 @@ impl Thin<'_, ParamId> {
                 return Err("a rib needs an open chain of curves".to_owned());
             }
             vec![chain]
+        };
+        // Normal to Curves (mitcad#2398): the far side, the chain offset by
+        // the depth where it lies now (a pattern's copy too).
+        let far = match (self.direction, values.depth) {
+            (RibDirection::Normal, Some(depth)) if !self.web => normal_far(
+                &frame,
+                &chains[0],
+                depth,
+                self.flip,
+                self.corners,
+                values.draft_angle != 0.0,
+            )?,
+            (RibDirection::Normal, _) => return Err(NORMAL_NEEDS_DEPTH.to_owned()),
+            _ => Vec::new(),
         };
         let spec = RibSpec {
             feature,
@@ -620,9 +701,183 @@ impl Thin<'_, ParamId> {
             end_offset: values.end_offset,
             direction,
             draft_angle: values.draft_angle,
+            far: &far,
         };
         ctx.kernel.rib(&spec).map_err(|e| e.to_string())
     }
+}
+
+/// A point of the sketch plane of `frame` in its coordinates.
+fn flat_point(frame: &SketchFrame, p: [f64; 3]) -> P2 {
+    let d = sub(p, frame.origin);
+    [dot(d, frame.x_axis), dot(d, frame.y_axis)]
+}
+
+/// The far side of a rib grown Normal to Curves (mitcad#2398): its chain
+/// offset by `depth` in the sketch plane of `frame`, to the chain's left
+/// looking along it with the sketch normal up (to its right with `flip`),
+/// as the sketch's Offset offsets a chain ([`offset::compute`]): what
+/// vanishes at the depth is left out, and where the chain turns toward the
+/// far side the offsets on either side meet where they cross; where it
+/// turns away from it they run on to where they cross (`corners` sharp,
+/// for a chain of lines and arcs) or an arc about the corner joins them.
+/// The pieces run the way the chain runs, from the far point across from
+/// its start to the one across from its end.
+///
+/// With a draft (`drafted`) each side of the rib is the ruled face between
+/// a curve and its offset (and a cone about a round corner), so each curve
+/// must keep its offset (none vanishes), each arc's offset must run its
+/// whole length (it meets its neighbours smoothly or by a round corner),
+/// and the chain is of lines and arcs; anything else fails in words.
+fn normal_far(
+    frame: &SketchFrame,
+    chain: &[PathCurve],
+    depth: f64,
+    flip: bool,
+    corners: RibCorners,
+    drafted: bool,
+) -> Result<Vec<RibFarCurve>, String> {
+    // The curves in the sketch plane, each with whether it runs the way
+    // the chain does (an arc is counter-clockwise in the plane).
+    let mut sources: Vec<(Curve2, bool)> = Vec::with_capacity(chain.len());
+    for piece in chain {
+        let flat = match project(std::slice::from_ref(&piece.curve), frame).pop() {
+            Some(Projected::Curve(curve)) => curve,
+            _ => {
+                return Err(format!(
+                    "{} cannot be offset in the rib's sketch plane for Normal to Curves",
+                    piece.name
+                ));
+            }
+        };
+        let (start, _) = path::curve_ends(&piece.curve)
+            .ok_or_else(|| "a rib needs an open chain of curves".to_owned())?;
+        let start = flat_point(frame, start);
+        let (lo, hi) = flat.domain();
+        let gap = |t: f64| {
+            let p = flat.eval(t)[0];
+            (p[0] - start[0]).hypot(p[1] - start[1])
+        };
+        let forward = gap(lo) <= gap(hi);
+        sources.push((flat, forward));
+    }
+    let name = |i: usize| chain[i].name.clone();
+    // Offset's distance is to the right of the chain; the rib grows to its
+    // left unless flipped.
+    let d = if flip { depth } else { -depth };
+    // Sharp corners as Offset makes them: lines and arcs only.
+    let exact = sources
+        .iter()
+        .all(|(c, _)| matches!(c, Curve2::Line { .. } | Curve2::Arc { .. }));
+    let computed = if corners == RibCorners::Sharp && exact {
+        offset::compute_sharp(&sources, d, false, &name)
+    } else {
+        offset::compute(&sources, d, false, None, &name)
+    }
+    .map_err(|e| format!("the rib's curves offset by its depth of {depth} mm: {e}"))?;
+    let m = computed.made.len();
+    let vanished = || {
+        let names: Vec<String> = computed.dropped.iter().map(|i| name(*i)).collect();
+        names.join(", ")
+    };
+    // One open outline from the chain's start to its end.
+    let whole = m > 0
+        && !computed.closed
+        && (0..m).all(|k| computed.next[k] == if k + 1 < m { Some(k + 1) } else { None });
+    if !whole {
+        return Err(if computed.dropped.is_empty() {
+            format!(
+                "the rib's curves offset by its depth of {depth} mm fall apart; give the rib a \
+                 smaller depth"
+            )
+        } else {
+            format!(
+                "the rib's curves offset by its depth of {depth} mm fall apart where {} vanish; \
+                 give the rib a smaller depth",
+                vanished()
+            )
+        });
+    }
+    if drafted {
+        if !computed.dropped.is_empty() {
+            return Err(format!(
+                "with a draft angle, a rib grown Normal to Curves needs every curve's offset: \
+                 {} vanish at its depth of {depth} mm; give it a smaller depth or no draft",
+                vanished()
+            ));
+        }
+        for spans in &computed.spans {
+            let [(i, t0, t1)] = spans.as_slice() else {
+                return Err(
+                    "with a draft angle, a rib grown Normal to Curves needs one offset for each \
+                     curve; give it no draft"
+                        .to_owned(),
+                );
+            };
+            match &sources[*i].0 {
+                Curve2::Line { .. } => {}
+                arc @ Curve2::Arc { .. } => {
+                    let (lo, hi) = arc.domain();
+                    let tolerance = 1e-9 * (1.0 + hi.abs().max(lo.abs()));
+                    if (t0.min(*t1) - lo).abs() > tolerance || (t0.max(*t1) - hi).abs() > tolerance
+                    {
+                        return Err(format!(
+                            "with a draft angle, a rib grown Normal to Curves needs each arc's \
+                             offset to run the arc's whole length: the offset of {} is cut or \
+                             runs on at a corner; set Corners to Round where it runs on, or \
+                             give it no draft",
+                            name(*i)
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "with a draft angle, a rib grown Normal to Curves takes lines and arcs: \
+                         {} is neither; give it no draft",
+                        name(*i)
+                    ));
+                }
+            }
+        }
+    }
+    // A piece in model space running from `from` the way the chain runs.
+    let piece = |made: &offset::Made, from: P2, near: usize, corner: bool| {
+        let curve = path::curve3(frame, &offset::made_curve(made));
+        let curve = match path::curve_ends(&curve) {
+            Some((s, e)) => {
+                let at = frame.point(from);
+                if distance(e, at) < distance(s, at) {
+                    path::reversed(curve)
+                } else {
+                    curve
+                }
+            }
+            None => curve,
+        };
+        RibFarCurve {
+            curve: PathCurve {
+                name: chain[near].name.clone(),
+                curve,
+            },
+            near,
+            corner,
+        }
+    };
+    let mut far = Vec::with_capacity(m + computed.corners.len());
+    for k in 0..m {
+        let spans = &computed.spans[k];
+        far.push(piece(
+            &computed.made[k],
+            computed.ends[k].0,
+            spans[0].0,
+            false,
+        ));
+        if let Some((_, arc)) = computed.corners.iter().find(|(j, _)| *j == k) {
+            let near = spans.last().map_or(spans[0].0, |s| s.0);
+            far.push(piece(arc, computed.ends[k].1, near, true));
+        }
+    }
+    Ok(far)
 }
 
 /// The values of a rib or a web.

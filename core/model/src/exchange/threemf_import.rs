@@ -400,6 +400,7 @@ mod tests {
                 .iter()
                 .flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]])
                 .collect(),
+            triangle_colors: Vec::new(),
         }
     }
 

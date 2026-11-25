@@ -17,6 +17,16 @@
 // takes the design's bodies as one undo step (finish_edit_in_place). Save
 // in the mode writes the design's file; the holder's Save writes unsaved
 // in-place edits first, and closing asks about them.
+//
+// In a Cloud project with edit locks (mitcad#2389) the mode holds the
+// design's lock from its start to its end: a tab that lends the design keeps
+// its own lock, held and active while lent; without a tab the window takes
+// it (LockController::holdLock) and releases it when the mode ends. A design
+// someone else edits does not enter the mode; who edits it is said. A lock
+// the mode takes brings the design up to date first, as its own tab does
+// (RemoteController::bringUpToDate, mitcad#2397), and a request for a lock
+// the mode holds (or a lending tab holds) is answered by ending the mode
+// (endInPlaceFor) before the lock is handed over.
 #include "../MainWindow.hpp"
 
 #include <cstdint>
@@ -31,14 +41,20 @@
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPointer>
 #include <QPushButton>
+#include <QStringList>
 #include <QtLogging>
 
 #include "../WindowManager.hpp"
+#include "../framework/AppSettings.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Json.hpp"
 #include "LinkedFiles.hpp"
+#include "LockController.hpp"
+#include "RemoteController.hpp"
+#include "VersionDialogs.hpp"
 
 namespace mitcad {
 namespace {
@@ -119,6 +135,42 @@ void MainWindow::editInPlace(const QString& component) {
   } else if ((m_inPlaceKept || m_inPlaceKeptTab) && !saveInPlaceEdits()) {
     return;
   }
+  // The project's edit lock (mitcad#2389), as opening the design in a tab of
+  // its own takes it: a tab holds it already (or is read-only, refused
+  // below); without one it is taken now and held until the mode ends. A
+  // design someone else edits is not edited in place.
+  if (!tab && m_locks != nullptr) {
+    const LockController::WriteLock lock = m_locks->holdLock(file);
+    if (!lock.allowed) {
+      if (fromKept && linked) {
+        m_inPlaceKept.emplace(std::move(*linked)); // its unsaved edits stay
+      }
+      if (lock.refusal.isEmpty()) {
+        showHint(tr("Edit in Place canceled."));
+      } else {
+        showError(lock.refusal);
+      }
+      return;
+    }
+    // Brought up to date as its own tab brings it when it takes the lock
+    // (mitcad#2397): a newer version on the remote is synced in before the
+    // file is read, or the mode does not start when that needs a choice.
+    if (lock.taken && m_remote != nullptr) {
+      const RemoteController::UpToDate update = m_remote->bringUpToDate(file, lock.newer, fromKept);
+      if (!update.allowed) {
+        m_locks->releaseHeld(file);
+        if (fromKept && linked) {
+          m_inPlaceKept.emplace(std::move(*linked)); // its unsaved edits stay
+        }
+        if (update.refusal.isEmpty()) {
+          showHint(tr("Edit in Place canceled."));
+        } else {
+          showError(update.refusal);
+        }
+        return;
+      }
+    }
+  }
   if (linked) {
     // Taken from what the last Edit in Place left.
   } else if (tab) {
@@ -127,7 +179,12 @@ void MainWindow::editInPlace(const QString& component) {
       return;
     }
     if (tab->windowReadOnly()) {
-      showWarning(tr("%1 is open read-only: it cannot be edited in place.").arg(fileNameOf(file)));
+      // Who edits it, as its tab says (mitcad#2389).
+      const QString reason = tab->readOnlyReason();
+      qInfo().noquote() << QStringLiteral("Edit in Place: %1 is read-only in its tab: not started")
+                               .arg(fileNameOf(file));
+      showWarning(reason.isEmpty() ? tr("%1 is open read-only: it cannot be edited in place.").arg(fileNameOf(file))
+                                   : tr("%1 It cannot be edited in place.").arg(reason));
       return;
     }
     // The tab keeps a copy it does not compute or show until Finish.
@@ -177,6 +234,9 @@ void MainWindow::editInPlace(const QString& component) {
     } else if (fromKept && linked) {
       m_inPlaceKept.emplace(std::move(*linked)); // its unsaved edits stay
     }
+    if (!tab && m_locks != nullptr) {
+      m_locks->releaseHeld(file); // the mode did not start
+    }
     if (!failure.isEmpty()) {
       showError(tr("%1 cannot be edited in place: %2").arg(name, failure));
     }
@@ -190,6 +250,8 @@ void MainWindow::editInPlace(const QString& component) {
   m_inPlaceName = name;
   m_inPlaceFile = file;
   m_inPlaceTab = tab;
+  // Drawn faded from the first refresh on (mitcad#2353).
+  m_inPlaceOccurrence = begun.value(QStringLiteral("occurrence")).toString();
   m_measureHistory.clear();
   m_selection.clear();
   refreshScene();
@@ -248,6 +310,7 @@ void MainWindow::finishEditInPlace() {
   std::swap(m_document, *m_inPlaceHolder);
   rust::Box<Document> linked = std::move(*m_inPlaceHolder);
   m_inPlaceHolder.reset();
+  m_inPlaceOccurrence.clear();
   const bool unsaved = documentModified(*linked);
   const QPointer<MainWindow> tab = m_inPlaceTab;
   m_inPlaceTab = nullptr;
@@ -266,6 +329,11 @@ void MainWindow::finishEditInPlace() {
   if (unsaved) {
     m_inPlaceKeptComponent = m_inPlaceComponent;
     m_inPlaceKeptFile = m_inPlaceFile;
+  }
+  // The lock held for the mode goes with it (mitcad#2389); kept unsaved
+  // edits take it again when the holder's Save writes them.
+  if (m_locks != nullptr) {
+    m_locks->releaseHeld(m_inPlaceFile);
   }
   m_measureHistory.clear();
   m_selection.clear();
@@ -305,29 +373,123 @@ bool MainWindow::saveInPlaceDesign() {
     showHint(tr("Finish the current command before saving."));
     return false;
   }
+  try {
+    static_cast<void>(idleDocument()); // a job in the background gives way first
+  } catch (const std::exception& e) {
+    showError(tr("Could not save %1:\n%2").arg(QDir::toNativeSeparators(m_inPlaceFile), errorText(e)));
+    return false;
+  }
+  if (!writeInPlaceDesign(*m_document, m_inPlaceFile, m_inPlaceTab)) {
+    return false;
+  }
+  updateWindowTitle();
+  qInfo().noquote() << QStringLiteral("Edit in Place: saved %1").arg(m_inPlaceFile);
+  return true;
+}
+
+bool MainWindow::writeInPlaceDesign(Document& document, const QString& file, const QPointer<MainWindow>& tab) {
+  const QString name = fileNameOf(file);
+  // The project's edit lock (mitcad#2353), as a save from the design's own
+  // tab respects it: the tab that lent the design holds it, or says why
+  // not; the mode without a tab holds it since it started (mitcad#2389);
+  // otherwise the lock is taken for the write and released after it, and a
+  // design someone else edits is not written.
+  LockController::WriteLock lock;
+  const bool held = !tab && m_locks != nullptr && m_locks->heldLock(file);
+  if (tab) {
+    if (tab->windowReadOnly()) {
+      qInfo().noquote() << QStringLiteral("Edit lock for writing: %1 is read-only in its tab: not written").arg(name);
+      showError(tr("%1 is not saved: %2").arg(name, tab->readOnlyReason()));
+      return false;
+    }
+  } else if (held) {
+    qInfo().noquote() << QStringLiteral("Edit lock for writing: %1 held for Edit in Place").arg(name);
+  } else if (m_locks != nullptr) {
+    lock = m_locks->takeForWrite(file);
+    if (!lock.allowed) {
+      if (lock.refusal.isEmpty()) {
+        showHint(tr("Save canceled."));
+      } else {
+        showError(lock.refusal);
+      }
+      return false;
+    }
+  }
+  const auto release = [this, &lock, &file] {
+    if (lock.taken && m_locks != nullptr) {
+      m_locks->releaseAfterWrite(file);
+    }
+  };
+  // In a project with version history the save records a version, as Save
+  // in the design's own tab does: by the author, with the automatic
+  // message of the design's steps since it was saved.
+  const std::optional<rust::Box<Project>> project = versionedProject(file);
+  QString author;
+  QString message;
+  if (project) {
+    // A sync moves the project's branch: the save waits for it.
+    m_remote->waitForBranch();
+    const std::optional<QString> chosen = versionAuthor(**project);
+    if (!chosen) {
+      release();
+      showHint(tr("Save canceled."));
+      return false;
+    }
+    author = *chosen;
+    QStringList steps;
+    const QByteArray changes = compactJson({{QStringLiteral("query"), QStringLiteral("changes_since_saved")}});
+    for (const QJsonValue& step :
+         parseObject(document.query(rustStr(changes))).value(QStringLiteral("steps")).toArray()) {
+      steps << step.toString();
+    }
+    message = automaticVersionMessage(name, steps);
+  }
   // No picture of the view, which shows the assembly around it: the
   // design keeps the preview it has.
   static const std::uint8_t none = 0;
   QString error;
   bool written = false;
   try {
-    idleDocument().save_design_stamped(rustStr(m_inPlaceFile.toUtf8()), "auto",
-                                       rust::Slice<const std::uint8_t>(&none, 0));
+    document.save_design_stamped(rustStr(file.toUtf8()), "auto", rust::Slice<const std::uint8_t>(&none, 0));
     written = true;
   } catch (const std::exception& e) {
     error = errorText(e);
   }
   if (!written) {
-    showError(tr("Could not save %1:\n%2").arg(QDir::toNativeSeparators(m_inPlaceFile), error));
+    release();
+    showError(tr("Could not save %1:\n%2").arg(QDir::toNativeSeparators(file), error));
     return false;
   }
-  markSaved(*m_document);
-  updateWindowTitle();
-  qInfo().noquote() << QStringLiteral("Edit in Place: saved %1").arg(m_inPlaceFile);
-  showHint(tr("Saved %1").arg(QDir::toNativeSeparators(m_inPlaceFile)));
+  markSaved(document);
+  QString status = tr("Saved %1").arg(QDir::toNativeSeparators(file));
+  bool problem = false;
+  if (project) {
+    const VersionRecord record = recordVersion(**project, file, QStringList{file}, message, author);
+    status = record.status;
+    problem = record.problem;
+    // Sent to the project's remote, if it has one, as Save's version.
+    m_remote->versionRecorded(file);
+    if (tab) {
+      // The tab's design is that version now: not a change made outside
+      // MitCad when the tab saves next.
+      tab->rememberVersionBase(**project, file);
+    }
+  }
+  release();
+  if (tab && tab->m_locks != nullptr) {
+    // Its lock's base is the version just recorded.
+    tab->m_locks->designSaved(file);
+  } else if (held && project) {
+    m_locks->heldSaved(file);
+  }
+  if (problem) {
+    showError(status);
+  } else {
+    showHint(status);
+  }
   // The other tabs that link the design offer to take it (mitcad#1416).
   if (m_windowManager != nullptr) {
-    m_windowManager->designSaved(this, m_inPlaceFile);
+    m_windowManager->designSaved(this, file);
   }
   return true;
 }
@@ -344,28 +506,13 @@ bool MainWindow::saveInPlaceEdits() {
       return false;
     }
   } else if (m_inPlaceKept) {
-    // No picture of the view: the design keeps the preview it has.
-    static const std::uint8_t none = 0;
-    QString error;
-    bool written = false;
-    try {
-      (*m_inPlaceKept)
-          ->save_design_stamped(rustStr(m_inPlaceKeptFile.toUtf8()), "auto",
-                                rust::Slice<const std::uint8_t>(&none, 0));
-      written = true;
-    } catch (const std::exception& e) {
-      error = errorText(e);
-    }
-    if (!written) {
+    // With its edit lock and its version, as a save in the mode
+    // (mitcad#2353).
+    if (!writeInPlaceDesign(**m_inPlaceKept, m_inPlaceKeptFile, nullptr)) {
       m_inPlaceSaving.clear();
-      showError(tr("Could not save %1:\n%2").arg(QDir::toNativeSeparators(m_inPlaceKeptFile), error));
       return false;
     }
-    markSaved(**m_inPlaceKept);
     qInfo().noquote() << QStringLiteral("Edit in Place: saved %1 with the assembly").arg(m_inPlaceKeptFile);
-    if (m_windowManager != nullptr) {
-      m_windowManager->designSaved(this, m_inPlaceKeptFile);
-    }
   } else {
     m_inPlaceSaving.clear();
     return true;
@@ -470,6 +617,9 @@ void MainWindow::showInPlaceNotices(const QJsonObject& answer) {
 void MainWindow::lendForInPlace(MainWindow* borrower) {
   m_inPlaceBorrower = borrower;
   setEnabled(false);
+  if (m_locks != nullptr) {
+    m_locks->setLent(true); // its lock held for the mode (mitcad#2389)
+  }
   qInfo().noquote() << QStringLiteral("Edit in Place: %1 lent to %2").arg(documentName(), borrower->documentName());
   showStatus(tr("%1 is edited in place in %2. Finish there to edit it here again.")
                  .arg(documentName(), borrower->documentName()),
@@ -481,6 +631,9 @@ void MainWindow::returnFromInPlace(rust::Box<Document> document) {
   std::swap(m_document, document);
   m_inPlaceBorrower = nullptr;
   setEnabled(true);
+  if (m_locks != nullptr) {
+    m_locks->setLent(false);
+  }
   refreshScene();
   updateWindowTitle();
   updateActions();
@@ -493,6 +646,73 @@ QString MainWindow::lentReason() const {
   }
   return tr("%1 is edited in place in %2: finish there first.")
       .arg(documentName(), m_inPlaceBorrower->documentName());
+}
+
+MainWindow* MainWindow::inPlaceEditorOf(const QString& path) {
+  if (m_inPlaceHolder && sameFile(m_inPlaceFile, path)) {
+    return this;
+  }
+  if (m_inPlaceBorrower && sameFile(m_filePath, path) && m_inPlaceBorrower->m_inPlaceHolder) {
+    return m_inPlaceBorrower.data();
+  }
+  return nullptr;
+}
+
+bool MainWindow::inPlaceModifiedFor(const QString& path) {
+  MainWindow* editor = inPlaceEditorOf(path);
+  // While a job computes the document it is not read: taken as changed.
+  return editor != nullptr && (editor->modelBusy() || editor->isModified());
+}
+
+bool MainWindow::endInPlaceFor(const QString& path, InPlaceEnd how) {
+  MainWindow* editor = inPlaceEditorOf(path);
+  if (editor == nullptr) {
+    return false;
+  }
+  if (editor != this) {
+    return editor->endInPlaceFor(path, how); // the borrower of this tab's design
+  }
+  // A request for the edit lock the mode holds was answered (mitcad#2397):
+  // the mode ends as Finish ends it, saved first, its edits dropped, or kept
+  // for the holder's Save (no answer; saved first with autosave on).
+  const QString name = fileNameOf(m_inPlaceFile);
+  if (!canChangeModel()) {
+    showError(tr("%1 is not released: %2").arg(name, changeBlockedReason()));
+    return false;
+  }
+  bool modified = false;
+  try {
+    modified = documentModified(idleDocument());
+  } catch (const std::exception& e) {
+    showError(tr("%1 is not released: %2").arg(name, errorText(e)));
+    return false;
+  }
+  qInfo().noquote() << QStringLiteral("Edit in Place: ending for a lock request: %1 (%2, %3)")
+                           .arg(name,
+                                how == InPlaceEnd::Save      ? QStringLiteral("save")
+                                : how == InPlaceEnd::Discard ? QStringLiteral("discard")
+                                                             : QStringLiteral("keep"),
+                                modified ? QStringLiteral("unsaved changes") : QStringLiteral("saved"));
+  if (modified && (how == InPlaceEnd::Save || (how == InPlaceEnd::Keep && GeneralSettings::load().autosave))) {
+    if (!saveInPlaceDesign() && how == InPlaceEnd::Save) {
+      return false; // why is said; the mode goes on
+    }
+  }
+  const bool fromTab = m_inPlaceTab != nullptr;
+  finishEditInPlace();
+  if (m_inPlaceHolder) {
+    return false; // it could not finish (said)
+  }
+  if (how == InPlaceEnd::Discard && !fromTab && m_inPlaceKept && sameFile(m_inPlaceKeptFile, path)) {
+    // Not saved, as asked: as Don't Save on closing drops them.
+    m_inPlaceKept.reset();
+    qInfo().noquote() << QStringLiteral("Edit in Place: the unsaved changes made in place to %1 dropped").arg(name);
+    showStatus(tr("The changes made in place to %1 were not saved. The assembly keeps what it took from them as one "
+                  "step, which Undo takes back.")
+                   .arg(name),
+               NoticeLevel::Information);
+  }
+  return true;
 }
 
 } // namespace mitcad

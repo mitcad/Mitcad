@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Ribs and webs (F3): thin walls grown from open sketch curves, up to the
-// next faces of bodies or a depth. Lengths are millimetres.
+// Ribs and webs (F3): thin walls grown from sketch curves (a rib's open),
+// up to the next faces of bodies or a depth. Lengths are millimetres.
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -22,15 +23,27 @@ enum class ThicknessLocation { Symmetric, Side1, Side2 };
 
 // A rib grows from one open chain in the sketch plane at right angles to
 // the chain's chord (to its left, or right with `flip`), its thickness
-// across the plane. A web grows from each chain (lines and arcs) along the
-// sketch normal (against it with `flip`), its thickness in the plane.
-// Without a depth they run up to the faces of `bodies` they reach first,
-// which must close them off. The result is the tool to join.
+// across the plane. A web grows from each chain along the sketch normal
+// (against it with `flip`), its thickness in the plane. Without a depth
+// they run up to the faces of `bodies` they reach first, which must close
+// them off. The result is the tool to join.
+//
+// A web takes every kind of curve (mitcad#2364): lines and circular arcs
+// exactly; an ellipse, an elliptical arc, a spline, a conic, an offset
+// curve or a projected edge between its offsets in the sketch plane (each
+// a B-spline within 1e-7 mm of the exact offset), a spline with a corner
+// as its smooth pieces meeting there as two curves do; a smooth closed
+// curve (a circle, an ellipse, a closed spline) as a ring with no ends. A
+// wall thicker than a curve's tightest bend to that side fails in words
+// with the place. A point or a helix is refused in words. Without a draft
+// the walls' bands (and the node pieces') are joined in the sketch plane
+// and grown in one prism, so that a dense grid is one planar boolean.
 //
 // Faces of a rib: side(<curve>) along the curves, wall1 and wall2, tip0 and
 // tip1 at the chain's ends, end at the depth. Of a web, per curve:
 // wall1(<curve>), wall2(<curve>), tip0(<curve>), tip1(<curve>),
-// start(<curve>) in the sketch plane and end(<curve>) at the depth.
+// start(<curve>) in the sketch plane and end(<curve>) at the depth; a ring
+// has no tips.
 //
 // A web's curves are joined where their ends meet (mitcad#1968): two walls
 // whose curves share an end meet in a mitre, at any angle and for every
@@ -80,6 +93,34 @@ enum class ThicknessLocation { Symmetric, Side1, Side2 };
 // a tenth of `thickness` apart, and fails with "... before it reaches the
 // faces of the bodies" where none closes it off by then. The faces have
 // the names they have without a draft.
+//
+// With `far` (a rib's, by a depth; mitcad#2398, Normal to Curves) the rib
+// grows from each point of its curves at right angles to them: its band
+// in the sketch plane lies between the chain and `far`, the chain offset
+// by the depth (the model computes it as the sketch's Offset does), its
+// pieces in order from the far point across from the chain's start to the
+// one across from its end, each running the way the chain runs.
+// `direction` is then unset. The far side's faces are end(<curve>) after
+// the chain's curve each piece is the offset of, a round corner's
+// corner(<curve>) after the curve before it; tip0 and tip1 join the
+// chain's ends to the far side's. A continued end's band runs from the
+// chain's end to the far side's, along its tangent. With a draft each side
+// of a piece is the ruled face between its chain curve and it (planes
+// between lines, cones between arcs; the model sends only pieces that run
+// their curve's whole length where it is an arc) and a round corner's the
+// cone about the chain's corner, the curve at `low` or `high` and the
+// piece leaned out by the depth times tan(draft_angle).
+
+// A piece of the far side of a rib grown Normal to Curves (mitcad#2398):
+// the offset of the chain's curve `chain_curve` (its index in the chain), or with
+// `corner` the round arc about that curve's end that joins its offset to
+// the next one's. Named after that curve.
+struct RibFarCurve {
+  PathCurve curve;
+  std::size_t chain_curve = 0;
+  bool corner = false;
+};
+
 struct RibSpec {
   std::string feature;
   Frame frame;
@@ -94,6 +135,8 @@ struct RibSpec {
   double end_offset = 0.0;
   std::optional<gp_Dir> direction;
   double draft_angle = 0.0;
+  // Normal to Curves' far side (mitcad#2398); empty for any other way.
+  std::vector<RibFarCurve> far_curves;
 };
 
 ShapePtr rib(const RibSpec& spec);

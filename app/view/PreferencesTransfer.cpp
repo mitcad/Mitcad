@@ -57,6 +57,7 @@
 #include "../render/RenderMode.hpp"
 #include "../render/RenderWorkerChoice.hpp"
 #include "../sketch/FontFiles.hpp"
+#include "../sketch/SketchPreferences.hpp"
 #include "OriginPreference.hpp"
 #include "SelectionLook.hpp"
 #include "SmallCirclesPreference.hpp"
@@ -421,6 +422,9 @@ void ViewController::applyImportedSettings(const SettingsBeforeImport& was, cons
     if (generalNow.temperatureUnit != was.general.temperatureUnit) {
       applyTemperaturePreference();
     }
+    // Sketch: whether a sketch hides when a feature uses it (mitcad#2393),
+    // which the model reads for the whole process.
+    sketch::applyHideUsedSketches();
     if (generalChanged) {
       generalChanged();
     }

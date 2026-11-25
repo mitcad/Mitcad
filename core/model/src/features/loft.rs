@@ -15,6 +15,8 @@ use super::extrude::{
 };
 use super::geom_ref::{GeomRef, Want};
 use super::path::{CurvePath, SketchCurves};
+// Free edges of surface bodies as a section (mitcad#2395).
+use super::sheet_edges::{self, OpeningEdgesRef};
 use super::surface_sweeps;
 use super::{
     BodyChange, CheckContext, EvalContext, Evaluate, FeatureDef, FeatureInfo, FeatureOutput,
@@ -25,7 +27,7 @@ use crate::kernel::Kernel;
 use crate::parameters::ParamId;
 use crate::profile::ProfileRegion;
 use crate::sweeps::{LoftEnd, LoftEndKind, LoftFace, LoftSection, LoftSpec, PathCurve};
-use crate::topo::{FaceName, RegionKey};
+use crate::topo::{EdgeName, FaceName, RegionKey};
 // The face of a curved face's sketch (mitcad#2345).
 use super::sketch::SketchPlane;
 // Frames along a centre line (mitcad#543).
@@ -59,6 +61,20 @@ pub enum LoftSectionDef {
         #[serde(default, skip_serializing_if = "is_false")]
         chain: bool,
     },
+    /// A loose chain of a body's or surface body's edges (mitcad#2377):
+    /// named edges joined end to end, open or closed, that need not be a
+    /// whole face's boundary. A curve section, as `Curves`: only in a
+    /// surface loft whose sections are all curves or edges.
+    Edges {
+        body: BodyUid,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        edges: Vec<EdgeName>,
+        /// Free edges of a surface body (mitcad#2395), which have no
+        /// names: picked by their openings as the surface features pick
+        /// them, joined with the named edges into the one chain.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        openings: Vec<OpeningEdgesRef>,
+    },
 }
 
 impl LoftSectionDef {
@@ -66,8 +82,10 @@ impl LoftSectionDef {
         matches!(self, Self::Point { .. })
     }
 
+    /// A section of curves: sketch curves or a chain of a body's edges
+    /// (mitcad#2377).
     fn is_curves(&self) -> bool {
-        matches!(self, Self::Curves { .. })
+        matches!(self, Self::Curves { .. } | Self::Edges { .. })
     }
 
     fn kind(&self) -> &'static str {
@@ -76,6 +94,7 @@ impl LoftSectionDef {
             Self::Face { .. } => "face",
             Self::Point { .. } => "point",
             Self::Curves { .. } => "curves",
+            Self::Edges { .. } => "edges",
         }
     }
 
@@ -458,6 +477,21 @@ impl FeatureInfo for LoftDef {
                 LoftSectionDef::Curves { sketch, .. } => {
                     references.features.insert(*sketch);
                 }
+                // A chain of a body's edges (mitcad#2377), free edges too
+                // (mitcad#2395).
+                LoftSectionDef::Edges {
+                    body,
+                    edges,
+                    openings,
+                } => {
+                    sheet_edges::add_chain_references(
+                        &mut references,
+                        *body,
+                        edges,
+                        openings,
+                        &None,
+                    );
+                }
             }
         }
         for path in self.centerline.iter().chain(&self.rails) {
@@ -535,6 +569,15 @@ impl FeatureInfo for LoftDef {
                         curves.check_any(ctx).map_err(at)?;
                     }
                 }
+                // A chain of a body's edges (mitcad#2377), free edges too
+                // (mitcad#2395).
+                LoftSectionDef::Edges {
+                    body,
+                    edges,
+                    openings,
+                } => {
+                    sheet_edges::check_chain(ctx, *body, edges, openings, &None).map_err(at)?;
+                }
             }
         }
         if self.sections.iter().all(LoftSectionDef::is_point) {
@@ -552,6 +595,13 @@ impl FeatureInfo for LoftDef {
                     } else {
                         section.kind()
                     };
+                    // A chain of a body's edges (mitcad#2377).
+                    if matches!(section, LoftSectionDef::Edges { .. }) && kind != "curve" {
+                        return Err(format!(
+                            "the {which} condition {} does not fit a chain of a body's edges",
+                            condition.name(),
+                        ));
+                    }
                     return Err(format!(
                         "the {which} condition {} does not fit a {kind} section",
                         condition.name(),
@@ -696,7 +746,7 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
                     Found::Face(shape, face)
                 }
                 LoftSectionDef::Point { point } => Found::Point(ctx.point(point).map_err(at)?),
-                LoftSectionDef::Curves { .. } => {
+                LoftSectionDef::Curves { .. } | LoftSectionDef::Edges { .. } => {
                     return Err(at("a curve section in a loft of other sections".to_owned()));
                 }
             });
@@ -784,6 +834,91 @@ fn loft_face<S>(found: &FoundFace<S>) -> Option<LoftFace<'_, S>> {
     found.as_ref().map(|(body, face)| LoftFace { body, face })
 }
 
+/// The face a chain of a body's edges bounds (mitcad#2377), which a
+/// Perpendicular end at the chain leaves at right angles when it names no
+/// face: the one face that every edge lies on, by the edges' names as the
+/// body has them now, and the face each free edge bounds (mitcad#2395).
+/// Refused in words where they share no face, or two (a single edge between
+/// two faces, a chain along the line where two faces meet).
+fn bounded_face<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    shape: &K::Shape,
+    edges: &[EdgeName],
+    free: &[PathCurve],
+    which: &str,
+) -> Result<FaceName, String> {
+    let mut common: Option<Vec<FaceName>> = None;
+    let mut keep = |faces: Vec<FaceName>| {
+        common = Some(match common.take() {
+            None => faces,
+            Some(before) => before.into_iter().filter(|f| faces.contains(f)).collect(),
+        });
+    };
+    for edge in edges {
+        let found = super::renamed::edge_for(ctx, shape, edge)?;
+        // A seam lies between a face and itself.
+        let mut faces = found.faces().to_vec();
+        faces.dedup();
+        keep(faces);
+    }
+    // A free edge's piece is named after the one face it bounds.
+    for piece in free {
+        keep(piece.name.parse::<FaceName>().into_iter().collect());
+    }
+    match common.unwrap_or_default().as_slice() {
+        [face] => Ok(face.clone()),
+        [] => Err(format!(
+            "the {which} section's edges bound no one face: give the face to leave at right \
+             angles as the {which} condition's face"
+        )),
+        _ => Err(format!(
+            "the {which} section's edges lie between the same two faces: give the one to leave \
+             at right angles as the {which} condition's face"
+        )),
+    }
+}
+
+/// The free edges of a section's openings (mitcad#2395) as path pieces:
+/// each opening's edges as the kernel gives them, each once, named after
+/// the face it bounds (free edges have no names of their own), so the
+/// loft's faces from them are `side(<face>)`, `#k` where several.
+fn free_edge_pieces<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    body: BodyUid,
+    shape: &K::Shape,
+    openings: &[OpeningEdgesRef],
+) -> Result<Vec<PathCurve>, String> {
+    if openings.is_empty() {
+        return Ok(Vec::new());
+    }
+    let resolved = sheet_edges::resolve(ctx, body, shape, openings)?;
+    let mut pieces: Vec<PathCurve> = Vec::new();
+    for opening in sheet_edges::kernel_openings(&resolved) {
+        let found = ctx
+            .kernel
+            .opening_curves(shape, &opening)
+            .map_err(|e| e.to_string())?;
+        if found.is_empty() {
+            return Err(format!(
+                "the section's openings pick no free edges of body {body}"
+            ));
+        }
+        for edge in found {
+            let Some(face) = edge.face else {
+                return Err("a free edge of the section bounds a face without a name".to_owned());
+            };
+            let piece = PathCurve {
+                name: face.to_string(),
+                curve: edge.curve,
+            };
+            if !pieces.contains(&piece) {
+                pieces.push(piece);
+            }
+        }
+    }
+    Ok(pieces)
+}
+
 impl LoftDef {
     /// The kernel's ends: the conditions evaluated and checked, free (or
     /// sharp at a point) where none is given.
@@ -852,6 +987,18 @@ impl LoftDef {
                         super::sketch::face_body(ctx.kernel, &face, shapes).map_err(at)?;
                     *slot = Some((shape, renamed.unwrap_or(face)));
                 }
+            } else if let LoftSectionDef::Edges {
+                body,
+                edges,
+                openings,
+            } = section
+            {
+                // A chain of a body's edges (mitcad#2377): the face they all
+                // bound, free edges too (mitcad#2395).
+                let shape = ctx.surface_body(*body).map_err(at)?;
+                let free = free_edge_pieces(ctx, *body, &shape, openings).map_err(at)?;
+                let face = bounded_face(ctx, &shape, edges, &free, which)?;
+                *slot = Some((shape, face));
             }
         }
         Ok(found)
@@ -869,6 +1016,26 @@ impl LoftDef {
         let mut normals = Vec::new();
         for (i, section) in self.sections.iter().enumerate() {
             let at = |e: String| format!("section {}: {e}", i + 1);
+            // A chain of a body's edges (mitcad#2377): its curves joined in
+            // order as a path's, named after the edges, free edges after
+            // the faces they bound (mitcad#2395); no plane of its own.
+            if let LoftSectionDef::Edges {
+                body,
+                edges,
+                openings,
+            } = section
+            {
+                let shape = ctx.surface_body(*body).map_err(at)?;
+                let mut pieces = if edges.is_empty() {
+                    Vec::new()
+                } else {
+                    super::path::edge_curves_of(ctx, *body, &shape, edges).map_err(at)?
+                };
+                pieces.extend(free_edge_pieces(ctx, *body, &shape, openings).map_err(at)?);
+                sections.push(super::path::chain(pieces).map_err(at)?);
+                normals.push(None);
+                continue;
+            }
             let Some(curves) = section.sketch_curves() else {
                 return Err(at(
                     "a loft of curve sections has only curve sections".to_owned()

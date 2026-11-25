@@ -3785,6 +3785,29 @@ profiles when a sketch opens on|off` when the preference changes. Tests
 `app.ui-windows-sketch-profiles-on-open` (the shared script
 `tools/ui-scripts/sketch-profiles-on-open.mitcad-ui`).
 
+The preference **Hide a sketch when a feature uses it** (Preferences ›
+Sketch, `hideUsedSketches`, settings `sketch/hideUsedSketches`, on by
+default; mitcad#2393, GitHub mitcad/Mitcad#652;
+`sketch::hideUsedSketches`) decides whether a planar sketch hides when a
+feature first uses it (the model's rule of mitcad#7). The model reads it
+for the whole process: `sketch::applyHideUsedSketches` hands it to the
+bridge's `set_hide_used_sketches` at start (`main.cpp`), when the
+preference is saved (`saveHideUsedSketches`), on Restore Defaults and
+after a settings import, and every document's `command` then sets the
+document's own value (`Document::set_hide_used_sketches`) before it runs;
+a file's import keeps the default. Off, a command that gives a shown
+sketch its first consumer (Extrude, an edit that takes another sketch's
+profile) sets its light bulb on in its own undo step, so the sketch stays
+shown until the user hides it; a sketch hidden already stays hidden, and
+the eye, Show/Hide All Sketches and the edit's temporary show are
+unchanged. Logs: `Preferences: hide a sketch when a feature uses it
+on|off` when the preference changes. Test: `tools/ui-sketch-hide-used-test.sh`
+(`tools/ui-scripts/sketch-hide-used.mitcad-ui`: off, a rectangle sketched
+on XY and extruded stays shown; on again, a second sketch hides when
+extruded), which reads the light bulb with the driver's
+`expect-feature-shown`; the model's
+`core/model-tests/api/src/used_sketch_shown_2393_tests.rs`.
+
 The Sketch Palette's **Show points** (`palettePoints`,
 `SketchController::setShowPoints`; mitcad#1705, GitHub mitcad/Mitcad#262)
 is on by default and remembered per user (settings `sketch/showPoints`):
@@ -8123,6 +8146,38 @@ rail and surface, orientation, Flip); `SweepCommands.cpp` and
   `app.ui-macos-surface-loft-perpendicular`): Surface Loft from a post's
   top face to a circle above it, Perpendicular to Face at both ends (the
   start's Face the post's wall, the end's weight 2), builds one side face.
+  With Rails (mitcad#2377) the loft leaves the face at right angles all
+  along the section, between the rails too, as fast as each rail leaves
+  it (Takeoff Weight then sets nothing); a rail that leaves the section
+  off the face's normal is refused in words (`rail 1 leaves the start
+  section 36.9 degrees off the face's normal; ...`, its point painted).
+  The model also takes a loose chain of a body's edges as a surface
+  loft's section (`{"type": "edges"}`, mitcad#2377, leaving the face the
+  edges bound), free edges of a surface body among them (`openings`,
+  mitcad#2395). Surface Loft's **Sections** input picks such chains
+  (mitcad#2395): it takes edges of bodies and, as the surface features'
+  edge inputs, free edges and openings of surface bodies (with a **Whole
+  Opening** check, shown once a free edge is picked: on, a click on a free
+  edge takes its whole opening; off, the single edge). Each pick is a
+  section of its own, but an edge, free edge or opening that meets the
+  edges of the section picked just before it (an end in common, of the
+  same body) joins that section, as the edges of a path make one path
+  (`loftSectionGroups` in `SurfaceCommands.cpp`); edge sections are curve
+  sections, so they mix with sketch curves, not with profiles, faces and
+  points. A section's named edges go to `edges`, its free edges and
+  openings to `openings`. A loft with such sections opens in its panel
+  again, each chain as its picks in chain order (`loftEdgeSectionItems`),
+  unless two neighbouring chains of one body meet (picks could not tell
+  them apart) or its `openings` name free edges by their faces rather than
+  as picks. The added line counts sections, not picks (`Added surface loft
+  through 2 sections` for two chains of two edges each). Tests: the same
+  UI test, step 3: two top edges of a box picked one after the other (one
+  section), then the two bottom edges below them (the second), a surface
+  of two faces; the loft opened again by a double click on its timeline
+  entry builds the same and is saved unchanged. A chain of free edges
+  meets a face at right angles in `geometry.loft_perpendicular`'s free
+  edge chains; the model's `loft_perpendicular_tests` check the
+  definition, its references and its refusals.
 - **Walls and surfaces from a 3D sketch's curves** (mitcad#1550). Rib and
   Web (Curves), Extrude's Thin Extrude (Profiles: its sketch curves) and
   Surface Extrude, Surface Revolve and Surface Sweep (Profiles) take a 3D
@@ -8401,6 +8456,10 @@ change of one item removes its condition and says so
   condition goes, with the status message); Hide 2 Bodies or Hide 2
   Components is a bulk change (`Hide Bodies: kept 1 following Show When:
   Leg`, `Hide Components: …`).
+- **Hide/Show** (`view.toggle_visibility`, V; mitcad#2356): one item as
+  its row's eye (its condition goes), several a bulk change (`Hide
+  Selection: kept 1 following Show When: Leg`); a Browser row's Hide /
+  Show on several selected rows runs it.
 - **Find in Design's Show and Hide** are bulk changes of the found items,
   whatever their number (`Hide Found Items: kept 1 following Show When:
   Body2`; the `Find in Design: hid …` line counts only what changed).
@@ -8877,8 +8936,15 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   mitcad/Mitcad#600 and #601): the timeline's (and a feature row's)
   **Suppress Features** / **Unsuppress Features**
   (`BrowserController::setFeaturesSuppressed`) takes the timeline's
-  selection when the menu's feature is in it (a feature row's menu: that
-  feature), as Delete and Auto Fix do; the label follows the clicked
+  selection when the menu's feature is in it, as Delete and Auto Fix do.
+  A browser feature row's menu, and a Joint row's own **Suppress** /
+  **Unsuppress** (mitcad#2376), follow Delete's browser rule
+  (`BrowserController::featuresToSuppress`): when the row is in the
+  browser's selection, the features of every selected Feature and Joint
+  row (of the clicked row's selection set, `BrowserPanel::rowsToDelete`;
+  a feature with rows under several sketches once); when it is not, that
+  row's feature alone (a right click on an unselected row selects it
+  alone). Contact sets and CAM operations keep their own Suppress. The label follows the clicked
   feature, and of the selection only the features not yet in that state
   change, one undo step (one feature: the model's own step); they are
   suppressed from the last one back and unsuppressed in timeline order, so
@@ -8897,7 +8963,11 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   dependents a Suppress All took, and one Undo takes it back. Logs: `Suppress
   Block: also Hole, Round?`, `Suppress Block cancelled`, `Suppressed Block,
   Hole, Round` (every feature it suppressed, in timeline order),
-  `Unsuppressed Block`. Tests: Linux `tools/ui-suppress-dependents-test.sh`,
+  `Unsuppressed Block`. The tests also cover, in the timeline and on the
+  browser's feature rows (mitcad#2376), Unsuppress Features on one feature
+  of a suppressed selection of three (all three in one undo step) and
+  Suppress Features on an unselected feature while two others are
+  selected (that feature alone). Tests: Linux `tools/ui-suppress-dependents-test.sh`,
   Windows `app.ui-windows-suppress-dependents`
   (`tools/ui-scripts/suppress-dependents.mitcad-ui`), the model's
   `suppress_dependents_2314_tests.rs`.
@@ -14444,7 +14514,17 @@ settings in the user's settings (`ViewSettings`, group `view`);
   mode. The start-up logs which decided, `Theme: dark (preference)`,
   `Theme: dark (preference; MitCad's own palette, window #1f2024 over the
   platform's light one)` or `Theme: system (light)`, and a change logs
-  `Preferences: theme dark` and the same line once it is settled. The 3D
+  `Preferences: theme dark` and the same line once it is settled. A
+  test's scheme (`MITCAD_TEST_COLOR_SCHEME` at start, mitcad#2404) is
+  asked the same way without being stored; on Linux, where Qt's GTK theme
+  under Xvfb can keep its light palette, MitCad's own palette follows
+  after the same wait, and `Colour scheme in effect: dark (the
+  platform's palette)` or `Colour scheme in effect: dark (MitCad's own
+  palette, window #1f2024 over the platform's light one)` says which
+  (on Windows and macOS the platform's only: `Colour scheme in effect:
+  light (the platform did not switch to dark)` when it does not). The
+  test driver's `color-scheme` step stands for the desktop's switch and
+  asks the platform only. The 3D
   view's background is its own setting (Environment in Preferences ›
   Display, View background in macOS's Settings window). Its default on
   every platform, also after Restore Defaults, is **Follow System**
@@ -15276,7 +15356,7 @@ UI thread.
 | `framework/Appearances.*` | appearances as the model's `appearances` query lists them (`Appearance`: the physically based parameters and the display color), a preview swatch (`appearanceSwatch`), and the physical materials |
 | `materials/TextureSource.*`, `materials/FolderTextureSource.*`, `materials/TextureBrowser.*`, `materials/TextureUse.*`, `materials/TexturePreferences.*` | texture sources (mitcad#315): the `TextureSource` interface, its registry, `TextureSettings` and the texture cache's folders; local texture folders (map detection in file names, the scan, thumbnails); Edit Appearances' grid; Use's `create_appearance`; Preferences' Textures group |
 | `sketch/FontFiles.*` | font files for sketch text (mitcad#473): the font folders' setting and their files, the families and previews of Edit Text's font chooser, Preferences' Fonts group |
-| `sketch/SketchPreferences.*` | Preferences › Sketch (mitcad#860): the setting of the first dimension that scales the sketch, and `scale_sketch` on a sketch action's `sketch.add_dimension`; the settings of Click adds to the selection in sketches (mitcad#1403), Esc leaves an unchanged sketch (mitcad#1623) and Show profiles when a sketch opens (mitcad#1670) |
+| `sketch/SketchPreferences.*` | Preferences › Sketch (mitcad#860): the setting of the first dimension that scales the sketch, and `scale_sketch` on a sketch action's `sketch.add_dimension`; the settings of Click adds to the selection in sketches (mitcad#1403), Esc leaves an unchanged sketch (mitcad#1623) and Show profiles when a sketch opens (mitcad#1670); Hide a sketch when a feature uses it (mitcad#2393), handed to the model's process-wide `set_hide_used_sketches` |
 | `materials/PolyHavenTextureSource.*`, `materials/TextureFetcher.*` | Poly Haven as an online texture source (mitcad#313): reading the API's lists, the cached list, files and thumbnails, the downloads; the requests of online sources (Qt Network, or fixture files for UI tests) |
 | `framework/Cursors.*`, `framework/Icons.*`, `framework/Numbers.*` | the sketch tools' pointer; icons from `app/icons`; numbers with decimal commas |
 | `framework/AppSettings.*` | general settings (autosave) |
@@ -21563,7 +21643,8 @@ next screenshot.
 | `Context menu Solid: Press Pull \| Fillet \| More`, `Context menu Solid More: Draft \| Hole` (`BUILD`, `Construct`), `Context menu Delete: Delete Member \| Delete Body \| Delete Component`, `Deleted member <name>` (`spacing set of <name>`), `Deleted body Body1`, `Deleted component Component1:1` | the view's context menu's submenus (mitcad#494; [The view's context menu](#the-views-context-menu)) and what Delete did, one undo step each; `tools/ui-context-menu-test.sh` |
 | `Browser hover highlight: Root/Bodies/Body1 (1 bodies), 0.31 ms, 0 faces meshed` (`none (0 bodies)`) | the pointer over a body's, component's or occurrence's row highlights its bodies in the view, or left them (mitcad#1022, "Hover over a row"; `tools/ui-browser-test.sh`, `tools/ui-browser-hover-test.sh`) |
 | `Eye click Root/Bodies/Body1 (press)` (`(double-click)`) | a click on a light bulb in the browser, before its `Visibility …` line; the press, its moves and its release belong to the light bulb and never reach the tree's selection (mitcad#344; `tools/ui-browser-test.sh`, `tools/ui-windows-browser-test.ps1`) |
-| `Context menu Hide: Hide Body \| Hide Component` (`Hide 2 Bodies`, `Hide 2 Components`; the submenu of the view's context menu, mitcad#347), `Hid body Body2`, `Hid component Component1:1` | Hide > Hide Body / Hide Component: `set_body_visible` for the bodies of the selected faces, edges, vertices and bodies, `set_occurrence_visible` for their occurrences (none for the root's bodies, so no Hide Component), each once, as the browser's light bulbs do (`BrowserController::hideBodies`, `hideOccurrences`), one undo step; `tools/ui-hide-menu-test.sh` |
+| `Context menu Hide: Hide Body \| Hide Component` (`Hide 2 Bodies`, `Hide 2 Components`; the submenu of the view's context menu, mitcad#347), `Hid body Body2`, `Hid component Component1:1` | Hide > Hide Body / Hide Component: `set_body_visible` for the bodies of the selected faces, edges, vertices and bodies, `set_occurrence_visible` for their occurrences (none for the root's bodies, so no Hide Component), each once, as the browser's light bulbs do (`BrowserController::hideBodies`, `hideOccurrences`, through Hide/Show's `setTargetsVisible`), one undo step; `tools/ui-hide-menu-test.sh` |
+| `Hide/Show hidden: Body1, Component1:1` (`shown`), `Hide/Show: nothing to hide or show in 2 item(s)` | Hide/Show (`view.toggle_visibility`, V, mitcad#2356) on several targets of the selection, one undo step (one target logs its row's `Visibility <path>: hidden`); see "Hide/Show of the selection"; `tools/ui-hide-show-key-test.sh` |
 | `Context menu checked: Transparent`, `Transparent: Body2, Part:1`, `Opaque: Body2`, `Browser eye Root/Bodies/Body2: transparent` (`opaque`), `View transparent: 1 body` (`none`) | Transparent in the view's and the Browser's context menus (mitcad#1093): checked while all the targets are transparent, the commands run, the row's half-open eye coming and going, the transparent bodies the view draws; [Transparent bodies and components](#transparent-bodies-and-components) |
 | `Context menu disabled: Move Up \| Move Down` | the entries of a Browser row's context menu that cannot be chosen (their tooltips say why), logged just before its `Context menu: …` line: the arrow keys pass over them in Windows' menus, so the Windows UI tests that choose an entry by its place count them out (`Ui-MenuSkipped` in `tools/ui-windows-lib.ps1`; mitcad#2104) |
 | `Find in Design opened`, `Find in Design found: 5 bodies, 0 components`, `Find in Design: hid 3 bodies` (`showed`, `1 component`; `selected …`, `appearance for N bodies`), `Find in Design button at x,y`, `Find in Design field\|components\|bodies\|visibility\|show\|hide\|appearance\|select\|all\|none\|close at x,y`, `Find in Design row N at x,y` | the Find in Design window (mitcad#350): the results after each search, what each button did (bodies by uid and components by occurrence, each once), and where the controls and the rows in sight are; the field is also logged as `Dialog field Find in Design: <text>`; `tools/ui-find-in-design-test.sh` |
@@ -21622,6 +21703,7 @@ next screenshot.
 | `Timeline Sketch1 at x,y`, `Timeline marker at x,y`, `Timeline button back at x,y` (start, back, forward, end) | the timeline's items, when they changed, also when the timeline moves in the window (a banner or another panel makes room) |
 | `Timeline search opened` / `closed`, `Timeline search field at x,y`, `Timeline button search at x,y` (`search-previous`, `search-next`), `Timeline search "fillet in:cover": 2 matches: Fillet2 (Cover), Fillet7 (Cover)` (`no matches`, `unknown filter is:x`), `Timeline search result Fillet2 (Cover) at x,y`, `Timeline search results hidden`, `Timeline search match 1 of 2: Fillet2 (Cover)`, `Timeline search cleared` / `cleared: selected Plane1 again, scrolled to 0`, `Selection restored after the timeline search: 1 item(s)` | the timeline search (mitcad#179): its field, the matches (when they change), the listed ones in sight, a step, the end and what it restored |
 | `Timeline colours: dark, marker #c8d0da, buttons #f0f0f0, window #1f2024, handle #5aa2ff` (`light, marker #2b3a4a, buttons the style's, …`), `Asking the platform for the dark colour scheme` | the timeline's palette colors at start and when the theme changes (the marker's handle: the Docked window's accent color, orange in the Floating layout); the switch of `MITCAD_TEST_COLOR_SCHEME` |
+| `Colour scheme in effect: dark (the platform's palette)` (`light`), `Colour scheme in effect: dark (MitCad's own palette, window #1f2024 over the platform's light one)`, `Colour scheme in effect: light (the platform did not switch to dark)` | the scheme `MITCAD_TEST_COLOR_SCHEME` asked for once it is settled (mitcad#2404, `framework/AppTheme` `applyTestColorScheme`, [above](#the-view)): from the platform, from MitCad's own palette on Linux where the platform kept its own (Qt's generic theme, the GTK one under Xvfb), or not in effect (Windows, macOS); checked by `tools/ui-theme-test.sh` and the look of `tools/ui-tutorials-test.py` |
 | `Browser row colours: dark, hidden #d0d4da: Root/Bodies/Body1, Root/Origin, Root/Sketches/Sketch1; error #ff9c9c: Root/Sketches/Sketch1/Fillet1` (`light, hidden #4c525c: …`; `none`; groups hidden, error, warning, success, info, each its color on the rows' palette now and at most 12 paths in order, then `<n> more`; a value that is none of these last, as `unknown <n>: <paths>`, mitcad#1143) | the Browser rows whose names have a color role (a hidden, failed or warned row; mitcad#1104: the item keeps the role, the delegate paints its color in the theme of the moment), after each rebuild and when the theme changes, when it changed; the test driver's `color-scheme light\|dark` switches the scheme at a step (`tools/ui-theme-test.sh`, `tools/ui-windows-test.ps1`) |
 | `Browser colors: Root #f29e1a, Root/Bodies/Body1 #f29e1a, Root/Bolt:1 #e0892a, Root/Bolt:1/Bodies/Body2 #e0892a` (`none` for a row without a bar), `Timeline component colors: Bolt #e0892a, Plate #3aa35b` (`none` without components) | the color bars of the Browser's component, occurrence and body rows in the tree's order (mitcad#1876), after a rebuild when the line changed; the timeline's band colors of the components (the root has no band) when they changed: a row's color is its component's timeline color, the root's rows the section caps' orange (`tools/ui-browser-component-colors-test.sh`) |
 | `Timeline feature colors: Sketch1 root, Extrude1 #e0892a, Fillet1 #3aa35b` (`none` without features) | each feature's color mark in the timeline, after a rebuild when the line changed (mitcad#2185): the color of the component it makes (a new-component operation, Component from Bodies: the `timeline` query's `made_component`), else of its own component, `root` for the root's features; an extrude edited to New Component and the fillets that went with it change at once (`tools/ui-new-component-fillets-test.sh`) |
@@ -22788,6 +22870,40 @@ drawing commands; it computes no geometry of its own.
   an undo step, and open the new drawing (`DocumentHost::createDrawing`;
   logged `Drawing created: D1 Drawing1 in C0`) with Base View on
   (mitcad#725).
+  **From the selection** (mitcad#2399, GitHub #621): `file.create_drawing`
+  (the File menu, its toolbar button, the command search;
+  `MainWindow::createDrawingOf` with `fromSelection`) with bodies or
+  occurrences selected, in the view or the browser (`SelectKind::Body`
+  items and `SelectKind::Component` ones with an occurrence; the root's
+  row and other kinds count for nothing), makes the drawing in the root's
+  Drawings folder as above and takes its subject from them
+  (`drawings::selectionSubject`, `MainWindow::selectionDrawingSubject`
+  from the `components` and `bodies` queries): one occurrence is its
+  Shows choice `occurrence:O1/O4`, one body of the root's own `body:F2.b0`;
+  several items, or a body an occurrence places, are the bodies they hold
+  (an occurrence's bodies and those of its occurrences, each once, in the
+  Shows list's order) as one `{"type": "bodies"}` subject, the record an
+  isolated whole-design view makes (mitcad#1293), a choice `selection:`
+  and the subject's JSON listed after the whole design as **The Selection
+  (3 bodies)**. Items not in the design are left out; nothing left, it
+  is a drawing of the design. Logged `Create Drawing from the selection:
+  occurrence:O2 (Component1:2)` (`2 bodies (Body1 and Body2)`). The
+  drawing's `name` says what it shows (`drawings::drawingNameFor`:
+  `Bracket:3 Drawing`, the occurrence's or the body's name; two items
+  `Plate and Rail Drawing`, more `Plate and 2 More Drawing`; ` 2`, ` 3`, …
+  after it when the root has a drawing of that name), renamable as any.
+  Opened, Base View's Shows is that choice
+  (`DrawingWorkspace::setSelectionSubject`, logged `Drawing Base View
+  shows the selection: occurrence:O2 (Component1:2)`) while the drawing
+  stays open; another drawing opened or this one closed, Shows is back to
+  what it was before unless it was changed meanwhile. A cut sheet chosen
+  in the dialog takes the selected bodies as before, under its default
+  name. Nothing selected: as before. A component's Create Drawing (the
+  browser's menus), the Drawings card's **+ Drawing** and the workspace
+  selector's Drawing take nothing from the selection. Test:
+  `tools/ui-drawing-from-selection-test.sh` (one occurrence of three,
+  then two bodies, then nothing selected: the view placed draws one, two,
+  then all five bodies); `app.unit` `drawing_tools.cpp`.
 - **The drawing's view** (`drawings/DrawingWorkspace`): a drawing takes
   the whole workspace (mitcad#1008). It is a child of the 3D view and
   covers all of it, edge to edge (no grid of the 3D view around it;
@@ -23198,8 +23314,8 @@ drawing commands; it computes no geometry of its own.
   | Hole Table (`drawing.hole_table`) | a click on a view, then where the table goes (its upper left corner) | Origin (Lower Left Corner, Component Origin), Tags (By Size, Numbers) | `add_drawing_annotation` `hole_table` with `at` and `table` |
   | Bill of Materials (`drawing.parts_list`) | a click on a view, then where the list goes | Rows (First Level, Components Only), Balloons (on: `"balloons": true`, a balloon on each row's bodies; mitcad#725) | `parts_list` with `at` and `table` (`levels`) |
   | Balloon (`drawing.balloon`) | a pick on a component's body, then where the balloon goes | | `balloon` |
-  | Weld Symbol (`drawing.weld`, mitcad#2350; ribbon short label Weld) | a pick (an edge, a corner or a joint's edge), then a click where the reference line starts | the symbols first, as icons (a grid of 16: No Weld and the 15 basic symbols, each `drawingOption_<option>_<symbol>`, its name in its tooltip): Arrow Side (Fillet), then Size, Fillet Size (Throat (a), Leg (z)), Penetration, Count, Length, Pitch, Contour (None, Flush, Convex, Concave), Finish (None, Ground (G), Machined (M), Chipped (C), Hammered (H), Rolled (R), Any Way (U)), Toes Blended, Other Side (No Weld) and Other Side Size, Staggered, All Around, Field Weld, Tail; a count, length or pitch is the other side's too while it has none of its own; a size that is no number makes no command | `weld` with `weld` (`weldOf`); drawn by the drawing's standard: ISO 2553 under ISO, AWS A2.4 under ASME; the tool stays for the next weld |
-  | Propose Welds (`drawing.propose_welds`, mitcad#2350; short label Propose) | clicks on the BUILD members whose joints are welded (one at least), then a click beside them that picks nothing | Size, Tail | `propose_drawing_welds` with `view`, the members' `picks` and `weld` (a fillet of that size and tail): a weld symbol on an edge of each of their joints the view shows, all around where the joint closes; proposing again keeps edited ones, adds new joints' and removes those of joints no longer there |
+  | Weld Symbol (`drawing.weld`, mitcad#2350; ribbon short label Weld) | a pick (an edge, a corner or a joint's edge), then a click where the reference line starts | the symbols first, as icons (a grid of 16: No Weld and the 15 basic symbols, each `drawingOption_<option>_<symbol>`, its name in its tooltip): Arrow Side (Fillet), then Size, Fillet Size (Throat (a), Leg (z)), Penetration, Count, Length, Pitch, Contour (None, Flush, Convex, Concave), Finish (None, Ground (G), Machined (M), Chipped (C), Hammered (H), Rolled (R), Any Way (U)), Toes Blended, Other Side (No Weld) and Other Side Size, Staggered, All Around, Field Weld, Tail; a count, length or pitch is the other side's too while it has none of its own; a size that is no number makes no command | `weld` with `weld` (`weldOf`); drawn by the drawing's standard: ISO 2553 under ISO, AWS A2.4 under ASME (Staggered: ISO's staggered mark, a `Z` through the reference line between the welds' `n×l` and `(e)`, mitcad#2379; AWS's other side offset along the line); the tool stays for the next weld |
+  | Propose Welds (`drawing.propose_welds`, mitcad#2350; short label Propose) | clicks on the BUILD members whose joints are welded (one at least), then a click beside them that picks nothing | Size, Tail | `propose_drawing_welds` with `view`, the members' `picks` and `weld` (a fillet of that size and tail): a weld symbol on an edge of each of their joints the view shows, all around where the joint closes; members crossing side by side (mitcad#2379) get it where they touch, all around when the contact's edges close round it; proposing again keeps edited ones, adds new joints' and removes those of joints no longer there |
 
   Each tool's options are kept, by tool, while the window lives. Esc
   clears the picks so far, then ends the tool; a tool's button again ends
@@ -26328,6 +26444,56 @@ menu in `ViewController::createMenus`, the model's `set_view_show`
   also counts the planes' orange in the view's own frame outside the
   orientation cube (at least 0.15 % shown: the default origin's 80 px squares, mitcad#1748; under 0.05 % hidden).
 
+## Hide/Show of the selection (mitcad#2356)
+
+GitHub mitcad/Mitcad#612. `view.toggle_visibility` (**Hide/Show**, icon
+`eye-off`), registered in `MainWindow::registerViewShowCommands`
+(`MainWindowVisibility.cpp`); its work is
+`BrowserController::toggleItemsVisibility`.
+
+- **Command:** an Action of mode Model (not in sketches, not while a
+  command's panel is open), default key **V** in the 3D view context
+  (Preferences › Keyboard Shortcuts rebinds it; `MITCAD_TEST_DEFAULT_SHORTCUTS`
+  checks the default), found by the command search (keywords hide, show,
+  visibility, light bulb, eye, toggle, body, component). On no toolbar
+  (the layout's list of commands without a place).
+- **What it acts on:** the window's selection (the view's picks or the
+  Browser's rows), each target once (`visibilityTargets`): the body of a
+  face, edge, vertex or body (`set_body_visible`), the occurrence of a
+  component other than the root (`set_occurrence_visible`), the sketch of
+  a sketch, profile, sketch curve or sketch point, and a construction
+  plane, axis or point (`set_feature_visible`). The origin's planes, axes
+  and point are no features and are left out. Nothing of that kind
+  selected: the status bar says `Select a body, component, sketch or
+  construction geometry to hide or show it` (logged `Hide/Show: nothing to
+  hide or show in 2 item(s)`).
+- **Which way:** all hidden when the first target's light bulb is on,
+  else all shown; those already so are left as they are.
+- **One target** goes as its Browser row's eye does
+  (`BrowserPanel::nodeOfItem`, `toggleVisibility`): the isolation's rules
+  (mitcad#1700), the hidden occurrences above it (mitcad#1995), its Show
+  When condition removed with the status message (mitcad#863); logged
+  `Visibility Root/Bodies/Body1: hidden`.
+- **Several:** one undo step (`setTargetsVisible`, `runVisibilityCommands`,
+  so also in every mode as the light bulbs), named `Hide Bodies` /
+  `Show Bodies` (bodies only), `Hide Components` / `Show Components`
+  (occurrences only), else `Hide Selection` / `Show Selection`. A bulk
+  change: those that follow Show When are left to it (`Hide Selection:
+  kept 1 following Show When: Leg`). Logged `Hide/Show hidden: Body1,
+  Component1:1` (`shown`).
+- **The same command elsewhere:** a Browser row's **Hide** / **Show**
+  (`BrowserController::rowVisibility`) runs it on the selected rows when
+  the row is one of several selected (the row's own item first), else the
+  row's eye as before; the eye itself stays the row's own. The view's
+  Hide submenu (`hideBodies`, `hideOccurrences`) sets the same light bulbs
+  through `setTargetsVisible`, hidden, one undo step as before.
+
+Tests: `tools/ui-hide-show-key-test.sh` (a body and a component selected
+in the Browser: V hides both in one undo step, V again shows both, the
+row menu's Hide on both rows; Hide/Show rebound to F8 in Keyboard
+Shortcuts, F8 hides and V no longer does; the command search runs it);
+`app.default_shortcuts` (V).
+
 ## Linked designs (mitcad#1416)
 
 A linked component (Insert Component, Linked) changes only with its file.
@@ -26416,7 +26582,13 @@ A linked component (Insert Component, Linked) changes only with its file.
     timeline, the browser, the commands, Undo and Redo are its, its root
     active, and the holder waits. The holder's other bodies are drawn
     around it, placed as they are, in a read-only component
-    `<holder> (assembly)`, and can be picked and measured. The title says
+    `<holder> (assembly)`, and can be picked and measured. They are drawn
+    faded, as context (see-through in their own color, as inactive
+    components are, whatever Ghost Inactive Components says; the view's
+    scope `outside`, mitcad#2353), the design's own bodies as usual. The
+    timeline has no row of the assembly (the model leaves its base
+    feature out of the `timeline` query, mitcad#2353); the browser shows
+    its component as the read-only context. The title says
     `<file> in place in <holder>`, and the band
     `Editing <name> in place in this assembly…` with **Finish**. Undo
     goes back only through the steps made in the mode. Autosave waits
@@ -26430,6 +26602,104 @@ A linked component (Insert Component, Linked) changes only with its file.
   - **Save** (File › Save, its key) in the mode writes the linked design's
     file (its preview kept; the holder is not written), and the other tabs
     that link it offer Update. Save As waits for Finish.
+  - **Its project** (mitcad#2353, `writeInPlaceDesign`): the linked
+    design is written as a save from its own tab would write it. In a
+    project with version history it records a version of its own (by the
+    author, the automatic message of the design's steps since it was
+    saved; the status bar says `Saved part.mitcad as version 2 (…)`), sent
+    to the remote as Save's versions are. In a Cloud project with edit
+    locks the project's edit lock is respected: the tab that lent the
+    design holds it (a read-only tab refuses in words, `<file> is not
+    saved: <why>`); in the mode without a tab the lock the mode holds
+    covers the write (below); otherwise the window takes the design's lock
+    for the write with its own session (`LockController::takeForWrite`, a
+    progress dialog `Taking the edit lock of part.mitcad…` when it takes
+    longer) and releases it after it. A design someone else edits is not
+    written: the message band says `part.mitcad is being edited by Sam
+    Other (since 14:02): the changes made in place are not saved to it.
+    Ask them to release its edit lock first.` (error; the same person in
+    another window or on another computer: `You are editing part.mitcad
+    in another window or on another computer…`), and the edits stay in
+    the mode. Without edit locks, and with the remote out of reach (as a
+    design opened then), it is written without a lock. The holder's Save
+    writing unsaved in-place edits (below) does the same.
+  - **The edit lock for the whole mode** (mitcad#2389): in a Cloud project
+    with edit locks, starting Edit in Place takes the linked design's lock
+    as opening it in its own tab does, and the mode holds it until it
+    ends. A design open in a tab uses that tab's lock: a tab that is
+    read-only because someone else edits the design refuses in words,
+    `part.mitcad is read-only: Sam Other is editing it. It cannot be
+    edited in place.` (warning), and a tab that lends its design keeps its
+    lock held and active while lent (it is not released at the idle time).
+    Without a tab the window takes the lock with its own session
+    (`LockController::holdLock`, the progress dialog `Taking the edit lock
+    of part.mitcad…` when it takes longer), refreshes it every half idle
+    time while the mode lasts, and releases it when the mode ends
+    (Finish, a discarded mode on closing, a start that failed). Held by
+    someone else, the mode does not start: the message band says
+    `part.mitcad is being edited by Sam Other (since 14:02): it cannot be
+    edited in place. Ask them to release its edit lock first.` (error; the
+    same person elsewhere: `You are editing part.mitcad in another window
+    or on another computer (since 14:02): it cannot be edited in place
+    here. Close it there first.`). Without edit locks, or with the remote
+    out of reach, the mode starts without a lock, and Save takes it for
+    the write as above. A lock someone takes while the mode holds it (it
+    went stale) is no longer held: the status bar says `Sam Other took the
+    edit lock of part.mitcad: the changes made in place cannot be saved to
+    it.` (error), and Save in the mode is refused in words as above.
+    Unsaved edits left after Finish take the lock again for the holder's
+    Save.
+  - **Brought up to date when the mode takes the lock** (mitcad#2397): as
+    opening the design in its own tab brings it up to date after taking its
+    lock, the lock the mode takes without a tab is followed by a look at
+    the remote (`RemoteController::bringUpToDate`; a fetch under the
+    progress dialog `Looking for newer versions of part.mitcad…` when the
+    lock's view saw newer versions) and, when the remote's version of the
+    design is newer than the project's, a sync (`Bringing part.mitcad up to
+    date…`) before the file is read, so the mode starts from the latest
+    version. Newer versions of other files only wait for Sync. When that
+    needs a choice the mode does not start and its lock is released: the
+    project's versions not sent yet change the design too (`A newer version
+    of part.mitcad is on the remote, and your versions not sent yet change
+    it too: Sync asks which to keep. Sync first, then edit it in place.`),
+    the sync stopped for a choice (`part.mitcad cannot be brought up to
+    date: Sync needs your choice first. Sync, then edit it in place.`) or
+    for changes no version holds (`part.mitcad cannot be brought up to
+    date: <why>`), or unsaved edits made in place before started from the
+    older version (`A newer version of part.mitcad is on the remote, and
+    the changes made in place before are not saved: save them first (Sync
+    then asks which version to keep), then edit it in place.`); all errors
+    in the message band. A remote out of reach leaves the design as it is,
+    said in the status bar (`Newer versions of part.mitcad could not be
+    looked for (<why>); it is edited as it is here.`). The assembly itself
+    is not opened again under the mode when the sync changed its file: the
+    status bar says `holder.mitcad changed with the sync; it stays open as
+    it was, and Save asks how to keep it.` A design lent by its tab was
+    brought up to date when that tab took its lock.
+  - **Lock requests answered from the mode** (mitcad#2397): another user's
+    request (Request Edit Access) for a lock the mode holds, or for the
+    lock of a tab that lends its design to the mode, is shown as for a
+    design's own tab, in the dialog `Edit Access Request`: `Sam Other asks
+    to edit part.mitcad, which you are editing in place[: "<message>"]`,
+    `Releasing finishes Edit in Place and hands the edit lock over.`, with
+    **Finish and Release** (with unsaved edits **Save, Finish and Release**
+    and **Release Without Saving**), **Keep 15 More Minutes** and
+    **Decline…** (a message). The held lock's requests are read at the
+    project's poll interval (2 minutes while live updates are connected, at
+    once on a live message), which writes their receipts, so the requester
+    sees the request was seen. Releasing ends the mode as Finish does
+    (saved first, or its unsaved edits dropped: without a tab the assembly
+    keeps what it took from them as one step that Undo takes back, said in
+    the band; a lending tab gets them back unsaved and turns read-only with
+    them, as Release Without Saving leaves a tab), sends the project's
+    versions (`Sending the versions of part.mitcad to Sam Other…`) and
+    hands the lock over to the requester (`lock_hand_over`), who gets it at
+    once; the status bar says `You handed the edit lock of part.mitcad to
+    Sam Other.` A mode that cannot end now (a command open, a save that
+    failed) keeps the lock: `part.mitcad was not released: Edit in Place
+    goes on, and the edit lock stays yours.` (error). No answer within the
+    idle time hands it over the same way, the mode's unsaved edits kept for
+    the holder's Save (saved first when autosave is on).
   - **Finish Edit in Place** (`assemble.finish_edit_in_place`: the band's
     Finish, the root row's menu in the browser, the view's menu, Esc on an
     idle view with nothing selected) gives the holder back, which takes the
@@ -26449,7 +26719,39 @@ A linked component (Insert Component, Linked) changes only with its file.
     `Edit in Place notice: <line>`, `Edit in Place: saved <file>`, `Finish
     Edit in Place C2: changed|unchanged, saved|unsaved; <undo step>|no undo
     step`, `Edit in Place: part.mitcad back in its tab`, `Save question:
-    part.mitcad (in place)`.
+    part.mitcad (in place)`; the write's lock (mitcad#2353): `Edit lock
+    for writing: part.mitcad taken|refreshed`, `… released`, `… held by
+    Sam Other[, another session]: not written`, `… not confirmed (<class>):
+    <message>`, `… none for part.mitcad (edit locks off)`, `… part.mitcad
+    is read-only in its tab: not written`, `… part.mitcad held for Edit in
+    Place`; the mode's lock (mitcad#2389): `Edit lock for Edit in Place:
+    part.mitcad taken|refreshed`, `… released`, `… held by Sam Other[,
+    another session]: not started`, `… not confirmed (<class>):
+    <message>`, `… refresh failed (<class>): <message>`, `… lost[ to Sam
+    Other]`, `Edit in Place: part.mitcad is read-only in its tab: not
+    started`, the lending tab's `Edit lock: part.mitcad held while it is
+    edited in place` and `… back from Edit in Place`; bringing it up to
+    date (mitcad#2397): `Edit in Place: part.mitcad is up to date`, `…
+    bringing part.mitcad up to date (sync)`, `Sync: <case>[ (<class>)], <n>
+    replayed, sent|nothing sent`, `Edit in Place: part.mitcad brought up to
+    date`, `… not brought up to date (fetch|sync: <class>): <message>`, `…
+    has newer versions on the remote and changed here too: not started`,
+    `… has newer versions on the remote and unsaved changes made in place:
+    not started`, `… bringing part.mitcad up to date needs a choice: not
+    started`, `… stopped (<class>): not started`, `… cancelled`; the
+    requests (mitcad#2397): `Edit lock receipt: part.mitcad for Sam Other
+    (edited in place)`, `Edit lock request: <text> [<buttons>]`, `Edit lock
+    request: Finish and Release|Release Without Saving|Keep 15 More
+    Minutes|Decline`, `Edit in Place: ending for a lock request:
+    part.mitcad (save|discard|keep, saved|unsaved changes)`, `Edit lock for
+    Edit in Place: handing part.mitcad over to Sam Other
+    (released|no answer)`, `… part.mitcad handed over to Sam Other`, `…
+    hand-over of part.mitcad cancelled: the mode goes on`, `… not handed
+    over (<outcome>)`, `… poll failed (<class>): <message>`, `Edit lock
+    request of Sam Other: kept until <time> (edited in place)`, `… declined[:
+    <message>] (edited in place)`, the lending tab's `Edit lock: part.mitcad
+    is edited in place: ending that for Sam Other (<why>)`; the view's
+    `View inactive ghosts: 1 body (active the design edited in place)`.
   - **Tests:** `tools/ui-edit-in-place-test.sh` and
     `tools/ui-windows-edit-in-place-test.ps1` (`app.ui-windows-edit-in-place`,
     both `tools/ui-scripts/edit-in-place.mitcad-ui`): Edit in Place on a
@@ -26457,9 +26759,23 @@ A linked component (Insert Component, Linked) changes only with its file.
     component frozen with its notice, an extrusion in the part, Save writing
     the part's file, Finish with one undo step in the holder, the part's
     tab showing the same edit, the holder's step undone and taken again with
-    Update, Esc finishing an Edit in Place that changed nothing; the model's
-    `core/model-tests/api/src/edit_in_place_tests.rs`. The UI scripts read
-    a text of a model query with the driver's `capture-model-text`.
+    Update, Esc finishing an Edit in Place that changed nothing, no
+    timeline row of the assembly and the assembly faded (mitcad#2353); the
+    model's `core/model-tests/api/src/edit_in_place_tests.rs`. The UI
+    scripts read a text of a model query with the driver's
+    `capture-model-text`. `tools/ui-edit-in-place-project-test.sh`
+    (`tools/ui-scripts/edit-in-place-project.mitcad-ui`, mitcad#2353,
+    #2389, #2397): in a Cloud project with edit locks on two clones, Edit
+    in Place takes the part's lock and syncs in the remote's newer version
+    of the part before reading it, the remote shows the lock as the user's
+    while the mode lasts, Save in place records a version of the part
+    under that lock, and Finish releases it, leaving no lock of the part;
+    the part open in its own tab lends its lock, held and active on the
+    remote during the mode and still the tab's after it; another user's
+    request for the lock the mode holds is shown, and Finish and Release
+    hands it over to them; while they hold it, Edit in Place does not
+    start and says who edits the part, the file and its versions left as
+    they were and the other user's lock kept.
 - **A file outside the project** (mitcad#1719, GitHub mitcad/Mitcad#251):
   a link is followed only to a file in the design's project (mitcad#929;
   without a project, the design's folder and the folders in it). Before
@@ -29091,7 +29407,8 @@ else the mouse goes through.
   `load` sets the check from the feature, so a rib saved without the field
   opens with it off and keeps its ends as drawn. *Direction* (`direction`,
   a choice before Flip, shown whatever Extend Ends is: Perpendicular to
-  Chord, the default, Sketch X, Sketch Y or Along Line) and *Direction
+  Chord, the default, Sketch X, Sketch Y, Along Line or Normal to Curves,
+  mitcad#2398, its own section) and *Direction
   Line* (`direction_line`, one straight sketch line, edge or axis, shown
   for Along Line): `build` writes `"direction": "sketch_x"`/`"sketch_y"`
   or `{"along": <the line's reference>}`, nothing for Perpendicular to
@@ -29763,6 +30080,47 @@ they landed.
   `core/model-tests/features-profile/src/f3_tests.rs`
   (`rib_ends_extend_to_the_bodies`,
   `patterned_ribs_and_webs_are_rebuilt_at_each_copy`).
+
+## Web: every curve kind, rings, dense grids (mitcad#2364)
+
+A Web refused a circle ("a web needs open curves") and an ellipse, an
+elliptical arc, a spline or a conic ("unsupported: …"), and was slow on
+dense grids (hexagonal cells, grids of circles).
+
+- **Panel** (`commands/SweepCommands.cpp`, `ribOrWeb`): the Web's tooltip
+  says *Thin walls along sketch curves, grown along the sketch normal*
+  (no longer "open"), its Curves row's *Sketch curves of one
+  sketch, open or closed, or a flat intersection curve* (the Rib's keep
+  "open"). Nothing else in the panel changes; the curves picker already
+  took every sketch curve.
+- **Model** (`core/model/src/features/rib.rs`, commands.md "rib, web"): a
+  web's closed curves are no longer refused; a point among the curves is,
+  in words.
+- **Kernel** (`geometry/src/rib.cpp`, `web_tool`): an ellipse, a spline,
+  a conic or any curve other than a line or a circular arc is a free curve
+  whose sides are its offsets in the sketch plane (B-splines within
+  1e-7 mm), its miters found by crossing those sides (and their runs on
+  past the ends) in the plane; a spline with corners is split there into
+  smooth pieces that meet as two curves do; a smooth closed curve is a
+  ring (`ring_band`, `ring_wall`). Without a draft, the bands of the walls
+  whose ends need no continuing and of the node pieces are joined in the
+  sketch plane in one boolean and grown in one prism (`grown_bands`; To
+  Next cut by the bodies once, `grown_to_bodies`) instead of a prism per
+  wall and node fused in 3D. A wall too thick for a curve's bend fails in
+  words with the place.
+- **Tests:** `tools/ui-web-circle-test.sh` with `app.ui-windows-web-circle`
+  and `app.ui-macos-web-circle` (the shared steps
+  `tools/ui-scripts/web-circle.mitcad-ui` on `web-circle.json`: Web on a
+  circle on a plate by a depth, OK makes a ring joined to the plate, one
+  body of 50000 + 800π mm³, Undo); `test_sweeps` (`test_web_curves`: a
+  circle, an ellipse, an elliptical arc, open and closed splines and a
+  conic, each wall's sides 1 from its curve within 1e-6 and joined to a
+  plate, a ring up to a roof, a spline with a corner mitered, a wall too
+  thick for an ellipse's bend, Extend Ends on an elliptical arc, a mixed
+  grid; `test_web_grids`: 200 hexagonal cells of lines and 10 × 10
+  overlapping circles, each one body joined to the plate); the mock test
+  `webs_take_every_curve_kind` in
+  `core/model-tests/features-profile/src/f3_tests.rs`.
 
 ## The Render workspace
 
@@ -30582,17 +30940,65 @@ guide steps are in [docs/tutorials.md](../docs/tutorials.md).
   picks or a panel is open) are held back (`Guide: input held back on
   <place> during step <id>`, the note "Held back during this tutorial
   step."); the wheel and the middle and right buttons stay free unless
-  the step says `"navigation": false`. Escape with no command open ends
+  the step says `"navigation": false`, and so does a left press that
+  navigates by the active scheme (Alt + left orbit, the orientation
+  cube's drag; `OcctViewer::navigationPress`) and the arrow keys' turns
+  (`view.turn_*`). Escape with no command open ends
   it (`Guide: step <id> left (escape)`). Done: `Guide: step <id> done:
-  <what>`. Where it is: `Guide: step <id> target at x,y wxh` (or `not
+  <what>`. A `navigate` step (mitcad#2369) is done by the user's orbit,
+  pan or zoom that moved the camera (`OcctViewer::viewNavigated`, from
+  OCCT's orbit, pan and zoom handlers and the arrow keys' turn): `Guide:
+  step <id> done: the view orbited` (`panned`, `zoomed`); another action
+  leaves it open (`Guide: step <id> view zoomed, not its orbit`, once an
+  action a step). Where it is: `Guide: step <id> target at x,y wxh` (or `not
   shown`), `Guide callout at x,y`, `Guide leave button at x,y`. The
   datums' places logged for UI tests keep clear of the callout as of the
   cards (`TutorialGuide::calloutRect`, logged again when it moves;
   mitcad#2311).
+- **A step with hold** (`"hold": true`, mitcad#2368): once done (`step_done`
+  sent at once, once) it logs `Guide: holding input after step <id>` and
+  keeps the application event filter: its callout and outline hidden, every
+  command but Leave Tutorial and the camera's (while navigation is allowed)
+  refused (`Guide: command <id> refused during the hold after step <id>`,
+  a `refused` event, no note), left clicks in the view held back even with
+  a drawing tool or a panel open, the Browser, the timeline, the Projects
+  and Configuration panels too (`Guide: input held back on <place> during
+  the hold after step <id>`); keys, the tutorial pane, view navigation and
+  an open panel stay free. It ends at the next step, the bridge's
+  `release_hold` (`mitcad.releaseHold()`), `end_step` (MCP's `end`), Leave
+  Tutorial or the tutorial closed: `Guide: hold after step <id> released
+  (<next step | released | ended | leave | closed>)`, no `step_left`. The
+  guide's state has `holding`.
+- **Hints over the step's target** (mitcad#2366, GitHub mitcad/Mitcad#634;
+  `tutorials/GuideDemonstration`, `tutorials/GuideBindings`): input held
+  back is an event to the page, `held` with its place (`view`, `browser`,
+  `timeline`, `projects`, `configuration`), its input (`click`,
+  `double_click`, `wheel`, a wheel at most once a second), the button and
+  the keys held (`Guide: held <input> on <place> during step <id>`). A
+  page's `window.mitcad.demonstrate` plays its own pictures (SVG, PNG,
+  JPEG; files of the tutorial's folder or `data:` addresses) frame by
+  frame over the step's target, re-read every frame so that they follow
+  the window's size and its panes, on the layer `guideDemonstration`
+  (over the window, between the outline and the callout, transparent for
+  the mouse: the learner's input reaches what is under it; the real
+  pointer never moves). It ends when its plays end, the page stops it
+  (`stopDemonstration`), another replaces it or the step ends
+  (`demonstration_ended` with `played`, `stopped`, `replaced`, `step`).
+  Logged: `Guide: demonstration on step <id> started: <n> frames, played
+  once|played <n> times|until stopped[, "<label>"]`, `Guide: demonstration
+  frame <n> at x,y (in|outside the target)` (the frame's own place, in the
+  top window's coordinates, when it is first shown in a play), `Guide:
+  demonstration on step <id> waits for its target`, `Guide: demonstration
+  on step <id> ended (<reason>)`, `Tutorial bridge: the demonstration was
+  refused: <reason>`. `shortcut` gives a command's keys as the learner has
+  them now (`CommandRegistry::effectiveShortcuts`), `navigation` the
+  view's orbit, pan and zoom gestures of the learner's scheme
+  (`OcctViewer::navigation`).
 - **Help › Leave Tutorial** (`help.leave_tutorial`, available while a
-  step is shown or a tutorial is open, during commands too; also the
-  pane's and the callout's button): ends the step (`left (leave)`) and
-  closes the pane (`Tutorial: pane closed`). A step never holds it back.
+  step is shown or held after, or a tutorial is open, during commands too;
+  also the pane's and the callout's button): ends the step (`left (leave)`)
+  or releases its hold, and closes the pane (`Tutorial: pane closed`). A
+  step never holds it back.
 
 Tests: `app/tests/guide_step.cpp`, `app/tests/tutorial_sources.cpp`,
 `core/vcs/src/tests/tutorials_tests.rs`, the UI test
@@ -30609,7 +31015,30 @@ after the close the card In progress (step 1 of 5) on the page shown
 again after the first step, over the modified design the card Done on
 that design's page at the end), its `look` mode (pictures of
 the Start page's tutorials, light and dark, Floating and Docked; not a
-ctest), and
+ctest), its `quit` mode (`app.ui-linux-tutorials-quit`,
+`app.ui-windows-tutorials-quit`, mitcad#2394: MitCad quits with the
+example tutorial's page open, in the Floating layout with the pane in
+front and in the Docked layout with the Start page shown again over it;
+CEF ends before the window goes, and the run must end with exit code 0;
+every run of every mode fails on a fatal check of the browser component in
+its log), its `hold` mode (`app.ui-linux-tutorials-hold`,
+`app.ui-windows-tutorials-hold`, mitcad#2368: a step with hold done as the
+rectangle tool is picked, clicks in the view adding no geometry and a
+command refused during the hold, the next step's rectangle drawn, Leave
+Tutorial during a hold freeing all input), its `hints` mode (`app.ui-linux-tutorials-hints`,
+`app.ui-windows-tutorials-hints`, mitcad#2366: the learner's keys and
+gestures read by a page, its run's settings choosing Alt + left to orbit;
+a Browser-row step's demonstration over the row after the page's own
+delay, a click held back on the timeline heard as `held` and the hint
+shown at once, stopped by the page, and the learner's own click on the row
+through the playing hint completing the step; an orbit step's
+demonstration of the configured gesture with its key held, ended by Leave
+Tutorial), `app/tests/guide_demonstration.cpp`, `tools/ui-guide-navigate-test.sh` (`navigate` steps on the demo
+block through the test step `guide-step`: an orbit step left open by a
+wheel zoom, a pan and a press without a move and done once by an orbit
+drag, done after a scheme change by that scheme's orbit gesture, a zoom
+step by the wheel, an orbit step by an arrow key, an Alt + left orbit free
+during a step aimed at a command; mitcad#2369), and
 `ui_guide` in `tools/ui-mcp-live.py` and
 `tools/ui-windows-mcp-test.ps1`. The Python script runs with
 `MITCAD_LOG_PICKS=1`, as the shell and PowerShell test libraries do, so
@@ -31834,3 +32263,200 @@ Cylinder/Cone/Torus) still wants a real face.
   picked in the browser; logged `Added axis Axis1: origin (20, 0, 10),
   direction (0, 0, 1)` and `Added axis Axis2: origin (20, 0, 0), direction
   (0, 0, 1)`.
+
+## Live tools on the sub-spindle (mitcad#2375)
+
+`cam/MainWindowCam.cpp` (the milling panels' *On the sub-spindle*),
+`cam/CamMachinesDialog.cpp` (the B head's clamp, the Sub-Spindle page),
+`cam/MainWindowCamStock.cpp` (the sub-spindle's live cuts in Simulate);
+the model's commands in `core/model-api/src/commands.md`, "CAM: live
+tools on the sub-spindle"; the design in `docs/cam.md`, same title.
+
+- **Machines and Tools…**: Edit Machine… of a lathe shows *B Head Clamp*
+  (`camMachineBClamp`) and *B Head Unclamp* (`camMachineBUnclamp`) under
+  *B head* when it is ticked, and a **Sub-Spindle** page (after Keep-Out
+  Zones, shown while *Sub-spindle* is ticked): *Lowest Speed (rpm)*
+  (`camMachineSubMinRpm`), *Highest Speed (rpm)* (`camMachineSubMaxRpm`;
+  0: the main spindle's speeds), *Travel From Z* and *Travel To Z*
+  (`camMachineSubTravelMin`, `camMachineSubTravelMax`: the machine Z of
+  its jaws' face, both or neither), *Chuck Diameter*
+  (`camMachineSubChuckDiameter`), *Axis Letter* (`camMachineSubAxis`: A,
+  B, E), *Synchronize Spindles*, *Separate Spindles*, *Close Chuck*,
+  *Open Chuck*, *Open Main Chuck*, *Spindle Forward*, *Spindle Reverse*,
+  *Spindle Stop* (`camMachineSyncOn`, `camMachineSyncOff`,
+  `camMachineSubChuckClose`, `camMachineSubChuckOpen`,
+  `camMachineMainChuckOpen`, `camMachineSubCw`, `camMachineSubCcw`,
+  `camMachineSubStop`) and, with *C axis and live tools*, *C Axis On*,
+  *C Axis Off* (blocks separated by ";"), *C Axis Clamp*, *C Axis
+  Unclamp* (`camMachineSubCAxisOn`, `camMachineSubCAxisOff`,
+  `camMachineSubCClamp`, `camMachineSubCUnclamp`). OK sends the codes in
+  `mill_turn` and the data in `sub_spindle`; a wrong travel or speed is
+  said under the pages and shows the Sub-Spindle page.
+- **Facing**, **Contour**, **Pocket**, **Adaptive Clearing** and
+  **Drill** in a lathe setup that hands over to the sub-spindle show *On
+  the sub-spindle* (sends `sub_spindle`; loaded when edited).
+- **Generate** draws such an operation's toolpath on the part where it
+  was; the lathe check's findings (the sub-spindle's travel at the
+  hand-over, its speeds, its chuck) show as the other findings.
+  **Simulate** adds "The live tools on the sub-spindle: at most … mm
+  left over the part's back." to its summary.
+- **Log lines** (for UI tests): `CAM machine mill-turn codes: mill-turn:
+  {"mill_turn":{…},"sub_spindle":{…}}` (with `MITCAD_TEST_INPUT`, when
+  the machine shown has either), `CAM live tools: Setup 1: face on the
+  sub-spindle, 1 operation(s), left 0, gouge 0, 0 rapid cut(s)`, `CAM
+  finding Setup 1: The hand-over before Parting Off 1: the sub-spindle
+  goes beyond its travel.`; the rest as the previous sections'.
+- **Tests:** `tools/ui-cam-mill-turn-sub-test.sh` (Linux, Xvfb),
+  `app.ui-windows-cam-mill-turn-sub` and `app.ui-macos-cam-mill-turn-sub`
+  run the shared script `tools/ui-scripts/cam-mill-turn-sub.mitcad-ui` on
+  `tools/ui-scripts/cam-mill-turn-sub.json` (a block on a lathe with every
+  axis): Edit Machine… with the B head's clamp and the Sub-Spindle page
+  (its speed, travel, chuck, axis E, stop and C axis), a setup handing
+  over, the back faced, a Drill on the sub-spindle from its panel and a
+  flat with the Y axis there, Generate, Simulate (the sub-spindle's live
+  cuts), Post Process… (the sub-spindle's stop, its C axis on, clamped
+  and off, G19, its axis E) and the lathe check's finding when the work
+  zero moves the part out of the sub-spindle's reach.
+
+## The sub-spindle's body, its moving zones and a Z-only control (mitcad#2392)
+
+`cam/CamMachinesDialog.cpp` (the Sub-Spindle page's body, where it waits
+and the Z-only control, the Sub-Spindle Zones page),
+`cam/MainWindowCam.cpp` and `cam/MainWindowCamTurning.cpp` (the
+operation panels' note), `cam/CamToolpaths.cpp` (`cam::mainAfterSub`),
+`browser/BrowserPanel.cpp` (the misplaced operation's row),
+`cam/MainWindowCamStock.cpp` (the sub-spindle's hits in Simulate); the
+model's commands in `core/model-api/src/commands.md`, "CAM: the
+sub-spindle's body, its moving zones and a Z-only control"; the design in
+`docs/cam.md`, same title.
+
+- **Machines and Tools…**: Edit Machine… of a lathe with a sub-spindle
+  shows on its **Sub-Spindle** page, after *Chuck Diameter*: *Chuck
+  Length* (`camMachineSubChuckLength`; 0: without end), *Housing
+  Diameter* (`camMachineSubHousingDiameter`; 0: none), *Housing Length*
+  (`camMachineSubHousingLength`; 0: without end) and *Waits at Z*
+  (`camMachineSubPark`: the machine Z of its jaws' face while the main
+  spindle cuts; empty: the end of its travel); with the C axis's rows
+  *The control mirrors only Z* (`camMachineSubMirrorZ`, sends
+  `mill_turn.sub_mirror_z_only`). A **Sub-Spindle Zones** page after it
+  (shown with the sub-spindle) lists the zones moving with it as the
+  Keep-Out Zones page lists the machine's (`camMachineSubZoneList`,
+  `camMachineSubZoneAdd`, `camMachineSubZoneEdit`,
+  `camMachineSubZoneRemove`; the zone dialog as there, Z measured from
+  the sub-spindle's jaws' face). OK sends them in `sub_spindle`; a
+  length below zero or a Z that does not read is said under the pages and
+  shows the Sub-Spindle page.
+- **The operation panels** (Facing, Contour, Pocket, Adaptive Clearing,
+  Drill and the turning operations): a note row `spindle_order` shows the
+  warning "On the main spindle after the sub-spindle's operations:
+  Generate refuses it." while the
+  operation is not on the sub-spindle and would come after one that is
+  (a new one is added last; an edited one stays where it is). The panels'
+  data (`camPanelData`) carries each setup's operations' `id`,
+  `sub_spindle` and `suppressed` for it.
+- **The browser**: such an operation's row is red, its tooltip the
+  model's `problem` in words in place of its state's.
+- **Generate** says "Could not generate every toolpath. Turn Facing 3:
+  It is on the main spindle after the sub-spindle's operations: move it
+  before them." and computes the others; the lathe check's findings of
+  the sub-spindle's chuck, housing and moving zones show as the other
+  findings. **Simulate** adds "%n move(s) run into the sub-spindle or a
+  zone moving with it." to its summary and shows the first as its
+  warning (when no rapid cuts the stock).
+- **Log lines** (for UI tests): `CAM machine mill-turn codes: …` with
+  the new fields, `Panel Turn Facing note spindle_order:  (warning: On
+  the main spindle after …)`, `Browser CAM: Setup 1 [… Turn Facing 3
+  not_generated (It is on the main spindle after the sub-spindle's
+  operations: move it before them.)]`, `CAM sub-spindle hits: Setup 1:
+  4`, `CAM sub-spindle hit Setup 1: Turn Facing 2: the tool runs into Sub
+  guard, which moves with the sub-spindle.`
+- **Tests:** `app/tests/cam_sub_order.cpp` (app.unit) and the UI test
+  `tools/ui-scripts/cam-mill-turn-sub.mitcad-ui` (run on Linux, Windows
+  and macOS as `app.ui-windows-cam-mill-turn-sub` and
+  `app.ui-macos-cam-mill-turn-sub` run it): the Sub-Spindle page's body,
+  where it waits and the Z-only control, a guard on the Sub-Spindle Zones
+  page, its hit in Simulate and in the lathe check, and Turn Facing added
+  on the main spindle after the sub-spindle's operations (its panel's
+  warning, the browser's row, Generate's refusal).
+
+## Rib: Direction Normal to Curves (mitcad#2398)
+
+GitHub mitcad/Mitcad#651: a rib of one width along a chain with a slanted
+piece, its far side the chain offset by the depth (as a sketch's Offset).
+
+- **Panel** (`commands/SweepCommands.cpp`, `ribOrWeb`; the Rib only):
+  *Direction* has a fifth choice, *Normal to Curves* (`normal`), and a
+  new choice *Corners* (`corners`: Sharp, the default, or Round; after
+  Direction Line, before Flip) is shown while Direction is Normal to
+  Curves and Depth Type is Depth. `build` writes `"direction": "normal"`
+  and, for Round, `"corners": "round"` (Sharp is written as nothing).
+  With Depth Type To Next the choice stays, `build` writes no direction
+  (the rib grows as Perpendicular to Chord, as before) and Direction's
+  row note (`withRowNote`, `ribNormalToNext`) says *With To Next the rib
+  grows at right angles to the chord; Normal to Curves needs Depth Type
+  Depth.* `load` sets Corners back from the feature (absent: Sharp).
+  The preview runs the same definition.
+- **Model** (`core/model/src/features/rib.rs`, `normal_far`;
+  `commands.md` "rib, web"): the chain is offset in the sketch plane by
+  the sketch's Offset (`mitcad_sketch::offset::compute`, and
+  `compute_sharp` for Corners Sharp on lines and arcs, mitcad#1774's
+  sharp corners) and sent to the kernel as `RibSpec::far`
+  (`RibFarCurve`: each piece with the chain curve it belongs to, and
+  round corners); `geometry/src/rib.cpp` builds the band between the
+  chain and the far side (with a draft `drafted_normal_rib`: ruled faces
+  between each curve and its offset, cones about round corners).
+- **Tests:** `core/model-tests/features-profile/src/rib_normal_tests.rs`
+  (mock kernel: the far side of the report's chain, 30 from each line,
+  sharp, round and flipped, a spline's round corner, the draft's and To
+  Next's refusals) and `cli.f3_rib_normal`
+  (`tools/cli/tests/f3_rib_normal.json`: the same chain on a plate
+  between two walls, analytic volumes for sharp, round, flipped, drafted
+  and with Extend Ends and End Offset, each far face 30 from its curve's
+  face).
+
+## The sub-spindle drawn in Simulate, the turret's body, the sub-spindle's profile (mitcad#2405)
+
+`cam/CamMachinesDialog.cpp` (the Sub-Spindle page's profile and the
+turret's body), `cam/MainWindowCamStock.cpp` (`showCamSubSpindle`),
+`cam/MainWindowCam.cpp` (the scene), `cam/CamToolpaths.cpp`
+(`cam::subSpindleLines`, `cam::subSpindleFace`),
+`view/CamToolpathOverlay.cpp` (the lines); the model's commands in
+`core/model-api/src/commands.md`, "CAM: the sub-spindle drawn in
+Simulate, the turret's body against it, its own profile"; the design in
+`docs/cam.md`, "The sub-spindle drawn, the turret's body and the
+sub-spindle's profile".
+
+- **Machines and Tools…**: Edit Machine… of a lathe with a sub-spindle
+  shows on its **Sub-Spindle** page, after *Waits at Z*: *Body Profile*
+  (`camMachineSubProfile`: points "Z, diameter" separated by ";", Z from
+  its jaws' face, in order along Z; empty: none; sends
+  `sub_spindle.profile`) and *Turret Body X From*, *Turret Body X To*,
+  *Turret Body Z From*, *Turret Body Z To* (`camMachineTurretXMin`,
+  `camMachineTurretXMax`, `camMachineTurretZMin`, `camMachineTurretZMax`:
+  the turret's body from the tool's point, all four or none; sends
+  `turret_body`, removed when all four are empty). A point that does not
+  read, points out of order, a single point or ends the wrong way round
+  are said under the pages and show the Sub-Spindle page.
+- **Simulate** draws the sub-spindle of a lathe setup (its chuck, its
+  housing and its profile, revolved about the spindle axis: a circle at
+  each point of a part and four lines along it, in the edges' color,
+  never picked) where it is as the operation at the slider's place cuts:
+  where it waits for the main spindle's operations (not drawn without the
+  setup's work zero on the machine), at the grip for the parting off and
+  for the sub-spindle's operations, which the view draws on the part
+  where it was. It moves with the slider through the hand-over and goes
+  when Simulate closes. The fixed zones are not drawn, nor are the zones
+  moving with it. Generate and Simulate say the turret's hits in words as
+  the tool's ("Turn Facing 2: the turret runs into the sub-spindle's
+  chuck.").
+- **Log lines** (for UI tests): `CAM machine mill-turn codes: …` with
+  `turret_body`, `CAM sub-spindle outline: Setup 1: 3 part(s)`, `CAM
+  sub-spindle drawn: Setup 1: Turn Facing 1 at Z 580, 156 segments`, `CAM
+  sub-spindle drawn: Setup 1: Turn Facing 1 where it waits is not known`
+  (each when it changes).
+- **Tests:** `app/tests/cam_sub_drawn.cpp` (app.unit) and the UI test
+  `tools/ui-scripts/cam-mill-turn-sub.mitcad-ui` (Linux, and as
+  `app.ui-windows-cam-mill-turn-sub` and `app.ui-macos-cam-mill-turn-sub`):
+  the profile and the turret's body typed on the Sub-Spindle page, the
+  turret's hit in Simulate and in the lathe check, the sub-spindle drawn
+  at the grip and, with the work zero on the machine, where it waits.

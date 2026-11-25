@@ -4,6 +4,8 @@
 #include <QSettings>
 #include <QString>
 
+#include "mitcad_bridge/lib.h"
+
 namespace mitcad::sketch {
 
 namespace {
@@ -85,5 +87,21 @@ bool projectFaceOnCreate() {
 void saveProjectFaceOnCreate(bool on) { QSettings().setValue(QLatin1String(kProjectFaceSetting), on); }
 
 void resetProjectFaceOnCreate() { QSettings().remove(QLatin1String(kProjectFaceSetting)); }
+
+// Hide a sketch when a feature uses it (mitcad#2393).
+namespace {
+
+const char* const kHideUsedSketchesSetting = "sketch/hideUsedSketches";
+
+} // namespace
+
+bool hideUsedSketches() { return QSettings().value(QLatin1String(kHideUsedSketchesSetting), true).toBool(); }
+
+void saveHideUsedSketches(bool on) {
+  QSettings().setValue(QLatin1String(kHideUsedSketchesSetting), on);
+  applyHideUsedSketches();
+}
+
+void applyHideUsedSketches() { ::mitcad::set_hide_used_sketches(hideUsedSketches()); }
 
 } // namespace mitcad::sketch

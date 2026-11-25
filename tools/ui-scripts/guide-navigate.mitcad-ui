@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: MIT
+# A tutorial's guide step done by a navigation of the view (mitcad#2369,
+# GitHub mitcad/Mitcad#631) on the demo block: an orbit step stays open on
+# a wheel zoom, a pan drag and a press of the orbit gesture without a move,
+# and is done once by an orbit drag; with another navigation scheme the
+# same step is done by that scheme's orbit gesture (the first scheme's
+# gesture no longer orbits); a zoom step is done by the wheel, an orbit
+# step by an arrow key's turn, and an Alt + left orbit is free during a
+# step aimed at a command. Run by tools/ui-guide-navigate-test.sh.
+wait-idle
+expect-viewport
+view-navigation middle-pan
+expect-log '^View navigation: middle-pan$' 20
+
+# Middle pan: Shift + middle orbits, middle pans, the wheel zooms.
+mark
+guide-step '{"id": "orbit", "text": "Orbit the view.", "target": {"view": true}, "done": {"navigate": "orbit"}}'
+expect-log '^Guide: step orbit started: target the view, navigation free$' 20
+expect-widget-property guideCallout visible true
+mark
+wheel 50 50 2
+expect-log '^Guide: step orbit view zoomed, not its orbit$' 20
+drag 40 50 60 55 middle
+expect-log '^Guide: step orbit view panned, not its orbit$' 20
+click 50 50 middle shift
+wait-idle
+sleep 1
+expect-no-log '^Guide: step orbit done'
+expect-no-log '^Guide: input held back'
+expect-widget-property guideCallout visible true
+mark
+drag 40 50 60 55 middle shift
+expect-log '^Guide: step orbit done: the view orbited$' 20
+expect-widget-property guideCallout visible false
+# Done once: another orbit completes nothing more.
+mark
+drag 60 55 40 50 middle shift
+wait-idle
+sleep 1
+expect-no-log '^Guide: step orbit'
+
+# Right orbit: the right button orbits, Shift + middle does not.
+view-navigation right-orbit
+expect-log '^View navigation: right-orbit$' 20
+mark
+guide-step '{"id": "orbit2", "text": "Orbit the view.", "target": {"view": true}, "done": {"navigate": "orbit"}}'
+expect-log '^Guide: step orbit2 started: target the view, navigation free$' 20
+mark
+drag 40 50 60 55 middle shift
+wheel 50 50 -2
+expect-log '^Guide: step orbit2 view zoomed, not its orbit$' 20
+wait-idle
+sleep 1
+expect-no-log '^Guide: step orbit2 done'
+expect-widget-property guideCallout visible true
+mark
+drag 40 50 60 55 right
+expect-log '^Guide: step orbit2 done: the view orbited$' 20
+
+# A zoom step: the wheel.
+mark
+guide-step '{"id": "zoom", "text": "Zoom with the wheel.", "target": {"view": true}, "done": {"navigate": "zoom"}}'
+expect-log '^Guide: step zoom started: ' 20
+mark
+wheel 50 50 2
+expect-log '^Guide: step zoom done: the view zoomed$' 20
+
+# An arrow key's turn is an orbit.
+mark
+guide-step '{"id": "turn", "text": "Turn the view with an arrow key.", "target": {"view": true}, "done": {"navigate": "orbit"}}'
+expect-log '^Guide: step turn started: ' 20
+focus-widget modelView
+mark
+key Right
+expect-log '^View turned right by 15 degrees$' 20
+expect-log '^Guide: step turn done: the view orbited$' 20
+expect-no-log '^Guide: command'
+
+# Alt + left orbits in the Alt buttons scheme: free during a step aimed at
+# a command, which holds back plain left presses in the view.
+view-navigation alt-buttons
+expect-log '^View navigation: alt-buttons$' 20
+mark
+guide-step '{"id": "alt", "text": "Orbit the view.", "target": {"command": "sketch.create"}, "done": {"navigate": "orbit"}}'
+expect-log '^Guide: step alt started: target command sketch\.create, navigation free$' 20
+mark
+drag 40 50 60 55 left alt
+expect-log '^Guide: step alt done: the view orbited$' 20
+expect-no-log '^Guide: input held back'
+
+view-navigation middle-pan
+expect-never '^(TestDriver: FAIL|OCCT view event failed)'

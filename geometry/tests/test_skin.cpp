@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdio>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -23,17 +24,21 @@
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomConvert.hxx>
+#include <Geom_BSplineCurve.hxx>
 #include <Geom_Circle.hxx>
 #include <Geom_Surface.hxx>
 #include <Geom_TrimmedCurve.hxx>
+#include <NCollection_Array1.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Vec.hxx>
 
 #include "../src/skin.hpp"
 #include "check.hpp"
+#include "mitcad/geometry/user_error.hpp"
 
 namespace test {
 namespace {
@@ -946,6 +951,230 @@ void test_loft_rails_rounded() {
   }
 }
 
+// --- Rails of splines and of chains (mitcad#2373)
+
+using Spline = occ::handle<Geom_BSplineCurve>;
+
+// The cubic through the points at their chord lengths, with `end` (a
+// derivative per millimetre of chord) at the last.
+Spline spline_through(const std::vector<gp_Pnt>& points, const EndDerivatives& end) {
+  std::vector<double> params{0.0};
+  for (std::size_t i = 1; i < points.size(); ++i) {
+    params.push_back(params.back() + points[i].Distance(points[i - 1]));
+  }
+  return detail::interpolate_with_ends(points, params, {}, end);
+}
+
+// The spline mirrored in x, pole by pole.
+Spline mirrored_spline(const Spline& spline) {
+  Spline copy = Handle(Geom_BSplineCurve)::DownCast(spline->Copy());
+  for (int k = 1; k <= copy->NbPoles(); ++k) {
+    copy->SetPole(k, mirrored_in_x(copy->Pole(k)));
+  }
+  return copy;
+}
+
+// A rail's piece along the spline (its knots flat, as a sketch's spline
+// gives them).
+PathCurve spline_piece(const std::string& name, const Spline& spline) {
+  PathCurve piece;
+  piece.name = name;
+  piece.curve.kind = ModelCurveKind::BSpline;
+  piece.curve.degree = spline->Degree();
+  for (int k = 1; k <= spline->NbPoles(); ++k) {
+    piece.curve.poles.push_back(spline->Pole(k));
+  }
+  const NCollection_Array1<double>& flat = spline->KnotSequence();
+  for (int k = flat.Lower(); k <= flat.Upper(); ++k) {
+    piece.curve.knots.push_back(flat(k));
+  }
+  return piece;
+}
+
+PathCurve line_piece(const std::string& name, const gp_Pnt& a, const gp_Pnt& b) {
+  PathCurve piece;
+  piece.name = name;
+  piece.curve.kind = ModelCurveKind::Line;
+  piece.curve.start = a;
+  piece.curve.end = b;
+  return piece;
+}
+
+// Points along a spline, and along the line a-b, 32 pieces each.
+std::vector<gp_Pnt> along_spline(const Spline& spline) {
+  std::vector<gp_Pnt> points;
+  for (int k = 0; k <= 32; ++k) {
+    points.push_back(spline->Value(spline->FirstParameter() +
+                                   (spline->LastParameter() - spline->FirstParameter()) * k / 32.0));
+  }
+  return points;
+}
+
+std::vector<gp_Pnt> along_line(const gp_Pnt& a, const gp_Pnt& b) {
+  std::vector<gp_Pnt> points;
+  for (int k = 0; k <= 32; ++k) {
+    points.emplace_back(a.XYZ() + (b.XYZ() - a.XYZ()) * (k / 32.0));
+  }
+  return points;
+}
+
+// The largest distance of the points from the body's boundary.
+double off_points(const Shape& body, const std::vector<gp_Pnt>& points) {
+  const TopoDS_Shape shell = shell_of(body);
+  double worst = 0.0;
+  for (const gp_Pnt& p : points) {
+    worst = std::max(worst, off_shell(shell, p));
+  }
+  return worst;
+}
+
+// The bottle of a forum post (mitcad#2373, follow-up of mitcad#2320): four
+// sections, rounded rectangles 100 x 50 at z = 0 and 150 x 75 at z = 100
+// (rounded by 10) and circles of radius 15 at z = 200 and z = 230, with two
+// mirrored spline rails through the middles of the rectangles' short sides
+// and opposite points of the circles. It failed with "the loft could not be
+// bent to follow its rails": one cubic fitted through the whole bend
+// towards a rail missed it near the middle sections, where the arc length
+// along the rail (a cubic per span) changes its second derivative. Built
+// with Tangent Edges Merge and Keep, it is its own mirror image in x and
+// passes through both rails.
+void test_loft_rails_four_sections() {
+  const Spline right = spline_through({gp_Pnt(50, 0, 0), gp_Pnt(75, 0, 100), gp_Pnt(30, 0, 130),
+                                       gp_Pnt(15, 0, 170), gp_Pnt(15, 0, 200), gp_Pnt(15, 0, 230)},
+                                      {});
+  const Spline left = mirrored_spline(right);
+  Region neck = circle(21, 0, 0, 15);
+  neck.loops.front().segments.front().rotation = 0.7;
+  Region top = circle(31, 0, 0, 15);
+  top.loops.front().segments.front().rotation = -0.4;
+  LoftSpec bottle;
+  bottle.feature = "F9";
+  bottle.sections = {region_at(0, rounded_rectangle(1, 100, 50, 10)),
+                     region_at(100, rounded_rectangle(11, 150, 75, 10)), region_at(200, neck), region_at(230, top)};
+  bottle.rails = {{spline_piece("c1", right)}, {spline_piece("c2", left)}};
+  for (const bool merge : {true, false}) {
+    std::fprintf(stderr, "four sections, tangent edges %s\n", merge ? "merged" : "kept");
+    bottle.merge_tangent = merge;
+    const ShapePtr body = loft(bottle);
+    CHECK(valid(*body) && edge_names_unique(*body));
+    if (merge) {
+      CHECK(body->face_count() == 4);
+    }
+    CHECK(off_points(*body, along_spline(right)) < 1e-4 && off_points(*body, along_spline(left)) < 1e-4);
+    const double mirror = off_mirror(*body);
+    std::fprintf(stderr, "  side mirrored in x: %.3g mm off the body\n", mirror);
+    CHECK(mirror < 1e-6);
+    const BoundingBox box = bounding_box(*body);
+    CHECK(near(box.max.X(), -box.min.X(), 1e-6));
+    CHECK(volume(*body) > 0);
+  }
+}
+
+// Rails that are chains of a spline and a line (mitcad#2373, GitHub #610):
+// the sections of test_loft_rails_rounded, each rail a spline from the
+// bottom rectangle's side through the middle one's up to x = 15 at z = 170
+// and on from there as a line straight up to the circle at z = 200. Where
+// the spline arrives straight up the rail's curvature jumps at the joint;
+// where it arrives slanted the rail turns a corner there. One cubic fitted
+// through the whole bend missed either ("the loft could not be bent to
+// follow its rails"); fitted on both sides of the joint, the loft follows
+// the rail with a crease where the rail has a corner. Both rails, and each
+// alone, with Tangent Edges Merge and Keep; the mirrored pair is its own
+// mirror image in x.
+void test_loft_rails_chained() {
+  const std::vector<gp_Pnt> through{gp_Pnt(50, 0, 0), gp_Pnt(75, 0, 100), gp_Pnt(30, 0, 130), gp_Pnt(15, 0, 170)};
+  std::vector<gp_Pnt> mirrored;
+  for (const gp_Pnt& p : through) {
+    mirrored.push_back(mirrored_in_x(p));
+  }
+  EndDerivatives up;
+  up.first = gp_Vec(0, 0, 1);
+  EndDerivatives slanted;
+  slanted.first = gp_Vec(0.3, 0, 1).Normalized();
+  const Spline right = spline_through(through, up);
+  const Spline left_smooth = mirrored_spline(right);
+  // Arriving inwards, the line then going straight up: a corner.
+  const Spline left_corner = spline_through(mirrored, slanted);
+  const gp_Pnt joint_right(15, 0, 170);
+  const gp_Pnt top_right(15, 0, 200);
+  const gp_Pnt joint_left = mirrored_in_x(joint_right);
+  const gp_Pnt top_left = mirrored_in_x(top_right);
+  Region neck = circle(21, 0, 0, 15);
+  neck.loops.front().segments.front().rotation = 0.7;
+  LoftSpec bottle;
+  bottle.feature = "F7";
+  bottle.sections = {region_at(0, rounded_rectangle(1, 100, 50, 10)),
+                     region_at(100, rounded_rectangle(11, 150, 75, 10)), region_at(200, neck)};
+  const Path right_rail{spline_piece("c1", right), line_piece("c27", joint_right, top_right)};
+  std::vector<gp_Pnt> right_points = along_spline(right);
+  for (const gp_Pnt& p : along_line(joint_right, top_right)) {
+    right_points.push_back(p);
+  }
+  for (const bool corner : {false, true}) {
+    const Spline& left = corner ? left_corner : left_smooth;
+    const Path left_rail{spline_piece("c15", left), line_piece("c28", joint_left, top_left)};
+    std::vector<gp_Pnt> left_points = along_spline(left);
+    for (const gp_Pnt& p : along_line(joint_left, top_left)) {
+      left_points.push_back(p);
+    }
+    for (const bool merge : {true, false}) {
+      std::fprintf(stderr, "chained rails, the left one %s, tangent edges %s\n",
+                   corner ? "with a corner" : "smooth", merge ? "merged" : "kept");
+      bottle.merge_tangent = merge;
+      bottle.rails = {right_rail, left_rail};
+      const ShapePtr body = loft(bottle);
+      CHECK(valid(*body) && edge_names_unique(*body));
+      const double off_right = off_points(*body, right_points);
+      const double off_left = off_points(*body, left_points);
+      std::fprintf(stderr, "  rails off the body: %.3g and %.3g mm\n", off_right, off_left);
+      CHECK(off_right < 1e-4 && off_left < 1e-4);
+      if (!corner) {
+        const double mirror = off_mirror(*body);
+        std::fprintf(stderr, "  side mirrored in x: %.3g mm off the body\n", mirror);
+        CHECK(mirror < 1e-6);
+      }
+      CHECK(volume(*body) > 0);
+      // Each chain alone.
+      bottle.rails = {left_rail};
+      const ShapePtr left_alone = loft(bottle);
+      CHECK(valid(*left_alone) && off_points(*left_alone, left_points) < 1e-4);
+      if (!corner) {
+        bottle.rails = {right_rail};
+        const ShapePtr right_alone = loft(bottle);
+        CHECK(valid(*right_alone) && off_points(*right_alone, right_points) < 1e-4);
+      }
+    }
+  }
+}
+
+// A rail the loft cannot be bent to follow (mitcad#2373): the circles of
+// the tube in test_loft_rails with a straight rail on one side and on the
+// other a cubic Bezier from (-10, 0, 0) to (-10, 0, 40) whose derivative
+// vanishes halfway (P2 - P1 = P0 - P3): a cusp at (-5.5, 0, 12.5) inside
+// its one span, where the rail turns back on itself. No knot or joint
+// is there, so no piece of the bends ends there, and no smooth piece
+// reaches the corner the bend has there. The error names the rail by its
+// place among the rails and says where along the loft, in words; its
+// number, how far along it and the point are for agents.
+void test_loft_rail_not_followed() {
+  const std::array<gp_Pnt, 4> cusp{gp_Pnt(-10, 0, 0), gp_Pnt(-4, 0, 30), gp_Pnt(-4, 0, -10), gp_Pnt(-10, 0, 40)};
+  CHECK(near_point(bezier_point(cusp, 0.5), gp_Pnt(-5.5, 0, 12.5)));
+  LoftSpec tube;
+  tube.feature = "F5";
+  tube.sections = {region_at(0, circle(1, 0, 0, 10)), region_at(40, circle(2, 0, 0, 10))};
+  tube.rails = {line_rail(gp_Pnt(10, 0, 0), gp_Pnt(10, 0, 40)), cubic_rail(cusp)};
+  std::string message;
+  try {
+    loft(tube);
+  } catch (const std::exception& error) {
+    message = error_message(error.what());
+    std::fprintf(stderr, "rail with a cusp: %s\n", error.what());
+  }
+  CHECK(message.find("the loft could not be bent to follow the second rail ") == 0);
+  CHECK(message.find("from the first profile to the second profile") != std::string::npos);
+  CHECK(message.find("rail 2") == std::string::npos && message.find("mm") == std::string::npos);
+}
+
 // The number of wires of the body's face `name`: its holes and its outer
 // boundary.
 int wires_of(const Shape& body, const std::string& name) {
@@ -1040,6 +1269,9 @@ void skin_tests() {
   guarded("lofts with rails on unmatched sections", test_loft_rails_unmatched);
   guarded("lofts from faces with holes", test_loft_face_holes);
   guarded("lofts with mirrored rails on rounded sections", test_loft_rails_rounded);
+  guarded("lofts with mirrored spline rails through four sections", test_loft_rails_four_sections);
+  guarded("lofts with rails of a spline and a line", test_loft_rails_chained);
+  guarded("lofts with a rail they cannot follow", test_loft_rail_not_followed);
 }
 
 } // namespace test

@@ -456,6 +456,11 @@ pub struct MockKernel {
     /// The faces' own colours of each body of each `write_file` and of each
     /// body of each `write_step_tree`'s definitions, in order (mitcad#2313).
     pub written_face_colors: RefCell<Vec<Vec<Vec<mitcad_model_base::exchange::FaceColor>>>>,
+    /// Curves of free edges (mitcad#2395: a loft's section of a surface
+    /// body's free edges): what `opening_curves` gives for the open
+    /// boundary at each index of `open_boundaries` (one per face of a
+    /// surface body), each bounding that boundary's face; none for others.
+    pub free_edge_curves: RefCell<BTreeMap<usize, Vec<mitcad_model_base::kernel::Curve3>>>,
 }
 
 /// A definition of a tree `write_step_tree` wrote ([`MockKernel::step_trees`],
@@ -3564,6 +3569,26 @@ impl Kernel for MockKernel {
         if spec.draft_angle != 0.0 {
             extend.push_str(&format!(" draft {}", number(spec.draft_angle)));
         }
+        // Normal to Curves' far side (mitcad#2398) only when given: each
+        // piece by its curve's name (`corner` for a round corner) and ends.
+        if !spec.far.is_empty() {
+            let point =
+                |p: [f64; 3]| format!("[{}, {}, {}]", number(p[0]), number(p[1]), number(p[2]));
+            let pieces: Vec<String> = spec
+                .far
+                .iter()
+                .map(|f| {
+                    let kind = if f.corner { "corner" } else { "end" };
+                    match mitcad_model_base::curves::curve_ends(&f.curve.curve) {
+                        Some((s, e)) => {
+                            format!("{kind}({}) {} {}", f.curve.name, point(s), point(e))
+                        }
+                        None => format!("{kind}({})", f.curve.name),
+                    }
+                })
+                .collect();
+            extend.push_str(&format!(" far {}", pieces.join("; ")));
+        }
         self.specs.borrow_mut().push(format!(
             "{} {} chains {} thickness {} {:?} depth {:?} flip {} bodies {}{extend}",
             if spec.web { "web" } else { "rib" },
@@ -4071,6 +4096,7 @@ impl Kernel for MockKernel {
             cavities: self.cavities.clone(),
             silhouettes: self.silhouettes.clone(),
             box_booleans: self.box_booleans.clone(),
+            free_edge_curves: self.free_edge_curves.clone(),
             ..MockKernel::default()
         })
     }
@@ -4950,6 +4976,69 @@ impl Kernel for MockKernel {
                 points: Vec::new(),
                 closed: true,
             })
+            .collect())
+    }
+
+    /// Curves of free edges (mitcad#2395): `free_edge_curves` of the open
+    /// boundary at the index, each bounding its face; none when the opening
+    /// names faces without it; with points, of the lines the one whose
+    /// middle is nearest each point.
+    fn opening_curves(
+        &self,
+        shape: &MockShape,
+        opening: &mitcad_model_base::surface_modelling::OpeningEdges<'_>,
+    ) -> Result<Vec<mitcad_model_base::surface_modelling::FreeEdgeCurve>, KernelError> {
+        self.call("opening_curves")?;
+        let boundaries = self.open_boundaries(shape)?;
+        let Some(boundary) = boundaries.get(opening.index) else {
+            return Err(KernelError::failed(format!(
+                "the body has no opening {} (it has {})",
+                opening.index,
+                boundaries.len()
+            )));
+        };
+        let face = boundary.faces.first().cloned();
+        if !opening.faces.is_empty() && !face.as_ref().is_some_and(|f| opening.faces.contains(f)) {
+            return Ok(Vec::new());
+        }
+        let mut curves = self
+            .free_edge_curves
+            .borrow()
+            .get(&opening.index)
+            .cloned()
+            .unwrap_or_default();
+        if !opening.at.is_empty() {
+            let middle = |curve: &mitcad_model_base::kernel::Curve3| match curve {
+                mitcad_model_base::kernel::Curve3::Line { start, end } => {
+                    Some(std::array::from_fn::<f64, 3, _>(|i| {
+                        (start[i] + end[i]) / 2.0
+                    }))
+                }
+                _ => None,
+            };
+            let mut nearest = Vec::new();
+            for point in opening.at {
+                let found = curves
+                    .iter()
+                    .filter_map(|c| middle(c).map(|m| (mitcad_vec3::distance(m, *point), c)))
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, c)| c.clone());
+                if let Some(curve) = found
+                    && !nearest.contains(&curve)
+                {
+                    nearest.push(curve);
+                }
+            }
+            curves = nearest;
+        }
+        Ok(curves
+            .into_iter()
+            .map(
+                |curve| mitcad_model_base::surface_modelling::FreeEdgeCurve {
+                    curve,
+                    face: face.clone(),
+                },
+            )
             .collect())
     }
 
@@ -7438,6 +7527,26 @@ impl Kernel for MockKernel {
             nodes,
             deviation: Some(0.0),
         })
+    }
+
+    // Triangle meshes with their faces (mitcad#2385).
+
+    /// [`Kernel::triangle_mesh`]'s box (counted as its call too), each
+    /// side's two triangles on a face of [`MockShape::faces`]: side `i`
+    /// (-Z, +Z, -Y, +Y, -X, +X) on face `i`, on face `i` modulo their
+    /// number for a shape of fewer faces.
+    fn triangle_mesh_faces(
+        &self,
+        shape: &MockShape,
+        tolerance: &mitcad_model_base::exchange::MeshTolerance,
+    ) -> Result<mitcad_model_base::exchange::FacedTriangleMesh, KernelError> {
+        self.call("triangle_mesh_faces")?;
+        let mesh = self.triangle_mesh(shape, tolerance)?;
+        let count = shape.faces.len().max(1) as u32;
+        let faces = (0..mesh.triangles.len() as u32)
+            .map(|t| (t / 2) % count)
+            .collect();
+        Ok(mitcad_model_base::exchange::FacedTriangleMesh { mesh, faces })
     }
 }
 

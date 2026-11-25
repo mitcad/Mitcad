@@ -345,6 +345,10 @@ public:
   // The same for the row of a body (of a face, edge or vertex picked in
   // the view), a sketch or a datum.
   bool revealItem(const SelectionItem& item);
+  // The item's own row as revealItem finds it (not a selection set's link
+  // to it), the first of several; an invalid node when it has none
+  // (Hide/Show of one item, mitcad#2356).
+  BrowserNode nodeOfItem(const SelectionItem& item) const;
   // Collapses every row below the top row, the descendants of a folded row
   // too, and forgets what was open: the remembered states of those rows are
   // "folded", so neither an arrow click (which opens only that row) nor a

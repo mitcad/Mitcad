@@ -228,6 +228,10 @@ impl<S> Cache<S> {
                         state.design_layer_height().map(f64::to_bits) == *bits
                     }
                     Read::Gravity(bits) => super::gravity_bits(state) == *bits,
+                    // Later Corner Relief definitions (mitcad#2342).
+                    Read::CornerReliefs(flange, key) => {
+                        crate::sheet::folded::corner_reliefs_key(&state.features, *flange) == *key
+                    }
                     // A later flange's definition (mitcad#1776).
                     Read::WallFlange(plane, key) => {
                         crate::sheet::folded::wall_flange_key(

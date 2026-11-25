@@ -21,3 +21,6 @@ mod sheet_process_tests;
 // The Hem command's forms: flat, open and rolled hems (mitcad#2112).
 mod sheet_bend_table_tests;
 mod sheet_hem_tests;
+// The rules' version flag of the corner relief at flange corners
+// (mitcad#2342).
+mod sheet_corner_flag_tests;

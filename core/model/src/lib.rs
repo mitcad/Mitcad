@@ -119,6 +119,8 @@ pub use sweeps::HelixSpec;
 pub use sweeps::RailPoint;
 // Pipes' corners (mitcad#1448).
 pub use sweeps::PipeCorners;
+// A rib's far side grown Normal to Curves (mitcad#2398).
+pub use sweeps::RibFarCurve;
 // Flex: flexible items routed through the model (mitcad#1713).
 pub use mitcad_model_base::flex;
 // Flex drape: a Flex item let hang (mitcad#1713).

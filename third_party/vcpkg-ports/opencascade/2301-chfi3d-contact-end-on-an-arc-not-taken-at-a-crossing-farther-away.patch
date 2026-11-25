@@ -1,0 +1,54 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: where a contact of a walked blend ends on an arc and its
+parameters there are not those of the arc's point, the end is not taken
+at a crossing of the contact with the arc that lies farther from the
+arc's point than the contact's own end does (mitcad#2300).
+
+The case: the rim between a loft's side and a cylinder pulled from its end
+face, convex in some places and concave in others, split at the points
+where the faces are tangent, each piece's rounding vanishing in a point at
+both ends. A convex piece rounded with 5 alone, or with the others: the
+walk is right, both contacts end at the pieces' vertices on the arcs, but
+the result is invalid (BRepCheck_NotClosed, BRepCheck_UnorientableShape).
+The second contact's edge had both its ends on the far vertex: its
+interference's parameters were 0 to 0 instead of 0 to 154.37.
+
+At the far end, ChFi3d_Builder::CompleteData's CompParam was given the
+arc's parameter of the end (408.07) and the contact's (154.37), whose
+points on the face lie 1.96e-6 apart in its parameters, more than
+Precision::PConfusion. So it intersected the contact's curve on the face
+with the arc's. The contact runs onto the arc (the very edge the rounding
+rounds) tangentially and stops a hair short of it at the vanishing end:
+the only crossing found was at the contact's other end (parameter 0, arc
+157.59), and, the only candidate, it was taken.
+
+- CompParam (ChFi3d_Builder_6.cxx): a crossing whose point on the arc lies
+  farther from the arc's point at the given parameter than the contact's
+  point at its given parameter does is not taken; with none left the
+  existing projection of the arc's point on the contact gives the end.
+  Elsewhere nothing changes: the crossing such a correction looks for lies
+  at the arc's point.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2301.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+@@ -645,6 +645,15 @@ static void CompParam(const Geom2dAdaptor_Curve&       Carc,
+           int2d = Intersection.Point(i);
+           p1    = int2d.ParamOnFirst();
+           p2    = int2d.ParamOnSecond();
++          // (Not a crossing farther from the arc's point than the contact's
++          // point already is: another crossing, not this end. A contact
++          // that runs onto the arc tangentially and stops a hair short of
++          // it, a rounding vanishing at the arc's vertex, crosses it only
++          // at its other end, mitcad#2300; the projection below takes it.)
++          if (Carc.Value(p2).Distance(point) > distini)
++          {
++            continue;
++          }
+           if (std::abs(prefarc - p2) < dist)
+           {
+             ptg   = p1;

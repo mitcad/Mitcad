@@ -280,6 +280,35 @@ public:
   // logged as the START tab's place ("Ribbon tab START at x,y").
   void setStartButton(QWidget* button);
 
+  // The toolbar's places for a tutorial's guide steps (mitcad#2370,
+  // tutorials/MainWindowGuide.cpp), in every layout that has them.
+  // A workspace's key ("DESIGN") from its name as a step writes it: the key
+  // or its title ("Design", the interface language's too), case and "_"
+  // for a space not minded; empty for none.
+  static QString workspaceOfName(const QString& name);
+  // The tabs a step may name, by their keys ("START", "SOLID", "MAKE_PRINT",
+  // "SHEET METAL", the modes' tabs too).
+  static QStringList guideTabs();
+  // A tab's key from its name: the key or its name as the toolbar shows it
+  // ("Sheet Metal", "3D Print", the interface language's too), case and "_"
+  // for a space not minded; empty for none.
+  static QString tabOfName(const QString& name);
+  // The workspace selector (setPanel or setWorkspaceSelector); null without
+  // one.
+  QWidget* workspaceSelector() const;
+  // Whether the selector's list is open (openWorkspaceMenu), and its entry
+  // of a workspace while it is (null otherwise).
+  bool workspaceListOpen() const;
+  QWidget* workspaceEntry(const QString& workspace) const;
+  // The workspace whose entry in the selector's list is outlined, as the
+  // guide's outline (which lies under the list); empty: none.
+  void setGuideWorkspace(const QString& workspace);
+  // A tab's rectangle in global coordinates while it is in sight (the
+  // toolbar panel's START: the title row's Home); null when it is not
+  // there, out of sight (another workspace's) or folded into the tab row's
+  // ».
+  QRect tabGlobalRect(const QString& tab) const;
+
   // Preferences › Display › Toolbar labels (mitcad#1936, framework/
   // RibbonLabels): each command button with a short label under its icon
   // (its command's CommandDef::shortLabel, else its name; one line, elided
@@ -640,6 +669,8 @@ private:
   QString m_loggedPanelHeight;               // as "Ribbon panel height ..." told it last
   bool m_applyingWorkspace = false;          // tabs shown or hidden: no following
   QPointer<QWidget> m_startButton;           // the title row's Home
+  QPointer<QWidget> m_workspaceList;         // the selector's list while it exists (mitcad#2370)
+  QString m_guideWorkspace;                  // setGuideWorkspace
   QPointer<QWidget> m_search;                // the search field in the panel
   std::vector<std::pair<QString, QRect>> m_panelParts; // as last told
   ToolbarPins m_pins;         // mitcad#1001

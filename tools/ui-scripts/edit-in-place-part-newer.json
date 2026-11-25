@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A newer version of tools/ui-scripts/edit-in-place-part.json on the remote (tools/ui-edit-in-place-project-test.sh, mitcad#2397): the 10 mm cube and a second one beside it, 2000 mm3."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"}, "corner": [0, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"}, "corner": [0, 20],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"expect": {"bodies": 2}}
+]

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands/SurfaceCommands.cpp app/commands/SweepCommands.cpp app/framework/CommandSession.cpp app/framework/CommandPanel.cpp geometry/src/loft.cpp geometry/src/loft_skin.cpp core/model/src/features/loft.rs tools/cli
-# Surface Loft's Start and End Condition (mitcad#2345) in the build VM, as
+# Surface Loft's Start and End Condition (mitcad#2345) and chains of edges
+# as sections (mitcad#2395) in the build VM, as
 # tools/ui-surface-loft-perpendicular-test.sh on Linux: the shared steps
 # tools/ui-scripts/surface-loft-perpendicular.mitcad-ui on the design that
 # mitcad-cli makes (tools/ui-scripts/surface-loft-perpendicular.json).
@@ -29,6 +30,7 @@ if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "surface loft perpendicular driver failed (exit code $exitCode)"
 }
 Ui-ExpectLog 'Added surface loft through 2 sections' 'the surface loft builds with Perpendicular to Face at both ends'
-Ui-ExpectLog 'TestDriver: done' 'the surface is one side face'
+Ui-ExpectLog 'Edited F7' 'the loft of two chains of edges opens in its panel again'
+Ui-ExpectLog 'TestDriver: done' 'the surfaces have the faces they should'
 Ui-StopApp
 Write-Host 'PASS: Surface Loft with Perpendicular to Face at both ends, one side face'

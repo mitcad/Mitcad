@@ -11,7 +11,10 @@
 //! says, so that more of its curves can be picked in the same Project. A light bulb set by hand wins until the
 //! sketch gets its first consumer or loses its last one: the command that
 //! does it forgets the setting, in the same undo step, so the sketch hides
-//! or shows again (mitcad#7).
+//! or shows again (mitcad#7). With the user's preference *Hide a sketch
+//! when a feature uses it* off ([`Document::set_hide_used_sketches`],
+//! mitcad#2393) a shown planar sketch that gets its first consumer keeps
+//! its light bulb on: the command sets it, in the same undo step.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -137,21 +140,44 @@ impl DocState {
     /// After a command, the state that follows `before`: forgets the light
     /// bulbs of the sketches that got their first consumer or lost their
     /// last one, so the default hides or shows them in the command's own
-    /// undo step.
-    pub(crate) fn follow_sketch_use(&mut self, before: &DocState) {
+    /// undo step. With `hide` false (the user's preference, mitcad#2393) a
+    /// planar sketch that was shown before and got its first consumer
+    /// keeps its light bulb on instead: it is set, as the default now
+    /// hides it. A sketch the command made has no light bulb before it and
+    /// follows the default.
+    pub(crate) fn follow_sketch_use(&mut self, before: &DocState, hide: bool) {
         let same = self.features.len() == before.features.len()
             && self
                 .features
                 .iter()
                 .zip(&before.features)
                 .all(|(a, b)| Arc::ptr_eq(a, b));
-        if same || self.feature_visibility.is_empty() {
+        if same || (hide && self.feature_visibility.is_empty()) {
             return;
         }
         let was = before.used_sketches();
         let now = self.used_sketches();
+        // The sketches that stay shown: planar, there before, shown then.
+        let kept: Vec<FeatureUid> = if hide {
+            Vec::new()
+        } else {
+            now.difference(&was)
+                .copied()
+                .filter(|uid| {
+                    before.entry(*uid).is_some_and(|entry| {
+                        matches!(entry.def, FeatureDef::Sketch(_))
+                            && before.feature_shown(entry, &was) == Some(true)
+                    })
+                })
+                .collect()
+        };
         for uid in was.symmetric_difference(&now) {
             self.feature_visibility.remove(uid);
+        }
+        for uid in kept {
+            if self.entry(uid).is_some() {
+                self.feature_visibility.insert(uid, true);
+            }
         }
     }
 
@@ -195,6 +221,23 @@ impl<K: Kernel> Document<K> {
     /// forgotten when it gets its first consumer or loses its last one.
     pub fn feature_visible(&self, uid: FeatureUid) -> Option<bool> {
         self.state.feature_visibility.get(&uid).copied()
+    }
+
+    /// Whether a shown planar sketch hides when a feature first uses it
+    /// (mitcad#2393): true by default, as since mitcad#7.
+    pub fn hide_used_sketches(&self) -> bool {
+        self.hide_used_sketches
+    }
+
+    /// The user's preference *Hide a sketch when a feature uses it*
+    /// (mitcad#2393; the application sets it before each command). Off: a
+    /// command that gives a shown planar sketch its first consumer sets
+    /// its light bulb on, in its own undo step, so the sketch stays shown
+    /// until it is hidden by hand. It changes what commands do from then
+    /// on only: no light bulb changes now, nothing is recomputed, and it
+    /// is neither saved nor undone.
+    pub fn set_hide_used_sketches(&mut self, hide: bool) {
+        self.hide_used_sketches = hide;
     }
 
     /// Whether a sketch or construction feature is shown: its light bulb

@@ -2310,6 +2310,34 @@ pub fn compute(
     structure: Option<&Structure>,
     name: &dyn Fn(usize) -> String,
 ) -> Result<Computed, String> {
+    computed(sources, d, closed, structure, false, name)
+}
+
+/// [`compute`] with the outer corners sharp, as an offset of lines and
+/// arcs made with Corners Sharp joins them (mitcad#1774): where the chain
+/// turns away from the offset, the offsets on either side run on to where
+/// they cross (along their lines and circles), with no arc about the
+/// corner; those joins are [`Join::Trim`] and `corners` is empty. What
+/// vanishes is left out as with [`compute`]. A rib grown Normal to Curves
+/// takes its far side so (mitcad#2398).
+pub fn compute_sharp(
+    sources: &[(Curve2, bool)],
+    d: f64,
+    closed: bool,
+    name: &dyn Fn(usize) -> String,
+) -> Result<Computed, String> {
+    computed(sources, d, closed, None, true, name)
+}
+
+/// [`compute`], its outer corners `sharp` or round.
+fn computed(
+    sources: &[(Curve2, bool)],
+    d: f64,
+    closed: bool,
+    structure: Option<&Structure>,
+    sharp: bool,
+    name: &dyn Fn(usize) -> String,
+) -> Result<Computed, String> {
     let whole_pieces = pieces_of(sources, d);
     let n = whole_pieces.len();
     let size = chain_size(&whole_pieces);
@@ -2337,7 +2365,18 @@ pub fn compute(
         }
     } else {
         let named = |i: usize| name(owner[i]);
-        trim(&pieces, d, closed || alone, size, false).map_err(|e| e.message(&named))?
+        let mut trimmed =
+            trim(&pieces, d, closed || alone, size, sharp).map_err(|e| e.message(&named))?;
+        if sharp {
+            // The offsets at an outer corner run on to where they cross
+            // (trim found it): a corner they share, as at an inner one.
+            for join in &mut trimmed.joins {
+                if *join == Join::Round {
+                    *join = Join::Trim;
+                }
+            }
+        }
+        trimmed
     };
     let Collapsed {
         results,

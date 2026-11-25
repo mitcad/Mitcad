@@ -1,0 +1,7 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The keys typed as a command panel opens go to its selected value field (mitcad#2391), tools/ui-panel-first-field-keys-test.sh: a sketch (F1, Sketch1) on the XY plane with one circle of diameter 20, which Extrude takes as its profile when it starts in the sketch."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F1","center":[0,0],"diameter":20},
+  {"expect":{"feature":"F1","status":"ok"}}
+]

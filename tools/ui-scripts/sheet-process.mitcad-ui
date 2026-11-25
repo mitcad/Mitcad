@@ -21,7 +21,7 @@ wait-log '^Command Sheet Rules started' 30
 wait-idle
 expect-ever '^Panel Sheet Rules options bend_relief: Rectangular [|] Round$' 30
 expect-widget-property input_bend_relief toolTip 'Used where a flange, bend or fold ends inside the sheet'
-expect-widget-property input_corner_relief toolTip 'Used by Corner Relief where two bends meet'
+expect-widget-property input_corner_relief toolTip 'Used where two bends meet: at Flange corners and by Corner Relief'
 expect-widget-property input_corner_relief_depth visible false
 qt-choice input_corner_relief 'Tear'
 expect-choice-text corner_relief '^Tear$'

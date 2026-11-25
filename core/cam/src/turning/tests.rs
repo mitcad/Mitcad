@@ -411,6 +411,8 @@ fn lathe() -> Machine {
             chuck_length: 50.0,
             axes: LatheAxes::default(),
             mill_turn: MillTurn::default(),
+            sub_spindle: SubSpindle::default(),
+            turret_body: None,
         }),
     }
 }

@@ -129,6 +129,9 @@ use kernel::abandon::bridge::{kernel_time_limit, set_kernel_time_limit, set_test
 // Edit in Place: a linked component edited inside its holder (mitcad#2321).
 mod edit_in_place;
 use edit_in_place::{begin_edit_in_place, finish_edit_in_place, linked_saved_in_place};
+// What a tutorial's page reads of its design (mitcad#2371).
+mod tutorial_bridge;
+use tutorial_bridge::tutorial_query;
 
 #[cxx::bridge(namespace = "mitcad")]
 mod ffi {
@@ -275,6 +278,15 @@ mod ffi {
         /// every temperature of materials shown follows it (parts lists and
         /// bills of materials too, and the queries that are given none).
         fn set_temperature_unit(unit: &str) -> Result<()>;
+        /// Preferences › Sketch › Hide a sketch when a feature uses it
+        /// (mitcad#2393), on by default: off, every document's `command`
+        /// keeps a shown planar sketch shown when a feature first uses
+        /// it (its light bulb set in the command's undo step); a file's
+        /// import is not affected. For the whole process, at start and
+        /// when the preference changes.
+        fn set_hide_used_sketches(hide: bool);
+        /// The value set_hide_used_sketches set last (true at start).
+        fn hide_used_sketches() -> bool;
         /// A 60 x 40 x 20 mm block (Sketch1, Extrude1), used by tests.
         fn new_demo_document() -> Box<Document>;
         /// Reads a design file (.mitcad JSON, version 1, 2 or 3; the
@@ -956,6 +968,22 @@ mod ffi {
         /// file's digest, without an undo step. JSON answer.
         fn linked_saved_in_place(holder: &mut Document, request: &str) -> Result<String>;
     }
+
+    // The tutorials' bridge (mitcad#2371, tutorial_bridge.rs;
+    // app/tutorials/MainWindowTutorials.cpp): what a tutorial's page reads
+    // of the design of its window, docs/tutorials.md "Reading the design".
+
+    extern "Rust" {
+        /// The answer to a page's `query` (JSON), or the refusal in words;
+        /// `open_sketch`: the sketch open in the window (a uid, empty for
+        /// none); `design`: the window's design name.
+        fn tutorial_query(
+            document: &Document,
+            request: &str,
+            open_sketch: &str,
+            design: &str,
+        ) -> Result<String>;
+    }
 }
 
 /// The document of the application and `mitcad-cli`.
@@ -1003,6 +1031,18 @@ fn set_temperature_unit(unit: &str) -> Result<(), String> {
         .ok_or_else(|| format!("{unit} is no temperature unit: C or F"))?;
     mitcad_model::material_units::set_preferred_temperature(unit);
     Ok(())
+}
+
+/// Preferences › Sketch › Hide a sketch when a feature uses it
+/// (mitcad#2393): on unless the application turned it off.
+static HIDE_USED_SKETCHES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn set_hide_used_sketches(hide: bool) {
+    HIDE_USED_SKETCHES.store(hide, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn hide_used_sketches() -> bool {
+    HIDE_USED_SKETCHES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn new_demo_document() -> Box<Document> {
@@ -1169,6 +1209,17 @@ impl Document {
             Some("import_file") => GuardedWork::Import,
             _ => GuardedWork::Command,
         };
+        // The user's preference whether a sketch hides when a feature
+        // first uses it (mitcad#2393), for the commands a person or an
+        // agent gives; a file's import replays its design as the file
+        // has it, with the model's default.
+        let imports = match &value {
+            Some(v @ serde_json::Value::Object(_)) => is_import(v),
+            Some(serde_json::Value::Array(commands)) => commands.iter().any(is_import),
+            _ => false,
+        };
+        self.0
+            .set_hide_used_sketches(imports || hide_used_sketches());
         match value {
             Some(v) if is_import(&v) => {
                 let mut result = self.import_command(v)?;

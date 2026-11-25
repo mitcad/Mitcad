@@ -190,6 +190,12 @@ pub mod ffi {
         direction: [f64; 3],
         /// Leans the sides (radians, 0 for none; mitcad#2102).
         draft_angle: f64,
+        /// Normal to Curves' far side (mitcad#2398; empty for none): its
+        /// pieces in order, for each the index of its curve in the chain
+        /// and 1 for a round corner about that curve's end, else 0.
+        far: Vec<SweepCurve>,
+        far_near: Vec<usize>,
+        far_corner: Vec<u8>,
     }
 
     unsafe extern "C++" {
@@ -684,6 +690,9 @@ pub fn rib(spec: &RibSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, Ker
         has_direction: spec.direction.is_some(),
         direction: spec.direction.unwrap_or([0.0; 3]),
         draft_angle: spec.draft_angle,
+        far: spec.far.iter().map(|f| curve(&f.curve)).collect(),
+        far_near: spec.far.iter().map(|f| f.near).collect(),
+        far_corner: spec.far.iter().map(|f| u8::from(f.corner)).collect(),
     };
     ffi::rib_solid(
         &spec.feature.to_string(),

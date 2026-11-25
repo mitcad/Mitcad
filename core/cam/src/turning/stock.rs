@@ -171,6 +171,24 @@ pub fn parted_at(program: &TurningProgram, first_sub: usize) -> Option<f64> {
     lowest.is_finite().then_some(lowest + width)
 }
 
+/// The stock as the sub-spindle holds it (mitcad#2319, mitcad#2375): the
+/// remnant the part-off before the hand-over leaves on the main spindle
+/// gone, turned round into the sub-spindle's work coordinates; as it is
+/// without a hand-over or an operation on the sub-spindle.
+pub fn on_sub_spindle(program: &TurningProgram, stock: &mut TurnStock) {
+    let (Some(hand_over), Some(first)) = (&program.hand_over, program.first_sub()) else {
+        return;
+    };
+    if let Some(cut) = parted_at(program, first) {
+        for i in 0..stock.z.len() {
+            if stock.z[i] < cut {
+                stock.outer[i] = stock.inner[i];
+            }
+        }
+    }
+    stock.turn_round(hand_over.back_z);
+}
+
 /// Cuts one operation's toolpath out of the stock, its findings at the
 /// main spindle's work Z (`hand_over`: on the sub-spindle, mitcad#2319).
 fn cut_operation(
@@ -240,14 +258,7 @@ pub fn simulate_turning(
     // leaves behind stays on the main spindle; the rest is cut in the
     // sub-spindle's coordinates, the stock turned round.
     if let (Some(hand_over), Some(first)) = (&program.hand_over, program.first_sub()) {
-        if let Some(cut) = parted_at(program, first) {
-            for i in 0..stock.z.len() {
-                if stock.z[i] < cut {
-                    stock.outer[i] = stock.inner[i];
-                }
-            }
-        }
-        stock.turn_round(hand_over.back_z);
+        on_sub_spindle(program, &mut stock);
         for (index, op) in program.operations.iter().enumerate().skip(first) {
             cut_operation(
                 &mut stock,

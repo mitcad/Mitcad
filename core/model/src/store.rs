@@ -327,6 +327,7 @@ enum StoredRead {
     Gravity(Option<[u64; 3]>),
     WallFlange(FeatureUid, Option<Hex>),
     Flexed(Vec<OccurrenceUid>, OccurrenceUid, Option<[u64; 12]>),
+    CornerReliefs(FeatureUid, Option<Hex>),
 }
 
 impl StoredRead {
@@ -358,6 +359,7 @@ impl StoredRead {
             Read::Gravity(bits) => Self::Gravity(*bits),
             Read::WallFlange(plane, key) => Self::WallFlange(*plane, hex(key)),
             Read::Flexed((within, o), bits) => Self::Flexed(within.clone(), *o, *bits),
+            Read::CornerReliefs(flange, key) => Self::CornerReliefs(*flange, hex(key)),
         }
     }
 
@@ -391,6 +393,7 @@ impl StoredRead {
             Self::Gravity(bits) => Read::Gravity(*bits),
             Self::WallFlange(plane, key) => Read::WallFlange(*plane, version(key)),
             Self::Flexed(within, o, bits) => Read::Flexed((within.clone(), *o), *bits),
+            Self::CornerReliefs(flange, key) => Read::CornerReliefs(*flange, version(key)),
         })
     }
 }

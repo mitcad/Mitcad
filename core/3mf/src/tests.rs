@@ -28,6 +28,7 @@ fn cube(at: [f64; 3], size: f64) -> Mesh {
     Mesh {
         vertices,
         triangles,
+        triangle_colors: Vec::new(),
     }
 }
 
@@ -899,4 +900,103 @@ fn the_import_takes_an_open_mesh_with_a_warning() {
     ));
     let error = read_for_import(&beyond).unwrap_err().to_string();
     assert!(error.contains("beyond the 8 vertices"), "{error}");
+}
+
+/// sRGB bytes as the colour components [`read`] gives.
+fn from_bytes(bytes: [u8; 3]) -> [f64; 3] {
+    bytes.map(|c| f64::from(c) / 255.0)
+}
+
+/// Faces coloured on their own (mitcad#2385): a white cube whose top's two
+/// triangles are gold and one side's first triangle red writes them as
+/// the triangles' base materials, after the part's, and reads them back.
+#[test]
+fn triangle_colors_are_written_as_base_materials_and_read_back() {
+    let white = from_bytes([0xF6, 0xF6, 0xF3]);
+    let gold = from_bytes([0xE8, 0xAD, 0x23]);
+    let red = from_bytes([0xC4, 0x35, 0x27]);
+    let mut mesh = cube([0.0; 3], 10.0);
+    let mut colors = vec![None; mesh.triangles.len()];
+    colors[2] = Some(gold);
+    colors[3] = Some(gold);
+    colors[4] = Some(red);
+    mesh.triangle_colors = colors.clone();
+    let model = Model {
+        name: "Lettering".to_owned(),
+        parts: vec![
+            part("Plate", mesh, Some(white), vec![Placement::IDENTITY]),
+            part(
+                "Plain",
+                cube([20.0, 0.0, 0.0], 5.0),
+                Some(gold),
+                vec![Placement::IDENTITY],
+            ),
+        ],
+        ..Model::default()
+    };
+    let data = write(&model).unwrap();
+    let xml = model_xml(&data);
+    // The parts' materials first, then one per triangle colour.
+    assert!(
+        xml.contains("<base name=\"Plate\" displaycolor=\"#F6F6F3FF\"/>"),
+        "{xml}"
+    );
+    assert!(xml.contains("<base name=\"Plain\" displaycolor=\"#E8AD23FF\"/>"));
+    assert!(xml.contains("<base name=\"Color #E8AD23\" displaycolor=\"#E8AD23FF\"/>"));
+    assert!(xml.contains("<base name=\"Color #C43527\" displaycolor=\"#C43527FF\"/>"));
+    assert!(xml.contains("<object id=\"2\" type=\"model\" name=\"Plate\" pid=\"1\" pindex=\"0\">"));
+    assert_eq!(xml.matches("pid=\"1\" p1=\"2\"").count(), 2);
+    assert_eq!(xml.matches("pid=\"1\" p1=\"3\"").count(), 1);
+    // The second part's triangles have none of their own.
+    let back = read(&data).unwrap();
+    assert_eq!(back.parts[0].color, Some(white));
+    assert_eq!(back.parts[0].mesh.triangle_colors, colors);
+    assert!(back.parts[1].mesh.triangle_colors.is_empty());
+    // The import reads them alike.
+    let imported = read_for_import(&data).unwrap();
+    assert_eq!(imported.model.parts[0].mesh.triangle_colors, colors);
+    // Placed (mirrored too) they stay with their triangles.
+    let mirror = Placement {
+        linear: [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        translation: [0.0; 3],
+    };
+    assert_eq!(back.parts[0].mesh.placed(&mirror).triangle_colors, colors);
+
+    // A triangle colour needs a colour of the part's own, and one per
+    // triangle.
+    let mut uncoloured = model.clone();
+    uncoloured.parts[0].color = None;
+    let error = write(&uncoloured).unwrap_err().to_string();
+    assert!(error.contains("none of its own"), "{error}");
+    let mut short = model.clone();
+    short.parts[0].mesh.triangle_colors.pop();
+    let error = write(&short).unwrap_err().to_string();
+    assert!(
+        error.contains("11 triangle colours for 12 triangles"),
+        "{error}"
+    );
+
+    // A triangle's group that is no base material group (a colour group of
+    // the Materials extension): refused by `read`, the part's colour for
+    // the import.
+    let archive = mitcad_zip::Archive::new(data.clone()).unwrap();
+    let mut zip = mitcad_zip::Writer::new();
+    for name in ["[Content_Types].xml", "_rels/.rels"] {
+        let bytes = archive.read_by_name(name).unwrap();
+        zip.add(name, &bytes, mitcad_zip::Method::Stored).unwrap();
+    }
+    let other = xml.replacen("pid=\"1\" p1=\"3\"", "pid=\"9\" p1=\"0\"", 1);
+    zip.add(
+        "3D/3dmodel.model",
+        other.as_bytes(),
+        mitcad_zip::Method::Stored,
+    )
+    .unwrap();
+    let other = zip.finish().unwrap();
+    let error = read(&other).unwrap_err().to_string();
+    assert!(error.contains("material group 9"), "{error}");
+    let imported = read_for_import(&other).unwrap();
+    let mut expected = colors.clone();
+    expected[4] = None;
+    assert_eq!(imported.model.parts[0].mesh.triangle_colors, expected);
 }

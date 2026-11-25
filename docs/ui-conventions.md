@@ -899,7 +899,7 @@ dynamic value.
 | | `Handle` | #e07b1a | manipulators, the timeline marker's handle, snaps, drawing picks | |
 | | `Provisional`, `FeatureFaces` | orange, amber | a mesh being made; a selected Fillet's own faces | |
 | | `HandleActive` | #ffffff | an axis-colored handle (Free Move's arrows and rings) hovered or dragged, white over its dark halo: none of the axis colors, no status hue, not the selection's blue that the Z axis' is close to (mitcad#1707); other handles take `Select` | |
-| View | `Body`, `Edge`, `HiddenEdge`, `Thread`, `BuildVolume`, `PrintBed`, `SectionCap`, `DatumPlane`, `DatumAxis`, `ProfileFill` | | the view's own objects | |
+| View | `Body`, `Edge`, `HiddenEdge`, `Thread`, `BuildVolume`, `PrintBed`, `SectionCap`, `DatumPlane`, `DatumAxis`, `ProfileFill` | | the view's own objects; Simulate's machine parts (a lathe's sub-spindle, mitcad#2405) as thin lines in `Edge`, apart from the tool's `Handle` | |
 | Sketch | `SketchFree`, `SketchFixed`, `SketchCenterline`, `SketchConstruction`, `SketchProjected`, `SketchInactive`, `SketchDriven`, `SketchDimension`, `SketchAxis`, `SketchPicked`, `SketchPreview`, `SketchGuide`, `SketchTrim`, `SketchHalo` | one value for the view and the overlay, by the background | the sketch's states | |
 | Domain | `Component0`–`Component7` | #e0892a, #3aa35b, #8e5bd0, #2aa7a7, #5560c8, #8d6e63, #c45a9a, #3d8bd9 | the components: timeline bands, section caps, Component Colors (no red, no olive) | |
 | | `AxisX`, `AxisY`, `AxisZ` | #e84f4f, #4cb05e, #3f8cff | the axes: view cube, joint triad, Free Move's arrows and rings (mitcad#1581) | |
@@ -1551,6 +1551,7 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
 | Focus | an accent ring on fields; none on flat buttons (they take no focus) |
 | Error, warning | the level's border, fill, icon and word ([Messages and severity](#3-messages-and-severity)), never the color alone |
 | Suppressed, rolled back | the object at one opacity (`kStateDimOpacity`, 0.35), not another hue |
+| Context geometry | geometry shown around what is edited, not part of it: an inactive component while another is active (mitcad#420, when *Ghost inactive components* is on), the assembly around a design edited in place (mitcad#2353, always). In the 3D view it is drawn as a ghost: bodies see-through in their own color, lines, points and planes pale (`OcctViewer::ActiveScope`), still pickable and measurable; what is edited is drawn as usual. It has no Timeline row; the Browser shows it as read-only where it shows it at all |
 
 The selected row's band is painted by one function,
 `paintRowBand` (`app/framework/WindowStyle.hpp`): the panels' trees call

@@ -17,6 +17,7 @@
 #include <QtLogging>
 
 #include "../framework/CommandRegistry.hpp"
+#include "../framework/Ribbon.hpp"
 #include "GuideStep.hpp"
 #include "TutorialGuide.hpp"
 
@@ -53,7 +54,9 @@ void MainWindow::registerTutorialCommands() {
   leave.mode = CommandDef::Mode::Any;
   leave.keywords = {QStringLiteral("tutorial"), QStringLiteral("guide"), QStringLiteral("lesson")};
   leave.duringCommands = true;
-  leave.enabled = [this] { return (m_guide != nullptr && m_guide->active()) || tutorialOpen(); };
+  leave.enabled = [this] {
+    return (m_guide != nullptr && (m_guide->active() || m_guide->holding())) || tutorialOpen();
+  };
   leave.run = [this] { leaveTutorial(); };
   m_registry->add(leave);
 }
@@ -92,9 +95,29 @@ TutorialGuide* MainWindow::guide() {
     return QString::fromLatin1(modes[static_cast<int>(m_mode)]);
   };
   host.leave = [this] { trigger(QString::fromLatin1(kLeaveTutorialCommand)); };
+  // The toolbar's workspace and tab (mitcad#2370).
+  host.workspaceListOpen = [this] { return m_ribbon != nullptr && m_ribbon->workspaceListOpen(); };
+  host.workspace = [this] { return m_ribbon != nullptr ? m_ribbon->workspace() : QString(); };
+  host.tab = [this] { return m_ribbon != nullptr ? m_ribbon->currentTab() : QString(); };
+  host.navigationPress = [this](const QPoint& position, Qt::MouseButton button, Qt::KeyboardModifiers keys) {
+    return m_viewer != nullptr && m_viewer->navigationPress(position, button, keys);
+  };
   m_guide = new TutorialGuide(std::move(host), this);
-  // Leave Tutorial's availability follows the step.
-  connect(m_guide, &TutorialGuide::changed, this, [this] { updateActions(); });
+  // The user's orbit, pan or zoom of the view (mitcad#2369): emitted while
+  // the view paints, so queued.
+  if (m_viewer != nullptr) {
+    connect(m_viewer, &OcctViewer::viewNavigated, m_guide, &TutorialGuide::viewNavigated, Qt::QueuedConnection);
+  }
+  // Leave Tutorial's availability follows the step; a workspace step's
+  // entry is outlined in the selector's list (mitcad#2370), which covers
+  // the window's outline.
+  connect(m_guide, &TutorialGuide::changed, this, [this] {
+    updateActions();
+    if (m_ribbon != nullptr) {
+      const bool workspaceStep = m_guide->active() && m_guide->step().target == GuideStep::Target::Workspace;
+      m_ribbon->setGuideWorkspace(workspaceStep ? m_guide->step().targetName : QString());
+    }
+  });
   // The datums' places for UI tests keep clear of the callout (mitcad#2311),
   // as of the cards over the view (OcctViewer::coveredChanged).
   connect(m_guide, &TutorialGuide::calloutMoved, this, [this] { logDatumPlaces(); }, Qt::QueuedConnection);
@@ -102,7 +125,7 @@ TutorialGuide* MainWindow::guide() {
 }
 
 bool MainWindow::startGuideStep(const QJsonObject& json, QString* error) {
-  const GuideStep step = GuideStep::parse(json, error);
+  GuideStep step = GuideStep::parse(json, error);
   if (step.id.isEmpty()) {
     return false;
   }
@@ -111,6 +134,49 @@ bool MainWindow::startGuideStep(const QJsonObject& json, QString* error) {
       *error = QStringLiteral("MitCad has no command %1").arg(id);
       return false;
     }
+  }
+  // The toolbar's places (mitcad#2370): the selector and the workspaces
+  // where the layout has a selector; workspaces and tabs by their names,
+  // kept as the toolbar's keys ("DESIGN", "SOLID").
+  const bool selectorStep = step.target == GuideStep::Target::WorkspaceSelector ||
+                            step.target == GuideStep::Target::Workspace || step.done == GuideStep::Done::Opened ||
+                            step.done == GuideStep::Done::Chosen;
+  if (selectorStep && (m_ribbon == nullptr || m_ribbon->workspaceSelector() == nullptr)) {
+    *error = QStringLiteral("The toolbar of this layout has no workspace selector");
+    return false;
+  }
+  const auto workspaceKey = [error](QString* name) {
+    const QString key = Ribbon::workspaceOfName(*name);
+    if (key.isEmpty()) {
+      QStringList names;
+      for (const QString& workspace : Ribbon::workspaces()) {
+        names << Ribbon::workspaceTitle(workspace);
+      }
+      *error = QStringLiteral("MitCad has no workspace %1; the workspaces are %2")
+                   .arg(*name, names.join(QStringLiteral(", ")));
+      return false;
+    }
+    *name = key;
+    return true;
+  };
+  const auto tabKey = [error](QString* name) {
+    const QString key = Ribbon::tabOfName(*name);
+    if (key.isEmpty()) {
+      QStringList names;
+      for (const QString& tab : Ribbon::guideTabs()) {
+        names << displayName(tab);
+      }
+      *error = QStringLiteral("MitCad has no tab %1; the tabs are %2").arg(*name, names.join(QStringLiteral(", ")));
+      return false;
+    }
+    *name = key;
+    return true;
+  };
+  if ((step.target == GuideStep::Target::Workspace && !workspaceKey(&step.targetName)) ||
+      (step.done == GuideStep::Done::Chosen && !workspaceKey(&step.doneName)) ||
+      (step.target == GuideStep::Target::Tab && !tabKey(&step.targetName)) ||
+      (step.done == GuideStep::Done::Activated && !tabKey(&step.doneName))) {
+    return false;
   }
   guide()->start(step);
   return true;
@@ -177,6 +243,51 @@ QRect MainWindow::guideTargetRect(const GuideStep& step) const {
   }
   case GuideStep::Target::View:
     return m_viewer != nullptr && m_viewer->isVisible() ? rectIn(m_viewer, host, m_viewer->rect()) : QRect();
+  case GuideStep::Target::WorkspaceSelector:
+  case GuideStep::Target::Workspace:
+  case GuideStep::Target::Tab: {
+    // The toolbar's places (mitcad#2370), in the layout shown: the toolbar
+    // panel's (Floating and Docked on Windows and Linux) or the macOS
+    // Docked toolbar's.
+    if (m_ribbon == nullptr) {
+      return QRect();
+    }
+    QWidget* selector = m_ribbon->workspaceSelector();
+    const auto selectorRect = [host, selector] {
+      return selector != nullptr && selector->isVisible() ? rectIn(selector, host, selector->rect()) : QRect();
+    };
+    if (step.target == GuideStep::Target::WorkspaceSelector) {
+      return selectorRect();
+    }
+    if (step.target == GuideStep::Target::Workspace) {
+      // Its entry while the selector's list is open (the list outlines it
+      // too: it covers the window's outline), else the selector that opens
+      // the list.
+      if (QWidget* entry = m_ribbon->workspaceEntry(step.targetName); entry != nullptr && entry->isVisible()) {
+        return rectIn(entry, host, entry->rect());
+      }
+      return selectorRect();
+    }
+    const QRect tab = m_ribbon->tabGlobalRect(step.targetName);
+    if (!tab.isNull()) {
+      return QRect(host->mapFromGlobal(tab.topLeft()), tab.size());
+    }
+    // A tab of another workspace: the selector that shows it.
+    const QString of = Ribbon::workspaceOfTab(step.targetName);
+    if (!of.isEmpty() && of != m_ribbon->workspace()) {
+      return selectorRect();
+    }
+    return QRect();
+  }
+  case GuideStep::Target::Timeline: {
+    // The timeline's dock (Docked) or card (Floating) while it is shown.
+    for (QWidget* timeline : host->findChildren<QWidget*>(QStringLiteral("timelineDock"))) {
+      if (timeline->isVisible() && !timeline->rect().isEmpty()) {
+        return rectIn(timeline, host, timeline->rect());
+      }
+    }
+    return QRect();
+  }
   }
   return QRect();
 }

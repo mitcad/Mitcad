@@ -1,0 +1,275 @@
+# SPDX-License-Identifier: MIT
+# CAM mill-turn: live tools on the sub-spindle, the B head's and the
+# sub-spindle's codes in Machines and Tools…, the sub-spindle's travel in
+# the lathe check (mitcad#2375, app/COMMANDS.md "Live tools on a lathe"),
+# the shared input script of tools/ui-cam-mill-turn-sub-test.sh (Linux),
+# tools/ui-windows-cam-mill-turn-sub-test.ps1 and
+# tools/ui-macos-cam-mill-turn-sub-test.sh, on
+# tools/ui-scripts/cam-mill-turn-sub.json (a 40 x 30 block 10 high turned
+# about the design's Z, a lathe with every axis on the Fanuc turning
+# dialect, its codes the defaults):
+#
+#   1. Machines and Tools… > Edit Machine…: the B head's clamp codes typed
+#      (M110, M111), on the Sub-Spindle page its highest speed, its travel
+#      from machine Z -260 to 300, its chuck 120 mm across, its axis E, its
+#      stop M206 and its C axis on M264 with its reference; its chuck 10 mm
+#      long, its housing 180 mm across and 200 long, waiting at machine Z
+#      280, a control that mirrors only Z on it, and on the Sub-Spindle
+#      Zones page a guard moving with it (mitcad#2392); its own profile, a
+#      step behind the housing, and the turret's body round the tool
+#      (mitcad#2405);
+#   2. New Setup on the lathe, the hand-over to the sub-spindle;
+#   3. through the model's commands Turn Facing, the part-off and the back
+#      faced on the sub-spindle; Drill from its panel on the sub-spindle,
+#      a vertex's hole 3 mm into the back; a flat faced with the Y axis on
+#      the sub-spindle through the model's commands;
+#   4. Generate: every operation up to date, its toolpath drawn;
+#   5. Simulate: the sub-spindle's live cuts in words, the back's facing
+#      running into the guard moving with the sub-spindle, the turret
+#      into its chuck; the sub-spindle drawn at the grip at the end
+#      (mitcad#2405);
+#   6. Post Process… to the Fanuc turning dialect (the wrappers read the
+#      file: the sub-spindle stopped with M206, its C axis on with M264,
+#      clamped, G19 for the flat, its C axis off, the sub-spindle's axis E);
+#   7. the setup's work zero 300 mm from the machine's: the sub-spindle
+#      cannot reach the part, which the lathe check says in words, and the
+#      guard moving with it; Simulate drawing the sub-spindle where it
+#      waits for the main spindle's facing, then at the grip (mitcad#2405);
+#   8. Turn Facing added on the main spindle after the sub-spindle's
+#      operations: its panel's warning, the browser's row, Generate's
+#      refusal in words.
+wait-idle
+command view.fit
+wait-idle
+
+mark
+# Make's workspace first in the Floating toolbar panel (mitcad#1990).
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+
+# 1. The B head's and the sub-spindle's codes and data in Edit Machine.
+mark
+command make.cam_machines
+focus-dialog '^Machines and Tools$'
+wait-log '^CAM machines dialog: 1 machine\(s\)'
+button '.*' camEditMachine
+focus-dialog '^Edit Machine$'
+wait-log '^CAM machine form: mill-turn: lathe$'
+focus-widget camMachineBClamp
+key Ctrl+a
+type 'M110'
+focus-widget camMachineBUnclamp
+key Ctrl+a
+type 'M111'
+# The pages: Machine, Keep-Out Zones, Sub-Spindle.
+focus-widget camMachineTabs
+key Right
+key Right
+focus-widget camMachineSubMaxRpm
+key Ctrl+a
+type '2500'
+focus-widget camMachineSubTravelMin
+key Ctrl+a
+type '-260 mm'
+focus-widget camMachineSubTravelMax
+key Ctrl+a
+type '300 mm'
+focus-widget camMachineSubChuckDiameter
+key Ctrl+a
+type '120 mm'
+qt-choice camMachineSubAxis 'E'
+focus-widget camMachineSubStop
+key Ctrl+a
+type 'M206'
+focus-widget camMachineSubCAxisOn
+key Ctrl+a
+type 'M264; G28 H0.'
+# Its body behind the jaws' face, where it waits, a control that mirrors
+# only Z on it (mitcad#2392).
+focus-widget camMachineSubChuckLength
+key Ctrl+a
+type '10 mm'
+focus-widget camMachineSubHousingDiameter
+key Ctrl+a
+type '180 mm'
+focus-widget camMachineSubHousingLength
+key Ctrl+a
+type '200 mm'
+focus-widget camMachineSubPark
+key Ctrl+a
+type '280 mm'
+focus-widget camMachineSubMirrorZ
+key Space
+# Its own profile, a step 100 mm across behind the housing, and the
+# turret's body round the tool: 100 mm out from the tool's point, 20 mm
+# along Z each way (mitcad#2405).
+focus-widget camMachineSubProfile
+key Ctrl+a
+type '210 mm, 100 mm; 260 mm, 100 mm'
+focus-widget camMachineTurretXMin
+key Ctrl+a
+type '0 mm'
+focus-widget camMachineTurretXMax
+key Ctrl+a
+type '100 mm'
+focus-widget camMachineTurretZMin
+key Ctrl+a
+type '-20 mm'
+focus-widget camMachineTurretZMax
+key Ctrl+a
+type '20 mm'
+# The zones moving with it: a guard up to 60 mm in front of its jaws' face.
+focus-widget camMachineTabs
+key Right
+button '.*' camMachineSubZoneAdd
+focus-dialog '^Add Zone$'
+focus-widget camMachineZoneName
+type 'Sub guard'
+focus-widget camMachineZoneMinX
+type '0 mm'
+focus-widget camMachineZoneMaxX
+type '1000 mm'
+focus-widget camMachineZoneMinZ
+type '-60 mm'
+focus-widget camMachineZoneMaxZ
+type '0 mm'
+button '^OK$'
+focus-dialog '^Edit Machine$'
+mark
+button '^OK$'
+wait-log '^CAM machine set: mill-turn$' 30
+wait-log '^CAM machine mill-turn codes: mill-turn: (?=.*"b_clamp":"M110")(?=.*"b_unclamp":"M111")(?=.*"sub_axis":"E")(?=.*"sub_stop":"M206")(?=.*"sub_c_axis_on":\["M264","G28 H0[.]"\])(?=.*"max_rpm":2500)(?=.*"travel":\[-260,300\])(?=.*"chuck_diameter":120).*$'
+wait-log '^CAM machine mill-turn codes: mill-turn: (?=.*"sub_mirror_z_only":true)(?=.*"chuck_length":10)(?=.*"housing_diameter":180)(?=.*"housing_length":200)(?=.*"park":280)(?=.*"name":"Sub guard")(?=.*"min":\[0,0,-60\])(?=.*"max":\[1000,0,0\]).*$'
+wait-log '^CAM machine mill-turn codes: mill-turn: (?=.*"profile":\[\[210,100\],\[260,100\]\])(?=.*"turret_body":\{"x":\[0,100\],"z":\[-20,20\]\}).*$'
+focus-dialog '^Machines and Tools$'
+key Escape
+wait-log '^CAM machines dialog closed$'
+
+# 2. New Setup on the mill-turn lathe, handing over to the sub-spindle.
+mark
+command make.cam_setup
+wait-log '^Command New Setup started'
+wait-log '^CAM setup panel: machine mill-turn$'
+type-in '^Panel New Setup input side at ' '2 mm'
+type-in '^Panel New Setup input top at ' '1 mm'
+type-in '^Panel New Setup input bottom at ' '5 mm'
+key Return
+wait-log '^CAM setup added: Setup 1$'
+mark
+model-command '{"cmd":"cam_setup_edit","setup":1,"changes":{"lathe":{"hand_over":{"withdraw":"40 mm"}}}}'
+wait-idle
+
+# 3. Turn Facing, the part-off, the back faced on the sub-spindle; Drill
+#    on the sub-spindle from its panel; the flat with the Y axis there.
+mark
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"turn_face"},"tool":1}}'
+wait-idle
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"turn_part_off"},"tool":2}}'
+wait-idle
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"turn_face"},"tool":1,"sub_spindle":true}}'
+wait-idle
+
+mark
+command make.cam_drill
+wait-log '^Command Drill started'
+wait-log '^CAM operation panel drill: setup Setup 1, tool 5$'
+wait-log '^CAM operation panel drill: a live tool on the face$'
+click-pick 'vertex F2[.]b0/'
+wait-log '^Drill Holes: 1 vertex'
+type-in '^Panel Drill input bottom at ' '-3 mm'
+click-logged '^Panel Drill input sub_spindle at '
+key Return
+wait-log '^CAM operation added: Drill 1 to Setup 1$'
+
+mark
+model-command '{"cmd":"cam_operation_add","setup":1,"operation":{"kind":{"type":"facing"},"tool":8,"live":"plane","sub_spindle":true,"plane":{"c":0,"b":90},"depths":{"bottom":"19 mm"}}}'
+wait-log '^CAM states: Setup 1: Turn Facing 1 not_generated, Parting Off 1 not_generated, Turn Facing 2 not_generated, Drill 1 not_generated, Facing 1 not_generated$' 30
+
+# 4. Generate: up to date, the toolpaths drawn (the sub-spindle's on the
+#    part where it was).
+mark
+command make.cam_generate
+wait-log '^CAM generate Setup 1: Turn Facing 1 up_to_date, [1-9][0-9]* moves, .*; Facing 1 up_to_date, [1-9][0-9]* moves, ' 90
+wait-log '^CAM states: Setup 1: Turn Facing 1 up_to_date, Parting Off 1 up_to_date, Turn Facing 2 up_to_date, Drill 1 up_to_date, Facing 1 up_to_date$' 30
+wait-log '^CAM toolpaths drawn: 5 operation\(s\), [1-9][0-9]* moves$' 30
+expect-never 'CAM generate .* failed'
+
+# 5. Simulate: the sub-spindle's live cuts on maps of their own.
+mark
+command make.cam_simulate
+wait-log '^CAM simulate: Setup 1, 5 operations, [1-9][0-9]* points$' 60
+wait-log '^CAM mill-turn stock: Setup 1: [1-9][0-9]* triangles, milled [0-9.]+, ' 120
+wait-log '^CAM live tools: Setup 1: face on the sub-spindle, 1 operation\(s\), left [0-9.]+, gouge [0-9.]+, [0-9]+ rapid cut\(s\)$' 30
+wait-log '^CAM live tools: Setup 1: plane on the sub-spindle, 1 operation\(s\), ' 30
+# The back's facing runs into the guard moving with the sub-spindle
+# (mitcad#2392).
+wait-log '^CAM sub-spindle hit Setup 1: Turn Facing 2: the tool runs into Sub guard, which moves with the sub-spindle[.]$' 30
+# The turret's body, 20 mm towards the sub-spindle from the tool, runs into
+# its chuck as the back is faced; the sub-spindle drawn: its chuck, its
+# housing and its profile; where it waits for the main spindle's facing is
+# not known without the work zero's machine place, the back's last
+# operation has it at the grip, work Z -5 (mitcad#2405).
+wait-log '^CAM sub-spindle hit Setup 1: Turn Facing 2: the turret runs into the sub-spindle.s chuck[.]$' 30
+wait-log '^CAM sub-spindle outline: Setup 1: 3 part\(s\)$' 30
+wait-log '^CAM sub-spindle drawn: Setup 1: Turn Facing 1 where it waits is not known$' 30
+focus-dialog '^Simulate$'
+focus-widget camSimulateSlider
+key End
+wait-log '^CAM sub-spindle drawn: Setup 1: Facing 1 at Z -5, [1-9][0-9]* segments$' 30
+key Escape
+wait-log '^CAM simulate closed$'
+wait-log '^CAM stock overlay: none$'
+
+# 6. Post Process… to the lathe's Fanuc dialect.
+mark
+command make.cam_post
+focus-dialog '^Post Process$'
+wait-log '^CAM post dialog: setup Setup 1, fanuc_turning, millimetres$'
+button '^Post'
+focus-dialog '^Save G-code$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/setup1.nc"
+key Return
+wait-log '^CAM post written: .*setup1[.]nc: fanuc_turning, millimetres, [1-9][0-9]* lines$' 30
+expect-file "${MITCAD_TEST_WORK}/setup1.nc"
+
+# 7. The work zero at machine Z -300: the sub-spindle's jaws' face would
+#    grip at -305, beyond its travel from -260.
+mark
+model-command '{"cmd":"cam_setup_edit","setup":1,"changes":{"placement":[0,0,-300]}}'
+wait-idle
+command make.cam_generate
+wait-log '^CAM finding Setup 1: The hand-over before Parting Off 1: the sub-spindle goes beyond its travel[.]$' 90
+wait-log '^CAM finding Setup 1: Turn Facing 2: the tool runs into Sub guard, which moves with the sub-spindle[.]$' 30
+wait-log '^CAM finding Setup 1: Turn Facing 2: the turret runs into the sub-spindle.s chuck[.]$' 30
+# Simulate draws the sub-spindle waiting at machine Z 280, 580 from the work
+# zero, while the main spindle faces, and at the grip for the back's
+# operations (mitcad#2405).
+mark
+command make.cam_simulate
+wait-log '^CAM simulate: Setup 1, 5 operations, [1-9][0-9]* points$' 60
+wait-log '^CAM sub-spindle drawn: Setup 1: Turn Facing 1 at Z 580, [1-9][0-9]* segments$' 120
+focus-dialog '^Simulate$'
+focus-widget camSimulateSlider
+key End
+wait-log '^CAM sub-spindle drawn: Setup 1: Facing 1 at Z -5, [1-9][0-9]* segments$' 30
+key Escape
+wait-log '^CAM simulate closed$'
+
+# 8. A facing on the main spindle added after the sub-spindle's operations
+#    (mitcad#2392): its panel warns, the browser names it in red, Generate
+#    refuses it in words.
+mark
+command make.cam_turn_face
+wait-log '^Command Turn Facing started'
+wait-log '^CAM turning panel turn_face: setup Setup 1, tool 1$'
+wait-log '^Panel Turn Facing note spindle_order: .*On the main spindle after the sub-spindle.s operations: Generate refuses it' 30
+key Return
+wait-log '^CAM operation added: Turn Facing 3 to Setup 1$' 30
+wait-log '^Browser CAM: Setup 1 \[.*Turn Facing 3 not_generated \(It is on the main spindle after the sub-spindle.s operations: move it before them[.]\)\]$' 30
+mark
+command make.cam_generate
+wait-log '^CAM generate Setup 1: .*Turn Facing 3 failed: It is on the main spindle after the sub-spindle.s operations: move it before them[.]' 90
+expect-never 'TestDriver: FAIL|CAM operation refused|CAM setup refused|CAM post refused|CAM machines: .* refused'

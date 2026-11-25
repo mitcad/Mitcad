@@ -105,7 +105,10 @@ public:
   void clickAt(const QPoint& point);
   // Cookies and site sign-ins, HTTP authentication, the cache.
   void clearBrowsingData();
-  // Before CEF ends (CefEngine): the browser closed and let go.
+  // Before CEF ends (CefEngine), and as the view goes: the tutorials' bridge
+  // and the browser closed and let go. A view that outlives CEF (a tutorial
+  // pane destroyed with its window after CEF's shutdown) has nothing of
+  // CEF's left to release then (mitcad#2394).
   void closeBrowser();
   // The GPU path failed this run (CefEngine, mitcad#1906): gpuFailed().
   void gpuFailedNotice() { emit gpuFailed(); }
@@ -158,6 +161,10 @@ private:
   friend class cef::BrowserClient;
 
   void createBrowser();
+  // The tutorials' bridge let go (closeBrowser): its listeners cleared and
+  // its handler removed from the router on CEF's UI thread, while CEF runs
+  // (mitcad#2394); none after.
+  void releaseBridge();
   CefRefPtr<CefBrowserHost> host() const;
   void sendMouse(QMouseEvent* event, bool up, int clicks);
   void sendKey(QKeyEvent* event, bool down);

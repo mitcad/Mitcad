@@ -8,7 +8,9 @@
 //! covers at points along its moves, on the face, the diameter, a plane or
 //! a tilted plane, its axis the side's. The sub-spindle's operations turn
 //! the part's back in their coordinates, the stock turned round, and the
-//! remnant the part-off leaves on the main spindle goes.
+//! remnant the part-off leaves on the main spindle goes; its live tools
+//! (mitcad#2375) cut where their sub-spindle coordinates are in the main
+//! spindle's.
 //!
 //! Its surface is the cubes' faces towards no material, a mesh for the
 //! view; compared with the part (its mesh in work coordinates) it gives the
@@ -389,13 +391,40 @@ pub fn simulate_solid(
     let cube = voxels.step.powi(3);
     let mut milled = 0.0;
     let mut rapid_cuts = Vec::new();
+    let first_sub = program.first_sub();
+    let hand_over = program.hand_over.as_ref();
     for (index, op) in program.operations.iter().enumerate() {
+        // At the hand-over the remnant the part-off leaves stays on the
+        // main spindle (mitcad#2375: a live operation may come first on the
+        // sub-spindle).
+        if Some(index) == first_sub
+            && let Some(cut) = super::stock::parted_at(program, index)
+        {
+            for k in 0..voxels.n[2] {
+                if voxels.center(0, 0, k)[2] < cut {
+                    for j in 0..voxels.n[1] {
+                        for i in 0..voxels.n[0] {
+                            let at = voxels.index(i, j, k);
+                            voxels.filled[at] = false;
+                        }
+                    }
+                }
+            }
+        }
+        // A live tool on the part's back cuts in the sub-spindle's work
+        // coordinates (mitcad#2375).
+        let sub = hand_over.filter(|_| op.sub);
         match &op.live {
             Some(live) => {
                 let mut reported = false;
                 for (q, rapid) in live_samples(live, voxels.step / 2.0) {
-                    let tip = live.side.to_work(q);
-                    let axis = live.side.tool_axis(q);
+                    let (tip, axis) = match sub {
+                        Some(h) => (
+                            h.main_point(live.side.to_work(q)),
+                            h.main_direction(live.side.tool_axis(q)),
+                        ),
+                        None => (live.side.to_work(q), live.side.tool_axis(q)),
+                    };
                     let taken = voxels.cut_tool(&live.cutter, tip, axis);
                     milled += taken as f64 * cube;
                     if rapid && taken > 0 && !reported {

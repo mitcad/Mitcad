@@ -146,6 +146,9 @@ const TestDriver::StepSpec kStepSpecs[] = {
     {"model-command-refused", 1, 1, TestDriver::kIdle},
     // A text of a model query's answer (mitcad#2321: a face's name).
     {"capture-model-text", 3, 3, TestDriver::kIdle},
+    // A sketch's or construction feature's light bulb as the model gives
+    // it, by the feature's name (yes|no, mitcad#2393).
+    {"expect-feature-shown", 2, 2, TestDriver::kIdle},
 };
 
 } // namespace
@@ -533,6 +536,36 @@ void TestDriver::runModelStep(const QString& name, const QStringList& a, int lin
     if (window->modelBusy() != (a.at(0) == QStringLiteral("true"))) {
       fail(line, QStringLiteral("the document was not busy=%1 at this input step").arg(a.at(0)));
     }
+  } else if (name == QLatin1String("expect-feature-shown")) {
+    // The timeline query's `visible` of the feature named (mitcad#2393).
+    if (a.at(1) != QLatin1String("yes") && a.at(1) != QLatin1String("no")) {
+      fail(line, QStringLiteral("expect-feature-shown <feature name> yes|no")); return;
+    }
+    const QString feature = a.at(0);
+    const bool wanted = a.at(1) == QLatin1String("yes");
+    whenReady([this, feature, wanted] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      const QJsonArray features = window->query({{QStringLiteral("query"), QStringLiteral("timeline")}})
+                                      .toObject()
+                                      .value(QStringLiteral("features"))
+                                      .toArray();
+      for (const QJsonValue& value : features) {
+        const QJsonObject current = value.toObject();
+        if (current.value(QStringLiteral("name")).toString() != feature) continue;
+        const QJsonValue visible = current.value(QStringLiteral("visible"));
+        m_waitDetail = QStringLiteral("%1: visible %2, visible_set %3")
+                           .arg(feature,
+                                visible.isBool() ? (visible.toBool() ? QStringLiteral("yes") : QStringLiteral("no"))
+                                                 : QStringLiteral("none"),
+                                current.value(QStringLiteral("visible_set")).toBool() ? QStringLiteral("yes")
+                                                                                       : QStringLiteral("no"));
+        return visible.isBool() && visible.toBool() == wanted;
+      }
+      m_waitDetail = QStringLiteral("no feature %1 in the timeline").arg(feature);
+      return false;
+    }, 6, wanted ? QStringLiteral("expected %1 to be shown").arg(feature)
+                 : QStringLiteral("expected %1 to be hidden").arg(feature));
   }
 }
 

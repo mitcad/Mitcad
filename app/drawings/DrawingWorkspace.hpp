@@ -149,6 +149,12 @@ public:
   // Runs a tool by its id ("drawing.base_view"), as its button and its
   // command do.
   void startTool(const QString& id);
+  // A drawing made from the selection (mitcad#2399): the open drawing's
+  // Base View shows `choice` (a Shows choice; a "selection:" one is listed
+  // as `label` after the whole component) while it stays open. Another
+  // drawing opened, or this one closed, Base View's Shows is what it was
+  // before, unless it was changed meanwhile.
+  void setSelectionSubject(const QString& choice, const QString& label);
   // Esc: a tool's picks go (the sheet's own), else the tool, else the
   // selection; the drawing stays open (mitcad#725).
   void escape();
@@ -330,6 +336,8 @@ private:
   // A base view's Shows list (subjectChoices): the drawing's component,
   // its occurrences and its bodies by name.
   QList<QPair<QString, QString>> subjects() const;
+  // Base View's Shows back to what it was before setSelectionSubject.
+  void dropSelectionSubject();
   // A base view's Exploded View list (mitcad#2113): Assembled, then the
   // drawing's component's explode views by name.
   QList<QPair<QString, QString>> explodeChoices() const;
@@ -472,6 +480,12 @@ private:
   const DrawingToolDef* m_tool = nullptr;
   // The tools' options, by tool id and option id, kept between uses.
   QHash<QString, QHash<QString, QString>> m_options;
+  // The Shows choice taken from the selection (setSelectionSubject): the
+  // drawing it is for, the choice and its label, and the choice before it
+  // (absent: none was made).
+  QString m_selectionDrawing;
+  QPair<QString, QString> m_selectionChoice;
+  std::optional<QString> m_subjectBefore;
   QString m_problems; // the views not drawn, as last said
   // An annotation tool's picks so far (the model's), what shows them, and
   // the view they are on.

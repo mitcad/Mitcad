@@ -64,7 +64,7 @@
     "operation": "new_body"}},
   {"expect": {"feature": "Coil1", "status": "error", "error_contains": "the coil's section reaches its axis"}},
 
-  {"comment": "A rib that grows away from every body, and a web along a quarter of an ellipse (Sketch4 F9, Rib1 F10, Web1 F11)."},
+  {"comment": "A rib that grows away from every body, and a web along a quarter of an ellipse (Sketch4 F9, Rib1 F10, Web1 F11): the web's wall is built (mitcad#2364: every curve kind makes a wall), but it stands apart from the only body, so it joins nothing."},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_line", "sketch": "F9", "start": [0, 50], "end": [20, 50]},
   {"cmd": "sketch.ellipse", "sketch": "F9", "center": [50, 50], "major": [60, 50], "minor_radius": 5, "start": [60, 50], "end": [50, 55]},
@@ -73,6 +73,6 @@
   {"expect": {"feature": "Rib1", "status": "error", "error_contains": "does not end at faces of the bodies"}},
   {"cmd": "add_feature", "def": {"type": "web", "curves": {"sketch": "F9", "curves": ["c4"]}, "thickness": 2,
     "extent": {"type": "depth", "depth": 5}}},
-  {"expect": {"feature": "Web1", "status": "error", "error_contains": "unsupported: web curves other than lines and arcs (c4)"}},
+  {"expect": {"feature": "Web1", "status": "error", "error_contains": "the web does not touch any participant body"}},
   {"expect": {"bodies": 1}}
 ]

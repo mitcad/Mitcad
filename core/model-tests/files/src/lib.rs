@@ -57,3 +57,6 @@ mod face_colors_2313_tests;
 // An explode view of a sub-component and the root's own bodies an explode
 // moves, as an animated USDZ (mitcad#2328).
 mod usdz_explode_2328_tests;
+// Faces coloured on their own written on their triangles in 3MF files
+// (mitcad#2385).
+mod threemf_face_colors_2385_tests;

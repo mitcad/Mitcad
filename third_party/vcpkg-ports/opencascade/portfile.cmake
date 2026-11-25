@@ -371,6 +371,11 @@ vcpkg_from_github(
         2229-chfi3d-cap-leaving-the-end-face-across-a-tangent-edge-cut-by-the-face-beyond.patch
         2306-chfi3d-corner-of-four-chamfers-meeting-in-a-plane-closed-by-a-planar-face.patch
         2272-brepblend-walk-ending-on-both-restrictions-takes-a-closed-guides-end-only-near-it.patch
+        2300-brepblend-no-twist-at-a-section-of-no-width.patch
+        2301-chfi3d-contact-end-on-an-arc-not-taken-at-a-crossing-farther-away.patch
+        2302-brepblend-walk-end-on-a-restriction-in-the-period-of-the-walk.patch
+        2303-chfi3d-no-split-of-a-blend-at-a-minimum-of-noise-in-its-vanishing-end.patch
+        2383-brepoffset-crease-split-in-several-edges-trimmed-once-and-oriented-in-each-face.patch
 )
 
 # The compiler cache (docs/development.md, "The compiler cache of the vcpkg

@@ -1,0 +1,261 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: the offsets of two faces that meet along a crease split into
+several edges, intersected once for all of them, trimmed once and oriented
+in each face as their own edge is there (mitcad#2383).
+
+The case: a cone standing on a ring, with notches cut up from the ring's
+top through the cone's wall (their floors in the ring's top), shelled
+inside with Sharp corners (the intersection join). The cone's foot, the
+crease between the cone and the ring's top, is split by the notches into
+arcs and by the cone's seam once more; the offsets of the two faces are
+intersected once for all of those arcs, in one circle, which the offset
+then splits and trims for each run of arcs. The offset failed (no result,
+or a solid with a notch whose walls the inside of the cone ran across):
+
+- BRepOffset_Inter3d::ConnexIntByInt: the copy of the circle made for each
+  further run of arcs (each localized shared part) went to the offsets of
+  both faces with one orientation, though the circle is stored for the two
+  each with its own: the copy ran against the wire of one of them. It now
+  goes to each face as the circle itself is there.
+- TrimEdges: a piece shared by the images of several edges (the arcs on
+  both sides of the seam) was trimmed again for each of them, as
+  NCollection_IndexedMap::Add gives an index, not whether the piece is
+  new. A second trim of a piece cut at its curve's origin (TrimEdge,
+  mitcad#2050) took the run of arcs the other way round the circle, across
+  every other notch. Each piece is now trimmed once.
+- TrimEdge: the second piece of such a cut went to the faces with the
+  orientation the edge had where it was cut, not as each face has the
+  edge: the cone's offset then closed its foot loop alone, its seam and
+  top left out. It now goes to each face as the edge is there.
+- IsOverOrigins (which arcs of a circle lie over the edges it is the image
+  of, mitcad#2050): the projection of an arc's middle onto an edge's curve
+  stored only over the edge's range (trimmed, or not periodic) gives the
+  farthest point where the nearest one lies outside the range; the arc
+  across a notch's gap was so taken for one over the arcs, and the circle
+  not trimmed at all. Only a nearest point (a local minimum of the
+  distance) inside the range counts now.
+- TrimEdges: the image of an edge that comes in a chain of pieces (the
+  intersection of the cone's offset with a notch's round wall's, in two
+  branches meeting at its apex) has each piece trimmed between its
+  neighbours' vertices on it and the vertex it shares with the next piece
+  of the chain; a piece with one neighbour's vertex was not trimmed at all
+  and the wall's offset was left open.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2383.
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+index cac75ccc..e72b85e2 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+@@ -524,6 +524,31 @@ void BRepOffset_Inter3d::ConnexIntByArc(const NCollection_List<TopoDS_Shape>& /*
+   }
+ }
+ 
++//=======================================================================
++// function : OrientationIn
++// purpose  : The orientation of the edge among the descendants of the
++//            face (the offset face it bounds), or theDefault where it is
++//            not among them (mitcad#2383).
++//=======================================================================
++static TopAbs_Orientation OrientationIn(const occ::handle<BRepAlgo_AsDes>& theAsDes,
++                                        const TopoDS_Shape&                theFace,
++                                        const TopoDS_Shape&                theEdge,
++                                        const TopAbs_Orientation           theDefault)
++{
++  if (!theAsDes->HasDescendant(theFace))
++  {
++    return theDefault;
++  }
++  for (NCollection_List<TopoDS_Shape>::Iterator anIt(theAsDes->Descendant(theFace)); anIt.More(); anIt.Next())
++  {
++    if (anIt.Value().IsSame(theEdge))
++    {
++      return anIt.Value().Orientation();
++    }
++  }
++  return theDefault;
++}
++
+ //=================================================================================================
+ 
+ void BRepOffset_Inter3d::ConnexIntByInt(
+@@ -1227,8 +1252,13 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+       //
+       BOPTools_AlgoTools::MakeSplitEdge(aE, aV1, aT1, aV2, aT2, aNewEdge);
+       //
+-      myAsDes->Add(aNF1, aNewEdge);
+-      myAsDes->Add(aNF2, aNewEdge);
++      // (mitcad#2383) The copy goes to each face as the edge itself is
++      // there: the intersection is stored for the two faces each with its
++      // own orientation (Store), so one orientation for both reversed the
++      // copy in one of them (the second arc of a crease split by a face's
++      // seam, its image then running against the wire of that face's offset).
++      myAsDes->Add(aNF1, aNewEdge.Oriented(OrientationIn(myAsDes, aNF1, aE, aNewEdge.Orientation())));
++      myAsDes->Add(aNF2, aNewEdge.Oriented(OrientationIn(myAsDes, aNF2, aE, aNewEdge.Orientation())));
+       //
+       const TopoDS_Shape& aCB = aItLCB.Value();
+       TopoDS_Iterator     aItCB(aCB);
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index 50cc6eb1..c0797ed7 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -5472,6 +5472,61 @@ void BRepOffset_MakeOffset::IntersectEdges(
+   }
+ }
+ 
++//=======================================================================
++// function : AddJointsOfPieces
++// purpose  : The image of an edge in several pieces, a chain of edges
++//            (a curve of intersection that comes in branches meeting at a
++//            vertex, such as a cone's offset cut by a cylinder's beside
++//            the apex of their intersection): each piece is trimmed
++//            between the vertices on it, and where a piece runs on into
++//            the next one of the chain, the vertex they share is an end of
++//            it as well as the vertices its neighbours put on it. Without
++//            it, a piece with one neighbour's vertex was not trimmed at all
++//            and the offset of the face it bounds was left open
++//            (mitcad#2383). The shared vertices of thePiece with the other
++//            edges of theImage are added to its vertices in theAsDes2d.
++//=======================================================================
++static void AddJointsOfPieces(const TopoDS_Edge&                 thePiece,
++                              const TopoDS_Shape&                theImage,
++                              const occ::handle<BRepAlgo_AsDes>& theAsDes2d)
++{
++  TopoDS_Vertex aV[2];
++  TopExp::Vertices(thePiece, aV[0], aV[1], true);
++  for (int k = 0; k < 2; ++k)
++  {
++    if (aV[k].IsNull() || (k == 1 && aV[1].IsSame(aV[0])))
++    {
++      continue;
++    }
++    bool bJoint = false;
++    for (TopExp_Explorer aExp(theImage, TopAbs_EDGE); aExp.More() && !bJoint; aExp.Next())
++    {
++      if (aExp.Current().IsSame(thePiece))
++      {
++        continue;
++      }
++      for (TopExp_Explorer aExpV(aExp.Current(), TopAbs_VERTEX); aExpV.More() && !bJoint; aExpV.Next())
++      {
++        bJoint = aExpV.Current().IsSame(aV[k]);
++      }
++    }
++    if (!bJoint)
++    {
++      continue;
++    }
++    bool bThere = false;
++    for (NCollection_List<TopoDS_Shape>::Iterator aIt(theAsDes2d->Descendant(thePiece)); aIt.More() && !bThere;
++         aIt.Next())
++    {
++      bThere = aIt.Value().IsSame(aV[k]);
++    }
++    if (!bThere)
++    {
++      theAsDes2d->Add(thePiece, aV[k].Oriented(k == 0 ? TopAbs_FORWARD : TopAbs_REVERSED));
++    }
++  }
++}
++
+ //=================================================================================================
+ 
+ bool TrimEdges(
+@@ -5575,10 +5630,21 @@ bool TrimEdges(
+           for (ExpC.Init(NE, TopAbs_EDGE); ExpC.More(); ExpC.Next())
+           {
+             TopoDS_Edge NEC = TopoDS::Edge(ExpC.Current());
+-            if (theNewEdges.Add(NEC))
++            // (mitcad#2383) Each piece is trimmed once: Add gives the
++            // index, also of a piece already there, so a piece shared by
++            // the images of several edges (a crease split by a seam) was
++            // trimmed again for each of them, and a second trim of one cut
++            // at its curve's origin (TrimEdge, mitcad#2050) took the run of
++            // arcs the other way round the curve.
++            if (theNewEdges.Contains(NEC))
++            {
++              continue;
++            }
++            theNewEdges.Add(NEC);
+             {
+               if (!theAsDes2d->Descendant(NEC).IsEmpty())
+               {
++                AddJointsOfPieces(NEC, NE, theAsDes2d);
+                 TopoDS_Edge aSecond;
+                 if (!TrimEdge(NEC, theAsDes2d, theAsDes, theETrimEInf, &theBuild, &aSecond))
+                 {
+@@ -5726,20 +5792,33 @@ static bool IsOverOrigins(const gp_Pnt& thePnt, const NCollection_List<TopoDS_Sh
+     {
+       continue;
+     }
++    // (mitcad#2383) A foot of the perpendicular from the point inside the
++    // edge's range that is a nearest point of the curve there, not a
++    // farthest one: the projection of a point whose nearest point lies
++    // outside the range of a curve stored only over it (trimmed, or not
++    // periodic) gives the farthest point, inside the range. The arc
++    // across the gap a notch leaves in a foot circle was so taken for one
++    // over the circle's edges, and the image of the circle not trimmed.
+     GeomAPI_ProjectPointOnCurve aProj(thePnt, aC);
+-    if (aProj.NbPoints() == 0)
++    const double                aMargin = 1.e-6 * (aL - aF);
++    const double                aStep   = 1.e-3 * (aL - aF);
++    for (int i = 1; i <= aProj.NbPoints(); ++i)
+     {
+-      continue;
+-    }
+-    double aU = aProj.LowerDistanceParameter();
+-    if (aC->IsPeriodic())
+-    {
+-      aU = ElCLib::InPeriod(aU, aF, aF + aC->Period());
+-    }
+-    const double aMargin = 1.e-6 * (aL - aF);
+-    if (aU > aF + aMargin && aU < aL - aMargin)
+-    {
+-      return true;
++      const double aUc = aProj.Parameter(i);
++      double       aU  = aUc;
++      if (aC->IsPeriodic())
++      {
++        aU = ElCLib::InPeriod(aU, aF, aF + aC->Period());
++      }
++      if (!(aU > aF + aMargin && aU < aL - aMargin))
++      {
++        continue;
++      }
++      const double aD = aProj.Distance(i);
++      if (thePnt.Distance(aC->Value(aUc - aStep)) >= aD && thePnt.Distance(aC->Value(aUc + aStep)) >= aD)
++      {
++        return true;
++      }
+     }
+   }
+   return false;
+@@ -5993,10 +6072,25 @@ bool TrimEdge(
+           AsDes->Add(aSecond, aV2.Oriented(TopAbs_REVERSED));
+           if (AsDes->HasAscendant(NE))
+           {
++            // (mitcad#2383) Each face gets the second piece as the edge is
++            // in it: the faces on its two sides have it oriented each its
++            // own way, and one orientation for both ran the piece against
++            // the wire of one of them (the offset of a cone whose foot is
++            // split by its seam built from its foot loop alone).
+             const NCollection_List<TopoDS_Shape> aFaces = AsDes->Ascendant(NE);
+             for (NCollection_List<TopoDS_Shape>::Iterator itF(aFaces); itF.More(); itF.Next())
+             {
+-              AsDes->Add(itF.Value(), aSecond);
++              TopAbs_Orientation anOrInF = Or;
++              for (NCollection_List<TopoDS_Shape>::Iterator itE(AsDes->Descendant(itF.Value())); itE.More();
++                   itE.Next())
++              {
++                if (itE.Value().IsSame(NE))
++                {
++                  anOrInF = itE.Value().Orientation();
++                  break;
++                }
++              }
++              AsDes->Add(itF.Value(), aSecond.Oriented(anOrInF));
+             }
+           }
+           BRepLib::SameParameter(NE, aSameParTol, true);

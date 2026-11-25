@@ -17,6 +17,8 @@ pub(crate) use develop::{refold, unfold};
 // Corner relief at bend junctions (mitcad#209).
 mod relief;
 pub(crate) use relief::corner_relief;
+// The rules' corner relief at a flange's corners (mitcad#2342).
+pub(crate) use relief::corner_reliefs_key;
 // A face joined coplanar to a sheet's panel (mitcad#242).
 mod join;
 pub(crate) use join::join_face;

@@ -9,6 +9,13 @@
 #      2; the panel shows both, the preview builds and the surface is
 #      added.
 #   2. The surface (F5.b0) is one side face (Tangent Edges Merge).
+#   3. Chains of edges as sections (mitcad#2395): a box beside the post
+#      (Box1 F6), then Surface Loft from two of its top edges, picked one
+#      after the other (the second meets the first, so it joins its
+#      section), to the two bottom edges below them (which meet neither,
+#      so they start the second section): two sections, a surface of two
+#      faces. The loft (Loft2, F7) opens in its panel again with the same
+#      two sections and is saved unchanged.
 # Run by tools/ui-surface-loft-perpendicular-test.sh (Linux),
 # tools/ui-windows-surface-loft-perpendicular-test.ps1 (Windows) and
 # tools/ui-macos-surface-loft-perpendicular-test.sh (macOS).
@@ -63,3 +70,59 @@ wait-idle
 # 2. One side face.
 capture-model-number faces '{"query":"properties","bodies":["F5.b0"]}' total.faces
 expect-near ${faces} 1 0 0
+
+# 3. A box beside the post, in front of it as the isometric view sees it
+#    (larger x): its top edges and the bottom edges of its front faces
+#    (side0 at its smallest y, side1 at its largest x) show.
+mark
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[40,-10],"length":20,"width":20,"height":10,"operation":"new_body"}}'
+wait-log '^Timeline Box1 at ' 30
+wait-idle
+command view.fit
+wait-idle
+mark
+command surface.loft
+wait-log '^Command Surface Loft started'
+wait-idle
+# The first section: two top edges meeting at the box's corner.
+click-pick 'edge F6[.]b0/E[{]F6:side0[|]F6:top[}] at '
+wait-log '^Surface Loft Sections: 1 edge'
+wait-idle
+mark
+click-pick 'edge F6[.]b0/E[{]F6:side1[|]F6:top[}] at '
+wait-log '^Surface Loft Sections: 2 edges'
+wait-idle
+# The second section: the two bottom edges below them.
+mark
+click-pick 'edge F6[.]b0/E[{]F6:bottom[|]F6:side0[}] at '
+wait-log '^Surface Loft Sections: 3 edges'
+wait-idle
+mark
+click-pick 'edge F6[.]b0/E[{]F6:bottom[|]F6:side1[}] at '
+wait-log '^Surface Loft Sections: 4 edges'
+wait-idle
+wait-log '^Preview Surface Loft: ok' 60
+wait-idle
+expect-no-log '^Panel Surface Loft error: '
+mark
+key Return
+wait-log '^Added surface loft through 2 sections' 60
+wait-log '^Timeline Loft2 at ' 30
+wait-idle
+capture-model-number faces '{"query":"properties","bodies":["F7.b0"]}' total.faces
+expect-near ${faces} 2 0 0
+
+# The loft opens in its panel again: its chains as the four edges, which
+# make the same two sections, saved unchanged.
+mark
+dblclick-logged '^Timeline Loft2 at '
+wait-log '^Editing F7 with Surface Loft$'
+wait-log '^Preview Surface Loft: ok' 60
+wait-idle
+expect-no-log '^Panel Surface Loft error: '
+mark
+key Return
+wait-log '^Edited F7$' 60
+wait-idle
+capture-model-number faces '{"query":"properties","bodies":["F7.b0"]}' total.faces
+expect-near ${faces} 2 0 0

@@ -28,7 +28,9 @@
 //! face and diameter ([`live`], mitcad#2067); with a Y axis on planes off
 //! the spindle axis, with a tilting head (a B axis) on tilted planes, and a
 //! sub-spindle takes the part over for its back ([`HandOver`]); [`solid`]
-//! cuts the whole program out of the bar in 3D (mitcad#2319).
+//! cuts the whole program out of the bar in 3D (mitcad#2319). Live tools
+//! cut the part's back too while the sub-spindle holds it, on its own C
+//! axis (mitcad#2375).
 
 use serde::{Deserialize, Serialize};
 
@@ -53,9 +55,23 @@ mod axes_tests;
 mod live_tests;
 #[cfg(test)]
 mod tests;
+// Live tools on the sub-spindle and its machine data (mitcad#2375).
+#[cfg(test)]
+mod sub_live_tests;
+// The sub-spindle's body and moving zones, a control that mirrors only Z
+// there, the main spindle's operations after it (mitcad#2392).
+#[cfg(test)]
+mod sub_body_tests;
+// The sub-spindle drawn in Simulate, the turret's body against it, its own
+// profile (mitcad#2405).
+#[cfg(test)]
+mod sub_turret_tests;
 
-pub use check::{ProgramCheck, ReadMove, TurnPlacement, check_lathe, check_program};
-pub use lathe::{Lathe, LatheAxes, MillTurn};
+pub use check::{
+    ProgramCheck, ReadMove, TurnPlacement, check_lathe, check_program, check_program_with,
+    sub_face_at, sub_face_shown, sub_spindle_hits,
+};
+pub use lathe::{Lathe, LatheAxes, MillTurn, SubBody, SubSpindle, TurretBody};
 pub use live::{LiveOp, LiveSide, LiveSim, simulate_live};
 pub use ops::{
     FaceOp, FinishOp, GrooveOp, PartOp, RoughOp, ThreadOp, TurnSide, face, finish, groove,
@@ -315,8 +331,9 @@ pub struct TurningProgramOp {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live: Option<live::LiveOp>,
     /// It turns the part's back on the sub-spindle, after the program's
-    /// hand-over (mitcad#2319): its moves in the sub-spindle's work
-    /// coordinates ([`HandOver`]).
+    /// hand-over (mitcad#2319), or cuts it there with a live tool, the
+    /// sub-spindle's C axis holding it (mitcad#2375): its moves in the
+    /// sub-spindle's work coordinates ([`HandOver`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sub: bool,
 }
@@ -329,7 +346,15 @@ pub struct TurningProgramOp {
 /// turn the part's back in the sub-spindle's work coordinates: the zero on
 /// the spindle axis at the part's back (`back_z` in the main spindle's
 /// work Z), Z turned round (away from the sub-spindle's chuck), X as on
-/// the main spindle.
+/// the main spindle: the part turned round about the work X, so Y turns
+/// round with Z. Its live tools' C is the angle in these coordinates, from
+/// their X towards their Y (mitcad#2375).
+///
+/// While the sub-spindle holds the part it stays where the hand-over pulled
+/// it back to: its jaws' face at `grip_z + withdraw` and a point at `z` of
+/// its work coordinates at `back_z + withdraw - z` of the main spindle's
+/// (the lathe check's machine places, mitcad#2375); the view draws the
+/// sub-spindle's moves where the part was before ([`HandOver::main_z`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HandOver {
     /// Where the sub-spindle's jaws' face is when it grips the part, in
@@ -352,6 +377,25 @@ impl HandOver {
     /// The main spindle's work Z of a point at `z` in the sub-spindle's.
     pub fn main_z(&self, z: f64) -> f64 {
         self.back_z - z
+    }
+
+    /// The main spindle's work coordinates of a point in the sub-spindle's
+    /// (mitcad#2375): turned round about the work X at the part's back.
+    pub fn main_point(&self, p: [f64; 3]) -> [f64; 3] {
+        [p[0], -p[1], self.back_z - p[2]]
+    }
+
+    /// The main spindle's work coordinates of a direction in the
+    /// sub-spindle's.
+    pub fn main_direction(&self, d: [f64; 3]) -> [f64; 3] {
+        [d[0], -d[1], -d[2]]
+    }
+
+    /// The main spindle's work Z of a point at `z` in the sub-spindle's
+    /// while the sub-spindle holds the part where the hand-over left it:
+    /// pulled back by `withdraw` (mitcad#2375).
+    pub fn held_z(&self, z: f64) -> f64 {
+        self.back_z + self.withdraw - z
     }
 
     pub fn validate(&self) -> Result<(), CamError> {
@@ -456,7 +500,8 @@ impl TurningProgram {
             self.mill_turn.validate().map_err(CamError::new)?;
         }
         // The sub-spindle's operations after the main spindle's, after a
-        // hand-over, turning (mitcad#2319).
+        // hand-over (mitcad#2319); turning or with live tools on its C axis
+        // (mitcad#2375).
         if let Some(first) = self.first_sub() {
             let Some(hand_over) = &self.hand_over else {
                 return Err(CamError::new(format!(
@@ -468,12 +513,6 @@ impl TurningProgram {
             if let Some(op) = self.operations[first..].iter().find(|o| !o.sub) {
                 return Err(CamError::new(format!(
                     "{} is on the main spindle after the hand-over: put it before the sub-spindle's operations.",
-                    op.name
-                )));
-            }
-            if let Some(op) = self.operations[first..].iter().find(|o| o.live.is_some()) {
-                return Err(CamError::new(format!(
-                    "{}: live tools cut on the main spindle only.",
                     op.name
                 )));
             }

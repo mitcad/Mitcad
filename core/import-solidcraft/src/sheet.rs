@@ -135,7 +135,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
             "allowance": {"type": "k_factor", "k": slot(&rule.k_factor)?},
             "reference_side": if back { "back" } else { "front" },
             "bend_relief": {"type": "rectangular", "width": slot(&rule.relief_width)?, "depth": slot(&rule.relief_depth)?},
-            "corner_relief": {"type": kind, "width": slot(&rule.corner_relief)?, "depth": slot(&rule.corner_relief)?}});
+            "corner_relief": {"type": kind, "width": slot(&rule.corner_relief)?, "depth": slot(&rule.corner_relief)?},
+            // The import replays the file's corners as they are built
+            // (mitcad#2342): no automatic corner relief at flange corners.
+            "flange_corner_relief": false});
         let name = format!("{}{}", rule.name, if back { " (back)" } else { "" });
         let uid = self.add(&def, Some(&name), component)?;
         self.sheet_rule_features.insert(key, uid);

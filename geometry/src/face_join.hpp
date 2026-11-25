@@ -25,7 +25,11 @@ namespace mitcad::geometry::detail {
 // their names, and then each run of
 // two or more edges of the joined faces that meet tangentially at vertices
 // of no other edge, between the same two faces, joined into one edge. The
-// other faces keep their geometry and names. Null where the result would
+// other faces keep their geometry and names. Pieces of a periodic surface
+// (copies of one periodic B-spline surface, or one cylinder) that go round
+// a whole period, without a seam of their own (a loft's side round the
+// whole section with Tangent Edges Keep, mitcad#2300), join into one face
+// whose seam is the edge where they come round. Null where the result would
 // not be valid; the shape unchanged where nothing is to be joined.
 ShapePtr join_surface_pieces(const Shape& body, const std::vector<int>& faces);
 

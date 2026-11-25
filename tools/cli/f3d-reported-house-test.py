@@ -90,7 +90,9 @@ def run(args, env=None):
     # not decode every line of the worker's trace.)
     done = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
                           errors="replace", env=env)
-    return done.returncode, done.stdout + done.stderr
+    # (Either can be None where the run is cut short, e.g. by a memory
+    # limit on the test's process tree: the status still tells.)
+    return done.returncode, (done.stdout or "") + (done.stderr or "")
 
 
 def main():

@@ -1,0 +1,136 @@
+# SPDX-License-Identifier: MIT
+# Edit in Place in a Cloud project with edit locks (mitcad#2353, #2389,
+# #2397), driven beside tools/ui-edit-in-place-project-test.sh: Ada's
+# holder.mitcad links part.mitcad (a 10 mm cube) on a plate of its own; the
+# remote has a newer version of the part (two cubes) that Ada's clone lacks.
+#   1. part.mitcad has no tab, so its file is read: starting the mode takes
+#      the part's edit lock, brings the part up to date (a sync) and holds
+#      the lock for the whole mode. Save in the mode records a version of
+#      the part under that lock, the test checks the remote has Ada's lock
+#      and writes ${MITCAD_TEST_WORK}/ada-held, and Finish releases it.
+#   2. The part in a tab of its own: Edit in Place takes the tab's document,
+#      and the tab keeps its lock, held and active while lent; the test
+#      checks it and writes ada-lent; after Finish the lock is still the
+#      tab's (the test writes ada-tab-kept), and closing the tab releases it.
+#   3. Edit in Place without a tab again (the part up to date): the test has
+#      Sam open the part and ask for its lock; the request is shown here, and
+#      Finish and Release ends the mode and hands the lock over to Sam.
+#   4. Sam holds the part's lock (the test writes sam-holds): Edit in Place
+#      does not start, said in words.
+# All geometry is synthetic.
+wait-idle
+capture-document-window holder
+expect-model-bodies 2 9000
+
+# 1. Edit in Place: the part's lock taken for the mode, the part brought up
+# to date from the remote and read without a tab; its timeline without the
+# assembly, the assembly faded.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Edit in Place'
+wait-log '^Edit lock for Edit in Place: part[.]mitcad taken$' 60
+wait-log '^Edit in Place: bringing part[.]mitcad up to date [(]sync[)]$' 60
+wait-log '^Sync: fast_forward, 0 replayed, nothing sent$' 60
+wait-log '^Edit in Place: part[.]mitcad brought up to date$' 60
+wait-log '^Edit in Place C[0-9]+: part[.]mitcad read, 1 bodies of the assembly$' 60
+wait-idle
+# The newer part's two cubes, the plate around them; its timeline its two
+# boxes only.
+expect-model-bodies 3 10000
+wait-log '^Timeline feature colors: Box1 root, Box2 root$'
+expect-no-log '^Timeline feature colors: .*[(]assembly[)]'
+wait-log '^View inactive ghosts: 1 body [(]active the design edited in place[)]$'
+
+# An edit, saved under the lock the mode holds: a version recorded, the lock
+# neither taken again nor released by the write.
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[20,0],"length":10,"width":10,"height":10,"operation":"new_body"}}'
+expect-document-modified yes
+mark
+command file.save
+wait-log '^Edit lock for writing: part[.]mitcad held for Edit in Place$' 60
+wait-log '^Version recorded: part[.]mitcad [0-9a-f]+ v[0-9]+: ' 60
+wait-log '^Edit in Place: saved .*/part[.]mitcad$' 60
+expect-no-log '^Edit lock for writing: part[.]mitcad (taken|refreshed|released)$'
+expect-no-log '^Edit lock for Edit in Place: part[.]mitcad released$'
+expect-document-modified no
+
+# The test saw Ada's lock of the part on the remote during the mode: Finish
+# releases it.
+expect-file '${MITCAD_TEST_WORK}/ada-held' 180
+mark
+command assemble.finish_edit_in_place
+wait-log '^Edit lock for Edit in Place: part[.]mitcad released$' 60
+wait-log '^Finish Edit in Place C[0-9]+: changed, saved; Edit in Place part$'
+wait-idle
+
+# 2. The part in a tab of its own, which takes its lock.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Open Linked Design'
+wait-log '^Open Linked Design: .*/part[.]mitcad$'
+wait-log '^Edit lock taken: part[.]mitcad' 60
+wait-idle
+expect-document-windows 2
+capture-document-window part
+focus-document-window holder
+
+# Edit in Place takes the tab's document; the tab keeps its lock, held and
+# active while it is lent; the mode takes no lock of its own.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Edit in Place'
+wait-log '^Edit in Place C[0-9]+: part[.]mitcad from its tab, 1 bodies of the assembly$' 60
+expect-log '^Edit in Place: part[.]mitcad lent to holder[.]mitcad$'
+expect-log '^Edit lock: part[.]mitcad held while it is edited in place$'
+wait-idle
+expect-no-log '^Edit lock for Edit in Place: part[.]mitcad (taken|refreshed)$'
+
+# The test saw the tab's lock on the remote, active, during the mode: Finish
+# gives the document back, and the lock stays the tab's.
+expect-file '${MITCAD_TEST_WORK}/ada-lent' 180
+mark
+command assemble.finish_edit_in_place
+wait-log '^Finish Edit in Place C[0-9]+: unchanged, saved; no undo step$' 60
+expect-log '^Edit in Place: part[.]mitcad back in its tab$'
+expect-log '^Edit lock: part[.]mitcad back from Edit in Place$'
+wait-idle
+expect-no-log '^Edit lock for Edit in Place: part[.]mitcad released$'
+expect-no-log '^Edit lock released: '
+
+# The test saw the lock still the tab's: closing the tab releases it.
+expect-file '${MITCAD_TEST_WORK}/ada-tab-kept' 180
+focus-document-window part
+mark
+command file.close
+expect-document-window-gone part
+wait-log '^Edit lock released: .*part[.]mitcad$' 60
+focus-document-window holder
+wait-idle
+
+# 3. Edit in Place without a tab again: the lock taken, the part up to date.
+# The test has Sam open the part and ask for its lock: the request is shown
+# here, and Finish and Release hands the lock over.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Edit in Place'
+wait-log '^Edit lock for Edit in Place: part[.]mitcad taken$' 60
+wait-log '^Edit in Place: part[.]mitcad is up to date$' 60
+wait-log '^Edit in Place C[0-9]+: part[.]mitcad read, 1 bodies of the assembly$' 60
+wait-idle
+wait-log '^Edit lock request: Sam Other asks to edit part[.]mitcad, which you are editing in place[.] [[]Finish and Release, Keep 15 More Minutes, Decline' 240
+expect-log '^Edit lock receipt: part[.]mitcad for Sam Other [(]edited in place[)]$'
+focus-dialog '^Edit Access Request$'
+button '^Finish and Release$'
+wait-log '^Edit lock request: Finish and Release$' 30
+wait-log '^Edit lock for Edit in Place: handing part[.]mitcad over to Sam Other [(]released[)]$' 30
+wait-log '^Finish Edit in Place C[0-9]+: unchanged, saved; no undo step$' 60
+wait-log '^Edit lock for Edit in Place: part[.]mitcad handed over to Sam Other$' 60
+wait-idle
+expect-no-log '^Edit lock for Edit in Place: part[.]mitcad released$'
+
+# 4. Sam holds the part's lock now (the test writes sam-holds once his
+# MitCad took it): Edit in Place does not start, and says who edits the
+# part.
+expect-file '${MITCAD_TEST_WORK}/sam-holds' 180
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Edit in Place'
+wait-log '^Edit lock for Edit in Place: part[.]mitcad held by Sam Other: not started$' 60
+wait-log '^Message band: error part[.]mitcad is being edited by Sam Other [(]since [^)]*[)]: it cannot be edited in place[.] ' 10
+expect-no-log '^Edit in Place C[0-9]+: '
+quit

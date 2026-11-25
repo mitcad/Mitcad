@@ -399,6 +399,109 @@ fn the_holders_save_records_the_part_it_wrote() {
     let _ = std::fs::remove_dir_all(&pair.dir);
 }
 
+/// The uids of a `timeline` query's features, in order.
+fn timeline_uids(timeline: &Value) -> Vec<String> {
+    timeline["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["uid"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn the_timeline_in_the_mode_lists_the_linked_designs_features_only() {
+    // mitcad#2353: the assembly around the design is drawn, picked and
+    // measured, but it is no row of the design's timeline, and the
+    // timeline's positions are the design's own.
+    let pair = pair("2353-timeline");
+    let holder = open(&pair.holder);
+    let mut linked = open(&pair.part);
+    // Two blocks: Sketch, Extrude, Sketch, Extrude.
+    block(&mut linked, 60.0);
+    let before = query(&linked, json!({"query": "timeline"}));
+    let own = timeline_uids(&before);
+    assert_eq!(own.len(), 4, "{before}");
+    let document_before = query(&linked, json!({"query": "document"}));
+
+    let begun = pair.begin(&mut linked, &holder);
+    let feature = begun["feature"].as_str().unwrap().to_owned();
+    let context: ComponentUid = begun["context"].as_str().unwrap().parse().unwrap();
+    // In the design, first, so that it is computed whatever the marker.
+    assert_eq!(
+        linked.features().next().map(|f| f.uid.to_string()),
+        Some(feature.clone())
+    );
+    assert_eq!(linked.in_place_leading(), 1);
+    // The timeline lists the design's features only, with its marker.
+    let timeline = query(&linked, json!({"query": "timeline"}));
+    assert_eq!(timeline_uids(&timeline), own, "{timeline}");
+    assert!(!timeline_uids(&timeline).contains(&feature), "{timeline}");
+    assert_eq!(timeline["marker"], before["marker"], "{timeline}");
+    assert!(
+        timeline["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f.get("component").is_none()),
+        "{timeline}"
+    );
+    let document = query(&linked, json!({"query": "document"}));
+    assert_eq!(
+        document["features"], document_before["features"],
+        "{document}"
+    );
+    assert_eq!(document["marker"], document_before["marker"], "{document}");
+    assert_eq!(linked.component_bodies(context).len(), 1);
+
+    // The marker at the timeline's start: the design's features rolled
+    // back, the assembly still there.
+    command(&mut linked, json!({"cmd": "set_marker", "position": 0}));
+    assert_eq!(
+        query(&linked, json!({"query": "timeline"}))["marker"],
+        json!(0)
+    );
+    assert!(linked.component_bodies(ComponentUid::ROOT).is_empty());
+    assert_eq!(linked.component_bodies(context).len(), 1);
+    command(&mut linked, json!({"cmd": "set_marker", "position": 4}));
+    assert_eq!(linked.component_bodies(ComponentUid::ROOT).len(), 2);
+
+    // A position of the design's timeline: the second sketch first.
+    let ok = query(
+        &linked,
+        json!({"query": "can_reorder", "uid": own[2], "index": 0}),
+    );
+    assert_eq!(ok["ok"], json!(true), "{ok}");
+    command(
+        &mut linked,
+        json!({"cmd": "reorder_feature", "uid": own[2], "index": 0}),
+    );
+    let moved = query(&linked, json!({"query": "timeline"}));
+    assert_eq!(
+        timeline_uids(&moved),
+        vec![
+            own[2].clone(),
+            own[0].clone(),
+            own[1].clone(),
+            own[3].clone()
+        ],
+        "{moved}"
+    );
+    assert_eq!(
+        linked.features().next().map(|f| f.uid.to_string()),
+        Some(feature.clone())
+    );
+    all_built(&linked);
+
+    // Once the mode ends, the design's timeline is as it was in the mode.
+    linked.end_in_place().unwrap();
+    assert_eq!(linked.in_place_leading(), 0);
+    let after = query(&linked, json!({"query": "timeline"}));
+    assert_eq!(timeline_uids(&after), timeline_uids(&moved), "{after}");
+    assert_eq!(after["marker"], json!(4), "{after}");
+    let _ = std::fs::remove_dir_all(&pair.dir);
+}
+
 #[test]
 fn only_a_linked_design_is_edited_in_place() {
     let pair = pair("2321-refused");

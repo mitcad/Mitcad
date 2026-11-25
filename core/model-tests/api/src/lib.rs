@@ -127,3 +127,9 @@ mod edit_in_place_tests;
 // suppress_feature with dependents: a chain in one undo step, conditions
 // left alone (mitcad#2314).
 mod suppress_dependents_2314_tests;
+// What a tutorial's page reads of its design through the bridge's query:
+// the allow-list, its answers and its refusals (mitcad#2371).
+mod tutorial_bridge_2371_tests;
+// Preferences › Sketch › Hide a sketch when a feature uses it, off: a
+// shown sketch keeps its light bulb (mitcad#2393).
+mod used_sketch_shown_2393_tests;

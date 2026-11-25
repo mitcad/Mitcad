@@ -4945,3 +4945,91 @@ reporter's body before its copies' roundings, as .brep) fails without the
 patch on the original nozzle by both edges and builds every edge of all
 four feet with it. Its failure without the patch is still to be shown in
 the port's before/after run (mitcad#1986).
+
+## 2300
+
+[2300-brepblend-no-twist-at-a-section-of-no-width.patch](../opencascade/2300-brepblend-no-twist-at-a-section-of-no-width.patch)
+
+Test: geometry/tests/test_fillet_loft_rim.cpp (ctests
+geometry.fillet_loft_rim.kernel_merge and kernel_keep): the rim between a
+loft's side and a cylinder pulled from its end face, joined and split where
+its rounding vanishes as MitCad's fillet gives it to the kernel, every
+piece rounded with 2, 5 and 10 by the kernel's fillet alone, each build on
+a copy of its own: done and valid (with patch 2301). In the OCCT lab (DRAW's
+`blend` on the bodies `test_fillet_loft_rim --probe` wrote) the chain
+without the patch fails the top convex piece of the Merge loft with 5
+("adjustment by reprocessing the non-written points"); with it the piece
+builds. Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
+## 2301
+
+[2301-chfi3d-contact-end-on-an-arc-not-taken-at-a-crossing-farther-away.patch](../opencascade/2301-chfi3d-contact-end-on-an-arc-not-taken-at-a-crossing-farther-away.patch)
+
+Test: geometry/tests/test_fillet_loft_rim.cpp (ctests
+geometry.fillet_loft_rim.kernel_merge and kernel_keep, with patch 2300; and
+the parts of MitCad's fillet, owner_merge, owner_keep, radii_merge,
+pulls_merge, pulls_keep): the rim split where its rounding vanishes, every
+piece rounded by the kernel's fillet alone, done and valid. In the OCCT lab
+(the case 2300-loft-rim: the split bodies as .brep, each piece alone and
+all at once with 2, 5 and 10, each on a freshly restored body) the chain
+with 2300 but without this patch gives the Merge loft's top piece with 5
+and its bottom piece with 10 invalid (BRepCheck_NotClosed, the second
+contact's interference 0 to 0); with it every Merge build and every Keep
+build with 5 and 10 is valid. The Keep loft's top and bottom pieces with 2
+need patches 2303 and 2302 as well (mitcad#2390). Its failure
+without the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
+## 2302
+
+[2302-brepblend-walk-end-on-a-restriction-in-the-period-of-the-walk.patch](../opencascade/2302-brepblend-walk-end-on-a-restriction-in-the-period-of-the-walk.patch)
+
+Test: geometry/tests/test_fillet_loft_rim.cpp (ctests
+geometry.fillet_loft_rim.kernel_keep and radii_keep, with 2 mm): the Keep
+loft's rim split where its rounding vanishes, its bottom convex piece
+rounded with 2 by the kernel's fillet alone and by MitCad's fillet, done
+and valid. In the OCCT lab (the case 2300-loft-rim, keep_r2_e7 and
+keep_r2_all) the chain without the patch fails that piece ("PerformSurf :
+Failed approximation!": the walk's end on the loft's periodic face a period
+off its points before); with it the piece builds valid. Its failure without
+the patch is still to be shown in the port's before/after run
+(mitcad#1986).
+
+## 2303
+
+[2303-chfi3d-no-split-of-a-blend-at-a-minimum-of-noise-in-its-vanishing-end.patch](../opencascade/2303-chfi3d-no-split-of-a-blend-at-a-minimum-of-noise-in-its-vanishing-end.patch)
+
+Test: geometry/tests/test_fillet_loft_rim.cpp (ctests
+geometry.fillet_loft_rim.kernel_keep and radii_keep, with 2 mm): the Keep
+loft's rim split where its rounding vanishes, all its pieces rounded at
+once with 2 by the kernel's fillet alone and by MitCad's fillet, done and
+valid. In the OCCT lab (the case 2300-loft-rim) the chain without the
+patch crashes on the top convex piece with 2 (keep_r2_e11: a segmentation
+fault in ChFi3d_CutConsumedFaces, after ChFi3d_FilDS read the spine past
+its end at a sliver SplitSurf cut off), refuses all the pieces at once
+with 2 (keep_r2_all, Failure_Overlap at the slivers' crossing), and gives
+the bottom piece with 5 a sliver face (keep_r5_e7: 7 faces); with it all
+of them build valid, keep_r5_e7 with 6 faces. Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
+
+## 2383
+
+[2383-brepoffset-crease-split-in-several-edges-trimmed-once-and-oriented-in-each-face.patch](../opencascade/2383-brepoffset-crease-split-in-several-edges-trimmed-once-and-oriented-in-each-face.patch)
+
+Test: geometry/tests/port/p2383-crease-split-in-several-edges.cpp (ctest
+geometry.port.2383): a cone standing on a ring with notches cut up from the
+ring's top through its wall, shelled 2 mm inside with Sharp corners by
+OCCT's thick solid alone, the boss top and the foot open:
+test_box_notch_floor_in_the_ring_top (a box notch, the body's axes up) and
+test_round_notches_one_and_five (one and five notches of the reported
+shape, the axes down as a revolve's): one valid solid each time, the wall
+2 mm behind each notch, five notches adding five times the wall one adds.
+MitCad's shell on the same bodies: geometry.shell_notched_cone; the
+reported design: cli.shell_sharp_reported (GitHub #642). In the OCCT lab
+(the case 2383-cone-notch-on-ring-top) the chain without the patch gives
+both an invalid solid (the box notch with the axes up: 315757 mm3, the
+offset shell in two; five notches: 344949 mm3), with it valid solids of
+50882.6 and 53054.3 mm3 (that without notches, 49807.6, plus five times
+what one notch adds, 649.3). Its failure without the patch is still to be
+shown in the port's before/after run (mitcad#1986).

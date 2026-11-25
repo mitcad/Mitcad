@@ -919,6 +919,91 @@ fn ribs_and_webs_join_the_bodies() {
     );
 }
 
+/// A web takes every kind of sketch curve (mitcad#2364): a circle (a ring,
+/// no longer refused as closed), an ellipse and an elliptical arc, open and
+/// closed splines and a conic all reach the kernel, each a chain of its own;
+/// a rib still needs an open chain.
+#[test]
+fn webs_take_every_curve_kind() {
+    let (mut b, _) = with_path();
+    // The circle of the profile sketch (F4, c1).
+    let ring = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": "F4", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10}}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, ring), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        format!("web {ring} chains c1 thickness 2 Symmetric depth Some(10.0) flip false bodies 1")
+    );
+    let rib = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F4", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10}}),
+    )
+    .unwrap();
+    assert!(error(&b.doc, rib).contains("a rib needs an open chain of curves"));
+
+    // Every other kind in one sketch on XY.
+    let sketch = command(&mut b.doc, json!({"cmd": "sketch.create"}))["uid"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let made = |doc: &mut Document<MockKernel>, mut value: Value| {
+        value["sketch"] = json!(sketch);
+        command(doc, value)["made"][0].as_str().unwrap().to_owned()
+    };
+    let ellipse = made(
+        &mut b.doc,
+        json!({"cmd": "sketch.ellipse", "center": [0, 0], "major": [10, 0], "minor_radius": 5}),
+    );
+    let elliptical_arc = made(
+        &mut b.doc,
+        json!({"cmd": "sketch.ellipse", "center": [40, 0], "major": [50, 0], "minor_radius": 5,
+               "start": [48, 3], "end": [32, 3]}),
+    );
+    let open_spline = made(
+        &mut b.doc,
+        json!({"cmd": "sketch.spline", "points": [[0, 30], [10, 36], [20, 30], [30, 36]]}),
+    );
+    let closed_spline = made(
+        &mut b.doc,
+        json!({"cmd": "sketch.spline", "points": [[60, 30], [70, 40], [80, 30], [70, 20]],
+               "closed": true}),
+    );
+    let conic = made(
+        &mut b.doc,
+        json!({"cmd": "sketch.conic", "start": [0, 60], "end": [20, 60], "apex": [10, 70]}),
+    );
+    let curves = [
+        &ellipse,
+        &elliptical_arc,
+        &open_spline,
+        &closed_spline,
+        &conic,
+    ];
+    let web = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": sketch, "curves": curves},
+               "thickness": 1, "extent": {"type": "depth", "depth": 5}}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, web), FeatureStatus::Ok);
+    let chains = curves
+        .iter()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert_eq!(
+        last_spec(&b.doc),
+        format!(
+            "web {web} chains {chains} thickness 1 Symmetric depth Some(5.0) flip false bodies 1"
+        )
+    );
+}
+
 /// Extend Ends and End Offset (mitcad#1746) reach the kernel; a rib saved
 /// without them keeps its ends as drawn, and so does a web (mitcad#1968),
 /// which takes them too. An end the kernel could not continue is the rib's

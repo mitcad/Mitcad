@@ -6,6 +6,8 @@ wait-idle
 dblclick-logged 'Timeline Sketch1'
 expect-log 'Editing sketch F1 \(Sketch1\)'
 command view.fit
+# The sketch's places are logged once the fit's navigation ends (mitcad#2296).
+wait-idle
 expect-profiles 1
 mark
 sketch-pointer press 9.5 2.5

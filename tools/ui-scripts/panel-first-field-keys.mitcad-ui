@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# The keys typed as a command panel opens go to its selected value field
+# (mitcad#2391, GitHub mitcad/Mitcad#617), on panel-first-field-keys.json
+# (Sketch1, F1: one circle of diameter 20 on the XY plane):
+#   1. Sketch1 edited, E: Extrude starts with the circle as its profile and
+#      gives Distance the keyboard, its 10 mm selected (logged "Panel
+#      Extrude: first value field (distance) focused; ...").
+#   2. 25 typed without a click and Enter: Distance is 25, OK adds a 25 mm
+#      extrusion (one body of pi * 10^2 * 25 mm3) and the view has not
+#      turned (2 and 5 are not taken as the view's keys).
+#   3. The panel closed, the 3D view has the keys again: 1 shows the front
+#      view.
+# panel-first-field-keys-floated.mitcad-ui runs the same with the Docked
+# layout's Command panel floated. Run by
+# tools/ui-panel-first-field-keys-test.sh in the Floating and the Docked
+# layout and with the panel floated.
+expect-ever 'View area'
+wait-idle
+
+# 1. Extrude from the edited sketch.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+expect-log '^Editing sketch F1 \(Sketch1\)'
+wait-idle
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^Panel Extrude: first value field \(distance\) focused; ' 30
+wait-log '^Preview Extrude: ok' 30
+# A panel's window that the platform activates a moment later gets the
+# keys (and its field's selection) then.
+sleep 500
+wait-idle
+capture-view-orientation opened
+
+# 2. 25 typed into Distance without a click; Enter is OK.
+mark
+type 25
+wait-log '^Panel field distance: ' 30
+wait-idle
+expect-input-text distance '^25$'
+expect-view-orientation ${opened} unchanged
+mark
+key Return
+expect-log 'Added extrude \(New Body\), distance 25' 20
+expect-model-bodies 1 7853.981633974483
+expect-view-orientation ${opened} unchanged
+
+# 3. The 3D view has the keys again: 1 is the front view.
+wait-idle
+mark
+key 1
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 ' 30
+expect-view-orientation ${opened} changed
+expect-never 'TestDriver: FAIL'

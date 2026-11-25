@@ -207,6 +207,16 @@ pub struct TriangleMesh {
     pub triangles: Vec<[u32; 3]>,
 }
 
+/// A body's triangle mesh with each triangle's face
+/// ([`Kernel::triangle_mesh_faces`], mitcad#2385).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FacedTriangleMesh {
+    pub mesh: TriangleMesh,
+    /// One per triangle of `mesh`: the index of the face it lies on, in
+    /// the order [`Kernel::faces`] lists the faces.
+    pub faces: Vec<u32>,
+}
+
 /// A body's faces as triangles for display ([`Kernel::face_meshes`],
 /// mitcad#123), millimetres.
 #[derive(Debug, Clone, Default, PartialEq)]

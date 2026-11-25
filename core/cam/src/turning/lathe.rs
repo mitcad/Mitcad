@@ -12,7 +12,13 @@
 //! axis and the live tools. A Y axis mills off the spindle axis, a milling
 //! head that tilts about Y (a B axis) mills and drills at an angle, and a
 //! sub-spindle takes the part over for its back (mitcad#2319); the travel's
-//! Y is the Y axis's then.
+//! Y is the Y axis's then. The sub-spindle has a C axis of its own for live
+//! tools on the part's back, and its speeds, travel and chuck
+//! ([`SubSpindle`], mitcad#2375); its body (chuck and housing), the zones
+//! moving with it, where it waits, and a control that mirrors only Z on it
+//! ([`MillTurn::sub_mirror_z_only`], mitcad#2392); a revolved profile of
+//! its body and the turret's body round the tool ([`TurretBody`],
+//! mitcad#2405).
 
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +63,10 @@ fn twelve() -> u32 {
 /// `M78` and open `M79`, the main chuck open `M69`, the sub-spindle forward
 /// `M203`, reverse `M204` and stop `M205`; the B head clamped `M107` and
 /// freed `M108`.
+///
+/// The sub-spindle's C axis (mitcad#2375), for live tools on the part's
+/// back while the sub-spindle holds it: on with `M254` and to its reference
+/// with `G28 H0.`, off with `M255`, its clamp `M114` and `M115`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MillTurn {
@@ -91,6 +101,21 @@ pub struct MillTurn {
     pub sub_cw: String,
     pub sub_ccw: String,
     pub sub_stop: String,
+    // The sub-spindle's C axis (mitcad#2375).
+    /// Switches the sub-spindle to its C axis mode (and references it).
+    pub sub_c_axis_on: Vec<String>,
+    /// Back to the sub-spindle's turning mode.
+    pub sub_c_axis_off: Vec<String>,
+    /// Clamps the sub-spindle's C axis where it is indexed, and frees it.
+    pub sub_c_clamp: String,
+    pub sub_c_unclamp: String,
+    // The sub-spindle's coordinates on the control (mitcad#2392).
+    /// The control mirrors only Z on the sub-spindle: X, Y and C keep the
+    /// main spindle's senses there (C from X towards the machine's Y), so
+    /// the post writes the live tools' Y and C turned round and their arcs
+    /// across Y the other way. Off (the default): the control turns the
+    /// part round about X, Y and Z both turned round.
+    pub sub_mirror_z_only: bool,
 }
 
 impl Default for MillTurn {
@@ -116,6 +141,11 @@ impl Default for MillTurn {
             sub_cw: "M203".to_owned(),
             sub_ccw: "M204".to_owned(),
             sub_stop: "M205".to_owned(),
+            sub_c_axis_on: vec!["M254".to_owned(), "G28 H0.".to_owned()],
+            sub_c_axis_off: vec!["M255".to_owned()],
+            sub_c_clamp: "M114".to_owned(),
+            sub_c_unclamp: "M115".to_owned(),
+            sub_mirror_z_only: false,
         }
     }
 }
@@ -203,7 +233,63 @@ impl MillTurn {
         if !matches!(self.sub_axis.as_str(), "A" | "B" | "E") {
             return Err("The sub-spindle's axis is one of the letters A, B and E.".to_owned());
         }
+        // The sub-spindle's C axis (mitcad#2375).
+        if self.sub_c_axis_on.is_empty() || self.sub_c_axis_on.len() > 8 {
+            return Err(
+                "The sub-spindle's C axis needs one to eight blocks that switch it on.".to_owned(),
+            );
+        }
+        if self.sub_c_axis_off.is_empty() || self.sub_c_axis_off.len() > 8 {
+            return Err(
+                "The sub-spindle's C axis needs one to eight blocks that switch it off.".to_owned(),
+            );
+        }
+        for line in &self.sub_c_axis_on {
+            block(line, false, "switches the sub-spindle's C axis on")?;
+        }
+        for line in &self.sub_c_axis_off {
+            block(line, false, "switches the sub-spindle's C axis off")?;
+        }
+        block(&self.sub_c_clamp, false, "clamps the sub-spindle's C axis")?;
+        block(&self.sub_c_unclamp, false, "frees the sub-spindle's C axis")?;
         Ok(())
+    }
+
+    /// The blocks that switch the C axis of the main spindle or (`sub`) the
+    /// sub-spindle on (mitcad#2375).
+    pub fn c_on(&self, sub: bool) -> &[String] {
+        if sub {
+            &self.sub_c_axis_on
+        } else {
+            &self.c_axis_on
+        }
+    }
+
+    /// The blocks that switch that C axis off.
+    pub fn c_off(&self, sub: bool) -> &[String] {
+        if sub {
+            &self.sub_c_axis_off
+        } else {
+            &self.c_axis_off
+        }
+    }
+
+    /// That C axis's clamp.
+    pub fn clamp(&self, sub: bool) -> &str {
+        if sub {
+            self.sub_c_clamp.trim()
+        } else {
+            self.c_clamp.trim()
+        }
+    }
+
+    /// That C axis's unclamp.
+    pub fn unclamp(&self, sub: bool) -> &str {
+        if sub {
+            self.sub_c_unclamp.trim()
+        } else {
+            self.c_unclamp.trim()
+        }
     }
 
     /// The sub-spindle's axis letter.
@@ -214,6 +300,369 @@ impl MillTurn {
     /// The sub-spindle's start block for a sense.
     pub fn sub_start(&self, cw: bool) -> &str {
         if cw { &self.sub_cw } else { &self.sub_ccw }
+    }
+}
+
+/// The sub-spindle's own data (mitcad#2375), each left out of the file at
+/// its default: its speeds (a highest speed of zero: the main spindle's
+/// range), its travel (the machine Z of its jaws' face, from its lowest to
+/// its highest; none: not checked) and its chuck's diameter (checked as the
+/// main chuck is: no tool behind its jaws' face within it).
+///
+/// Its body and the zones moving with it (mitcad#2392): the chuck reaches
+/// `chuck_length` back from its jaws' face (zero: without end, as before),
+/// its housing a cylinder of `housing_diameter` from the chuck's back,
+/// `housing_length` long (zero: without end); `zones` are boxes that move
+/// with it, their Z measured from its jaws' face (positive away from the
+/// main spindle), X the machine's (a radius; checked in X and Z as a
+/// lathe's zones are entered, their Y kept). While the main
+/// spindle cuts alone its jaws' face waits at `park` (machine Z), else at
+/// the far end of its travel; with neither its body is checked only where
+/// it holds the part.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SubSpindle {
+    #[serde(skip_serializing_if = "is_zero")]
+    pub min_rpm: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub max_rpm: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub travel: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub chuck_diameter: f64,
+    // Its body and the zones moving with it (mitcad#2392).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub chuck_length: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub housing_diameter: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub housing_length: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub park: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<crate::machine::Zone>,
+    // A revolved profile of its own (mitcad#2405).
+    /// Its body's profile beside the chuck and the housing: `[z, diameter]`
+    /// points, z from its jaws' face (positive away from the main spindle,
+    /// negative for a nose in front of it), in order along z; two points at
+    /// one z make a step. The body is what the profile encloses about the
+    /// spindle axis from its first z to its last. Empty: none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profile: Vec<[f64; 2]>,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// A part of the sub-spindle's body (mitcad#2392); its own revolved
+/// profile (mitcad#2405).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubBody {
+    Chuck,
+    Housing,
+    Profile,
+}
+
+impl SubBody {
+    /// The finding of an operation's tool running into it, in words.
+    pub fn finding(self, name: &str) -> String {
+        match self {
+            SubBody::Chuck => format!("{name}: the tool runs into the sub-spindle's chuck."),
+            SubBody::Housing => format!("{name}: the tool runs into the sub-spindle's housing."),
+            SubBody::Profile => format!("{name}: the tool runs into the sub-spindle's body."),
+        }
+    }
+
+    /// The finding of the turret's body running into it (mitcad#2405).
+    pub fn turret_finding(self, name: &str) -> String {
+        match self {
+            SubBody::Chuck => format!("{name}: the turret runs into the sub-spindle's chuck."),
+            SubBody::Housing => format!("{name}: the turret runs into the sub-spindle's housing."),
+            SubBody::Profile => format!("{name}: the turret runs into the sub-spindle's body."),
+        }
+    }
+}
+
+/// How far a part reaches when it has no end (a length of zero) as the
+/// view draws it: its diameter, at least this (mm, mitcad#2405).
+const ENDLESS_DRAWN: f64 = 20.0;
+
+/// The turret's body round the tool (mitcad#2405): a box from the tool's
+/// controlled point, `x` along the machine's X (a radius, positive away
+/// from the spindle axis) and `z` along its Z (positive away from the main
+/// spindle), each from its lowest to its highest; like a lathe's zones in X
+/// and Z only. Checked against the sub-spindle's body and the zones moving
+/// with it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TurretBody {
+    pub x: [f64; 2],
+    pub z: [f64; 2],
+}
+
+impl TurretBody {
+    pub fn validate(&self) -> Result<(), String> {
+        let ordered = |r: [f64; 2]| r[0].is_finite() && r[1].is_finite() && r[0] <= r[1];
+        if !(ordered(self.x) && ordered(self.z)) {
+            return Err(
+                "The turret's body needs X and Z from the tool, each from a lowest up to a highest."
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Its X and Z on the machine with the tool's controlled point at
+    /// machine X `x` and at `z` along Z.
+    pub fn at(&self, x: f64, z: f64) -> ([f64; 2], [f64; 2]) {
+        (
+            [x + self.x[0], x + self.x[1]],
+            [z + self.z[0], z + self.z[1]],
+        )
+    }
+}
+
+/// The least distance from zero of the values from `r[0]` to `r[1]`.
+pub(crate) fn nearest_zero(r: [f64; 2]) -> f64 {
+    if r[0] <= 0.0 && r[1] >= 0.0 {
+        0.0
+    } else {
+        r[0].abs().min(r[1].abs())
+    }
+}
+
+impl SubSpindle {
+    /// Whether it is all defaults (left out of the file then).
+    pub fn is_default(&self) -> bool {
+        *self == SubSpindle::default()
+    }
+
+    /// Its speed range (rpm): its own, else the main spindle's
+    /// (`main`: lowest and highest).
+    pub fn speeds(&self, main: [f64; 2]) -> [f64; 2] {
+        if self.max_rpm > 0.0 {
+            [self.min_rpm, self.max_rpm]
+        } else {
+            main
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if !(self.min_rpm.is_finite()
+            && self.min_rpm >= 0.0
+            && self.max_rpm.is_finite()
+            && self.max_rpm >= 0.0
+            && (self.max_rpm == 0.0 || self.max_rpm >= self.min_rpm))
+        {
+            return Err(
+                "The sub-spindle's speeds must run from a minimum up to a maximum, or be left at zero."
+                    .to_owned(),
+            );
+        }
+        if let Some([lo, hi]) = self.travel
+            && !(lo.is_finite() && hi.is_finite() && lo <= hi)
+        {
+            return Err(
+                "The sub-spindle's travel must run from its lowest Z up to its highest.".to_owned(),
+            );
+        }
+        if !(self.chuck_diameter.is_finite() && self.chuck_diameter >= 0.0) {
+            return Err("The sub-spindle's chuck diameter must be zero or more.".to_owned());
+        }
+        // Its body and the zones moving with it (mitcad#2392).
+        let size = |v: f64| v.is_finite() && v >= 0.0;
+        if !(size(self.chuck_length) && size(self.housing_diameter) && size(self.housing_length)) {
+            return Err(
+                "The sub-spindle's chuck length and its housing's size must be zero or more."
+                    .to_owned(),
+            );
+        }
+        if self.park.is_some_and(|z| !z.is_finite()) {
+            return Err(
+                "Where the sub-spindle waits must be a machine Z of its jaws' face.".to_owned(),
+            );
+        }
+        for zone in &self.zones {
+            let b = &zone.bounds;
+            let ordered = (0..3)
+                .all(|k| b.min[k].is_finite() && b.max[k].is_finite() && b.min[k] <= b.max[k]);
+            if zone.name.trim().is_empty() || !ordered {
+                return Err(
+                    "A zone that moves with the sub-spindle needs a name and bounds from a minimum up to a maximum."
+                        .to_owned(),
+                );
+            }
+        }
+        // Its own profile (mitcad#2405).
+        if !self.profile.is_empty() {
+            let points = self
+                .profile
+                .iter()
+                .all(|p| p[0].is_finite() && p[1].is_finite() && p[1] >= 0.0);
+            let ordered = self.profile.windows(2).all(|w| w[0][0] <= w[1][0]);
+            if self.profile.len() < 2 || !points || !ordered {
+                return Err(
+                    "The sub-spindle's profile needs two or more points in order along Z, each with a diameter of zero or more."
+                        .to_owned(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The radius of its profile at `behind` (mitcad#2405): the largest
+    /// where a step stands there; none outside the profile.
+    pub fn profile_radius(&self, behind: f64) -> Option<f64> {
+        const EPS: f64 = 1e-9;
+        let mut out: Option<f64> = None;
+        for w in self.profile.windows(2) {
+            let ([z0, d0], [z1, d1]) = (w[0], w[1]);
+            if behind < z0 - EPS || behind > z1 + EPS {
+                continue;
+            }
+            let d = if z1 - z0 <= EPS {
+                d0.max(d1)
+            } else {
+                let t = ((behind - z0) / (z1 - z0)).clamp(0.0, 1.0);
+                d0 + (d1 - d0) * t
+            };
+            out = Some(out.map_or(d / 2.0, |r: f64| r.max(d / 2.0)));
+        }
+        out
+    }
+
+    /// The largest radius of its profile from `behind[0]` to `behind[1]`
+    /// (mitcad#2405); none where the profile is not.
+    fn profile_radius_across(&self, behind: [f64; 2]) -> Option<f64> {
+        let (first, last) = (self.profile.first()?, self.profile.last()?);
+        let lo = behind[0].max(first[0]);
+        let hi = behind[1].min(last[0]);
+        if lo > hi + 1e-9 {
+            return None;
+        }
+        // Linear between its points: the largest at an end or at a point.
+        let mut best = self.profile_radius(lo)?.max(self.profile_radius(hi)?);
+        for p in &self.profile {
+            if p[0] >= lo - 1e-9 && p[0] <= hi + 1e-9 {
+                best = best.max(p[1] / 2.0);
+            }
+        }
+        Some(best)
+    }
+
+    /// The parts of its body a box reaches into (mitcad#2405, the turret's
+    /// body against it): `r_min` the box's least distance from the spindle
+    /// axis, `behind` how far it reaches behind the jaws' face, from its
+    /// nearest to its farthest.
+    pub fn body_across(&self, r_min: f64, behind: [f64; 2]) -> Vec<SubBody> {
+        const EPS: f64 = 1e-9;
+        let mut out = Vec::new();
+        // The jaws' face itself is free, as for a point.
+        if behind[1] > EPS {
+            if self.chuck_diameter > 0.0
+                && r_min < self.chuck_diameter / 2.0 + EPS
+                && (self.chuck_length <= 0.0 || behind[0] <= self.chuck_length + EPS)
+            {
+                out.push(SubBody::Chuck);
+            }
+            let start = self.chuck_length.max(0.0);
+            if self.housing_diameter > 0.0
+                && r_min < self.housing_diameter / 2.0 + EPS
+                && behind[1] >= start - EPS
+                && (self.housing_length <= 0.0 || behind[0] <= start + self.housing_length + EPS)
+            {
+                out.push(SubBody::Housing);
+            }
+        }
+        if self
+            .profile_radius_across(behind)
+            .is_some_and(|r| r_min < r + EPS)
+        {
+            out.push(SubBody::Profile);
+        }
+        out
+    }
+
+    /// Its body as the view draws it (mitcad#2405): each part (the chuck,
+    /// the housing, its profile) as `[behind, radius]` points along it, a
+    /// part without end as long as its diameter (at least 20 mm).
+    pub fn outline(&self) -> Vec<Vec<[f64; 2]>> {
+        let drawn = |length: f64, diameter: f64| {
+            if length > 0.0 {
+                length
+            } else {
+                diameter.max(ENDLESS_DRAWN)
+            }
+        };
+        let mut out = Vec::new();
+        if self.chuck_diameter > 0.0 {
+            let (l, r) = (
+                drawn(self.chuck_length, self.chuck_diameter),
+                self.chuck_diameter / 2.0,
+            );
+            out.push(vec![[0.0, r], [l, r]]);
+        }
+        if self.housing_diameter > 0.0 {
+            let start = self.chuck_length.max(0.0);
+            let (l, r) = (
+                drawn(self.housing_length, self.housing_diameter),
+                self.housing_diameter / 2.0,
+            );
+            out.push(vec![[start, r], [start + l, r]]);
+        }
+        if self.profile.len() >= 2 {
+            out.push(self.profile.iter().map(|p| [p[0], p[1] / 2.0]).collect());
+        }
+        out
+    }
+
+    /// Where its jaws' face waits while the main spindle cuts alone
+    /// (machine Z, mitcad#2392): its `park`, else the far end of its
+    /// travel; none when neither is known.
+    pub fn waiting_z(&self) -> Option<f64> {
+        self.park.or(self.travel.map(|t| t[1]))
+    }
+
+    /// The part of its body a point is in (mitcad#2392): `r` the point's
+    /// distance from the spindle axis, `behind` how far it is behind the
+    /// jaws' face (away from the main spindle). The jaws' face itself is
+    /// free (the part is gripped there); its own profile (mitcad#2405) is
+    /// where it says, a nose in front of the face too.
+    pub fn body_at(&self, r: f64, behind: f64) -> Option<SubBody> {
+        const EPS: f64 = 1e-9;
+        if behind <= EPS {
+            return self
+                .profile_radius(behind)
+                .filter(|rp| r < rp + EPS)
+                .map(|_| SubBody::Profile);
+        }
+        if self.chuck_diameter > 0.0
+            && r < self.chuck_diameter / 2.0 + EPS
+            && (self.chuck_length <= 0.0 || behind <= self.chuck_length + EPS)
+        {
+            return Some(SubBody::Chuck);
+        }
+        let start = self.chuck_length.max(0.0);
+        if self.housing_diameter > 0.0
+            && r < self.housing_diameter / 2.0 + EPS
+            && behind >= start - EPS
+            && (self.housing_length <= 0.0 || behind <= start + self.housing_length + EPS)
+        {
+            return Some(SubBody::Housing);
+        }
+        if self.profile_radius(behind).is_some_and(|rp| r < rp + EPS) {
+            return Some(SubBody::Profile);
+        }
+        None
+    }
+
+    /// Whether it has a body or zones to check (mitcad#2392), its own
+    /// profile too (mitcad#2405).
+    pub fn has_body(&self) -> bool {
+        self.chuck_diameter > 0.0
+            || self.housing_diameter > 0.0
+            || !self.zones.is_empty()
+            || !self.profile.is_empty()
     }
 }
 
@@ -235,6 +684,13 @@ pub struct Lathe {
     /// The live spindle and the C axis's codes (mitcad#2067).
     #[serde(default, skip_serializing_if = "MillTurn::is_default")]
     pub mill_turn: MillTurn,
+    /// The sub-spindle's speeds, travel and chuck (mitcad#2375).
+    #[serde(default, skip_serializing_if = "SubSpindle::is_default")]
+    pub sub_spindle: SubSpindle,
+    /// The turret's body round the tool (mitcad#2405); none: only the
+    /// tool's controlled point is checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turret_body: Option<TurretBody>,
 }
 
 impl Default for Lathe {
@@ -245,6 +701,8 @@ impl Default for Lathe {
             chuck_length: 0.0,
             axes: LatheAxes::default(),
             mill_turn: MillTurn::default(),
+            sub_spindle: SubSpindle::default(),
+            turret_body: None,
         }
     }
 }
@@ -267,6 +725,10 @@ impl Lathe {
             return Err("The chuck's size must be zero or more.".to_owned());
         }
         self.mill_turn.validate()?;
+        self.sub_spindle.validate()?;
+        if let Some(body) = &self.turret_body {
+            body.validate()?;
+        }
         // A B head and a sub-spindle each need a letter of their own
         // (mitcad#2319).
         if self.axes.b && self.axes.sub_spindle && self.mill_turn.sub_letter() == 'B' {

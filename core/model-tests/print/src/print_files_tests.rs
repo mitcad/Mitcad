@@ -50,6 +50,7 @@ fn cube(name: &str) -> mitcad_3mf::Part {
         mesh: mitcad_3mf::Mesh {
             vertices,
             triangles,
+            triangle_colors: Vec::new(),
         },
         placements: vec![mitcad_3mf::Placement::IDENTITY],
         metadata: Vec::new(),

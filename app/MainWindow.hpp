@@ -46,6 +46,7 @@
 #include "projects/ProjectPicker.hpp"
 #include "rust/cxx.h"
 #include "sketch/SketchController.hpp"
+#include "tutorials/TutorialPlace.hpp"
 #include "view/CommandSketches.hpp"
 #include "view/CommentImages.hpp"
 #include "view/DatumHandles.hpp"
@@ -105,6 +106,7 @@ struct DesignImportBatch;
 class FloatingLayout;
 class GlassCard;
 class LockController;
+enum class InPlaceEnd; // files/LockController.hpp
 class MeasureHistoryView;
 class MessageBand;
 class MessageCenter;
@@ -179,6 +181,7 @@ class ChatPanel;
 namespace drawings {
 class DrawingWorkspace;
 class DrawingsPanel;
+struct SelectionSubject;
 } // namespace drawings
 class VersionWatermark;
 
@@ -556,6 +559,11 @@ public:
   // (the root's: "C0") opened at once.
   void openDrawing(const QString& uid) override;
   void createDrawing(const QString& component) override;
+  // Create Drawing (`component`'s, the root's "C0"); `fromSelection`
+  // (File › Create Drawing, mitcad#2399): of the root's bodies and
+  // occurrences selected, when there are any (selectionDrawingSubject).
+  void createDrawingOf(const QString& component, bool fromSelection);
+  drawings::SelectionSubject selectionDrawingSubject() const;
   bool isDrawingOpen() const override { return drawingOpen(); }
   // A drawing's sheet drawn in a job (mitcad#1997, DocumentSession::queryAsync).
   bool queryInJob(const QString& label, const QJsonObject& query, QObject* context, QueryDone done) override;
@@ -1949,6 +1957,22 @@ private:
   QPointer<QWidget> m_tutorialPageWidget; // the page shown, null when none
   TutorialPage* m_tutorialPage = nullptr; // the same object, while it lives
   QString m_tutorialFolder;
+  // Where the pane is (mitcad#2367, window.mitcad.place): the left column
+  // as a tutorial opens, the right column, or centred over the view (the
+  // view's picks held meanwhile). Floating: the card's anchor; Docked: the
+  // dock's area, or floating centred over the window. The move animates
+  // (PaneMotion.hpp) unless the system asks for reduced motion or `animate`
+  // is false; "Tutorial: pane placed <place> (animated 250 ms|at once) at
+  // x,y wxh in the window wxh, its middle at <n>% of the window's width,
+  // <n>% of its width wide" is logged where it ends.
+  void placeTutorialPane(TutorialPlace place, bool animate);
+  // Docked: the dock docked at the left or the right, as wide as
+  // ensureTutorialPane makes it (360 px, never at the cost of the view).
+  void dockTutorialPane(QDockWidget* dock, Qt::DockWidgetArea area);
+  void logTutorialPlace(const QString& how);
+  TutorialPlace m_tutorialPlace = TutorialPlace::Left;
+  int m_tutorialMoves = 0; // the moves asked for; a finished one older than the last is not logged
+  QPointer<QObject> m_tutorialDockMove; // Docked: the floating dock's move, while it runs
   // `rerun`: the options of an .f3d import run again with the items whose
   // deviating results the user keeps (mitcad#379); empty for a new import.
   // `ask`: the import asks its choices (File > Open and Import: an .iam
@@ -2573,6 +2597,9 @@ private:
   QString m_inPlaceComponent; // the holder's linked component (uid)
   QString m_inPlaceName;      // its name
   QString m_inPlaceFile;      // the linked design's file
+  // The occurrence that shows the assembly around it (`O3`), drawn faded
+  // (mitcad#2353).
+  QString m_inPlaceOccurrence;
   QPointer<MainWindow> m_inPlaceTab;
   // After Finish: the linked design's unsaved edits, which the holder's
   // Save writes first: kept here when it came from no tab, else its tab's.
@@ -2589,6 +2616,14 @@ private:
   void registerEditInPlaceCommands();
   // Save in the mode: the linked design's file.
   bool saveInPlaceDesign();
+  // Writes `document`, the linked design edited in place, to its `file` as
+  // a save in its own tab would (mitcad#2353): refused in words when the
+  // project's edit lock is someone else's (`tab`, which lent the design,
+  // holds it, or says why not; without one the lock is taken for the write
+  // and released after it), a version recorded in a project with version
+  // history; the other tabs that link it offer Update. False when it was
+  // not written.
+  bool writeInPlaceDesign(Document& document, const QString& file, const QPointer<MainWindow>& tab);
   // The holder's Save: the linked design's unsaved in-place edits written
   // first, the link recording the file; false when that failed.
   bool saveInPlaceEdits();
@@ -2604,6 +2639,13 @@ private:
   // Why this tab takes no change or close while its design is edited in
   // place elsewhere; empty when it is not.
   QString lentReason() const;
+  // A request for the edit lock of `path`, edited in place (mitcad#2397):
+  // the window that edits it (this one, or the borrower of this tab's
+  // design; null when none), whether it has unsaved edits, and the mode
+  // ended for the hand-over as `how` says (LockController::Host).
+  MainWindow* inPlaceEditorOf(const QString& path);
+  bool inPlaceModifiedFor(const QString& path);
+  bool endInPlaceFor(const QString& path, InPlaceEnd how);
   QLabel* m_rendererLabel = nullptr;
   FloatingLayout* m_floating = nullptr; // the central widget in Floating chrome
   GlassCard* m_commandCard = nullptr;
@@ -3293,6 +3335,19 @@ private:
   std::optional<CamStockPlayback> m_camStock;
   // A lathe setup's turned stock is drawn (mitcad#1869).
   bool m_camTurnedStock = false;
+  // A lathe setup's sub-spindle as Simulate draws it (mitcad#2405):
+  // cam_simulate's `sub_spindle` with the setup's name and work frame, the
+  // lines drawn where it is as the operation at the slider's place cuts
+  // ("CAM sub-spindle drawn: …"), cleared with the stock.
+  struct CamSubSpindleDrawn {
+    QString setup;
+    QJsonObject data;
+    cam::WorkFrame frame;
+  };
+  std::optional<CamSubSpindleDrawn> m_camSubSpindle;
+  std::vector<float> m_camMachineLines;
+  QString m_loggedCamSubSpindle;
+  void showCamSubSpindle(int operation, const QString& name);
   // Post Process…: the setup, its controller and units asked (its own by
   // default), cam_post written through the save dialog with the dialect's
   // extension ("CAM post written: <path>: grbl, millimetres, 40 lines").

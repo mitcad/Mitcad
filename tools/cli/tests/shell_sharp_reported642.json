@@ -1,0 +1,21 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #642 (mitcad#2383; opened with --open, never committed; tools/cli/shell-sharp-reported-test.cmake): Body1 (F2.b0), a cone on a ring revolved from Sketch1 (Revolve1 F2), a side boss along a pipe (Pipe1 F8, Extrude1 F7) and five notches cut up from the ring's top through the cone's wall (Extrude2 F10, CircularPattern1 F11). The report's Shell: Inside 2 mm, Sharp, Tangent Chain on, the boss top and the foot removed. It failed ('the offset faces do not close up') at any thickness, no face vanishing: the geometry kernel's offset split the cone's foot, cut by the notches and the cone's seam, wrongly (OCCT port patch 2383). It builds into one solid: the step's top measured 2 mm from its inside, every notch's round end with the inside of its wall."},
+  {"cmd": "add_feature", "def": {"type": "shell", "body": "F2.b0",
+    "faces": ["F2:side(c1[c20,c7])", "F2:side(c19[c15,c21])"],
+    "inside": 2, "tangent_chain": true, "rounded": false}},
+  {"expect": {"feature": "Shell1", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"comment": "The step's top (z = 80) with its inside 2 mm below."},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F2:side(c9[c7,c11]))"}},
+  {"expect": {"query": {"query": "measure", "a": "Body1/F2:side(c9[c7,c11])", "b": "Body1/F12:offset(F2:side(c9[c7,c11]))"},
+    "result": {"between": {"offset": 2}}}},
+  {"comment": "Each notch's round end with the inside of its wall (a notch whose walls the cone's inside ran across had none)."},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F10:side(c1[c11,c8]))"}},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F11:inst1(F10:side(c1[c11,c8])))"}},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F11:inst2(F10:side(c1[c11,c8])))"}},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F11:inst3(F10:side(c1[c11,c8])))"}},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F11:inst4(F10:side(c1[c11,c8])))"}},
+  {"comment": "The cone's inside, and the volume of the wall (the geometry kernel's 55678.2 mm3 in the OCCT lab; Rounded gives 55359.1)."},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F2:side(c11[c9,c13+c21]))"}},
+  {"expect": {"body": "Body1", "volume": 55678.2, "tolerance": 1e-4}}
+]

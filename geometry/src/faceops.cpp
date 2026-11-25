@@ -10,6 +10,7 @@
 #include <set>
 #include <stdexcept>
 #include <typeinfo>
+#include <utility>
 
 #include <BOPAlgo_Alerts.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
@@ -19,6 +20,8 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
@@ -35,9 +38,14 @@
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <Geom_BSplineSurface.hxx>
 #include <Geom_Surface.hxx>
+#include <NCollection_Array1.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
+#include <NCollection_Map.hxx>
+#include <Standard_Failure.hxx>
+#include <TopLoc_Location.hxx>
 #include <Precision.hxx>
 #include <ShapeBuild_ReShape.hxx>
 #include <ShapeUpgrade_ShapeDivideContinuity.hxx>
@@ -50,7 +58,10 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Solid.hxx>
+#include <gp.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Trsf.hxx>
 #include <gp_Sphere.hxx>
 #include <gp_Torus.hxx>
 #include <gp_Pnt2d.hxx>
@@ -370,6 +381,101 @@ void name_generated_from_edges(detail::FaceNamer& namer, Operation& operation, c
   }
 }
 
+// One direction of a B-spline surface's piece under a face: the surface's
+// range [first, last], ended before each sliver (a knot span shorter than a
+// millionth of the range) that one of the face's ends [lo, hi] lies in or
+// at.
+std::pair<double, double> span_without_end_slivers(const NCollection_Array1<double>& knots, double lo, double hi,
+                                                   double first, double last) {
+  const double near = 1e-6 * (last - first);
+  double from = first;
+  double to = last;
+  for (int i = knots.Lower(); i < knots.Upper(); ++i) {
+    const double a = knots(i);
+    const double b = knots(i + 1);
+    if (b - a >= near) {
+      continue;
+    }
+    if (hi >= a - near && hi <= b + near) {
+      to = std::min(to, a);
+    }
+    if (lo >= a - near && lo <= b + near) {
+      from = std::max(from, b);
+    }
+  }
+  return {from, to};
+}
+
+// Each face of the shape on a B-spline surface with a sliver span at one of
+// the face's ends, put on the surface's piece without it, with its edges'
+// curves on it; in place (the callers' working copies). The offset evaluates
+// a face's surface, its normal and its edges' curves on it up to the face's
+// ends. A rounding's surface walked on past a vertex can turn back in a
+// span a few ten-millionths long right where its face ends (its normal
+// turned round there): which side of the turn the face's end falls on
+// depends on the last bits of the walk, which differ between compilers and
+// their maths libraries, and where it falls past the turn the offset of the
+// face is turned round at that end and the offset faces do not close up
+// (mitcad#2247: a Y tube's crotch rounded and shelled, on Windows and macOS,
+// not on Linux). Without the sliver the face's end is on the span before
+// it, carried on a few ten-millionths.
+void cut_end_slivers(const TopoDS_Shape& shape) {
+  BRep_Builder builder;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> done;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face face = TopoDS::Face(it.Current().Oriented(TopAbs_FORWARD));
+    if (!done.Add(face.Located(TopLoc_Location()))) {
+      continue;
+    }
+    TopLoc_Location location;
+    const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face, location);
+    const occ::handle<Geom_BSplineSurface> spline = occ::down_cast<Geom_BSplineSurface>(surface);
+    if (spline.IsNull() || spline->IsUPeriodic() || spline->IsVPeriodic()) {
+      continue;
+    }
+    double u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+    spline->Bounds(u1, u2, v1, v2);
+    double fu1 = 0.0, fu2 = 0.0, fv1 = 0.0, fv2 = 0.0;
+    BRepTools::UVBounds(face, fu1, fu2, fv1, fv2);
+    const auto [pu1, pu2] = span_without_end_slivers(spline->UKnots(), fu1, fu2, u1, u2);
+    const auto [pv1, pv2] = span_without_end_slivers(spline->VKnots(), fv1, fv2, v1, v2);
+    if ((pu1 == u1 && pu2 == u2 && pv1 == v1 && pv2 == v2) || !(pu1 < pu2) || !(pv1 < pv2)) {
+      continue;
+    }
+    const occ::handle<Geom_BSplineSurface> piece = occ::down_cast<Geom_BSplineSurface>(spline->Copy());
+    try {
+      piece->Segment(pu1, pu2, pv1, pv2);
+    } catch (const Standard_Failure&) {
+      continue;
+    }
+    // The edges' curves on the face, carried over to the piece: the same
+    // parameters, so the same curves.
+    for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
+      const TopoDS_Edge edge = TopoDS::Edge(e.Current());
+      double first = 0.0;
+      double last = 0.0;
+      const occ::handle<Geom2d_Curve> curve = BRep_Tool::CurveOnSurface(edge, face, first, last);
+      if (curve.IsNull()) {
+        continue;
+      }
+      const double tolerance = BRep_Tool::Tolerance(edge);
+      if (BRep_Tool::IsClosed(edge, face)) {
+        const occ::handle<Geom2d_Curve> other =
+            BRep_Tool::CurveOnSurface(TopoDS::Edge(edge.Reversed()), face, first, last);
+        if (edge.Orientation() == TopAbs_REVERSED) {
+          builder.UpdateEdge(edge, other, curve, piece, location, tolerance);
+        } else {
+          builder.UpdateEdge(edge, curve, other, piece, location, tolerance);
+        }
+      } else {
+        builder.UpdateEdge(edge, curve, piece, location, tolerance);
+      }
+      builder.Range(edge, piece, location, first, last);
+    }
+    builder.UpdateFace(face, piece, location, BRep_Tool::Tolerance(face));
+  }
+}
+
 // The body with each face whose surface is only C0 continuous split at its
 // creases into C1 pieces that keep the face's names, or null when no face
 // has one. OCCT's offset refuses C0 surfaces (BRepOffset_C0Geometry), though
@@ -424,6 +530,7 @@ ShapePtr thick_solid(const std::string& feature, const Shape& input, const std::
                      double offset, GeomAbs_JoinType join) {
   // OCCT's offset widens the tolerances of its input's sub-shapes.
   const ShapePtr copy = detail::working_copy(input);
+  cut_end_slivers(copy->occt());
   std::set<int> removed = removed_faces;
   const ShapePtr split = split_at_creases(*copy, removed);
   const Shape& body = split ? *split : *copy;
@@ -498,6 +605,7 @@ ShapePtr offset_body(const std::string& feature, const Shape& input, double offs
                      GeomAbs_JoinType join, bool inner) {
   // OCCT's offset widens the tolerances of its input's sub-shapes.
   const ShapePtr copy = detail::working_copy(input);
+  cut_end_slivers(copy->occt());
   std::set<int> none;
   const ShapePtr split = split_at_creases(*copy, none);
   const Shape& body = split ? *split : *copy;
@@ -672,6 +780,7 @@ ShapePtr cavity_shell(const std::string& feature, const Shape& input, const std:
   }
   // OCCT's offset widens the tolerances of its input's sub-shapes.
   const ShapePtr copy = detail::working_copy(input);
+  cut_end_slivers(copy->occt());
   std::set<int> removed = removed_faces;
   const ShapePtr split = split_at_creases(*copy, removed);
   const Shape& body = split ? *split : *copy;
@@ -788,9 +897,30 @@ ShapePtr draft_faces(const Shape& body, const std::vector<int>& faces, const gp_
   }
   // The modifier rebuilds every face it touches; ModifiedShape gives the image.
   detail::FaceNamer namer(maker.Shape());
+  // Images that are no face of the result, with their names.
+  std::vector<Shape::NamedFace> outside;
   for (int i = 0; i < body.face_count(); ++i) {
     const TopoDS_Shape image = step("draft", [&] { return maker.ModifiedShape(body.face(i)); });
     add_names(namer, image, body.face_names(i));
+    if (!body.face_names(i).empty() && image.ShapeType() == TopAbs_FACE && !namer.contains(image)) {
+      outside.push_back({image, body.face_names(i)});
+    }
+  }
+  // After it has reported the images, the draft splits the edges of a face
+  // where its seam crosses another of its wires and copies the faces with
+  // those edges (a drafted cylinder that became a cone, OCCT's CorrectWires);
+  // ModifiedShape still gives the faces before that copy, so the copies kept
+  // no name, and a sketch or a pick could no longer find them (mitcad#2351).
+  // The copies lie exactly in the images they were made of: each face
+  // without a name takes the names of the image it lies in.
+  if (!outside.empty()) {
+    BRep_Builder builder;
+    TopoDS_Compound images;
+    builder.MakeCompound(images);
+    for (const Shape::NamedFace& face : outside) {
+      builder.Add(images, face.face);
+    }
+    namer.carry_by_containment(Shape(images, outside), kTolerance);
   }
   namer.finish();
   return namer.shape();
@@ -911,6 +1041,22 @@ ShapePtr draft(const std::string& feature, const Shape& body, const DraftSpec& s
 }
 
 namespace {
+
+// The least and greatest of p . up over the face's points p: the face's box
+// in a frame whose z axis is `up`, from its edges' exact bounds (a planar
+// face; mitcad#2382).
+std::pair<double, double> extent_along(const TopoDS_Face& face, const gp_Dir& up) {
+  gp_Trsf into_frame;
+  into_frame.SetTransformation(gp_Ax3(gp::Origin(), up));
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(face.Moved(TopLoc_Location(into_frame)), box, false, false);
+  if (box.IsVoid()) {
+    throw std::runtime_error("the face has no extent");
+  }
+  double xmin = 0.0, ymin = 0.0, zmin = 0.0, xmax = 0.0, ymax = 0.0, zmax = 0.0;
+  box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+  return {zmin, zmax};
+}
 
 // Moves each face by its own offset; the other faces stay on their surfaces.
 // `except` are faces not to carry the names of.
@@ -1653,14 +1799,25 @@ ShapePtr replace_faces(const std::string& feature, const Shape& body,
       double nearest = 0.0;
       double farthest = 0.0;
       bool first = true;
-      for (TopExp_Explorer it(body.face(f), TopAbs_VERTEX); it.More(); it.Next()) {
-        const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(it.Current()));
-        const double t = gp_Vec(p, plane.Location()).Dot(gp_Vec(up)) / facing;
+      const auto reach = [&](double t) {
         nearest = first ? t : std::min(nearest, t);
         farthest = first ? t : std::max(farthest, t);
         first = false;
+      };
+      for (TopExp_Explorer it(body.face(f), TopAbs_VERTEX); it.More(); it.Next()) {
+        const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(it.Current()));
+        reach(gp_Vec(p, plane.Location()).Dot(gp_Vec(up)) / facing);
       }
       if (std::abs(1.0 - std::abs(facing)) > 1.0e-9) {
+        // Tilted, the distance changes across the face, and on a curved
+        // edge it is greatest between the vertices: a round top has one
+        // vertex, and moved past the target there only, it still crossed
+        // the target and every piece held it (mitcad#2382). So the face's
+        // own extent along the target's normal, its edges' exact bounds.
+        const auto [low, high] = extent_along(body.face(f), up);
+        const double level = gp_Vec(plane.Location().XYZ()).Dot(gp_Vec(up));
+        reach((level - low) / facing);
+        reach((level - high) / facing);
         tilted = true;
         // Past the target everywhere on the face.
         moves.emplace_back(f, farthest + std::max(1.0, farthest - nearest));

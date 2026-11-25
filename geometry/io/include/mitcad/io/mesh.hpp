@@ -415,10 +415,14 @@ bool is_mesh(const TopoDS_Shape& shape);
 // edges, and a closed solid gives a closed mesh; triangles that collapse
 // in the merge (slivers at degenerate edges) are left out. Triangles are
 // counter-clockwise seen from outside (a reversed face's are turned
-// round). Millimetres, in the shape's own placement.
+// round). Millimetres, in the shape's own placement. `faces` gives each
+// triangle's face (mitcad#2385): its index among the shape's faces
+// (TopExp::MapShapes order, 0-based, as geometry::Shape numbers them), one
+// per triangle; 0 for a mesh body's.
 struct IndexedMesh {
   std::vector<std::array<double, 3>> vertices;
   std::vector<std::array<std::uint32_t, 3>> triangles;
+  std::vector<std::uint32_t> faces;
 };
 
 // A face that a meshing left without a triangulation (mitcad#1568): its

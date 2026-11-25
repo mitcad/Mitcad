@@ -15,7 +15,11 @@ const MODEL_PART: &str = "3D/3dmodel.model";
 /// The 3MF package of a model: one build item, an object named after the
 /// model whose components place a mesh object per part (each placement of
 /// a part a component of its own), in millimetres. Parts with a colour
-/// refer to it in one `basematerials` group, named after them. Every part
+/// refer to it in one `basematerials` group, named after them; triangles
+/// with colours of their own ([`crate::Mesh::triangle_colors`],
+/// mitcad#2385) refer by their `pid` and `p1` to a base material of the
+/// same group per colour, named `Color #RRGGBB`, after the parts' (a part
+/// with them needs a colour of its own, its other triangles'). Every part
 /// needs a mesh with triangles and at least one placement. With
 /// [`Model::objects`] (mitcad#856) the build has an item per object, each
 /// of the placements it names.
@@ -29,6 +33,24 @@ pub fn write(model: &Model) -> Result<Vec<u8>, Error> {
         }
         if part.placements.is_empty() {
             return Err(Error(format!("{} is not placed", part.name)));
+        }
+        // The triangles' own colours (mitcad#2385): one per triangle, over
+        // a colour of the part's own (an object whose triangles have
+        // properties needs one of its own for the others).
+        let colors = &part.mesh.triangle_colors;
+        if !colors.is_empty() && colors.len() != part.mesh.triangles.len() {
+            return Err(Error(format!(
+                "{} has {} triangle colours for {} triangles",
+                part.name,
+                colors.len(),
+                part.mesh.triangles.len()
+            )));
+        }
+        if part.color.is_none() && colors.iter().any(Option::is_some) {
+            return Err(Error(format!(
+                "{} has colours on its triangles but none of its own",
+                part.name
+            )));
         }
     }
     for object in &model.objects {
@@ -162,7 +184,9 @@ fn model_xml(model: &Model) -> String {
         );
     }
     xml.push_str(" <resources>\n");
-    // The colours, one base material per coloured part.
+    // The colours, one base material per coloured part, then one per
+    // colour of triangles of their own (mitcad#2385), in the order they
+    // are first used.
     let mut material = vec![None; model.parts.len()];
     let coloured: Vec<_> = model
         .parts
@@ -170,7 +194,25 @@ fn model_xml(model: &Model) -> String {
         .enumerate()
         .filter(|(_, p)| p.color.is_some())
         .collect();
-    if !coloured.is_empty() {
+    let mut triangle_bytes: Vec<[u8; 3]> = Vec::new();
+    for part in &model.parts {
+        for color in part.mesh.triangle_colors.iter().flatten() {
+            let bytes = color.map(channel);
+            if !triangle_bytes.contains(&bytes) {
+                triangle_bytes.push(bytes);
+            }
+        }
+    }
+    // A triangle colour's index in the group.
+    let first_triangle_material = coloured.len();
+    let triangle_material = |color: &[f64; 3]| {
+        let bytes = color.map(channel);
+        triangle_bytes
+            .iter()
+            .position(|b| *b == bytes)
+            .map_or(0, |k| first_triangle_material + k)
+    };
+    if !coloured.is_empty() || !triangle_bytes.is_empty() {
         xml.push_str("  <basematerials id=\"1\">\n");
         for (index, (i, part)) in coloured.into_iter().enumerate() {
             let [r, g, b] = part.color.unwrap_or_default().map(channel);
@@ -180,6 +222,13 @@ fn model_xml(model: &Model) -> String {
                 escape(&part.name)
             );
             material[i] = Some(index);
+        }
+        for [r, g, b] in &triangle_bytes {
+            let _ = writeln!(
+                xml,
+                "   <base name=\"Color #{r:02X}{g:02X}{b:02X}\" \
+                 displaycolor=\"#{r:02X}{g:02X}{b:02X}FF\"/>"
+            );
         }
         xml.push_str("  </basematerials>\n");
     }
@@ -218,12 +267,17 @@ fn model_xml(model: &Model) -> String {
             );
         }
         xml.push_str("    </vertices>\n    <triangles>\n");
-        for t in &part.mesh.triangles {
-            let _ = writeln!(
+        for (k, t) in part.mesh.triangles.iter().enumerate() {
+            let _ = write!(
                 xml,
-                "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>",
+                "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"",
                 t[0], t[1], t[2]
             );
+            // A colour of its own (mitcad#2385): the whole triangle's.
+            if let Some(Some(color)) = part.mesh.triangle_colors.get(k) {
+                let _ = write!(xml, " pid=\"1\" p1=\"{}\"", triangle_material(color));
+            }
+            xml.push_str("/>\n");
         }
         xml.push_str("    </triangles>\n   </mesh>\n  </object>\n");
     }

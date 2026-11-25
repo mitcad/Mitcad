@@ -460,7 +460,10 @@ QString choiceLabel(const QString& label) {
     // above).
     QT_TRANSLATE_NOOP("Choice", "Outward: past the end"),
     QT_TRANSLATE_NOOP("Choice", "Inward: the component cut back"), QT_TRANSLATE_NOOP("Choice", "Rolled"),
-    QT_TRANSLATE_NOOP("Choice", "Fine"), QT_TRANSLATE_NOOP("Choice", "Coarse")};
+    QT_TRANSLATE_NOOP("Choice", "Fine"), QT_TRANSLATE_NOOP("Choice", "Coarse"),
+    // Rib's Direction Normal to Curves (mitcad#2398); its Corners are
+    // Sharp and Round, above.
+    QT_TRANSLATE_NOOP("Choice", "Normal to Curves")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -498,18 +501,95 @@ bool splitKey(const QString& key, QString& list, int& index) {
 }
 
 // Gives a value field the keyboard. With native glass the panel's card is a
-// window of its own, so the field's window is activated first when another
-// window of the same main window has the keys (the timeline card); a popup,
-// a dialog or another application keeps them.
+// window of its own, and so is the Docked layout's Command panel floated
+// (mitcad#2391), so the field's window is activated first when another
+// window of the same main window has the keys (the main window itself, the
+// timeline card); a popup, a dialog or another application keeps them.
 void focusField(QLineEdit* edit) {
   QWidget* window = edit->window();
   const QWidget* active = QApplication::activeWindow();
   if (active != nullptr && active != window && QApplication::activePopupWidget() == nullptr &&
-      GlassCard::hostWindow(active) == GlassCard::hostWindow(window)) {
+      GlassCard::keyboardHost(active) == GlassCard::keyboardHost(window)) {
     window->activateWindow();
   }
   edit->setFocus();
   edit->selectAll();
+}
+
+// What has the keyboard, for the log: its class and its object name.
+QString describeFocus(const QWidget* widget) {
+  if (widget == nullptr) {
+    return QStringLiteral("none");
+  }
+  const QString type = QString::fromLatin1(widget->metaObject()->className());
+  return widget->objectName().isEmpty() ? type : QStringLiteral("%1 '%2'").arg(type, widget->objectName());
+}
+
+// A value field the panel gave the keyboard, watched for a second
+// (mitcad#2391): once the panel is shown it logs what has the keys and
+// whether the field's window is active, and later any move of the keys away
+// from the field. Its text is shown selected only while the field has the
+// keys: when another widget keeps them (the platform did not activate the
+// field's window, and digits typed would turn the 3D view), the value is
+// shown plain, and selected again if the keys come to the field within that
+// second (a panel's window that the platform activates a moment later).
+class FieldKeysWatch : public QObject {
+public:
+  FieldKeysWatch(QLineEdit* edit, QString panel, QString field)
+      : QObject(edit), m_edit(edit), m_panel(std::move(panel)), m_field(std::move(field)) {
+    setObjectName(QStringLiteral("fieldKeysWatch"));
+    connect(qApp, &QApplication::focusChanged, this,
+            [this](QWidget* old, QWidget* now) { focusChanged(old, now); });
+    QTimer::singleShot(0, this, [this] { report(); });
+    QTimer::singleShot(1000, this, [this] { deleteLater(); });
+  }
+
+private:
+  void report() {
+    const QWidget* focused = QApplication::focusWidget();
+    qDebug().noquote() << QStringLiteral("Panel %1: %2 focused; focus widget %3, window active %4")
+                              .arg(m_panel, m_field,
+                                   focused == m_edit ? QStringLiteral("the field") : describeFocus(focused),
+                                   m_edit->window()->isActiveWindow() ? QStringLiteral("yes") : QStringLiteral("no"));
+    // No widget at all has the keys while no window of the application is
+    // active: the field gets them with its window, still selected.
+    if (focused != nullptr && focused != m_edit && m_edit->hasSelectedText()) {
+      m_edit->deselect();
+      m_deselected = true;
+      qDebug().noquote() << QStringLiteral("Panel %1: %2 does not have the keyboard; its text is not shown selected")
+                                .arg(m_panel, m_field);
+    }
+  }
+
+  void focusChanged(const QWidget* old, const QWidget* now) {
+    if (now == m_edit) {
+      if (m_deselected) {
+        m_deselected = false;
+        m_edit->selectAll();
+        qDebug().noquote() << QStringLiteral("Panel %1: %2 got the keyboard; its text selected").arg(m_panel, m_field);
+      }
+      return;
+    }
+    if (old == m_edit && now != nullptr) {
+      qDebug().noquote() << QStringLiteral("Panel %1: the keyboard moved from %2 to %3")
+                                .arg(m_panel, m_field, describeFocus(now));
+    }
+  }
+
+  QLineEdit* m_edit;
+  QString m_panel;
+  QString m_field;
+  bool m_deselected = false;
+};
+
+// Watches the field the panel just gave the keyboard; an earlier field's
+// watch ends (the picks done move the keys to another field, mitcad#338).
+void watchFieldKeys(QWidget* panel, QLineEdit* edit, const QString& panelName, const QString& field) {
+  const QList<QObject*> earlier = panel->findChildren<QObject*>(QStringLiteral("fieldKeysWatch"));
+  for (QObject* watch : earlier) {
+    delete watch;
+  }
+  new FieldKeysWatch(edit, panelName, field);
 }
 
 QToolButton* smallButton(const QString& text, const QString& tip) {
@@ -2875,6 +2955,7 @@ bool CommandPanel::focusFirstValue() {
       if (row->edit != nullptr && row->input->type == InputDef::Type::Value &&
           (!marked || row->input->keyboardFirst) && row->field->isVisibleTo(this)) {
         focusField(row->edit);
+        watchFieldKeys(this, row->edit, m_def.name, QStringLiteral("first value field (%1)").arg(row->input->id));
         return true;
       }
     }
@@ -2888,6 +2969,7 @@ bool CommandPanel::focusValue(const QString& key) {
     return false;
   }
   focusField(row->edit);
+  watchFieldKeys(this, row->edit, m_def.name, QStringLiteral("value field %1").arg(key));
   return true;
 }
 

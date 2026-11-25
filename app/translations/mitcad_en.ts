@@ -2,6 +2,23 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="en" sourcelanguage="en">
 <context>
+    <name>DrawingTools</name>
+    <message numerus="yes">
+        <source>%1 and %n More</source>
+        <translation>
+            <numerusform>%1 and %n More</numerusform>
+            <numerusform>%1 and %n More</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>The Selection (%n body(s))</source>
+        <translation>
+            <numerusform>The Selection (%n body)</numerusform>
+            <numerusform>The Selection (%n bodies)</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
     <name>ProjectDialogs</name>
     <message numerus="yes">
         <source>✓ Project &quot;%1&quot;: %n version(s)</source>
@@ -902,6 +919,13 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>Exported %n bend to %1.</numerusform>
             <numerusform>Exported %n bends to %1.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n move(s) run into the sub-spindle or a zone moving with it.</source>
+        <translation>
+            <numerusform>%n move runs into the sub-spindle or a zone moving with it.</numerusform>
+            <numerusform>%n moves run into the sub-spindle or a zone moving with it.</numerusform>
         </translation>
     </message>
 </context>

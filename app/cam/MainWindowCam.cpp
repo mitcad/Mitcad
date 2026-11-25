@@ -270,6 +270,15 @@ bool setupHasY(const CommandState& state) {
   return setupMills(state) && setupAxes(state).value(QStringLiteral("y")).toBool();
 }
 
+// Whether an operation panel's setup hands the part over to its lathe's
+// sub-spindle (mitcad#2375): its live tools may cut the part's back there.
+bool setupHandsOver(const CommandState& state) {
+  const QJsonObject data = camData(state);
+  const QJsonObject setup = setupOf(data, state.choice(QStringLiteral("setup")).toInt());
+  return setupAxes(state).value(QStringLiteral("sub_spindle")).toBool() &&
+         setup.value(QStringLiteral("lathe")).toObject().contains(QStringLiteral("hand_over"));
+}
+
 // Whether a live tool cuts on a plane in an operation panel (mitcad#2319).
 bool liveOnPlane(const CommandState& state) {
   return setupHasY(state) && state.choice(QStringLiteral("live")) == QStringLiteral("plane");
@@ -782,6 +791,13 @@ QJsonObject operationFields(const CommandState& state, const QString& type, QStr
   } else if (edit) {
     op.insert(QStringLiteral("plane"), QJsonValue(QJsonValue::Null));
   }
+  // The part's back on the sub-spindle, after the setup's hand-over
+  // (mitcad#2375).
+  const bool sub = cutsLive(type) && setupMills(state) && setupHandsOver(state) &&
+                   state.checked(QStringLiteral("sub_spindle"));
+  if (sub || edit) {
+    op.insert(QStringLiteral("sub_spindle"), sub);
+  }
   if (!why->isEmpty()) {
     return {};
   }
@@ -848,9 +864,22 @@ QJsonObject MainWindow::camPanelData() const {
   QJsonArray setups;
   for (const QJsonValue& value : m_snapshot.camSetups) {
     const QJsonObject setup = value.toObject();
+    // The lathe's part too: its hand-over shows the panels' On the
+    // sub-spindle (mitcad#2319, mitcad#2375). Its operations' order on the
+    // spindles, for the panels' note on one on the main spindle after the
+    // sub-spindle's (mitcad#2392).
+    QJsonArray operations;
+    for (const QJsonValue& entry : setup.value(QStringLiteral("operations")).toArray()) {
+      const QJsonObject op = entry.toObject();
+      operations.append(QJsonObject{{QStringLiteral("id"), idOf(op)},
+                                    {QStringLiteral("sub_spindle"), op.value(QStringLiteral("sub_spindle")).toBool()},
+                                    {QStringLiteral("suppressed"), op.value(QStringLiteral("suppressed")).toBool()}});
+    }
     setups.append(QJsonObject{{QStringLiteral("id"), idOf(setup)},
                               {QStringLiteral("name"), str(setup, "name")},
-                              {QStringLiteral("machine"), str(setup, "machine")}});
+                              {QStringLiteral("machine"), str(setup, "machine")},
+                              {QStringLiteral("lathe"), setup.value(QStringLiteral("lathe"))},
+                              {QStringLiteral("operations"), operations}});
   }
   QJsonArray machines;
   QJsonArray dialects;
@@ -1243,6 +1272,33 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
                           .withTooltip(tr("The tool's tilt from the spindle axis: 0 on the face, 90 across it, "
                                           "between them with a B head")));
   }
+  // The part's back on the sub-spindle, after the setup's hand-over
+  // (mitcad#2375): the live tool cuts it with the sub-spindle's C axis.
+  if (cutsLive(type)) {
+    def.inputs.append(checkInput(QStringLiteral("sub_spindle"), tr("On the sub-spindle"))
+                          .withTooltip(tr("Cuts the part's back after the sub-spindle has taken it over"))
+                          .withVisible([](const CommandState& state) {
+                            return setupMills(state) && setupHandsOver(state);
+                          }));
+  }
+  // On the main spindle after the sub-spindle's operations (mitcad#2392):
+  // Generate refuses it there; the panel says so as a warning.
+  def.inputs.append(noteInput(
+      QStringLiteral("spindle_order"),
+      [type](const CommandState& state) {
+        InputNote note;
+        const QJsonObject setup = setupOf(camData(state), state.choice(QStringLiteral("setup")).toInt());
+        const bool sub = cutsLive(type) && setupMills(state) && setupHandsOver(state) &&
+                         state.checked(QStringLiteral("sub_spindle"));
+        const QJsonObject edited = state.object(QStringLiteral("edited"));
+        const int editedId = edited.value(QStringLiteral("setup_id")).toInt() == idOf(setup) ? idOf(edited) : 0;
+        if (cam::mainAfterSub(setup, editedId, sub)) {
+          note.notice = MainWindow::tr("On the main spindle after the sub-spindle's operations: Generate refuses it.");
+          note.noticeLevel = NoticeLevel::Warning;
+        }
+        return note;
+      },
+      [](int, const CommandState&, const CommandContext&) {}));
   // On the diameter a contour or a pocket takes the faces round the
   // spindle axis it mills (their floors), a drilling its holes.
   def.inputs.append(selectionInput(QStringLiteral("geometry"), pickLabel, picks, least, 0)
@@ -1433,6 +1489,8 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
     const QJsonObject plane = op.value(QStringLiteral("plane")).toObject();
     loadCamValue(state, QStringLiteral("plane_c"), plane.value(QStringLiteral("c")), ValueKind::Angle, context);
     loadCamValue(state, QStringLiteral("plane_b"), plane.value(QStringLiteral("b")), ValueKind::Angle, context);
+    // On the sub-spindle (mitcad#2375).
+    state.setChecked(QStringLiteral("sub_spindle"), op.value(QStringLiteral("sub_spindle")).toBool());
     state.setText(QStringLiteral("name"), str(op, "name"));
     state.setItems(QStringLiteral("geometry"), camItems(op.value(QStringLiteral("inputs")).toArray(), context));
     // The bodies of a 3-axis operation, each in its occurrence.
@@ -1824,6 +1882,8 @@ void MainWindow::drawCamScene() {
     }
   }
   scene.tool = m_camTool;
+  // A lathe's sub-spindle where Simulate has it (mitcad#2405).
+  scene.machine = m_camMachineLines;
   m_viewer->setCamToolpaths(scene);
 }
 
@@ -1912,6 +1972,7 @@ void MainWindow::camSimulateAt(int index) {
                             .arg(op.name)
                             .arg(point.move + 1);
   showCamStock(index);
+  showCamSubSpindle(op.id, op.name);
   drawCamScene();
 }
 

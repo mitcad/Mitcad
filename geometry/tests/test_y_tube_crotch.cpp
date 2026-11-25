@@ -18,7 +18,10 @@
 //   a rounding and after each: one valid solid, the wall 2 mm thick by
 //   points in the trunk, both arms and under the crotch, the ends open;
 //   without a rounding the volume that of the tube less the same tube of
-//   radius 8 (port patch 2140).
+//   radius 8 (port patch 2140). Registered on every platform (mitcad#2247:
+//   after the rounding the shell failed on Windows and macOS, where the
+//   rounding's surfaces turn back in a sliver span right at the crotch's
+//   top).
 // - A shell that the geometry kernel and the cavity both refuse
 //   (MITCAD_TEST_OCCT_REFUSES=shell) fails in words, the crotch's edges its
 //   places, the kernel's text in the detail only.
@@ -28,7 +31,9 @@
 // tube's faces and edges (BRepOffset_MakeOffset's, with the crease
 // intersection traced, MITCAD_TRACE_OFFSET_CREASE, port patch 2140), also
 // after the roundings of 6 and 50 split at their creases as the shell
-// splits them; `--probe-third` the kernel's shell of the tube and the faulty
+// splits them, and for an invalid image face the checker's faults, its
+// surface's bounds, knots and corners and how far its edges' curves on it
+// stray (mitcad#2247); `--probe-third` the kernel's shell of the tube and the faulty
 // faces of an invalid one, the kernel's fillets at 8 and 50 with their walks
 // traced (MITCAD_TRACE_FILLET_WALK, port patch 2141), and MitCad's fillets
 // at 6, 8, 20 and 50 with the shells after 6 and 50; `--probe-second` the
@@ -65,6 +70,8 @@
 #include <Bnd_Box.hxx>
 #include <Geom2d_Curve.hxx>
 #include <Geom_Curve.hxx>
+#include <Geom_OffsetSurface.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
 #include <Geom_Surface.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <NCollection_List.hxx>
@@ -74,6 +81,8 @@
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
@@ -602,6 +611,171 @@ std::string faults(const NCollection_List<BRepCheck_Status>& statuses) {
   return out;
 }
 
+std::string ends_of(const TopoDS_Shape& edge);
+
+// How far an edge's curve on the face strays from its 3d curve: 200
+// samples, the largest distances and where (the point on the face, its uv)
+// (mitcad#2247).
+void probe_edge_deviation(const TopoDS_Edge& edge, const TopoDS_Face& face) {
+  double first = 0.0;
+  double last = 0.0;
+  const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, first, last);
+  double pfirst = 0.0;
+  double plast = 0.0;
+  const occ::handle<Geom2d_Curve> pcurve = BRep_Tool::CurveOnSurface(edge, face, pfirst, plast);
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+  if (curve.IsNull() || pcurve.IsNull() || surface.IsNull()) {
+    std::printf("     (no 3d curve, curve on the face or surface)\n");
+    return;
+  }
+  std::printf("     ranges: 3d %.9g..%.9g, on the face %.9g..%.9g\n", first, last, pfirst, plast);
+  double worst = -1.0;
+  for (int k = 0; k <= 200; ++k) {
+    const double t = first + (last - first) * k / 200.0;
+    const double s = pfirst + (plast - pfirst) * k / 200.0;
+    const gp_Pnt2d uv = pcurve->Value(s);
+    const gp_Pnt on_face = surface->Value(uv.X(), uv.Y());
+    const double d = on_face.Distance(curve->Value(t));
+    if (d > worst || k == 0 || k == 200 || k % 40 == 0) {
+      std::printf("     sample %3d: distance %.3g, uv (%.9g %.9g), on the face (%.6f %.6f %.6f)\n", k, d, uv.X(),
+                  uv.Y(), on_face.X(), on_face.Y(), on_face.Z());
+    }
+    worst = std::max(worst, d);
+  }
+}
+
+// An offset face's surface: its bounds and its basis's, and at its corners
+// (and just inside them) the basis's point, its derivatives' cross product
+// and the offset point (mitcad#2247).
+void probe_offset_corners(const TopoDS_Face& face) {
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+  occ::handle<Geom_Surface> basis = surface;
+  while (!basis.IsNull()) {
+    double u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+    basis->Bounds(u1, u2, v1, v2);
+    std::printf("     surface %s: u %.9g..%.9g, v %.9g..%.9g\n", basis->DynamicType()->Name(), u1, u2, v1, v2);
+    const occ::handle<Geom_OffsetSurface> offset = occ::down_cast<Geom_OffsetSurface>(basis);
+    const occ::handle<Geom_RectangularTrimmedSurface> trimmed = occ::down_cast<Geom_RectangularTrimmedSurface>(basis);
+    if (!offset.IsNull()) {
+      std::printf("      offset %.9g, its equivalent surface %s\n", offset->Offset(),
+                  offset->Surface().IsNull() ? "none" : offset->Surface()->DynamicType()->Name());
+      basis = offset->BasisSurface();
+    } else if (!trimmed.IsNull()) {
+      basis = trimmed->BasisSurface();
+    } else {
+      const occ::handle<Geom_BSplineSurface> spline = occ::down_cast<Geom_BSplineSurface>(basis);
+      if (!spline.IsNull()) {
+        std::printf("      degrees %d %d, continuity %d, rational %d %d\n", spline->UDegree(), spline->VDegree(),
+                    int(spline->Continuity()), int(spline->IsURational()), int(spline->IsVRational()));
+        std::string knots = "      u knots:";
+        for (int i = 1; i <= spline->NbUKnots(); ++i) {
+          knots += " " + std::to_string(spline->UKnot(i)) + "x" + std::to_string(spline->UMultiplicity(i));
+        }
+        knots += "\n      v knots:";
+        for (int i = 1; i <= spline->NbVKnots(); ++i) {
+          char one[64];
+          std::snprintf(one, sizeof one, " %.12gx%d", spline->VKnot(i), spline->VMultiplicity(i));
+          knots += one;
+        }
+        std::printf("%s\n", knots.c_str());
+        // Across each v span shorter than 1e-5 (and a little round it), at
+        // the u middle: the normal and the derivatives.
+        double bu1 = 0.0, bu2 = 0.0, bv1 = 0.0, bv2 = 0.0;
+        spline->Bounds(bu1, bu2, bv1, bv2);
+        for (int i = 1; i < spline->NbVKnots(); ++i) {
+          const double a = spline->VKnot(i);
+          const double b = spline->VKnot(i + 1);
+          if (b - a >= 1e-5) {
+            continue;
+          }
+          for (int k = -4; k <= 14; ++k) {
+            const double v = a + (b - a) * k / 10.0;
+            for (const double u : {bu1, 0.5 * (bu1 + bu2), bu2}) {
+              gp_Pnt p;
+              gp_Vec du;
+              gp_Vec dv;
+              spline->D1(u, v, p, du, dv);
+              const gp_Vec n = du.Crossed(dv);
+              const gp_Vec unit = n.Magnitude() > 0.0 ? n.Normalized() : n;
+              std::printf("       v %.12g u %.6g: |du| %.4g |dv| %.4g, normal (%.4f %.4f %.4f) |n| %.4g\n", v, u,
+                          du.Magnitude(), dv.Magnitude(), unit.X(), unit.Y(), unit.Z(), n.Magnitude());
+            }
+          }
+        }
+      }
+      break;
+    }
+  }
+  double umin = 0.0, umax = 0.0, vmin = 0.0, vmax = 0.0;
+  BRepTools::UVBounds(face, umin, umax, vmin, vmax);
+  std::printf("     the face's uv bounds: u %.9g..%.9g, v %.9g..%.9g\n", umin, umax, vmin, vmax);
+  for (const double u : {umin, umin + 1e-3, umax - 1e-3, umax}) {
+    for (const double v : {vmin, vmin + 1e-3, vmax - 1e-3, vmax}) {
+      gp_Pnt p;
+      gp_Vec du;
+      gp_Vec dv;
+      basis->D1(u, v, p, du, dv);
+      const gp_Pnt q = surface->Value(u, v);
+      std::printf("      (%.6f %.6f): basis (%.6f %.6f %.6f), |du x dv| %.3g, offset point (%.6f %.6f %.6f), %.6f away\n",
+                  u, v, p.X(), p.Y(), p.Z(), du.Crossed(dv).Magnitude(), q.X(), q.Y(), q.Z(), p.Distance(q));
+    }
+  }
+}
+
+// The checker's faults of a face and of each of its wires, edges and
+// vertices, on their own and on the face (BRepCheck_Status numbers; the
+// edges' tolerances), where it has any (mitcad#2247).
+void probe_check_statuses(const TopoDS_Face& face) {
+  const BRepCheck_Analyzer analyzer(face);
+  if (analyzer.IsValid()) {
+    return;
+  }
+  const auto said = [&](const TopoDS_Shape& shape) {
+    const occ::handle<BRepCheck_Result>& result = analyzer.Result(shape);
+    if (result.IsNull()) {
+      return std::string();
+    }
+    std::string out = faults(result->Status());
+    if (!shape.IsSame(face) && result->IsStatusOnShape(face)) {
+      const std::string on = faults(result->StatusOnShape(face));
+      if (!on.empty()) {
+        out += " on the face [" + on + "]";
+      }
+    }
+    return out;
+  };
+  probe_offset_corners(face);
+  const std::string own = said(face);
+  if (!own.empty()) {
+    std::printf("    the face's faults: %s\n", own.c_str());
+  }
+  for (const TopAbs_ShapeEnum type : {TopAbs_WIRE, TopAbs_EDGE, TopAbs_VERTEX}) {
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> shapes;
+    TopExp::MapShapes(face, type, shapes);
+    for (int i = 1; i <= shapes.Extent(); ++i) {
+      const std::string text = said(shapes(i));
+      if (text.empty()) {
+        continue;
+      }
+      std::string where;
+      if (type == TopAbs_EDGE) {
+        where = ends_of(shapes(i)) + ", tolerance " + std::to_string(BRep_Tool::Tolerance(TopoDS::Edge(shapes(i))));
+      } else if (type == TopAbs_VERTEX) {
+        const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(shapes(i)));
+        char at[128];
+        std::snprintf(at, sizeof at, "(%.4f %.4f %.4f), tolerance %g", p.X(), p.Y(), p.Z(),
+                      BRep_Tool::Tolerance(TopoDS::Vertex(shapes(i))));
+        where = at;
+      }
+      std::printf("    %s %d %s: %s\n", type == TopAbs_WIRE ? "wire" : type == TopAbs_EDGE ? "edge" : "vertex", i,
+                  where.c_str(), text.c_str());
+      if (type == TopAbs_EDGE) {
+        probe_edge_deviation(TopoDS::Edge(shapes(i)), face);
+      }
+    }
+  }
+}
+
 // The faces of an invalid shape that the checker faults, with their wires'
 // faults, surface types and boxes.
 void probe_faulty_faces(const TopoDS_Shape& shape) {
@@ -715,7 +889,12 @@ void probe_traced_kernel_fillet(const Shape& body, double r, const char* what) {
 // The body as the shell offsets it: where a face's surface is only C0, its
 // faces split at their creases into C1 pieces with the face's names
 // (faceops.cpp's split_at_creases); else the body itself. (Reading the
-// divider's context where it split nothing crashed the probe.)
+// divider's context where it split nothing crashed the probe.) The shell
+// also puts each face that ends on a sliver span of its surface on the
+// surface's piece without it (faceops.cpp's cut_end_slivers, mitcad#2247);
+// this does not, so that the probe shows the faces as the rounding left
+// them: on Windows the rounding faces' offsets turn round at the crotch's
+// top, where their surfaces turn back in such a sliver.
 ShapePtr split_like_the_shell(const Shape& body) {
   bool creased = false;
   for (int f = 0; f < body.face_count() && !creased; ++f) {
@@ -836,6 +1015,7 @@ void probe_offset_images(const Shape& body, const char* what) {
       }
       std::printf("   image face: valid %d, type %d\n", int(BRepCheck_Analyzer(image.Value()).IsValid()),
                   int(BRepAdaptor_Surface(TopoDS::Face(image.Value())).GetType()));
+      probe_check_statuses(TopoDS::Face(image.Value()));
       for (TopExp_Explorer wire(image.Value(), TopAbs_WIRE); wire.More(); wire.Next()) {
         std::printf("    wire:\n");
         for (TopExp_Explorer edge(wire.Current(), TopAbs_EDGE); edge.More(); edge.Next()) {

@@ -474,6 +474,23 @@ CommandDef MainWindow::camTurningCommand(const QString& type) {
   def.inputs.append(checkInput(QStringLiteral("sub_spindle"), tr("On the sub-spindle"))
                         .withTooltip(tr("Turns the part's back after the sub-spindle has taken it over"))
                         .withVisible([](const CommandState& state) { return handsOver(state); }));
+  // On the main spindle after the sub-spindle's operations (mitcad#2392):
+  // Generate refuses it there; the panel says so as a warning.
+  def.inputs.append(noteInput(
+      QStringLiteral("spindle_order"),
+      [](const CommandState& state) {
+        InputNote note;
+        const QJsonObject setup = setupOf(camData(state), state.choice(QStringLiteral("setup")).toInt());
+        const bool sub = handsOver(state) && state.checked(QStringLiteral("sub_spindle"));
+        const QJsonObject edited = state.object(QStringLiteral("edited"));
+        const int editedId = edited.value(QStringLiteral("setup_id")).toInt() == idOf(setup) ? idOf(edited) : 0;
+        if (cam::mainAfterSub(setup, editedId, sub)) {
+          note.notice = MainWindow::tr("On the main spindle after the sub-spindle's operations: Generate refuses it.");
+          note.noticeLevel = NoticeLevel::Warning;
+        }
+        return note;
+      },
+      [](int, const CommandState&, const CommandContext&) {}));
   def.inputs.append(valueInput(QStringLiteral("spindle_rpm"), tr("Spindle Speed (rpm)"), ValueKind::Unitless, QString())
                         .withAuto(fromDefaults)
                         .withTooltip(tr("Revolutions per minute; empty: from the surface speed"))

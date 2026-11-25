@@ -10,7 +10,10 @@
 //! linked design shows it while it is edited in place
 //! ([`Document::begin_in_place`]): a component of its own (`in_place`, read
 //! only, see `DocState::editable`) holding those bodies in a base feature,
-//! so that they are drawn, picked and measured as any other geometry. It
+//! so that they are drawn, picked and measured as any other geometry. That
+//! feature is first in the timeline and not in the timeline the user sees
+//! (mitcad#2353, [`Document::in_place_leading`]): the timeline query and
+//! the positions of commands are the design's own. It
 //! is runtime only: a save leaves it out ([`Document::saved_state`]), undo
 //! does not go back past the steps made in the mode, and
 //! [`Document::end_in_place`] takes it out of the state and of every step.
@@ -214,8 +217,10 @@ impl<K: Kernel> Document<K> {
                 component: made,
                 def,
             };
-            let position = next.marker;
-            next.features.insert(position, Arc::new(entry));
+            // First in the timeline (mitcad#2353): the timeline the user
+            // sees starts after it ([`Document::in_place_leading`]), so
+            // that its positions are the design's own.
+            next.features.insert(0, Arc::new(entry));
             next.marker += 1;
             Some(uid)
         };
@@ -235,6 +240,22 @@ impl<K: Kernel> Document<K> {
     /// The design edited in place, while it is (mitcad#2321).
     pub fn in_place_mode(&self) -> Option<&InPlaceMode> {
         self.in_place.as_ref()
+    }
+
+    /// The features at the start of the timeline that show the assembly
+    /// around the design edited in place (mitcad#2353): its base feature,
+    /// which [`Document::begin_in_place`] puts first; none outside the
+    /// mode. The timeline the user sees leaves them out and starts after
+    /// them: its positions (the marker, an insert or reorder position) are
+    /// these plus this number in [`Document::features`].
+    pub fn in_place_leading(&self) -> usize {
+        self.in_place.as_ref().map_or(0, |mode| {
+            self.state
+                .features
+                .iter()
+                .take_while(|f| f.component == mode.component)
+                .count()
+        })
     }
 
     /// Freezes what the design's features refer to in the assembly around

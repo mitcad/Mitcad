@@ -22,8 +22,11 @@
 //! meets the reference line; the tail (a fork) with its text at the
 //! line's other end. A contour (flush, convex, concave) is drawn beyond
 //! the symbol, a finish's letter beyond that, a weld's toes blended as two
-//! small arcs at the contour's ends. Staggered intermittent welds have the
-//! other side's symbol offset along the line.
+//! small arcs at the contour's ends. Staggered intermittent welds
+//! (mitcad#2379): ISO 2553 keeps both sides' symbols in one column and
+//! draws its staggered mark, a `Z` through the reference line between the
+//! welds' `n×l` and their gaps `(e)`; AWS A2.4 offsets the other side's
+//! symbol along the line.
 //!
 //! Every part is a thin line, an arc, a filled polygon or a text of the
 //! sheet ([`Item`]), so the PDF, SVG, DXF and DWG writers carry the
@@ -60,8 +63,13 @@ const STAFF: f64 = 1.9;
 const FLAG: f64 = 1.0;
 /// The tail's fork: along the line and to each side, per letter height.
 const FORK: f64 = 0.9;
-/// How far a staggered other side's symbol is offset, in symbol widths.
+/// How far a staggered other side's symbol is offset (AWS A2.4), in
+/// symbol widths.
 const STAGGER: f64 = 1.5;
+/// ISO 2553's staggered mark (mitcad#2379): the `Z`'s width per letter
+/// height; it runs from the top of the arrow side's texts to the bottom of
+/// the other side's.
+pub const STAGGER_MARK: f64 = 0.8;
 
 /// A part of a basic or supplementary symbol in its own units: `u` along
 /// the reference line from the symbol's middle, `v` away from the line
@@ -289,14 +297,10 @@ pub fn size_text(side: &WeldSide, standard: Standard) -> String {
 /// intermittent weld's count and pitch (ISO 2553 the gap between welds).
 pub fn length_text(side: &WeldSide, standard: Standard) -> String {
     match standard {
-        Standard::Iso => {
-            let count = side.count.map(|n| format!("{n}×")).unwrap_or_default();
-            match (side.length, side.pitch) {
-                (Some(l), Some(p)) => format!("{count}{} ({})", number(l), number(p - l)),
-                (Some(l), None) => format!("{count}{}", number(l)),
-                _ => side.count.map(|n| n.to_string()).unwrap_or_default(),
-            }
-        }
+        Standard::Iso => match staggered_texts(side) {
+            (along, gap) if gap.is_empty() => along,
+            (along, gap) => format!("{along} {gap}"),
+        },
         Standard::Asme => {
             let along = match (side.length, side.pitch) {
                 (Some(l), Some(p)) => format!("{}-{}", number(l), number(p)),
@@ -309,6 +313,25 @@ pub fn length_text(side: &WeldSide, standard: Standard) -> String {
                 (None, _) => along,
             }
         }
+    }
+}
+
+/// ISO 2553's length of a side's weld in its two parts: the count and
+/// length (`n×l`, or the count alone) and the gap between the welds
+/// (`(e)`, empty when it has no pitch). A staggered weld's mark stands
+/// between them (mitcad#2379).
+pub fn staggered_texts(side: &WeldSide) -> (String, String) {
+    let count = side.count.map(|n| format!("{n}×")).unwrap_or_default();
+    match (side.length, side.pitch) {
+        (Some(l), Some(p)) => (
+            format!("{count}{}", number(l)),
+            format!("({})", number(p - l)),
+        ),
+        (Some(l), None) => (format!("{count}{}", number(l)), String::new()),
+        _ => (
+            side.count.map(|n| n.to_string()).unwrap_or_default(),
+            String::new(),
+        ),
     }
 }
 
@@ -365,21 +388,31 @@ pub fn weld_symbol(
     let places = side_places(weld, standard, h);
     // Along the line from its left end: the room at its ends, the sizes'
     // texts, the symbols (in a column, the other side's offset when
-    // staggered), the lengths' texts.
+    // staggered by AWS A2.4), the lengths' texts (ISO 2553's staggered
+    // mark between their `n×l` and their gaps).
     let (first, last) = if dir > 0.0 {
         (LEAD * h, TRAIL * h)
     } else {
         (TRAIL * h, LEAD * h)
     };
     let gap = TEXT_GAP * h;
+    let iso_mark = weld.staggered && standard == Standard::Iso;
     let sizes: Vec<String> = sides
         .iter()
         .map(|side| side.map(|w| size_text(w, standard)).unwrap_or_default())
         .collect();
-    let lengths: Vec<String> = sides
+    let split: Vec<(String, String)> = sides
         .iter()
-        .map(|side| side.map(|w| length_text(w, standard)).unwrap_or_default())
+        .map(|side| side.map(staggered_texts).unwrap_or_default())
         .collect();
+    let lengths: Vec<String> = if iso_mark {
+        split.iter().map(|(along, _)| along.clone()).collect()
+    } else {
+        sides
+            .iter()
+            .map(|side| side.map(|w| length_text(w, standard)).unwrap_or_default())
+            .collect()
+    };
     let widths: Vec<f64> = sides
         .iter()
         .map(|side| side.map_or(0.0, |w| parts(w.symbol).1 * s))
@@ -387,10 +420,8 @@ pub fn weld_symbol(
     let widest = widths.iter().copied().fold(0.0, f64::max);
     let left_text = sizes.iter().map(|t| text_width(t, h)).fold(0.0, f64::max);
     let middle = first + left_text + if left_text > 0.0 { gap } else { 0.0 } + widest / 2.0;
-    let middles = [
-        middle,
-        middle + if weld.staggered { STAGGER * s } else { 0.0 },
-    ];
+    let offset = weld.staggered && !iso_mark;
+    let middles = [middle, middle + if offset { STAGGER * s } else { 0.0 }];
     let mut end: f64 = 0.0;
     for (i, side) in sides.iter().enumerate() {
         if side.is_none() {
@@ -404,6 +435,21 @@ pub fn weld_symbol(
             right
         });
     }
+    // ISO 2553's staggered mark after the `n×l`, the gaps after it.
+    let mark = iso_mark.then(|| {
+        let from = end + gap;
+        let gaps_from = from + STAGGER_MARK * h + gap;
+        let written = split
+            .iter()
+            .map(|(_, e)| text_width(e, h))
+            .fold(0.0, f64::max);
+        end = if written > 0.0 {
+            gaps_from + written
+        } else {
+            from + STAGGER_MARK * h
+        };
+        (from, gaps_from)
+    });
     let length = (end + last).max(SHORTEST * h);
     let (left, right) = if dir > 0.0 {
         (knee[0], knee[0] + length)
@@ -427,6 +473,25 @@ pub fn weld_symbol(
             s,
         };
         draw_side(g, &place, side, &sizes[i], &lengths[i], widths[i], h);
+    }
+    if let Some((from, gaps_from)) = mark {
+        // The `Z` from the top of the arrow side's texts to the bottom of
+        // the other side's, through the reference line; the gaps after it
+        // at their sides' texts' height.
+        let text_edge = |(away, drop): (f64, f64)| y - drop + away * (0.5 * s + h / 2.0);
+        let (top, bottom) = (text_edge(places[0]), text_edge(places[1]));
+        let (x0, x1) = (left + from, left + from + STAGGER_MARK * h);
+        g.line(Pen::Thin, [x0, top], [x1, top]);
+        g.line(Pen::Thin, [x1, top], [x0, bottom]);
+        g.line(Pen::Thin, [x0, bottom], [x1, bottom]);
+        for (i, (_, e)) in split.iter().enumerate() {
+            if e.is_empty() || sides[i].is_none() {
+                continue;
+            }
+            let (away, drop) = places[i];
+            let baseline = y - drop + away * 0.5 * s - h / 2.0;
+            g.text([left + gaps_from, baseline], h, 0.0, Anchor::Start, e);
+        }
     }
     // At the knee: all around, field weld.
     let mut staff_from = y;

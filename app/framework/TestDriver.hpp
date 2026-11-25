@@ -127,6 +127,14 @@
 //   show-workspace DESIGN|RENDER  that workspace shown in either layout:
 //                           by the selector (Floating), else a click on its
 //                           tab (RENDER, SOLID for Design; mitcad#2092)
+//   guide-step <json> [refused <regex>]  a tutorial's guide step (docs/
+//                           tutorials.md "Guide steps") shown in the design's
+//                           window, as live MCP's ui_guide shows it, without
+//                           the tutorial pane (mitcad#2369, mitcad#2370; in
+//                           TestDriverCommands.cpp); a step it refuses
+//                           fails, unless `refused` expects the refusal,
+//                           matching <regex>
+//   guide-end               the guide step shown ended ("ended")
 //   capture-toolbar-height <var>  the toolbar's height as laid out (the
 //                           Floating panel, the Docked toolbar) into ${var}
 //   leave-start-page        the Start page left by a click: on the design's
@@ -414,6 +422,8 @@
 //   capture-model-number <var> <query JSON> <dot.path> read a numeric result
 //                           (a number in the path indexes an array)
 //   capture-model-text <var> <query JSON> <dot.path> the same for a text
+//   expect-feature-shown <feature name> yes|no the light bulb of a sketch or
+//                           construction feature as the timeline query gives it
 //   expect-document-cache-sharing <total bytes> actual per-document budgets
 //   system-window-menu <entry> the owned macOS Window menu's actual action
 //   expect-system-menu-bar <titles...> the active macOS frame's usable menus and application roles

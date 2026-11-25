@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser app/framework/ChromeStyle.cpp app/framework/ChromeStyle.hpp app/framework/WindowStyle.cpp app/framework/WindowStyle.hpp app/framework/Theme.cpp app/framework/TestDriver.cpp
 # check-all sources: app/framework/CommandPanel.cpp app/framework/CommandMessage.cpp app/commands/PrimitiveCommands.cpp
+# check-all sources: app/framework/AppTheme.cpp app/framework/AppTheme.hpp
 # The timeline in a light and a dark theme (mitcad#14): the history marker
 # and the playback buttons' glyphs follow the palette, also when the theme
 # changes while Mitcad runs; so does the Docked window's style (mitcad#251),
@@ -24,6 +25,11 @@
 #      is the dark theme's (#ff9c9c on #4a2025), not the light fill under
 #      the dark text, and the light one's again after a switch back (the
 #      message widget's style sheet, expect-widget-property).
+#   5. The test's dark scheme (MITCAD_TEST_COLOR_SCHEME=dark) where the
+#      platform keeps its light palette (mitcad#2404; Qt's generic platform
+#      theme here, as the GTK one under Xvfb with the caller's desktop
+#      session did): MitCad's own dark palette, logged as "Colour scheme in
+#      effect: dark (MitCad's own palette, ...)", the marker light.
 # Qt's GTK platform theme gives the palettes (QT_QPA_PLATFORMTHEME=gtk3):
 # the generic one has no dark scheme.
 #
@@ -98,6 +104,7 @@ echo "--- The theme turns dark while Mitcad runs"
 MITCAD_TEST_COLOR_SCHEME=dark ui_start_app --demo
 ui_expect_log "Timeline colours: light, marker #2b3a4a" "light at first"
 ui_expect_log "Asking the platform for the dark colour scheme" "the desktop switches to dark"
+ui_expect_log "Colour scheme in effect: dark " "the dark scheme is logged as in effect (mitcad#2404)"
 ui_expect_log "Timeline colours: dark, marker #c8d0da" "dark: the marker is light"
 grep -q "Timeline colours: dark, marker #c8d0da, buttons #" "$UI_LOG" ||
   ui_fail "the buttons' glyphs are not in the text colour: $(grep 'Timeline colours: dark' "$UI_LOG")"
@@ -189,5 +196,19 @@ wait "$UI_RUNNER" ||
   ui_fail "the error box's script failed: $(grep -E 'TestDriver|Panel Box|Timeline colours' "$UI_LOG" | tail -6)"
 ui_expect_log "TestDriver: done" "the error box's script ran"
 echo "ok   the error box's fill and text in the dark theme's colours after the switch, the light ones after it"
+
+echo "--- The test's dark scheme where the platform keeps its light palette (mitcad#2404)"
+# Qt's generic platform theme has no dark scheme, as the GTK one under Xvfb
+# with the caller's desktop session did not switch: MitCad's own dark
+# palette, logged as the scheme in effect, and the window drawn dark.
+QT_QPA_PLATFORMTHEME=generic MITCAD_TEST_COLOR_SCHEME=dark ui_start_app --demo
+ui_expect_log "Asking the platform for the dark colour scheme" "generic: the dark scheme is asked for"
+ui_expect_log "Colour scheme in effect: dark (MitCad's own palette, window #" \
+  "generic: MitCad's own dark palette, logged as in effect"
+ui_expect_log "Timeline colours: dark, marker #c8d0da" "generic: the marker is light"
+shot generic-dark
+check generic-dark
+more "generic: the marker's bar is light" "$MARKER_light" 20
+ui_stop_app
 
 ui_finish "UI theme test"

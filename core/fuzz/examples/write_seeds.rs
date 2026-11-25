@@ -231,6 +231,7 @@ fn cube(size: f64) -> mitcad_3mf::Mesh {
     mitcad_3mf::Mesh {
         vertices,
         triangles,
+        triangle_colors: Vec::new(),
     }
 }
 

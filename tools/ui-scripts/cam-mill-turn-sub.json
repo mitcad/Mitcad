@@ -1,0 +1,31 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "CAM mill-turn sub-spindle's UI test (mitcad#2375): a 40 x 30 block 10 high (F2.b0) turned about the design's Z through its middle, and a lathe with a C axis, live tools, a Y axis, a B head and a sub-spindle on the Fanuc turning dialect, its codes the defaults: a turning tool (1), a parting blade (2), an axial 3 mm drill (5) and a radial 6 mm end mill (8)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "cam_machine_put", "machine": {
+    "id": "mill-turn",
+    "machine": {
+      "name": "Mill-turn",
+      "controller": "fanuc_turning",
+      "travel": {"min": [-60, -40, -300], "max": [150, 40, 200]},
+      "spindle": {"min_rpm": 50, "max_rpm": 3000, "nose_diameter": 0, "nose_length": 0},
+      "max_feed": 5000,
+      "rapid_feed": 20000,
+      "lathe": {"turret_stations": 12, "chuck_diameter": 160, "chuck_length": 50,
+                "axes": {"c": true, "live_tools": true, "y": true, "b": true, "sub_spindle": true}}
+    },
+    "tools": {"tools": [
+      {"number": 1, "name": "Turning", "shape": {"kind": "turning", "nose_radius": 0.4},
+       "diameter": 20, "flute_length": 3, "length": 30},
+      {"number": 2, "name": "Parting", "shape": {"kind": "parting", "width": 3},
+       "diameter": 20, "flute_length": 25, "length": 30},
+      {"number": 5, "name": "Back drill", "shape": {"kind": "drill"}, "diameter": 3, "flute_length": 15,
+       "length": 30, "mount": "axial", "cutting": {"spindle_rpm": 2000, "feed": 150, "plunge_feed": 100}},
+      {"number": 8, "name": "Flat mill", "shape": {"kind": "flat"}, "diameter": 6, "flute_length": 18,
+       "length": 30, "mount": "radial", "cutting": {"spindle_rpm": 2500, "feed": 400, "plunge_feed": 150}}
+    ]}
+  }}
+]

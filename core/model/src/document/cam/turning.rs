@@ -69,6 +69,25 @@ pub(super) struct TurnRun<'a> {
     pub hand_over: Option<Result<turn::HandOver, String>>,
 }
 
+/// An operation on the main spindle after the sub-spindle's (mitcad#2392):
+/// refused at Generate, as the program cannot be written so.
+pub(super) const MAIN_AFTER_SUB: &str =
+    "It is on the main spindle after the sub-spindle's operations: move it before them.";
+
+/// The operations of a lathe setup on the main spindle after its first on
+/// the sub-spindle (mitcad#2392), suppressed ones left out: their ids.
+pub(super) fn main_after_sub(setup: &CamSetup) -> Vec<u32> {
+    let live = || setup.operations.iter().filter(|o| !o.suppressed);
+    let Some(first) = live().position(|o| o.sub_spindle) else {
+        return Vec::new();
+    };
+    live()
+        .skip(first)
+        .filter(|o| !o.sub_spindle)
+        .map(|o| o.id)
+        .collect()
+}
+
 /// The inverse of a placement's linear part (a placement is invertible).
 fn inverse(linear: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let m = linear;
@@ -819,6 +838,10 @@ impl<K: Kernel> Document<K> {
             (Ok(tf), Some(h)) => Some(self.turn_hand_over(tf, h)),
             _ => None,
         };
+        // The main spindle's operations after the sub-spindle's are refused
+        // here, at Generate, not only when the program is written
+        // (mitcad#2392).
+        let misplaced = main_after_sub(setup);
         let operations = setup
             .operations
             .iter()
@@ -826,10 +849,17 @@ impl<K: Kernel> Document<K> {
             .map(|op| {
                 let fingerprint = self.cam_fingerprint(setup, &sf, Some(machine), op);
                 let result = (!op.suppressed).then(|| match (&frame, &sub_frame) {
+                    _ if misplaced.contains(&op.id) => Err(MAIN_AFTER_SUB.to_owned()),
                     (Err(e), _) => Err(e.clone()),
                     (Ok(_), Some(sub)) if op.sub_spindle => {
                         let sub = sub.as_ref().map_err(Clone::clone)?;
-                        let mut turned = self.turn_compute_operation(sub, machine, op)?;
+                        // Turning, or a live tool on the sub-spindle's C
+                        // axis (mitcad#2375), in its work coordinates.
+                        let mut turned = if op.kind.is_turning() {
+                            self.turn_compute_operation(sub, machine, op)?
+                        } else {
+                            self.live_compute_operation(setup, sub, machine, op)?
+                        };
                         turned.sub = true;
                         Ok(turned)
                     }
@@ -1141,7 +1171,18 @@ impl<K: Kernel> Document<K> {
                     // (mitcad#2067).
                     Some(Ok(op)) if op.live.is_some() => {
                         let live = op.live.as_ref().expect("a live operation");
-                        let view = Self::live_view_path(live);
+                        let mut view = Self::live_view_path(live);
+                        // On the sub-spindle (mitcad#2375): on the part
+                        // where it was, turned round at its back.
+                        if let (true, Ok(tf)) = (op.sub, &run.frame) {
+                            let back = tf.part.back_z();
+                            for m in &mut view.moves {
+                                if let Move::Rapid { to } | Move::Line { to, .. } = m {
+                                    *to = [to[0], -to[1], back - to[2]];
+                                }
+                            }
+                            value["sub_spindle"] = json!(true);
+                        }
                         value["bounds"] = json!(view.bounds());
                         value["toolpath"] = json!(view);
                         value["live"] = json!({"side": live.side, "path": live.path});
@@ -1216,7 +1257,9 @@ impl<K: Kernel> Document<K> {
         }
         let text = engine::turning_post(&program, post.as_ref(), &settings)
             .map_err(|e| invalid(e.message))?;
-        let check = turn::check_program(&text).map_err(|e| {
+        // Read back with the lathe's own codes (the sub-spindle's stop,
+        // mitcad#2375).
+        let check = turn::check_program_with(&text, &program.mill_turn).map_err(|e| {
             invalid(format!(
                 "The written program does not read back as meant: {}",
                 e.message
@@ -1269,6 +1312,38 @@ impl<K: Kernel> Document<K> {
         let solid = self
             .solid_simulate_json(setup, tf, &program, &ids, (z_min, step))
             .map_err(invalid)?;
+        // The moves that run into the sub-spindle's body or a zone moving
+        // with it, where it is as each operation cuts (mitcad#2392); those
+        // of the main spindle's operations only with the work zero's
+        // machine place.
+        let sub_hits = turn::sub_spindle_hits(
+            &run.machine.machine,
+            &program,
+            setup.placement.map(|p| p[2]),
+        );
+        // The sub-spindle as Simulate draws it (mitcad#2405): its outline
+        // and where its jaws' face is as each operation (its id) cuts, on
+        // the part where the view draws it; none without a body.
+        let sub_spindle = run
+            .machine
+            .machine
+            .lathe
+            .as_ref()
+            .filter(|l| l.axes.sub_spindle)
+            .map(|l| (l, l.sub_spindle.outline()))
+            .filter(|(_, outline)| !outline.is_empty())
+            .map_or(Value::Null, |(lathe, outline)| {
+                let work_z = setup.placement.map(|p| p[2]);
+                let faces: Vec<Value> = ids
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| {
+                        json!({"id": id,
+                               "face": turn::sub_face_shown(lathe, &program, i, work_z)})
+                    })
+                    .collect();
+                json!({"outline": outline, "operations": faces})
+            });
         Ok(json!({
             "setup": setup.id,
             "turning": true,
@@ -1280,6 +1355,8 @@ impl<K: Kernel> Document<K> {
             "rapid_cuts": sim.rapid_cuts,
             "live": live,
             "solid": solid,
+            "sub_spindle_hits": sub_hits,
+            "sub_spindle": sub_spindle,
         }))
     }
 }

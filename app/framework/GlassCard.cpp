@@ -7,6 +7,7 @@
 #include <utility>
 
 #include <QCoreApplication>
+#include <QDockWidget>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QGraphicsOpacityEffect>
@@ -17,6 +18,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPropertyAnimation>
 #include <QScrollArea>
 #include <QSpacerItem>
 #include <QToolButton>
@@ -485,11 +487,30 @@ void GlassCard::setSlot(const QRect& slot) {
   // constraint before sizing it, including after the content was folded.
   m_layout->activate();
   m_slot = slot;
-  if (m_windowed) {
-    setGeometry(QRect(parentWidget()->mapToGlobal(slot.topLeft()), slot.size()));
-  } else {
-    setGeometry(slot);
+  const QRect target = m_windowed ? QRect(parentWidget()->mapToGlobal(slot.topLeft()), slot.size()) : slot;
+  if (m_slotMoving) {
+    // A layout during the move (mitcad#2367): the move ends there.
+    m_slotMove->setEndValue(target);
+    return;
   }
+  const int moveMs = std::exchange(m_slotMoveMs, 0);
+  if (moveMs > 0 && isVisible() && !geometry().isEmpty() && geometry() != target) {
+    if (m_slotMove == nullptr) {
+      m_slotMove = new QPropertyAnimation(this, "geometry", this);
+      m_slotMove->setEasingCurve(QEasingCurve::OutCubic);
+      connect(m_slotMove, &QPropertyAnimation::finished, this, [this] {
+        m_slotMoving = false;
+        emit slotMoveFinished();
+      });
+    }
+    m_slotMove->setDuration(moveMs);
+    m_slotMove->setStartValue(geometry());
+    m_slotMove->setEndValue(target);
+    m_slotMoving = true;
+    m_slotMove->start();
+    return;
+  }
+  setGeometry(target);
 }
 
 QWidget* GlassCard::hostWindow(const QWidget* widget) {
@@ -497,6 +518,15 @@ QWidget* GlassCard::hostWindow(const QWidget* widget) {
   const auto* card = qobject_cast<const GlassCard*>(window);
   if (card != nullptr && card->m_windowed && card->parentWidget() != nullptr) {
     return card->parentWidget()->window();
+  }
+  return window;
+}
+
+QWidget* GlassCard::keyboardHost(const QWidget* widget) {
+  QWidget* window = hostWindow(widget);
+  const auto* dock = qobject_cast<const QDockWidget*>(window);
+  if (dock != nullptr && dock->isFloating() && dock->parentWidget() != nullptr) {
+    return hostWindow(dock->parentWidget());
   }
   return window;
 }

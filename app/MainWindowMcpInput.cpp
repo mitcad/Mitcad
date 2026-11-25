@@ -284,7 +284,7 @@ QJsonObject MainWindow::mcpType(const QJsonObject& arguments) {
       receiver = receiver->focusWidget();
     }
   } else if (QWidget* focused = QApplication::focusWidget();
-             focused != nullptr && GlassCard::hostWindow(focused) == host) {
+             focused != nullptr && GlassCard::keyboardHost(focused) == host) {
     receiver = focused;
   } else {
     receiver = host->focusWidget();

@@ -17,6 +17,13 @@
 //! finished contour as its blocks, a finishing toolpath along the same
 //! contour as the finishing cycle (G70) that runs those blocks again, and
 //! threading as the threading cycle (G76); otherwise the moves.
+//!
+//! After the sub-spindle's hand-over (mitcad#2319) the operations on the
+//! part's back are written in the sub-spindle's work offset: turning with
+//! its spindle codes, live tools (mitcad#2375) with the sub-spindle stopped
+//! and its own C axis on. On a control that mirrors only Z there
+//! (`MillTurn::sub_mirror_z_only`, mitcad#2392) the live tools' Y and C are
+//! written turned round, their arcs across Y the other way.
 
 use serde::Serialize;
 
@@ -787,9 +794,11 @@ pub fn turning_post(
                 out.forget();
                 tool = Some(&op.tool);
             }
-            // The main spindle stops for the C axis.
+            // The spindle that holds the part stops for its C axis: the
+            // main spindle, or the sub-spindle after the hand-over
+            // (mitcad#2375).
             if running.is_some() {
-                dialect.spindle_off(&mut out);
+                stop_spindle(&mut out, dialect, program, sub);
                 running = None;
                 speed = None;
             }
@@ -798,7 +807,21 @@ pub fn turning_post(
                 dialect.coolant(&mut out, op.coolant)?;
                 coolant = op.coolant;
             }
-            super::live::moves(&mut out, dialect, program, live, cycles, &mut live_state)?;
+            // A control that mirrors only Z on the sub-spindle reads its Y
+            // and C in the main spindle's senses (mitcad#2392).
+            if op.sub && program.mill_turn.sub_mirror_z_only {
+                let mirrored = live.mirrored_y();
+                super::live::moves(
+                    &mut out,
+                    dialect,
+                    program,
+                    &mirrored,
+                    cycles,
+                    &mut live_state,
+                )?;
+            } else {
+                super::live::moves(&mut out, dialect, program, live, cycles, &mut live_state)?;
+            }
             continue;
         }
         if live_state.c_axis || live_state.running.is_some() {

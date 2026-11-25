@@ -1097,17 +1097,31 @@ mod grblhal_sim {
             };
             stream.set_read_timeout(Some(QUIET)).unwrap();
             stream.set_nodelay(true).unwrap();
-            (
-                Sim {
-                    child,
-                    stream,
-                    pending: String::new(),
-                    started,
-                    capacity: 0,
-                    restarts: 0,
-                },
-                blocks,
-            )
+            let mut s = Sim {
+                child,
+                stream,
+                pending: String::new(),
+                started,
+                capacity: 0,
+                restarts: 0,
+            };
+            s.skip_startup();
+            (s, blocks)
+        }
+
+        /// Drops what the controller says while it starts, up to its first
+        /// status report. The empty settings file makes it restore the
+        /// defaults and report `error:7` (a settings read failed); then
+        /// come its banner and an unlock message. The simulator takes the
+        /// connection at the controller's first main loop pass and sends
+        /// what its simulated serial port has not yet sent by then, so how
+        /// much of this reaches the test depends on how the two threads
+        /// are scheduled: on a loaded machine the `error:7` came after the
+        /// connection and was taken for the answer to `$X`. A status
+        /// report comes only from the main loop, through the same port,
+        /// after every start-up line.
+        fn skip_startup(&mut self) {
+            self.status(&mut Vec::new());
         }
 
         /// The next line from the controller, `None` after a quiet spell.

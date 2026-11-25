@@ -2,13 +2,15 @@
 // The in-app tutorials' guide steps (mitcad#2012, tutorials/GuideStep): a
 // step read from its JSON and refused with the reason, the commands it
 // allows (its own, the ones it names, Leave Tutorial, the camera's unless
-// navigation is off), its picks and the values that complete it.
+// navigation is off), its picks and the values that complete it; the
+// toolbar's places and their done conditions (mitcad#2370).
 #include "UnitTests.hpp"
 #include "tutorials/GuideStep.hpp"
 
 #include <cstdio>
 
 #include <QJsonDocument>
+#include <QJsonObject>
 
 namespace {
 
@@ -120,6 +122,112 @@ void modeSteps() {
   CHECK(error.contains(QStringLiteral("pick_plane")));
 }
 
+// The toolbar's places (mitcad#2370): the workspace selector opened, a
+// workspace chosen, a tab activated, the timeline without done.
+void toolbarSteps() {
+  QString error;
+  const GuideStep selector = parsed(R"({"id": "selector", "text": "Click the workspace selector.",
+                                       "target": {"workspace_selector": true},
+                                       "done": {"opened": "workspace_selector"}})",
+                                    &error);
+  CHECK(error.isEmpty());
+  CHECK(selector.target == GuideStep::Target::WorkspaceSelector);
+  CHECK(selector.targetName.isEmpty());
+  CHECK(selector.done == GuideStep::Done::Opened);
+  CHECK(selector.doneName == QLatin1String(kGuideWorkspaceSelector));
+  CHECK(selector.commands().isEmpty());
+  CHECK(!selector.takesPicks());
+  CHECK(GuideStep::parse(selector.toJson(), &error).toJson() == selector.toJson());
+
+  const GuideStep workspace = parsed(R"({"id": "design", "text": "Choose Design.",
+                                        "target": {"workspace": " Design "}, "done": {"chosen": "Design"}})",
+                                     &error);
+  CHECK(error.isEmpty());
+  CHECK(workspace.target == GuideStep::Target::Workspace);
+  CHECK(workspace.targetName == QStringLiteral("Design")); // MainWindow resolves it to DESIGN
+  CHECK(workspace.done == GuideStep::Done::Chosen);
+  CHECK(workspace.doneName == QStringLiteral("Design"));
+  CHECK(workspace.commands().isEmpty());
+  CHECK(GuideStep::parse(workspace.toJson(), &error).toJson() == workspace.toJson());
+
+  const GuideStep tab = parsed(R"({"text": "Open the Surface tab.", "target": {"tab": "Surface"},
+                                  "done": {"activated": "Surface"}, "allow": ["view.fit"]})",
+                               &error);
+  CHECK(error.isEmpty());
+  CHECK(tab.target == GuideStep::Target::Tab);
+  CHECK(tab.done == GuideStep::Done::Activated);
+  CHECK(tab.doneName == QStringLiteral("Surface"));
+  CHECK(tab.allowsCommand(QStringLiteral("view.fit")));
+  CHECK(!tab.allowsCommand(QStringLiteral("solid.extrude")));
+  CHECK(GuideStep::parse(tab.toJson(), &error).toJson() == tab.toJson());
+
+  // A place to point at: no done, ended by the page.
+  const GuideStep timeline = parsed(R"({"id": "timeline", "text": "This is the timeline.",
+                                       "target": {"timeline": true}})",
+                                    &error);
+  CHECK(error.isEmpty());
+  CHECK(timeline.target == GuideStep::Target::Timeline);
+  CHECK(timeline.done == GuideStep::Done::None);
+  CHECK(timeline.commands().isEmpty());
+  CHECK(!timeline.toJson().contains(QStringLiteral("done")));
+  CHECK(timeline.toJson().value(QStringLiteral("target")).toObject().value(QStringLiteral("timeline")).toBool());
+  CHECK(GuideStep::parse(timeline.toJson(), &error).toJson() == timeline.toJson());
+  // Any target may go without done; a timeline step may have one.
+  CHECK(parsed(R"({"text": "x", "target": {"command": "solid.extrude"}})", &error).done == GuideStep::Done::None);
+  CHECK(parsed(R"({"text": "x", "target": {"timeline": true}, "done": {"mode": "sketch"}})", &error).done ==
+        GuideStep::Done::Mode);
+
+  // Refused: the selector and the timeline are true, a workspace and a tab
+  // are names, opened names the selector, done is an object.
+  CHECK(parsed(R"({"text": "x", "target": {"workspace_selector": "Design"}})", &error).id.isEmpty());
+  CHECK(error.contains(QStringLiteral("workspace_selector is true")));
+  CHECK(parsed(R"({"text": "x", "target": {"timeline": false}})", &error).id.isEmpty());
+  CHECK(parsed(R"({"text": "x", "target": {"workspace": ""}, "done": {"chosen": "Design"}})", &error).id.isEmpty());
+  CHECK(parsed(R"({"text": "x", "target": {"tab": 3}, "done": {"activated": "Solid"}})", &error).id.isEmpty());
+  CHECK(parsed(R"({"text": "x", "target": {"workspace_selector": true}, "done": {"opened": "menu"}})", &error)
+            .id.isEmpty());
+  CHECK(error.contains(QStringLiteral("workspace_selector")));
+  CHECK(parsed(R"({"text": "x", "target": {"tab": "Solid"}, "done": {"activated": ""}})", &error).id.isEmpty());
+  CHECK(parsed(R"({"text": "x", "target": {"tab": "Solid"}, "done": "Solid"})", &error).id.isEmpty());
+  CHECK(error.contains(QStringLiteral("object")));
+  CHECK(parsed(R"({"text": "x", "target": {"tab": "Solid", "timeline": true}})", &error).id.isEmpty());
+  CHECK(error.contains(QStringLiteral("exactly one")));
+}
+
+// A step done by a navigation of the view (mitcad#2369).
+void navigateSteps() {
+  QString error;
+  const GuideStep orbit = parsed(R"({"id": "orbit", "text": "Orbit the view.", "target": {"view": true},
+                                    "done": {"navigate": "orbit"}})",
+                                 &error);
+  CHECK(error.isEmpty());
+  CHECK(orbit.done == GuideStep::Done::Navigate);
+  CHECK(orbit.doneName == QStringLiteral("orbit"));
+  CHECK(orbit.navigation);
+  CHECK(orbit.commands().isEmpty());
+  CHECK(orbit.toJson().value(QStringLiteral("done")).toObject().value(QStringLiteral("navigate")).toString() ==
+        QStringLiteral("orbit"));
+  CHECK(GuideStep::parse(orbit.toJson(), &error).toJson() == orbit.toJson());
+  for (const char* text : {R"({"text": "x", "target": {"view": true}, "done": {"navigate": "pan"}})",
+                           R"({"text": "x", "target": {"command": "a"}, "done": {"navigate": "zoom"}})"}) {
+    CHECK(!parsed(text, &error).id.isEmpty());
+  }
+  CHECK(guideNavigationActions() ==
+        (QStringList{QStringLiteral("orbit"), QStringLiteral("pan"), QStringLiteral("zoom")}));
+  CHECK(parsed(R"({"text": "x", "target": {"view": true}, "done": {"navigate": "roll"}})", &error).id.isEmpty());
+  CHECK(error.contains(QStringLiteral("orbit, pan, zoom")));
+  CHECK(parsed(R"({"text": "x", "target": {"view": true}, "done": {"navigate": "orbit"}, "navigation": false})",
+               &error)
+            .id.isEmpty());
+  CHECK(error.contains(QStringLiteral("navigation")));
+  CHECK(parsed(R"({"text": "x", "target": {"view": true}, "done": {"navigate": "orbit", "value": "1"}})", &error)
+            .id.isEmpty());
+  // The arrow keys' turns are the camera's commands, allowed with navigation.
+  CHECK(orbit.allowsCommand(QStringLiteral("view.turn_left")));
+  CHECK(orbit.allowsCommand(QStringLiteral("view.turn_down")));
+  CHECK(!orbit.allowsCommand(QStringLiteral("sketch.create")));
+}
+
 void refusals() {
   QString error;
   CHECK(parsed(R"({"target": {"command": "a"}, "done": {"command": "a"}})", &error).id.isEmpty());
@@ -140,6 +248,44 @@ void refusals() {
             .id.isEmpty());
 }
 
+// "hold": true (mitcad#2368): read and written back; while held only Leave
+// Tutorial and the camera's commands run, not the step's own nor the ones it
+// allows.
+void holdSteps() {
+  QString error;
+  const GuideStep held = parsed(R"({"id": "tool", "text": "Pick the rectangle tool.",
+                                   "target": {"command": "sketch.rectangle"},
+                                   "done": {"command": "sketch.rectangle"}, "allow": ["edit.undo"],
+                                   "hold": true})",
+                                &error);
+  CHECK(error.isEmpty());
+  CHECK(held.hold);
+  CHECK(held.toJson().value(QStringLiteral("hold")).toBool());
+  CHECK(GuideStep::parse(held.toJson(), &error).toJson() == held.toJson());
+  CHECK(held.allowsCommand(QStringLiteral("sketch.rectangle")));
+  CHECK(!held.allowsCommandWhileHeld(QStringLiteral("sketch.rectangle")));
+  CHECK(!held.allowsCommandWhileHeld(QStringLiteral("edit.undo")));
+  CHECK(!held.allowsCommandWhileHeld(QStringLiteral("solid.extrude")));
+  CHECK(held.allowsCommandWhileHeld(QStringLiteral("help.leave_tutorial")));
+  CHECK(held.allowsCommandWhileHeld(QStringLiteral("view.fit")));
+
+  const GuideStep still = parsed(R"({"text": "x", "target": {"command": "a"}, "done": {"command": "a"},
+                                    "navigation": false, "hold": true})",
+                                 &error);
+  CHECK(error.isEmpty());
+  CHECK(!still.allowsCommandWhileHeld(QStringLiteral("view.fit")));
+  CHECK(still.allowsCommandWhileHeld(QStringLiteral("help.leave_tutorial")));
+
+  // No hold by default, and none written.
+  const GuideStep plain = parsed(R"({"text": "x", "target": {"command": "a"}, "done": {"command": "a"}})", &error);
+  CHECK(error.isEmpty());
+  CHECK(!plain.hold);
+  CHECK(!plain.toJson().contains(QStringLiteral("hold")));
+  CHECK(parsed(R"({"text": "x", "target": {"command": "a"}, "done": {"command": "a"}, "hold": "yes"})", &error)
+            .id.isEmpty());
+  CHECK(error.contains(QStringLiteral("hold")));
+}
+
 } // namespace
 
 int guideStepTests() {
@@ -147,7 +293,10 @@ int guideStepTests() {
   commandSteps();
   inputAndPickSteps();
   modeSteps();
+  toolbarSteps();
+  navigateSteps();
   refusals();
+  holdSteps();
   return failures;
 }
 MITCAD_UNIT_TEST(guideStepTests);

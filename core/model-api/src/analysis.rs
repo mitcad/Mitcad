@@ -227,6 +227,11 @@ pub(super) struct CompareStepQuery {
     max_deviation: Option<f64>,
     #[serde(default)]
     max_relative: Option<f64>,
+    /// The volume booleans are left out when every point was sampled and
+    /// none lies farther than this from the other side, mm (mitcad#2373:
+    /// a body against its mirror image, coincident, took five minutes).
+    #[serde(default)]
+    booleans_above: Option<f64>,
 }
 
 /// `analysis_shape` requests.
@@ -1360,6 +1365,9 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
         }
         if let Some(fuzzy) = query.fuzzy {
             options.fuzzy = fuzzy;
+        }
+        if let Some(above) = query.booleans_above {
+            options.booleans_above = above;
         }
         options.step_body = match &query.step_body {
             None => None,

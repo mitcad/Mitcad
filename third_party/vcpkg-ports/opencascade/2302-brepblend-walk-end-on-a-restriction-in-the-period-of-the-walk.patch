@@ -1,0 +1,100 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: where a step of a walked blend ends on a restriction, the
+contacts' parameters on a periodic surface are moved by whole periods next
+to those of the walk's point before (mitcad#2390).
+
+The case: the rim between a loft's side and a cylinder pulled from its end
+face, split at the points where the faces are tangent, each piece's
+rounding vanishing in a point at both ends; the loft's side a periodic
+surface (period 869.72 in u) whose face's seam lies on a convex piece's
+way. That piece rounded with 2: the walk crossed the seam, the solver going
+on into the next period (u 780.67 at its last point but one), and ended on
+the restriction at the vanishing end (Blend_OnRst1), its contact on the
+loft taken from the reframing at u -79.20, the same point a period below.
+The approximation's start for the sections between the two points, the
+chord between them in the surfaces' parameters, lay half a surface away;
+the solver found balls 100 to 200 mm off, they were inserted into the line
+as hard sections, and the approximation failed ("PerformSurf : Failed
+approximation!"). With the walk's deflection 1e-4 the walk reached the
+end on both arcs at once, the arc's curve giving u 790.52, and the piece
+built.
+
+- BRepBlend_Walking::InternalPerform: where a step ends on a restriction
+  (either or both), the contacts' parameters on a periodic surface are
+  moved by whole periods next to those of the walk's point before
+  (RecadreIfPeriodic), after the classification of the reframing on the
+  face, which wants them as the reframing gave them. The point in space
+  is the same; where no period lies between, nothing changes.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2302.
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+index 21359e37..8e1d06c8 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+@@ -2210,6 +2210,48 @@ static void RecadreIfPeriodic(double&      NewU,
+   }
+ }
+ 
++//=======================================================================
++// function : BRepBlend_IntoPeriodOf
++// purpose  : The parameters (theU, theV) of a contact on theSurf where the
++//            walk reached a restriction, moved by whole periods of a
++//            periodic surface next to those of the walk's point before
++//            (theRef) on that surface (theOnS1: its first). The reframing
++//            onto the restriction may give them in another period than the
++//            walk's: a walk that crossed the seam of a loft's periodic face
++//            ran on in the next period, and its end on the arcs came out a
++//            period below (u -79.20 after 780.67, the period 869.72); the
++//            approximation's start for the sections between the two, the
++//            chord in the parameters, lay on the far side of the surface,
++//            and its sections landed on balls 100 mm off (mitcad#2390). The
++//            point in space is the same.
++//=======================================================================
++static void BRepBlend_IntoPeriodOf(const occ::handle<Adaptor3d_Surface>& theSurf,
++                                   const Blend_Point&                    theRef,
++                                   const bool                            theOnS1,
++                                   double&                               theU,
++                                   double&                               theV)
++{
++  if (theSurf.IsNull() || !(theSurf->IsUPeriodic() || theSurf->IsVPeriodic()))
++  {
++    return;
++  }
++  double aRefU = 0., aRefV = 0.;
++  if (theOnS1)
++  {
++    theRef.ParametersOnS1(aRefU, aRefV);
++  }
++  else
++  {
++    theRef.ParametersOnS2(aRefU, aRefV);
++  }
++  RecadreIfPeriodic(theU,
++                    theV,
++                    aRefU,
++                    aRefV,
++                    theSurf->IsUPeriodic() ? theSurf->UPeriod() : 0.,
++                    theSurf->IsVPeriodic() ? theSurf->VPeriod() : 0.);
++}
++
+ static void evalpinit(math_Vector&       parinit,
+                       const Blend_Point& previousP,
+                       const double       parprec,
+@@ -2773,6 +2815,14 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+         {
+           State = Blend_OK;
+         }
++        // The contacts on a restriction in the period of the walk's points
++        // (mitcad#2390, BRepBlend_IntoPeriodOf; after the classification
++        // above, which wants them as the reframing gave them).
++        if (recad1 || recad2)
++        {
++          BRepBlend_IntoPeriodOf(surf1, previousP, true, sol(1), sol(2));
++          BRepBlend_IntoPeriodOf(surf2, previousP, false, sol(3), sol(4));
++        }
+ 
+         bool testdefl = true;
+ #ifdef OCCT_DEBUG

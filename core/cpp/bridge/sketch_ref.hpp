@@ -36,4 +36,8 @@ rust::Vec<SectionPiece> section_curves(const geometry::Shape& shape, rust::Str n
 rust::Vec<double> section_points(const geometry::Shape& shape, rust::Str name, std::array<double, 3> origin,
                                  std::array<double, 3> normal);
 
+// Curves of free edges (mitcad#2395): an opening's, each with its face.
+rust::Vec<SectionPiece> opening_curves(const geometry::Shape& shape, std::int32_t index,
+                                       rust::Slice<const rust::String> faces, rust::Slice<const double> at);
+
 } // namespace mitcad::bridge

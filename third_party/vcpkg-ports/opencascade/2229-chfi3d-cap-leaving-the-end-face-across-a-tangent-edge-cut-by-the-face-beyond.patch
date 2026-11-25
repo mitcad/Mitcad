@@ -289,7 +289,6 @@ index ef23557c..a1003dc7 100644
              double DistDebToDeb = ptestdeb.Distance(pdeb);
              double DistDebToFin = ptestdeb.Distance(pfin);
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index 5385150d..bb619d82 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 @@ -20,6 +20,9 @@
@@ -302,7 +301,7 @@ index 5385150d..bb619d82 100644
  #include <BRepAlgo_NormalProjection.hxx>
  #include <BRepBlend_Line.hxx>
  #include <BRepClass_FaceClassifier.hxx>
-@@ -7660,6 +7663,173 @@ static bool ChFi3d_SliverFaceAtEnd(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -7660,6 +7663,173 @@
    return false;
  }
  
@@ -476,7 +475,7 @@ index 5385150d..bb619d82 100644
  //=================================================================================================
  
  void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSame)
-@@ -8955,7 +9125,256 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -8955,7 +9125,256 @@
      }
    }
  
@@ -734,7 +733,21 @@ index 5385150d..bb619d82 100644
    {
      // there is no intersection with the sewing edge
      // the curve Cc is stored in the stripe
-@@ -12705,8 +13124,39 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -12700,13 +13119,52 @@
+           // edges on one curve (two arcs of a circle) give the same
+           // crossings, and the one nearest to the vertex may be the other
+           // edge's.
+-          gp_Pnt       P = BRep_Tool::Pnt(Vtx);
++          // Two successive crossings of one edge bound a lens. For the
++          // first crossing, follow the cut from the preceding boundary.
++          // The corner vertex alone can favour the opposite side of the
++          // lens at a mirrored end. The next crossing still excludes the
++          // one already used.
++          const bool aLensEntry = !extend && nb >= 2 && nb < nbface && inters.NbPoints() > 1
++                                  && !Edge[nb + 1].IsNull() && Edge[nb + 1].IsSame(E2);
++          const gp_Pnt aReference =
++            aLensEntry ? HGs->Value(pfil1.X(), pfil1.Y()) : BRep_Tool::Pnt(Vtx);
+           const double tolW =
              std::max(Cad.Resolution(BRep_Tool::Tolerance(E2)), Precision::PConfusion());
            double distmin = RealLast(), gapmin = RealLast();
            nbp            = 0;
@@ -774,7 +787,16 @@ index 5385150d..bb619d82 100644
              double gap = 0.;
              if (!extend)
              {
-@@ -13186,6 +13636,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -12718,7 +13176,7 @@
+               }
+               gap = std::max(0., std::max(aFirstE2 - aW, aW - aLastE2) - tolW);
+             }
+-            dist = P.Distance(inters.Point(i).Pnt());
++            dist = aReference.Distance(inters.Point(i).Pnt());
+             if (gap < gapmin || (gap == gapmin && dist < distmin))
+             {
+               gapmin  = gap;
+@@ -13186,6 +13644,17 @@
      {
        double uu1, uu2, vv1, vv2;
        ChFi3d_Boite(pfac1, pfac2, uu1, uu2, vv1, vv2);
@@ -792,7 +814,7 @@ index 5385150d..bb619d82 100644
        ChFi3d_BoundFac(Bs, uu1, uu2, vv1, vv2);
  
        //////////////////////////////////////////////////////////////////////
-@@ -13240,6 +13701,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -13240,6 +13709,17 @@
          }
        }
        // storage of information in the data structure

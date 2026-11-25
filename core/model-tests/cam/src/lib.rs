@@ -24,3 +24,14 @@ mod live_tests;
 // The mill-turn's Y axis, B head, sub-spindle, 3D stock and wrapped
 // sketches (mitcad#2319).
 mod axes_tests;
+
+// Live tools on the sub-spindle and its machine data (mitcad#2375).
+mod sub_live_tests;
+
+// The sub-spindle's body and moving zones, a control that mirrors only Z
+// there, the main spindle's operations after it (mitcad#2392).
+mod sub_body_tests;
+
+// The sub-spindle drawn in Simulate, the turret's body against it, its own
+// profile (mitcad#2405).
+mod sub_turret_tests;

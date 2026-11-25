@@ -224,6 +224,18 @@ public:
   // bulbs, one undo step.
   void hideBodies(const Selection& items);
   void hideOccurrences(const Selection& items);
+  // Hide/Show (`view.toggle_visibility`, key V; mitcad#2356, GitHub
+  // mitcad/Mitcad#612): the light bulbs of what the items are, each once:
+  // the bodies of the faces, edges, vertices and bodies, the occurrences of
+  // the components (not the root), the sketches of the sketches, profiles,
+  // sketch curves and sketch points, and the construction planes, axes and
+  // points (not the origin's). All hidden when the first is shown, else all
+  // shown, one undo step (setTargetsVisible). One target alone goes as its
+  // row's eye does (toggleVisibility: Isolate, the hidden occurrences above
+  // it, its Show When removed). False when the items have none. The
+  // Browser row's Hide/Show (on the rows selected with it) and the view's
+  // Hide submenu (hideBodies, hideOccurrences) run the same.
+  bool toggleItemsVisibility(const Selection& items);
   // Transparent (mitcad#1093), in the view's and the browser's context
   // menus: the bodies of the faces, edges, vertices and bodies of the items
   // and the occurrences of their components (not the root), each once.
@@ -265,6 +277,13 @@ public:
   // the model's `dependents`), Suppress Only This or Cancel; no question
   // when there are none, and none when unsuppressing.
   void setFeaturesSuppressed(const QStringList& uids, bool suppress);
+  // The features Suppress Features / Unsuppress Features act on when asked
+  // on `uid` (mitcad#2376). From a browser row (a feature or a joint row),
+  // Delete's rule: when the row is selected, the features of the selected
+  // feature and joint rows (those of its selection set, rowsToDelete);
+  // else that row's feature alone. From the timeline (`row` invalid), its
+  // selection when the feature is in it, else the feature.
+  QStringList featuresToSuppress(const QString& uid, const BrowserNode& row) const;
   void showBodyWhen(const QString& body);
   void showOccurrenceWhen(const QString& path);
   // A message history's row about a feature clicked (mitcad#1042): the
@@ -438,6 +457,32 @@ private:
   void moveCamOperation(const BrowserNode& node, int setup, int index);
   void camDropped(const BrowserNode& source, const BrowserNode& target);
   void toggleVisibility(const BrowserNode& node);
+  // Hide/Show (mitcad#2356): what a light bulb shows or hides, the body
+  // (uid), the occurrence (path) or the sketch or construction feature
+  // (uid), with its name, its light bulb and its Show When condition.
+  struct VisibilityTarget {
+    enum class Kind { Body, Occurrence, Feature };
+    Kind kind = Kind::Body;
+    QString id;
+    QString name;
+    bool visible = true;
+    QString condition;
+    SelectionItem item; // its row's
+  };
+  VisibilityTarget bodyTarget(const QString& uid) const;
+  VisibilityTarget occurrenceTarget(const QString& path) const;
+  VisibilityTarget featureTarget(const QString& uid) const;
+  QVector<VisibilityTarget> visibilityTargets(const Selection& items) const;
+  // The targets' light bulbs set to `show`, one undo step named `label`
+  // when it has several commands. One target loses its Show When condition
+  // (the model's rule, the status bar says so); of several, those with a
+  // condition are left to it (mitcad#863). The names of those set go into
+  // `changed`; false when nothing ran or the model refused.
+  bool setTargetsVisible(const QVector<VisibilityTarget>& targets, bool show, const QString& label,
+                         QStringList* changed);
+  // The Browser row's Hide/Show: the selected rows' items when the row is
+  // one of several selected (Hide/Show on all of them), else the row's eye.
+  void rowVisibility(const BrowserNode& node);
   // An eye while Isolate is on (mitcad#1700): a row left out by the
   // isolation alone joins it, a row isolated on its own (with other items
   // isolated too) leaves it, one undo step that changes no light bulb.

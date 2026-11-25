@@ -2623,8 +2623,14 @@ IndexedMesh indexed_mesh(const TopoDS_Shape& shape, const MeshOptions& options) 
   IndexedMesh mesh;
   VertexMerger merger(1e-6, mesh.vertices);
   std::vector<std::uint32_t> nodes;
+  // The faces' indices (mitcad#2385): the copy's faces are in the shape's
+  // order.
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapes(meshed, TopAbs_FACE, faces);
   for (TopExp_Explorer it(meshed, TopAbs_FACE); it.More(); it.Next()) {
     const TopoDS_Face& face = TopoDS::Face(it.Current());
+    const int found = faces.FindIndex(face);
+    const std::uint32_t index = found > 0 ? static_cast<std::uint32_t>(found - 1) : 0U;
     TopLoc_Location location;
     const occ::handle<Poly_Triangulation> triangulation = BRep_Tool::Triangulation(face, location);
     if (triangulation.IsNull()) {
@@ -2657,6 +2663,7 @@ IndexedMesh indexed_mesh(const TopoDS_Shape& shape, const MeshOptions& options) 
         continue; // collapsed by the merge
       }
       mesh.triangles.push_back(triangle);
+      mesh.faces.push_back(index);
     }
   }
   return mesh;

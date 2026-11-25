@@ -41,7 +41,8 @@ pub mod ffi {
     }
 
     /// Section curves of sketches (mitcad#389): a curve where a plane cuts
-    /// faces, with the names of the faces it lies on.
+    /// faces, with the names of the faces it lies on. Also a free edge's
+    /// curve with the face it bounds (`opening_curves`, mitcad#2395).
     struct SectionPiece {
         curve: ModelCurve,
         faces: Vec<String>,
@@ -93,6 +94,19 @@ pub mod ffi {
             origin: [f64; 3],
             normal: [f64; 3],
         ) -> Result<Vec<f64>>;
+
+        /// The curves of the free edges an opening picks (mitcad#2395:
+        /// the open boundary `index`, of those the edges bounding `faces`
+        /// when any are named, of those the one nearest each point of `at`,
+        /// x0, y0, z0, x1, ..., when any are given), each with the one face
+        /// it bounds in `faces` (none when it has no name)
+        /// (`geometry::opening_curves`).
+        fn opening_curves(
+            shape: &Shape,
+            index: i32,
+            faces: &[String],
+            at: &[f64],
+        ) -> Result<Vec<SectionPiece>>;
     }
 }
 

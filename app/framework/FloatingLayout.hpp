@@ -71,8 +71,11 @@ public:
   // orientation cube left of it; or bottom centre (the navigation bar,
   // mitcad#1086): just above the bottom card, at its content's size, in the
   // middle of the free width between the side cards (and the sketch's
-  // badge) of its row, the status pill above it.
-  enum class Anchor { TopLeft, TopRight, Bottom, Right, BottomCenter };
+  // badge) of its row, the status pill above it. Center (mitcad#2367: the
+  // tutorial pane's introduction and review): centred over the room between
+  // the top rows and the bottom card, most of it (centredPaneRect,
+  // PaneMotion.hpp), over the other cards.
+  enum class Anchor { TopLeft, TopRight, Bottom, Right, BottomCenter, Center };
 
   struct Sizing {
     int width = 0; // 0: the width of the view less the margins
@@ -105,6 +108,12 @@ public:
   // it where it is anchored while it is shown.
   void addCard(GlassCard* card, Anchor anchor, const Sizing& sizing);
   void addCard(GlassCard* card, Anchor anchor) { addCard(card, anchor, Sizing()); }
+  // A card of the layout anchored elsewhere (mitcad#2367: the tutorial pane
+  // at the left, at the right or centred), with that place's sizing; laid
+  // out at once, the card moving to its new slot over `moveMs` milliseconds
+  // (GlassCard::animateNextSlot; 0: at once). Its order among the cards
+  // stays.
+  void setCardAnchor(GlassCard* card, Anchor anchor, const Sizing& sizing, int moveMs = 0);
 
   // The cards a top row is made of: their names and rectangles in the row's
   // coordinates.

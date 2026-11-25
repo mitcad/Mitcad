@@ -299,6 +299,34 @@ void MainWindow::registerViewShowCommands() {
       tr("Turns on the light bulb of every sketch in the design"));
   all("view.hide_all_sketches", false, tr("Hide All Sketches"),
       tr("Turns off the light bulb of every sketch in the design"));
+  // Hide/Show of the selection by a key (mitcad#2356, GitHub
+  // mitcad/Mitcad#612): the light bulbs of the bodies, components, sketches
+  // and construction geometry selected in the view or the Browser, one undo
+  // step (BrowserController::toggleItemsVisibility); V in the 3D view, as
+  // Keyboard Shortcuts sets it. The Browser row's Hide/Show and the view's
+  // Hide submenu run the same.
+  CommandDef toggle;
+  toggle.id = QStringLiteral("view.toggle_visibility");
+  toggle.name = tr("Hide/Show");
+  toggle.icon = QStringLiteral("eye-off");
+  toggle.tooltip = tr("Hides the selected items, or shows them when the first is hidden");
+  toggle.kind = CommandDef::Kind::Action;
+  toggle.mode = CommandDef::Mode::Model;
+  toggle.shortcut = QKeySequence(Qt::Key_V);
+  toggle.keywords = {QStringLiteral("hide"),       QStringLiteral("show"),   QStringLiteral("visibility"),
+                     QStringLiteral("light bulb"), QStringLiteral("eye"),    QStringLiteral("toggle"),
+                     QStringLiteral("body"),       QStringLiteral("component")};
+  toggle.run = [this] {
+    if (m_controller == nullptr) {
+      return;
+    }
+    if (!m_controller->toggleItemsVisibility(m_selection)) {
+      const QString message = tr("Select a body, component, sketch or construction geometry to hide or show it");
+      showStatus(message, NoticeLevel::Information);
+      qDebug().noquote() << QStringLiteral("Hide/Show: nothing to hide or show in %1 item(s)").arg(m_selection.size());
+    }
+  };
+  m_registry->add(toggle);
 }
 
 void MainWindow::toggleViewShow(const QString& kind) {

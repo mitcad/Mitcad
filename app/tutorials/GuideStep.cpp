@@ -97,8 +97,15 @@ const QStringList& guideNavigationCommands() {
                                QStringLiteral("view.left"),        QStringLiteral("view.right"),
                                QStringLiteral("view.top"),         QStringLiteral("view.bottom"),
                                QStringLiteral("view.look_at"),     QStringLiteral("view.orthographic"),
-                               QStringLiteral("view.perspective")};
+                               QStringLiteral("view.perspective"), QStringLiteral("view.turn_left"),
+                               QStringLiteral("view.turn_right"),  QStringLiteral("view.turn_up"),
+                               QStringLiteral("view.turn_down")};
   return ids;
+}
+
+const QStringList& guideNavigationActions() {
+  static const QStringList actions{QStringLiteral("orbit"), QStringLiteral("pan"), QStringLiteral("zoom")};
+  return actions;
 }
 
 bool guideValueMatches(const QString& typed, const QString& wanted) {
@@ -126,7 +133,8 @@ GuideStep GuideStep::parse(const QJsonObject& json, QString* error) {
     return step;
   };
   static const QStringList known{QStringLiteral("id"),    QStringLiteral("text"),       QStringLiteral("target"),
-                                 QStringLiteral("allow"), QStringLiteral("navigation"), QStringLiteral("done")};
+                                 QStringLiteral("allow"), QStringLiteral("navigation"), QStringLiteral("done"),
+                                 QStringLiteral("hold")};
   for (auto it = json.begin(); it != json.end(); ++it) {
     if (!known.contains(it.key())) {
       return fail(QStringLiteral("A step has no field \"%1\"; its fields are %2")
@@ -147,9 +155,12 @@ GuideStep GuideStep::parse(const QJsonObject& json, QString* error) {
 
   const QJsonObject targetJson = json.value(QStringLiteral("target")).toObject();
   QString reason;
-  const QString targetKey = oneOf(targetJson, {QStringLiteral("command"), QStringLiteral("input"), QStringLiteral("browser"),
-                                           QStringLiteral("view")},
-                                  QStringLiteral("A step's target"), &reason);
+  const QString targetKey =
+      oneOf(targetJson,
+            {QStringLiteral("command"), QStringLiteral("input"), QStringLiteral("browser"), QStringLiteral("view"),
+             QStringLiteral("workspace_selector"), QStringLiteral("workspace"), QStringLiteral("tab"),
+             QStringLiteral("timeline")},
+            QStringLiteral("A step's target"), &reason);
   if (targetKey.isEmpty()) {
     return fail(reason);
   }
@@ -158,10 +169,19 @@ GuideStep GuideStep::parse(const QJsonObject& json, QString* error) {
     if (!readKinds(targetJson.value(targetKey), QStringLiteral("The target's view"), &step.pickKinds, &reason)) {
       return fail(reason);
     }
+  } else if (targetKey == QLatin1String("workspace_selector") || targetKey == QLatin1String("timeline")) {
+    // A place of its own, one in a window (mitcad#2370): true.
+    step.target = targetKey == QLatin1String("timeline") ? Target::Timeline : Target::WorkspaceSelector;
+    const QJsonValue value = targetJson.value(targetKey);
+    if (!value.isBool() || !value.toBool()) {
+      return fail(QStringLiteral("The target's %1 is true").arg(targetKey));
+    }
   } else {
-    step.target = targetKey == QLatin1String("command") ? Target::Command
-                  : targetKey == QLatin1String("input") ? Target::Input
-                                                        : Target::Browser;
+    step.target = targetKey == QLatin1String("command")     ? Target::Command
+                  : targetKey == QLatin1String("input")     ? Target::Input
+                  : targetKey == QLatin1String("workspace") ? Target::Workspace
+                  : targetKey == QLatin1String("tab")       ? Target::Tab
+                                                            : Target::Browser;
     step.targetName = targetJson.value(targetKey).toString().trimmed();
     if (step.targetName.isEmpty()) {
       return fail(QStringLiteral("The target's %1 is a name").arg(targetKey));
@@ -185,11 +205,29 @@ GuideStep GuideStep::parse(const QJsonObject& json, QString* error) {
     return fail(QStringLiteral("A step's navigation is true or false"));
   }
   step.navigation = navigationJson.toBool(true);
+  const QJsonValue holdJson = json.value(QStringLiteral("hold"));
+  if (!holdJson.isUndefined() && !holdJson.isBool()) {
+    return fail(QStringLiteral("A step's hold is true or false"));
+  }
+  step.hold = holdJson.toBool(false);
 
-  const QJsonObject doneJson = json.value(QStringLiteral("done")).toObject();
-  const QString doneKey = oneOf(doneJson, {QStringLiteral("command"), QStringLiteral("started"), QStringLiteral("input"),
-                                       QStringLiteral("pick"), QStringLiteral("mode")},
-                                QStringLiteral("A step's done"), &reason);
+  const QJsonValue doneValue = json.value(QStringLiteral("done"));
+  if (doneValue.isUndefined()) {
+    // No done (mitcad#2370): the step points at its target until the page
+    // or MCP ends it (a page's Continue), Escape or Leave Tutorial.
+    step.done = Done::None;
+    return step;
+  }
+  if (!doneValue.isObject()) {
+    return fail(QStringLiteral("A step's done is an object"));
+  }
+  const QJsonObject doneJson = doneValue.toObject();
+  const QString doneKey =
+      oneOf(doneJson,
+            {QStringLiteral("command"), QStringLiteral("started"), QStringLiteral("input"), QStringLiteral("pick"),
+             QStringLiteral("mode"), QStringLiteral("navigate"), QStringLiteral("opened"), QStringLiteral("chosen"),
+             QStringLiteral("activated")},
+            QStringLiteral("A step's done"), &reason);
   if (doneKey.isEmpty()) {
     return fail(reason);
   }
@@ -202,16 +240,33 @@ GuideStep GuideStep::parse(const QJsonObject& json, QString* error) {
     // The view target's kinds and the done pick's are one filter.
     step.pickKinds = kinds.isEmpty() ? step.pickKinds : kinds;
   } else {
-    step.done = doneKey == QLatin1String("command") ? Done::Finished
-                : doneKey == QLatin1String("started") ? Done::Started
-                : doneKey == QLatin1String("mode")    ? Done::Mode
-                                                      : Done::Value;
+    step.done = doneKey == QLatin1String("command")     ? Done::Finished
+                : doneKey == QLatin1String("started")   ? Done::Started
+                : doneKey == QLatin1String("mode")      ? Done::Mode
+                : doneKey == QLatin1String("navigate")  ? Done::Navigate
+                : doneKey == QLatin1String("opened")    ? Done::Opened
+                : doneKey == QLatin1String("chosen")    ? Done::Chosen
+                : doneKey == QLatin1String("activated") ? Done::Activated
+                                                        : Done::Value;
     step.doneName = doneJson.value(doneKey).toString().trimmed();
     if (step.doneName.isEmpty()) {
       return fail(QStringLiteral("The done %1 is a name").arg(doneKey));
     }
     if (step.done == Done::Mode && !guideModes().contains(step.doneName)) {
       return fail(QStringLiteral("The done mode is one of %1").arg(guideModes().join(QStringLiteral(", "))));
+    }
+    if (step.done == Done::Navigate) {
+      if (!guideNavigationActions().contains(step.doneName)) {
+        return fail(QStringLiteral("The done navigate is one of %1")
+                        .arg(guideNavigationActions().join(QStringLiteral(", "))));
+      }
+      // The learner navigates to complete it: the view's navigation stays free.
+      if (!step.navigation) {
+        return fail(QStringLiteral("A done navigate needs the step's navigation"));
+      }
+    }
+    if (step.done == Done::Opened && step.doneName != QLatin1String(kGuideWorkspaceSelector)) {
+      return fail(QStringLiteral("The done opened is %1").arg(QLatin1String(kGuideWorkspaceSelector)));
     }
     if (step.done == Done::Value) {
       step.value = doneJson.value(QStringLiteral("value")).toString().trimmed();
@@ -235,6 +290,10 @@ QJsonObject GuideStep::toJson() const {
   case Target::View:
     aim.insert(QStringLiteral("view"), pickKinds.isEmpty() ? QJsonValue(true) : QJsonValue(QJsonArray::fromStringList(pickKinds)));
     break;
+  case Target::WorkspaceSelector: aim.insert(QStringLiteral("workspace_selector"), true); break;
+  case Target::Workspace: aim.insert(QStringLiteral("workspace"), targetName); break;
+  case Target::Tab: aim.insert(QStringLiteral("tab"), targetName); break;
+  case Target::Timeline: aim.insert(QStringLiteral("timeline"), true); break;
   }
   QJsonObject finished;
   switch (done) {
@@ -245,18 +304,28 @@ QJsonObject GuideStep::toJson() const {
     finished.insert(QStringLiteral("value"), value);
     break;
   case Done::Mode: finished.insert(QStringLiteral("mode"), doneName); break;
+  case Done::Navigate: finished.insert(QStringLiteral("navigate"), doneName); break;
   case Done::Pick:
     finished.insert(QStringLiteral("pick"),
                     pickKinds.isEmpty() ? QJsonValue(true) : QJsonValue(QJsonArray::fromStringList(pickKinds)));
     break;
+  case Done::Opened: finished.insert(QStringLiteral("opened"), doneName); break;
+  case Done::Chosen: finished.insert(QStringLiteral("chosen"), doneName); break;
+  case Done::Activated: finished.insert(QStringLiteral("activated"), doneName); break;
+  case Done::None: break; // no done: left out
   }
   QJsonObject json{{QStringLiteral("id"), id},
                    {QStringLiteral("text"), text},
                    {QStringLiteral("target"), aim},
-                   {QStringLiteral("navigation"), navigation},
-                   {QStringLiteral("done"), finished}};
+                   {QStringLiteral("navigation"), navigation}};
+  if (done != Done::None) {
+    json.insert(QStringLiteral("done"), finished);
+  }
   if (!allowed.isEmpty()) {
     json.insert(QStringLiteral("allow"), QJsonArray::fromStringList(allowed));
+  }
+  if (hold) {
+    json.insert(QStringLiteral("hold"), true);
   }
   return json;
 }
@@ -277,6 +346,11 @@ bool GuideStep::allowsCommand(const QString& command) const {
     return true;
   }
   return navigation && guideNavigationCommands().contains(command);
+}
+
+bool GuideStep::allowsCommandWhileHeld(const QString& command) const {
+  return command == QLatin1String(kLeaveTutorialCommand) ||
+         (navigation && guideNavigationCommands().contains(command));
 }
 
 bool GuideStep::pickMatches(const QString& kind) const { return pickKinds.isEmpty() || pickKinds.contains(kind); }

@@ -124,6 +124,11 @@ if(BUILD_TESTING)
   endforeach()
   # A rib's and a web's Draft Angle (mitcad#2102): drafted, edited, patterned.
   add_test(NAME cli.f3_rib_web_draft COMMAND mitcad-cli run "${scripts}/f3_rib_web_draft.json")
+  # A rib's Direction Normal to Curves (mitcad#2398): a three-line chain with
+  # a slanted middle offset 30 as its far side, sharp and round corners,
+  # flipped, drafted and with Extend Ends; analytic volumes and the far
+  # faces 30 from the curves' faces.
+  add_test(NAME cli.f3_rib_normal COMMAND mitcad-cli run "${scripts}/f3_rib_normal.json")
   # A loft's Tangent Edges merged (mitcad#2162): a slot to a circle is one
   # side face, with two and three sections and a tangent end; fillets on the
   # merged faces build through the slot edited into a rectangle and back.
@@ -3182,6 +3187,70 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/boundary-network-reported-test.cmake")
   set_tests_properties(cli.boundary_network_reported PROPERTIES
     SKIP_REGULAR_EXPRESSION "boundary network reported: skipped" TIMEOUT 600)
+endif()
+
+# Lofts along two rails (mitcad#2373, follow-up of mitcad#2320,
+# loft-rails-reported-test.py): the forum's four-section bottle built by
+# tests/loft_rails_four_sections.json, and GitHub #607's and #610's designs
+# found by their content ids under MITCAD_MITCAD_REPORTED (skipped without
+# them): each loft builds, both rails lie on it within 1e-4 mm, and the
+# mirrored cases are their own mirror images in x within 1e-6 mm.
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.loft_rails_four_sections
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/loft-rails-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>" --case forum
+              --work "${CMAKE_CURRENT_BINARY_DIR}/loft-rails-four-sections")
+    set_tests_properties(cli.loft_rails_four_sections PROPERTIES TIMEOUT 600
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    add_test(NAME cli.loft_rails_reported
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/loft-rails-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>" --case reported
+              --work "${CMAKE_CURRENT_BINARY_DIR}/loft-rails-reported")
+    set_tests_properties(cli.loft_rails_reported PROPERTIES TIMEOUT 1200
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+      SKIP_REGULAR_EXPRESSION "loft rails reported: skipped")
+  endif()
+endif()
+
+# Replace Face of a cylinder's round top onto a slanted planar face
+# (mitcad#2382, GitHub #643): the reported design, found by its content id
+# under MITCAD_MITCAD_REPORTED, two cylinder tops replaced by a slanted
+# surface strip's plane, each an ellipse on it (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.replace_face_tilted_round_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/replace-face-tilted-round-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/replace-face-tilted-round-reported-test.cmake")
+  set_tests_properties(cli.replace_face_tilted_round_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "replace face tilted round reported: skipped" TIMEOUT 600)
+endif()
+
+# Shells with Sharp corners on reporters' designs (GitHub #642, mitcad#2383),
+# found by their content ids under MITCAD_MITCAD_REPORTED and opened in a
+# copy: the revolved cone with five notches through its wall shells 2 mm
+# inside, Sharp (OCCT port patch 2383); skipped without the designs.
+if(BUILD_TESTING)
+  add_test(NAME cli.shell_sharp_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/shell-sharp-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/shell-sharp-reported-test.cmake")
+  set_tests_properties(cli.shell_sharp_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "shell sharp reported: skipped" TIMEOUT 900)
+endif()
+
+# The rules' corner relief at flange corners (mitcad#2342): Flanges on two
+# adjacent edges and a flange on several edges, Rectangular, Round and Tear,
+# a width inside the bends' crossing zone, the version flag, a flange's own
+# relief and a Corner Relief feature that overrides the rules'.
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_flange_corner_relief
+    COMMAND mitcad-cli run "${scripts}/sheet_flange_corner_relief.json")
+  add_test(NAME cli.sheet_flange_edges_corner_relief
+    COMMAND mitcad-cli run "${scripts}/sheet_flange_edges_corner_relief.json")
 endif()
 
 # Every mitcad-cli test (mitcad-cli loads Qt's DLLs, mitcad-cli render): on

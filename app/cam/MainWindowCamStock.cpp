@@ -4,7 +4,8 @@
 // model (cam_simulate), read once with snapshots at places along
 // Simulate's playback; the stock as cut drawn at the slider's place, and
 // at the end shaded by the material it leaves over the part, with the
-// material left in words and the legend under the slider.
+// material left in words and the legend under the slider; a lathe's
+// sub-spindle drawn where it is as each operation cuts (mitcad#2405).
 //
 // Messages a person sees say what is wrong in words; the log lines carry
 // the numbers UI tests read.
@@ -15,7 +16,9 @@
 #include <cstddef>
 #include <exception>
 #include <initializer_list>
+#include <optional>
 #include <utility>
+#include <vector>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -104,6 +107,15 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
       m_camTurnedStock = true;
       m_viewer->setCamStock(cubes);
     }
+    // The sub-spindle's outline and where it is as each operation cuts
+    // (mitcad#2405): drawn at the slider's place (showCamSubSpindle).
+    const QJsonObject subSpindle = answer.value(QStringLiteral("sub_spindle")).toObject();
+    if (!subSpindle.isEmpty()) {
+      m_camSubSpindle = CamSubSpindleDrawn{name, subSpindle, frame};
+      qInfo().noquote() << QStringLiteral("CAM sub-spindle outline: %1: %2 part(s)")
+                               .arg(name)
+                               .arg(subSpindle.value(QStringLiteral("outline")).toArray().size());
+    }
     const double left = answer.value(QStringLiteral("left")).toDouble();
     const int gouges = static_cast<int>(answer.value(QStringLiteral("gouges")).toArray().size());
     QJsonArray cuts = answer.value(QStringLiteral("rapid_cuts")).toArray();
@@ -124,15 +136,19 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
       const QJsonArray liveCuts = side.value(QStringLiteral("rapid_cuts")).toArray();
       const double liveLeft = remaining.value(QStringLiteral("max")).toDouble();
       const double gouge = remaining.value(QStringLiteral("gouge")).toDouble();
+      // On the part's back while the sub-spindle holds it (mitcad#2375).
+      const bool sub = side.value(QStringLiteral("sub_spindle")).toBool();
+      const QString kindLogged = face    ? QStringLiteral("face")
+                                 : plane ? QStringLiteral("plane")
+                                         : QStringLiteral("diameter");
       qInfo().noquote() << QStringLiteral("CAM live tools: %1: %2, %3 operation(s), left %4, gouge %5, %6 rapid cut(s)")
-                               .arg(name, face    ? QStringLiteral("face")
-                                          : plane ? QStringLiteral("plane")
-                                                  : QStringLiteral("diameter"))
+                               .arg(name, sub ? kindLogged + QStringLiteral(" on the sub-spindle") : kindLogged)
                                .arg(side.value(QStringLiteral("operations")).toArray().size())
                                .arg(cam::shortNumber(liveLeft), cam::shortNumber(gouge))
                                .arg(liveCuts.size());
       const QString cut = gouge > 0.0 ? tr("They cut into the part.") : tr("They cut nothing of the part.");
-      liveSummary << (face    ? tr("The live tools on the face: at most %1 mm left over the part. %2")
+      liveSummary << (sub     ? tr("The live tools on the sub-spindle: at most %1 mm left over the part's back. %2")
+                      : face  ? tr("The live tools on the face: at most %1 mm left over the part. %2")
                       : plane ? tr("The live tools on a plane: at most %1 mm left over the part. %2")
                               : tr("The live tools on the diameter: at most %1 mm left over the part. %2"))
                          .arg(cam::shortNumber(liveLeft), cut);
@@ -140,11 +156,22 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
         cuts.append(liveCut);
       }
     }
+    // The moves that run into the sub-spindle's body or a zone moving with
+    // it (mitcad#2392), in words: in the summary, the first as the warning.
+    const QJsonArray subHits = answer.value(QStringLiteral("sub_spindle_hits")).toArray();
+    qInfo().noquote() << QStringLiteral("CAM sub-spindle hits: %1: %2").arg(name).arg(subHits.size());
+    for (const QJsonValue& hit : subHits) {
+      qInfo().noquote() << QStringLiteral("CAM sub-spindle hit %1: %2").arg(name, str(hit.toObject(), "message"));
+    }
     if (m_camSimulate != nullptr) {
       const QString cut = gouges > 0 ? tr("The tools cut into the part.") : tr("No tool cuts into the part.");
       QString summary = tr("The turned part: at most %1 mm of material left over it. %2").arg(cam::shortNumber(left), cut);
       for (const QString& line : std::as_const(liveSummary)) {
         summary += QLatin1Char(' ') + line;
+      }
+      if (!subHits.isEmpty()) {
+        summary += QLatin1Char(' ') + tr("%n move(s) run into the sub-spindle or a zone moving with it.", nullptr,
+                                         static_cast<int>(subHits.size()));
       }
       if (!cubes.empty()) {
         summary += QLatin1Char(' ') + tr("In 3D: %1 mm³ left over the part, %2 mm³ of it cut away.")
@@ -156,6 +183,9 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
     if (!cuts.isEmpty()) {
       showWarning(tr("The simulation found a problem. %1")
                       .arg(modelMessage(userText(str(cuts.first().toObject(), "message")))));
+    } else if (!subHits.isEmpty()) {
+      showWarning(tr("The simulation found a problem. %1")
+                      .arg(modelMessage(userText(str(subHits.first().toObject(), "message")))));
     }
     return;
   }
@@ -240,10 +270,38 @@ void MainWindow::showCamStock(int index) {
   }
 }
 
+void MainWindow::showCamSubSpindle(int operation, const QString& name) {
+  m_camMachineLines.clear();
+  if (!m_camSubSpindle) {
+    return;
+  }
+  // Where its jaws' face is as the operation cuts, on the part where the
+  // view draws it; not drawn where that is not known (the main spindle's
+  // operations without the work zero's machine place).
+  QString logged;
+  if (const std::optional<double> face = cam::subSpindleFace(m_camSubSpindle->data, operation)) {
+    m_camMachineLines = cam::subSpindleLines(m_camSubSpindle->data, *face, m_camSubSpindle->frame);
+    logged = QStringLiteral("CAM sub-spindle drawn: %1: %2 at Z %3, %4 segments")
+                 .arg(m_camSubSpindle->setup, name, cam::shortNumber(*face))
+                 .arg(static_cast<int>(m_camMachineLines.size() / 6));
+  } else {
+    logged = QStringLiteral("CAM sub-spindle drawn: %1: %2 where it waits is not known")
+                 .arg(m_camSubSpindle->setup, name);
+  }
+  if (logged != m_loggedCamSubSpindle) {
+    m_loggedCamSubSpindle = logged;
+    qInfo().noquote() << logged;
+  }
+}
+
 void MainWindow::clearCamStock() {
   const bool shown = m_camStock.has_value() || m_camTurnedStock;
   m_camStock.reset();
   m_camTurnedStock = false;
+  // The sub-spindle drawn with it (mitcad#2405).
+  m_camSubSpindle.reset();
+  m_camMachineLines.clear();
+  m_loggedCamSubSpindle.clear();
   if (m_camSimulate != nullptr) {
     m_camSimulate->setRemaining(QString(), {});
   }

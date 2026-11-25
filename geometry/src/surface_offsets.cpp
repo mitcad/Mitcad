@@ -1049,4 +1049,22 @@ gp_Dir detail::across_edge(const TopoDS_Edge& edge, const TopoDS_Face& face, dou
   return strip_direction(tangent, edge, face, t);
 }
 
+// Curves of free edges (mitcad#2395).
+std::vector<FreeEdgeCurve> opening_curves(const Shape& body, const OpeningEdges& opening) {
+  return detail::run("free edge curves", [&] {
+    std::vector<FreeEdgeCurve> curves;
+    const detail::EdgeFaces edge_faces(body);
+    for (const int e : opening_edges(body, {opening})) {
+      FreeEdgeCurve free;
+      free.curve = edge_curve(body.edge(e));
+      const std::vector<int> faces = edge_faces.at(e);
+      if (!faces.empty()) {
+        free.face = detail::primary_name(body, faces.front());
+      }
+      curves.push_back(std::move(free));
+    }
+    return curves;
+  });
+}
+
 } // namespace mitcad::geometry

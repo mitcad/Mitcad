@@ -117,6 +117,10 @@ struct ToolpathScene {
   };
   std::vector<Group> groups;
   std::optional<Tool> tool;
+  // The machine's parts Simulate draws where they are as the tool cuts
+  // (mitcad#2405: a lathe's sub-spindle), as segments (six numbers each,
+  // design coordinates); not counted in the log line.
+  std::vector<float> machine;
 
   bool empty() const;
   // "CAM toolpath overlay: 3 groups, 412 segments (rapid 40, feed 300,
@@ -131,5 +135,26 @@ QString pathLinesLog(const QString& name, const PathLines& lines);
 
 // A number for the log, without trailing zeros ("12.5", "3").
 QString shortNumber(double value);
+
+// Whether an operation panel's operation would come on the main spindle
+// after the sub-spindle's in a lathe setup (mitcad#2392), which Generate
+// refuses: none when it is on the sub-spindle (`sub`); the operation
+// `edited` (its id) where it is in `setup`'s `operations` (each `id`,
+// `sub_spindle`, `suppressed`), a new one or one moved in from another
+// setup last.
+bool mainAfterSub(const QJsonObject& setup, int edited, bool sub);
+
+// A lathe's sub-spindle as Simulate draws it (mitcad#2405): the
+// `sub_spindle` of `cam_simulate`, its `outline` (parts, each `[behind,
+// radius]` points along the spindle axis behind its jaws' face) revolved
+// about the work Z with its jaws' face at work Z `face`: a circle at each
+// point and four lines between a part's points, as segments in the
+// design's coordinates. Empty without an outline.
+std::vector<float> subSpindleLines(const QJsonObject& subSpindle, double face, const WorkFrame& frame);
+
+// Where `cam_simulate`'s `sub_spindle` has its jaws' face (work Z, on the
+// part where the view draws it) while the operation `operation` (its id)
+// cuts; none where that is not known or the operation is not listed.
+std::optional<double> subSpindleFace(const QJsonObject& subSpindle, int operation);
 
 } // namespace mitcad::cam

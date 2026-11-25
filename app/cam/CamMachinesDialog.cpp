@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <exception>
+#include <iterator>
 #include <optional>
 #include <utility>
 
@@ -556,6 +557,16 @@ void CamMachinesDialog::showMachine() {
     const QJsonDocument zones(body.value(QStringLiteral("zones")).toArray());
     qInfo().noquote() << QStringLiteral("CAM machine zones: %1: %2")
                              .arg(text(machine, "id"), QString::fromUtf8(zones.toJson(QJsonDocument::Compact)));
+    // A mill-turn's codes and sub-spindle (mitcad#2375), the turret's body
+    // (mitcad#2405).
+    const QJsonObject latheJson = body.value(QStringLiteral("lathe")).toObject();
+    if (latheJson.contains(QStringLiteral("mill_turn")) || latheJson.contains(QStringLiteral("sub_spindle"))) {
+      const QJsonDocument codes(QJsonObject{{QStringLiteral("mill_turn"), latheJson.value(QStringLiteral("mill_turn"))},
+                                            {QStringLiteral("sub_spindle"), latheJson.value(QStringLiteral("sub_spindle"))},
+                                            {QStringLiteral("turret_body"), latheJson.value(QStringLiteral("turret_body"))}});
+      qInfo().noquote() << QStringLiteral("CAM machine mill-turn codes: %1: %2")
+                               .arg(text(machine, "id"), QString::fromUtf8(codes.toJson(QJsonDocument::Compact)));
+    }
   }
   const QJsonObject travel = body.value(QStringLiteral("travel")).toObject();
   const QJsonArray min = travel.value(QStringLiteral("min")).toArray();
@@ -691,7 +702,7 @@ bool CamMachinesDialog::evaluate(const QString& typed, const QString& kind, doub
   }
 }
 
-std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObject zone, bool lathe) {
+std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObject zone, bool lathe, bool sub) {
   const QJsonObject bounds = zone.value(QStringLiteral("bounds")).toObject();
   QJsonArray minimum = bounds.value(QStringLiteral("min")).toArray();
   QJsonArray maximum = bounds.value(QStringLiteral("max")).toArray();
@@ -721,9 +732,13 @@ std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObje
     }
     const QString label = zoneAxis(axis, lathe);
     const QLatin1Char key("XYZ"[axis]);
-    const QString tip = !lathe ? QString()
-                              : axis == 0 ? tr("Measure X as a radius from the spindle axis.")
-                                          : tr("Measure Z along the spindle axis.");
+    // A zone moving with the sub-spindle (mitcad#2392): its Z from the
+    // sub-spindle's jaws' face.
+    const QString tip = !lathe      ? QString()
+                        : axis == 0 ? tr("Measure X as a radius from the spindle axis.")
+                        : sub       ? tr("Measure Z from the sub-spindle's jaws' face, positive away from the main "
+                                         "spindle.")
+                                    : tr("Measure Z along the spindle axis.");
     fields[axis].minimum = field(QStringLiteral("camMachineZoneMin") + key, shown(minimum.at(axis).toDouble()), tip);
     fields[axis].maximum = field(QStringLiteral("camMachineZoneMax") + key, shown(maximum.at(axis).toDouble()), tip);
     form->addRow(tr("Minimum %1").arg(label), fields[axis].minimum);
@@ -787,14 +802,19 @@ std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObje
   return zone;
 }
 
-QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones, bool lathe) {
+QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones, bool lathe, bool sub) {
   auto* page = new QWidget;
   auto* layout = new QVBoxLayout(page);
-  auto* guidance = new QLabel(tr("Enter the bounds in machine coordinates."));
+  // The zones moving with the sub-spindle (mitcad#2392): their own list and
+  // buttons, Z from its jaws' face.
+  auto* guidance = new QLabel(sub ? tr("Enter X in machine coordinates and Z from the sub-spindle's jaws' face, "
+                                       "positive away from the main spindle. These zones move with the sub-spindle.")
+                                  : tr("Enter the bounds in machine coordinates."));
   guidance->setWordWrap(true);
   layout->addWidget(guidance);
+  const QString prefix = sub ? QStringLiteral("camMachineSubZone") : QStringLiteral("camMachineZone");
   auto* list = new QTreeWidget;
-  list->setObjectName(QStringLiteral("camMachineZoneList"));
+  list->setObjectName(prefix + QStringLiteral("List"));
   list->setRootIsDecorated(false);
   panel::setCompactIndentation(list, panel::Indent::Flat);
   QStringList headers{tr("Name"), zoneAxis(0, lathe)};
@@ -810,9 +830,9 @@ QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones,
   auto* add = new QPushButton(tr("Add Zone…"));
   auto* edit = new QPushButton(tr("Edit Zone…"));
   auto* remove = new QPushButton(tr("Remove Zone"));
-  add->setObjectName(QStringLiteral("camMachineZoneAdd"));
-  edit->setObjectName(QStringLiteral("camMachineZoneEdit"));
-  remove->setObjectName(QStringLiteral("camMachineZoneRemove"));
+  add->setObjectName(prefix + QStringLiteral("Add"));
+  edit->setObjectName(prefix + QStringLiteral("Edit"));
+  remove->setObjectName(prefix + QStringLiteral("Remove"));
   for (QPushButton* button : {add, edit, remove}) {
     button->setAutoDefault(false);
     actions->addWidget(button);
@@ -847,16 +867,16 @@ QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones,
     remove->setEnabled(selected);
   };
   connect(list, &QTreeWidget::currentItemChanged, page, enableActions);
-  connect(add, &QPushButton::clicked, page, [this, dialog, &zones, lathe, showZones] {
-    if (const auto zone = askZone(dialog, {}, lathe)) {
+  connect(add, &QPushButton::clicked, page, [this, dialog, &zones, lathe, sub, showZones] {
+    if (const auto zone = askZone(dialog, {}, lathe, sub)) {
       zones.append(*zone);
       showZones(static_cast<int>(zones.size()) - 1);
     }
   });
-  const auto editZone = [this, dialog, list, &zones, lathe, showZones] {
+  const auto editZone = [this, dialog, list, &zones, lathe, sub, showZones] {
     const int row = list->indexOfTopLevelItem(list->currentItem());
     if (row >= 0) {
-      if (const auto zone = askZone(dialog, zones.at(row).toObject(), lathe)) {
+      if (const auto zone = askZone(dialog, zones.at(row).toObject(), lathe, sub)) {
         zones.replace(row, *zone);
         showZones(row);
       }
@@ -1129,17 +1149,150 @@ void CamMachinesDialog::editMachine() {
                              tr("The turret moves in Y: live tools mill on planes off the spindle axis"));
   QCheckBox* bHead = axisBox(QStringLiteral("camMachineBHead"), tr("B head"), "b",
                              tr("A milling head that tilts about Y: live tools cut tilted planes"));
+  // The B head's clamp codes (mitcad#2375), with the B head.
+  QLineEdit* bClamp = field(QStringLiteral("camMachineBClamp"), code("b_clamp", QStringLiteral("M107")),
+                            tr("Clamps the B head where it is tilted"));
+  form->addRow(tr("B Head Clamp"), bClamp);
+  QLineEdit* bUnclamp = field(QStringLiteral("camMachineBUnclamp"), code("b_unclamp", QStringLiteral("M108")),
+                              tr("Frees the B head to tilt it"));
+  form->addRow(tr("B Head Unclamp"), bUnclamp);
   QCheckBox* subSpindle = axisBox(QStringLiteral("camMachineSubSpindle"), tr("Sub-spindle"), "sub_spindle",
                                   tr("A second spindle that takes the part over and turns its back"));
-  const auto showAxes = [form, liveTools, yAxis, bHead, subSpindle, travelY, lathe] {
+  // The sub-spindle's own page (mitcad#2375): its speeds, travel and
+  // chuck, and its codes, each one block (its C axis's on and off blocks
+  // separated by ";"); the C axis's rows with the live tools.
+  const QJsonObject subJson = latheJson.value(QStringLiteral("sub_spindle")).toObject();
+  auto* subPage = new QWidget;
+  auto* subForm = new QFormLayout(subPage);
+  QLineEdit* subMinRpm = field(QStringLiteral("camMachineSubMinRpm"), plain(numberOf(subJson, "min_rpm")),
+                               tr("The sub-spindle's slowest speed"));
+  subForm->addRow(tr("Lowest Speed (rpm)"), subMinRpm);
+  QLineEdit* subMaxRpm = field(QStringLiteral("camMachineSubMaxRpm"), plain(numberOf(subJson, "max_rpm")),
+                               tr("The sub-spindle's fastest speed; 0: the main spindle's speeds"));
+  subForm->addRow(tr("Highest Speed (rpm)"), subMaxRpm);
+  const QJsonArray subTravel = subJson.value(QStringLiteral("travel")).toArray();
+  QLineEdit* subTravelMin =
+      field(QStringLiteral("camMachineSubTravelMin"), subTravel.size() == 2 ? mm(subTravel.at(0).toDouble()) : QString(),
+            tr("The machine Z of its jaws' face nearest the main spindle; empty: its travel is not checked"));
+  subForm->addRow(tr("Travel From Z"), subTravelMin);
+  QLineEdit* subTravelMax =
+      field(QStringLiteral("camMachineSubTravelMax"), subTravel.size() == 2 ? mm(subTravel.at(1).toDouble()) : QString(),
+            tr("The machine Z of its jaws' face farthest from the main spindle"));
+  subForm->addRow(tr("Travel To Z"), subTravelMax);
+  QLineEdit* subChuck = field(QStringLiteral("camMachineSubChuckDiameter"), mm(numberOf(subJson, "chuck_diameter")),
+                              tr("The sub-spindle's chuck diameter: no tool behind its jaws' face within it"));
+  subForm->addRow(tr("Chuck Diameter"), subChuck);
+  // Its body behind the jaws' face and where it waits (mitcad#2392): the
+  // chuck's length, the housing's size (lengths of zero: without end).
+  QLineEdit* subChuckLength = field(QStringLiteral("camMachineSubChuckLength"), mm(numberOf(subJson, "chuck_length")),
+                                    tr("How far the chuck reaches back from its jaws' face; 0: without end"));
+  subForm->addRow(tr("Chuck Length"), subChuckLength);
+  QLineEdit* subHousingDiameter =
+      field(QStringLiteral("camMachineSubHousingDiameter"), mm(numberOf(subJson, "housing_diameter")),
+            tr("The diameter of the sub-spindle's housing behind its chuck; 0: not checked"));
+  subForm->addRow(tr("Housing Diameter"), subHousingDiameter);
+  QLineEdit* subHousingLength =
+      field(QStringLiteral("camMachineSubHousingLength"), mm(numberOf(subJson, "housing_length")),
+            tr("How far the housing reaches back from the chuck; 0: without end"));
+  subForm->addRow(tr("Housing Length"), subHousingLength);
+  const QJsonValue subPark = subJson.value(QStringLiteral("park"));
+  QLineEdit* subParkZ = field(QStringLiteral("camMachineSubPark"), subPark.isDouble() ? mm(subPark.toDouble()) : QString(),
+                              tr("The machine Z of its jaws' face while the main spindle cuts; empty: its travel's end"));
+  subForm->addRow(tr("Waits at Z"), subParkZ);
+  // Its own revolved profile and the turret's body round the tool, checked
+  // against it (mitcad#2405): the profile's points "z, diameter" separated
+  // by ";", the turret's X and Z from the tool, each both ends or neither.
+  QStringList profileText;
+  for (const QJsonValue& value : subJson.value(QStringLiteral("profile")).toArray()) {
+    const QJsonArray point = value.toArray();
+    profileText << QStringLiteral("%1, %2").arg(mm(point.at(0).toDouble()), mm(point.at(1).toDouble()));
+  }
+  QLineEdit* subProfile =
+      field(QStringLiteral("camMachineSubProfile"), profileText.join(QStringLiteral("; ")),
+            tr("Points of Z from the jaws' face and diameter, as 0, 80; 40, 80; separated by ;"));
+  subForm->addRow(tr("Body Profile"), subProfile);
+  const QJsonObject turretJson = latheJson.value(QStringLiteral("turret_body")).toObject();
+  const auto turretEnd = [&turretJson, &mm](const char* key, int end) {
+    const QJsonArray range = turretJson.value(QLatin1String(key)).toArray();
+    return range.size() == 2 ? mm(range.at(end).toDouble()) : QString();
+  };
+  QLineEdit* turretXMin = field(QStringLiteral("camMachineTurretXMin"), turretEnd("x", 0),
+                                tr("Where the turret's body starts in X from the tool's point; empty: not checked"));
+  subForm->addRow(tr("Turret Body X From"), turretXMin);
+  QLineEdit* turretXMax = field(QStringLiteral("camMachineTurretXMax"), turretEnd("x", 1),
+                                tr("Where the turret's body ends in X from the tool's point"));
+  subForm->addRow(tr("Turret Body X To"), turretXMax);
+  QLineEdit* turretZMin = field(QStringLiteral("camMachineTurretZMin"), turretEnd("z", 0),
+                                tr("Where the turret's body starts in Z from the tool's point"));
+  subForm->addRow(tr("Turret Body Z From"), turretZMin);
+  QLineEdit* turretZMax = field(QStringLiteral("camMachineTurretZMax"), turretEnd("z", 1),
+                                tr("Where the turret's body ends in Z, towards the sub-spindle"));
+  subForm->addRow(tr("Turret Body Z To"), turretZMax);
+  auto* subAxis = new QComboBox;
+  subAxis->setObjectName(QStringLiteral("camMachineSubAxis"));
+  for (const QString& letter : {QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("E")}) {
+    subAxis->addItem(letter, letter);
+  }
+  subAxis->setCurrentIndex(std::max(0, subAxis->findData(code("sub_axis", QStringLiteral("A")))));
+  subAxis->setToolTip(tr("The letter of the sub-spindle's axis along Z; B only without a B head"));
+  subForm->addRow(tr("Axis Letter"), subAxis);
+  const auto subCode = [&subForm, &code](const QString& objectName, const QString& label, const char* key,
+                                         const QString& fallback, const QString& tip) {
+    QLineEdit* edit = field(objectName, code(key, fallback), tip);
+    subForm->addRow(label, edit);
+    return edit;
+  };
+  QLineEdit* syncOn = subCode(QStringLiteral("camMachineSyncOn"), tr("Synchronize Spindles"), "sync_on",
+                              QStringLiteral("M213"), tr("Turns the sub-spindle with the main spindle"));
+  QLineEdit* syncOff = subCode(QStringLiteral("camMachineSyncOff"), tr("Separate Spindles"), "sync_off",
+                               QStringLiteral("M212"), tr("Lets the spindles turn on their own again"));
+  QLineEdit* subChuckClose = subCode(QStringLiteral("camMachineSubChuckClose"), tr("Close Chuck"), "sub_chuck_close",
+                                     QStringLiteral("M78"), tr("Closes the sub-spindle's chuck on the part"));
+  QLineEdit* subChuckOpen = subCode(QStringLiteral("camMachineSubChuckOpen"), tr("Open Chuck"), "sub_chuck_open",
+                                    QStringLiteral("M79"), tr("Opens the sub-spindle's chuck"));
+  QLineEdit* mainChuckOpen = subCode(QStringLiteral("camMachineMainChuckOpen"), tr("Open Main Chuck"),
+                                     "main_chuck_open", QStringLiteral("M69"),
+                                     tr("Lets the main spindle's chuck go of the part when nothing parts it off"));
+  QLineEdit* subCw = subCode(QStringLiteral("camMachineSubCw"), tr("Spindle Forward"), "sub_cw", QStringLiteral("M203"),
+                             tr("Starts the sub-spindle forward"));
+  QLineEdit* subCcw = subCode(QStringLiteral("camMachineSubCcw"), tr("Spindle Reverse"), "sub_ccw",
+                              QStringLiteral("M204"), tr("Starts the sub-spindle in reverse"));
+  QLineEdit* subStop = subCode(QStringLiteral("camMachineSubStop"), tr("Spindle Stop"), "sub_stop",
+                               QStringLiteral("M205"), tr("Stops the sub-spindle"));
+  QLineEdit* subCOn = subCode(QStringLiteral("camMachineSubCAxisOn"), tr("C Axis On"), "sub_c_axis_on",
+                              QStringLiteral("M254; G28 H0."),
+                              tr("The blocks that switch the sub-spindle to its C axis, separated by ;"));
+  QLineEdit* subCOff = subCode(QStringLiteral("camMachineSubCAxisOff"), tr("C Axis Off"), "sub_c_axis_off",
+                               QStringLiteral("M255"), tr("The blocks that switch it back to turning, separated by ;"));
+  QLineEdit* subCClamp = subCode(QStringLiteral("camMachineSubCClamp"), tr("C Axis Clamp"), "sub_c_clamp",
+                                 QStringLiteral("M114"), tr("Clamps the sub-spindle's C axis where a hole is drilled"));
+  QLineEdit* subCUnclamp = subCode(QStringLiteral("camMachineSubCUnclamp"), tr("C Axis Unclamp"), "sub_c_unclamp",
+                                   QStringLiteral("M115"), QString());
+  // A control that mirrors only Z on the sub-spindle (mitcad#2392): the
+  // live tools' Y and C written turned round there.
+  auto* subMirror = new QCheckBox(tr("The control mirrors only Z"));
+  subMirror->setObjectName(QStringLiteral("camMachineSubMirrorZ"));
+  subMirror->setChecked(millTurn.value(QStringLiteral("sub_mirror_z_only")).toBool());
+  subMirror->setToolTip(tr("On the sub-spindle X, Y and C keep the main spindle's directions"));
+  subForm->addRow(QString(), subMirror);
+  const auto showAxes = [form, subForm, liveTools, yAxis, bHead, bClamp, bUnclamp, subSpindle, subCOn, subCOff,
+                         subCClamp, subCUnclamp, subMirror, travelY, lathe] {
     form->setRowVisible(yAxis, lathe && liveTools->isChecked());
     form->setRowVisible(bHead, lathe && liveTools->isChecked());
+    form->setRowVisible(bClamp, lathe && liveTools->isChecked() && bHead->isChecked());
+    form->setRowVisible(bUnclamp, lathe && liveTools->isChecked() && bHead->isChecked());
     form->setRowVisible(subSpindle, lathe);
     form->setRowVisible(travelY, !lathe || (liveTools->isChecked() && yAxis->isChecked()));
+    for (QWidget* row : {static_cast<QWidget*>(subCOn), static_cast<QWidget*>(subCOff),
+                         static_cast<QWidget*>(subCClamp), static_cast<QWidget*>(subCUnclamp),
+                         static_cast<QWidget*>(subMirror)}) {
+      subForm->setRowVisible(row, liveTools->isChecked());
+    }
   };
   connect(liveTools, &QCheckBox::toggled, &dialog, showLive);
   connect(liveTools, &QCheckBox::toggled, &dialog, showAxes);
   connect(yAxis, &QCheckBox::toggled, &dialog, showAxes);
+  connect(bHead, &QCheckBox::toggled, &dialog, showAxes);
   showLive();
   showAxes();
   qInfo().noquote() << QStringLiteral("CAM machine form: %1: %2")
@@ -1152,6 +1305,17 @@ void CamMachinesDialog::editMachine() {
   tabs->tabBar()->setObjectName(QStringLiteral("camMachineTabs"));
   tabs->addTab(machinePage, tr("Machine"));
   tabs->addTab(machineZonesPage(&dialog, zones, lathe), tr("Keep-Out Zones"));
+  // The sub-spindle's page, with the sub-spindle (mitcad#2375), and the
+  // zones moving with it (mitcad#2392).
+  const int subTab = tabs->addTab(subPage, tr("Sub-Spindle"));
+  QJsonArray subZones = subJson.value(QStringLiteral("zones")).toArray();
+  const int subZonesTab = tabs->addTab(machineZonesPage(&dialog, subZones, lathe, true), tr("Sub-Spindle Zones"));
+  const auto showSubTab = [tabs, subTab, subZonesTab, subSpindle, lathe] {
+    tabs->setTabVisible(subTab, lathe && subSpindle->isChecked());
+    tabs->setTabVisible(subZonesTab, lathe && subSpindle->isChecked());
+  };
+  connect(subSpindle, &QCheckBox::toggled, &dialog, showSubTab);
+  showSubTab();
   auto* layout = new QVBoxLayout(&dialog);
   layout->addWidget(tabs);
   layout->addWidget(message);
@@ -1209,6 +1373,108 @@ void CamMachinesDialog::editMachine() {
       message->setText(tr("%1: a number above zero.").arg(tr("Highest Live Tool Speed (rpm)")));
       return;
     }
+    // The sub-spindle's speeds, travel and chuck (mitcad#2375): its travel
+    // both ends or neither, the lowest first.
+    const bool sub = lathe && subSpindle->isChecked();
+    double subRpm[2] = {};
+    double subChuckDiameter = 0.0;
+    double subEnds[2] = {};
+    const bool subTravelSet = !subTravelMin->text().trimmed().isEmpty() || !subTravelMax->text().trimmed().isEmpty();
+    // Its chuck's length, its housing's diameter and length, where it waits
+    // (mitcad#2392).
+    double subBody[3] = {};
+    double subParkValue = 0.0;
+    const bool subParkSet = !subParkZ->text().trimmed().isEmpty();
+    // Its own profile and the turret's body round the tool (mitcad#2405).
+    QJsonArray subProfilePoints;
+    QLineEdit* const turretFields[] = {turretXMin, turretXMax, turretZMin, turretZMax};
+    double turretEnds[4] = {};
+    const bool turretSet = std::any_of(std::begin(turretFields), std::end(turretFields),
+                                       [](const QLineEdit* edit) { return !edit->text().trimmed().isEmpty(); });
+    if (sub) {
+      const std::pair<QLineEdit*, QString> speeds[] = {{subMinRpm, tr("Lowest Speed (rpm)")},
+                                                       {subMaxRpm, tr("Highest Speed (rpm)")}};
+      for (int i = 0; i < 2; ++i) {
+        if (!evaluate(speeds[i].first->text(), QStringLiteral("unitless"), &subRpm[i]) || subRpm[i] < 0.0) {
+          tabs->setCurrentIndex(subTab);
+          message->setText(tr("%1: a number of zero or more.").arg(speeds[i].second));
+          return;
+        }
+      }
+      if (subRpm[1] > 0.0 && subRpm[1] < subRpm[0]) {
+        tabs->setCurrentIndex(subTab);
+        message->setText(tr("The sub-spindle's highest speed must be at or above its lowest."));
+        return;
+      }
+      if (!evaluate(subChuck->text(), QStringLiteral("length"), &subChuckDiameter) || subChuckDiameter < 0.0) {
+        tabs->setCurrentIndex(subTab);
+        message->setText(tr("%1: a length of zero or more.").arg(tr("Chuck Diameter")));
+        return;
+      }
+      if (subTravelSet && (!evaluate(subTravelMin->text(), QStringLiteral("length"), &subEnds[0]) ||
+                           !evaluate(subTravelMax->text(), QStringLiteral("length"), &subEnds[1]) ||
+                           subEnds[0] > subEnds[1])) {
+        tabs->setCurrentIndex(subTab);
+        message->setText(tr("The sub-spindle's travel: from a Z up to a Z, or both left empty."));
+        return;
+      }
+      // Its body and where it waits (mitcad#2392).
+      const std::pair<QLineEdit*, QString> sizes[] = {{subChuckLength, tr("Chuck Length")},
+                                                      {subHousingDiameter, tr("Housing Diameter")},
+                                                      {subHousingLength, tr("Housing Length")}};
+      for (int i = 0; i < 3; ++i) {
+        if (!evaluate(sizes[i].first->text(), QStringLiteral("length"), &subBody[i]) || subBody[i] < 0.0) {
+          tabs->setCurrentIndex(subTab);
+          message->setText(tr("%1: a length of zero or more.").arg(sizes[i].second));
+          return;
+        }
+      }
+      if (subParkSet && !evaluate(subParkZ->text(), QStringLiteral("length"), &subParkValue)) {
+        tabs->setCurrentIndex(subTab);
+        message->setText(tr("%1: a machine Z, or left empty.").arg(tr("Waits at Z")));
+        return;
+      }
+      // Its profile: points of a Z and a diameter, in order along Z
+      // (mitcad#2405).
+      for (const QString& entry : subProfile->text().split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        if (entry.trimmed().isEmpty()) {
+          continue;
+        }
+        const QStringList parts = entry.split(QLatin1Char(','));
+        double point[2] = {};
+        if (parts.size() != 2 || !evaluate(parts.at(0), QStringLiteral("length"), &point[0]) ||
+            !evaluate(parts.at(1), QStringLiteral("length"), &point[1]) || point[1] < 0.0) {
+          tabs->setCurrentIndex(subTab);
+          message->setText(tr("%1: points of a Z and a diameter of zero or more, as 0, 80; 40, 80.")
+                               .arg(tr("Body Profile")));
+          return;
+        }
+        if (!subProfilePoints.isEmpty() && point[0] < subProfilePoints.last().toArray().at(0).toDouble()) {
+          tabs->setCurrentIndex(subTab);
+          message->setText(tr("%1: its points in order along Z.").arg(tr("Body Profile")));
+          return;
+        }
+        subProfilePoints.append(QJsonArray{point[0], point[1]});
+      }
+      if (subProfilePoints.size() == 1) {
+        tabs->setCurrentIndex(subTab);
+        message->setText(tr("%1: two or more points, or left empty.").arg(tr("Body Profile")));
+        return;
+      }
+      // The turret's body: X and Z from the tool, all four or none.
+      for (int i = 0; turretSet && i < 4; ++i) {
+        if (!evaluate(turretFields[i]->text(), QStringLiteral("length"), &turretEnds[i])) {
+          tabs->setCurrentIndex(subTab);
+          message->setText(tr("The turret's body: X and Z each from a lowest up to a highest, or all left empty."));
+          return;
+        }
+      }
+      if (turretSet && (turretEnds[0] > turretEnds[1] || turretEnds[2] > turretEnds[3])) {
+        tabs->setCurrentIndex(subTab);
+        message->setText(tr("The turret's body: X and Z each from a lowest up to a highest, or all left empty."));
+        return;
+      }
+    }
     const double x0 = min.at(0).toDouble();
     const double y0 = latheY ? -0.5 * values[1] : min.at(1).toDouble();
     const double z1 = max.at(2).toDouble();
@@ -1246,7 +1512,7 @@ void CamMachinesDialog::editMachine() {
       axes.insert(QStringLiteral("b"), mills && bHead->isChecked());
       axes.insert(QStringLiteral("sub_spindle"), subSpindle->isChecked());
       latheJson.insert(QStringLiteral("axes"), axes);
-      if (mills) {
+      if (mills || sub) {
         const auto blocks = [](const QLineEdit* edit) {
           QJsonArray out;
           for (const QString& line : edit->text().split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
@@ -1256,16 +1522,87 @@ void CamMachinesDialog::editMachine() {
           }
           return out;
         };
+        const auto one = [](const QLineEdit* edit) { return edit->text().trimmed(); };
         QJsonObject codes = millTurn;
-        codes.insert(QStringLiteral("live_max_rpm"), liveRpm);
-        codes.insert(QStringLiteral("c_axis_on"), blocks(cOn));
-        codes.insert(QStringLiteral("c_axis_off"), blocks(cOff));
-        codes.insert(QStringLiteral("c_clamp"), cClamp->text().trimmed());
-        codes.insert(QStringLiteral("c_unclamp"), cUnclamp->text().trimmed());
-        codes.insert(QStringLiteral("live_cw"), liveCw->text().trimmed());
-        codes.insert(QStringLiteral("live_ccw"), liveCcw->text().trimmed());
-        codes.insert(QStringLiteral("live_stop"), liveStop->text().trimmed());
+        if (mills) {
+          codes.insert(QStringLiteral("live_max_rpm"), liveRpm);
+          codes.insert(QStringLiteral("c_axis_on"), blocks(cOn));
+          codes.insert(QStringLiteral("c_axis_off"), blocks(cOff));
+          codes.insert(QStringLiteral("c_clamp"), one(cClamp));
+          codes.insert(QStringLiteral("c_unclamp"), one(cUnclamp));
+          codes.insert(QStringLiteral("live_cw"), one(liveCw));
+          codes.insert(QStringLiteral("live_ccw"), one(liveCcw));
+          codes.insert(QStringLiteral("live_stop"), one(liveStop));
+          // The B head's clamp (mitcad#2375).
+          codes.insert(QStringLiteral("b_clamp"), one(bClamp));
+          codes.insert(QStringLiteral("b_unclamp"), one(bUnclamp));
+        }
+        // The sub-spindle's codes, its C axis's with the live tools
+        // (mitcad#2375).
+        if (sub) {
+          codes.insert(QStringLiteral("sub_axis"), subAxis->currentData().toString());
+          codes.insert(QStringLiteral("sync_on"), one(syncOn));
+          codes.insert(QStringLiteral("sync_off"), one(syncOff));
+          codes.insert(QStringLiteral("sub_chuck_close"), one(subChuckClose));
+          codes.insert(QStringLiteral("sub_chuck_open"), one(subChuckOpen));
+          codes.insert(QStringLiteral("main_chuck_open"), one(mainChuckOpen));
+          codes.insert(QStringLiteral("sub_cw"), one(subCw));
+          codes.insert(QStringLiteral("sub_ccw"), one(subCcw));
+          codes.insert(QStringLiteral("sub_stop"), one(subStop));
+          if (mills) {
+            codes.insert(QStringLiteral("sub_c_axis_on"), blocks(subCOn));
+            codes.insert(QStringLiteral("sub_c_axis_off"), blocks(subCOff));
+            codes.insert(QStringLiteral("sub_c_clamp"), one(subCClamp));
+            codes.insert(QStringLiteral("sub_c_unclamp"), one(subCUnclamp));
+            // A control that mirrors only Z there (mitcad#2392).
+            codes.insert(QStringLiteral("sub_mirror_z_only"), subMirror->isChecked());
+          }
+        }
         latheJson.insert(QStringLiteral("mill_turn"), codes);
+      }
+      // The sub-spindle's speeds, travel and chuck (mitcad#2375); a hidden
+      // page keeps the stored values.
+      if (sub) {
+        QJsonObject subData;
+        if (subRpm[0] > 0.0) {
+          subData.insert(QStringLiteral("min_rpm"), subRpm[0]);
+        }
+        if (subRpm[1] > 0.0) {
+          subData.insert(QStringLiteral("max_rpm"), subRpm[1]);
+        }
+        if (subTravelSet) {
+          subData.insert(QStringLiteral("travel"), QJsonArray{subEnds[0], subEnds[1]});
+        }
+        if (subChuckDiameter > 0.0) {
+          subData.insert(QStringLiteral("chuck_diameter"), subChuckDiameter);
+        }
+        // Its body, where it waits and the zones moving with it
+        // (mitcad#2392).
+        const char* const bodyKeys[] = {"chuck_length", "housing_diameter", "housing_length"};
+        for (int i = 0; i < 3; ++i) {
+          if (subBody[i] > 0.0) {
+            subData.insert(QString::fromLatin1(bodyKeys[i]), subBody[i]);
+          }
+        }
+        if (subParkSet) {
+          subData.insert(QStringLiteral("park"), subParkValue);
+        }
+        if (!subZones.isEmpty()) {
+          subData.insert(QStringLiteral("zones"), subZones);
+        }
+        // Its own profile and the turret's body round the tool
+        // (mitcad#2405).
+        if (!subProfilePoints.isEmpty()) {
+          subData.insert(QStringLiteral("profile"), subProfilePoints);
+        }
+        latheJson.insert(QStringLiteral("sub_spindle"), subData);
+        if (turretSet) {
+          latheJson.insert(QStringLiteral("turret_body"),
+                           QJsonObject{{QStringLiteral("x"), QJsonArray{turretEnds[0], turretEnds[1]}},
+                                       {QStringLiteral("z"), QJsonArray{turretEnds[2], turretEnds[3]}}});
+        } else {
+          latheJson.remove(QStringLiteral("turret_body"));
+        }
       }
       body.insert(QStringLiteral("lathe"), latheJson);
     }

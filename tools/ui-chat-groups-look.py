@@ -66,6 +66,11 @@ def main():
             if "Asking the platform for the " + theme + " colour scheme" not in log:
                 raise RuntimeError("the " + theme + " colour scheme was not asked for; see "
                                    + str(out / ("look-" + theme + ".log")))
+            # In effect, not only asked for (mitcad#2404: under Xvfb the
+            # platform may keep its light palette; MitCad then sets its own).
+            if "Colour scheme in effect: " + theme + " " not in log:
+                raise RuntimeError("the " + theme + " colour scheme is not in effect; see "
+                                   + str(out / ("look-" + theme + ".log")))
             print("ok   " + str(closed) + " " + str(opened))
 
 

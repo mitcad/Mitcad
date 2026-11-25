@@ -3362,10 +3362,6 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 on rikki</translation>
     </message>
     <message>
-        <source>%1 is closed; a web needs open curves</source>
-        <translation>%1 on suljettu; seinämä tarvitsee avoimia käyriä</translation>
-    </message>
-    <message>
         <source>%1 is compressed (%2)</source>
         <translation>%1 on pakattu (%2)</translation>
     </message>
@@ -15646,6 +15642,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation> ja sen ketju</translation>
     </message>
     <message>
+        <source>&quot;%1&quot; is a text, a name or a uid</source>
+        <translation>&quot;%1&quot; on teksti, nimi tai uid</translation>
+    </message>
+    <message>
         <source>%1 End Cap</source>
         <translation>%1 päätykansi</translation>
     </message>
@@ -15666,6 +15666,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Kohteen %2 kappaleista %1 ei ole tulostuspalveluille, ja ne jätetään pois: %3. Muut %4 voi lähettää tulostuspalveluun.</translation>
     </message>
     <message>
+        <source>%1 cannot be offset in the rib&apos;s sketch plane for Normal to Curves</source>
+        <translation>kohteelle %1 ei voi tehdä siirtymää rivan luonnostasossa suunnalle Käyrien normaalin suuntaan</translation>
+    </message>
+    <message>
         <source>%1 cannot follow %2 there: the joints do not hold</source>
         <translation>%1 ei voi seurata kohdetta %2 sinne: liitokset eivät pidä</translation>
     </message>
@@ -15684,6 +15688,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 from the library %2: not for print services</source>
         <translation>%1 kirjastosta %2: ei tulostuspalveluille</translation>
+    </message>
+    <message>
+        <source>%1 has %2 triangle colours for %3 triangles</source>
+        <translation>kohteessa %1 on %2 kolmion väriä %3 kolmiolle</translation>
+    </message>
+    <message>
+        <source>%1 has colours on its triangles but none of its own</source>
+        <translation>kohteen %1 kolmioilla on värejä, mutta sillä itsellään ei ole väriä</translation>
     </message>
     <message>
         <source>%1 has no box to rest on the side</source>
@@ -15724,6 +15736,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 is %2 mm long: an inward end cap of %3 mm leaves nothing of it</source>
         <translation>%1 on %2 mm pitkä: %3 mm:n sisäänpäin oleva päätykansi ei jätä siitä mitään</translation>
+    </message>
+    <message>
+        <source>%1 is a feature of the type %2, not %3</source>
+        <translation>%1 on tyypin %2 piirre, ei %3</translation>
+    </message>
+    <message>
+        <source>%1 is a feature of the type %2, not a sketch</source>
+        <translation>%1 on tyypin %2 piirre, ei luonnos</translation>
     </message>
     <message>
         <source>%1 is a library part; it changes only in its library</source>
@@ -15942,6 +15962,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Koneen %1 työkalunvaihtajassa on työkalut 1–%2; anna kohteelle %3 numero väliltä 1–%4.</translation>
     </message>
     <message>
+        <source>%1. The Corner Relief of the sheet rules does not fit at this flange&apos;s corner: make Corner Relief Width smaller, or give the flange a relief of its own</source>
+        <translation>%1. Ohutlevysääntöjen nurkan vapautusleikkaus ei mahdu tämän laipan nurkkaan: pienennä nurkan vapautusleikkauksen leveyttä tai anna laipalle oma vapautusleikkaus</translation>
+    </message>
+    <message>
         <source>%1: %2 is fixed where it is now; it will not follow the assembly</source>
         <translation>%1: %2 kiinnitetään nykyiselle paikalleen; se ei seuraa kokoonpanoa</translation>
     </message>
@@ -16026,10 +16050,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1: kelpoisuutta ei tarkistettu (ydin ei voi tarkistaa sitä)</translation>
     </message>
     <message>
-        <source>%1: live tools cut on the main spindle only.</source>
-        <translation>%1: pyörivät työkalut työstävät vain pääkaralla.</translation>
-    </message>
-    <message>
         <source>%1: not valid</source>
         <translation>%1: ei kelpaa</translation>
     </message>
@@ -16048,6 +16068,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1: the feed of its rapids must be above zero.</source>
         <translation>%1: sen pikaliikkeiden syötön on oltava nollaa suurempi.</translation>
+    </message>
+    <message>
+        <source>%1: the kernel gave the faces of %2 triangles for %3</source>
+        <translation>%1: geometriaydin antoi %2 kolmion tahkot kohteelle %3</translation>
     </message>
     <message>
         <source>%1: the lathe has no B head to tilt the tool.</source>
@@ -16076,6 +16100,34 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1: the profile it lies along is gone</source>
         <translation>%1: profiili, jonka suuntaisesti se on, on poissa</translation>
+    </message>
+    <message>
+        <source>%1: the tool runs into %2, which moves with the sub-spindle.</source>
+        <translation>%1: työkalu törmää kohteeseen %2, joka liikkuu vastakaran mukana.</translation>
+    </message>
+    <message>
+        <source>%1: the tool runs into the sub-spindle&apos;s body.</source>
+        <translation>%1: työkalu törmää vastakaran runkoon.</translation>
+    </message>
+    <message>
+        <source>%1: the tool runs into the sub-spindle&apos;s housing.</source>
+        <translation>%1: työkalu törmää vastakaran karakoteloon.</translation>
+    </message>
+    <message>
+        <source>%1: the turret runs into %2, which moves with the sub-spindle.</source>
+        <translation>%1: revolveri törmää kohteeseen %2, joka liikkuu vastakaran mukana.</translation>
+    </message>
+    <message>
+        <source>%1: the turret runs into the sub-spindle&apos;s body.</source>
+        <translation>%1: revolveri törmää vastakaran runkoon.</translation>
+    </message>
+    <message>
+        <source>%1: the turret runs into the sub-spindle&apos;s chuck.</source>
+        <translation>%1: revolveri törmää vastakaran istukkaan.</translation>
+    </message>
+    <message>
+        <source>%1: the turret runs into the sub-spindle&apos;s housing.</source>
+        <translation>%1: revolveri törmää vastakaran karakoteloon.</translation>
     </message>
     <message>
         <source>, not valid</source>
@@ -16158,12 +16210,36 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Pisteeseen päättyy yksi käyrä. Viivojen, kaarien tai kartioleikkausten kulma edellyttää kahta käyrää</translation>
     </message>
     <message>
+        <source>A query is an object, such as {&quot;query&quot;: &quot;sketch&quot;}</source>
+        <translation>Kysely on olio, kuten {&quot;query&quot;: &quot;sketch&quot;}</translation>
+    </message>
+    <message>
+        <source>A query needs &quot;query&quot;, one of %1</source>
+        <translation>Kysely tarvitsee kentän &quot;query&quot;, jonkin näistä: %1</translation>
+    </message>
+    <message>
         <source>A sketch wrapped onto the diameter must lie on a plane along the spindle axis.</source>
         <translation>Kehälle kiedotun luonnoksen on oltava karan akselin suuntaisella tasolla.</translation>
     </message>
     <message>
         <source>A turning operation turns: it has no live tool&apos;s place.</source>
         <translation>Sorvausvaihe sorvaa: sillä ei ole pyörivän työkalun paikkaa.</translation>
+    </message>
+    <message>
+        <source>A tutorial page cannot read the query %1; it reads %2</source>
+        <translation>Tutoriaalin sivu ei voi lukea kyselyä %1; se lukee kyselyt %2</translation>
+    </message>
+    <message>
+        <source>A tutorial page only reads the design: it cannot run %1; the user makes every change</source>
+        <translation>Tutoriaalin sivu vain lukee mallia: se ei voi suorittaa komentoa %1; käyttäjä tekee jokaisen muutoksen</translation>
+    </message>
+    <message>
+        <source>A tutorial page reads only the design of its own window (%1), not %2</source>
+        <translation>Tutoriaalin sivu lukee vain oman ikkunansa mallia (%1), ei mallia %2</translation>
+    </message>
+    <message>
+        <source>A zone that moves with the sub-spindle needs a name and bounds from a minimum up to a maximum.</source>
+        <translation>Vastakaran mukana liikkuva kieltoalue tarvitsee nimen ja rajat minimistä maksimiin.</translation>
     </message>
     <message>
         <source>Add Parameter Group %1</source>
@@ -16184,6 +16260,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Change Selection Set %1</source>
         <translation>Muuta valintajoukkoa %1</translation>
+    </message>
+    <message>
+        <source>Corners joins the far side of a rib grown Normal to Curves: set its direction to &quot;normal&quot;, or leave corners out</source>
+        <translation>Nurkat (corners) yhdistää vain käyrien normaalin suuntaan kasvatetun rivan kauemman sivun: aseta sen suunnaksi &quot;normal&quot; tai jätä corners pois</translation>
     </message>
     <message>
         <source>Curves already end at a point</source>
@@ -16266,6 +16346,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Lisää pisteet luonnokseen %1</translation>
     </message>
     <message>
+        <source>It is on the main spindle after the sub-spindle&apos;s operations: move it before them.</source>
+        <translation>Se on pääkaralla vastakaran työstövaiheiden jälkeen: siirrä se niiden edelle.</translation>
+    </message>
+    <message>
         <source>Its tool sits in a radial holder: it cuts planes along the spindle axis.</source>
         <translation>Sen työkalu on radiaalisessa pitimessä: se työstää karan akselin suuntaisia tasoja.</translation>
     </message>
@@ -16334,6 +16418,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Lähisivu</translation>
     </message>
     <message>
+        <source>No sketch is open; name one: {&quot;query&quot;: &quot;sketch&quot;, &quot;name&quot;: &quot;Sketch1&quot;}</source>
+        <translation>Luonnosta ei ole auki; nimeä jokin: {&quot;query&quot;: &quot;sketch&quot;, &quot;name&quot;: &quot;Sketch1&quot;}</translation>
+    </message>
+    <message>
         <source>None of the %1 bodies may be sent to a print service: %2.</source>
         <translation>Yhtäkään %1 kappaleesta ei voi lähettää tulostuspalveluun: %2.</translation>
     </message>
@@ -16352,10 +16440,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>On the diameter a live tool mills the faces round the spindle axis or the sketch geometry wrapped onto it, and drills holes at points.</source>
         <translation>Kehällä pyörivä työkalu jyrsii karan akselin ympäri olevia tahkoja tai sille kiedottua luonnosgeometriaa ja poraa reikiä pisteisiin.</translation>
-    </message>
-    <message>
-        <source>Only turning operations turn the part&apos;s back on the sub-spindle; live tools cut on the main spindle.</source>
-        <translation>Vain sorvausvaiheet sorvaavat työkappaleen takapään vastakaralla; pyörivät työkalut työstävät pääkaralla.</translation>
     </message>
     <message>
         <source>Pick the holes: points, round edges or holes&apos; faces.</source>
@@ -16470,6 +16554,26 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Leikkaus ei enää ulotu komponenttiin, jota se työstää tässä kokoonpanossa; komponentti jätetään ennalleen.</translation>
     </message>
     <message>
+        <source>The design has no feature</source>
+        <translation>Mallissa ei ole piirrettä</translation>
+    </message>
+    <message>
+        <source>The design has no feature %1</source>
+        <translation>Mallissa ei ole piirrettä %1</translation>
+    </message>
+    <message>
+        <source>The design has no feature before the marker</source>
+        <translation>Mallissa ei ole piirrettä ennen aikajanan merkkiä</translation>
+    </message>
+    <message>
+        <source>The design has no feature of the type %1 before the marker</source>
+        <translation>Mallissa ei ole tyypin %1 piirrettä ennen aikajanan merkkiä</translation>
+    </message>
+    <message>
+        <source>The design has no sketch %1</source>
+        <translation>Mallissa ei ole luonnosta %1</translation>
+    </message>
+    <message>
         <source>The expression cannot be read: %1.</source>
         <translation>Lauseketta ei voi lukea: %1.</translation>
     </message>
@@ -16502,6 +16606,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Lauseke käyttää nimeä %1, joka ei ole parametri. Tarkoititko %2?</translation>
     </message>
     <message>
+        <source>The hand-over before %1: the sub-spindle goes beyond its travel.</source>
+        <translation>Siirto ennen kohdetta %1: vastakara menee liikealueensa ulkopuolelle.</translation>
+    </message>
+    <message>
+        <source>The hand-over before %1: the synchronized speed is outside what the spindles can do.</source>
+        <translation>Siirto ennen kohdetta %1: tahdistettu nopeus on karojen nopeusalueen ulkopuolella.</translation>
+    </message>
+    <message>
         <source>The hand-over needs where the sub-spindle grips, how far it pulls the part back, a speed and a feed above zero.</source>
         <translation>Siirto tarvitsee kohdan, josta vastakara tarttuu, matkan, jonka se vetää työkappaletta taaksepäin, sekä nollaa suuremman nopeuden ja syötön.</translation>
     </message>
@@ -16516,6 +16628,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>The machine %1 takes milling tools only.</source>
         <translation>Kone %1 ottaa vain jyrsintätyökaluja.</translation>
+    </message>
+    <message>
+        <source>The open sketch %1 is not a uid</source>
+        <translation>Avoin luonnos %1 ei ole uid</translation>
     </message>
     <message>
         <source>The operation has no faces to mill on the diameter: pick the floors round the spindle axis.</source>
@@ -16554,8 +16670,44 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Ohjelman numeron on oltava 1–9999.</translation>
     </message>
     <message>
+        <source>The query %1 has no field &quot;%2&quot;; it takes %3</source>
+        <translation>Kyselyssä %1 ei ole kenttää &quot;%2&quot;; sen kentät: %3</translation>
+    </message>
+    <message>
+        <source>The query is not JSON: %1</source>
+        <translation>Kysely ei ole JSONia: %1</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s C axis needs one to eight blocks that switch it off.</source>
+        <translation>Vastakaran C-akseli tarvitsee yhdestä kahdeksaan lausetta, jotka kytkevät sen pois.</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s C axis needs one to eight blocks that switch it on.</source>
+        <translation>Vastakaran C-akseli tarvitsee yhdestä kahdeksaan lausetta, jotka kytkevät sen päälle.</translation>
+    </message>
+    <message>
         <source>The sub-spindle&apos;s axis is one of the letters A, B and E.</source>
         <translation>Vastakaran akseli on jokin kirjaimista A, B ja E.</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s chuck diameter must be zero or more.</source>
+        <translation>Vastakaran istukan halkaisijan on oltava nolla tai enemmän.</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s chuck length and its housing&apos;s size must be zero or more.</source>
+        <translation>Vastakaran istukan pituuden ja karakotelon koon on oltava vähintään nolla.</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s profile needs two or more points in order along Z, each with a diameter of zero or more.</source>
+        <translation>Vastakaran profiili tarvitsee vähintään kaksi pistettä järjestyksessä Z:n suunnassa, kunkin halkaisija nolla tai enemmän.</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s speeds must run from a minimum up to a maximum, or be left at zero.</source>
+        <translation>Vastakaran nopeuksien on edettävä pienimmästä suurimpaan, tai ne jätetään nollaan.</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s travel must run from its lowest Z up to its highest.</source>
+        <translation>Vastakaran liikealueen on edettävä sen pienimmästä Z:sta suurimpaan.</translation>
     </message>
     <message>
         <source>The sub-spindle&apos;s work offset must be one of G54 to G59.</source>
@@ -16564,6 +16716,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>The tool change position must be numbers.</source>
         <translation>Työkalunvaihtoaseman on oltava lukuja.</translation>
+    </message>
+    <message>
+        <source>The turret&apos;s body needs X and Z from the tool, each from a lowest up to a highest.</source>
+        <translation>Revolverin runko tarvitsee X:n ja Z:n työkalusta, kumpikin pienimmästä suurimpaan.</translation>
     </message>
     <message>
         <source>The version is recorded but was not sent: %1</source>
@@ -17150,6 +17306,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Web viewer: on, updated on each save</source>
         <translation>Verkkokatselin: päällä, päivitetään jokaisella tallennuksella</translation>
+    </message>
+    <message>
+        <source>Where the sub-spindle waits must be a machine Z of its jaws&apos; face.</source>
+        <translation>Vastakaran odotuskohdan on oltava sen leukojen tahkon koneen Z.</translation>
     </message>
     <message>
         <source>Whole shape</source>
@@ -19738,6 +19898,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tahko on luettelossa useammin kuin kerran</translation>
     </message>
     <message>
+        <source>a face is no longer split; the sketch lies on the whole face</source>
+        <translation>tahko ei ole enää jaettu; luonnos on koko tahkolla</translation>
+    </message>
+    <message>
         <source>a face is no point or curve: a point lies on it through an On Face relation</source>
         <translation>tahko ei ole piste eikä käyrä: piste on sillä Tahkolla-suhteen kautta</translation>
     </message>
@@ -19764,6 +19928,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a face is not where the bend before it puts it: it must lie in the plane of the panel the bend makes</source>
         <translation>tahko ei ole siinä, mihin sitä edeltävä taivutus sen asettaa: sen on oltava taivutuksen muodostaman paneelin tasossa</translation>
+    </message>
+    <message>
+        <source>a face is split into %1 pieces that do not lie in one plane; the sketch lies on the largest, %2 (Redefine Sketch Plane puts it on another)</source>
+        <translation>tahko on jaettu %1 osaan, jotka eivät ole samassa tasossa; luonnos on suurimmalla, %2 (Määritä luonnostaso uudelleen siirtää sen toiselle)</translation>
     </message>
     <message>
         <source>a face joined by a bend: its bend part lists %1 items of the face&apos;s own plate, not decoded yet</source>
@@ -20360,6 +20528,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a frame&apos;s kind is wall, floor or roof</source>
         <translation>rungon tyyppi on seinä, lattia tai katto</translation>
+    </message>
+    <message>
+        <source>a free edge of the section bounds a face without a name</source>
+        <translation>poikkileikkauksen vapaa särmä rajaa tahkoa, jolla ei ole nimeä</translation>
     </message>
     <message>
         <source>a free move must be a rotation and a translation</source>
@@ -22322,6 +22494,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piste ei ole polun käyrä</translation>
     </message>
     <message>
+        <source>a point is not a curve; a web needs curves (%1)</source>
+        <translation>piste ei ole käyrä; verkko tarvitsee käyriä (%1)</translation>
+    </message>
+    <message>
         <source>a point is not solved</source>
         <translation>pistettä ei ole ratkaistu</translation>
     </message>
@@ -23060,6 +23236,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a rib along the sketch normal is a web</source>
         <translation>luonnoksen normaalin suuntainen ripa on uuma</translation>
+    </message>
+    <message>
+        <source>a rib grown Normal to Curves runs a depth: its far side is its curves offset by the depth; set Depth Type to Depth, or choose another Direction for To Next</source>
+        <translation>käyrien normaalin suuntaan kasvatettu ripa kulkee syvyyden verran: sen kauempi sivu on sen käyrät syvyyden verran siirrettyinä; aseta syvyystyypiksi Syvyys tai valitse Seuraavaan-asetukselle toinen suunta</translation>
     </message>
     <message>
         <source>a rib needs an open chain of curves</source>
@@ -24420,6 +24600,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a tread&apos;s side does not reach its inner circle</source>
         <translation>askelman sivu ei ulotu sen sisäympyrään</translation>
+    </message>
+    <message>
+        <source>a triangle of object %1 refers to material %2 of group %3, which has %4</source>
+        <translation>objektin %1 kolmio viittaa ryhmän %3 materiaaliin %2, mutta ryhmässä on %4</translation>
+    </message>
+    <message>
+        <source>a triangle of object %1 refers to material group %2, which is not defined</source>
+        <translation>objektin %1 kolmio viittaa materiaaliryhmään %2, jota ei ole määritelty</translation>
     </message>
     <message>
         <source>a triangle refers to a vertex its mesh does not have</source>
@@ -27454,6 +27642,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>lukitsee C-akselin</translation>
     </message>
     <message>
+        <source>clamps the sub-spindle&apos;s C axis</source>
+        <translation>lukitsee vastakaran C-akselin</translation>
+    </message>
+    <message>
         <source>closes every bend its Unfold (%1) opened, as the file&apos;s Refold paired with it</source>
         <translation>sulkee jokaisen taivutuksen, jonka sen avaus (%1) avasi, kuten tiedoston siihen pariksi liitetty takaisintaivutus</translation>
     </message>
@@ -27496,6 +27688,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>curve %1 of the section&apos;s outline</source>
         <translation>poikkileikkauksen ääriviivan käyrä %1</translation>
+    </message>
+    <message>
+        <source>curves of free edges</source>
+        <translation>vapaiden särmien käyrät</translation>
     </message>
     <message>
         <source>curves one way: %1; crossing curves: %2</source>
@@ -27626,8 +27822,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>explode_views[%1]: räjäytyskuvanto %2 on luettelossa useammin kuin kerran</translation>
     </message>
     <message>
+        <source>face %1 is no longer split; the sketch lies on the whole face %2</source>
+        <translation>tahko %1 ei ole enää jaettu; luonnos on koko tahkolla %2</translation>
+    </message>
+    <message>
         <source>face %1 is not planar: panels are made of planar faces</source>
         <translation>tahko %1 ei ole tasomainen: paneelit tehdään tasomaisista tahkoista</translation>
+    </message>
+    <message>
+        <source>face %1 is split into %2 pieces that do not lie in one plane; the sketch lies on the largest, %3 (Redefine Sketch Plane puts it on another)</source>
+        <translation>tahko %1 on jaettu %2 osaan, jotka eivät ole samassa tasossa; luonnos on suurimmalla, %3 (Määritä luonnostaso uudelleen siirtää sen toiselle)</translation>
     </message>
     <message>
         <source>face %1 of %2 is not there at the timeline marker: %3</source>
@@ -27652,6 +27856,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>fewer than two curves cross c%1</source>
         <translation>käyrää c%1 leikkaa vähemmän kuin kaksi käyrää</translation>
+    </message>
+    <message>
+        <source>flange corner reliefs</source>
+        <translation>laippojen nurkkien vapautusleikkaukset</translation>
     </message>
     <message>
         <source>for board</source>
@@ -27972,6 +28180,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the values %1 takes from its templates %2 (not found: only its own are in the file)</source>
         <translation>arvot, jotka %1 ottaa mallipohjistaan %2 (ei löytynyt: tiedostossa on vain sen omat)</translation>
+    </message>
+    <message>
+        <source>the view shows no edge of the %1 joint of %2 and %3</source>
+        <translation>kuvanto ei näytä yhtään särmää kohteiden %2 ja %3 liitoksesta %1</translation>
     </message>
     <message>
         <source>there is no BOM Structure %1; the structures are %2</source>
@@ -50016,6 +50228,22 @@ ament_package()
         <translation>ei mitään, mistä tehdä lohko: valitse luonnoksen pisteitä ja käyriä</translation>
     </message>
     <message>
+        <source>%1: the lathe has no sub-spindle to hold the part&apos;s back.</source>
+        <translation>%1: sorvissa ei ole vastakaraa työkappaleen takapään pitämiseen.</translation>
+    </message>
+    <message>
+        <source>%1: the spindle limit is above what the sub-spindle can do.</source>
+        <translation>%1: karan nopeusraja ylittää vastakaran nopeusalueen.</translation>
+    </message>
+    <message>
+        <source>%1: the spindle speed is outside what the sub-spindle can do.</source>
+        <translation>%1: karan nopeus on vastakaran nopeusalueen ulkopuolella.</translation>
+    </message>
+    <message>
+        <source>%1: the tool runs into the sub-spindle&apos;s chuck.</source>
+        <translation>%1: työkalu törmää vastakaran istukkaan.</translation>
+    </message>
+    <message>
         <source>A curve has no knot between its ends to remove with a point</source>
         <translation>Käyrällä ei ole päiden välissä solmua, jonka voisi poistaa pisteen kanssa</translation>
     </message>
@@ -50050,6 +50278,10 @@ ament_package()
     <message>
         <source>Lock Aspect keeps the image&apos;s proportions: give the decal&apos;s width or its height, not %1 by %2 (or turn Lock Aspect off)</source>
         <translation>Lukitse mittasuhteet säilyttää kuvan mittasuhteet: anna tarran leveys tai korkeus, ei %1 × %2 (tai poista Lukitse mittasuhteet käytöstä)</translation>
+    </message>
+    <message>
+        <source>On the sub-spindle an operation turns the part&apos;s back or cuts it with a live tool.</source>
+        <translation>Vastakaralla työstövaihe sorvaa työkappaleen takapään tai työstää sitä pyörivällä työkalulla.</translation>
     </message>
     <message>
         <source>Propose %1 weld symbols in %2</source>
@@ -50138,6 +50370,10 @@ ament_package()
     <message>
         <source>frees the C axis</source>
         <translation>vapauttaa C-akselin</translation>
+    </message>
+    <message>
+        <source>frees the sub-spindle&apos;s C axis</source>
+        <translation>vapauttaa vastakaran C-akselin</translation>
     </message>
     <message>
         <source>from and to must be finite times in seconds</source>
@@ -50320,8 +50556,16 @@ ament_package()
         <translation>suuntaa ei ole annettu</translation>
     </message>
     <message>
+        <source>no fields</source>
+        <translation>ei kenttiä</translation>
+    </message>
+    <message>
         <source>no free appearance name for %1</source>
         <translation>kohteelle %1 ei ole vapaata ulkoasun nimeä</translation>
+    </message>
+    <message>
+        <source>no opening %1</source>
+        <translation>aukkoa %1 ei ole</translation>
     </message>
     <message>
         <source>no parameter to move</source>
@@ -50536,6 +50780,14 @@ ament_package()
         <translation>kytkee C-akselin päälle</translation>
     </message>
     <message>
+        <source>switches the sub-spindle&apos;s C axis off</source>
+        <translation>kytkee vastakaran C-akselin pois</translation>
+    </message>
+    <message>
+        <source>switches the sub-spindle&apos;s C axis on</source>
+        <translation>kytkee vastakaran C-akselin päälle</translation>
+    </message>
+    <message>
         <source>synchronises the spindles</source>
         <translation>tahdistaa karat</translation>
     </message>
@@ -50556,12 +50808,28 @@ ament_package()
         <translation>tekstit eivät ole lohkon geometriaa</translation>
     </message>
     <message>
+        <source>the %1 condition %2 does not fit a chain of a body&apos;s edges</source>
+        <translation>ehto %1 %2 ei sovi kappaleen särmäketjuun</translation>
+    </message>
+    <message>
         <source>the %1 condition direction needs curves that lie in a plane; give perpendicular with the face they lie on instead</source>
         <translation>ehto %1 direction tarvitsee käyrät, jotka ovat tasossa; anna sen sijaan perpendicular ja tahko, jolla ne ovat</translation>
     </message>
     <message>
         <source>the %1 condition perpendicular needs the face that the 3D sketch&apos;s curves lie on: give it as the condition&apos;s face</source>
         <translation>ehto %1 perpendicular tarvitsee tahkon, jolla 3D-luonnoksen käyrät ovat: anna se ehdon tahkona</translation>
+    </message>
+    <message>
+        <source>the %1 joint of %2 and %3: the members touch along no edge, so no weld can be placed</source>
+        <translation>kohteiden %2 ja %3 liitos %1: rakenneosat eivät kosketa toisiaan minkään särmän matkalta, joten hitsiä ei voi sijoittaa</translation>
+    </message>
+    <message>
+        <source>the %1 section&apos;s edges bound no one face: give the face to leave at right angles as the %2 condition&apos;s face</source>
+        <translation>poikkileikkauksen %1 särmät eivät rajaa yhtä tahkoa: anna tahko, josta lähdetään kohtisuoraan, ehdon %2 tahkona</translation>
+    </message>
+    <message>
+        <source>the %1 section&apos;s edges lie between the same two faces: give the one to leave at right angles as the %2 condition&apos;s face</source>
+        <translation>poikkileikkauksen %1 särmät ovat samojen kahden tahkon välissä: anna se, josta lähdetään kohtisuoraan, ehdon %2 tahkona</translation>
     </message>
     <message>
         <source>the %1&apos;s draft angle must lie between -90 and 90 degrees, got %2 rad</source>
@@ -55528,6 +55796,18 @@ ament_package()
         <translation>pyöräytysakselilla ei ole suuntaa</translation>
     </message>
     <message>
+        <source>the rib&apos;s curves offset by its depth of %1 mm fall apart where %2 vanish; give the rib a smaller depth</source>
+        <translation>rivan käyrät hajoavat, kun niitä siirretään sen syvyyden %1 mm verran, kohdissa, joissa %2 häviävät; anna ripalle pienempi syvyys</translation>
+    </message>
+    <message>
+        <source>the rib&apos;s curves offset by its depth of %1 mm fall apart; give the rib a smaller depth</source>
+        <translation>rivan käyrät hajoavat, kun niitä siirretään sen syvyyden %1 mm verran; anna ripalle pienempi syvyys</translation>
+    </message>
+    <message>
+        <source>the rib&apos;s curves offset by its depth of %1 mm: %2</source>
+        <translation>rivan käyrät siirrettyinä sen syvyyden %1 mm verran: %2</translation>
+    </message>
+    <message>
         <source>the rib&apos;s direction has no length</source>
         <translation>rivan suunnalla ei ole pituutta</translation>
     </message>
@@ -55700,6 +55980,14 @@ ament_package()
         <translation>levyn %1 säännöt eivät ole käytettävissä</translation>
     </message>
     <message>
+        <source>the rules&apos; corner relief</source>
+        <translation>sääntöjen nurkan vapautusleikkaus</translation>
+    </message>
+    <message>
+        <source>the rules&apos; corner relief removes all material of %1</source>
+        <translation>sääntöjen nurkan vapautusleikkaus poistaa kohteen %1 kaiken materiaalin</translation>
+    </message>
+    <message>
         <source>the rules&apos; crease table has no rows</source>
         <translation>sääntöjen nuuttaustaulukossa ei ole rivejä</translation>
     </message>
@@ -55862,6 +56150,14 @@ ament_package()
     <message>
         <source>the section&apos;s height</source>
         <translation>poikkileikkauksen korkeus</translation>
+    </message>
+    <message>
+        <source>the section&apos;s openings pick no free edges of a body</source>
+        <translation>poikkileikkauksen aukot eivät poimi kappaleen vapaita särmiä</translation>
+    </message>
+    <message>
+        <source>the section&apos;s openings pick no free edges of body %1</source>
+        <translation>poikkileikkauksen aukot eivät poimi kappaleen %1 vapaita särmiä</translation>
     </message>
     <message>
         <source>the section&apos;s outline has no curves</source>
@@ -57322,10 +57618,6 @@ ament_package()
         <translation>kuvanto ei enää näytä kohdetta %1: sen viivatyyli säilytetään</translation>
     </message>
     <message>
-        <source>the view shows no edge of the joint</source>
-        <translation>kuvanto ei näytä liitoksen yhtään särmää</translation>
-    </message>
-    <message>
         <source>the view&apos;s eye must differ from its target</source>
         <translation>näkymän silmäpisteen on oltava eri kuin kohdepisteen</translation>
     </message>
@@ -58198,6 +58490,10 @@ ament_package()
         <translation>kolmioverkot</translation>
     </message>
     <message>
+        <source>triangle meshes with their faces</source>
+        <translation>kolmioverkot tahkoineen</translation>
+    </message>
+    <message>
         <source>triangles that use a vertex twice are left out: %1</source>
         <translation>kolmiot, jotka käyttävät samaa kärkipistettä kahdesti, jätetään pois: %1</translation>
     </message>
@@ -58694,6 +58990,10 @@ ament_package()
         <translation>tallennettujen muotojen purku myöhemmin</translation>
     </message>
     <message>
+        <source>unreadable answer: %1</source>
+        <translation>lukukelvoton vastaus: %1</translation>
+    </message>
+    <message>
         <source>unsupported curve type %1</source>
         <translation>tukematon käyrätyyppi %1</translation>
     </message>
@@ -59076,6 +59376,22 @@ ament_package()
     <message>
         <source>with %1 points, the most an equation curve takes, the curve is still up to %2 mm from its formulas (its tolerance is %3 mm): a larger tolerance or a shorter range follows them</source>
         <translation>%1 pisteelläkin, joka on yhtälökäyrän enimmäismäärä, käyrä on yhä jopa %2 mm:n päässä kaavoistaan (sen toleranssi on %3 mm): suuremmalla toleranssilla tai lyhyemmällä arvovälillä käyrä seuraa niitä</translation>
+    </message>
+    <message>
+        <source>with a draft angle, a rib grown Normal to Curves needs each arc&apos;s offset to run the arc&apos;s whole length: the offset of %1 is cut or runs on at a corner; set Corners to Round where it runs on, or give it no draft</source>
+        <translation>päästökulman kanssa käyrien normaalin suuntaan kasvatettu ripa tarvitsee jokaisen kaaren siirtymän kaaren koko pituudelle: kohteen %1 siirtymä katkeaa tai jatkuu nurkassa; aseta Nurkat arvoon Pyöreä, missä se jatkuu, tai jätä päästö pois</translation>
+    </message>
+    <message>
+        <source>with a draft angle, a rib grown Normal to Curves needs every curve&apos;s offset: %1 vanish at its depth of %2 mm; give it a smaller depth or no draft</source>
+        <translation>päästökulman kanssa käyrien normaalin suuntaan kasvatettu ripa tarvitsee jokaisen käyrän siirtymän: %1 häviävät sen syvyydellä %2 mm; anna sille pienempi syvyys tai jätä päästö pois</translation>
+    </message>
+    <message>
+        <source>with a draft angle, a rib grown Normal to Curves needs one offset for each curve; give it no draft</source>
+        <translation>päästökulman kanssa käyrien normaalin suuntaan kasvatettu ripa tarvitsee yhden siirtymän kullekin käyrälle; jätä päästö pois</translation>
+    </message>
+    <message>
+        <source>with a draft angle, a rib grown Normal to Curves takes lines and arcs: %1 is neither; give it no draft</source>
+        <translation>päästökulman kanssa käyrien normaalin suuntaan kasvatettu ripa hyväksyy viivoja ja kaaria: %1 ei ole kumpikaan; jätä päästö pois</translation>
     </message>
     <message>
         <source>with constraints or dimensions on them</source>

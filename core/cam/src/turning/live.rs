@@ -40,6 +40,12 @@
 //! working plane `G68.2` with `G53.1`, X, Y and Z in its frame, `G69`
 //! after). Its paths are written as a mill's: G0 to G3, arcs with I and J
 //! (K in G19), drilling as `G83` (`G87` across) with the C axis clamped.
+//!
+//! **On the sub-spindle** (mitcad#2375, a [`TurningProgramOp`] with `sub`)
+//! every side is the same in the sub-spindle's work coordinates (its work
+//! offset after the hand-over), written the same way, the sub-spindle
+//! stopped and its own C axis switched on and clamped with its codes
+//! ([`super::lathe::MillTurn::c_on`]).
 
 use std::f64::consts::PI;
 
@@ -309,6 +315,74 @@ impl LiveOp {
         true
     }
 
+    /// The operation with the work Y turned round (mitcad#2392): the same
+    /// cuts as a control that mirrors only Z on the sub-spindle reads them,
+    /// its X, Y and C in the main spindle's senses. On the face and on a
+    /// plane the path's y turns round (a plane's C too), on the diameter
+    /// the length round it (its angle); arcs across them run the other way.
+    pub fn mirrored_y(&self) -> LiveOp {
+        // `0.0 - v` keeps a zero a plain zero (no "-0." written).
+        let flip = |v: f64| 0.0 - v;
+        // Which coordinate of the path's x and y turns round.
+        let axis = match self.side {
+            LiveSide::Diameter { .. } => 0,
+            LiveSide::Face | LiveSide::Plane { .. } => 1,
+        };
+        let point = |p: P3| {
+            let mut q = p;
+            q[axis] = flip(q[axis]);
+            q
+        };
+        let moves = self
+            .path
+            .moves
+            .iter()
+            .map(|m| match *m {
+                Move::Rapid { to } => Move::Rapid { to: point(to) },
+                Move::Line { to, feed } => Move::Line {
+                    to: point(to),
+                    feed,
+                },
+                Move::Arc {
+                    to,
+                    center,
+                    ccw,
+                    feed,
+                } => {
+                    let mut c = center;
+                    c[axis] = flip(c[axis]);
+                    Move::Arc {
+                        to: point(to),
+                        center: c,
+                        ccw: !ccw,
+                        feed,
+                    }
+                }
+            })
+            .collect();
+        let cycles = self
+            .path
+            .cycles
+            .iter()
+            .map(|c| {
+                let mut c = c.clone();
+                for hole in &mut c.holes {
+                    hole[axis] = flip(hole[axis]);
+                }
+                c
+            })
+            .collect();
+        let side = match self.side {
+            LiveSide::Plane { c, b } => LiveSide::Plane { c: flip(c), b },
+            other => other,
+        };
+        LiveOp {
+            side,
+            path: Toolpath { moves, cycles },
+            ..self.clone()
+        }
+    }
+
     /// Points along its moves (each move's end, arcs within `tolerance`),
     /// each with whether it is a rapid's and its feed (mm/min).
     pub fn points(&self, tolerance: f64) -> Vec<(P3, Option<f64>)> {
@@ -415,6 +489,8 @@ pub struct LiveState {
     pub running: Option<(f64, SpindleDirection)>,
     /// Where the B head is tilted (mitcad#2319); none when not known.
     pub b: Option<f64>,
+    /// The C axis that is on is the sub-spindle's (mitcad#2375).
+    pub sub: bool,
 }
 
 /// The words of a point of a plane's path (mitcad#2319): the plane's two
@@ -478,9 +554,11 @@ fn rapid_legs(from: Option<P3>, to: P3) -> Vec<(bool, P3)> {
     }
 }
 
-/// Writes a live operation's blocks after its tool change: the main
-/// spindle stopped, the C axis on, feeds per minute, the live tool
-/// started (the caller writes the coolant after), then its moves.
+/// Writes a live operation's blocks after its tool change: the spindle
+/// that holds the part stopped (by the caller), its C axis on (the main
+/// spindle's, or the sub-spindle's for an operation on the part's back,
+/// mitcad#2375), feeds per minute, the live tool started (the caller writes
+/// the coolant after), then its moves.
 pub fn start(
     out: &mut TurnOutput,
     dialect: &dyn TurningPost,
@@ -495,12 +573,17 @@ pub fn start(
             dialect.label()
         )));
     }
+    // The other spindle's C axis goes off first.
+    if state.c_axis && state.sub != op.sub {
+        stop(out, dialect, program, state);
+    }
     if !state.c_axis {
-        for line in &codes.c_axis_on {
+        for line in codes.c_on(op.sub) {
             out.line(line.trim());
         }
         state.c_axis = true;
         state.clamped = false;
+        state.sub = op.sub;
         dialect.feed_per_minute(out);
     }
     let rpm = op.spindle.rpm_at(0.0);
@@ -514,8 +597,9 @@ pub fn start(
     Ok(())
 }
 
-/// Stops the live tool and switches the C axis off, back to turning with
-/// feeds per revolution; nothing when the C axis is off.
+/// Stops the live tool and switches the C axis off (the spindle's whose C
+/// axis is on), back to turning with feeds per revolution; nothing when
+/// the C axis is off.
 pub fn stop(
     out: &mut TurnOutput,
     dialect: &dyn TurningPost,
@@ -528,13 +612,14 @@ pub fn stop(
     }
     if state.c_axis {
         if state.clamped {
-            out.line(codes.c_unclamp.trim());
+            out.line(codes.unclamp(state.sub));
             state.clamped = false;
         }
-        for line in &codes.c_axis_off {
+        for line in codes.c_off(state.sub) {
             out.line(line.trim());
         }
         state.c_axis = false;
+        state.sub = false;
         dialect.feed_per_rev(out);
     }
 }
@@ -584,7 +669,7 @@ pub fn moves(
     // The C axis turns to where the path starts, free.
     let unclamp = |out: &mut TurnOutput, state: &mut LiveState| {
         if state.clamped {
-            out.line(codes.c_unclamp.trim());
+            out.line(codes.unclamp(state.sub));
             state.clamped = false;
         }
     };
@@ -626,7 +711,7 @@ pub fn moves(
             };
             unclamp(out, state);
             out.line(format!("G0 C{}", TurnOutput::angle(c)));
-            out.line(codes.c_clamp.trim());
+            out.line(codes.clamp(state.sub));
             state.clamped = true;
             match kind {
                 PlaneKind::Face => out.line("G17"),
@@ -757,7 +842,7 @@ pub fn moves(
             }
             Move::Line { to, feed } => {
                 if mode == Mode::Indexed && !state.clamped {
-                    out.line(codes.c_clamp.trim());
+                    out.line(codes.clamp(state.sub));
                     state.clamped = true;
                 }
                 let a = axes(out, to, &modal);
@@ -1038,6 +1123,10 @@ pub fn plane_map(stock: &TurnStock, side: LiveSide, grid: Grid, step: f64) -> He
 #[derive(Clone, Debug)]
 pub struct LiveSim {
     pub side: LiveSide,
+    /// On the part's back while the sub-spindle holds it (mitcad#2375):
+    /// the side, the maps and the places in the sub-spindle's work
+    /// coordinates.
+    pub sub: bool,
     /// The program's operations it cut, in order.
     pub operations: Vec<usize>,
     /// The stock before them: as the turning before the first of them left
@@ -1053,7 +1142,9 @@ pub struct LiveSim {
 /// unrolled map, each map as the turning operations before the first of
 /// them left the stock (`z_min`, `step` as [`simulate_turning`] takes
 /// them), its nodes `finest` apart when it can be with at most
-/// `max_nodes`.
+/// `max_nodes`. The operations on the part's back while the sub-spindle
+/// holds it are groups of their own, on the stock as the sub-spindle holds
+/// it (mitcad#2375).
 pub fn simulate_live(
     part: &TurnPart,
     program: &TurningProgram,
@@ -1063,16 +1154,19 @@ pub fn simulate_live(
     max_nodes: usize,
 ) -> Vec<LiveSim> {
     // The groups in the order they first come.
-    let mut groups: Vec<(LiveSide, Vec<usize>)> = Vec::new();
+    let mut groups: Vec<(LiveSide, bool, Vec<usize>)> = Vec::new();
     for (i, op) in program.operations.iter().enumerate() {
         let Some(live) = &op.live else { continue };
-        match groups.iter_mut().find(|(s, _)| s.same(&live.side)) {
-            Some((_, ops)) => ops.push(i),
-            None => groups.push((live.side, vec![i])),
+        match groups
+            .iter_mut()
+            .find(|(s, sub, _)| s.same(&live.side) && *sub == op.sub)
+        {
+            Some((_, _, ops)) => ops.push(i),
+            None => groups.push((live.side, op.sub, vec![i])),
         }
     }
     let mut out = Vec::new();
-    for (side, ops) in groups {
+    for (side, sub, ops) in groups {
         let first = ops[0];
         let before = TurningProgram {
             operations: program.operations[..first]
@@ -1082,7 +1176,15 @@ pub fn simulate_live(
                 .collect(),
             ..program.clone()
         };
-        let turned = simulate_turning(part, &before, z_min, step, 0.0).stock;
+        let mut turned = simulate_turning(part, &before, z_min, step, 0.0).stock;
+        if sub {
+            super::stock::on_sub_spindle(program, &mut turned);
+        }
+        // The stock's reach along the spindle in the group's coordinates.
+        let (z_lo, z_hi) = match (turned.z.first(), turned.z.last()) {
+            (Some(&a), Some(&b)) => (a, b),
+            _ => (z_min, part.stock_face),
+        };
         let lives: Vec<&LiveOp> = ops
             .iter()
             .filter_map(|&i| program.operations[i].live.as_ref())
@@ -1092,7 +1194,7 @@ pub fn simulate_live(
             LiveSide::Face => {
                 let r = part.stock_radius + widest;
                 let grid = Grid::for_stock([-r, -r], [r, r], finest, max_nodes);
-                face_map(&turned, grid, z_min)
+                face_map(&turned, grid, z_lo)
             }
             LiveSide::Diameter { .. } => {
                 let mut lo = f64::INFINITY;
@@ -1106,12 +1208,8 @@ pub fn simulate_live(
                 if !lo.is_finite() {
                     continue;
                 }
-                let grid = Grid::for_stock(
-                    [lo - widest, z_min],
-                    [hi + widest, part.stock_face],
-                    finest,
-                    max_nodes,
-                );
+                let grid =
+                    Grid::for_stock([lo - widest, z_lo], [hi + widest, z_hi], finest, max_nodes);
                 diameter_map(&turned, grid)
             }
             // A plane's map over its paths (mitcad#2319).
@@ -1160,6 +1258,7 @@ pub fn simulate_live(
         }
         out.push(LiveSim {
             side,
+            sub,
             operations: ops,
             initial,
             simulation,

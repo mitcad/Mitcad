@@ -25,6 +25,7 @@
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBndLib.hxx>
@@ -49,6 +50,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Vec.hxx>
 
 #include "bridge/analysis.hpp"
@@ -2838,6 +2840,196 @@ void test_reported_screw_joint_keeps_earlier_joint() {
   }
 }
 
+// The point `[x, y, z]` after `"key":[` in a JSON text, looked for from
+// `from` on; none when it has none.
+std::optional<gp_Vec> json_triple(const std::string& text, const std::string& key, std::size_t from) {
+  const std::string open = "\"" + key + "\":[";
+  const std::size_t at = text.find(open, from);
+  if (at == std::string::npos) {
+    return std::nullopt;
+  }
+  const char* p = text.c_str() + at + open.size();
+  std::array<double, 3> values{};
+  for (double& value : values) {
+    char* end = nullptr;
+    value = std::strtod(p, &end);
+    if (end == p) {
+      return std::nullopt;
+    }
+    p = end;
+    while (*p == ',' || *p == ' ') {
+      ++p;
+    }
+  }
+  return gp_Vec(values[0], values[1], values[2]);
+}
+
+// A sketch's frame as the sketch query gives it: its origin and normal.
+struct SketchPlace {
+  gp_Pnt origin;
+  gp_Vec normal;
+};
+
+std::optional<SketchPlace> sketch_place(const mitcad::Document& document, const std::string& uid) {
+  const std::string json(document.query(R"({"query": "sketch", "uid": ")" + uid + "\"}"));
+  const std::size_t frame = json.find("\"frame\":{");
+  if (frame == std::string::npos) {
+    return std::nullopt;
+  }
+  const auto origin = json_triple(json, "origin", frame);
+  const auto x = json_triple(json, "x_axis", frame);
+  const auto y = json_triple(json, "y_axis", frame);
+  if (!origin || !x || !y) {
+    return std::nullopt;
+  }
+  return SketchPlace{gp_Pnt(origin->XYZ()), x->Crossed(*y)};
+}
+
+// The planes of the planar faces of body F2.b0 that the name finds (every
+// piece of a split face), each with its area.
+std::vector<std::pair<gp_Pln, double>> face_planes(const mitcad::Document& document, const std::string& name) {
+  std::vector<std::pair<gp_Pln, double>> planes;
+  const auto body = document.body_shape("F2.b0");
+  if (!body) {
+    return planes;
+  }
+  for (const int f : body->find_faces(name)) {
+    const TopoDS_Face& face = body->face(f);
+    const BRepAdaptor_Surface surface(face);
+    if (surface.GetType() != GeomAbs_Plane) {
+      continue;
+    }
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(face, props);
+    planes.emplace_back(surface.Plane(), props.Mass());
+  }
+  return planes;
+}
+
+// Whether the sketch lies in the plane: its origin on it, its normal along
+// the plane's normal.
+bool lies_in(const SketchPlace& place, const gp_Pln& plane) {
+  return plane.Distance(place.origin) < 1e-6 && place.normal.Magnitude() > 0.5 &&
+         std::abs(std::abs(gp_Dir(place.normal).Dot(plane.Axis().Direction())) - 1.0) < 1e-9;
+}
+
+// A sketch on a drafted face follows the face when the draft's fixed plane
+// moves to an offset plane, and when its angle or pull direction changes,
+// and Redefine Sketch Plane takes the drafted face (mitcad#2351, GitHub
+// mitcad/Mitcad#622). A face that an edit of the draft splits into pieces
+// that do not lie in one plane takes the sketch on its largest piece, and
+// a piece of a face no longer split the whole face; both say so.
+void test_sketch_on_a_drafted_face_follows_the_draft() {
+  auto document = mitcad::new_demo_document(); // Sketch1 (F1, 60 x 40), Extrude1 (F2, 20 mm)
+  const std::string side = "F2:side(c2[c1,c3])"; // x = 60
+  const std::string top = "F2:end(" + kRectangle + ")";
+  // Plane1 (F3): 20 mm along the XZ plane's normal (+y), before the draft.
+  const auto plane1 = [](double distance) {
+    return R"({"type": "construction_plane", "definition": {"type": "offset", "plane": "xz", "distance": )" +
+           std::to_string(distance) + "}}";
+  };
+  run(*document, R"({"cmd": "add_feature", "def": )" + plane1(20) + "}");
+  const auto draft = [&side](const std::string& plane, const std::string& angle, const std::string& more) {
+    return R"({"type": "draft", "body": "F2.b0", "faces": [")" + side + R"("], "plane": ")" + plane +
+           R"(", "angle": ")" + angle + "\"" + more + "}";
+  };
+  const auto edit_draft = [&](const std::string& def) {
+    return run(*document, R"({"cmd": "edit_feature", "uid": "F4", "def": )" + def + "}");
+  };
+  // Draft1 (F4): the side 5 degrees about the XZ plane, leaning in towards +y.
+  run(*document, R"({"cmd": "add_feature", "def": )" + draft("xz", "5 deg", "") + "}");
+  // Sketch2 (F5) on the drafted side, a circle on it.
+  run(*document, R"({"cmd": "sketch.create", "plane": {"face": ")" + side + R"(", "body": "F2.b0"}})");
+  run(*document, sketch_circle("F5", -15, -10, 6));
+  const auto on_face = [&](const std::string& face, const char* what) {
+    const auto place = sketch_place(*document, "F5");
+    const auto planes = face_planes(*document, face);
+    const bool ok = place && planes.size() == 1 && lies_in(*place, planes.front().first);
+    if (!ok) {
+      std::fprintf(stderr, "  %s: Sketch2 does not lie on %s (%zu planar faces)\n", what, face.c_str(),
+                   planes.size());
+    }
+    return ok;
+  };
+  // The sketch query, whose `warnings` hold the evaluation's (a face name
+  // has brackets of its own, so the whole answer is searched).
+  const auto sketch_warnings = [&]() { return std::string(document->query(R"({"query": "sketch", "uid": "F5"})")); };
+  const auto not_failed = [&](const std::string& name) {
+    const std::string entry = timeline_entry(*document, name);
+    if (entry.empty() || contains(entry, R"("status":"error")")) {
+      std::fprintf(stderr, "  %s: %s\n", name.c_str(), entry.c_str());
+      return false;
+    }
+    return true;
+  };
+  // The frame's origin is the design origin's foot on the face's plane:
+  // 60 cos(a) + p sin(a) from it, for the side turned by a about y = p.
+  const auto from_origin = [&]() {
+    const auto place = sketch_place(*document, "F5");
+    return place ? place->origin.Distance(gp_Pnt(0, 0, 0)) : -1.0;
+  };
+  const double a = 5.0 * kPi / 180.0;
+  CHECK(feature_ok(*document, "Draft1"));
+  CHECK(feature_ok(*document, "Sketch2"));
+  CHECK(on_face(side, "about XZ"));
+  CHECK(near(from_origin(), 60.0 * std::cos(a)));
+
+  // The fixed plane moved to Plane1, 20 mm on: the side turns about y = 20
+  // and the sketch moves with it.
+  edit_draft(draft("F3", "5 deg", ""));
+  CHECK(feature_ok(*document, "Draft1"));
+  CHECK(feature_ok(*document, "Sketch2"));
+  CHECK(on_face(side, "about Plane1"));
+  CHECK(near(from_origin(), 60.0 * std::cos(a) + 20.0 * std::sin(a)));
+  // Another angle, and the pull direction flipped (the side leans out).
+  edit_draft(draft("F3", "8 deg", ""));
+  CHECK(feature_ok(*document, "Sketch2"));
+  CHECK(on_face(side, "8 degrees"));
+  edit_draft(draft("F3", "8 deg", R"(, "flip": true)"));
+  CHECK(feature_ok(*document, "Draft1"));
+  CHECK(feature_ok(*document, "Sketch2"));
+  CHECK(on_face(side, "flipped"));
+
+  // Redefine Sketch Plane takes the drafted face: the sketch onto the top
+  // and back onto the drafted side.
+  run(*document, R"({"cmd": "sketch.redefine_plane", "sketch": "F5", "plane": {"face": ")" + top +
+                     R"(", "body": "F2.b0"}})");
+  CHECK(on_face(top, "redefined onto the top"));
+  run(*document, R"({"cmd": "sketch.redefine_plane", "sketch": "F5", "plane": {"face": ")" + side +
+                     R"(", "body": "F2.b0"}})");
+  CHECK(feature_ok(*document, "Sketch2"));
+  CHECK(on_face(side, "redefined onto the drafted side"));
+
+  // Symmetric about Plane1 at y = 12: the side is split there into two
+  // pieces that lean away from it, 12 and 28 mm wide. The sketch on the
+  // whole side lies on the larger and says so.
+  run(*document, R"({"cmd": "edit_feature", "uid": "F3", "def": )" + plane1(12) + "}");
+  edit_draft(draft("F3", "5 deg", R"(, "symmetric": true)"));
+  CHECK(feature_ok(*document, "Draft1"));
+  CHECK(not_failed("Sketch2"));
+  CHECK(contains(sketch_warnings(), "is split into 2 pieces that do not lie in one plane; the sketch lies on "
+                                    "the largest"));
+  const auto pieces = face_planes(*document, side);
+  CHECK(pieces.size() == 2);
+  if (pieces.size() == 2) {
+    const gp_Pln& larger = pieces[0].second > pieces[1].second ? pieces[0].first : pieces[1].first;
+    const auto place = sketch_place(*document, "F5");
+    CHECK(place && lies_in(*place, larger));
+  }
+
+  // The sketch moved onto a piece; the draft one-sided again: the piece's
+  // whole face takes the sketch, which says so.
+  run(*document, R"({"cmd": "sketch.redefine_plane", "sketch": "F5", "plane": {"face": ")" + side +
+                     R"(#0", "body": "F2.b0"}})");
+  CHECK(feature_ok(*document, "Sketch2"));
+  CHECK(on_face(side + "#0", "on a piece"));
+  edit_draft(draft("F3", "5 deg", ""));
+  CHECK(feature_ok(*document, "Draft1"));
+  CHECK(not_failed("Sketch2"));
+  CHECK(contains(sketch_warnings(), "is no longer split; the sketch lies on the whole face"));
+  CHECK(on_face(side, "on the whole face again"));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2852,6 +3044,10 @@ int main(int argc, char** argv) {
   }
   if (argc > 1 && std::string(argv[1]) == "screw-joint-530") {
     test_reported_screw_joint_keeps_earlier_joint();
+    return failures == 0 ? 0 : 1;
+  }
+  if (argc > 1 && std::string(argv[1]) == "drafted-face-2351") {
+    test_sketch_on_a_drafted_face_follows_the_draft();
     return failures == 0 ? 0 : 1;
   }
   test_block_fillet_and_dimension_change();
@@ -2894,6 +3090,7 @@ int main(int argc, char** argv) {
   test_point_cloud_deviation_of_a_block();
   test_reported_screw_joint_keeps_earlier_joint();
   test_boundary_distances_without_a_surface();
+  test_sketch_on_a_drafted_face_follows_the_draft();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

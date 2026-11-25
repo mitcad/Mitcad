@@ -182,7 +182,8 @@ QList<QPair<QString, QString>> subjectChoices(const QString& component, const QS
 // (mitcad#2280): "Plate Flat Pattern".
 QString flatPatternLabel(const QString& body);
 // A Shows choice as the model's `subject`; empty for the whole component
-// (the model's default).
+// (the model's default). A "selection:" choice (selectionSubject) is its
+// subject as JSON.
 QJsonObject subjectOf(const QString& choice);
 // A view's `subject` as its Shows choice; empty when no choice is it
 // (several bodies, or a body where an occurrence places it).
@@ -209,6 +210,42 @@ bool subjectShows(const QJsonObject& subject, const QString& body, const QString
 // Chosen bodies, each a (body, occurrence path) pair, as the model's
 // `subject` (`bodies`; no `occurrence` for the component's own bodies).
 QJsonObject chosenSubject(const QVector<QPair<QString, QString>>& chosen);
+
+// What a drawing made from the selection shows (mitcad#2399: File › Create
+// Drawing with bodies or occurrences selected): its first Base View's
+// Shows choice, the choice's label in the Shows list, the model's
+// `subject` and what it shows in words, for the drawing's name. Empty
+// (`choice` empty) when nothing of the selection is in the design.
+struct SelectionSubject {
+  // One occurrence: "occurrence:O1/O4"; one body of the root's own:
+  // "body:F2.b0"; anything else: "selection:" and the subject as compact
+  // JSON (subjectOf reads it back).
+  QString choice;
+  // As the Shows list names it: "Arm:1/Pin:2", "Base", "The Selection
+  // (3 bodies)".
+  QString label;
+  QJsonObject subject;
+  // "Pin:2", "Base", "Base and Pin:2", "Base and 2 More".
+  QString shows;
+  // How many bodies a "selection:" choice records (0 for the others).
+  int bodies = 0;
+  bool isEmpty() const { return choice.isEmpty(); }
+};
+// The root's drawing of selected items, each a (body, occurrence path)
+// pair in the order they were selected: a body with the path that places
+// it (empty for the root's own), an occurrence with an empty body and its
+// path from the root. `components` and `allBodies` are the `components`
+// and `bodies` queries. One occurrence or one body of the root's own is
+// its Shows choice as listed; several items, or a body an occurrence
+// places, are the bodies they hold (an occurrence's bodies and its
+// occurrences' ones) as one `bodies` subject, each once, in the Shows
+// list's order. Items not in the design are left out.
+SelectionSubject selectionSubject(const QVector<QPair<QString, QString>>& items, const QJsonObject& components,
+                                  const QJsonArray& allBodies);
+// A drawing's default name for what it shows (SelectionSubject::shows):
+// "Pin:2 Drawing", or "Pin:2 Drawing 2" (3, …) when a drawing in `taken`
+// has that name already.
+QString drawingNameFor(const QString& shows, const QStringList& taken);
 
 // An option's value: the chosen one (`options`: the tool's own, by option
 // id), else its default.

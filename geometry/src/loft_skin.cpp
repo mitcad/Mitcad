@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -87,6 +89,11 @@ constexpr double kWeightScale = 1.0;
 constexpr double kSewing = 1.0e-6;
 
 constexpr double kHalfPi = 1.57079632679489661923;
+
+// The most a rail may leave a Perpendicular end's section off the face's
+// normal (mitcad#2377), radians: half the 1e-6 rad within which the loft
+// meets the face, the rest left to the fit of the face's normals.
+constexpr double kRailAngle = 5.0e-7;
 
 // A face section's own face as the loft's cap, without its holes: the loft
 // takes only its outer boundary (mitcad#1183). A face without holes is
@@ -189,6 +196,39 @@ std::pair<double, double> decompose(const gp_Vec& v, const gp_Vec& x, const gp_V
   return {(vx * yy - vy * xy) / det, (vy * xx - vx * xy) / det};
 }
 
+// Whether MITCAD_TRACE_LOFT_BENDS is set (not empty): the fit of the bends
+// towards a loft's rails then says on the standard error how near it came
+// (a line `loft bends: …`), and when it fails what its breaks are and how
+// near each refinement and each piece came (mitcad#2373); nothing else
+// changes.
+bool tracing_loft_bends() {
+#ifdef _WIN32
+  char* value = nullptr;
+  std::size_t length = 0;
+  if (_dupenv_s(&value, &length, "MITCAD_TRACE_LOFT_BENDS") != 0 || value == nullptr) {
+    return false;
+  }
+  const bool on = value[0] != '\0';
+  std::free(value);
+  return on;
+#else
+  const char* value = std::getenv("MITCAD_TRACE_LOFT_BENDS");
+  return value != nullptr && value[0] != '\0';
+#endif
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 1, 2)))
+#endif
+std::string bends_line(const char* format, ...) {
+  char line[512];
+  va_list args;
+  va_start(args, format);
+  std::vsnprintf(line, sizeof line, format, args);
+  va_end(args);
+  return std::string("loft bends: ") + line;
+}
+
 // --- Rails
 
 // A rail and where it meets the sections: the points on the sections and
@@ -200,18 +240,53 @@ struct Rail {
   int vertex = -1; // the sections' vertex it runs through
 };
 
-// A section in words: "the first profile", "the last profile" (of three or
-// more), "profile 12".
-std::string profile_words(std::size_t i, std::size_t count) {
+// The i-th of `count` sections or rails in words: "the first profile",
+// "the last rail" (of three or more), "profile 12".
+std::string place_words(std::size_t i, std::size_t count, const std::string& noun) {
   static const char* const ordinals[] = {"first", "second",  "third",  "fourth", "fifth",
                                          "sixth", "seventh", "eighth", "ninth",  "tenth"};
   if (count > 2 && i + 1 == count) {
-    return "the last profile";
+    return "the last " + noun;
   }
   if (i < 10) {
-    return std::string("the ") + ordinals[i] + " profile";
+    return std::string("the ") + ordinals[i] + " " + noun;
   }
-  return "profile " + std::to_string(i + 1);
+  return noun + " " + std::to_string(i + 1);
+}
+
+// A section in words: "the first profile", "the last profile" (of three or
+// more), "profile 12".
+std::string profile_words(std::size_t i, std::size_t count) { return place_words(i, count, "profile"); }
+
+// A rail in words (mitcad#2373): "the rail" (the only one), "the second
+// rail", "the last rail" (of three or more), "rail 12".
+std::string rail_words(std::size_t r, std::size_t count) {
+  return count == 1 ? std::string("the rail") : place_words(r, count, "rail");
+}
+
+// Where the loft's parameter x is along the loft, in words, by the
+// profiles at v on either side of it (mitcad#2373): "near the second
+// profile", "about halfway from the first profile to the second profile",
+// "about a quarter of the way …", "about three quarters of the way …".
+std::string along_words(double x, const std::vector<double>& v) {
+  const std::size_t n = v.size();
+  std::size_t i = 0;
+  while (i + 2 < n && x > v[i + 1]) {
+    ++i;
+  }
+  const double share = std::clamp((x - v[i]) / std::max(v[i + 1] - v[i], 1.0e-12), 0.0, 1.0);
+  const std::string from = profile_words(i, n);
+  const std::string to = profile_words(i + 1, n);
+  if (share < 0.125) {
+    return "near " + from;
+  }
+  if (share > 0.875) {
+    return "near " + to;
+  }
+  const std::string way = share < 0.375    ? "about a quarter of the way"
+                          : share <= 0.625 ? "about halfway"
+                                           : "about three quarters of the way";
+  return way + " from " + from + " to " + to;
 }
 
 // A distance in millimetres in words: three significant digits.
@@ -225,6 +300,22 @@ std::string point_words(const gp_Pnt& p) {
   char text[96];
   std::snprintf(text, sizeof text, "(%.6g, %.6g, %.6g)", p.X(), p.Y(), p.Z());
   return text;
+}
+
+// The error of a rail the loft could not be bent to follow (mitcad#2373):
+// for the person the rail by its place among the rails and where along the
+// loft, in words; for agents its number, how far along it (`along`, mm),
+// the point there (also painted) and `why`. x is the loft's parameter
+// there, v the sections'.
+std::string not_followed(const std::vector<Rail>& rails, std::size_t r, double along, double x,
+                         const std::vector<double>& v, const std::string& why) {
+  const gp_Pnt point = rails[r].spine.point(along);
+  const std::string where = along_words(x, v);
+  return placed_error("the loft could not be bent to follow " + rail_words(r, rails.size()) + " " + where,
+                      "rail " + std::to_string(r + 1) + " at " + distance_words(along) + " mm of its " +
+                          distance_words(rails[r].spine.length()) + " mm " + point_words(point) + ", " + where +
+                          ": " + why,
+                      {point_place(point)});
 }
 
 std::vector<Rail> meet_rails(const std::vector<Path>& paths, const std::vector<SkinSection>& sections,
@@ -439,6 +530,10 @@ public:
            (t3 - t2) * h * m_m[i + 1];
   }
 
+  // The derivative at the first and at the last x (mitcad#2377).
+  double start_slope() const { return m_m.front(); }
+  double end_slope() const { return m_m.back(); }
+
 private:
   std::vector<double> m_x;
   std::vector<double> m_y;
@@ -468,6 +563,220 @@ Surface added(const Surface& a0, const Surface& b0) {
     }
   }
   return a;
+}
+
+// A place along the loft's parameter where the bends towards the rails may
+// turn less smoothly (mitcad#2373): a section, or where a rail goes on from
+// one of its edges to the next; `corner` where a rail turns a corner there.
+struct BendBreak {
+  double x = 0.0;
+  bool section = false;
+  bool corner = false;
+};
+
+// Edges of a rail meeting at an angle above this (radians) make a corner;
+// below it they go on with one tangent (as a sketch's tangency leaves them).
+constexpr double kRailCorner = 1.0e-6;
+
+// The arc lengths along the wire where the knots inside its B-spline
+// edges are (where their third derivatives may jump).
+std::vector<double> knot_lengths(const Spine& spine) {
+  std::vector<double> found;
+  for (int e = 0; e < spine.edge_count(); ++e) {
+    const Spine::EdgeCurve edge = spine.edge_curve(e);
+    occ::handle<Geom_Curve> basis = edge.curve;
+    while (!Handle(Geom_TrimmedCurve)::DownCast(basis).IsNull()) {
+      basis = Handle(Geom_TrimmedCurve)::DownCast(basis)->BasisCurve();
+    }
+    const Curve spline = Handle(Geom_BSplineCurve)::DownCast(basis);
+    if (spline.IsNull()) {
+      continue;
+    }
+    const GeomAdaptor_Curve adaptor(edge.curve, edge.first, edge.last);
+    const double margin = Precision::PConfusion() * std::max(1.0, edge.last - edge.first);
+    for (int k = 1; k <= spline->NbKnots(); ++k) {
+      const double knot = spline->Knot(k);
+      if (knot <= edge.first + margin || knot >= edge.last - margin) {
+        continue;
+      }
+      const double local = edge.forward ? GCPnts_AbscissaPoint::Length(adaptor, edge.first, knot)
+                                        : GCPnts_AbscissaPoint::Length(adaptor, knot, edge.last);
+      found.push_back(spine.edge_start(e) + local);
+    }
+  }
+  return found;
+}
+
+// The breaks of the bends in order: the sections at v, and between them
+// where each rail's edges meet and where the knots inside its spline
+// edges are, at the loft's parameter where the arc length along the rail
+// (`lengths`, a monotone cubic per span) reaches them, and `smooth` (the
+// knots of the loft's surfaces along it). Between the breaks every bend
+// is a smooth function, which the pieces fitted to it reach within the
+// fit's tolerance with few samples (one cubic across a knot of a fitted
+// spline rail converged slowly, mitcad#2373). Breaks closer than 1e-7 of
+// the loft's parameter range are one (a section's place kept): a corner
+// that near a section bends the loft by less than the bends are fitted
+// to.
+std::vector<BendBreak> bend_breaks(const std::vector<Rail>& rails, const std::vector<Monotone>& lengths,
+                                   const std::vector<double>& v, const std::vector<double>& smooth) {
+  std::vector<BendBreak> breaks;
+  for (const double x : v) {
+    breaks.push_back({x, true, false});
+  }
+  for (const double x : smooth) {
+    if (x > v.front() && x < v.back()) {
+      breaks.push_back({x, false, false});
+    }
+  }
+  for (std::size_t r = 0; r < rails.size(); ++r) {
+    const Spine& spine = rails[r].spine;
+    const std::vector<double>& s = rails[r].lengths;
+    // The loft's parameter where the arc length along the rail is `at`,
+    // when that is between two sections.
+    const auto parameter_at = [&](double at) -> std::optional<double> {
+      for (std::size_t i = 0; i + 1 < v.size(); ++i) {
+        const bool up = s[i + 1] > s[i];
+        if (at <= std::min(s[i], s[i + 1]) || at >= std::max(s[i], s[i + 1])) {
+          continue;
+        }
+        // The arc length grows (or falls) monotonically over the span.
+        double a = v[i];
+        double b = v[i + 1];
+        for (int k = 0; k < 200; ++k) {
+          const double middle = (a + b) / 2;
+          if (middle <= a || middle >= b) {
+            break;
+          }
+          if ((lengths[r](middle) < at) == up) {
+            a = middle;
+          } else {
+            b = middle;
+          }
+        }
+        return (a + b) / 2;
+      }
+      return std::nullopt;
+    };
+    for (int e = 1; e < spine.edge_count(); ++e) {
+      const double joint = spine.edge_start(e);
+      const bool corner =
+          spine.edge_tangent(e - 1, spine.edge_length(e - 1)).Angle(spine.edge_tangent(e, 0.0)) > kRailCorner;
+      if (const std::optional<double> x = parameter_at(joint)) {
+        breaks.push_back({*x, false, corner});
+      }
+      // A joint at a section: its corner is that section's (a joint past
+      // the end sections does not bend the loft).
+      for (std::size_t i = 0; i < v.size(); ++i) {
+        if (std::abs(joint - s[i]) <= 1.0e-9 * std::max(1.0, spine.length())) {
+          breaks[i].corner = breaks[i].corner || corner;
+        }
+      }
+    }
+    for (const double knot : knot_lengths(spine)) {
+      if (const std::optional<double> x = parameter_at(knot)) {
+        breaks.push_back({*x, false, false});
+      }
+    }
+  }
+  std::stable_sort(breaks.begin(), breaks.end(),
+                   [](const BendBreak& a, const BendBreak& b) { return a.x < b.x; });
+  const double close = 1.0e-7 * (v.back() - v.front());
+  std::vector<BendBreak> merged;
+  for (const BendBreak& at : breaks) {
+    if (!merged.empty() && at.x - merged.back().x <= close) {
+      BendBreak& kept = merged.back();
+      if (at.section) {
+        kept.x = at.x;
+        kept.section = true;
+      }
+      kept.corner = kept.corner || at.corner;
+      continue;
+    }
+    merged.push_back(at);
+  }
+  return merged;
+}
+
+// Polynomial B-spline curves of one degree over consecutive parameter
+// ranges, each starting where the one before ends and at its end point,
+// joined into one curve; `joints` gets the index of each joint's knot,
+// whose multiplicity is the degree (the curves meet there, nothing more).
+Curve joined_pieces(const std::vector<Curve>& pieces, std::vector<int>& joints) {
+  const int degree = pieces.front()->Degree();
+  std::vector<gp_Pnt> poles;
+  std::vector<double> knots;
+  std::vector<int> mults;
+  joints.clear();
+  for (std::size_t p = 0; p < pieces.size(); ++p) {
+    const Curve& piece = pieces[p];
+    if (piece->Degree() != degree || piece->IsRational()) {
+      throw std::runtime_error("the bends towards the rails could not be joined");
+    }
+    for (int k = p == 0 ? 1 : 2; k <= piece->NbPoles(); ++k) {
+      poles.push_back(piece->Pole(k));
+    }
+    for (int k = 1; k <= piece->NbKnots(); ++k) {
+      if (p > 0 && k == 1) {
+        // The joint: the knot ending the curve before, once less.
+        mults.back() = degree;
+        joints.push_back(static_cast<int>(knots.size()));
+        continue;
+      }
+      knots.push_back(piece->Knot(k));
+      mults.push_back(piece->Multiplicity(k));
+    }
+  }
+  NCollection_Array1<gp_Pnt> pole_array(1, static_cast<int>(poles.size()));
+  for (std::size_t k = 0; k < poles.size(); ++k) {
+    pole_array(static_cast<int>(k) + 1) = poles[k];
+  }
+  NCollection_Array1<double> knot_array(1, static_cast<int>(knots.size()));
+  NCollection_Array1<int> mult_array(1, static_cast<int>(mults.size()));
+  for (std::size_t k = 0; k < knots.size(); ++k) {
+    knot_array(static_cast<int>(k) + 1) = knots[k];
+    mult_array(static_cast<int>(k) + 1) = mults[k];
+  }
+  return new Geom_BSplineCurve(pole_array, knot_array, mult_array, degree);
+}
+
+// The bends' pieces (per rail one per span between neighbouring breaks)
+// joined into one curve per rail, all in one basis. At a break where no
+// rail turns a corner the joint's knot is lowered so that the curves' first
+// derivatives are continuous there, and once more, their second ones,
+// where every rail's bend allows that within `tolerance` (each piece was
+// fitted with its own derivatives at its ends, so they meet with one
+// tangent where the bend has one); at a corner the curves keep a corner.
+std::vector<Curve> joined_bends(const std::vector<std::vector<Curve>>& fitted, const std::vector<BendBreak>& breaks,
+                                double tolerance) {
+  std::vector<Curve> bends;
+  std::vector<int> joints;
+  for (const std::vector<Curve>& pieces : fitted) {
+    bends.push_back(joined_pieces(pieces, joints));
+  }
+  // Every curve's knot lowered to the multiplicity, or none.
+  const auto lowered = [&](int index, int multiplicity) {
+    std::vector<Curve> copies;
+    for (const Curve& bend : bends) {
+      Curve copy = Handle(Geom_BSplineCurve)::DownCast(bend->Copy());
+      if (!copy->RemoveKnot(index, multiplicity, tolerance)) {
+        return false;
+      }
+      copies.push_back(copy);
+    }
+    bends = copies;
+    return true;
+  };
+  const int degree = bends.front()->Degree();
+  for (std::size_t j = 0; j < joints.size() && j + 1 < breaks.size(); ++j) {
+    if (breaks[j + 1].corner || degree < 2) {
+      continue;
+    }
+    if (lowered(joints[j], degree - 1) && degree > 2) {
+      lowered(joints[j], degree - 2);
+    }
+  }
+  return bends;
 }
 
 // --- End conditions
@@ -850,12 +1159,19 @@ private:
   double m_u0 = 0.0, m_u1 = 0.0, m_v0 = 0.0, m_v1 = 0.0;
 };
 
+// How fast a Perpendicular end leaves its section along rails
+// (mitcad#2377): for face `j` of the section and the share `t` of the way
+// along it (0 to 1), the length of the takeoff (the derivative across the
+// section by the loft's parameter). Empty: the condition's weight.
+using Speeds = std::function<double(std::size_t, double)>;
+
 // `length` is the loft's parameter over the span from the section to the
 // adjacent one: a takeoff L long over the span is a derivative of
-// L / length per millimetre.
+// L / length per millimetre. `speeds` (a Perpendicular end with rails,
+// mitcad#2377) replace the weight's constant length.
 EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std::vector<Matched>& matched,
                  const std::vector<Strip>& strips, std::size_t index, std::size_t adjacent, double length,
-                 const char* which) {
+                 const char* which, const Speeds& speeds = Speeds()) {
   EndRows rows;
   double weight = condition.weight * kWeightScale;
   const double into = index == 0 ? 1.0 : -1.0; // S_v is the takeoff at the start, its opposite at the end
@@ -925,6 +1241,20 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
                                 : !section.perpendicular.IsNull()               ? section.perpendicular
                                                                                 : section.face;
   const bool on_plane = condition.kind == LoftEnd::Kind::Perpendicular && reference.IsNull();
+  // A Perpendicular takeoff's length along face j's curve: `constant`, or
+  // with rails (mitcad#2377) the speeds at the share of the way along it.
+  const auto length_along = [&speeds](std::size_t j, const Curve& curve,
+                                      double constant) -> std::function<double(double)> {
+    if (!speeds) {
+      return [constant](double) { return constant; };
+    }
+    const double u0 = curve->FirstParameter();
+    const double span = curve->LastParameter() - u0;
+    const Speeds along = speeds;
+    return [along, j, u0, span](double u) {
+      return along(j, span > 0.0 ? std::clamp((u - u0) / span, 0.0, 1.0) : 0.0);
+    };
+  };
   if (condition.kind == LoftEnd::Kind::Perpendicular && !reference.IsNull()) {
     const FaceNormals normals(reference, which);
     // One side for the whole section: the one the next section lies on,
@@ -953,8 +1283,10 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
     // tangent end's.
     weight *= vertex_reach(strips, index, adjacent) / length;
     const std::shared_ptr<const FaceNormals> shared = std::make_shared<const FaceNormals>(normals);
-    for (const Curve& curve : curves) {
-      takeoff.push_back([=](double u) { return shared->at(curve->Value(u)) * (sign * weight); });
+    for (std::size_t j = 0; j < curves.size(); ++j) {
+      const Curve curve = curves[j];
+      const std::function<double(double)> reach = length_along(j, curve, weight);
+      takeoff.push_back([=](double u) { return shared->at(curve->Value(u)) * (sign * reach(u)); });
     }
   } else if (condition.kind == LoftEnd::Kind::Direction || on_plane) {
     std::optional<gp_Dir> normal = section.normal;
@@ -980,10 +1312,15 @@ EndRows end_rows(const LoftEnd& condition, const SkinSection& section, const std
     // outward and arrives at the last one moving outward, so the takeoff into
     // the loft from the last section tilts inward.
     const double s = std::sin(angle) * (index == 0 ? 1.0 : -1.0);
-    for (const Curve& curve : curves) {
+    for (std::size_t j = 0; j < curves.size(); ++j) {
+      const Curve curve = curves[j];
+      // Along rails, a Perpendicular end as fast as they leave (mitcad#2377).
+      const std::function<double(double)> reach =
+          on_plane ? length_along(j, curve, weight)
+                   : std::function<double(double)>([weight](double) { return weight; });
       takeoff.push_back([=](double u) {
         const gp_Vec outward = tangent(curve, u).Crossed(n) * out;
-        return (n * c + outward * s) * weight;
+        return (n * c + outward * s) * reach(u);
       });
     }
   } else {
@@ -1973,7 +2310,8 @@ std::vector<Matched> match_along_rails(const std::vector<SkinSection>& sections,
 
 // A side surface that closes on itself round the sections, continuous in
 // its first derivative where it closes (within 1e-6 mm), made periodic
-// there, its knot where it closes kept once less than its degree; as it
+// there, its knot where it closes kept once less than its degree (twice
+// less where it is continuous in its second derivative there too); as it
 // was where it does not close, or closes with a crease. The kernel's
 // offset takes a closed surface so: a clamped one that only closes on
 // itself was intersected wrongly where it closes (mitcad#2141: a rim's
@@ -2002,17 +2340,68 @@ Surface periodic_where_closed(const Surface& surface) {
   if (periodic->UMultiplicity(closing) > smooth) {
     periodic->RemoveUKnot(closing, smooth, kClosing);
   }
-  return periodic->UMultiplicity(closing) <= smooth ? periodic : surface;
+  if (periodic->UMultiplicity(closing) > smooth) {
+    return surface;
+  }
+  // (mitcad#2308) Continuous in its second derivative where it closes too
+  // (a ring smooth all round, as a merged circle or spline outline is: by
+  // arc length, C2 along each former edge): the knot there once less
+  // again, where that moves the surface by no more than the kernel's
+  // confusion distance. Kept C1 there, the side's offset (a symmetric
+  // Thicken's half wall) was C0 along its seam alone, which the kernel's
+  // offset refuses (BRepOffset_C0Geometry) and which can neither be split
+  // at nor cut out of the face's own range: the merged circle to spline
+  // outline, its knot there 8 times at degree 9, came out once more within
+  // 1e-7 mm.
+  if (smooth >= 2) {
+    periodic->RemoveUKnot(closing, smooth - 1, Precision::Confusion());
+  }
+  return periodic;
+}
+
+// (mitcad#2308) The surface with each knot inside its U range at which it
+// is continuous in its first derivative only by its knot (once less than
+// its degree) kept once less again where it is continuous in its second
+// derivative there too: where that moves the surface by no more than the
+// kernel's confusion distance. A merged ring (mitcad#2162) is cut where it
+// is to start and joined again C1 there (joined_curve keeps every join
+// once less than the degree), though a smooth edge cut in two is as smooth
+// there as anywhere: the merged circle to spline outline's side, degree 9,
+// had such a knot 8 times, C1, so its offset (a symmetric Thicken's half
+// wall) was C0, which the kernel's offset refuses (BRepOffset_C0Geometry);
+// that knot came out once more within 1e-7 mm, and the side so smoothed
+// was offset by half the thickness and that again with thickening. A join
+// of a line and an arc (a slot's), where the curvature jumps, does not
+// come out and stays C1.
+Surface smooth_where_c2(const Surface& surface) {
+  const int degree = surface->UDegree();
+  if (degree < 3) {
+    return surface;
+  }
+  Surface smoothed;
+  for (int k = surface->FirstUKnotIndex() + 1; k < surface->LastUKnotIndex(); ++k) {
+    const Surface& current = smoothed.IsNull() ? surface : smoothed;
+    if (current->UMultiplicity(k) != degree - 1) {
+      continue;
+    }
+    const Surface trial = Handle(Geom_BSplineSurface)::DownCast(current->Copy());
+    if (trial->RemoveUKnot(k, degree - 2, Precision::Confusion())) {
+      smoothed = trial;
+    }
+  }
+  return smoothed.IsNull() ? surface : smoothed;
 }
 
 // The side faces' surfaces at the loft's parameters `v`: each edge
 // index's curves made compatible (polynomial ones when `plain`), its pole
 // rows interpolated in homogeneous coordinates with the derivatives the
 // ends ask for. At a conditioned end the weights stay still, so the
-// derivatives carry over to the rational surface.
+// derivatives carry over to the rational surface. `start_speeds` and
+// `end_speeds`: how fast Perpendicular ends leave along rails (mitcad#2377).
 std::vector<Surface> skin_surfaces(const std::vector<Matched>& matched, const std::vector<SkinSection>& sections,
                                    const LoftEnd& start, const LoftEnd& end, const std::vector<double>& v,
-                                   bool plain, bool closed, bool hermite_free) {
+                                   bool plain, bool closed, bool hermite_free, const Speeds& start_speeds = Speeds(),
+                                   const Speeds& end_speeds = Speeds()) {
   const std::size_t count = matched.size();
   const auto first = std::find_if(matched.begin(), matched.end(), [](const Matched& m) { return !m.point; });
   const std::size_t edge_count = first->curves.size();
@@ -2068,16 +2457,17 @@ std::vector<Surface> skin_surfaces(const std::vector<Matched>& matched, const st
           const double a = strip.weights[i](k);
           const double b = strip.weights[reference](k);
           if (std::abs(a - b) > 1.0e-12 * std::max(1.0, std::abs(b))) {
-            return skin_surfaces(matched, sections, start, end, v, true, closed, hermite_free);
+            return skin_surfaces(matched, sections, start, end, v, true, closed, hermite_free, start_speeds,
+                                 end_speeds);
           }
         }
       }
     }
   }
 
-  EndRows starts = end_rows(start, sections.front(), matched, strips, 0, 1, v[1] - v[0], "start");
-  EndRows ends =
-      end_rows(end, sections.back(), matched, strips, count - 1, count - 2, v[count - 1] - v[count - 2], "end");
+  EndRows starts = end_rows(start, sections.front(), matched, strips, 0, 1, v[1] - v[0], "start", start_speeds);
+  EndRows ends = end_rows(end, sections.back(), matched, strips, count - 1, count - 2, v[count - 1] - v[count - 2],
+                          "end", end_speeds);
   // A Perpendicular end on a face (mitcad#2345): the rows hold the face's
   // normals, which are no image of the section's curves, only at their
   // fitting points; the curves' knot spans halved until they hold them
@@ -2093,8 +2483,9 @@ std::vector<Surface> skin_surfaces(const std::vector<Matched>& matched, const st
     for (Strip& strip : strips) {
       split_spans(strip);
     }
-    starts = end_rows(start, sections.front(), matched, strips, 0, 1, v[1] - v[0], "start");
-    ends = end_rows(end, sections.back(), matched, strips, count - 1, count - 2, v[count - 1] - v[count - 2], "end");
+    starts = end_rows(start, sections.front(), matched, strips, 0, 1, v[1] - v[0], "start", start_speeds);
+    ends = end_rows(end, sections.back(), matched, strips, count - 1, count - 2, v[count - 1] - v[count - 2], "end",
+                end_speeds);
   }
   if (count == 2 && starts.order > 0 && ends.order == 0) {
     ends = far_end(starts, start, strips, 0, 1, v[1] - v[0]);
@@ -2367,155 +2758,369 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     chained[0].curves = chains->first;
     chained[1].curves = chains->second;
   }
-  std::vector<Surface> surfaces =
-      skin_surfaces(chains ? chained : matched, sections, start, end, v, false, closed, hermite_free);
   // Rails: each face bent by the rails' distances from it along the
   // vertex lines they run through, in shares that fall from 1 at a rail's
   // own vertex to 0 at the neighbouring rails along the section,
   // smoothly with no slope at the vertices. A single rail moves the whole
   // section with it (the reference model loft_rail_circle_one: the
   // circles' loft through one bent rail is the cylinder shifted along it).
+  // The vertices' arc lengths round the first section.
+  std::vector<double> at;
+  double length = 0.0;
   if (!rails.empty()) {
-    // The vertices' arc lengths round the first section.
-    std::vector<double> at{0.0};
+    at.push_back(0.0);
     for (const Curve& curve : matched.front().curves) {
       at.push_back(at.back() + GCPnts_AbscissaPoint::Length(GeomAdaptor_Curve(curve)));
     }
-    const double length = at.back();
+    length = at.back();
     at.pop_back();
-    // Each face's shares of the rails' bends: four poles across the face
-    // per rail. Between two neighbouring rails along the section (from the
-    // one at arc length p to the next, l further on) the share of the
-    // first is the smooth step f(t) = 1 - 3 t^2 + 2 t^3 of t = (x - p) / l,
-    // the next one's 1 - f(t), the others' 0: so the step is the same
-    // whatever vertices the section has between the rails (mitcad#2320: a
-    // vertex on one side only, the seam of a rounded rectangle, made that
-    // side's step steeper and its side bulge past its rail), and a face
-    // from xa to xb takes the part of it between its ends, exactly (the
-    // cubic's Bezier poles over that part). One rail: all of its bend
-    // everywhere.
-    const auto shares_of = [&](double xa, double xb) {
-      std::vector<std::array<double, 4>> shares(rails.size(), std::array<double, 4>{1.0, 1.0, 1.0, 1.0});
-      if (rails.size() == 1) {
-        return shares;
-      }
-      const auto ahead = [&](double from, double to) { return std::fmod(to - from + 2 * length, length); };
-      // The rails before and after the face's middle along the section.
-      const double middle = xa + (xb - xa) / 2;
-      std::size_t previous = 0;
-      std::size_t next = 0;
-      for (std::size_t r = 0; r < rails.size(); ++r) {
-        const double p = at[static_cast<std::size_t>(rails[r].vertex)];
-        if (ahead(p, middle) < ahead(at[static_cast<std::size_t>(rails[previous].vertex)], middle)) {
-          previous = r;
-        }
-        if (ahead(middle, p) < ahead(middle, at[static_cast<std::size_t>(rails[next].vertex)])) {
-          next = r;
-        }
-      }
-      const double p = at[static_cast<std::size_t>(rails[previous].vertex)];
-      double span = ahead(p, at[static_cast<std::size_t>(rails[next].vertex)]);
-      if (span <= 0.0) {
-        span = length;
-      }
-      const double ta = std::clamp(ahead(p, xa) / span, 0.0, 1.0);
-      const double tb = std::clamp(ta + (xb - xa) / span, 0.0, 1.0);
-      const auto f = [](double t) { return 1.0 - 3.0 * t * t + 2.0 * t * t * t; };
-      const auto df = [](double t) { return -6.0 * t + 6.0 * t * t; };
-      const std::array<double, 4> step{f(ta), f(ta) + (tb - ta) / 3.0 * df(ta), f(tb) - (tb - ta) / 3.0 * df(tb),
-                                       f(tb)};
-      for (std::size_t r = 0; r < rails.size(); ++r) {
-        for (std::size_t k = 0; k < 4; ++k) {
-          shares[r][k] = r == previous ? step[k] : r == next ? 1.0 - step[k] : 0.0;
-        }
-      }
+  }
+  // Each face's shares of the rails' bends: four poles across the face
+  // per rail. Between two neighbouring rails along the section (from the
+  // one at arc length p to the next, l further on) the share of the
+  // first is the smooth step f(t) = 1 - 3 t^2 + 2 t^3 of t = (x - p) / l,
+  // the next one's 1 - f(t), the others' 0: so the step is the same
+  // whatever vertices the section has between the rails (mitcad#2320: a
+  // vertex on one side only, the seam of a rounded rectangle, made that
+  // side's step steeper and its side bulge past its rail), and a face
+  // from xa to xb takes the part of it between its ends, exactly (the
+  // cubic's Bezier poles over that part). One rail: all of its bend
+  // everywhere.
+  const auto shares_of = [&](double xa, double xb) {
+    std::vector<std::array<double, 4>> shares(rails.size(), std::array<double, 4>{1.0, 1.0, 1.0, 1.0});
+    if (rails.size() == 1) {
       return shares;
+    }
+    const auto ahead = [&](double from, double to) { return std::fmod(to - from + 2 * length, length); };
+    // The rails before and after the face's middle along the section.
+    const double middle = xa + (xb - xa) / 2;
+    std::size_t previous = 0;
+    std::size_t next = 0;
+    for (std::size_t r = 0; r < rails.size(); ++r) {
+      const double p = at[static_cast<std::size_t>(rails[r].vertex)];
+      if (ahead(p, middle) < ahead(at[static_cast<std::size_t>(rails[previous].vertex)], middle)) {
+        previous = r;
+      }
+      if (ahead(middle, p) < ahead(middle, at[static_cast<std::size_t>(rails[next].vertex)])) {
+        next = r;
+      }
+    }
+    const double p = at[static_cast<std::size_t>(rails[previous].vertex)];
+    double span = ahead(p, at[static_cast<std::size_t>(rails[next].vertex)]);
+    if (span <= 0.0) {
+      span = length;
+    }
+    const double ta = std::clamp(ahead(p, xa) / span, 0.0, 1.0);
+    const double tb = std::clamp(ta + (xb - xa) / span, 0.0, 1.0);
+    const auto f = [](double t) { return 1.0 - 3.0 * t * t + 2.0 * t * t * t; };
+    const auto df = [](double t) { return -6.0 * t + 6.0 * t * t; };
+    const std::array<double, 4> step{f(ta), f(ta) + (tb - ta) / 3.0 * df(ta), f(tb) - (tb - ta) / 3.0 * df(tb),
+                                     f(tb)};
+    for (std::size_t r = 0; r < rails.size(); ++r) {
+      for (std::size_t k = 0; k < 4; ++k) {
+        shares[r][k] = r == previous ? step[k] : r == next ? 1.0 - step[k] : 0.0;
+      }
+    }
+    return shares;
+  };
+  // The rails' distances from the loft along their vertex lines, as
+  // curves in a common basis over the loft's parameter.
+  std::vector<Monotone> lengths;
+  for (const Rail& rail : rails) {
+    lengths.emplace_back(v, rail.lengths);
+  }
+  // A Perpendicular end along rails (mitcad#2377): the takeoff runs along
+  // the face's normal at every point of the section, and is as long as
+  // each rail's speed at its point (the derivative of the rail's point by
+  // the loft's parameter), the speeds in between shared out as the bends
+  // are (the same smooth steps across each face). So the loft leaves each
+  // rail's point as the rail does, its bends leave the section with no
+  // slope of their own, and the surface stays at right angles to the face
+  // all along the section, between the rails too. The condition's weight
+  // then sets nothing.
+  const auto speeds_of = [&](const LoftEnd& condition, bool at_start) -> Speeds {
+    if (rails.empty() || condition.kind != LoftEnd::Kind::Perpendicular) {
+      return Speeds();
+    }
+    std::vector<double> speed;
+    for (const Monotone& along : lengths) {
+      speed.push_back(std::abs(at_start ? along.start_slope() : along.end_slope()));
+    }
+    std::vector<std::vector<std::array<double, 4>>> faces;
+    for (std::size_t j = 0; j < edge_count; ++j) {
+      faces.push_back(shares_of(at[j], j + 1 < edge_count ? at[j + 1] : length));
+    }
+    return [faces, speed](std::size_t j, double t) {
+      const double s = 1.0 - t;
+      const std::array<double, 4> basis{s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t};
+      double value = 0.0;
+      for (std::size_t r = 0; r < speed.size(); ++r) {
+        for (std::size_t k = 0; k < 4; ++k) {
+          value += faces.at(j)[r][k] * basis[k] * speed[r];
+        }
+      }
+      return value;
     };
-    // The rails' distances from the loft along their vertex lines, as
-    // curves in a common basis over the loft's parameter.
-    std::vector<Monotone> lengths;
-    for (const Rail& rail : rails) {
-      lengths.emplace_back(v, rail.lengths);
+  };
+  const Speeds start_speeds = speeds_of(start, true);
+  const Speeds end_speeds = speeds_of(end, false);
+  std::vector<Surface> surfaces = skin_surfaces(chains ? chained : matched, sections, start, end, v, false, closed,
+                                                hermite_free, start_speeds, end_speeds);
+  if (!rails.empty()) {
+    // A rail's velocity: its point's derivative by the loft's parameter.
+    const auto velocity = [&](std::size_t r, bool at_start) {
+      const double x = at_start ? v.front() : v.back();
+      const Monotone& along = lengths[r];
+      return gp_Vec(rails[r].spine.tangent(along(x))) * (at_start ? along.start_slope() : along.end_slope());
+    };
+    // A Perpendicular end's rails must leave the section at right angles
+    // to the face, along the loft's takeoff at their points (mitcad#2377);
+    // otherwise the loft could not leave the face at right angles there.
+    for (const bool at_start : {true, false}) {
+      if ((at_start ? start : end).kind != LoftEnd::Kind::Perpendicular) {
+        continue;
+      }
+      const double x = at_start ? v.front() : v.back();
+      for (std::size_t r = 0; r < rails.size(); ++r) {
+        const Surface& surface = surfaces[static_cast<std::size_t>(rails[r].vertex)];
+        gp_Pnt p;
+        gp_Vec su;
+        gp_Vec sv;
+        surface->D1(surface->UKnot(1), x, p, su, sv);
+        const gp_Vec rail = velocity(r, at_start);
+        if (sv.Magnitude() <= 1.0e-12 || rail.Magnitude() <= 1.0e-12) {
+          continue;
+        }
+        const double off = sv.Angle(rail);
+        if (off > kRailAngle) {
+          char degrees[32];
+          std::snprintf(degrees, sizeof degrees, "%.3g", off * 90.0 / kHalfPi);
+          const std::string which = at_start ? "start" : "end";
+          const std::string what = "rail " + std::to_string(r + 1) + " leaves the " + which + " section " +
+                                   degrees + " degrees off the face's normal; leaving the section at right " +
+                                   "angles to the face needs rails that leave it so";
+          throw std::invalid_argument(placed_error(what, what + " (at " + point_words(p) + ")", {point_place(p)}));
+        }
+      }
     }
     const auto distance = [&](std::size_t r, double x) {
       const Surface& surface = surfaces[static_cast<std::size_t>(rails[r].vertex)];
       return gp_Vec(surface->Value(surface->UKnot(1), x), rails[r].spine.point(lengths[r](x)));
     };
-    // A Perpendicular end (mitcad#2345): each bend leaves that section along
-    // the loft's own takeoff at its rail's vertex, as fast as the rail draws
-    // it there, so that rails leaving the section at right angles to the
-    // face keep the condition (all along the section on a plane, where every
-    // takeoff is parallel; elsewhere at the rails' vertices). Other ends'
-    // bends are free, as before.
+    // Where the bends turn less smoothly (mitcad#2373): at the sections,
+    // where the arc lengths along the rails (a cubic of the loft's
+    // parameter per span) change their second derivative, and where a rail
+    // goes on from one of its edges to the next (a spline on to a line),
+    // where its curvature jumps or it turns a corner. One cubic through
+    // samples of a whole bend missed it near such a break by more than the
+    // fit allows however densely it was sampled ("the loft could not be
+    // bent"): the bends are fitted piece by piece between the breaks and
+    // the pieces joined smoothly where the bend is smooth, at a rail's
+    // corner with a corner.
+    // (Found again with each fit, the surfaces' knots among them.)
+    std::vector<BendBreak> breaks;
+    const auto find_breaks = [&] {
+      std::vector<double> knots;
+      for (const Rail& rail : rails) {
+        const Surface& surface = surfaces[static_cast<std::size_t>(rail.vertex)];
+        for (int k = 1; k <= surface->NbVKnots(); ++k) {
+          knots.push_back(surface->VKnot(k));
+        }
+      }
+      breaks = bend_breaks(rails, lengths, v, knots);
+    };
+    const double allowed = 1.0e-7 * std::max(1.0, size);
+    // The bend towards rail r at a break: none at the sections, where the
+    // rails meet them already.
+    const auto bend_at = [&](std::size_t r, const BendBreak& place) {
+      return place.section ? gp_Vec(0, 0, 0) : distance(r, place.x);
+    };
+    // The derivative of the bend towards rail r at the end of the piece
+    // from `from` to `to` (at `to` with `at_end`) as the piece alone has it:
+    // five points a thousandth of the piece apart, inside it (fourth
+    // order).
+    const auto slope = [&](std::size_t r, const BendBreak& from, const BendBreak& to, bool at_end) {
+      const BendBreak& end_break = at_end ? to : from;
+      const double h = (to.x - from.x) * (at_end ? -1.0e-3 : 1.0e-3);
+      static constexpr std::array<double, 5> weights{-25.0, 48.0, -36.0, 16.0, -3.0};
+      gp_Vec sum = bend_at(r, end_break) * weights[0];
+      for (std::size_t k = 1; k < weights.size(); ++k) {
+        sum += distance(r, end_break.x + static_cast<double>(k) * h) * weights[k];
+      }
+      return sum / (12.0 * h);
+    };
+    // A Perpendicular end (mitcad#2345, mitcad#2377): each bend leaves that
+    // section with the distance's own slope there, the rail's velocity less
+    // the loft's takeoff at the rail's vertex, which the speeds above make
+    // (all but) nothing; a slope off it would leave the bend off the rail
+    // near the section. Exact, from the rail's tangent and the rate at
+    // which the loft's parameter runs along it, not estimated from the
+    // distances. Other ends' bends are free, as before.
     const auto held = [&](std::size_t r, bool at_start) {
       EndDerivatives derivatives;
       if ((at_start ? start : end).kind != LoftEnd::Kind::Perpendicular) {
         return derivatives;
       }
       const double x = at_start ? v.front() : v.back();
-      const double inward = at_start ? 1.0 : -1.0;
       const Surface& surface = surfaces[static_cast<std::size_t>(rails[r].vertex)];
       gp_Pnt p;
       gp_Vec su;
       gp_Vec sv;
       surface->D1(surface->UKnot(1), x, p, su, sv);
-      if (sv.Magnitude() <= 1.0e-12) {
-        return derivatives;
-      }
-      // The distance's slope at the section, as the bend must leave it
-      // (a slope off it leaves the bend off the rail near the section): the
-      // bend is 0 at the section (it runs through the sections exactly), so
-      // the one-sided difference of second order from that 0, by steps of a
-      // thousandth of the span, improved by Richardson's extrapolation with
-      // the steps halved (a tiny step would be lost in the distance's own
-      // noise).
-      const auto one_sided = [&](double h) {
-        return (distance(r, x + inward * h) * 4 - distance(r, x + inward * 2 * h)) * (inward / (2 * h));
-      };
-      const double step = 1.0e-3 * (v.back() - v.front());
-      const gp_Vec slope = (one_sided(step / 2) * 4 - one_sided(step)) / 3;
-      // A rail that leaves the section along the takeoff (at right angles
-      // to the face) leaves the bend exactly along it; another bends the
-      // takeoff, as rails bend every condition.
-      const gp_Vec along = sv.Normalized();
-      const gp_Vec on = along * slope.Dot(along);
-      const gp_Vec off = slope - on;
-      derivatives.first = off.Magnitude() <= 1.0e-5 * std::max(slope.Magnitude(), 1.0e-9) ? on : slope;
+      derivatives.first = velocity(r, at_start) - sv;
       return derivatives;
     };
     std::vector<Curve> bends;
+    // Where the fit missed most: the rail, the loft's parameter and by how
+    // much.
+    std::size_t worst_rail = 0;
+    double worst_x = v.front();
+    double worst = 0.0;
     const auto fit_bends = [&] {
+      // Each piece's derivatives at its ends, as the piece alone has them.
+      find_breaks();
+      const std::size_t pieces = breaks.size() - 1;
+      // The trace's lines (MITCAD_TRACE_LOFT_BENDS), written when the fit
+      // fails.
+      const bool tracing = tracing_loft_bends();
+      std::vector<std::string> notes;
+      if (tracing) {
+        notes.push_back(bends_line("%zu rails, %zu sections, %zu breaks, allowed %.3g mm", rails.size(), v.size(),
+                                   breaks.size(), allowed));
+        for (const BendBreak& place : breaks) {
+          notes.push_back(bends_line("  break at %.9g%s%s", place.x, place.section ? " section" : "",
+                                     place.corner ? " corner" : ""));
+        }
+      }
+      std::vector<std::vector<gp_Vec>> starts(pieces, std::vector<gp_Vec>(rails.size()));
+      std::vector<std::vector<gp_Vec>> ends(pieces, std::vector<gp_Vec>(rails.size()));
+      for (std::size_t p = 0; p < pieces; ++p) {
+        for (std::size_t r = 0; r < rails.size(); ++r) {
+          starts[p][r] = slope(r, breaks[p], breaks[p + 1], false);
+          ends[p][r] = slope(r, breaks[p], breaks[p + 1], true);
+        }
+      }
+      // Each piece keeps its own derivatives at its ends: a mean of the two
+      // pieces' there was off where they differ (a chain's spline with a
+      // corner, mitcad#2373: the piece after the spline's knot missed its
+      // first samples by 6e-5 mm at 64 per piece, 3e-5 at 128, the error
+      // halving with the step). The joint is made smooth where the fitted
+      // pieces agree (joined_bends).
+      for (std::size_t p = 1; tracing && p < pieces; ++p) {
+        for (std::size_t r = 0; r < rails.size(); ++r) {
+          const double apart = (ends[p - 1][r] - starts[p][r]).Magnitude();
+          if (apart > 1.0e-9) {
+            notes.push_back(bends_line("  break at %.9g rail %zu: slopes %.3g apart", breaks[p].x, r + 1, apart));
+          }
+        }
+      }
+      // A Perpendicular end holds the first piece's start, or the last
+      // one's end, along the loft's takeoff (mitcad#2345).
+      for (std::size_t r = 0; r < rails.size(); ++r) {
+        if (const EndDerivatives first = held(r, true); first.first) {
+          starts.front()[r] = *first.first;
+        }
+        if (const EndDerivatives last = held(r, false); last.first) {
+          ends.back()[r] = *last.first;
+        }
+      }
       double largest = 0.0;
       for (int per_span = 8;; per_span *= 2) {
         std::vector<double> params;
-        for (std::size_t i = 0; i + 1 < count; ++i) {
+        std::vector<std::vector<Curve>> fitted(rails.size());
+        largest = 0.0;
+        for (std::size_t p = 0; p < pieces; ++p) {
+          const BendBreak& from = breaks[p];
+          const BendBreak& to = breaks[p + 1];
+          std::vector<double> samples;
           for (int k = 0; k < per_span; ++k) {
-            params.push_back(v[i] + (v[i + 1] - v[i]) * k / per_span);
+            samples.push_back(from.x + (to.x - from.x) * k / per_span);
+          }
+          samples.push_back(to.x);
+          params.insert(params.end(), samples.begin(), samples.end() - 1);
+          for (std::size_t r = 0; r < rails.size(); ++r) {
+            std::vector<gp_Pnt> points;
+            for (std::size_t k = 0; k < samples.size(); ++k) {
+              // Exactly through the sections, and through the same point at
+              // a break from either side.
+              const gp_Vec value = k == 0                  ? bend_at(r, from)
+                                   : k + 1 == samples.size() ? bend_at(r, to)
+                                                           : distance(r, samples[k]);
+              points.emplace_back(value.XYZ());
+              largest = std::max(largest, value.Magnitude());
+            }
+            EndDerivatives start_slope;
+            start_slope.first = starts[p][r];
+            EndDerivatives end_slope;
+            end_slope.first = ends[p][r];
+            fitted[r].push_back(interpolate_with_ends(points, samples, start_slope, end_slope));
           }
         }
-        params.push_back(v.back());
-        bends.clear();
-        double error = 0.0;
-        largest = 0.0;
+        params.push_back(breaks.back().x);
+        bends = joined_bends(fitted, breaks, 0.1 * allowed);
+        worst = 0.0;
         for (std::size_t r = 0; r < rails.size(); ++r) {
-          std::vector<gp_Pnt> points;
-          for (std::size_t k = 0; k < params.size(); ++k) {
-            // Exactly through the sections.
-            const bool section = (k % static_cast<std::size_t>(per_span)) == 0;
-            points.emplace_back(section ? gp_XYZ(0, 0, 0) : distance(r, params[k]).XYZ());
-            largest = std::max(largest, gp_Vec(points.back().XYZ()).Magnitude());
-          }
-          bends.push_back(interpolate_with_ends(points, params, held(r, true), held(r, false)));
           for (std::size_t k = 0; k + 1 < params.size(); ++k) {
             const double x = (params[k] + params[k + 1]) / 2;
-            error = std::max(error, gp_Vec(bends.back()->Value(x).XYZ()).Subtracted(distance(r, x)).Magnitude());
+            const double error = gp_Vec(bends[r]->Value(x).XYZ()).Subtracted(distance(r, x)).Magnitude();
+            if (error > worst) {
+              worst = error;
+              worst_rail = r;
+              worst_x = x;
+            }
           }
         }
-        if (error <= 1.0e-7 * std::max(1.0, size)) {
+        if (tracing) {
+          notes.push_back(bends_line("per piece %d: worst %.3g mm on rail %zu at %.9g (allowed %.3g)", per_span,
+                                     worst, worst_rail + 1, worst_x, allowed));
+          // From 64 per piece, per piece and rail where it misses by more
+          // than a tenth of the allowed: the fitted piece's own miss and
+          // the joined curve's there (the joints' lowered knots move it).
+          for (std::size_t p = 0; per_span >= 64 && p < pieces; ++p) {
+            for (std::size_t r = 0; r < rails.size(); ++r) {
+              double own = 0.0;
+              double joined = 0.0;
+              for (int k = 0; k < per_span; ++k) {
+                const double x =
+                    breaks[p].x + (breaks[p + 1].x - breaks[p].x) * (static_cast<double>(k) + 0.5) / per_span;
+                const gp_Vec d = distance(r, x);
+                own = std::max(own, gp_Vec(fitted[r][p]->Value(x).XYZ()).Subtracted(d).Magnitude());
+                joined = std::max(joined, gp_Vec(bends[r]->Value(x).XYZ()).Subtracted(d).Magnitude());
+              }
+              if (std::max(own, joined) > 0.1 * allowed) {
+                notes.push_back(bends_line("  piece %zu [%.9g, %.9g] rail %zu: own %.3g joined %.3g", p,
+                                           breaks[p].x, breaks[p + 1].x, r + 1, own, joined));
+              }
+            }
+          }
+        }
+        if (worst <= allowed) {
+          if (tracing) {
+            std::fprintf(stderr, "%s\n", notes.back().c_str());
+          }
           return largest;
         }
         if (per_span >= 128) {
-          throw std::runtime_error("the loft could not be bent to follow its rails");
+          if (tracing) {
+            // How rough the distance is at the worst place: its fourth
+            // differences at steps of 1e-2 to 1e-6 of the loft's length (a
+            // smooth distance gives about step^4 times its fourth
+            // derivative, noise about 16 times its own size).
+            for (const double share : {1.0e-2, 1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6}) {
+              const double h = share * (v.back() - v.front());
+              const gp_Vec fourth = distance(worst_rail, worst_x - 2 * h) -
+                                    distance(worst_rail, worst_x - h) * 4.0 + distance(worst_rail, worst_x) * 6.0 -
+                                    distance(worst_rail, worst_x + h) * 4.0 + distance(worst_rail, worst_x + 2 * h);
+              notes.push_back(bends_line("  fourth difference at step %.3g: %.3g mm", h, fourth.Magnitude()));
+            }
+            for (const std::string& note : notes) {
+              std::fprintf(stderr, "%s\n", note.c_str());
+            }
+          }
+          throw std::runtime_error(
+              not_followed(rails, worst_rail, lengths[worst_rail](worst_x), worst_x, v,
+                           "the bend towards it could not be fitted within " + distance_words(allowed) + " mm: " +
+                               distance_words(worst) + " mm off"));
         }
       }
     };
@@ -2526,7 +3131,8 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
       // The bends are polynomial: so must the surfaces be.
       if (std::any_of(surfaces.begin(), surfaces.end(),
                       [](const Surface& s) { return s->IsURational() || s->IsVRational(); })) {
-        surfaces = skin_surfaces(matched, sections, start, end, v, true, closed, hermite_free);
+        surfaces = skin_surfaces(matched, sections, start, end, v, true, closed, hermite_free, start_speeds,
+                                 end_speeds);
         fit_bends();
       }
       for (std::size_t j = 0; j < edge_count; ++j) {
@@ -2559,12 +3165,26 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
                                                      bends.front()->Multiplicities(), 3, bends.front()->Degree());
         surfaces[j] = added(surfaces[j], bend);
       }
-      // The rails lie on the faces.
+      // The rails lie on the faces (also on either side of each break,
+      // where the bends turn).
+      std::vector<double> checks;
+      for (int k = 0; k <= 64; ++k) {
+        checks.push_back(v.front() + (v.back() - v.front()) * k / 64);
+      }
+      for (std::size_t b = 0; b + 1 < breaks.size(); ++b) {
+        const double gap = breaks[b + 1].x - breaks[b].x;
+        checks.push_back(breaks[b].x + 0.01 * gap);
+        checks.push_back(breaks[b + 1].x - 0.01 * gap);
+      }
+      const double most = std::max(10 * kSewing, 1.0e-6 * size);
       for (std::size_t r = 0; r < rails.size(); ++r) {
-        for (int k = 0; k <= 64; ++k) {
-          const double x = v.front() + (v.back() - v.front()) * k / 64;
-          if (distance(r, x).Magnitude() > std::max(10 * kSewing, 1.0e-6 * size)) {
-            throw std::runtime_error("the loft could not be bent to follow rail " + std::to_string(r + 1));
+        for (const double x : checks) {
+          const double off = distance(r, x).Magnitude();
+          if (off > most) {
+            throw std::runtime_error(not_followed(rails, r, lengths[r](x), x, v,
+                                                  "it lies " + distance_words(off) +
+                                                      " mm off the loft (the most allowed is " +
+                                                      distance_words(most) + " mm)"));
           }
         }
       }
@@ -2576,7 +3196,7 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
   // mitcad#2271): periodic where it closes smoothly.
   const bool one_round = !open && surfaces.size() == 1 && (chains ? chains->round : edge_count == 1);
   if (one_round) {
-    surfaces.front() = periodic_where_closed(surfaces.front());
+    surfaces.front() = smooth_where_c2(periodic_where_closed(surfaces.front()));
   }
 
   // The faces, sewn with the caps.

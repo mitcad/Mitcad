@@ -35,6 +35,15 @@ for case in launch closed modified; do
     export MITCAD_TUTORIALS_DIR=$run/installed
     export MITCAD_WEB_PROFILE_DIR=$run/profile
     export MITCAD_BROWSER_COMPONENTS_DIR=$run/components
+    # Settings and the app's other files of this run's own, as
+    # ui-tutorials-test.py's run_app gives each run a fresh settings folder:
+    # a tutorial's progress is kept in the settings (mitcad#2346), so a run
+    # after the first saw the example's card Done, not Not started (0.72.0-rc3:
+    # tutorials-launch-docked failed after launch-floating passed).
+    own=$UI_ROOT/runs/$case-$layout
+    export MITCAD_SETTINGS_DIR=$own/settings MITCAD_AUTOSAVE_DIR=$own/autosave
+    export MITCAD_PROJECTS_DIR=$own/projects MITCAD_THUMBNAIL_DIR=$own/thumbnails MITCAD_CRASH_DIR=$own/crashes
+    mkdir -p "$MITCAD_SETTINGS_DIR" "$MITCAD_AUTOSAVE_DIR" "$MITCAD_PROJECTS_DIR" "$MITCAD_THUMBNAIL_DIR" || exit 1
     MITCAD_START_PAGE=$start_page MITCAD_TEST_INPUT=$MITCAD_TEST_WORK/$case.mitcad-ui MITCAD_TEST_STEP_MS=100 \
       ui_run_app "tutorials-$case-$layout" --ui=qt --no-native-dialogs --no-recovery --no-mcp --chrome="$layout"
     ui_expect_log '^TestDriver: quit' "the example tutorial was done to its end over the Start page ($case, $layout)"

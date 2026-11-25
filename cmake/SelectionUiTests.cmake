@@ -285,7 +285,12 @@ endif()
 # a run of its own, the example tutorials repository's tutorial
 # (docs/examples/tutorials, mitcad#2078) with each of its steps done, so that
 # a UI change that breaks the example fails here (the example's folder is in
-# the command, so that a change of it reruns the test). The same script on
+# the command, so that a change of it reruns the test); and in a third run a
+# tutorial whose page reads the design through the bridge's query
+# (mitcad#2371): a free square told from a fully constrained one while its
+# sketch is open, a cut through a cube from a blind pocket and a new body,
+# a command and another design refused. Three runs of at most 300 s each
+# (RUN_TIMEOUT) within the TIMEOUT. The same script on
 # Linux and Windows, run by a wrapper on macOS; only where the web browser
 # component is built.
 if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
@@ -307,7 +312,7 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
               "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}"
               "${CMAKE_SOURCE_DIR}/docs/examples/tutorials")
   endif()
-  set_tests_properties("${tutorials_ui_test}" PROPERTIES TIMEOUT 720 ${selection_ui_alone}
+  set_tests_properties("${tutorials_ui_test}" PROPERTIES TIMEOUT 1020 ${selection_ui_alone}
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   if(selection_ui_platform STREQUAL "linux")
     set_property(TEST "${tutorials_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
@@ -373,5 +378,110 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
     ${selection_ui_alone} ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   if(selection_ui_platform STREQUAL "linux")
     set_property(TEST "${insert_during_command_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()
+
+# Quitting with a tutorial open (mitcad#2394): the example tutorial started
+# from the Start page's card at launch, its page loaded with the bridge and
+# its first step started, then MitCad quits with the tutorial pane open (in
+# the Docked layout with the Start page shown again over it). CEF ends
+# before the window goes; the run must end with exit code 0 and no fatal
+# check of the browser component in its log. Two runs of the application,
+# each stopped after 300 s (ui-tutorials-test.py's RUN_TIMEOUT). Linux and
+# Windows; only where the web browser component is built.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform AND selection_ui_web_browser AND NOT APPLE)
+  set(tutorials_quit_ui_test "app.ui-${selection_ui_platform}-tutorials-quit")
+  selection_ui_command_prefix(470)
+  add_test(NAME "${tutorials_quit_ui_test}"
+    COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/ui-tutorials-test.py" quit
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-tutorials-quit"
+            "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}"
+            "${CMAKE_SOURCE_DIR}/docs/examples/tutorials")
+  set_tests_properties("${tutorials_quit_ui_test}" PROPERTIES TIMEOUT 660 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${tutorials_quit_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()
+
+# A tutorial step with hold (mitcad#2368): done while the rectangle tool is
+# open, the page hears it once; clicks in the view add no geometry and a
+# command is refused during the hold; the page's next step releases it and
+# its rectangle is drawn; Leave Tutorial during the hold frees all input.
+# One run of the application, stopped after 300 s (ui-tutorials-test.py's
+# RUN_TIMEOUT). Linux and Windows; only where the web browser component is
+# built.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform AND selection_ui_web_browser AND NOT APPLE)
+  set(tutorials_hold_ui_test "app.ui-${selection_ui_platform}-tutorials-hold")
+  selection_ui_command_prefix(480)
+  add_test(NAME "${tutorials_hold_ui_test}"
+    COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/ui-tutorials-test.py" hold
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-tutorials-hold"
+            "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}")
+  set_tests_properties("${tutorials_hold_ui_test}" PROPERTIES TIMEOUT 360 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${tutorials_hold_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()
+
+# The tutorial pane's places (mitcad#2367): a tutorial of the test's own
+# whose page moves its pane with window.mitcad.place: centred for its
+# introduction, at the left, at the right with a step whose Browser row is
+# picked there, centred for the review, at the right for the next step; in
+# the Floating and the Docked layout, animated, and in the Floating layout
+# once more at once with reduced motion. Leave Tutorial in sight in every
+# place, the page never loaded again, the pane back at the left when the
+# tutorial is left. Three runs of the application, each stopped after 300 s
+# (ui-tutorials-test.py's RUN_TIMEOUT). Linux and Windows; only where the
+# web browser component is built.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform AND selection_ui_web_browser AND NOT APPLE)
+  set(tutorials_placement_ui_test "app.ui-${selection_ui_platform}-tutorials-placement")
+  selection_ui_command_prefix(487)
+  add_test(NAME "${tutorials_placement_ui_test}"
+    COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/ui-tutorials-test.py" placement
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-tutorials-placement"
+            "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}")
+  set_tests_properties("${tutorials_placement_ui_test}" PROPERTIES TIMEOUT 960 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${tutorials_placement_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()
+
+# The tutorials' hints (mitcad#2366, docs/tutorials.md "Demonstrations"): a
+# tutorial of the test's own reads the learner's keys and navigation gestures
+# (the run's settings choose Alt + left to orbit); on a Browser-row step its
+# page plays its demonstration (its own pictures of a mouse) over the row
+# after a delay of its own, a click held back on the timeline reaches the
+# page as `held` and starts the hint at once, the page stops it, and only
+# the learner's own click on the row, through the playing demonstration,
+# completes the step; an orbit step's demonstration shows the configured
+# gesture with its modifier until Leave Tutorial ends it. One run of the
+# application, stopped after 300 s (ui-tutorials-test.py's RUN_TIMEOUT).
+# Linux and Windows; only where the web browser component is built.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform AND selection_ui_web_browser AND NOT APPLE)
+  set(tutorials_hints_ui_test "app.ui-${selection_ui_platform}-tutorials-hints")
+  selection_ui_command_prefix(493)
+  add_test(NAME "${tutorials_hints_ui_test}"
+    COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/ui-tutorials-test.py" hints
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-tutorials-hints"
+            "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}")
+  set_tests_properties("${tutorials_hints_ui_test}" PROPERTIES TIMEOUT 420 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${tutorials_hints_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()

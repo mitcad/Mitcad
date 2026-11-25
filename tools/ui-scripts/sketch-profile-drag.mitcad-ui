@@ -6,8 +6,14 @@ wait-idle
 dblclick-logged 'Timeline Sketch1'
 expect-log 'Editing sketch F1 \(Sketch1\)'
 command view.fit
+wait-idle
 # Enlarge the original circle so its interior is outside point/edge pick tolerances.
+# The sketch's places ("Sketch view") are logged once the navigation ends
+# (mitcad#2296): the clicks below wait for them, not for the last frame.
+mark
 wheel 35 67 6
+wait-log '^View navigation: [0-9]+ frame' 20
+wait-idle
 expect-profiles 100
 capture-undo-depth baseline
 sketch-click 7 4.5

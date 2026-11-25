@@ -2564,24 +2564,34 @@ bool OcctViewer::outsideActive(const QString& occurrence) const {
   if (!m_activeScope.on) {
     return false;
   }
+  const auto within = [&occurrence](const QString& scope) {
+    return occurrence == scope || occurrence.startsWith(scope + QLatin1Char('/'));
+  };
+  // Edit in Place (mitcad#2353): only the assembly's occurrences.
+  if (!m_activeScope.outside.isEmpty()) {
+    return !occurrence.isEmpty() &&
+           std::any_of(m_activeScope.outside.begin(), m_activeScope.outside.end(), within);
+  }
   // The root's own items (an empty occurrence) are outside every component.
   return std::none_of(m_activeScope.occurrences.begin(), m_activeScope.occurrences.end(),
-                      [&occurrence](const QString& active) {
-                        return active.isEmpty() || occurrence == active ||
-                               occurrence.startsWith(active + QLatin1Char('/'));
-                      });
+                      [&within](const QString& active) { return active.isEmpty() || within(active); });
 }
 
 bool OcctViewer::outsideActive(const SelectionItem& item) const {
   return outsideActive(item.occurrence) && !m_activeScope.normal.contains(item.owner);
 }
 
+bool OcctViewer::ghostsShown() const {
+  // Context geometry (mitcad#2353) is faded whatever the setting.
+  return m_ghostInactive || !m_activeScope.outside.isEmpty();
+}
+
 bool OcctViewer::isInactive(const QString& occurrence) const {
-  return m_ghostInactive && outsideActive(occurrence);
+  return ghostsShown() && outsideActive(occurrence);
 }
 
 bool OcctViewer::isInactiveItem(const SelectionItem& item) const {
-  return m_ghostInactive && outsideActive(item);
+  return ghostsShown() && outsideActive(item);
 }
 
 void OcctViewer::setActivePickPriority(bool on) {
@@ -2662,7 +2672,7 @@ void OcctViewer::applyInactiveGhosts(bool faded) {
 
 void OcctViewer::logInactiveGhosts() {
   QString line = QStringLiteral("none");
-  if (m_ghostInactive && m_activeScope.on) {
+  if (ghostsShown() && m_activeScope.on) {
     // The bodies drawn as ghosts for it: a command's ghosts among them, not
     // its previews.
     const int ghosts = static_cast<int>(std::count_if(m_bodies.begin(), m_bodies.end(), [](const auto& body) {
@@ -8219,24 +8229,104 @@ void OcctViewer::setNavigation(const NavigationSettings& settings) {
   emit navigationChanged(); // the 3D mouse follows (mitcad#951)
 }
 
+namespace {
+
+// Where the camera is, to tell whether a navigation moved it (mitcad#2369).
+struct CameraPose {
+  gp_Pnt eye;
+  gp_Pnt center;
+  gp_Dir up;
+  double scale = 1.0;
+};
+
+CameraPose cameraPose(const Graphic3d_Camera& camera) {
+  return {camera.Eye(), camera.Center(), camera.Up(), camera.Scale()};
+}
+
+// Whether the camera moved from `before`: more than rounding noise against
+// its distance to what it looks at (a press without a move computes the same
+// camera again).
+bool cameraMovedFrom(const CameraPose& before, const Graphic3d_Camera& camera) {
+  const CameraPose now = cameraPose(camera);
+  const double span = std::max(1.0, before.eye.Distance(before.center));
+  const double tolerance = 1e-9 * span;
+  return now.eye.Distance(before.eye) > tolerance || now.center.Distance(before.center) > tolerance ||
+         now.up.Angle(before.up) > 1e-9 || std::abs(now.scale - before.scale) > 1e-9 * std::max(1.0, before.scale);
+}
+
+} // namespace
+
+void OcctViewer::userNavigated(NavigationAction action) {
+  const char* name = action == NavigationAction::Orbit ? "orbit"
+                     : action == NavigationAction::Pan ? "pan"
+                     : action == NavigationAction::Zoom ? "zoom"
+                                                        : nullptr;
+  if (name != nullptr) {
+    emit viewNavigated(QString::fromLatin1(name));
+  }
+}
+
 // OCCT exposes orbit acceleration, but its mouse acceleration only affects
 // first-person rotation. Pan retains OCCT's picked anchor and projection;
 // only the integer delta is scaled, carrying subpixel motion across frames.
 void OcctViewer::handlePanning(const occ::handle<V3d_View>& view) {
+  const CameraPose before = cameraPose(*view->Camera());
   auto& pan = ChangeInputBuffer(AIS_ViewInputBufferType_GL).Panning;
   if (pan.ToStart) {
     m_panRemainder = {};
   }
   if (!pan.ToPan || m_navigation.panSpeed == 1.0) {
     AIS_ViewController::handlePanning(view);
-    return;
+  } else {
+    const auto original = pan.Delta;
+    const QPointF scaled = QPointF(pan.Delta.x(), pan.Delta.y()) * m_navigation.panSpeed + m_panRemainder;
+    pan.Delta.SetValues(qRound(scaled.x()), qRound(scaled.y()));
+    m_panRemainder = scaled - QPointF(pan.Delta.x(), pan.Delta.y());
+    AIS_ViewController::handlePanning(view);
+    pan.Delta = original;
   }
-  const auto original = pan.Delta;
-  const QPointF scaled = QPointF(pan.Delta.x(), pan.Delta.y()) * m_navigation.panSpeed + m_panRemainder;
-  pan.Delta.SetValues(qRound(scaled.x()), qRound(scaled.y()));
-  m_panRemainder = scaled - QPointF(pan.Delta.x(), pan.Delta.y());
-  AIS_ViewController::handlePanning(view);
-  pan.Delta = original;
+  if (cameraMovedFrom(before, *view->Camera())) {
+    userNavigated(NavigationAction::Pan);
+  }
+}
+
+// The orbits OCCT applies from the input (a drag the scheme binds to Orbit,
+// the trackpad's orbit scroll, the orientation cube's drag): one that moved
+// the camera is the user's orbit (mitcad#2369).
+void OcctViewer::handleOrbitRotation(const occ::handle<V3d_View>& view, const gp_Pnt& point, bool lockZUp) {
+  const CameraPose before = cameraPose(*view->Camera());
+  AIS_ViewController::handleOrbitRotation(view, point, lockZUp);
+  if (cameraMovedFrom(before, *view->Camera())) {
+    userNavigated(NavigationAction::Orbit);
+  }
+}
+
+// The zooms OCCT applies from the input (the wheel, a drag the scheme binds
+// to Zoom, the trackpad's zoom scroll, a pinch): one that moved the camera is
+// the user's zoom (mitcad#2369).
+void OcctViewer::handleZoom(const occ::handle<V3d_View>& view, const Aspect_ScrollDelta& params, const gp_Pnt* point) {
+  const CameraPose before = cameraPose(*view->Camera());
+  AIS_ViewController::handleZoom(view, params, point);
+  if (cameraMovedFrom(before, *view->Camera())) {
+    userNavigated(NavigationAction::Zoom);
+  }
+}
+
+bool OcctViewer::navigationPress(const QPoint& position, Qt::MouseButton button, Qt::KeyboardModifiers keys) {
+  if (button == Qt::LeftButton && isOnOrientationCube(QPointF(position))) {
+    return true; // the cube's drag orbits in every scheme
+  }
+  if (button != Qt::LeftButton && button != Qt::MiddleButton && button != Qt::RightButton) {
+    return false;
+  }
+  const NavigationInput input = button == Qt::LeftButton     ? NavigationInput::LeftButton
+                                : button == Qt::MiddleButton ? NavigationInput::MiddleButton
+                                                             : NavigationInput::RightButton;
+  if (input == NavigationInput::LeftButton && m_orbitKey &&
+      navigationAction(m_navigation, input, keys, true) != NavigationAction::None) {
+    return true; // F4 held: the left button orbits (MiddlePanF4)
+  }
+  return navigationAction(m_navigation, input, keys) != NavigationAction::None;
 }
 
 bool OcctViewer::UpdateZoom(const Aspect_ScrollDelta& delta) {
@@ -9963,7 +10053,7 @@ void OcctViewer::deactivated(const QWidget* active) {
   // its field) is still this window's: a drag on the view goes on, as
   // CommandSession::previewHoldRefusal counts it.
   const QWidget* host = GlassCard::hostWindow(this);
-  if (active != nullptr && (active == host || GlassCard::hostWindow(active) == host)) {
+  if (active != nullptr && (active == host || GlassCard::keyboardHost(active) == host)) {
     return;
   }
   if (pointerInteractionHeld()) {
@@ -10768,6 +10858,7 @@ void OcctViewer::turnView(double right, double up) {
   cameraMoved();
   navigationStep();
   requestFrame();
+  userNavigated(NavigationAction::Orbit); // the arrow keys orbit (mitcad#2369)
 }
 
 void OcctViewer::keyPressEvent(QKeyEvent* event) {

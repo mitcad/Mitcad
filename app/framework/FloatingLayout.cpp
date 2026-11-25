@@ -24,6 +24,7 @@
 #include "ColumnShare.hpp"
 #include "GlassCard.hpp"
 #include "MessageBand.hpp"
+#include "PaneMotion.hpp"
 #include "TestSync.hpp"
 #include "Theme.hpp"
 
@@ -184,6 +185,8 @@ void FloatingLayout::adopt(GlassCard* card) {
 void FloatingLayout::addCard(GlassCard* card, Anchor anchor, const Sizing& sizing) {
   adopt(card);
   connect(card, &GlassCard::collapsedChanged, this, &FloatingLayout::requestLayout);
+  // A move to another place ended (setCardAnchor): the cards are logged.
+  connect(card, &GlassCard::slotMoveFinished, this, &FloatingLayout::requestLayout);
   // A width the user drags (mitcad#529).
   connect(card, &GlassCard::widthDragged, this, [this, card](int width) { setCardWidth(card, width); });
   m_entries.push_back({card, anchor, sizing, -1});
@@ -192,6 +195,22 @@ void FloatingLayout::addCard(GlassCard* card, Anchor anchor, const Sizing& sizin
     card->raise();
   }
   requestLayout();
+}
+
+void FloatingLayout::setCardAnchor(GlassCard* card, Anchor anchor, const Sizing& sizing, int moveMs) {
+  for (Entry& entry : m_entries) {
+    if (entry.card != card) {
+      continue;
+    }
+    entry.anchor = anchor;
+    entry.sizing = sizing;
+    entry.maxContent = -1;
+    entry.want = -1;
+    card->animateNextSlot(moveMs);
+    layoutCards();
+    card->animateNextSlot(0); // not placed (hidden): no move later
+    return;
+  }
 }
 
 void FloatingLayout::watchContent(QWidget* content) { content->installEventFilter(this); }
@@ -843,7 +862,8 @@ void FloatingLayout::layoutCards() {
       freeLeft = std::max(freeLeft, view.left() + m_viewer->badgeWidth() + kGap);
     }
     for (const Entry& other : m_entries) {
-      if (!visible(other) || other.anchor == Anchor::Bottom || other.anchor == Anchor::BottomCenter) {
+      if (!visible(other) || other.anchor == Anchor::Bottom || other.anchor == Anchor::BottomCenter ||
+          other.anchor == Anchor::Center) {
         continue;
       }
       const QRect slot = other.card->slot();
@@ -862,9 +882,27 @@ void FloatingLayout::layoutCards() {
     card->setSlot(QRect(x, top, width, height));
     floor = top - kGap;
   }
+  // The centred cards (mitcad#2367): most of the room between the rows and
+  // the bottom card, over the other cards.
+  for (Entry& entry : m_entries) {
+    if (!visible(entry) || entry.anchor != Anchor::Center) {
+      continue;
+    }
+    const QRect area(view.left() + kMargin, topLimit, std::max(1, view.width() - 2 * kMargin),
+                     std::max(1, cardsBottom - topLimit));
+    QRect slot = centredPaneRect(area);
+    slot.setHeight(std::max(slot.height(), entry.card->heightForContent(0)));
+    entry.card->setSlot(slot);
+    entry.maxContent = std::max(0, slot.height() - entry.card->heightForContent(0));
+  }
   if (!m_windowed) { // the child windows keep their order
     for (const Entry& entry : m_entries) {
       if (visible(entry)) {
+        entry.card->raise();
+      }
+    }
+    for (const Entry& entry : m_entries) {
+      if (visible(entry) && entry.anchor == Anchor::Center) {
         entry.card->raise();
       }
     }
@@ -895,6 +933,12 @@ void FloatingLayout::layoutCards() {
 void FloatingLayout::logCards() {
   QWidget* host = window();
   if (host == nullptr || !host->isVisible()) {
+    return;
+  }
+  // A card on its way to another slot (mitcad#2367): logged where it ends,
+  // not at each step of the move (its last step lays the cards out again).
+  if (std::any_of(m_entries.begin(), m_entries.end(),
+                  [](const Entry& entry) { return entry.card != nullptr && entry.card->slotMoving(); })) {
     return;
   }
   // The bottom of the bar above the cards in the window: the menu bar (none

@@ -4,7 +4,9 @@
 //! on another's side (a T), gets one fillet weld all around on an edge of
 //! the joint, keyed by the joint; proposing again keeps it as edited and
 //! adds nothing, a deleted one comes back with the weld asked for, and
-//! the members asked for are checked.
+//! the members asked for are checked. Members crossing side by side
+//! (mitcad#2379) get a fillet all around where they touch; a joint whose
+//! members touch along no edge is skipped in words naming it.
 
 use serde_json::{Value, json};
 
@@ -13,6 +15,7 @@ use mitcad_model::datum::CurveGeometry;
 use mitcad_model::ids::{BodyUid, ComponentUid};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::testing::MockKernel;
+use mitcad_model_build::prelude::*;
 use mitcad_model_tests_support::test_library::*;
 
 /// The corners of a 30 x 30 profile's section, round its axis.
@@ -88,13 +91,77 @@ fn frame() -> (Document<MockKernel>, Value, Value) {
             );
         }
     }
-    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"})).unwrap();
+    front_view(&mut doc);
+    (doc, post, rail)
+}
+
+/// A drawing of the design with its front view at 1:10.
+fn front_view(doc: &mut Document<MockKernel>) {
+    command(doc, json!({"cmd": "add_drawing", "size": "A3"})).unwrap();
     command(
-        &mut doc,
+        doc,
         json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
                "at": [200, 150], "scale": "1:10"}),
     )
     .unwrap();
+}
+
+/// Every edge of a placed part's body as a 30 x 30 bar `length` long in
+/// its own coordinates (its axis along z, end A at `from`): its four long
+/// edges at the section's corners, the edges round each end the section's
+/// outline there.
+fn bar_edges(doc: &Document<MockKernel>, part: ComponentUid, length: f64, from: f64) {
+    let names = edge_names(doc, part);
+    let mut curves = doc.kernel().edge_curves.borrow_mut();
+    let (mut long, mut end_a, mut end_b) = (0, 0, 0);
+    for name in names {
+        let curve = if name.matches(":side").count() == 2 {
+            let [x, y] = SECTION[long % 4];
+            long += 1;
+            CurveGeometry::Line {
+                start: [x, y, from],
+                end: [x, y, from + length],
+            }
+        } else if name.contains(":side") {
+            let (k, z) = if round_end_a(&name) {
+                end_a += 1;
+                (end_a - 1, from)
+            } else {
+                end_b += 1;
+                (end_b - 1, from + length)
+            };
+            let ([x0, y0], [x1, y1]) = (SECTION[k % 4], SECTION[(k + 1) % 4]);
+            CurveGeometry::Line {
+                start: [x0, y0, z],
+                end: [x1, y1, z],
+            }
+        } else {
+            continue;
+        };
+        curves.insert(name, curve);
+    }
+    assert_eq!((long, end_a), (4, 4), "{part}");
+}
+
+/// A post 1000 long and a rail 300 long beside it, across it half way up
+/// (a `cross` joint: the rail's side on the post's side, mitcad#2379);
+/// both bodies' edges listed as bars, the rail's `shift` along its own
+/// axis (beyond the post: the members touch along no edge); a drawing
+/// with its front view at 1:10. Returns the document, the post and the
+/// rail.
+fn crossing(shift: f64) -> (Document<MockKernel>, Value, Value) {
+    let mut doc = design();
+    let post = first(&mut doc, "p30", [0.0; 3], 1000.0);
+    let rail = place(
+        &mut doc,
+        json!({"part": {"source": "S1"},
+               "at": {"geometry": "xz", "point": [30, 0, 500]}, "length": 300}),
+    );
+    all_ok(&doc);
+    doc.kernel().lists_geometry.set(true);
+    bar_edges(&doc, component(&post), 1000.0, 0.0);
+    bar_edges(&doc, component(&rail), 300.0, shift);
+    front_view(&mut doc);
     (doc, post, rail)
 }
 
@@ -232,4 +299,71 @@ fn proposing_again_keeps_edited_welds_and_brings_back_deleted_ones() {
     )
     .unwrap_err();
     assert!(error.contains("arrow side"), "{error}");
+}
+
+/// Members crossing side by side (mitcad#2379) share no edge: the weld
+/// goes where they touch, a fillet all around the contact (the rail's
+/// edges along the post's side and the post's edges across the rail's
+/// close round it), its arrow on an edge of one of them there.
+#[test]
+fn members_crossing_side_by_side_get_a_fillet_all_around_where_they_touch() {
+    let (mut doc, post, rail) = crossing(0.0);
+    let junctions = doc.build_junctions(None);
+    assert_eq!(junctions.len(), 1, "{junctions:?}");
+    assert_eq!(junctions[0].kind, "cross");
+    let answer = propose(&mut doc, json!({}));
+    assert_eq!(answer["skipped"], json!([]), "{answer}");
+    assert_eq!(
+        answer["annotations"].as_array().unwrap().len(),
+        1,
+        "{answer}"
+    );
+    let found = welds(&doc);
+    assert_eq!(found.len(), 1);
+    let weld = &found[0];
+    assert_eq!(weld["weld"]["arrow_side"]["symbol"], "fillet");
+    assert_eq!(
+        weld["weld"]["all_around"], true,
+        "the contact's outline closes: {weld}"
+    );
+    assert_eq!(weld["weld"]["joint"], junctions[0].id);
+    let picked = weld["picks"][0]["edge"].as_str().unwrap().to_owned();
+    let occurrence = &weld["picks"][0]["occurrence"];
+    let of = |part: &Value| {
+        edge_names(&doc, component(part)).contains(&picked) && *occurrence == part["occurrence"]
+    };
+    assert!(of(&post) || of(&rail), "{picked} {occurrence}");
+    // Proposed again: kept, nothing added.
+    let again = propose(&mut doc, json!({}));
+    assert_eq!(again["annotations"], json!([]), "{again}");
+    assert_eq!(welds(&doc).len(), 1);
+}
+
+/// A joint whose members touch along no edge gets no weld: skipped with
+/// words naming the joint, its kind and its two members (mitcad#2379).
+#[test]
+fn a_joint_touching_along_no_edge_is_skipped_in_words_naming_it() {
+    let (mut doc, post, rail) = crossing(1000.0);
+    let junctions = doc.build_junctions(None);
+    assert_eq!(junctions.len(), 1, "{junctions:?}");
+    let answer = propose(&mut doc, json!({}));
+    assert_eq!(answer["annotations"], json!([]), "{answer}");
+    let skipped = answer["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1, "{answer}");
+    assert_eq!(skipped[0]["joint"], junctions[0].id);
+    let why = skipped[0]["why"].as_str().unwrap();
+    let name = |part: &Value| {
+        doc.assembly()
+            .component(component(part))
+            .unwrap()
+            .name
+            .clone()
+    };
+    assert!(why.starts_with("the cross joint of "), "{why}");
+    assert!(
+        why.contains(&name(&post)) && why.contains(&name(&rail)),
+        "{why}"
+    );
+    assert!(why.ends_with("no weld can be placed"), "{why}");
+    assert!(welds(&doc).is_empty());
 }

@@ -906,7 +906,7 @@ impl<K: Kernel> Document<K> {
             }
         }
         next.normalize_groups();
-        next.follow_sketch_use(&self.state);
+        next.follow_sketch_use(&self.state, self.hide_used_sketches());
         let result = self.compute(&next)?;
         for r in &result.results {
             let worked = self

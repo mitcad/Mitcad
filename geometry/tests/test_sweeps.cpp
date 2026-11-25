@@ -4,6 +4,7 @@
 // names, and failures.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -26,12 +27,18 @@
 #include <BRepLib.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRep_Tool.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <GProp_GProps.hxx>
 #include <Geom2d_Line.hxx>
+#include <GeomAPI_Interpolate.hxx>
+#include <GeomAdaptor_Curve.hxx>
 #include <GeomConvert.hxx>
 #include <Geom_BSplineCurve.hxx>
+#include <Geom_Circle.hxx>
 #include <Geom_CylindricalSurface.hxx>
+#include <Geom_Ellipse.hxx>
 #include <Geom_TrimmedCurve.hxx>
+#include <NCollection_HArray1.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -1981,6 +1988,322 @@ void test_guide_surfaces() {
   CHECK(throws_with([&] { sweep(prism); }, "does not exist"));
 }
 
+// The distance from `point` to the nearest face of the shape named `name`;
+// -1 without one.
+double distance_to(const Shape& shape, const std::string& name, const gp_Pnt& point) {
+  double best = -1.0;
+  const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(point).Vertex();
+  for (const int i : shape.find_faces(name)) {
+    BRepExtrema_DistShapeShape distance(vertex, shape.face(i));
+    if (distance.IsDone() && (best < 0.0 || distance.Value() < best)) {
+      best = distance.Value();
+    }
+  }
+  return best;
+}
+
+// An ellipse about `center` in a plane of constant Z, its major axis along
+// X, from `first` to `last` (whole: closed), as a model curve.
+ModelCurve ellipse3(const gp_Pnt& center, double major, double minor, double first = 0.0, double last = 2 * kPi) {
+  ModelCurve curve;
+  curve.kind = ModelCurveKind::Conic;
+  curve.center = center;
+  curve.normal = gp_Dir(0, 0, 1);
+  curve.x_axis = gp_Dir(1, 0, 0);
+  curve.major = major;
+  curve.minor = minor;
+  curve.first = first;
+  curve.last = last;
+  curve.closed = last - first >= 2 * kPi - 1e-12;
+  return curve;
+}
+
+// The length of a curve between two parameters, to 1e-10 (without a
+// tolerance the length of a whole ellipse 30 x 15 came out 0.13 % long).
+double length_of(const occ::handle<Geom_Curve>& curve, double first, double last) {
+  const GeomAdaptor_Curve adaptor(curve, first, last);
+  return GCPnts_AbscissaPoint::Length(adaptor, first, last, 1.0e-10);
+}
+
+// A web's wall of F7 along `curve` from `first` to `last`, its curve named
+// `key`, 2 thick Symmetric, from its curve 10 up: at points along it,
+// halfway up, each side lies 1 from the curve within 1e-6 (mitcad#2364).
+void check_wall(const Shape& web, const occ::handle<Geom_Curve>& curve, double first, double last,
+                const std::string& key) {
+  for (int i = 1; i < 10; ++i) {
+    const gp_Pnt point = curve->Value(first + (last - first) * i / 10.0).Translated(gp_Vec(0, 0, 5));
+    CHECK(std::abs(distance_to(web, "F7:wall1(" + key + ")", point) - 1.0) <= 1e-6);
+    CHECK(std::abs(distance_to(web, "F7:wall2(" + key + ")", point) - 1.0) <= 1e-6);
+  }
+}
+
+// Webs along every kind of curve (mitcad#2364), each 2 thick Symmetric and
+// 10 deep on a 100 x 100 x 5 plate: a circle and an ellipse as rings (no
+// tips, their middles open), an elliptical arc, an open spline, a closed
+// spline (a ring) and a conic, each a wall whose sides lie 1 from its curve
+// within 1e-6 and whose volume is its length x 2 x 10, joined to the plate
+// in one body; a spline with a corner mitred there as an L of two lines; a
+// wall too thick for an ellipse's tight bend refused in words; Extend Ends
+// continuing an elliptical arc's end along its tangent to a wall; and a grid
+// of lines, a circle and a spline crossing each other, one body.
+void test_web_curves() {
+  const ShapePtr plate = extrude("F2", {rectangle(1, 0, 0, 100, 100)}, 0, 5);
+  RibSpec spec;
+  spec.feature = "F7";
+  spec.web = true;
+  spec.frame = xy_at(5);
+  spec.thickness = 2;
+  spec.depth = 10.0;
+  spec.bodies = {plate};
+  const auto joined_once = [&](const ShapePtr& web) {
+    CHECK(BRepCheck_Analyzer(web->occt()).IsValid());
+    const BooleanResult joined = boolean(BooleanOp::Join, {plate.get()}, *web);
+    CHECK(joined.pieces.size() == 1);
+    CHECK(joined.pieces.size() != 1 || BRepCheck_Analyzer(joined.pieces.front().shape->occt()).IsValid());
+  };
+  const auto no_tips = [](const Shape& web, const std::string& key) {
+    return web.find_faces("F7:tip0(" + key + ")").empty() && web.find_faces("F7:tip1(" + key + ")").empty();
+  };
+  const gp_Ax2 axes(gp_Pnt(50, 50, 5), gp::DZ(), gp::DX());
+
+  // A circle of radius 20: a ring, 2 pi 20 x 2 x 10.
+  spec.chains = {{{"c1", arc3(gp_Pnt(50, 50, 5), gp_Dir(0, 0, 1), gp_Dir(1, 0, 0), 20, 0, 2 * kPi)}}};
+  const ShapePtr ring = rib(spec);
+  CHECK(solids(*ring).size() == 1);
+  CHECK_NEAR(volume(*ring), 2 * kPi * 20 * 2 * 10);
+  CHECK(no_tips(*ring, "c1") && faces_named(*ring, "F7:wall1(c1)") == 1 && faces_named(*ring, "F7:wall2(c1)") == 1);
+  CHECK(!inside(*ring, gp_Pnt(50, 50, 10)) && inside(*ring, gp_Pnt(70, 50, 10)));
+  check_wall(*ring, new Geom_Circle(axes, 20), 0, 2 * kPi, "c1");
+  joined_once(ring);
+  // Side 1, to the left of the counter-clockwise circle: inside it.
+  spec.location = ThicknessLocation::Side1;
+  CHECK_NEAR(volume(*rib(spec)), kPi * (400 - 324) * 10);
+  spec.location = ThicknessLocation::Symmetric;
+  // Up to a roof at z = 25..30: 20 high.
+  const ShapePtr roof = extrude("F4", {rectangle(9, 0, 0, 100, 100)}, 25, 30);
+  spec.depth.reset();
+  spec.bodies = {plate, roof};
+  CHECK_NEAR(volume(*rib(spec)), 2 * kPi * 20 * 2 * 20);
+  spec.depth = 10.0;
+  spec.bodies = {plate};
+
+  // An ellipse 30 x 15: a ring along its whole length.
+  const occ::handle<Geom_Curve> oval_curve = new Geom_Ellipse(axes, 30, 15);
+  spec.chains = {{{"c2", ellipse3(gp_Pnt(50, 50, 5), 30, 15)}}};
+  const ShapePtr oval = rib(spec);
+  CHECK(solids(*oval).size() == 1 && no_tips(*oval, "c2"));
+  CHECK(!inside(*oval, gp_Pnt(50, 50, 10)) && inside(*oval, gp_Pnt(80, 50, 10)));
+  CHECK_NEAR_TOL(volume(*oval), length_of(oval_curve, 0, 2 * kPi) * 2 * 10, 1e-6);
+  check_wall(*oval, oval_curve, 0, 2 * kPi, "c2");
+  joined_once(oval);
+
+  // Its upper half: a wall with square ends.
+  spec.chains = {{{"c3", ellipse3(gp_Pnt(50, 50, 5), 30, 15, 0, kPi)}}};
+  const ShapePtr half = rib(spec);
+  CHECK(solids(*half).size() == 1 && !no_tips(*half, "c3"));
+  CHECK_NEAR_TOL(volume(*half), length_of(oval_curve, 0, kPi) * 2 * 10, 1e-6);
+  check_wall(*half, oval_curve, 0, kPi, "c3");
+  joined_once(half);
+
+  // An open spline: a cubic S.
+  NCollection_Array1<gp_Pnt> s_poles(1, 4);
+  s_poles.SetValue(1, gp_Pnt(20, 20, 5));
+  s_poles.SetValue(2, gp_Pnt(40, 80, 5));
+  s_poles.SetValue(3, gp_Pnt(60, 20, 5));
+  s_poles.SetValue(4, gp_Pnt(80, 80, 5));
+  NCollection_Array1<double> ends(1, 2);
+  ends.SetValue(1, 0.0);
+  ends.SetValue(2, 1.0);
+  NCollection_Array1<int> cubic(1, 2);
+  cubic.SetValue(1, 4);
+  cubic.SetValue(2, 4);
+  const occ::handle<Geom_BSplineCurve> s_curve = new Geom_BSplineCurve(s_poles, ends, cubic, 3);
+  spec.chains = {{{"c4", bspline3(s_curve)}}};
+  const ShapePtr s_wall = rib(spec);
+  CHECK(solids(*s_wall).size() == 1 && !no_tips(*s_wall, "c4"));
+  CHECK_NEAR_TOL(volume(*s_wall), length_of(occ::handle<Geom_Curve>(s_curve), 0, 1) * 2 * 10, 1e-6);
+  check_wall(*s_wall, occ::handle<Geom_Curve>(s_curve), 0, 1, "c4");
+  joined_once(s_wall);
+
+  // A closed spline through eight points round (50, 50): a ring.
+  const occ::handle<NCollection_HArray1<gp_Pnt>> loop = new NCollection_HArray1<gp_Pnt>(1, 8);
+  const double loop_points[8][2] = {{30, 30}, {50, 25}, {70, 30}, {75, 50}, {70, 70}, {50, 75}, {30, 70}, {25, 50}};
+  for (int i = 0; i < 8; ++i) {
+    loop->SetValue(i + 1, gp_Pnt(loop_points[i][0], loop_points[i][1], 5));
+  }
+  GeomAPI_Interpolate through(loop, true, 1e-9);
+  through.Perform();
+  CHECK(through.IsDone());
+  if (through.IsDone()) {
+    const occ::handle<Geom_BSplineCurve> closed = through.Curve();
+    closed->SetNotPeriodic();
+    spec.chains = {{{"c5", bspline3(closed)}}};
+    const ShapePtr closed_ring = rib(spec);
+    CHECK(solids(*closed_ring).size() == 1 && no_tips(*closed_ring, "c5"));
+    CHECK(!inside(*closed_ring, gp_Pnt(50, 50, 10)));
+    CHECK_NEAR_TOL(volume(*closed_ring),
+                   length_of(occ::handle<Geom_Curve>(closed), closed->FirstParameter(), closed->LastParameter()) * 2 * 10, 1e-6);
+    check_wall(*closed_ring, occ::handle<Geom_Curve>(closed), closed->FirstParameter(), closed->LastParameter(), "c5");
+    joined_once(closed_ring);
+  }
+
+  // A conic: a rational quadratic from (20, 20) to (80, 20), its end
+  // tangents meeting at (50, 60), rho 0.4.
+  NCollection_Array1<gp_Pnt> c_poles(1, 3);
+  c_poles.SetValue(1, gp_Pnt(20, 20, 5));
+  c_poles.SetValue(2, gp_Pnt(50, 60, 5));
+  c_poles.SetValue(3, gp_Pnt(80, 20, 5));
+  NCollection_Array1<double> c_weights(1, 3);
+  c_weights.SetValue(1, 1.0);
+  c_weights.SetValue(2, 0.4 / 0.6);
+  c_weights.SetValue(3, 1.0);
+  NCollection_Array1<int> quadratic(1, 2);
+  quadratic.SetValue(1, 3);
+  quadratic.SetValue(2, 3);
+  const occ::handle<Geom_BSplineCurve> c_curve = new Geom_BSplineCurve(c_poles, c_weights, ends, quadratic, 2);
+  spec.chains = {{{"c6", bspline3(c_curve)}}};
+  const ShapePtr arch = rib(spec);
+  CHECK(solids(*arch).size() == 1);
+  CHECK_NEAR_TOL(volume(*arch), length_of(occ::handle<Geom_Curve>(c_curve), 0, 1) * 2 * 10, 1e-6);
+  check_wall(*arch, occ::handle<Geom_Curve>(c_curve), 0, 1, "c6");
+  joined_once(arch);
+
+  // A spline with a corner: an L of degree 1, (10, 10) - (40, 10) -
+  // (40, 40), mitred there as two lines are, 2 x (31 + 29) / 2 per leg.
+  NCollection_Array1<gp_Pnt> l_poles(1, 3);
+  l_poles.SetValue(1, gp_Pnt(10, 10, 5));
+  l_poles.SetValue(2, gp_Pnt(40, 10, 5));
+  l_poles.SetValue(3, gp_Pnt(40, 40, 5));
+  NCollection_Array1<double> l_knots(1, 3);
+  l_knots.SetValue(1, 0.0);
+  l_knots.SetValue(2, 1.0);
+  l_knots.SetValue(3, 2.0);
+  NCollection_Array1<int> l_mults(1, 3);
+  l_mults.SetValue(1, 2);
+  l_mults.SetValue(2, 1);
+  l_mults.SetValue(3, 2);
+  spec.chains = {{{"c7", bspline3(new Geom_BSplineCurve(l_poles, l_knots, l_mults, 1))}}};
+  const ShapePtr corner = rib(spec);
+  CHECK(solids(*corner).size() == 1);
+  CHECK_NEAR(volume(*corner), 2 * 60.0 * 10);
+
+  // Too thick for an ellipse 30 x 3, which bends with a radius of 0.3 at
+  // its ends.
+  spec.chains = {{{"c8", ellipse3(gp_Pnt(50, 50, 5), 30, 3)}}};
+  CHECK(throws_with([&] { rib(spec); }, "the web is thicker than one of its curves allows"));
+
+  // Extend Ends on an elliptical arc, a quarter of 20 x 10 about (40, 50)
+  // from (40, 40), where it runs along +X, to (60, 50): on a plate with a
+  // wall at x = 0..10, its start continues along -X to the wall, 30 x 2 x
+  // 10; its end, running along +Y, meets nothing and stays, with a note.
+  const ShapePtr side_wall = extrude("F3", {rectangle(5, 0, 0, 10, 100)}, 0, 25);
+  const BooleanResult room = boolean(BooleanOp::Join, {plate.get()}, *side_wall);
+  CHECK(room.pieces.size() == 1);
+  if (room.pieces.size() == 1) {
+    spec.bodies = {room.pieces.front().shape};
+    spec.extend_ends = true;
+    spec.chains = {{{"c9", ellipse3(gp_Pnt(40, 50, 5), 20, 10, -kPi / 2, 0)}}};
+    const ShapePtr reached = rib(spec);
+    CHECK(near(bounding_box(*reached).min.X(), 10, 1e-6));
+    CHECK(reached->notes().size() == 1);
+    const occ::handle<Geom_Curve> quarter = new Geom_Ellipse(gp_Ax2(gp_Pnt(40, 50, 5), gp::DZ(), gp::DX()), 20, 10);
+    CHECK_NEAR_TOL(volume(*reached), length_of(quarter, -kPi / 2, 0) * 2 * 10 + 30.0 * 2 * 10, 1e-6);
+    spec.extend_ends = false;
+    spec.bodies = {plate};
+  }
+
+  // A grid: a square of four lines, a circle inside it, a spline and a line
+  // across both: one body; the circle's wall 2 thick away from the others.
+  spec.chains = {{{"c1", line3(gp_Pnt(20, 20, 5), gp_Pnt(80, 20, 5))}},
+                 {{"c2", line3(gp_Pnt(80, 20, 5), gp_Pnt(80, 80, 5))}},
+                 {{"c3", line3(gp_Pnt(80, 80, 5), gp_Pnt(20, 80, 5))}},
+                 {{"c4", line3(gp_Pnt(20, 80, 5), gp_Pnt(20, 20, 5))}},
+                 {{"c5", arc3(gp_Pnt(50, 50, 5), gp_Dir(0, 0, 1), gp_Dir(1, 0, 0), 25, 0, 2 * kPi)}},
+                 {{"c6", bspline3(s_curve)}},
+                 {{"c7", line3(gp_Pnt(50, 20, 5), gp_Pnt(50, 80, 5))}}};
+  const ShapePtr grid = rib(spec);
+  CHECK(solids(*grid).size() == 1);
+  const double at = kPi / 4 + 0.1;
+  const gp_Vec radial(std::cos(at), std::sin(at), 0);
+  const gp_Pnt on_circle = gp_Pnt(50, 50, 10).Translated(radial * 25);
+  CHECK(inside(*grid, on_circle.Translated(radial * 0.99)) && inside(*grid, on_circle.Translated(radial * -0.99)));
+  CHECK(!inside(*grid, on_circle.Translated(radial * 1.01)) && !inside(*grid, on_circle.Translated(radial * -1.01)));
+  joined_once(grid);
+}
+
+// Dense webs (mitcad#2364), each wall 1 thick and 3 deep on a plate, its
+// bands joined in the sketch plane and grown at once: a grid of 200
+// hexagonal cells (10 rows of 20) of circumradius 3 drawn as lines, each
+// edge once, and a grid of 10 x 10 circles of radius 5, 9 apart, each
+// crossing its neighbours: each one body, joined to the plate in one.
+// guarded() prints how long each takes.
+void test_web_grids() {
+  const ShapePtr plate = extrude("F2", {rectangle(1, -10, -10, 130, 120)}, 0, 5);
+  RibSpec spec;
+  spec.feature = "F7";
+  spec.web = true;
+  spec.frame = xy_at(5);
+  spec.thickness = 1;
+  spec.depth = 3.0;
+  spec.bodies = {plate};
+  const double r = 3.0;
+  const double w = std::sqrt(3.0) * r;
+  std::set<std::array<long long, 4>> drawn;
+  const auto key = [](const gp_Pnt& p) {
+    return std::array<long long, 2>{std::llround(p.X() * 1e6), std::llround(p.Y() * 1e6)};
+  };
+  int count = 0;
+  for (int row = 0; row < 10; ++row) {
+    for (int column = 0; column < 20; ++column) {
+      const double cx = column * w + (row % 2) * w / 2;
+      const double cy = row * 1.5 * r;
+      for (int k = 0; k < 6; ++k) {
+        const double a0 = (30.0 + 60.0 * k) * kPi / 180.0;
+        const double a1 = (30.0 + 60.0 * (k + 1)) * kPi / 180.0;
+        const gp_Pnt p(cx + r * std::cos(a0), cy + r * std::sin(a0), 5);
+        const gp_Pnt q(cx + r * std::cos(a1), cy + r * std::sin(a1), 5);
+        std::array<long long, 2> kp = key(p);
+        std::array<long long, 2> kq = key(q);
+        if (kq < kp) {
+          std::swap(kp, kq);
+        }
+        if (drawn.insert({kp[0], kp[1], kq[0], kq[1]}).second) {
+          spec.chains.push_back({{"c" + std::to_string(++count), line3(p, q)}});
+        }
+      }
+    }
+  }
+  const ShapePtr cells = rib(spec);
+  CHECK(solids(*cells).size() == 1);
+  CHECK(BRepCheck_Analyzer(cells->occt()).IsValid());
+  // The first cell's lower right edge, from (0, -r) to (w / 2, -r / 2),
+  // halfway up: material 0.49 across it, none 0.51.
+  const gp_Pnt middle(w / 4, -0.75 * r, 6.5);
+  const gp_Vec across(0.5, -std::sqrt(3.0) / 2, 0);
+  CHECK(inside(*cells, middle.Translated(across * 0.49)) && !inside(*cells, middle.Translated(across * 0.51)));
+  const BooleanResult honeycomb = boolean(BooleanOp::Join, {plate.get()}, *cells);
+  CHECK(honeycomb.pieces.size() == 1);
+
+  spec.chains.clear();
+  count = 0;
+  for (int i = 0; i < 10; ++i) {
+    for (int j = 0; j < 10; ++j) {
+      spec.chains.push_back({{"c" + std::to_string(++count),
+                              arc3(gp_Pnt(5 + 9.0 * i, 5 + 9.0 * j, 5), gp_Dir(0, 0, 1), gp_Dir(1, 0, 0), 5, 0,
+                                   2 * kPi)}});
+    }
+  }
+  const ShapePtr rings = rib(spec);
+  CHECK(solids(*rings).size() == 1);
+  CHECK(BRepCheck_Analyzer(rings->occt()).IsValid());
+  // The first ring's wall at its bottom, below the others; the middle of a
+  // circle open.
+  CHECK(inside(*rings, gp_Pnt(5, 0, 6.5)) && !inside(*rings, gp_Pnt(5, -0.51, 6.5)));
+  CHECK(!inside(*rings, gp_Pnt(5, 5, 6.5)));
+  const BooleanResult rings_on_plate = boolean(BooleanOp::Join, {plate.get()}, *rings);
+  CHECK(rings_on_plate.pieces.size() == 1);
+}
+
 } // namespace
 
 // The distinct names of a shape's faces, without the numbers of their
@@ -2798,6 +3121,7 @@ void sweeps_tests_2() {
   guarded("rib rim cap", test_rib_rim_cap);
   guarded("web corners", test_web_corners);
   guarded("rib draft", test_rib_draft);
+  guarded("web curves", test_web_curves);
 }
 
 void sweeps_tests_3() {
@@ -2823,6 +3147,7 @@ void sweeps_tests_5() {
   guarded("helices with flat ends", test_helices_with_flat_ends);
   guarded("helix turns that meet in one edge", test_helix_turns_meet_in_one_edge);
   guarded("guide surfaces", test_guide_surfaces);
+  guarded("web grids", test_web_grids);
 }
 
 } // namespace test

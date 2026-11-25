@@ -902,7 +902,7 @@ subprocess helper and CEF's runtime.
   CEF's licence); `MITCAD_BROWSER_COMPONENT_DIR=<build>/browser-component`
   makes a build's MitCad use it without a download (the UI test
   `app.ui-<platform>-component-web` does). The UI tests that need it
-  (`component-web*`, `tutorials`, `tutorials-start-page`) are registered
+  (`component-web*`, `tutorials`, `tutorials-start-page`, `tutorials-quit`, `tutorials-hold`) are registered
   only in a build that makes it: a Linux build or check machine without
   `~/cef/<version>/` runs none of them until `tools/dev-env/fetch-cef.sh`
   has run once as its user and the build is configured again. The target `browser-package`
@@ -1900,6 +1900,16 @@ in the distro only:
   new end edge parallel to the picked one (mitcad#2056); skipped with a
   message without it. `geometry.surface_modelling` covers the same
   outlines on synthetic faces without the file.
+  ctest `cli.replace_face_tilted_round_reported`
+  (`tools/cli/replace-face-tilted-round-reported-test.cmake`) finds the
+  archive in `github-643/` by its content id, unpacks it into the build
+  folder and runs `replace_face_tilted_round_reported.json` on the design
+  in it: the round tops of two cylinders standing in a shelled box are
+  replaced by the plane of a slanted surface strip, each new top the
+  ellipse on that plane and the cylinder's highest point on it
+  (mitcad#2382); skipped with a message without it.
+  `geometry.suite.faceops` (`test_replace_tilted_round_top`) covers a pin's
+  round top onto planes above, across and below it without the file.
   ctest `core.bridge` (`core/tests/test_bridge.cpp`,
   `test_reported_screw_joint_keeps_earlier_joint`; alone:
   `test_bridge screw-joint-530`) opens the design in `github-530/`

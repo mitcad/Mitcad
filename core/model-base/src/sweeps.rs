@@ -192,7 +192,9 @@ pub enum LoftSection<'a, S> {
     /// loft's section of sketch curves, given to the kernel's loft when it
     /// has end conditions. A loft of chains has only chains, all open or
     /// all closed, and is a surface; its faces are `side(<curve>)` after
-    /// the first chain's curves, as [`crate::Kernel::loft_sheet`]'s.
+    /// the first chain's curves, as [`crate::Kernel::loft_sheet`]'s. A
+    /// loose chain of a body's edges (mitcad#2377) comes as their curves,
+    /// each named after its edge.
     /// `normal`: the plane the curves lie in (a planar sketch's), if any.
     Chain {
         curves: &'a [PathCurve],
@@ -455,6 +457,20 @@ pub enum ThicknessLocation {
 /// does the opposite. The draft is built into the tool, so To Next and
 /// `extend_ends` are solved for the drafted wall; an angle that makes the
 /// sides meet before the wall's far end fails. Face names are as without.
+///
+/// With `far` (a rib's, by a depth; mitcad#2398, Normal to Curves) the rib
+/// grows from each point of its curves at right angles to them: its band in
+/// the sketch plane lies between the chain and `far`, the chain's offset by
+/// the depth in the plane (the model computes it as the sketch's Offset
+/// does, [`RibFarCurve`]), from the far point across from the chain's start
+/// to the one across from its end. `direction` is then none. Faces: the
+/// far side `end(<curve>)` after the chain's curve each piece is the offset
+/// of, a round corner's `corner(<curve>)` after the curve before it; the
+/// others as without. A continued end's band runs from the chain's end to
+/// the far side's. With a draft, the sides lean with the distance from the
+/// curves: each side of a piece of `far` is the ruled face between its
+/// chain curve and it (planes between lines, cones between arcs), a round
+/// corner's the cone about the chain's corner.
 #[derive(Debug, Clone)]
 pub struct RibSpec<'a, S> {
     pub feature: FeatureUid,
@@ -470,6 +486,22 @@ pub struct RibSpec<'a, S> {
     pub end_offset: f64,
     pub direction: Option<[f64; 3]>,
     pub draft_angle: f64,
+    /// Normal to Curves (mitcad#2398): the far side; empty for any other
+    /// direction.
+    pub far: &'a [RibFarCurve],
+}
+
+/// A piece of the far side of a rib grown Normal to Curves (mitcad#2398,
+/// [`RibSpec::far`]), in order from the far point across from the chain's
+/// start, each running the way the chain runs: the offset of the chain's
+/// curve `near` (its index in the chain), or with `corner` the round arc
+/// about that curve's end that joins its offset to the next one's. `curve`
+/// is named after the chain's curve.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RibFarCurve {
+    pub curve: PathCurve,
+    pub near: usize,
+    pub corner: bool,
 }
 
 /// Input of [`crate::Kernel::helix`] (FreeCAD's additive and subtractive

@@ -23,6 +23,19 @@ pub struct TurnPlacement {
 /// Checks a turning program against the lathe: one finding per operation
 /// and kind, in words, with the place in `at` (`[x, 0, z]`, work
 /// coordinates, x a radius).
+///
+/// The sub-spindle (mitcad#2375): the hand-over within its travel and its
+/// speeds and the main spindle's; its operations (turning and live tools)
+/// at its speeds, their tool within the turret's travel and clear of the
+/// zones and of both chucks where the sub-spindle holds the part (pulled
+/// back as the hand-over leaves it, [`super::HandOver::held_z`]), their
+/// places in `at` where the view draws them (the main spindle's work
+/// coordinates where the part was, [`super::HandOver::main_point`]).
+///
+/// The sub-spindle's body and the zones moving with it (mitcad#2392,
+/// [`sub_spindle_hits`]): every operation's tool clear of them where the
+/// sub-spindle is as it cuts. The findings come by operation, the
+/// hand-over's before its operation's own.
 pub fn check_lathe(
     machine: &Machine,
     program: &TurningProgram,
@@ -37,7 +50,39 @@ pub fn check_lathe(
         });
         return out;
     };
-    let at3 = |p: PXZ| Some([p[0], 0.0, p[1]]);
+    let main_speeds = [machine.spindle.min_rpm, machine.spindle.max_rpm];
+    let sub_speeds = lathe.sub_spindle.speeds(main_speeds);
+    // The hand-over: the sub-spindle's jaws' face where it grips and where
+    // it pulls the part back to, in its travel; the synchronized speed
+    // within both spindles' (mitcad#2375).
+    if let (Some(h), Some(index)) = (&program.hand_over, program.hand_over_at()) {
+        let name = &program.operations[index].name;
+        if let Some([lo, hi]) = lathe.sub_spindle.travel {
+            let beyond = [h.grip_z, h.grip_z + h.withdraw].into_iter().find(|z| {
+                let m = z + placement.work_z;
+                m < lo - 1e-9 || m > hi + 1e-9
+            });
+            if let Some(z) = beyond {
+                out.push(Finding {
+                    message: format!(
+                        "The hand-over before {name}: the sub-spindle goes beyond its travel."
+                    ),
+                    operation: index,
+                    at: Some([0.0, 0.0, z]),
+                });
+            }
+        }
+        let within = |s: [f64; 2]| h.rpm >= s[0] - 1e-9 && h.rpm <= s[1] + 1e-9;
+        if !within(main_speeds) || !within(sub_speeds) {
+            out.push(Finding {
+                message: format!(
+                    "The hand-over before {name}: the synchronized speed is outside what the spindles can do."
+                ),
+                operation: index,
+                at: None,
+            });
+        }
+    }
     for (i, op) in program.operations.iter().enumerate() {
         let name = &op.name;
         let mut say = |message: String, at: Option<[f64; 3]>| {
@@ -53,81 +98,55 @@ pub fn check_lathe(
                 None,
             );
         }
+        // The sub-spindle holds the part (mitcad#2319, mitcad#2375).
+        let held = program.hand_over.as_ref().filter(|_| op.sub);
+        if op.sub && !lathe.axes.sub_spindle {
+            let message = if op.live.is_some() {
+                format!("{name}: the lathe has no sub-spindle to hold the part's back.")
+            } else {
+                format!("{name}: the lathe has no sub-spindle to turn the part's back.")
+            };
+            say(message, None);
+            continue;
+        }
         // A live tool's operation (mitcad#2067).
         if let Some(live) = &op.live {
-            for (message, at) in check_live(machine, lathe, op, live, placement) {
+            for (message, at) in check_live(machine, lathe, op, live, placement, held) {
                 say(message, at);
             }
             continue;
         }
-        // An operation on the sub-spindle (mitcad#2319): the lathe needs
-        // one; its travel, zones and chuck are not modelled, so only its
-        // speeds are checked.
-        if op.sub {
-            if !lathe.axes.sub_spindle {
-                say(
-                    format!("{name}: the lathe has no sub-spindle to turn the part's back."),
-                    None,
-                );
-            }
-            let fast = match op.spindle {
-                TurnSpindle::Css { max_rpm, .. } => max_rpm > machine.spindle.max_rpm,
-                TurnSpindle::Rpm { rpm } => {
-                    rpm < machine.spindle.min_rpm || rpm > machine.spindle.max_rpm
-                }
-            };
-            if fast {
-                say(
-                    format!("{name}: the spindle speed is outside what the spindle can do."),
-                    None,
-                );
-            }
-            continue;
-        }
+        let speeds = if op.sub { sub_speeds } else { main_speeds };
         match op.spindle {
-            TurnSpindle::Css { max_rpm, .. } => {
-                if max_rpm > machine.spindle.max_rpm {
-                    say(
-                        format!("{name}: the spindle limit is above what the spindle can do."),
-                        None,
-                    );
-                }
+            TurnSpindle::Css { max_rpm, .. } if max_rpm > speeds[1] => {
+                let message = if op.sub {
+                    format!("{name}: the spindle limit is above what the sub-spindle can do.")
+                } else {
+                    format!("{name}: the spindle limit is above what the spindle can do.")
+                };
+                say(message, None);
             }
-            TurnSpindle::Rpm { rpm } => {
-                if rpm < machine.spindle.min_rpm || rpm > machine.spindle.max_rpm {
-                    say(
-                        format!("{name}: the spindle speed is outside what the spindle can do."),
-                        None,
-                    );
-                }
+            TurnSpindle::Rpm { rpm } if rpm < speeds[0] || rpm > speeds[1] => {
+                let message = if op.sub {
+                    format!("{name}: the spindle speed is outside what the sub-spindle can do.")
+                } else {
+                    format!("{name}: the spindle speed is outside what the spindle can do.")
+                };
+                say(message, None);
             }
+            _ => {}
         }
+        // A point's main spindle work Z where the part is as it cuts, and
+        // where the view draws it.
+        let held_z = |z: f64| held.map_or(z, |h| h.held_z(z));
+        let shown = |p: PXZ| held.map_or(p, |h| [p[0], h.main_z(p[1])]);
         let mut fast = None;
         let mut beyond = None;
         let mut chuck = None;
         let mut zones: Vec<Option<PXZ>> = vec![None; machine.zones.len()];
         let mut from: Option<PXZ> = None;
         for m in &op.path.moves {
-            let pts = match from {
-                Some(f) => {
-                    let mut pts = Vec::new();
-                    let mut prev = f;
-                    for q in move_points(f, m, 0.01) {
-                        let d = (q[0] - prev[0]).hypot(q[1] - prev[1]);
-                        let n = ((d / 0.5).ceil() as usize).max(1);
-                        for k in 1..=n {
-                            let t = k as f64 / n as f64;
-                            pts.push([
-                                prev[0] + (q[0] - prev[0]) * t,
-                                prev[1] + (q[1] - prev[1]) * t,
-                            ]);
-                        }
-                        prev = q;
-                    }
-                    pts
-                }
-                None => vec![m.to()],
-            };
+            let pts = turn_move_points(from, m);
             if let (Some(f), Some(feed)) = (from, m.feed()) {
                 let x = f[0].abs().min(m.to()[0].abs());
                 if fast.is_none() && feed * op.spindle.rpm_at(x) > machine.max_feed + 1e-9 {
@@ -135,7 +154,8 @@ pub fn check_lathe(
                 }
             }
             for p in pts {
-                let machine_p = [p[0], 0.0, p[1] + placement.work_z];
+                let z = held_z(p[1]);
+                let machine_p = [p[0], 0.0, z + placement.work_z];
                 let t = &machine.travel;
                 let inside = machine_p[0] >= t.min[0] - 1e-9
                     && machine_p[0] <= t.max[0] + 1e-9
@@ -146,7 +166,7 @@ pub fn check_lathe(
                 }
                 if let Some(cz) = placement.chuck_z
                     && chuck.is_none()
-                    && p[1] < cz - 1e-9
+                    && z < cz - 1e-9
                     && p[0] < lathe.chuck_diameter.max(0.0) / 2.0 + 1e-9
                 {
                     chuck = Some(p);
@@ -165,6 +185,10 @@ pub fn check_lathe(
             }
             from = Some(m.to());
         }
+        let at3 = |p: PXZ| {
+            let p = shown(p);
+            Some([p[0], 0.0, p[1]])
+        };
         if let Some(p) = fast {
             say(
                 format!("{name}: a feed is faster than the machine can cut."),
@@ -189,19 +213,280 @@ pub fn check_lathe(
             }
         }
     }
+    // The sub-spindle's body and the zones moving with it, where it is as
+    // each operation cuts (mitcad#2392); each operation's findings
+    // together, the hand-over's first.
+    out.extend(sub_spindle_hits(machine, program, Some(placement.work_z)));
+    out.sort_by_key(|f| f.operation);
+    out
+}
+
+/// Points along a turning move from `from` at most half a millimetre
+/// apart (its end included, its start not); the move's end alone when
+/// where it starts is not known.
+fn turn_move_points(from: Option<PXZ>, m: &TurnMove) -> Vec<PXZ> {
+    let Some(f) = from else {
+        return vec![m.to()];
+    };
+    let mut pts = Vec::new();
+    let mut prev = f;
+    for q in move_points(f, m, 0.01) {
+        let d = (q[0] - prev[0]).hypot(q[1] - prev[1]);
+        let n = ((d / 0.5).ceil() as usize).max(1);
+        for k in 1..=n {
+            let t = k as f64 / n as f64;
+            pts.push([
+                prev[0] + (q[0] - prev[0]) * t,
+                prev[1] + (q[1] - prev[1]) * t,
+            ]);
+        }
+        prev = q;
+    }
+    pts
+}
+
+/// Points along a live operation's moves at most half a millimetre apart,
+/// in its side's frame.
+fn live_move_points(live: &super::LiveOp) -> Vec<[f64; 3]> {
+    let mut out = Vec::new();
+    let mut from: Option<[f64; 3]> = None;
+    for (p, _) in live.points(0.01) {
+        match from {
+            Some(f) => {
+                let d =
+                    ((p[0] - f[0]).powi(2) + (p[1] - f[1]).powi(2) + (p[2] - f[2]).powi(2)).sqrt();
+                let n = ((d / 0.5).ceil() as usize).max(1);
+                for k in 1..=n {
+                    let t = k as f64 / n as f64;
+                    out.push(std::array::from_fn(|i| f[i] + (p[i] - f[i]) * t));
+                }
+            }
+            None => out.push(p),
+        }
+        from = Some(p);
+    }
+    out
+}
+
+/// Where the sub-spindle's jaws' face is (the main spindle's work Z) while
+/// operation `index` cuts (mitcad#2392): where the hand-over left it for
+/// the sub-spindle's operations, where it grips for the parting off it
+/// holds the part through, else where it waits (`work_z`: the machine Z
+/// of the work zero, which that needs); none when not known.
+pub fn sub_face_at(
+    lathe: &super::Lathe,
+    program: &TurningProgram,
+    index: usize,
+    work_z: Option<f64>,
+) -> Option<f64> {
+    if !lathe.axes.sub_spindle {
+        return None;
+    }
+    let op = program.operations.get(index)?;
+    if op.sub {
+        return program.hand_over.as_ref().map(|h| h.grip_z + h.withdraw);
+    }
+    if program.hand_over_at() == Some(index) {
+        return program.hand_over.as_ref().map(|h| h.grip_z);
+    }
+    Some(lathe.sub_spindle.waiting_z()? - work_z?)
+}
+
+/// Where the view draws the sub-spindle's jaws' face while operation
+/// `index` cuts (mitcad#2405): the main spindle's work Z on the part where
+/// the view draws it, which for the sub-spindle's operations is where the
+/// part was before the hand-over pulled it back (at the grip), else where
+/// [`sub_face_at`] has it; none when not known.
+pub fn sub_face_shown(
+    lathe: &super::Lathe,
+    program: &TurningProgram,
+    index: usize,
+    work_z: Option<f64>,
+) -> Option<f64> {
+    let face = sub_face_at(lathe, program, index, work_z)?;
+    match (&program.hand_over, program.operations.get(index)) {
+        (Some(h), Some(op)) if op.sub => Some(face - h.withdraw),
+        _ => Some(face),
+    }
+}
+
+/// The first place each part of the sub-spindle's body and each zone
+/// moving with it is hit, by the tool's controlled point or by the
+/// turret's body (mitcad#2392, mitcad#2405).
+struct SubHits {
+    body: [Option<[f64; 3]>; 3],
+    zones: Vec<Option<[f64; 3]>>,
+}
+
+impl SubHits {
+    fn new(zones: usize) -> Self {
+        SubHits {
+            body: [None; 3],
+            zones: vec![None; zones],
+        }
+    }
+
+    fn hit(&mut self, part: super::SubBody, at: [f64; 3]) {
+        let k = match part {
+            super::SubBody::Chuck => 0,
+            super::SubBody::Housing => 1,
+            super::SubBody::Profile => 2,
+        };
+        self.body[k].get_or_insert(at);
+    }
+}
+
+const SUB_PARTS: [super::SubBody; 3] = [
+    super::SubBody::Chuck,
+    super::SubBody::Housing,
+    super::SubBody::Profile,
+];
+
+/// The moves that run into the sub-spindle's body (its chuck, its housing)
+/// or into a zone moving with it (mitcad#2392), where the sub-spindle is as
+/// each operation cuts ([`sub_face_at`]): one finding per operation and
+/// part, in words, its place in `at` where the view draws the move (the
+/// main spindle's work coordinates, on the part where it was). `work_z` is
+/// the machine Z of the work zero; without it the main spindle's
+/// operations, which the sub-spindle waits for, are not checked. The lathe
+/// check gives these with its other findings; the simulation gives them as
+/// its machine hits.
+///
+/// Its own profile (mitcad#2405) as a third part ("the sub-spindle's
+/// body"), and the turret's body round the tool where the lathe has one
+/// ([`super::TurretBody`]): at each of the tool's points the box against
+/// the body and the zones, one finding per operation and part ("Drill 1:
+/// the turret runs into the sub-spindle's housing."), after the tool's.
+pub fn sub_spindle_hits(
+    machine: &Machine,
+    program: &TurningProgram,
+    work_z: Option<f64>,
+) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let Some(lathe) = &machine.lathe else {
+        return out;
+    };
+    let sub = &lathe.sub_spindle;
+    if !lathe.axes.sub_spindle || !sub.has_body() {
+        return out;
+    }
+    for (i, op) in program.operations.iter().enumerate() {
+        let Some(face) = sub_face_at(lathe, program, i, work_z) else {
+            continue;
+        };
+        let held = program.hand_over.as_ref().filter(|_| op.sub);
+        // The first place each part and each zone is hit by the tool and
+        // by the turret's body: `[r, behind]` and the machine's X and Y of
+        // a point give what it hits, `shown` where the view draws it.
+        let mut tool = SubHits::new(sub.zones.len());
+        let mut turret = SubHits::new(sub.zones.len());
+        let within = |v: [f64; 2], b: &crate::machine::Bounds, axis: usize| {
+            v[1] >= b.min[axis] - 1e-9 && v[0] <= b.max[axis] + 1e-9
+        };
+        let mut test = |r: f64, behind: f64, m: [f64; 2], shown: [f64; 3]| {
+            if let Some(part) = sub.body_at(r, behind) {
+                tool.hit(part, shown);
+            }
+            for (k, zone) in sub.zones.iter().enumerate() {
+                if within([m[0]; 2], &zone.bounds, 0) && within([behind; 2], &zone.bounds, 2) {
+                    tool.zones[k].get_or_insert(shown);
+                }
+            }
+            // The turret's body round the tool, at the machine's X and Y
+            // of its controlled point (mitcad#2405).
+            if let Some(body) = &lathe.turret_body {
+                let (x, along) = body.at(m[0], behind);
+                let r_min = super::lathe::nearest_zero(x).hypot(m[1]);
+                for part in sub.body_across(r_min, along) {
+                    turret.hit(part, shown);
+                }
+                for (k, zone) in sub.zones.iter().enumerate() {
+                    if within(x, &zone.bounds, 0) && within(along, &zone.bounds, 2) {
+                        turret.zones[k].get_or_insert(shown);
+                    }
+                }
+            }
+        };
+        match &op.live {
+            Some(live) => {
+                for q in live_move_points(live) {
+                    let m = live.side.machine(q);
+                    let w = live.side.to_work(q);
+                    let z = held.map_or(w[2], |h| h.held_z(w[2]));
+                    let shown = held.map_or(w, |h| h.main_point(w));
+                    test(w[0].hypot(w[1]), z - face, [m[0], m[1]], shown);
+                }
+            }
+            None => {
+                let mut from: Option<PXZ> = None;
+                for m in &op.path.moves {
+                    for p in turn_move_points(from, m) {
+                        let z = held.map_or(p[1], |h| h.held_z(p[1]));
+                        let shown = held.map_or(p[1], |h| h.main_z(p[1]));
+                        test(p[0].abs(), z - face, [p[0], 0.0], [p[0], 0.0, shown]);
+                    }
+                    from = Some(m.to());
+                }
+            }
+        }
+        let name = &op.name;
+        let mut say = |message: String, at: [f64; 3]| {
+            out.push(Finding {
+                message,
+                operation: i,
+                at: Some(at),
+            })
+        };
+        for (k, part) in SUB_PARTS.into_iter().enumerate() {
+            if let Some(at) = tool.body[k] {
+                say(part.finding(name), at);
+            }
+        }
+        for (k, hit) in tool.zones.iter().enumerate() {
+            if let Some(at) = *hit {
+                say(
+                    format!(
+                        "{name}: the tool runs into {}, which moves with the sub-spindle.",
+                        sub.zones[k].name
+                    ),
+                    at,
+                );
+            }
+        }
+        for (k, part) in SUB_PARTS.into_iter().enumerate() {
+            if let Some(at) = turret.body[k] {
+                say(part.turret_finding(name), at);
+            }
+        }
+        for (k, hit) in turret.zones.iter().enumerate() {
+            if let Some(at) = *hit {
+                say(
+                    format!(
+                        "{name}: the turret runs into {}, which moves with the sub-spindle.",
+                        sub.zones[k].name
+                    ),
+                    at,
+                );
+            }
+        }
+    }
     out
 }
 
 /// The lathe check of a live tool's operation (mitcad#2067): the C axis
 /// and the live tools there, the live spindle's speed, the feeds (per
 /// minute), and the travel, the zones and the chuck at the lathe's X (the
-/// distance from the axis) and Z of each point along its moves.
+/// distance from the axis) and Z of each point along its moves. On the
+/// sub-spindle (`held`, mitcad#2375) its points are where the sub-spindle
+/// holds the part and its places in `at` where the view draws them; the
+/// sub-spindle's body is [`sub_spindle_hits`]' (mitcad#2392).
 fn check_live(
     machine: &Machine,
     lathe: &super::Lathe,
     op: &super::TurningProgramOp,
     live: &super::LiveOp,
     placement: &TurnPlacement,
+    held: Option<&super::HandOver>,
 ) -> Vec<(String, Option<[f64; 3]>)> {
     let name = &op.name;
     let mut out = Vec::new();
@@ -243,6 +528,13 @@ fn check_live(
             None,
         ));
     }
+    // A work point where the view draws it, the machine's Y and the main
+    // spindle's work Z of a point where the part is as it cuts (turned
+    // round about X on the sub-spindle). The sub-spindle's body is
+    // [`sub_spindle_hits`]'.
+    let shown = |w: [f64; 3]| held.map_or(w, |h| h.main_point(w));
+    let machine_y = |y: f64| if held.is_some() { -y } else { y };
+    let held_z = |z: f64| held.map_or(z, |h| h.held_z(z));
     let mut fast = None;
     let mut beyond = None;
     let mut chuck = None;
@@ -265,7 +557,7 @@ fn check_live(
             None => vec![p],
         };
         if fast.is_none() && feed.is_some_and(|f| f > machine.max_feed + 1e-9) {
-            fast = Some(live.side.to_work(p));
+            fast = Some(shown(live.side.to_work(p)));
         }
         // The machine's X, Y (a Y axis's, mitcad#2319) and Z of the tool's
         // tip; Y only on a lathe with a Y axis.
@@ -273,26 +565,28 @@ fn check_live(
         for q in pts {
             let m = live.side.machine(q);
             let w = live.side.to_work(q);
-            let machine_p = [m[0], m[1], m[2] + placement.work_z];
+            let z = held_z(w[2]);
+            let r = w[0].hypot(w[1]);
+            let machine_p = [m[0], machine_y(m[1]), held_z(m[2]) + placement.work_z];
             let t = &machine.travel;
             let within = |p: [f64; 3], lo: [f64; 3], hi: [f64; 3]| {
                 (0..3)
                     .all(|k| (k == 1 && !y_axis) || (p[k] >= lo[k] - 1e-9 && p[k] <= hi[k] + 1e-9))
             };
             if !within(machine_p, t.min, t.max) && beyond.is_none() {
-                beyond = Some(w);
+                beyond = Some(shown(w));
             }
             if let Some(cz) = placement.chuck_z
                 && chuck.is_none()
-                && w[2] < cz - 1e-9
-                && w[0].hypot(w[1]) < lathe.chuck_diameter.max(0.0) / 2.0 + 1e-9
+                && z < cz - 1e-9
+                && r < lathe.chuck_diameter.max(0.0) / 2.0 + 1e-9
             {
-                chuck = Some(w);
+                chuck = Some(shown(w));
             }
             for (k, zone) in machine.zones.iter().enumerate() {
                 let b = &zone.bounds;
                 if zones[k].is_none() && within(machine_p, b.min, b.max) {
-                    zones[k] = Some(w);
+                    zones[k] = Some(shown(w));
                 }
             }
         }
@@ -448,8 +742,21 @@ fn words(line: &str) -> Result<Vec<(char, String)>, String> {
 /// G80), and refuses a rapid (G0) or a tool change in interpolation, a cut
 /// while the main spindle stands at feeds per revolution or while it turns
 /// at feeds per minute, and a program that ends in interpolation.
+///
+/// The lathe's codes are the default set ([`check_program_with`] reads a
+/// program written with others).
 pub fn check_program(text: &str) -> Result<ProgramCheck, CamError> {
+    check_program_with(text, &super::MillTurn::default())
+}
+
+/// [`check_program`] for a lathe with its own codes (mitcad#2375): the
+/// sub-spindle's stop block stops the spindle that holds the part, as M5
+/// does, so that its live tools cut with it standing.
+pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<ProgramCheck, CamError> {
     let lines: Vec<&str> = text.lines().collect();
+    // The block that stops the sub-spindle, besides M5.
+    let sub_stop: Option<Vec<(char, String)>> =
+        words(codes.sub_stop.trim()).ok().filter(|w| !w.is_empty());
     let fail = |n: usize, what: String| CamError::new(format!("Line {n}: {what}."));
     // Sequence numbers and their lines.
     let mut labels: Vec<(u32, usize)> = Vec::new();
@@ -592,6 +899,12 @@ pub fn check_program(text: &str) -> Result<ProgramCheck, CamError> {
         // Neither a tool change nor the end in the tilted working plane
         // (mitcad#2319).
         let held = interpolation.or(tilted.then_some("the tilted working plane"));
+        // The sub-spindle stopped: it holds the part after the hand-over
+        // (mitcad#2375).
+        let block: Vec<(char, String)> = ws.iter().filter(|(c, _)| *c != 'N').cloned().collect();
+        if sub_stop.as_ref() == Some(&block) {
+            main_running = false;
+        }
         for (_, v) in ws.iter().filter(|(c, _)| *c == 'M') {
             match v.parse::<u32>() {
                 Ok(3 | 4) => main_running = true,

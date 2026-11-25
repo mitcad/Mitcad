@@ -628,7 +628,7 @@ QVector<InputDef> ruleInputs(std::function<bool(const CommandState&)> shown, boo
                   })
            << choiceInput(QStringLiteral("corner_relief"), QObject::tr("Corner Relief"), kCornerReliefs,
                           QStringLiteral("round"))
-                  .withTooltip(QObject::tr("Used by Corner Relief where two bends meet"))
+                  .withTooltip(QObject::tr("Used where two bends meet: at Flange corners and by Corner Relief"))
            << valueInput(QStringLiteral("corner_relief_width"), QObject::tr("Corner Relief Width"),
                          ValueKind::Length, QStringLiteral("1 mm"))
            << valueInput(QStringLiteral("corner_relief_depth"), QObject::tr("Corner Relief Depth"),

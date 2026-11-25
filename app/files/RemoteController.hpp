@@ -171,6 +171,23 @@ public:
   // conflict is the error class "conflict", which is not asked about).
   void checkQuietly();
   QJsonObject syncNow(const QString& label, int limitSeconds = 0);
+  // Edit in Place took the edit lock of another design of the current
+  // project (`path`, mitcad#2397): it is brought up to date before it is
+  // read, as its own tab brings it up to date when its lock is taken. The
+  // remote fetched first when `fetch` (the lock's view saw newer versions)
+  // under a progress dialog; when the remote's version of the design is
+  // newer than the project's, the project is synced. `allowed` false, with
+  // `refusal` in words ("" cancelled), when that needs a choice: the
+  // project's versions change the design too (Sync asks which to keep), a
+  // sync stopped for one, or `kept` unsaved edits made in place before
+  // started from the older version. A remote out of reach leaves the
+  // design as it is, said in the status bar. Logs "Edit in Place: ... up
+  // to date ...".
+  struct UpToDate {
+    bool allowed = true;
+    QString refusal;
+  };
+  UpToDate bringUpToDate(const QString& path, bool fetch, bool kept);
   // Version work off the UI thread (mitcad#1895): the author of the
   // versions of the project in `root` (asked when none is set; none when
   // cancelled), and a sync that a design's edit lock ran in the project's

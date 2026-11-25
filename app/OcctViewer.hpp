@@ -368,6 +368,12 @@ public:
   bool UpdateMousePosition(const NCollection_Vec2<int>& point, Aspect_VKeyMouse buttons,
                            Aspect_VKeyFlags modifiers, bool emulated) override;
   const NavigationSettings& navigation() const { return m_navigation; }
+  // Whether a press of `button` with `keys` at `position` (widget pixels)
+  // navigates the view by the active scheme: a binding of the button and
+  // keys (the left one with F4 held in MiddlePanF4), or the orientation
+  // cube's drag (mitcad#2369: a tutorial step leaves such a left press to
+  // the view).
+  bool navigationPress(const QPoint& position, Qt::MouseButton button, Qt::KeyboardModifiers keys);
   // A 3D mouse's motion (mitcad#951, view/SpaceMouseView.cpp): the camera
   // moves by these rates at each frame (the time between the frames)
   // until they are zero, in the 3D mouse's Navigation mode (turning about
@@ -732,13 +738,20 @@ public:
   // item (after the active component's own: setActivePickPriority()); a
   // body that a command ghosts too is drawn once, as the command's
   // ghost. Not `on` (the root active): everything is drawn normally.
+  // With `outside` (Edit in Place, mitcad#2353: the assembly around the
+  // design edited in place) only those occurrences, and the occurrences
+  // inside them, are inactive ghosts and everything else is drawn
+  // normally (`occurrences` is not read), whatever Ghost Inactive
+  // Components says: context geometry is always faded.
   struct ActiveScope {
     bool on = false;
     QStringList occurrences;
     QStringList normal;
     QString name; // the active component's occurrences, for the log
+    QStringList outside;
     bool operator==(const ActiveScope& other) const {
-      return on == other.on && occurrences == other.occurrences && normal == other.normal && name == other.name;
+      return on == other.on && occurrences == other.occurrences && normal == other.normal && name == other.name &&
+             outside == other.outside;
     }
   };
   // Logs "View inactive ghosts: <n> bodies (active <name>)" or "View
@@ -1431,6 +1444,14 @@ signals:
   // The orientation cube's arrows for native controls (shownCubeArrows)
   // appeared, moved or went.
   void cubeArrowsChanged();
+  // The user's navigation moved the camera (mitcad#2369): `action` is
+  // "orbit", "pan" or "zoom" as the active scheme bound the gesture (a mouse
+  // drag, the wheel, a trackpad scroll or pinch, the orientation cube's
+  // drag; an arrow key's turn is an orbit). A press without a move emits
+  // nothing; camera commands and animations (Front View, Fit) neither.
+  // Emitted at each frame that moves it, while the view paints: connect
+  // queued.
+  void viewNavigated(const QString& action);
 
 protected:
   // Shift anywhere in the window widens a scope's clicks (setPickScope).
@@ -1449,6 +1470,10 @@ protected:
   void keyReleaseEvent(QKeyEvent* event) override;
 
   void handlePanning(const occ::handle<V3d_View>& view) override;
+  // The orbits and zooms OCCT applies from the input: viewNavigated when
+  // they move the camera (mitcad#2369).
+  void handleOrbitRotation(const occ::handle<V3d_View>& view, const gp_Pnt& point, bool lockZUp) override;
+  void handleZoom(const occ::handle<V3d_View>& view, const Aspect_ScrollDelta& params, const gp_Pnt* point) override;
   void handleViewRedraw(const occ::handle<AIS_InteractiveContext>& context,
                         const occ::handle<V3d_View>& view) override;
   void contextLazyMoveTo(const occ::handle<AIS_InteractiveContext>& context,
@@ -1554,6 +1579,9 @@ private:
   // The same by the scope alone, whatever the setting (the pick priority).
   bool outsideActive(const QString& occurrence) const;
   bool outsideActive(const SelectionItem& item) const;
+  // Whether what lies outside the scope is drawn as ghosts: the setting,
+  // or always for Edit in Place's assembly (`outside`, mitcad#2353).
+  bool ghostsShown() const;
   // Draws the bodies, sketch entities, profiles and datums by the scope
   // and the setting again; `faded` restyles the pale ones too (their
   // colour follows the background).
@@ -1746,6 +1774,9 @@ private:
   // With native controls: shownCubeArrows from the Qt arrows' places.
   void publishCubeArrows();
   void turnCube(const QString& arrow);
+  // The user's navigation moved the camera: viewNavigated with the action's
+  // name (mitcad#2369).
+  void userNavigated(NavigationAction action);
   // Logs the camera, and with MITCAD_LOG_PICKS where the cube's faces,
   // edges and corners can be clicked, once the camera rests.
   void cameraMoved();

@@ -242,8 +242,24 @@ struct FacesBeyondGrown {
 // planes, cylinders, cones, spheres or tori. None when there is no such
 // face, or the material to take away is not bounded by the narrow face, the
 // face beyond and the other face's surface near the edge.
+//
+// `rising` (mitcad#2352, GitHub #620): instead, a narrow face beside a
+// convex selected edge whose far edges across it (those wholly nearer the
+// edge than `contact`; the face's other far edges lie past the rounding)
+// all go on concavely into one face beyond that rises from it (a ledge
+// before a spike's foot): the narrow face is taken away there with the
+// material between it, the edge's other face's surface and the face beyond
+// continued down along its own surface, so that the rounding of the new
+// edge between the other face and the face beyond, at the same size, is
+// the rounding tangent to both that the ball rolling past the ledge makes;
+// the material taken away lies outside that rounding (the caller checks
+// that its result lies within the input). Continued along its own surface
+// instead (over_narrow_faces), the ledge's plane held the ball, and the
+// face beyond grown down to meet it buried the rounding (a 4 mm rounding
+// beside a ledge 1 wide before a face rising at 55 degrees left a sharp
+// edge, with no error).
 std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std::vector<int>& owner,
-                                                   double contact);
+                                                   double contact, bool rising = false);
 
 // The material that a rounding of a concave picked edge (`edge` of `body`,
 // a straight line) adds under the edge's other face (`face`, a plane: the

@@ -1434,8 +1434,10 @@ pub struct CamOperation {
     /// normal, a hole's axis).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plane: Option<LivePlaneAngles>,
-    /// A turning operation on the sub-spindle, after the setup's hand-over
-    /// (mitcad#2319): it turns the part's back.
+    /// An operation on the sub-spindle, after the setup's hand-over: a
+    /// turning one turns the part's back (mitcad#2319), a live tool's cuts
+    /// it with the sub-spindle's C axis holding it (mitcad#2375), each in
+    /// the sub-spindle's work coordinates.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sub_spindle: bool,
 }
@@ -1980,10 +1982,12 @@ pub fn check_operation(op: &CamOperation) -> Result<(), String> {
         }
         return Ok(());
     }
-    // The sub-spindle turns the part's back (mitcad#2319).
-    if op.sub_spindle {
+    // The sub-spindle turns the part's back (mitcad#2319) and holds it for
+    // the live tools (mitcad#2375): a milling operation on it cuts with a
+    // live tool.
+    if op.sub_spindle && !op.kind.cuts_live() {
         return Err(
-            "Only turning operations turn the part's back on the sub-spindle; live tools cut on the main spindle."
+            "On the sub-spindle an operation turns the part's back or cuts it with a live tool."
                 .to_owned(),
         );
     }
@@ -2221,7 +2225,8 @@ pub struct CamOperationInput {
     /// A live tool's plane angles (mitcad#2319); null: from the inputs.
     #[serde(default, deserialize_with = "double")]
     pub plane: Option<Option<LivePlaneAngles>>,
-    /// A turning operation on the sub-spindle (mitcad#2319).
+    /// An operation on the sub-spindle: turning (mitcad#2319) or a live
+    /// tool's (mitcad#2375).
     #[serde(default)]
     pub sub_spindle: Option<bool>,
 }

@@ -1187,6 +1187,16 @@ public:
     m_highlighted = on;
     update();
   }
+  // The entry a tutorial's guide step points at (Ribbon::setGuideWorkspace,
+  // mitcad#2370): outlined in the guide's colour, since the guide's outline
+  // in the window lies under the list.
+  void setGuided(bool on) {
+    if (m_guided != on) {
+      m_guided = on;
+      update();
+    }
+  }
+  bool isGuided() const { return m_guided; }
   std::function<void(const QString&)> chosen;
 
   QSize sizeHint() const override {
@@ -1226,6 +1236,13 @@ protected:
     if (m_current || (m_highlighted && isEnabled())) {
       painter.setBrush(textTint(pal, m_current ? 22 : 14));
       painter.drawRoundedRect(box, kControlRadius, kControlRadius);
+    }
+    if (m_guided) {
+      // The guide step's outline (TutorialGuide's colour and weight).
+      painter.setPen(QPen(themeColor(ColorRole::Action, pal), 2));
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRoundedRect(QRectF(rect()).adjusted(1.5, 1.0, -1.5, -1.0), kControlRadius + 2, kControlRadius + 2);
+      painter.setPen(Qt::NoPen);
     }
     // The bar at the left: the accent by the one shown, a quiet line by the
     // others.
@@ -1284,6 +1301,7 @@ private:
   QIcon m_icon;
   bool m_current = false;
   bool m_highlighted = false;
+  bool m_guided = false;
 };
 
 // The selector's list of workspaces (Ribbon::openWorkspaceMenu): a popup
@@ -4984,7 +5002,12 @@ void Ribbon::openWorkspaceMenu() {
     // A model workspace without tabs (all hidden in the tabs' menu): none
     // to show.
     entry->setEnabled(!isModelWorkspace(key) || !names.isEmpty());
-    entry->chosen = [this, popup = QPointer<WorkspaceList>(list)](const QString& chosen) {
+    // The entry a guide step points at (mitcad#2370).
+    entry->setGuided(key == m_guideWorkspace);
+    if (entry->isGuided()) {
+      qDebug().noquote() << QStringLiteral("Ribbon workspace entry %1 outlined for the guide").arg(key);
+    }
+    entry->chosen =[this, popup = QPointer<WorkspaceList>(list)](const QString& chosen) {
       if (popup) {
         popup->close();
       }
@@ -5000,6 +5023,7 @@ void Ribbon::openWorkspaceMenu() {
   list->adjustSize();
   // Under the selector, its left edges aligned.
   list->move(m_workspaceButton->mapToGlobal(QPoint(0, m_workspaceButton->height() + 4)));
+  m_workspaceList = list;
   list->show();
   list->setFocus();
   qDebug().noquote() << QStringLiteral("Ribbon workspace menu: %1").arg(logged.join(QStringLiteral(" | ")));
@@ -5821,6 +5845,108 @@ void Ribbon::logLayoutIfChanged() const {
   if (layoutLines() != m_loggedLayout) {
     logLayout();
   }
+}
+
+// The toolbar's places for a tutorial's guide steps (mitcad#2370).
+namespace {
+
+// A name as a guide step may write it: "Sheet Metal", "sheet_metal" and
+// "SHEET METAL" alike.
+QString guideNameKey(const QString& name) {
+  QString key = name.toLower();
+  key.replace(QLatin1Char('_'), QLatin1Char(' '));
+  return key.simplified();
+}
+
+} // namespace
+
+QString Ribbon::workspaceOfName(const QString& name) {
+  const QString wanted = guideNameKey(name);
+  for (const QString& key : workspaces()) {
+    if (wanted == guideNameKey(key) || wanted == guideNameKey(workspaceTitle(key))) {
+      return key;
+    }
+  }
+  return QString();
+}
+
+QStringList Ribbon::guideTabs() {
+  return {kStart,    kSolid,   kSurface, kSheetMetal, kBuild,    kMakePrint, kMakeLaser,
+          kMakeCnc,  kManage,  kSketch,  kDrawing,    kCutSheet, kRender};
+}
+
+QString Ribbon::tabOfName(const QString& name) {
+  const QString wanted = guideNameKey(name);
+  for (const QString& key : guideTabs()) {
+    if (wanted == guideNameKey(key) || wanted == guideNameKey(captionKey(key)) ||
+        wanted == guideNameKey(displayName(key))) {
+      return key;
+    }
+  }
+  return QString();
+}
+
+QWidget* Ribbon::workspaceSelector() const { return m_workspaces ? m_workspaceButton : nullptr; }
+
+bool Ribbon::workspaceListOpen() const { return m_workspaceList != nullptr && m_workspaceList->isVisible(); }
+
+QWidget* Ribbon::workspaceEntry(const QString& workspace) const {
+  const auto* list = dynamic_cast<const WorkspaceList*>(m_workspaceList.data());
+  if (list == nullptr || !list->isVisible()) {
+    return nullptr;
+  }
+  for (WorkspaceEntry* entry : list->entries()) {
+    if (entry->key() == workspace) {
+      return entry;
+    }
+  }
+  return nullptr;
+}
+
+void Ribbon::setGuideWorkspace(const QString& workspace) {
+  if (m_guideWorkspace == workspace) {
+    return;
+  }
+  m_guideWorkspace = workspace;
+  // The list open now marks its entry at once.
+  if (const auto* list = dynamic_cast<const WorkspaceList*>(m_workspaceList.data())) {
+    for (WorkspaceEntry* entry : list->entries()) {
+      entry->setGuided(!workspace.isEmpty() && entry->key() == workspace);
+      if (entry->isGuided()) {
+        qDebug().noquote() << QStringLiteral("Ribbon workspace entry %1 outlined for the guide").arg(entry->key());
+      }
+    }
+  }
+}
+
+QRect Ribbon::tabGlobalRect(const QString& tab) const {
+  int index = -1;
+  for (int i = 0; i < m_tabs->count(); ++i) {
+    if (tabName(m_tabs->tabData(i).toInt()) == tab) {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0) {
+    return QRect();
+  }
+  if (m_panel && tab == kStart) {
+    // The toolbar panel's Start is the title row's Home (setStartButton).
+    if (m_startButton == nullptr || !m_startButton->isVisible()) {
+      return QRect();
+    }
+    return QRect(m_startButton->mapToGlobal(QPoint(0, 0)), m_startButton->size());
+  }
+  if (!m_tabs->isVisible() || !m_tabs->isTabVisible(index)) {
+    return QRect();
+  }
+  // Docked's row too narrow for every tab (mitcad#2079): a tab folded
+  // into the » is not in sight.
+  if (const auto* pills = dynamic_cast<const PillTabBar*>(m_tabs); pills != nullptr && pills->isFolded(index)) {
+    return QRect();
+  }
+  const QRect place = m_tabs->tabRect(index);
+  return QRect(m_tabs->mapToGlobal(place.topLeft()), place.size());
 }
 
 } // namespace mitcad

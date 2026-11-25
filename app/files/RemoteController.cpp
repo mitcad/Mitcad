@@ -1229,6 +1229,157 @@ QJsonObject RemoteController::syncNow(const QString& label, int limitSeconds) {
   return answer;
 }
 
+RemoteController::UpToDate RemoteController::bringUpToDate(const QString& path, bool fetch, bool kept) {
+  UpToDate result;
+  const QString name = QFileInfo(path).fileName();
+  refreshStatus();
+  if (m_state.name.isEmpty() || !inFolder(path, m_state.root)) {
+    return result; // no remote: nothing newer
+  }
+  // The running work first: a sync is waited for, a check or a push stops
+  // (the fetch below learns what the check would have).
+  if (m_task != nullptr && m_task->name() == QLatin1String("sync")) {
+    QObject waiting;
+    bool finished = false;
+    const QPointer<RemoteTask> pending = m_task;
+    connect(m_task, &RemoteTask::finished, &waiting, [&finished] { finished = true; });
+    m_branchWait = true;
+    waitDialogUntil([&] { return finished || pending == nullptr; });
+    m_branchWait = false;
+    m_host.whenIdle([this] { runWaiting(); });
+    fetch = true;
+  } else if (m_task != nullptr) {
+    settle(tr("Edit in Place"));
+    fetch = true;
+  }
+  const QString root = m_state.root;
+  if (fetch || m_state.behind < 0) {
+    const QJsonObject fetched = runModal(RemoteTask::command(root, named("fetch"), this),
+                                         tr("Looking for newer versions of %1…").arg(name));
+    refreshStatus();
+    const QString cls = errorClass(fetched);
+    if (cls == QLatin1String("cancelled")) {
+      qInfo().noquote() << QStringLiteral("Edit in Place: looking for newer versions of %1 cancelled").arg(name);
+      result.allowed = false;
+      return result;
+    }
+    if (!cls.isEmpty()) {
+      // As a design opened while the remote is out of reach: edited as it
+      // is here.
+      qInfo().noquote() << QStringLiteral("Edit in Place: %1 not brought up to date (fetch: %2): %3")
+                               .arg(name, cls, errorMessage(fetched));
+      m_host.status(tr("Newer versions of %1 could not be looked for (%2); it is edited as it is here.")
+                        .arg(name, errorMessage(fetched)),
+                    true);
+      return result;
+    }
+  }
+  // What the remote has of this design, from the references as fetched.
+  const QJsonObject incoming = local(path, {{QStringLiteral("cmd"), QStringLiteral("incoming")},
+                                            {QStringLiteral("path"), path}});
+  const bool differs = !incoming.isEmpty() && errorClass(incoming).isEmpty() &&
+                       incoming.value(QStringLiteral("differs")).toBool() &&
+                       !incoming.value(QStringLiteral("file_versions")).toArray().isEmpty();
+  if (!differs) {
+    // Newer versions of other files only wait for Sync, as for a tab.
+    qInfo().noquote() << QStringLiteral("Edit in Place: %1 is up to date").arg(name);
+    return result;
+  }
+  if (incoming.value(QStringLiteral("changed_here")).toBool()) {
+    qInfo().noquote() << QStringLiteral("Edit in Place: %1 has newer versions on the remote and changed here too: "
+                                        "not started")
+                             .arg(name);
+    result.allowed = false;
+    result.refusal = tr("A newer version of %1 is on the remote, and your versions not sent yet change it too: Sync "
+                        "asks which to keep. Sync first, then edit it in place.")
+                         .arg(name);
+    return result;
+  }
+  if (kept) {
+    qInfo().noquote() << QStringLiteral("Edit in Place: %1 has newer versions on the remote and unsaved changes made "
+                                        "in place: not started")
+                             .arg(name);
+    result.allowed = false;
+    result.refusal = tr("A newer version of %1 is on the remote, and the changes made in place before are not saved: "
+                        "save them first (Sync then asks which version to keep), then edit it in place.")
+                         .arg(name);
+    return result;
+  }
+  // A sync, as the design's own tab runs one when its lock is taken.
+  qInfo().noquote() << QStringLiteral("Edit in Place: bringing %1 up to date (sync)").arg(name);
+  const std::optional<rust::Box<Project>> repo = project();
+  const std::optional<QString> author = repo ? m_host.author(**repo) : std::nullopt;
+  if (!author) {
+    qInfo().noquote() << QStringLiteral("Edit in Place: bringing %1 up to date cancelled (no author)").arg(name);
+    result.allowed = false;
+    return result;
+  }
+  auto* task = RemoteTask::command(root,
+                                   {{QStringLiteral("cmd"), QStringLiteral("sync")},
+                                    {QStringLiteral("author"), *author},
+                                    {QStringLiteral("fetch"), false}},
+                                   this);
+  const QJsonObject answer = runModal(task, tr("Bringing %1 up to date…").arg(name));
+  const QString cls = errorClass(answer);
+  qInfo().noquote() << QStringLiteral("Sync: %1%2, %3 replayed, %4")
+                           .arg(answer.value(QStringLiteral("case")).toString(),
+                                cls.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(cls))
+                           .arg(answer.value(QStringLiteral("replayed")).toArray().size())
+                           .arg(answer.value(QStringLiteral("pushed")).toBool() ? QStringLiteral("sent")
+                                                                                 : QStringLiteral("nothing sent"));
+  const QJsonObject pushed = answer.value(QStringLiteral("push")).toObject();
+  if (pushed.value(QStringLiteral("pushed")).toBool()) {
+    emit versionsSent(root, pushed.value(QStringLiteral("branch")).toString(),
+                      pushed.value(QStringLiteral("head")).toString());
+  }
+  refreshStatus();
+  // What the sync did stays done, also when it stopped later. The window's
+  // own design (the assembly) is not opened again under the mode: Save
+  // compares its file and asks.
+  const QString own = m_host.filePath();
+  if (!own.isEmpty() && inFolder(own, root) &&
+      texts(answer.value(QStringLiteral("changed_paths"))).contains(QDir(root).relativeFilePath(own))) {
+    qInfo().noquote() << QStringLiteral("Sync: %1 changed, kept open as it was").arg(QFileInfo(own).fileName());
+    m_host.status(tr("%1 changed with the sync; it stays open as it was, and Save asks how to keep it.")
+                      .arg(QFileInfo(own).fileName()),
+                  true);
+  }
+  m_host.versionsChanged();
+  if (cls == QLatin1String("conflict")) {
+    m_state.conflict = true;
+    publishState();
+    qInfo().noquote() << QStringLiteral("Edit in Place: bringing %1 up to date needs a choice: not started").arg(name);
+    result.allowed = false;
+    result.refusal =
+        tr("%1 cannot be brought up to date: Sync needs your choice first. Sync, then edit it in place.").arg(name);
+    return result;
+  }
+  publishState();
+  if (cls == QLatin1String("cancelled")) {
+    qInfo().noquote() << QStringLiteral("Edit in Place: bringing %1 up to date cancelled").arg(name);
+    result.allowed = false;
+    return result;
+  }
+  if (cls == QLatin1String("local_changes") || cls == QLatin1String("unsupported")) {
+    qInfo().noquote() << QStringLiteral("Edit in Place: bringing %1 up to date stopped (%2): not started")
+                             .arg(name, cls);
+    result.allowed = false;
+    result.refusal = tr("%1 cannot be brought up to date: %2").arg(name, errorMessage(answer));
+    return result;
+  }
+  if (!cls.isEmpty()) {
+    // The remote out of reach: edited as it is here.
+    qInfo().noquote() << QStringLiteral("Edit in Place: %1 not brought up to date (sync: %2): %3")
+                             .arg(name, cls, errorMessage(answer));
+    m_host.status(tr("%1 could not be brought up to date (%2); it is edited as it is here.")
+                      .arg(name, errorMessage(answer)),
+                  true);
+    return result;
+  }
+  qInfo().noquote() << QStringLiteral("Edit in Place: %1 brought up to date").arg(name);
+  return result;
+}
+
 void RemoteController::runSync(const QString& author, const QJsonObject& resolutions, bool fetch) {
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("sync")},
                       {QStringLiteral("author"), author},

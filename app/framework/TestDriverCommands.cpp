@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <unordered_set>
@@ -47,6 +48,7 @@
 #include <QIcon>
 #include <QImage>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
@@ -123,6 +125,9 @@ const TestDriver::StepSpec kStepSpecs[] = {
     {"expect-command-icon", 2, 3, TestDriver::kIdle},
     {"click-parameter", 2, 2, TestDriver::kInputOfTarget},
     {"expect-parameter-cell", 4, 4, TestDriver::kIdle},
+    // A tutorial's guide step (mitcad#2370).
+    {"guide-step", 1, 3, TestDriver::kIdle},
+    {"guide-end", 0, 0, TestDriver::kIdle},
 };
 
 } // namespace
@@ -361,6 +366,51 @@ void TestDriver::runCommandStep(const QString& name, const QStringList& a, int l
         });
       }
     });
+  } else if (name == QLatin1String("guide-step") || name == QLatin1String("guide-end")) {
+    // A tutorial's guide step shown in the design's window as a tutorial
+    // page or live MCP's ui_guide shows it (mitcad#2370), without the
+    // tutorial pane; the window logs the step's "Guide: ..." lines.
+    if (a.size() == 2 || (a.size() == 3 && a.at(1) != QLatin1String("refused"))) {
+      fail(line, QStringLiteral("guide-step <step's JSON> [refused <regex>]"));
+      return;
+    }
+    auto* window = qobject_cast<MainWindow*>(m_main.data());
+    if (window == nullptr) {
+      fail(line, QStringLiteral("%1 needs a design's window").arg(name));
+      return;
+    }
+    QJsonObject arguments{{QStringLiteral("action"), QStringLiteral("end")}};
+    if (name == QLatin1String("guide-step")) {
+      QJsonParseError parseError{};
+      const QJsonDocument step = QJsonDocument::fromJson(a.at(0).toUtf8(), &parseError);
+      if (!step.isObject()) {
+        fail(line, QStringLiteral("guide-step needs a step as a JSON object: %1").arg(parseError.errorString()));
+        return;
+      }
+      arguments = {{QStringLiteral("action"), QStringLiteral("start")}, {QStringLiteral("step"), step.object()}};
+    }
+    try {
+      const QJsonObject state = window->mcpTool(QStringLiteral("ui_guide"), arguments);
+      qDebug().noquote() << QStringLiteral("TestDriver: %1: %2")
+                                .arg(name, QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact)));
+    } catch (const std::exception& refused) {
+      // `guide-step <json> refused <regex>`: the step's refusal expected.
+      const QString reason = QString::fromUtf8(refused.what());
+      QRegularExpression re;
+      if (a.size() == 3 && a.at(1) == QLatin1String("refused") && regex(a.at(2), re)) {
+        if (!re.match(reason).hasMatch()) {
+          fail(line, QStringLiteral("guide-step refused with '%1', not '%2'").arg(reason, a.at(2)));
+        } else {
+          qDebug().noquote() << QStringLiteral("TestDriver: guide-step refused: %1").arg(reason);
+        }
+        return;
+      }
+      fail(line, QStringLiteral("%1 refused: %2").arg(name, reason));
+      return;
+    }
+    if (a.size() == 3) {
+      fail(line, QStringLiteral("guide-step was not refused"));
+    }
   }
 }
 

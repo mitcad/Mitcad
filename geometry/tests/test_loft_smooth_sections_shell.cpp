@@ -19,6 +19,19 @@
 // joins inside the one face, and is split there for the second
 // (geometry/src/surfaces.cpp, split_at_creases).
 //
+// With Keep, two sections of one closed edge each (a circle to a spline
+// outline) are still OCCT's through-sections loft; its side, the same
+// clamped surface closing on itself, was not offset outward Sharp (Shell
+// Outside and Both). That face is now put on its surface made periodic
+// where it closes smoothly (geometry/src/loft_skin.cpp,
+// periodic_closed_sides; mitcad#2271, mitcad#2308): the loft is the
+// kernel's own through-sections loft within 1e-6 mm, with the same faces
+// and names. The merged circle to spline outline is C2 all round, but its
+// side was kept only C1 where it closes and where a ring was cut to start,
+// so a symmetric Thicken's half offset was C0 along those lines, which the
+// kernel's offset refuses; the side now keeps its smoothness there
+// (geometry/src/loft_skin.cpp, periodic_where_closed and smooth_where_c2).
+//
 // Not one model but a set: circles to slots of several proportions (the
 // owner's among them), an ellipse to a rounded rectangle, and a circle to a
 // closed spline outline; each with Keep and Merge (one ctest each), shelled
@@ -28,9 +41,10 @@
 // thickness from the loft (or on it) within 1e-6 mm, the rounded joins of
 // a Rounded wall within the kernel's 1e-4 mm (see kJoin), and for the
 // inside wall the kernel's own offset closes (not the cavity Shell falls
-// back on). The merged side is one face on a periodic surface. The owner's
-// surface lofts thicken to either side and symmetric into valid single
-// solids.
+// back on). The merged side, and the kept one through sections of one
+// edge each, is one face on a periodic surface. The owner's surface lofts
+// and the circle to spline outline as a surface, Keep and Merge, thicken
+// to either side and symmetric into valid single solids.
 //
 // Where a shell fails or its volume is not positive, the test prints the
 // faces of what the kernel's offset built (their surfaces, orientations
@@ -49,27 +63,38 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepExtrema_SupportType.hxx>
 #include <BRepGProp.hxx>
+#include <BRepOffset_Error.hxx>
+#include <BRepOffset_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAbs_Shape.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <Geom_OffsetSurface.hxx>
 #include <Geom_Surface.hxx>
 #include <NCollection_List.hxx>
+#include <ShapeUpgrade_ShapeDivideClosed.hxx>
 #include <ShapeUpgrade_ShapeDivideContinuity.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_Type.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Iterator.hxx>
+#include <TopoDS_Shell.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt2d.hxx>
 
@@ -366,9 +391,10 @@ std::vector<TopoDS_Face> side_faces(const g::Shape& body) {
   return faces;
 }
 
-// Merged: the side is one face, on a periodic surface continuous in its
-// first derivative (mitcad#2271).
-void check_merged_side(const char* what, const g::Shape& body) {
+// Merged, or kept through sections of one edge each: the side is one face,
+// on a periodic surface continuous in its first derivative (mitcad#2271,
+// mitcad#2308).
+void check_round_side(const char* what, const g::Shape& body) {
   const std::vector<TopoDS_Face> sides = side_faces(body);
   CHECK(sides.size() == 1);
   if (sides.size() != 1) {
@@ -605,9 +631,101 @@ void check_shell(const std::string& what, const g::ShapePtr& body, const std::st
   }
 }
 
+// The sections are one closed edge each (a circle, an ellipse, a closed
+// spline).
+bool one_edge_each(const g::LoftSpec& spec) {
+  for (const g::LoftSection& section : spec.sections) {
+    if (section.region.loops.size() != 1 || section.region.loops.front().segments.size() != 1) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The faces of the shape that carry the name.
+int faces_called(const g::Shape& shape, const std::string& name) {
+  int n = 0;
+  for (int i = 0; i < shape.face_count(); ++i) {
+    const g::NameList& names = shape.face_names(i);
+    n += std::find(names.begin(), names.end(), name) != names.end() ? 1 : 0;
+  }
+  return n;
+}
+
+// How far the points of `from` at a grid over its parameter box (those
+// not outside it) lie from the face `to` at most.
+double farthest(const TopoDS_Face& from, const TopoDS_Face& to) {
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  BRepTools::UVBounds(from, u0, u1, v0, v1);
+  const BRepAdaptor_Surface surface(from);
+  double largest = 0.0;
+  for (int a = 0; a <= 8; ++a) {
+    for (int b = 0; b <= 4; ++b) {
+      const gp_Pnt2d uv(u0 + (u1 - u0) * a / 8, v0 + (v1 - v0) * b / 4);
+      if (BRepClass_FaceClassifier(from, uv, 1.0e-7).State() == TopAbs_OUT) {
+        continue;
+      }
+      BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(surface.Value(uv.X(), uv.Y())).Vertex(), to);
+      CHECK(distance.IsDone());
+      if (distance.IsDone()) {
+        largest = std::max(largest, distance.Value());
+      }
+    }
+  }
+  return largest;
+}
+
+// Kept through sections of one edge each (mitcad#2308): the loft is the
+// kernel's through-sections loft of the two outlines as it was, its side
+// only put on its surface made periodic: the kernel's own loft's side and
+// this one lie on each other within 1e-6 mm, the volumes agree, and the
+// faces keep their names (the side after the first section's edge, the
+// ends after the regions).
+void check_as_through_sections(const std::string& what, const g::LoftSpec& spec, const g::Shape& body) {
+  BRepOffsetAPI_ThruSections kernel(true, spec.ruled, 1.0e-6);
+  kernel.CheckCompatibility(true);
+  kernel.SetMutableInput(false);
+  for (const g::LoftSection& section : spec.sections) {
+    kernel.AddWire(BRepTools::OuterWire(g::make_profile(section.frame, section.region).face));
+  }
+  kernel.Build();
+  CHECK(kernel.IsDone());
+  if (!kernel.IsDone()) {
+    return;
+  }
+  const TopoDS_Shape& theirs = kernel.Shape();
+  CHECK(body.face_count() == count(theirs, TopAbs_FACE));
+  const double ours = std::abs(volume_of(body.occt()));
+  const double kernels = std::abs(volume_of(theirs));
+  std::printf("%s: volume %.6f, the kernel's through-sections loft %.6f\n", what.c_str(), ours, kernels);
+  CHECK(near(ours, kernels, 1e-6));
+  std::optional<TopoDS_Face> their_side;
+  for (TopExp_Explorer it(theirs, TopAbs_FACE); it.More(); it.Next()) {
+    if (BRepAdaptor_Surface(TopoDS::Face(it.Current())).GetType() != GeomAbs_Plane) {
+      CHECK(!their_side);
+      their_side = TopoDS::Face(it.Current());
+    }
+  }
+  const std::vector<TopoDS_Face> sides = side_faces(body);
+  CHECK(their_side.has_value() && sides.size() == 1);
+  if (their_side && sides.size() == 1) {
+    const double off = std::max(farthest(*their_side, sides.front()), farthest(sides.front(), *their_side));
+    std::printf("%s: the side lies %.2e mm from the kernel's\n", what.c_str(), off);
+    CHECK(off <= 1.0e-6);
+  }
+  const std::string edge = spec.sections.front().region.loops.front().segments.front().name;
+  CHECK(faces_called(body, g::face_name("F3", "side", edge)) == 1);
+  CHECK(faces_called(body, g::face_name("F3", "start", spec.sections.front().region.name)) == 1);
+  CHECK(faces_called(body, g::face_name("F3", "end", spec.sections.back().region.name)) == 1);
+}
+
 // The loft with Tangent Edges Keep or Merge: a valid single solid (the
-// merged side one face on a periodic surface), shelled each way, Sharp and
-// Rounded, with the first section's end removed.
+// merged side, and a kept one through sections of one edge each, one face
+// on a periodic surface), shelled each way, Sharp and Rounded, with the
+// first section's end removed.
 void check_loft(const char* what, g::LoftSpec spec, bool merge) {
   spec.merge_tangent = merge;
   const std::string name = std::string(what) + (merge ? ", Merge" : ", Keep");
@@ -623,21 +741,15 @@ void check_loft(const char* what, g::LoftSpec spec, bool merge) {
   }
   CHECK(BRepCheck_Analyzer(body->occt()).IsValid());
   CHECK(count(body->occt(), TopAbs_SOLID) == 1);
-  if (merge) {
-    check_merged_side(name.c_str(), *body);
+  if (merge || one_edge_each(spec)) {
+    check_round_side(name.c_str(), *body);
+  }
+  if (!merge && one_edge_each(spec)) {
+    check_as_through_sections(name, spec, *body);
   }
   const std::string removed = g::face_name("F3", "start", spec.sections.front().region.name);
   for (const Direction direction : {Direction::Inside, Direction::Outside, Direction::Both}) {
     for (const bool rounded : {false, true}) {
-      // With Keep, a circle to a spline outline (one edge each) is OCCT's
-      // through-sections loft, whose clamped closed side the kernel does
-      // not offset outward Sharp (mitcad#2308): skipped until that is done.
-      if (!merge && spec.sections.back().region.loops.front().segments.front().kind == g::SegmentKind::BSpline &&
-          direction != Direction::Inside && !rounded) {
-        std::printf("%s, %s, Sharp: skipped, the outward Sharp offset of a Keep one-edge loft is mitcad#2308\n",
-                    name.c_str(), words(direction));
-        continue;
-      }
       check_shell(name, body, removed, direction, rounded);
     }
   }
@@ -669,16 +781,238 @@ double check_thicken(const std::string& what, const g::ShapePtr& sheet, double t
   return volume;
 }
 
-// The owner's loft as a surface, Keep or Merge, thickened 1 mm along its
-// normals, against them and symmetric. The volume between a surface of
-// area A and its offset by t is t A + t^2 Int H + t^3 / 3 Int K: the two
-// sides sum to 2 t A + 2/3 t^3 Int K, symmetric is t A + t^3 / 12 Int K
-// (the t^3 terms a few mm^3 against some 10^5 here).
-void check_thickened_owner_surface(bool merge) {
-  g::LoftSpec spec = owner_loft();
+const char* continuity_words(GeomAbs_Shape shape) {
+  switch (shape) {
+  case GeomAbs_C0:
+    return "C0";
+  case GeomAbs_G1:
+    return "G1";
+  case GeomAbs_C1:
+    return "C1";
+  case GeomAbs_G2:
+    return "G2";
+  case GeomAbs_C2:
+    return "C2";
+  case GeomAbs_C3:
+    return "C3";
+  case GeomAbs_CN:
+    return "CN";
+  }
+  return "?";
+}
+
+const char* offset_error_words(BRepOffset_Error error) {
+  switch (error) {
+  case BRepOffset_NoError:
+    return "no error";
+  case BRepOffset_UnknownError:
+    return "unknown error";
+  case BRepOffset_BadNormalsOnGeometry:
+    return "bad normals on the geometry";
+  case BRepOffset_C0Geometry:
+    return "a C0 surface";
+  case BRepOffset_NullOffset:
+    return "null offset";
+  case BRepOffset_NotConnectedShell:
+    return "not a connected shell";
+  case BRepOffset_CannotTrimEdges:
+    return "cannot trim edges";
+  case BRepOffset_CannotFuseVertices:
+    return "cannot fuse vertices";
+  case BRepOffset_CannotExtentEdge:
+    return "cannot extend an edge";
+  case BRepOffset_UserBreak:
+    return "user break";
+  case BRepOffset_MixedConnectivity:
+    return "mixed connectivity";
+  }
+  return "?";
+}
+
+// Each face of a sheet as the kernel's offset takes it: its surface (an
+// offset one with its basis), the continuity it reports, whether it is
+// periodic and whether the face closes on itself (a seam edge on it).
+void describe_offset_faces(const std::string& what, const TopoDS_Shape& shape) {
+  int index = 0;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next(), ++index) {
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+    if (surface.IsNull()) {
+      std::printf("%s: face %d without a surface\n", what.c_str(), index);
+      continue;
+    }
+    const occ::handle<Geom_OffsetSurface> offset = occ::down_cast<Geom_OffsetSurface>(surface);
+    const occ::handle<Geom_Surface> basis = offset.IsNull() ? surface : offset->BasisSurface();
+    bool seam = false;
+    for (TopExp_Explorer e(face, TopAbs_EDGE); e.More() && !seam; e.Next()) {
+      seam = BRep_Tool::IsClosed(TopoDS::Edge(e.Current()), face);
+    }
+    double u0 = 0.0;
+    double u1 = 0.0;
+    double v0 = 0.0;
+    double v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    std::printf("%s: face %d, %s%s, %s (basis %s%s), %s, u %.6f to %.6f, v %.6f to %.6f\n", what.c_str(), index,
+                offset.IsNull() ? "" : "offset of ", basis->DynamicType()->Name(),
+                continuity_words(surface->Continuity()), continuity_words(basis->Continuity()),
+                basis->IsUPeriodic() ? ", U periodic" : "", seam ? "closed on itself" : "not closed", u0, u1, v0,
+                v1);
+  }
+}
+
+// The kernel's offset of (a copy of) the sheet as thicken asks it, in
+// Skin mode with sharp joins: the result, or none with the kernel's error
+// printed.
+std::optional<TopoDS_Shape> traced_offset(const std::string& what, const TopoDS_Shape& sheet, double distance,
+                                          bool thickening) {
+  TopoDS_Shape input = BRepBuilderAPI_Copy(sheet).Shape();
+  if (input.ShapeType() == TopAbs_COMPOUND) {
+    TopoDS_Iterator it(input);
+    if (it.More()) {
+      const TopoDS_Shape only = it.Value();
+      it.Next();
+      if (!it.More()) {
+        input = only;
+      }
+    }
+  }
+  try {
+    BRepOffset_MakeOffset maker;
+    maker.Initialize(input, distance, 1.0e-6, BRepOffset_Skin, false, false, GeomAbs_Intersection, thickening);
+    maker.MakeOffsetShape();
+    std::printf("%s: the kernel's offset by %g%s: %s\n", what.c_str(), distance, thickening ? ", thickening" : "",
+                maker.IsDone() ? "done" : offset_error_words(maker.Error()));
+    if (maker.IsDone()) {
+      return maker.Shape();
+    }
+  } catch (const Standard_Failure& failure) {
+    std::printf("%s: the kernel's offset by %g raised: %s\n", what.c_str(), distance, failure.what());
+  }
+  return std::nullopt;
+}
+
+// Where a symmetric thicken of the sheet stops (mitcad#2308), as
+// geometry/src/surfaces.cpp's thicken goes: how smooth the sheet's
+// periodic surfaces are where they close (whether their knot there comes
+// out once more within 1e-7 to 1e-4 mm), the half offset each way, its
+// faces, and the whole offset of it with thickening as it is, divided
+// across its seams and split at its creases (split_at_creases), each with
+// the kernel's own error.
+void trace_symmetric(const std::string& what, const g::Shape& sheet, double thickness) {
+  for (int i = 0; i < sheet.face_count(); ++i) {
+    const occ::handle<Geom_BSplineSurface> spline =
+        occ::down_cast<Geom_BSplineSurface>(BRep_Tool::Surface(sheet.face(i)));
+    if (spline.IsNull() || !spline->IsUPeriodic()) {
+      continue;
+    }
+    const int closing = spline->FirstUKnotIndex();
+    std::printf("%s: face %d, U degree %d, %s, its knot where it closes %d times\n", what.c_str(), i,
+                spline->UDegree(), continuity_words(spline->Continuity()), spline->UMultiplicity(closing));
+    for (const double tolerance : {1.0e-7, 1.0e-6, 1.0e-5, 1.0e-4}) {
+      const occ::handle<Geom_BSplineSurface> copy = occ::down_cast<Geom_BSplineSurface>(spline->Copy());
+      const int fewer = copy->UMultiplicity(closing) - 1;
+      const bool removed = fewer >= 0 && copy->RemoveUKnot(closing, fewer, tolerance);
+      std::printf("%s: face %d, its knot where it closes once less within %g mm: %s\n", what.c_str(), i,
+                  tolerance, removed ? "yes" : "no");
+    }
+    // Every knot along U at which the surface is less than C2 (more than
+    // degree - 2 times): where, how often, and whether it comes out once
+    // more; and the V knots so (mitcad#2308: the closure C2, the surface
+    // was still C1).
+    const int degree = spline->UDegree();
+    for (int k = spline->FirstUKnotIndex(); k <= spline->LastUKnotIndex(); ++k) {
+      const int times = spline->UMultiplicity(k);
+      if (times <= degree - 2) {
+        continue;
+      }
+      std::string removable;
+      for (const double tolerance : {1.0e-7, 1.0e-6, 1.0e-5, 1.0e-4}) {
+        const occ::handle<Geom_BSplineSurface> copy = occ::down_cast<Geom_BSplineSurface>(spline->Copy());
+        const bool removed = copy->RemoveUKnot(k, times - 1, tolerance);
+        removable += std::string(removable.empty() ? "" : ", ") + (removed ? "yes" : "no");
+      }
+      std::printf("%s: face %d, U knot %d at %.9f of %.9f to %.9f, %d times; once less within 1e-7, 1e-6, "
+                  "1e-5, 1e-4 mm: %s\n",
+                  what.c_str(), i, k, spline->UKnot(k), spline->UKnot(spline->FirstUKnotIndex()),
+                  spline->UKnot(spline->LastUKnotIndex()), times, removable.c_str());
+    }
+    for (int k = spline->FirstVKnotIndex() + 1; k < spline->LastVKnotIndex(); ++k) {
+      if (spline->VMultiplicity(k) > spline->VDegree() - 2) {
+        std::printf("%s: face %d, V knot %d at %.9f, %d times at V degree %d\n", what.c_str(), i, k,
+                    spline->VKnot(k), spline->VMultiplicity(k), spline->VDegree());
+      }
+    }
+    // The same surface with every such U knot once less where that moves
+    // it by no more than 1e-7 mm, as a face of its own: its continuity, and
+    // whether the kernel offsets it by half the thickness and that again
+    // with thickening (would smoothing those knots do?).
+    const occ::handle<Geom_BSplineSurface> smoothed = occ::down_cast<Geom_BSplineSurface>(spline->Copy());
+    for (int k = smoothed->FirstUKnotIndex(); k <= smoothed->LastUKnotIndex(); ++k) {
+      const int times = smoothed->UMultiplicity(k);
+      if (times > degree - 2) {
+        smoothed->RemoveUKnot(k, times - 1, 1.0e-7);
+      }
+    }
+    std::printf("%s: face %d smoothed within 1e-7 mm: %s\n", what.c_str(), i,
+                continuity_words(smoothed->Continuity()));
+    const BRepBuilderAPI_MakeFace made(smoothed, 1.0e-7);
+    if (made.IsDone()) {
+      BRep_Builder builder;
+      TopoDS_Shell shell;
+      builder.MakeShell(shell);
+      builder.Add(shell, made.Face());
+      const std::string at = what + ", smoothed";
+      const std::optional<TopoDS_Shape> back = traced_offset(at + ", half offset", shell, -thickness / 2, false);
+      if (back) {
+        describe_offset_faces(at + ", half offset", *back);
+        traced_offset(at + ", half offset", *back, thickness, true);
+      }
+    }
+  }
+  describe_offset_faces(what + ", the sheet", sheet.occt());
+  const double half = thickness / 2;
+  for (const double d : {-half, half}) {
+    const std::string at = what + ", half offset " + (d < 0 ? "against" : "along") + " the normals";
+    const std::optional<TopoDS_Shape> back = traced_offset(at, sheet.occt(), d, false);
+    if (!back) {
+      continue;
+    }
+    describe_offset_faces(at, *back);
+    traced_offset(at + ", as it is", *back, thickness, true);
+    traced_offset(at + ", as it is", *back, -thickness, true);
+    try {
+      ShapeUpgrade_ShapeDivideClosed divide(*back);
+      divide.SetNbSplitPoints(1);
+      const bool divided = divide.Perform();
+      std::printf("%s: divided across its seams: %s\n", at.c_str(), divided ? "yes" : "no");
+      if (divided && !divide.Result().IsNull()) {
+        describe_offset_faces(at + ", divided", divide.Result());
+        traced_offset(at + ", divided", divide.Result(), thickness, true);
+        traced_offset(at + ", divided", divide.Result(), -thickness, true);
+      }
+      ShapeUpgrade_ShapeDivideContinuity creases(*back);
+      creases.SetSurfaceCriterion(GeomAbs_C1);
+      const bool split = creases.Perform();
+      std::printf("%s: split at its creases: %s\n", at.c_str(), split ? "yes" : "no");
+      if (split && !creases.Result().IsNull()) {
+        describe_offset_faces(at + ", split", creases.Result());
+        traced_offset(at + ", split", creases.Result(), thickness, true);
+      }
+    } catch (const Standard_Failure& failure) {
+      std::printf("%s: dividing raised: %s\n", at.c_str(), failure.what());
+    }
+  }
+}
+
+// The loft as a surface, Keep or Merge, thickened 1 mm along its normals,
+// against them and symmetric. The volume between a surface of area A and
+// its offset by t is t A + t^2 Int H + t^3 / 3 Int K: the two sides sum to
+// 2 t A + 2/3 t^3 Int K, symmetric is t A + t^3 / 12 Int K (the t^3 terms
+// a few mm^3 against some 10^4 to 10^5 here).
+void check_thickened_surface(const char* what, g::LoftSpec spec, bool merge) {
   spec.solid = false;
   spec.merge_tangent = merge;
-  const std::string name = std::string("the owner's surface loft, ") + (merge ? "Merge" : "Keep");
+  const std::string name = std::string(what) + (merge ? ", Merge" : ", Keep");
   g::ShapePtr sheet;
   try {
     sheet = g::loft(spec);
@@ -690,6 +1024,9 @@ void check_thickened_owner_surface(bool merge) {
     return;
   }
   CHECK(count(sheet->occt(), TopAbs_SOLID) == 0);
+  if (one_edge_each(spec)) {
+    check_round_side(name.c_str(), *sheet);
+  }
   const double area = area_of(sheet->occt());
   const double front = check_thicken(name + ", 1 mm along the normals", sheet, 1.0, false);
   const double back = check_thicken(name + ", 1 mm against the normals", sheet, -1.0, false);
@@ -706,6 +1043,10 @@ void check_thickened_owner_surface(bool merge) {
     // The sheet's faces, to tell a measurement that is off from a wall
     // that is (mitcad#2271).
     describe(name + ", the sheet", sheet->occt());
+  }
+  if (!(both > 0.0)) {
+    // Where the symmetric thicken stops, step by step (mitcad#2308).
+    trace_symmetric(name + ", 1 mm symmetric", *sheet, 1.0);
   }
 }
 
@@ -724,40 +1065,43 @@ g::LoftSpec circle_slot_long() { return loft_xy(circle(40), slot(190, 10), 150);
 g::LoftSpec ellipse_rounded_rectangle() { return loft_xy(ellipse(60, 30), rounded_rectangle(140, 80, 15), 70); }
 g::LoftSpec circle_spline() { return loft_xy(circle(25), spline_outline(), 60); }
 
-// One ctest: a loft shelled every way with Keep or Merge, or (no loft)
-// the owner's surface loft thickened.
+// One ctest: a loft shelled every way with Keep or Merge, or the loft
+// as a surface thickened (`thickened`).
 struct Part {
   const char* name;
   const char* what;
   g::LoftSpec (*loft)();
   bool merge;
+  bool thickened;
 
   void run() const {
     guarded(name, [this] {
-      if (loft != nullptr) {
-        check_loft(what, loft(), merge);
+      if (thickened) {
+        check_thickened_surface(what, loft(), merge);
       } else {
-        check_thickened_owner_surface(merge);
+        check_loft(what, loft(), merge);
       }
     });
   }
 };
 
 const Part kParts[] = {
-    {"circle_slot_r30_keep", "R30 to 160 x 40", circle_slot_r30, false},
-    {"circle_slot_r30_merge", "R30 to 160 x 40", circle_slot_r30, true},
-    {"circle_slot_r50_keep", "R50 to 188 x 42", circle_slot_r50, false},
-    {"circle_slot_r50_merge", "R50 to 188 x 42", circle_slot_r50, true},
-    {"circle_slot_owner_keep", "the owner's R111 to 520 x 80", owner_loft, false},
-    {"circle_slot_owner_merge", "the owner's R111 to 520 x 80", owner_loft, true},
-    {"circle_slot_long_keep", "R40 to 400 x 20", circle_slot_long, false},
-    {"circle_slot_long_merge", "R40 to 400 x 20", circle_slot_long, true},
-    {"ellipse_rounded_rectangle_keep", "ellipse to rounded rectangle", ellipse_rounded_rectangle, false},
-    {"ellipse_rounded_rectangle_merge", "ellipse to rounded rectangle", ellipse_rounded_rectangle, true},
-    {"circle_spline_keep", "circle to spline outline", circle_spline, false},
-    {"circle_spline_merge", "circle to spline outline", circle_spline, true},
-    {"thicken_owner_keep", "the owner's surface loft thickened", nullptr, false},
-    {"thicken_owner_merge", "the owner's surface loft thickened", nullptr, true},
+    {"circle_slot_r30_keep", "R30 to 160 x 40", circle_slot_r30, false, false},
+    {"circle_slot_r30_merge", "R30 to 160 x 40", circle_slot_r30, true, false},
+    {"circle_slot_r50_keep", "R50 to 188 x 42", circle_slot_r50, false, false},
+    {"circle_slot_r50_merge", "R50 to 188 x 42", circle_slot_r50, true, false},
+    {"circle_slot_owner_keep", "the owner's R111 to 520 x 80", owner_loft, false, false},
+    {"circle_slot_owner_merge", "the owner's R111 to 520 x 80", owner_loft, true, false},
+    {"circle_slot_long_keep", "R40 to 400 x 20", circle_slot_long, false, false},
+    {"circle_slot_long_merge", "R40 to 400 x 20", circle_slot_long, true, false},
+    {"ellipse_rounded_rectangle_keep", "ellipse to rounded rectangle", ellipse_rounded_rectangle, false, false},
+    {"ellipse_rounded_rectangle_merge", "ellipse to rounded rectangle", ellipse_rounded_rectangle, true, false},
+    {"circle_spline_keep", "circle to spline outline", circle_spline, false, false},
+    {"circle_spline_merge", "circle to spline outline", circle_spline, true, false},
+    {"thicken_owner_keep", "the owner's surface loft", owner_loft, false, true},
+    {"thicken_owner_merge", "the owner's surface loft", owner_loft, true, true},
+    {"thicken_circle_spline_keep", "the circle to spline outline surface loft", circle_spline, false, true},
+    {"thicken_circle_spline_merge", "the circle to spline outline surface loft", circle_spline, true, true},
 };
 
 const Part* find_part(const std::string& name) {

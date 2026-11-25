@@ -653,7 +653,12 @@ pub(crate) fn face_boundary<K: Kernel>(
         Some(body) => vec![(*body, ctx.body_in(component, *body)?)],
         None => ctx.bodies_in(component),
     };
-    let (_, shape, renamed) = face_body(ctx.kernel, face, shapes)?;
+    // The face the sketch's plane found (its frame told what it took).
+    let SketchFace {
+        shape,
+        found: renamed,
+        ..
+    } = sketch_face(ctx.kernel, face, shapes)?;
     let boundary = match ctx
         .kernel
         .face_boundary(&shape, renamed.as_ref().unwrap_or(face))
@@ -996,9 +1001,13 @@ pub(crate) fn face_frame<K: Kernel>(
         Some(body) => vec![(*body, ctx.body(*body)?)],
         None => ctx.bodies(),
     };
-    let (body, _, found) = face_body(ctx.kernel, face, shapes)?;
-    if let Some(found) = &found {
-        ctx.found_renamed("face", face, found, face.feature);
+    let SketchFace {
+        body, found, moved, ..
+    } = sketch_face(ctx.kernel, face, shapes)?;
+    match (&moved, &found) {
+        (Some(moved), _) => ctx.warn(moved.clone()),
+        (None, Some(found)) => ctx.found_renamed("face", face, found, face.feature),
+        (None, None) => {}
     }
     let face = GeomRef::Face {
         body,
@@ -1059,6 +1068,129 @@ pub(crate) fn face_body<K: Kernel>(
     }
 }
 
+/// The face a sketch on a planar face lies on, as [`sketch_face`] finds it.
+pub(crate) struct SketchFace<S> {
+    pub body: BodyUid,
+    pub shape: S,
+    /// The face's name now, when it is not the stored one.
+    pub found: Option<FaceName>,
+    /// In words, why the sketch lies on another face than the stored name
+    /// names (a piece of it, or the whole face of a piece); None for a face
+    /// a sketch change renamed, which `found_renamed` tells (mitcad#272).
+    pub moved: Option<String>,
+}
+
+/// The face of a sketch on a planar face ([`face_body`]), followed where a
+/// change of an earlier feature split it or joined it again (mitcad#2351):
+/// a face now split into pieces that do not lie in one plane (a symmetric
+/// draft whose fixed plane now crosses it) gives its largest planar piece,
+/// the piece most of the face is on; a piece (`…#k`) of a face that is no
+/// longer split gives the whole face. Either way `moved` says so. Pieces
+/// that lie in one plane stay as they are: the plane is theirs.
+pub(crate) fn sketch_face<K: Kernel>(
+    kernel: &K,
+    face: &FaceName,
+    shapes: Vec<(BodyUid, K::Shape)>,
+) -> Result<SketchFace<K::Shape>, String> {
+    let (body, shape, found) = match face_body(kernel, face, shapes.clone()) {
+        Ok(found) => found,
+        Err(error) => return whole_face(kernel, face, shapes).ok_or(error),
+    };
+    let name = found.clone().unwrap_or_else(|| face.clone());
+    let pieces = kernel.count_faces(&shape, &name).unwrap_or(1);
+    // Pieces on one surface share its geometry; pieces on several do not.
+    let apart = pieces > 1
+        && matches!(
+            kernel.face_geometry(&shape, &name),
+            Err(error) if !matches!(error, KernelError::Unsupported(_))
+        );
+    let piece = if apart {
+        kernel
+            .faces(&shape)
+            .ok()
+            .and_then(|faces| largest_piece(&faces, &name))
+    } else {
+        None
+    };
+    Ok(match piece {
+        Some((piece, count)) => SketchFace {
+            body,
+            shape,
+            moved: Some(format!(
+                "face {name} is split into {count} pieces that do not lie in one plane; the \
+                 sketch lies on the largest, {piece} (Redefine Sketch Plane puts it on another)"
+            )),
+            found: Some(piece),
+        },
+        // One face, pieces in one plane, or no planar piece (the plane's
+        // own error then says why).
+        None => SketchFace {
+            body,
+            shape,
+            found,
+            moved: None,
+        },
+    })
+}
+
+/// The whole face of a piece name (`…#k`) whose face is no longer split:
+/// the name without its piece numbers, where it finds exactly one face.
+fn whole_face<K: Kernel>(
+    kernel: &K,
+    face: &FaceName,
+    shapes: Vec<(BodyUid, K::Shape)>,
+) -> Option<SketchFace<K::Shape>> {
+    let mut whole = face.clone();
+    while whole.split.pop().is_some() {
+        let Ok((body, shape, found)) = face_body(kernel, &whole, shapes.clone()) else {
+            continue;
+        };
+        let name = found.unwrap_or_else(|| whole.clone());
+        if kernel.count_faces(&shape, &name).ok() == Some(1) {
+            return Some(SketchFace {
+                body,
+                shape,
+                moved: Some(format!(
+                    "face {face} is no longer split; the sketch lies on the whole face {name}"
+                )),
+                found: Some(name),
+            });
+        }
+    }
+    None
+}
+
+/// The largest planar face of `faces` that is a piece of `name` (named
+/// `name#k`, or deeper), with the number of faces its pieces are; of pieces
+/// of the same area the first by piece number. None without a planar piece.
+fn largest_piece(faces: &[crate::kernel::FaceInfo], name: &FaceName) -> Option<(FaceName, usize)> {
+    let mut count = 0;
+    let mut best: Option<(f64, FaceName)> = None;
+    for info in faces {
+        let Some(piece) = info
+            .names
+            .iter()
+            .filter_map(|n| n.parse::<FaceName>().ok())
+            .find(|n| n.matches(name) && n.split.len() > name.split.len())
+        else {
+            continue;
+        };
+        count += 1;
+        if info.surface != "plane" {
+            continue;
+        }
+        let larger = best.as_ref().is_none_or(|(area, held)| {
+            let margin = 1e-9 * area.abs().max(1.0);
+            info.area > area + margin
+                || ((info.area - area).abs() <= margin && piece.split < held.split)
+        });
+        if larger {
+            best = Some((info.area, piece));
+        }
+    }
+    best.map(|(_, piece)| (piece, count))
+}
+
 /// The frame of a plane of another component (mitcad#100): found there and
 /// moved into the sketch's coordinates. An origin or construction plane
 /// keeps its own axes; a face gets the frame every planar face gets
@@ -1083,9 +1215,16 @@ pub(crate) fn linked_frame<K: Kernel>(
                 Some(body) => vec![(*body, ctx.body_in(component, *body)?)],
                 None => ctx.bodies_in(component),
             };
-            let (_, shape, found) = face_body(ctx.kernel, face, shapes)?;
-            if let Some(found) = &found {
-                ctx.found_renamed("face", face, found, face.feature);
+            let SketchFace {
+                shape,
+                found,
+                moved,
+                ..
+            } = sketch_face(ctx.kernel, face, shapes)?;
+            match (&moved, &found) {
+                (Some(moved), _) => ctx.warn(moved.clone()),
+                (None, Some(found)) => ctx.found_renamed("face", face, found, face.feature),
+                (None, None) => {}
             }
             match ctx
                 .kernel
@@ -1117,5 +1256,59 @@ pub(crate) fn linked_frame<K: Kernel>(
         SketchPlane::Xy | SketchPlane::Xz | SketchPlane::Yz => {
             unreachable!("origin planes have a frame")
         }
+    }
+}
+
+#[cfg(test)]
+mod piece_tests {
+    use super::largest_piece;
+    use crate::kernel::FaceInfo;
+    use crate::topo::FaceName;
+
+    fn info(names: &[&str], surface: &str, area: f64) -> FaceInfo {
+        FaceInfo {
+            names: names.iter().map(|n| (*n).to_owned()).collect(),
+            surface: surface.to_owned(),
+            area,
+        }
+    }
+
+    fn name(text: &str) -> FaceName {
+        text.parse().expect("a face name")
+    }
+
+    #[test]
+    fn the_largest_planar_piece_of_a_split_face_is_taken() {
+        let side = "F2:side(c2[c1,c3])";
+        let faces = [
+            info(&["F2:end(r{c1})"], "plane", 900.0),
+            info(&[&format!("{side}#0")], "plane", 120.0),
+            info(&[&format!("{side}#1")], "plane", 380.0),
+        ];
+        assert_eq!(
+            largest_piece(&faces, &name(side)),
+            Some((name(&format!("{side}#1")), 2))
+        );
+        // Pieces of the same area: the first by number.
+        let even = [
+            info(&[&format!("{side}#1")], "plane", 250.0),
+            info(&[&format!("{side}#0")], "plane", 250.0),
+        ];
+        assert_eq!(
+            largest_piece(&even, &name(side)),
+            Some((name(&format!("{side}#0")), 2))
+        );
+        // A curved piece is counted but not taken; no planar piece, none.
+        let curved = [
+            info(&[&format!("{side}#0")], "cone", 900.0),
+            info(&[&format!("{side}#1")], "plane", 100.0),
+        ];
+        assert_eq!(
+            largest_piece(&curved, &name(side)),
+            Some((name(&format!("{side}#1")), 2))
+        );
+        assert_eq!(largest_piece(&curved[..1], &name(side)), None);
+        // Another face is no piece of it.
+        assert_eq!(largest_piece(&faces[..1], &name(side)), None);
     }
 }

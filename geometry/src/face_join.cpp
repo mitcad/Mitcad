@@ -205,6 +205,46 @@ TopoDS_Face join_faces(const std::vector<TopoDS_Face>& group) {
       return TopoDS_Face();
     }
   }
+  // Pieces round a whole period of the surface (a loft's side round the
+  // whole section, mitcad#2300): the edge where they come round to the first
+  // again lies a period apart on its two sides, with the pieces' offsets.
+  // It stays, as the joined face's seam (both its curves); the boundary's
+  // loops then close. Any other gap: no face.
+  ShapeMap wrapped;
+  for (int k = 1; k <= users.Extent(); ++k) {
+    const TopoDS_Edge edge = TopoDS::Edge(users.FindKey(k));
+    if (!inside(edge)) {
+      continue;
+    }
+    const std::size_t a = users.FindFromIndex(k)[0];
+    const std::size_t b = users.FindFromIndex(k)[1];
+    TopoDS_Edge on_a, on_b;
+    for (TopExp_Explorer e(group[a], TopAbs_EDGE); e.More(); e.Next()) {
+      if (e.Current().IsSame(edge)) {
+        on_a = TopoDS::Edge(e.Current());
+      }
+    }
+    for (TopExp_Explorer e(group[b], TopAbs_EDGE); e.More(); e.Next()) {
+      if (e.Current().IsSame(edge)) {
+        on_b = TopoDS::Edge(e.Current());
+      }
+    }
+    const auto pa = middle_on(on_a, group[a]);
+    const auto pb = middle_on(on_b, group[b]);
+    if (!pa || !pb) {
+      return TopoDS_Face();
+    }
+    const gp_Vec2d gap(pb->Translated(*offset[b]), pa->Translated(*offset[a]));
+    if (gap.Magnitude() <= kChain) {
+      continue;
+    }
+    const gp_Vec2d whole = in_periods(gap);
+    if (whole.Magnitude() <= 0.0 || (gap - whole).Magnitude() > kChain) {
+      return TopoDS_Face();
+    }
+    wrapped.Add(edge);
+  }
+  const auto bounds = [&](const TopoDS_Shape& edge) { return !inside(edge) || wrapped.Contains(edge); };
   // The boundary's uses, their curves moved by their pieces' offsets.
   std::vector<Use> uses;
   double tolerance = 0.0;
@@ -212,7 +252,7 @@ TopoDS_Face join_faces(const std::vector<TopoDS_Face>& group) {
     tolerance = std::max(tolerance, BRep_Tool::Tolerance(group[p]));
     for (TopExp_Explorer e(group[p], TopAbs_EDGE); e.More(); e.Next()) {
       const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
-      if (inside(edge)) {
+      if (!bounds(edge)) {
         continue;
       }
       Use use;
@@ -708,6 +748,38 @@ bool same_surface(const occ::handle<Geom_Surface>& a, const occ::handle<Geom_Sur
   }
   const auto sa = occ::down_cast<Geom_BSplineSurface>(a);
   const auto sb = occ::down_cast<Geom_BSplineSurface>(b);
+  // Copies of one periodic B-spline surface: the faces of a loft's side
+  // round the whole section with Tangent Edges Keep, each on a copy of its
+  // chain's periodic surface (loft_skin.cpp, mitcad#2300). Pieces of such a
+  // surface are only taken as one where they are copies of it.
+  if (!sa.IsNull() && !sb.IsNull() &&
+      (sa->IsUPeriodic() || sa->IsVPeriodic() || sb->IsUPeriodic() || sb->IsVPeriodic())) {
+    if (sa->IsUPeriodic() != sb->IsUPeriodic() || sa->IsVPeriodic() != sb->IsVPeriodic() ||
+        sa->UDegree() != sb->UDegree() || sa->VDegree() != sb->VDegree() || sa->NbUPoles() != sb->NbUPoles() ||
+        sa->NbVPoles() != sb->NbVPoles() || sa->NbUKnots() != sb->NbUKnots() ||
+        sa->NbVKnots() != sb->NbVKnots() || sa->IsURational() != sb->IsURational() ||
+        sa->IsVRational() != sb->IsVRational()) {
+      return false;
+    }
+    for (int i = 1; i <= sa->NbUKnots(); ++i) {
+      if (std::abs(sa->UKnot(i) - sb->UKnot(i)) > kSame || sa->UMultiplicity(i) != sb->UMultiplicity(i)) {
+        return false;
+      }
+    }
+    for (int i = 1; i <= sa->NbVKnots(); ++i) {
+      if (std::abs(sa->VKnot(i) - sb->VKnot(i)) > kSame || sa->VMultiplicity(i) != sb->VMultiplicity(i)) {
+        return false;
+      }
+    }
+    for (int i = 1; i <= sa->NbUPoles(); ++i) {
+      for (int j = 1; j <= sa->NbVPoles(); ++j) {
+        if (sa->Pole(i, j).Distance(sb->Pole(i, j)) > kSame || std::abs(sa->Weight(i, j) - sb->Weight(i, j)) > kSame) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
   if (sa.IsNull() || sb.IsNull() || sa->UDegree() != sb->UDegree() || sa->VDegree() != sb->VDegree() ||
       sa->NbUPoles() != sb->NbUPoles() || sa->NbUKnots() != sb->NbUKnots() || sa->IsURational() ||
       sa->IsVRational() || sb->IsURational() || sb->IsVRational() || sa->IsUPeriodic() || sa->IsVPeriodic() ||

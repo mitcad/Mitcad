@@ -112,6 +112,7 @@
 #include "ring_dressup.hpp"
 #include "runout_dressup.hpp"
 #include "util.hpp"
+#include "vanishing_split.hpp"
 
 namespace mitcad::geometry {
 namespace {
@@ -885,6 +886,21 @@ public:
   ~RetryScope() { t_retry = false; }
   RetryScope(const RetryScope&) = delete;
   RetryScope& operator=(const RetryScope&) = delete;
+};
+
+// Set while a fillet rounds a body whose edges were split where their
+// roundings vanish (mitcad#2300): its own fillets split nothing again.
+thread_local bool t_vanishing_split = false;
+
+class VanishingSplitScope {
+public:
+  VanishingSplitScope() : m_previous(t_vanishing_split) { t_vanishing_split = true; }
+  ~VanishingSplitScope() { t_vanishing_split = m_previous; }
+  VanishingSplitScope(const VanishingSplitScope&) = delete;
+  VanishingSplitScope& operator=(const VanishingSplitScope&) = delete;
+
+private:
+  bool m_previous;
 };
 
 // Whether edge `a` runs along edge `b`: its ends and its middle lie on b
@@ -4934,6 +4950,75 @@ ShapePtr over_tangent_far_edges(const std::string& feature, const Shape& input, 
   }
 }
 
+// A rounding of convex selected edges (`owner`) wider than a narrow face
+// beside them whose far edges across it go on concavely into one face
+// beyond rising from it (a ledge before a spike's foot, mitcad#2352,
+// GitHub #620): `build` rounds, at the full size, the body with the narrow
+// face taken away there and the face beyond continued down along its own
+// surface to the edge's other face (faces_beyond_grown's `rising`), so
+// that the rounding is tangent to the other face and the face beyond, as
+// the ball rolling past the ledge makes it. The result is taken where it
+// is one closed solid holding a face of the rounding and lying within the
+// input (a rounding of convex edges only takes material away); its faces
+// are named after the picked edges. Null otherwise (never throws but for
+// cancelling and invalid arguments).
+template <class Build>
+ShapePtr over_rising_far_edges(const std::string& feature, const Shape& input, const std::vector<int>& owner,
+                               double contact, Build&& build) {
+  try {
+    OCC_CATCH_SIGNALS
+    const ShapePtr copy = detail::working_copy(input);
+    const std::optional<detail::FacesBeyondGrown> grown = detail::faces_beyond_grown(*copy, owner, contact, true);
+    if (!grown) {
+      return nullptr;
+    }
+    ShapePtr made;
+    try {
+      made = build(*grown->body, grown->owner);
+    } catch (const std::invalid_argument&) {
+      throw;
+    } catch (const Cancelled&) {
+      throw;
+    } catch (...) {
+      return nullptr;
+    }
+    if (!made || !closed_solids(made->occt()) || !holds_made_face(*made, feature + ":fillet(")) {
+      return nullptr;
+    }
+    int solids = 0;
+    for (TopExp_Explorer ex(made->occt(), TopAbs_SOLID); ex.More(); ex.Next()) {
+      ++solids;
+    }
+    if (solids != 1) {
+      return nullptr;
+    }
+    // (The result less the input: nothing.)
+    BRepAlgoAPI_Cut past;
+    NCollection_List<TopoDS_Shape> arguments;
+    NCollection_List<TopoDS_Shape> tools;
+    arguments.Append(made->occt());
+    tools.Append(input.occt());
+    past.SetArguments(arguments);
+    past.SetTools(tools);
+    past.SetNonDestructive(true);
+    past.SetRunParallel(true);
+    past.Build();
+    const double whole = std::abs(detail::volume_of(input.occt()));
+    if (!past.IsDone() || past.HasErrors() ||
+        std::abs(detail::volume_of(past.Shape())) > 1.0e-6 * std::max(1.0, whole) ||
+        !(std::abs(detail::volume_of(made->occt())) < whole)) {
+      return nullptr;
+    }
+    return with_renames(made, grown->renames);
+  } catch (const std::invalid_argument&) {
+    throw;
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
 // A rounding of the selected edges (`owner`) that the geometry kernel
 // failed to build at its exact size, or left open (OpenResult); called
 // while that error is handled. Where a face beside the edges is narrower
@@ -5058,6 +5143,17 @@ ShapePtr past_narrow_faces(const std::string& feature, const Shape& input, const
   bool tangent_far_edges = false;
   if (ShapePtr rolled = over_tangent_far_edges(feature, input, owner, contact, build_or_ended, tangent_far_edges)) {
     return rolled;
+  }
+  // A narrow face beside a convex edge whose far edge across it goes on
+  // concavely into a face rising beyond (a ledge before a spike's foot):
+  // the face beyond continued down to the edge's other face, the rounding
+  // tangent to both (over_rising_far_edges, mitcad#2352). Continued along
+  // its own surface, the ledge's plane would hold the ball, and the face
+  // beyond grown down to meet the rounding would bury it.
+  if (!tangent_far_edges) {
+    if (ShapePtr risen = over_rising_far_edges(feature, input, owner, contact, build_or_ended)) {
+      return risen;
+    }
   }
   ShapePtr over;
   bool freeform = false;
@@ -6931,6 +7027,56 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
   const ShapePtr joined = surface_pieces_joined(given, select_edges(given, sets), pieces);
   const Shape& input = *joined;
   const std::vector<int> owner = select_edges(input, sets);
+  // How far the roundings reach, for the joined pieces split again.
+  const auto reach_of_sets = [&] {
+    double reach = 0.0;
+    for (const FilletSet& set : sets) {
+      reach = std::max({reach, set.radius, set.radius2, set.chord});
+      for (const auto& point : set.mid) {
+        reach = std::max(reach, point.second);
+      }
+    }
+    return reach;
+  };
+  // Edges whose faces come tangent inside them, turning from convex to
+  // concave there (the rim between a loft's side and a cylinder pulled from
+  // its end, mitcad#2300): split where the rounding vanishes, rounded on
+  // that body, and named after the input's edges (vanishing_split.hpp).
+  // On the body with the pieces of one surface joined: that join also
+  // joins the edges between the same two faces that meet at vertices of no
+  // other edge (join_surface_pieces), which would put the pieces of a split
+  // edge together again (a loft's side with Tangent Edges Keep, pieces of
+  // one periodic surface). The joined pieces are split again after it, as
+  // below.
+  if (!t_vanishing_split) {
+    if (std::optional<detail::VanishingSplit> split = detail::split_at_vanishing_points(input, sets)) {
+      const detail::UnsplitNames names = detail::unsplit_names(input, *split);
+      ShapePtr rounded;
+      {
+        const VanishingSplitScope scope;
+        try {
+          rounded = fillet(feature, *split->body, split->sets, rolling_ball_corners);
+        } catch (const Cancelled&) {
+          throw;
+        } catch (const std::invalid_argument& error) {
+          throw std::invalid_argument(detail::with_unsplit_names(error.what(), names));
+        } catch (const std::runtime_error& error) {
+          throw std::runtime_error(detail::with_unsplit_names(error.what(), names));
+        }
+      }
+      rounded = detail::with_unsplit_names(rounded, names, feature);
+      if (!rounded || pieces.empty()) {
+        return rounded;
+      }
+      ShapePtr resplit;
+      try {
+        resplit = detail::split_joined_pieces(*rounded, given, pieces, feature, "fillet", 3.0 * reach_of_sets());
+      } catch (const Standard_Failure&) {
+        resplit = nullptr;
+      }
+      return resplit ? resplit : rounded;
+    }
+  }
   std::vector<char> blended(sets.size(), 0);
   bool any_blended = false;
   for (std::size_t s = 0; s < sets.size(); ++s) {
@@ -7167,16 +7313,9 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
   if (!result || pieces.empty()) {
     return warned(result);
   }
-  double reach = 0.0;
-  for (const FilletSet& set : sets) {
-    reach = std::max({reach, set.radius, set.radius2, set.chord});
-    for (const auto& point : set.mid) {
-      reach = std::max(reach, point.second);
-    }
-  }
   ShapePtr split;
   try {
-    split = detail::split_joined_pieces(*result, given, pieces, feature, "fillet", 3.0 * reach);
+    split = detail::split_joined_pieces(*result, given, pieces, feature, "fillet", 3.0 * reach_of_sets());
   } catch (const Standard_Failure&) {
     split = nullptr;
   }

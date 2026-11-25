@@ -1279,6 +1279,30 @@ fn mitred<K: Kernel>(
             .iter()
             .filter_map(|c| corner_gap(uid, &geometry, &ends_of, c, (gap, reach))),
     );
+    // The rules' corner relief at the corners between the flange's edges
+    // and where its bends meet other bends at a corner of their panel
+    // (mitcad#2342); a corner across a recorded gap has no junction of
+    // the two bends to relieve. A flange with a relief of its own keeps its
+    // corners as they are.
+    if d.relief.is_none() && rules.relieves_flange_corners() {
+        let bend = |k: usize| BendId {
+            feature: uid,
+            slot: k as u32,
+        };
+        let mut pairs: Vec<[BendId; 2]> = found
+            .iter()
+            .filter(|c| !c.gap)
+            .map(|c| [bend(c.edges[0]), bend(c.edges[1])])
+            .collect();
+        for (k, edge) in edges.iter().enumerate() {
+            for other in super::relief::corner_bends(&state, edge.panel, bend(k)) {
+                if other.feature != uid && !pairs.contains(&[bend(k), other]) {
+                    pairs.push([bend(k), other]);
+                }
+            }
+        }
+        state = super::relief::flange_corner_reliefs(ctx, state, &rules, &pairs)?;
+    }
     // Walls that still meet: the refusal paints them, as the input sheet
     // has them, and their corner (mitcad#1877).
     let uid = ctx.uid;

@@ -247,6 +247,99 @@ int drawingToolsTests() {
   CHECK(subjectShows(arm, QStringLiteral("F7.b0"), QStringLiteral("O1/O4")));
   CHECK(!subjectShows(arm, QStringLiteral("F2.b0"), QString()));
   CHECK(!subjectShows(arm, QStringLiteral("F7.b0"), QStringLiteral("O11")));
+  // A drawing made from the selection (mitcad#2399): Arm placed twice
+  // (O1, O2), each with a Pin in it (O1/O4, O2/O5), and two bodies of the
+  // root's own.
+  {
+    const auto occurrenceOf = [](const char* uid, const char* name, const char* component, QJsonArray children) {
+      return QJsonObject{{QStringLiteral("uid"), QString::fromLatin1(uid)},
+                         {QStringLiteral("name"), QString::fromLatin1(name)},
+                         {QStringLiteral("component"), QString::fromLatin1(component)},
+                         {QStringLiteral("children"), children}};
+    };
+    const auto bodyOf = [](const char* uid, const char* name, const char* component) {
+      QJsonObject body{{QStringLiteral("uid"), QString::fromLatin1(uid)}, {QStringLiteral("name"), QString::fromLatin1(name)}};
+      if (component != nullptr) {
+        body.insert(QStringLiteral("component"), QString::fromLatin1(component));
+      }
+      return body;
+    };
+    const QJsonObject arms{
+        {QStringLiteral("occurrences"),
+         QJsonArray{occurrenceOf("O1", "Arm:1", "C1", QJsonArray{occurrenceOf("O4", "Pin:2", "C2", {})}),
+                    occurrenceOf("O2", "Arm:2", "C1", QJsonArray{occurrenceOf("O5", "Pin:3", "C2", {})})}}};
+    const QJsonArray armBodies{bodyOf("F2.b0", "Base", nullptr), bodyOf("F3.b0", "Lid", nullptr),
+                               bodyOf("F5.b0", "Arm body", "C1"), bodyOf("F7.b0", "Pin body", "C2")};
+    using Items = QVector<QPair<QString, QString>>;
+    const auto entry = [](const char* body, const char* occurrence) {
+      QJsonObject out{{QStringLiteral("body"), QString::fromLatin1(body)}};
+      if (occurrence != nullptr) {
+        out.insert(QStringLiteral("occurrence"), QString::fromLatin1(occurrence));
+      }
+      return out;
+    };
+    const auto bodiesOf = [](const QJsonArray& entries) {
+      return QJsonObject{{QStringLiteral("type"), QStringLiteral("bodies")}, {QStringLiteral("bodies"), entries}};
+    };
+    // One occurrence among several: its Shows choice, named by it.
+    const SelectionSubject arm2 = selectionSubject(Items{{QString(), QStringLiteral("O2")}}, arms, armBodies);
+    CHECK(arm2.choice == QStringLiteral("occurrence:O2"));
+    CHECK(arm2.label == QStringLiteral("Arm:2"));
+    CHECK(arm2.shows == QStringLiteral("Arm:2"));
+    CHECK(arm2.bodies == 0);
+    CHECK(arm2.subject == QJsonObject({{QStringLiteral("type"), QStringLiteral("occurrence")},
+                                       {QStringLiteral("occurrence"), QStringLiteral("O2")}}));
+    // Selected twice: once. A nested one: its path's label, its own name.
+    CHECK(selectionSubject(Items{{QString(), QStringLiteral("O2")}, {QString(), QStringLiteral("O2")}}, arms, armBodies)
+              .choice == QStringLiteral("occurrence:O2"));
+    const SelectionSubject pin = selectionSubject(Items{{QString(), QStringLiteral("O1/O4")}}, arms, armBodies);
+    CHECK(pin.choice == QStringLiteral("occurrence:O1/O4"));
+    CHECK(pin.label == QStringLiteral("Arm:1/Pin:2"));
+    CHECK(pin.shows == QStringLiteral("Pin:2"));
+    // One body of the root's own: its choice.
+    const SelectionSubject base1 = selectionSubject(Items{{QStringLiteral("F2.b0"), QString()}}, arms, armBodies);
+    CHECK(base1.choice == QStringLiteral("body:F2.b0"));
+    CHECK(base1.label == QStringLiteral("Base"));
+    CHECK(base1.shows == QStringLiteral("Base"));
+    // Two bodies: the bodies, a "selection:" choice the base view sends.
+    const SelectionSubject two = selectionSubject(
+        Items{{QStringLiteral("F3.b0"), QString()}, {QStringLiteral("F2.b0"), QString()}}, arms, armBodies);
+    CHECK(two.choice.startsWith(QStringLiteral("selection:")));
+    CHECK(two.bodies == 2);
+    CHECK(two.shows == QStringLiteral("Lid and Base"));
+    // In the Shows list's order, not the selection's.
+    CHECK(two.subject == bodiesOf(QJsonArray{entry("F2.b0", nullptr), entry("F3.b0", nullptr)}));
+    CHECK(subjectOf(two.choice) == two.subject);
+    command = base->command(QStringLiteral("D1"), 0, picks(0, {QPointF(10, 20)}), {{QStringLiteral("subject"), two.choice}});
+    CHECK(command.value(QStringLiteral("subject")).toObject() == two.subject);
+    // A body an occurrence places: that body there alone.
+    const SelectionSubject armBody =
+        selectionSubject(Items{{QStringLiteral("F5.b0"), QStringLiteral("O2")}}, arms, armBodies);
+    CHECK(armBody.bodies == 1);
+    CHECK(armBody.shows == QStringLiteral("Arm body"));
+    CHECK(armBody.subject == bodiesOf(QJsonArray{entry("F5.b0", "O2")}));
+    // An occurrence, a body in it and a body of the root's: the occurrence's
+    // bodies (its Pin's too) and the root's one, each once.
+    const SelectionSubject mixed = selectionSubject(Items{{QString(), QStringLiteral("O1")},
+                                                          {QStringLiteral("F5.b0"), QStringLiteral("O1")},
+                                                          {QStringLiteral("F3.b0"), QString()}},
+                                                    arms, armBodies);
+    CHECK(mixed.bodies == 3);
+    CHECK(mixed.shows == QStringLiteral("Arm:1 and 2 More"));
+    CHECK(mixed.subject ==
+          bodiesOf(QJsonArray{entry("F3.b0", nullptr), entry("F5.b0", "O1"), entry("F7.b0", "O1/O4")}));
+    // Nothing of it in the design (a gone body, an unknown occurrence, the
+    // root itself): nothing.
+    CHECK(selectionSubject(Items{{QStringLiteral("F9.b0"), QString()}, {QString(), QStringLiteral("O9")},
+                                 {QString(), QString()}, {QStringLiteral("F5.b0"), QString()}},
+                           arms, armBodies)
+              .isEmpty());
+    CHECK(selectionSubject(Items{}, arms, armBodies).isEmpty());
+    // The drawing's name: what it shows, a free one.
+    CHECK(drawingNameFor(QStringLiteral("Arm:2"), {}) == QStringLiteral("Arm:2 Drawing"));
+    CHECK(drawingNameFor(QStringLiteral("Arm:2"), {QStringLiteral("Arm:2 Drawing"), QStringLiteral("Arm:2 Drawing 2")}) ==
+          QStringLiteral("Arm:2 Drawing 3"));
+  }
   // Current View: the 3D view's direction the workspace gives; nothing
   // without it. The isometric views from below too.
   const QHash<QString, QString> current{{QStringLiteral("direction"), QStringLiteral("current")}};

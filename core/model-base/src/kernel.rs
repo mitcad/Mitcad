@@ -2360,6 +2360,38 @@ pub trait Kernel: Send {
     ) -> Result<Vec<(f64, Vec3)>, KernelError> {
         Err(KernelError::Unsupported("closest points on faces"))
     }
+
+    // Curves of free edges: a loft's section of a surface body's free
+    // edges (mitcad#2395; `features/loft.rs`).
+
+    /// The curves of the body's free edges that `opening` picks, as the
+    /// surface features' openings pick them (the edges of the open boundary
+    /// at its index among [`Kernel::open_boundaries`], of those only the
+    /// ones bounding its faces when it names any, and of those the one
+    /// nearest each of its points when it has any), in the boundary's
+    /// order, each with the face it bounds. An index the body has no open
+    /// boundary at is an error.
+    fn opening_curves(
+        &self,
+        _shape: &Self::Shape,
+        _opening: &crate::surface_modelling::OpeningEdges<'_>,
+    ) -> Result<Vec<crate::surface_modelling::FreeEdgeCurve>, KernelError> {
+        Err(KernelError::Unsupported("curves of free edges"))
+    }
+
+    // Triangle meshes with their faces: the colours of faces coloured on
+    // their own in 3MF files (mitcad#2385; `exchange.rs`).
+
+    /// [`Kernel::triangle_mesh`] with each triangle's face: the same mesh,
+    /// and for each triangle the index of the face it lies on in the order
+    /// [`Kernel::faces`] lists the faces (0 for a mesh body's).
+    fn triangle_mesh_faces(
+        &self,
+        _shape: &Self::Shape,
+        _tolerance: &MeshTolerance,
+    ) -> Result<crate::exchange::FacedTriangleMesh, KernelError> {
+        Err(KernelError::Unsupported("triangle meshes with their faces"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of

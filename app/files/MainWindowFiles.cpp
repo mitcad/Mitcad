@@ -407,10 +407,11 @@ void MainWindow::registerFileCommands() {
   // the BUILD lists or the open sketch on paper.
   m_registry->add(paperPrintCommand());
   // A drawing kept in the design (mitcad#707, drawings/MainWindowDrawings.cpp):
-  // in the root's Drawings folder, opened at once.
+  // in the root's Drawings folder, opened at once; with bodies or
+  // occurrences selected, a drawing of them (mitcad#2399).
   CommandDef createDrawingDef = def("file.create_drawing", tr("Create Drawing…"), "drawing",
-                                    tr("Adds a drawing of the design and opens its sheet"),
-                                    [this] { createDrawing(QStringLiteral("C0")); });
+                                    tr("Adds a drawing of the design or of the selection and opens its sheet"),
+                                    [this] { createDrawingOf(QStringLiteral("C0"), true); });
   createDrawingDef.keywords = {QStringLiteral("drawing"), QStringLiteral("sheet"), QStringLiteral("blueprint"),
                                QStringLiteral("2d"), QStringLiteral("views")};
   m_registry->add(createDrawingDef);

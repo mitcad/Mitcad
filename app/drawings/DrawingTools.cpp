@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "DrawingTools.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QCoreApplication>
@@ -1006,6 +1007,10 @@ QList<QPair<QString, QString>> subjectChoices(const QString& component, const QS
 QString flatPatternLabel(const QString& body) { return Text::tr("%1 Flat Pattern").arg(body); }
 
 QJsonObject subjectOf(const QString& choice) {
+  // The selection's bodies (mitcad#2399): the subject itself.
+  if (choice.startsWith(QStringLiteral("selection:"))) {
+    return QJsonDocument::fromJson(choice.mid(QStringLiteral("selection:").size()).toUtf8()).object();
+  }
   if (choice.startsWith(QStringLiteral("flat:"))) {
     return {{QStringLiteral("type"), QStringLiteral("flat_pattern")},
             {QStringLiteral("body"), choice.mid(QStringLiteral("flat:").size())}};
@@ -1131,6 +1136,102 @@ QJsonObject chosenSubject(const QVector<QPair<QString, QString>>& chosen) {
     bodies.append(entry);
   }
   return {{QStringLiteral("type"), QStringLiteral("bodies")}, {QStringLiteral("bodies"), bodies}};
+}
+
+SelectionSubject selectionSubject(const QVector<QPair<QString, QString>>& items, const QJsonObject& components,
+                                  const QJsonArray& allBodies) {
+  const QList<QPair<QString, QString>> choices = subjectChoices(QStringLiteral("C0"), QString(), components, allBodies);
+  const QVector<SubjectRow> rows = subjectRows(QStringLiteral("C0"), components, allBodies);
+  const auto labelOf = [&choices](const QString& choice) {
+    for (const auto& [value, label] : choices) {
+      if (value == choice) {
+        return label;
+      }
+    }
+    return QString();
+  };
+  // The items found in the design, each once, and their names: an
+  // occurrence's own ("Pin:2"), a body's.
+  QStringList occurrences;
+  QVector<QPair<QString, QString>> bodies;
+  QStringList names;
+  for (const auto& [body, path] : items) {
+    for (const SubjectRow& row : rows) {
+      if (row.body != body || row.occurrence != path) {
+        continue;
+      }
+      if (body.isEmpty() ? !occurrences.contains(path) : !bodies.contains(qMakePair(body, path))) {
+        if (body.isEmpty()) {
+          occurrences.append(path);
+        } else {
+          bodies.append({body, path});
+        }
+        names.append(row.label);
+      }
+      break;
+    }
+  }
+  SelectionSubject out;
+  if (names.isEmpty()) {
+    return out;
+  }
+  if (names.size() == 1) {
+    out.shows = names.first();
+  } else if (names.size() == 2) {
+    out.shows = Text::tr("%1 and %2").arg(names.at(0), names.at(1));
+  } else {
+    out.shows = Text::tr("%1 and %n More", nullptr, static_cast<int>(names.size()) - 1).arg(names.first());
+  }
+  // One occurrence, one body of the root's own: as the Shows list has them.
+  QString single;
+  if (occurrences.size() == 1 && bodies.isEmpty()) {
+    single = QStringLiteral("occurrence:") + occurrences.first();
+  } else if (occurrences.isEmpty() && bodies.size() == 1 && bodies.first().second.isEmpty()) {
+    single = QStringLiteral("body:") + bodies.first().first;
+  }
+  if (!single.isEmpty() && !labelOf(single).isEmpty()) {
+    out.choice = single;
+    out.label = labelOf(single);
+    out.subject = subjectOf(single);
+    return out;
+  }
+  // The bodies: those selected and those of the occurrences selected, in
+  // the Shows list's order.
+  const auto under = [&occurrences](const QString& path) {
+    return std::any_of(occurrences.cbegin(), occurrences.cend(), [&path](const QString& occurrence) {
+      return path == occurrence || path.startsWith(occurrence + QLatin1Char('/'));
+    });
+  };
+  QVector<QPair<QString, QString>> chosen;
+  for (const SubjectRow& row : rows) {
+    const QPair<QString, QString> body{row.body, row.occurrence};
+    if (!row.body.isEmpty() && (bodies.contains(body) || under(row.occurrence)) && !chosen.contains(body)) {
+      chosen.append(body);
+    }
+  }
+  if (chosen.isEmpty()) {
+    // Occurrences without bodies: nothing to draw.
+    out.shows.clear();
+    return out;
+  }
+  out.subject = chosenSubject(chosen);
+  out.bodies = static_cast<int>(chosen.size());
+  out.choice = QStringLiteral("selection:") + QString::fromUtf8(QJsonDocument(out.subject).toJson(QJsonDocument::Compact));
+  out.label = Text::tr("The Selection (%n body(s))", nullptr, out.bodies);
+  return out;
+}
+
+QString drawingNameFor(const QString& shows, const QStringList& taken) {
+  const QString name = Text::tr("%1 Drawing").arg(shows);
+  if (!taken.contains(name)) {
+    return name;
+  }
+  for (int n = 2;; ++n) {
+    const QString numbered = QStringLiteral("%1 %2").arg(name).arg(n);
+    if (!taken.contains(numbered)) {
+      return numbered;
+    }
+  }
 }
 
 QString optionValue(const DrawingToolDef& tool, const QHash<QString, QString>& options, const QString& id) {

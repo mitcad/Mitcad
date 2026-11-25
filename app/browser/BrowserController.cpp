@@ -1535,15 +1535,46 @@ void BrowserController::deleteFeatureKeyed(const QStringList& uids) {
   }
 }
 
-void BrowserController::deleteNode(const BrowserNode& node) {
-  const QVector<BrowserNode> selected = m_browser->selectedNodes();
-  const bool inSelection = std::any_of(selected.begin(), selected.end(), [&node](const BrowserNode& other) {
+namespace {
+
+// Whether `node` is one of the selected rows (the same row, not another row
+// of its item).
+bool rowSelected(const QVector<BrowserNode>& selected, const BrowserNode& node) {
+  return std::any_of(selected.begin(), selected.end(), [&node](const BrowserNode& other) {
     return other.type == node.type && other.uid == node.uid && other.occurrence == node.occurrence &&
            other.sketch == node.sketch && other.feature == node.feature && other.selectionSet == node.selectionSet;
   });
+}
+
+} // namespace
+
+void BrowserController::deleteNode(const BrowserNode& node) {
+  const QVector<BrowserNode> selected = m_browser->selectedNodes();
   // Not the selection sets' links selected with an item's own row
   // (mitcad#2219).
-  deleteNodes(inSelection ? BrowserPanel::rowsToDelete(selected, node) : QVector<BrowserNode>{node});
+  deleteNodes(rowSelected(selected, node) ? BrowserPanel::rowsToDelete(selected, node) : QVector<BrowserNode>{node});
+}
+
+QStringList BrowserController::featuresToSuppress(const QString& uid, const BrowserNode& row) const {
+  QStringList features;
+  if (row.isValid()) {
+    const QVector<BrowserNode> selected = m_browser->selectedNodes();
+    if (rowSelected(selected, row)) {
+      // A feature has a row under each sketch it uses: each feature once.
+      for (const BrowserNode& node : BrowserPanel::rowsToDelete(selected, row)) {
+        if ((node.type == BrowserNode::Type::Feature || node.type == BrowserNode::Type::Joint) &&
+            !features.contains(node.uid)) {
+          features.append(node.uid);
+        }
+      }
+    }
+  } else {
+    features = m_timeline->selectedFeatures();
+  }
+  if (!features.contains(uid)) {
+    features = QStringList{uid};
+  }
+  return features;
 }
 
 void BrowserController::deleteNodes(const QVector<BrowserNode>& allNodes) {
@@ -2358,8 +2389,10 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       // As the eye shows it: a row Isolate leaves out is hidden (mitcad#1700).
       // Hidden with an occurrence above it too (mitcad#1995).
       const bool eyeOn = node.visible && !node.isolatedOut && node.hiddenParents.isEmpty();
+      // Hide/Show (view.toggle_visibility, mitcad#2356): on the rows selected
+      // with it, one undo step; the row alone as its eye.
       menu.add(eyeOn ? QStringLiteral("eye-off") : QStringLiteral("eye"), eyeOn ? tr("Hide") : tr("Show"),
-               [this, node] { toggleVisibility(node); });
+               [this, node] { rowVisibility(node); });
     }
   };
   // Transparent (mitcad#1093) on a body's or a component's row: for the
@@ -3103,15 +3136,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         }
       });
     }
+    // As a feature row's Suppress Features (mitcad#2376): the selected
+    // feature and joint rows when this row is among them, else the joint;
+    // suppressing asks about the features that use them.
     const bool suppressed = feature != nullptr && feature->suppressed;
     menu.add(QStringLiteral("suppress"), suppressed ? tr("Unsuppress") : tr("Suppress"), [this, node, suppressed] {
-      if (canChange() &&
-          m_host.runModelCommand(cmd("suppress_feature", {{QStringLiteral("uid"), node.uid},
-                                                          {QStringLiteral("suppressed"), !suppressed}}))) {
-        qDebug().noquote() << QStringLiteral("%1 %2").arg(suppressed ? QStringLiteral("Unsuppressed")
-                                                                     : QStringLiteral("Suppressed"),
-                                                          node.name);
-      }
+      setFeaturesSuppressed(featuresToSuppress(node.uid, node), !suppressed);
     });
     menu.separator();
     renameEntry();
@@ -3910,16 +3940,11 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
       m_timeline->startRename(uid);
     }
   });
-  // The timeline's selection when the menu's feature is in it, as Delete
-  // and Auto Fix take it (GitHub mitcad/Mitcad#600), else the feature.
+  // The selection when the menu's feature is in it, as Delete takes it
+  // (GitHub mitcad/Mitcad#600): the timeline's, or the browser's feature
+  // rows (mitcad#2376); else the feature. The feature sets the direction.
   menu.add(QStringLiteral("suppress"), suppressed ? tr("Unsuppress Features") : tr("Suppress Features"),
-           [this, uid, row, suppressed] {
-             QStringList features = row.isValid() ? QStringList() : m_timeline->selectedFeatures();
-             if (!features.contains(uid)) {
-               features = QStringList{uid};
-             }
-             setFeaturesSuppressed(features, !suppressed);
-           });
+           [this, uid, row, suppressed] { setFeaturesSuppressed(featuresToSuppress(uid, row), !suppressed); });
   // Suppressed while a condition holds (mitcad#809).
   menu.add(QStringLiteral("suppress"), tr("Suppress When…"), [this, uid] { suppressWhen(uid); });
   menu.add(QStringLiteral("delete"), tr("Delete"), [this, uid, row] {
@@ -4271,34 +4296,15 @@ void BrowserController::hideBodies(const Selection& items) {
   if (bodies.isEmpty()) {
     return;
   }
-  // One body is hidden by hand: its Show When condition goes, as the status
-  // bar says. Several are a bulk change that leaves those with a condition
-  // to it (mitcad#863).
-  const bool one = bodies.size() == 1;
-  const bool removed = one && !m_snapshot.bodies.value(bodies.first()).visibleWhen.isEmpty();
-  QJsonArray commands;
-  QStringList names;
-  QStringList kept;
+  // Hide/Show's light bulbs (mitcad#2356), hidden: one body loses its Show
+  // When condition, several leave those with one to it (mitcad#863).
+  QVector<VisibilityTarget> targets;
   for (const QString& uid : bodies) {
-    const QString name = m_host.model().bodyName(uid);
-    if (!one && !m_snapshot.bodies.value(uid).visibleWhen.isEmpty()) {
-      kept << name;
-      continue;
-    }
-    commands.append(cmd("set_body_visible", {{QStringLiteral("uid"), uid}, {QStringLiteral("visible"), false}}));
-    names << name;
+    targets.append(bodyTarget(uid));
   }
-  if (!kept.isEmpty()) {
-    keptByConditions(tr("Hide Bodies"), QString(), kept);
-  }
-  if (commands.isEmpty()) {
-    return;
-  }
-  if (m_host.runVisibilityCommands(commands, commands.size() == 1 ? QString() : tr("Hide Bodies"))) {
+  QStringList names;
+  if (setTargetsVisible(targets, false, tr("Hide Bodies"), &names)) {
     qDebug().noquote() << QStringLiteral("Hid body %1").arg(names.join(QStringLiteral(", ")));
-    if (removed) {
-      conditionRemoved(names.first());
-    }
   }
 }
 
@@ -4309,34 +4315,206 @@ void BrowserController::hideOccurrences(const Selection& items) {
   }
   // As hideBodies (mitcad#863): one occurrence loses its condition, several
   // leave those with one to it.
-  const bool one = occurrences.size() == 1;
-  const bool removed = one && !occurrenceCondition(occurrences.first()).isEmpty();
+  QVector<VisibilityTarget> targets;
+  for (const QString& path : occurrences) {
+    targets.append(occurrenceTarget(path));
+  }
+  QStringList names;
+  if (setTargetsVisible(targets, false, tr("Hide Components"), &names)) {
+    qDebug().noquote() << QStringLiteral("Hid component %1").arg(names.join(QStringLiteral(", ")));
+  }
+}
+
+BrowserController::VisibilityTarget BrowserController::bodyTarget(const QString& uid) const {
+  const DocumentSnapshot::Body body = m_snapshot.bodies.value(uid);
+  VisibilityTarget target;
+  target.kind = VisibilityTarget::Kind::Body;
+  target.id = uid;
+  target.name = m_host.model().bodyName(uid);
+  target.visible = body.visible;
+  target.condition = body.visibleWhen;
+  target.item.kind = SelectKind::Body;
+  target.item.owner = uid;
+  return target;
+}
+
+BrowserController::VisibilityTarget BrowserController::occurrenceTarget(const QString& path) const {
+  const DocumentSnapshot::Occurrence* found = occurrence(path);
+  VisibilityTarget target;
+  target.kind = VisibilityTarget::Kind::Occurrence;
+  target.id = path;
+  target.name = found != nullptr ? found->name : path;
+  target.visible = found == nullptr || found->visible;
+  target.condition = found != nullptr ? found->visibleWhen : QString();
+  target.item.kind = SelectKind::Component;
+  target.item.owner = found != nullptr ? found->component : QString();
+  target.item.occurrence = path;
+  return target;
+}
+
+BrowserController::VisibilityTarget BrowserController::featureTarget(const QString& uid) const {
+  const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+  VisibilityTarget target;
+  target.kind = VisibilityTarget::Kind::Feature;
+  target.id = uid;
+  target.name = feature != nullptr ? feature->name : uid;
+  target.visible = m_snapshot.isShown(uid);
+  target.item.owner = uid;
+  return target;
+}
+
+QVector<BrowserController::VisibilityTarget> BrowserController::visibilityTargets(const Selection& items) const {
+  QVector<VisibilityTarget> targets;
+  QSet<QString> seen;
+  const auto add = [&targets, &seen](VisibilityTarget target) {
+    const QString key = QStringLiteral("%1|%2").arg(static_cast<int>(target.kind)).arg(target.id);
+    if (!target.id.isEmpty() && !seen.contains(key)) {
+      seen.insert(key);
+      targets.append(std::move(target));
+    }
+  };
+  for (const SelectionItem& item : items) {
+    const SelectKind kind = item.kind;
+    if (kind == SelectKind::Face || kind == SelectKind::Edge || kind == SelectKind::Vertex ||
+        kind == SelectKind::Body) {
+      // The body, in the occurrence picked (its row there); its light bulb
+      // is the body's in every occurrence.
+      if (m_snapshot.bodies.contains(item.owner)) {
+        VisibilityTarget target = bodyTarget(item.owner);
+        target.item.occurrence = item.occurrence;
+        add(std::move(target));
+      }
+    } else if (kind == SelectKind::Component) {
+      // An occurrence; the root (no path) is everything and has no light bulb.
+      if (!item.occurrence.isEmpty() && occurrence(item.occurrence) != nullptr) {
+        add(occurrenceTarget(item.occurrence));
+      }
+    } else if (kind == SelectKind::Sketch || kind == SelectKind::Profile || kind == SelectKind::SketchCurve ||
+               kind == SelectKind::SketchPoint) {
+      const DocumentSnapshot::Feature* feature = m_snapshot.feature(item.owner);
+      if (feature != nullptr && feature->isAnySketch()) {
+        VisibilityTarget target = featureTarget(item.owner);
+        target.item.kind = SelectKind::Sketch;
+        target.item.occurrence = item.occurrence;
+        add(std::move(target));
+      }
+    } else if (kConstructionGeometry.testFlag(kind)) {
+      // A construction plane, axis or point; the origin's (xy, x, origin)
+      // are no features and follow the Origin folder's light bulb.
+      const DocumentSnapshot::Feature* feature = m_snapshot.feature(item.owner);
+      if (feature != nullptr && feature->isConstruction()) {
+        VisibilityTarget target = featureTarget(item.owner);
+        target.item.kind = kind;
+        target.item.occurrence = item.occurrence;
+        add(std::move(target));
+      }
+    }
+  }
+  return targets;
+}
+
+bool BrowserController::setTargetsVisible(const QVector<VisibilityTarget>& targets, bool show, const QString& label,
+                                          QStringList* changed) {
+  const bool one = targets.size() == 1;
   QJsonArray commands;
   QStringList names;
   QStringList kept;
-  for (const QString& path : occurrences) {
-    const DocumentSnapshot::Occurrence* found = occurrence(path);
-    const QString name = found != nullptr ? found->name : path;
-    if (!one && found != nullptr && !found->visibleWhen.isEmpty()) {
-      kept << name;
+  for (const VisibilityTarget& target : targets) {
+    if (!one && !target.condition.isEmpty()) {
+      kept << target.name;
       continue;
     }
-    commands.append(
-        cmd("set_occurrence_visible", {{QStringLiteral("occurrence"), path}, {QStringLiteral("visible"), false}}));
-    names << name;
+    if (!one && target.visible == show) {
+      continue; // already so
+    }
+    switch (target.kind) {
+    case VisibilityTarget::Kind::Body:
+      commands.append(cmd("set_body_visible", {{QStringLiteral("uid"), target.id}, {QStringLiteral("visible"), show}}));
+      break;
+    case VisibilityTarget::Kind::Occurrence:
+      commands.append(cmd("set_occurrence_visible",
+                          {{QStringLiteral("occurrence"), target.id}, {QStringLiteral("visible"), show}}));
+      break;
+    case VisibilityTarget::Kind::Feature:
+      commands.append(
+          cmd("set_feature_visible", {{QStringLiteral("uid"), target.id}, {QStringLiteral("visible"), show}}));
+      break;
+    }
+    names << target.name;
   }
   if (!kept.isEmpty()) {
-    keptByConditions(tr("Hide Components"), QString(), kept);
+    keptByConditions(label, QString(), kept);
   }
   if (commands.isEmpty()) {
-    return;
+    return false;
   }
-  if (m_host.runVisibilityCommands(commands, commands.size() == 1 ? QString() : tr("Hide Components"))) {
-    qDebug().noquote() << QStringLiteral("Hid component %1").arg(names.join(QStringLiteral(", ")));
-    if (removed) {
-      conditionRemoved(names.first());
+  if (!m_host.runVisibilityCommands(commands, commands.size() == 1 ? QString() : label)) {
+    return false;
+  }
+  if (one && !targets.first().condition.isEmpty()) {
+    conditionRemoved(targets.first().name);
+  }
+  if (changed != nullptr) {
+    *changed = names;
+  }
+  return true;
+}
+
+bool BrowserController::toggleItemsVisibility(const Selection& items) {
+  const QVector<VisibilityTarget> targets = visibilityTargets(items);
+  if (targets.isEmpty()) {
+    return false;
+  }
+  if (targets.size() == 1) {
+    // As its row's eye: Isolate, the hidden occurrences above it, Show When.
+    const BrowserNode row = m_browser->nodeOfItem(targets.first().item);
+    if (row.isValid() && row.hasEye) {
+      toggleVisibility(row);
+      return true;
     }
   }
+  // A mixed selection follows the first item.
+  const bool show = !targets.first().visible;
+  const auto all = [&targets](VisibilityTarget::Kind kind) {
+    return std::all_of(targets.begin(), targets.end(),
+                       [kind](const VisibilityTarget& target) { return target.kind == kind; });
+  };
+  QString label;
+  if (all(VisibilityTarget::Kind::Body)) {
+    label = show ? tr("Show Bodies") : tr("Hide Bodies");
+  } else if (all(VisibilityTarget::Kind::Occurrence)) {
+    label = show ? tr("Show Components") : tr("Hide Components");
+  } else {
+    label = show ? tr("Show Selection") : tr("Hide Selection");
+  }
+  QStringList names;
+  if (setTargetsVisible(targets, show, label, &names)) {
+    qDebug().noquote() << QStringLiteral("Hide/Show %1: %2")
+                              .arg(show ? QStringLiteral("shown") : QStringLiteral("hidden"),
+                                   names.join(QStringLiteral(", ")));
+  }
+  return true;
+}
+
+void BrowserController::rowVisibility(const BrowserNode& node) {
+  // One of several rows selected: Hide/Show on the items of all of them,
+  // this row's first (mitcad#2356); else this row's eye, as before.
+  const QVector<BrowserNode> selected = m_browser->selectedNodes();
+  const SelectionItem own = node.item();
+  if (own.isValid() && selected.size() > 1 && rowSelected(selected, node) && !visibilityTargets({own}).isEmpty()) {
+    Selection items{own};
+    for (const BrowserNode& row : selected) {
+      const SelectionItem item = row.item();
+      if (item.isValid()) {
+        items << item;
+      }
+    }
+    if (visibilityTargets(items).size() > 1) {
+      toggleItemsVisibility(items);
+      return;
+    }
+  }
+  toggleVisibility(node);
 }
 
 bool BrowserController::offersTransparent(const Selection& items) {

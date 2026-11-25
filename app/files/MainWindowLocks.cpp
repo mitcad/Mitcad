@@ -57,6 +57,9 @@ void MainWindow::createLocks() {
   host.whenIdle = [this](std::function<void()> call) { whenIdle(m_locks, std::move(call)); };
   host.busy = [this] { return modelBusy(); };
   host.liveDetails = [this](const QString& root) { return m_live != nullptr ? m_live->details(root) : QString(); };
+  // Requests for a lock that Edit in Place holds (mitcad#2397).
+  host.inPlaceModified = [this](const QString& path) { return inPlaceModifiedFor(path); };
+  host.endInPlace = [this](const QString& path, InPlaceEnd how) { return endInPlaceFor(path, how); };
   m_locks = new LockController(*this, *m_remote, *m_indicator, std::move(host), this);
   // A view change is activity (an idle lock is released), a frame drawn
   // for a highlight under the mouse is not: the camera that came to rest.

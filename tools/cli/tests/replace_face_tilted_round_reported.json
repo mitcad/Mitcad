@@ -1,0 +1,25 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Replace Face of a cylinder's round top onto a slanted planar face (mitcad#2382, GitHub mitcad/Mitcad#643), on the reported design (opened with --open, never committed; tools/cli/replace-face-tilted-round-reported-test.cmake): a shelled 105.07 x 86.09 x 21 box (Body1, F2.b0, floor at z = 2) with cylinders standing on its floor, among them Extrude2's (F5, r{c9}: R 7.0438 at x = -33.524, y = 25.286, its top at z = 40.2) and Extrude6's (F10, r{c17}: R 7.5570 at x = -29.017, y = -16.941, top at z = 25), and a planar surface strip (Body5, F12.b0, face F12:side(c9)) extruded from a line of Sketch3 on the box's side x = 52.535, rising 14 in 51 along y (15.35 degrees): z = 33.7213 + 14/51 (y + 55.9585), above both tops everywhere. Before the fix the top moved past the plane only at its circle's one vertex, still crossed the plane where it rises across the circle (by 0.93 mm), and the cut left no piece without the moved top: 'the target removes the whole body'. Now each top reaches the plane: the cylinder keeps its section up to it, its new top the ellipse pi R^2 sqrt(1 + (14/51)^2)."},
+  {"cmd": "add_feature", "def": {"type": "replace_face", "body": "F2.b0", "faces": ["F5:end(r{c9})"],
+    "target": {"body": "F12.b0", "face": "F12:side(c9)"}, "tangent_chain": true}},
+  {"expect": {"feature": "ReplaceFace2", "status": "ok"}},
+  {"comment": "The design recomputes to four bodies (Body1, Body2, Body4, Body5: Extrude3 is a surface extrusion of one arc, one body); the file also lists a stored name Body3 (F6.b1) that no feature makes (mitcad#2381). The replacement adds and removes none."},
+  {"expect": {"bodies": 4}},
+  {"expect": {"body": "F2.b0", "has_face": "F13:replace(F5:end(r{c9}))", "no_face": "F5:end(r{c9})"}},
+  {"comment": "The new top: the plane at the axis is at z = 56.024, from 54.090 to 57.957 across the circle; the highest point of the body."},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0"},
+    "some": {"surface": "plane", "area": 161.63647319932844},
+    "tolerance": 1e-6}},
+  {"expect": {"body": "F2.b0", "max": [52.534837841982956, 43.043249492380994, 57.95733379669275], "tolerance": 1e-4}},
+
+  {"comment": "The shorter cylinder's top onto the same face: the plane at its axis is at z = 44.432, from 42.357 to 46.506 across the circle."},
+  {"cmd": "add_feature", "def": {"type": "replace_face", "body": "F2.b0", "faces": ["F10:end(r{c17})"],
+    "target": {"body": "F12.b0", "face": "F12:side(c9)"}, "tangent_chain": true}},
+  {"expect": {"feature": "ReplaceFace3", "status": "ok"}},
+  {"expect": {"bodies": 4}},
+  {"expect": {"body": "F2.b0", "has_face": "F14:replace(F10:end(r{c17}))", "no_face": "F10:end(r{c17})"}},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0"},
+    "some": {"surface": "plane", "area": 186.04984281786926},
+    "tolerance": 1e-6}},
+  {"expect": {"body": "F2.b0", "has_face": "F13:replace(F5:end(r{c9}))"}}
+]

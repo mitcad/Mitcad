@@ -278,6 +278,7 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     sketch::saveEscLeavesUnchangedSketch(false);
     sketch::saveShowProfilesOnOpen(true);
     sketch::resetProjectFaceOnCreate();
+    sketch::saveHideUsedSketches(true);
   }
 
   if (resets("suppliers")) {

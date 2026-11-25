@@ -61,6 +61,11 @@ TriangleMesh triangle_mesh(const geometry::Shape& shape, double deviation, doubl
       out.triangles.push_back(index);
     }
   }
+  // Each triangle's face (mitcad#2385).
+  out.faces.reserve(mesh.faces.size());
+  for (const std::uint32_t face : mesh.faces) {
+    out.faces.push_back(face);
+  }
   return out;
 }
 

@@ -832,8 +832,9 @@ pub struct WeldSymbol {
     /// reference line.
     #[serde(default, skip_serializing_if = "is_false")]
     pub field: bool,
-    /// The two sides' intermittent welds staggered: the other side's
-    /// symbol drawn offset along the line.
+    /// The two sides' intermittent welds staggered: ISO 2553's staggered
+    /// mark drawn between their lengths and gaps (mitcad#2379), by AWS
+    /// A2.4 the other side's symbol offset along the line.
     #[serde(default, skip_serializing_if = "is_false")]
     pub staggered: bool,
     /// The tail's text: a process number (ISO 4063), a specification or a

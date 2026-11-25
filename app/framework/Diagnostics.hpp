@@ -61,7 +61,13 @@ namespace mitcad {
 //   application asks the platform for that colour scheme, as when the
 //   desktop's setting changes while Mitcad runs (QStyleHints::
 //   setColorScheme; Qt's GTK platform theme follows it, the generic one
-//   does not; tools/ui-theme-test.sh).
+//   does not; tools/ui-theme-test.sh). On Linux, where the platform keeps
+//   its palette (the generic theme, or the GTK one under Xvfb with the
+//   caller's desktop session, mitcad#2404), MitCad's own palette of that
+//   scheme after a moment, as for Preferences' Theme
+//   (applyTestColorScheme, AppTheme.hpp); logged as "Colour scheme in
+//   effect: dark (...)". The test driver's color-scheme step asks the
+//   platform only.
 // - MITCAD_TEST_WINDOWS10=1: Windows 10's dark app mode path (Qt's own
 //   style with a dark palette while the app mode is dark, mitcad#1282) on
 //   Windows 11 too, the build VM's (platform/WindowsTheme.hpp;

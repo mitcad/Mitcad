@@ -2,7 +2,9 @@
 # check-all sources: app/browser app/MainWindow.cpp app/framework/TestDriver.cpp core/model/src/document.rs core/model-api/src/lib.rs tools/cli
 # Suppress Features asks about the features that use it (mitcad#2314):
 # Cancel, Suppress Only This, Suppress All with one Undo, and Unsuppress
-# without a question (tools/ui-scripts/suppress-dependents.mitcad-ui).
+# without a question; the selection rule of Suppress Features and
+# Unsuppress Features in the timeline and on the browser's feature rows
+# (mitcad#2376) (tools/ui-scripts/suppress-dependents.mitcad-ui).
 param(
   [string]$App,
   [string]$Cli,
@@ -20,13 +22,16 @@ $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/suppress-dependents
 $env:MITCAD_TEST_STEP_MS = '100'
 Ui-StartApp 'suppress-dependents' @('--ui=qt', '--no-mcp', '--open', $design)
 $null = $script:UiProcess.Handle
-if (-not $script:UiProcess.WaitForExit(240000)) { Ui-Fail 'suppress dependents driver timed out' }
+if (-not $script:UiProcess.WaitForExit(420000)) { Ui-Fail 'suppress dependents driver timed out' }
 $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "suppress dependents driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'TestDriver: done' 'Cancel, Suppress Only This, Suppress All, Undo and Unsuppress'
+Ui-ExpectLog 'TestDriver: done' 'Cancel, Suppress Only This, Suppress All, Undo, Unsuppress and the selection rule'
 $questions = @(Select-String -Path $script:UiLog -Pattern '^Suppress Block: also Hole, Round\?$').Count
 if ($questions -ne 4) { Ui-Fail "expected one question per Suppress, found $questions" }
+# One Unsuppress of a selection of three, in the timeline and in the browser.
+$unsuppressed = @(Select-String -Path $script:UiLog -Pattern '^Unsuppressed Block, Hole, Round$').Count
+if ($unsuppressed -ne 2) { Ui-Fail "expected two Unsuppress of the selection, found $unsuppressed" }
 Ui-StopApp
 Write-Host 'PASS: Suppress with dependents'

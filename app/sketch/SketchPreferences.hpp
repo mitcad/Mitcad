@@ -62,4 +62,16 @@ void saveProjectFaceOnCreate(bool on);
 // No saved value (Restore Defaults): the default above applies again.
 void resetProjectFaceOnCreate();
 
+// "Hide a sketch when a feature uses it" (mitcad#2393, GitHub
+// mitcad/Mitcad#652, settings "sketch/hideUsedSketches"), on by default
+// (the model's rule of mitcad#7). Off: a shown planar sketch that a feature
+// starts to use keeps its light bulb on, set by the model in that feature's
+// undo step; sketches already hidden stay hidden. The model reads it for
+// the whole process (set_hide_used_sketches in the bridge), which
+// applyHideUsedSketches tells it: at start, and whenever the setting is
+// saved, reset or imported.
+bool hideUsedSketches();
+void saveHideUsedSketches(bool on);
+void applyHideUsedSketches();
+
 } // namespace mitcad::sketch

@@ -1,8 +1,8 @@
 # In-app tutorials
 
 A MitCad tutorial is a set of web pages shown beside the design. Its steps
-point at what to use next. The tutorial pane outlines a button, an input
-or a Browser row, and a callout says what to do. MitCad holds back other
+point at what to use next. The tutorial pane outlines a button, an input,
+a Browser row or a place of the toolbar, and a callout says what to do. MitCad holds back other
 input until the user does the step. Tutorials are packages in git
 repositories, as [component libraries](libraries.md) are. Users choose
 them on the Start page: its Tutorials button (under User Guide) and Help ›
@@ -103,17 +103,24 @@ The tutorial's own pages get `window.mitcad`. Its calls return promises.
 | Call | What it does |
 |---|---|
 | `mitcad.startStep(step)` | Shows a guide step ([Guide steps](#guide-steps)), replacing one shown. Resolves to the guide's state; rejects with the reason when the step is not valid or names a command MitCad does not have. |
-| `mitcad.endStep()` | Ends the step shown. |
-| `mitcad.state()` | `{"guide", "mode", "command", "picked", "design", "modified", "version", "progress"}`: the guide's state, the window's mode (`idle`, `sketch`, `command`, `pick_plane`), the open command's id, the kinds picked, the design's name, whether it has unsaved changes, MitCad's version, and the tutorial's progress ([Progress](#progress)). |
+| `mitcad.endStep()` | Ends the step shown, or releases the hold after a step done with `hold`. |
+| `mitcad.releaseHold()` | Releases the hold after a step done with `hold` ([After a step with hold](#after-a-step-with-hold)); nothing happens when none holds. Resolves to the guide's state. |
+| `mitcad.state()` | `{"guide", "mode", "command", "picked", "design", "modified", "version", "progress", "place"}`: the guide's state, the window's mode (`idle`, `sketch`, `command`, `pick_plane`), the open command's id, the kinds picked, the design's name, whether it has unsaved changes, MitCad's version, the tutorial's progress ([Progress](#progress)) and where the pane is (`left`, `right`, `centre`; [Placement](#placement)). |
+| `mitcad.query(request)` | Reads the design: `{"query": "sketch"}`, `{"query": "feature", "name": "Extrude1"}` or `{"query": "bodies"}` ([Reading the design](#reading-the-design)). Resolves to the answer; rejects with the reason in words. |
 | `mitcad.setProgress(progress)` | Records where the user is: `{"step": 3, "steps": 8}` (`steps` may be left out) or `{"done": true}` ([Progress](#progress)). Resolves to the progress recorded. |
+| `mitcad.place(side)` | Moves the pane: `"left"`, `"right"` or `"centre"` (`"center"` too) ([Placement](#placement)). Resolves to `{"place": <side>}` as the move starts; rejects any other side. |
 | `mitcad.openDesign(path)` | Opens a starting design of the tutorial (a `.mitcad` path in its folder) as a copy of its own in the local data folder's `tutorial-designs/<id>`. The user's unsaved changes are asked about first, as File › Open asks. |
 | `mitcad.leave()` | Leaves the tutorial, as Leave Tutorial does. |
+| `mitcad.demonstrate(demonstration)` | Plays the page's input demonstration over the step's target ([Demonstrations](#demonstrations)), replacing one playing. Resolves to the guide's state; rejects with the reason when no step is shown or the demonstration is not valid. |
+| `mitcad.stopDemonstration()` | Stops the demonstration playing. Resolves to `{"stopped": true}`, or `false` when none played. |
+| `mitcad.shortcut(command)` | A command's keys as the user has them now ([The user's keys and gestures](#the-users-keys-and-gestures)). Rejects when MitCad has no such command. |
+| `mitcad.navigation()` | The view's orbit, pan and zoom gestures of the user's navigation scheme ([The user's keys and gestures](#the-users-keys-and-gestures)). |
 | `mitcad.on(event, listener)`, `mitcad.off(event, listener)` | Listens to the guide's events ([Events](#events)); `"*"` listens to all. |
-| `mitcad.call(name, args)` | The calls above by name (`start_step`, `end_step`, `state`, `set_progress`, `open_design`, `leave`). |
+| `mitcad.call(name, args)` | The calls above by name (`start_step`, `end_step`, `release_hold`, `state`, `query`, `set_progress`, `place` with `{"side": <side>}`, `open_design`, `leave`, `demonstrate`, `stop_demonstration`, `shortcut` with `{"command": <id>}`, `navigation`). |
 
 The bridge gives no file access and makes no model edits. The user makes
 every change in MitCad. A page cannot run a command; it shows a step, and
-the user takes it.
+the user takes it. It reads only the design of the tutorial's window.
 
 ```html
 <script>
@@ -129,6 +136,71 @@ mitcad.on("step_left", event => console.log("mitcad:tutorial:left " + event.reas
 mitcad.openDesign("designs/start.mitcad").then(() => mitcad.startStep(steps[0]));
 </script>
 ```
+
+## Reading the design
+
+A step's `done` says that the user did something: opened a command,
+typed a value, finished a sketch. To check what the user made, a page
+reads the design with `mitcad.query`: the sketch before the user
+finishes it, the feature after the user commits it, the bodies. It reads
+the design of the tutorial's window only, and only these three queries:
+
+| Request | Answer |
+|---|---|
+| `{"query": "sketch"}`, `{"query": "sketch", "name": "Sketch1"}` | The open sketch, or the one named (its name in the Browser): `uid`, `name`, `open` (whether it is the open one), `plane` (`"xy"`, `"xz"`, `"yz"`, a construction plane's uid, or `{"face", "body"}` for a sketch on a face), `origin` and `normal` (where its plane is in the design, in mm; `normal` `[0, 0, 1]` for a sketch facing up), `solved`, `error`, `dof` (the degrees of freedom left), `fully_constrained` (true when it solved with none left), `dimensions` (each one's `id`, `type`: `length`, `distance`, `diameter`, `angle`, …, `value` in mm or radians, `driven`, `parameter`: its name such as `d1`), `curves` (the curves that make profiles, counted by type: `{"line": 4}`), `construction_curves` (how many), `profiles` (each closed region's `area` in mm², `centroid` and `perimeter` in mm). |
+| `{"query": "feature", "name": "Extrude1"}`, `{"query": "feature", "type": "extrude"}`, `{"query": "feature"}` | The feature named (in the timeline), or the last one before the timeline marker, of the `type` when given (`extrude`, `revolve`, `hole`, `fillet`, `sketch`, …): `uid`, `name`, `type`, `suppressed`, `status` (`ok`, `warning`, `error`, `suppressed`, `rolled_back`), `error`, `rolled_back` (after the marker), `operation` (`new_body`, `join`, `cut`, `intersect`, …) and `extent` (an extrude's `{"type": "distance", "distance": 10}`, `{"type": "through_all"}`, …) where the feature has them, and `def`: its whole definition ([commands.md](../core/model-api/src/commands.md#feature-definitions)) with the values in mm and radians. |
+| `{"query": "bodies"}` | The bodies at the timeline marker: `count`, `solids` (how many of them are solids), and `bodies`, each one's `uid`, `name`, `kind` (`solid`, `sheet`, `mesh` or `empty`), `solid`, `volume` (mm³), `visible`, and `component` for a component's body. |
+
+A request may say which design it means, `"design": "<name>"`; it must
+be the window's (the `design` that `mitcad.state()` gives). A command, a
+query other than these, a field a query does not take, another design, a
+sketch or feature the design does not have, and `{"query": "sketch"}`
+with no sketch open are refused: the promise rejects with the reason in
+words. A query while the design computes is refused too; ask again after
+a moment or at the next event.
+
+An example: a 30 × 30 mm square that is fully constrained, checked while
+the sketch is still open; then a cut through the block, told apart from
+a blind pocket and from a new body.
+
+```js
+const near = (a, b) => Math.abs(a - b) < 1e-6;
+
+async function checkSquare() {
+  const sketch = await mitcad.query({query: "sketch"});
+  const lengths = sketch.dimensions.filter(d => !d.driven && near(d.value, 30));
+  if (sketch.curves.line !== 4 || lengths.length < 2) {
+    return "Draw a square and give two sides 30 mm.";
+  }
+  if (!sketch.fully_constrained) {
+    return "The square can still move (" + sketch.dof + " degrees of freedom): fix a corner at the origin.";
+  }
+  return null;  // ready: show the step that finishes the sketch
+}
+
+async function checkCut() {
+  const cut = await mitcad.query({query: "feature", type: "extrude"});
+  const bodies = await mitcad.query({query: "bodies"});
+  if (cut.operation !== "cut" || bodies.count !== 1) {
+    return "That made a new body. Undo, and choose Cut as the operation.";
+  }
+  if (cut.extent.type !== "through_all") {
+    return "That is a blind pocket. Edit the extrude and choose Through All.";
+  }
+  return null;
+}
+
+mitcad.on("step_done", async event => {
+  if (event.step === "square") {
+    const problem = await checkSquare();
+    // … show the problem, or the next step
+  }
+});
+```
+
+`mitcad.query` came after the Start page's tutorials; `mitcad.call("query",
+…)` does the same with a web browser component installed before it, and a
+MitCad without it rejects the call.
 
 ## Progress
 
@@ -166,6 +238,44 @@ mitcad.setProgress({done: true});
 `mitcad.call("set_progress", …)` does the same, and a MitCad without it
 rejects the call, so a page that catches the rejection works with both.
 
+## Placement
+
+The pane opens at the left. A page moves it where its step needs it with
+`mitcad.place(side)`:
+
+| Side | Floating layout | Docked layout |
+|---|---|---|
+| `"centre"` | A large card centered over the view, most of the room between the toolbar and the timeline, over the other cards. | A floating pane centered over the window, most of it. |
+| `"left"` | The left column, under the Browser. | A dock at the left, beside the Browser. |
+| `"right"` | The right column, from the toolbar to the timeline; the Browser at the left stays in sight and takes clicks. | A dock at the right. |
+
+Centre suits an introduction, an illustration or a step's review; left a
+sketch or a modeling step worked in the view; right a step in the
+Browser. While the pane is centered, clicks in the view are held back as a
+step holds them (the view's navigation stays free). A step started there
+holds what it holds anyway.
+
+The pane moves to its new place in about 250 ms, or at once when the
+system's reduced-motion setting is on (Windows: Animation effects off;
+macOS: Reduce motion; Linux: KDE's animation speed at Instant, else
+GNOME's animations off). The page is not loaded again: its scripts, its
+audio and its video go on across the move. Leave Tutorial is in the
+pane's header in every place. Leaving the tutorial puts the pane back at
+the left, hidden, and the window as it was; the next tutorial opens there.
+
+```js
+mitcad.place("centre");                       // the introduction
+start.onclick = () => mitcad.place("left").then(() => mitcad.startStep(sketchStep));
+mitcad.on("step_done", () => mitcad.place("centre"));   // the review
+```
+
+`mitcad.place` came with the pane's placement; with an older web browser
+component `mitcad.call("place", {side: "left"})` does the same, and an
+older MitCad rejects the call, so a page that catches the rejection works
+with every version. MitCad's UI test `app.ui-*-tutorials-placement`
+(`tools/ui-tutorials-test.py placement`) moves a pane through these
+places in both layouts, with and without reduced motion.
+
 ## Guide steps
 
 A step names its target as the UI names it, never by pixels. MitCad
@@ -186,14 +296,51 @@ finds the target and outlines it, and places the callout beside it.
 |---|---|
 | `id` | The step's name, echoed in its events. Default `step`. |
 | `text` | The callout's text, at most 400 characters. Required. |
-| `target` | One of: `{"command": <id>}` (its button where one is shown; the ids are in [app/COMMANDS.md](../app/COMMANDS.md)), `{"input": <key>}` (an input of the open command's panel, by the key ui_state lists), `{"browser": <name>}` (a Browser row by its name), `{"view": true}` or `{"view": <kind or kinds>}` (the 3D view, picks of those kinds). |
-| `done` | What completes the step, one of: `{"command": <id>}` (the command finished with OK, or an action ran), `{"started": <id>}` (its panel opened), `{"input": <key>, "value": <text>}` (the value typed into the open panel's input, and left for a moment; a length's "mm" may be left out), `{"pick": true}` or `{"pick": <kind or kinds>}` (a new pick of those kinds), `{"mode": <mode>}` (the window is in that mode: `idle`, `pick_plane`, `sketch`, `command`; a sketch opened is `sketch`, a sketch finished `idle`). |
+| `target` | One of: `{"command": <id>}` (its button where one is shown; the ids are in [app/COMMANDS.md](../app/COMMANDS.md)), `{"input": <key>}` (an input of the open command's panel, by the key ui_state lists), `{"browser": <name>}` (a Browser row by its name), `{"view": true}` or `{"view": <kind or kinds>}` (the 3D view, picks of those kinds), `{"workspace_selector": true}` (the toolbar's workspace selector), `{"workspace": <name>}` (a workspace by its name: its entry in the selector's list while the list is open, else the selector), `{"tab": <name>}` (a toolbar tab by its name; another workspace's tab: the selector), `{"timeline": true}` (the timeline, a place to point at). |
+| `done` | What completes the step, one of: `{"command": <id>}` (the command finished with OK, or an action ran), `{"started": <id>}` (its panel opened), `{"input": <key>, "value": <text>}` (the value typed into the open panel's input, and left for a moment; a length's "mm" may be left out), `{"pick": true}` or `{"pick": <kind or kinds>}` (a new pick of those kinds), `{"mode": <mode>}` (the window is in that mode: `idle`, `pick_plane`, `sketch`, `command`; a sketch opened is `sketch`, a sketch finished `idle`), `{"navigate": <action>}` (the user orbited, panned or zoomed the view: `orbit`, `pan`, `zoom`; see [Navigation steps](#navigation-steps)), `{"opened": "workspace_selector"}` (the selector's list opened), `{"chosen": <workspace>}` (the workspace shown, with the selector's list closed: at once when it is shown already as the step starts, else once the user chose it), `{"activated": <tab>}` (the tab shown: at once when it is shown already). Optional: a step without `done` stays until the page ends it (`mitcad.endStep()`, a page's Continue), Escape or Leave Tutorial. |
 | `allow` | More command ids the step allows. |
-| `navigation` | View navigation: the wheel, the middle and right buttons and the camera commands (`view.home`, `view.fit`, the standard views, the projection). Default `true`. |
+| `navigation` | View navigation: the wheel, the mouse buttons and keys the navigation scheme binds, the orientation cube, and the camera commands (`view.home`, `view.fit`, the standard views, the projection, the arrow keys' turns `view.turn_left`, `view.turn_right`, `view.turn_up`, `view.turn_down`). Default `true`; a `navigate` step needs it. |
+| `hold` | `true`: once the step is done, the input stays held while the page shows what comes next ([After a step with hold](#after-a-step-with-hold)). Default `false`. |
 
 The kinds of picks are `face`, `edge`, `vertex`, `body`, `profile`,
 `sketch_curve`, `sketch_point`, `plane`, `axis`, `point`, `component`,
 `sketch`, `feature`.
+
+### The toolbar's places
+
+A step can introduce the toolbar to a beginner (mitcad#2370): the
+workspace selector, a workspace of its list, a tab and the timeline.
+MitCad finds each in the layout shown (Floating, Docked, and the Docked
+toolbar of macOS) and outlines it; a workspace's entry is outlined in the
+selector's list itself, which lies over the window. The workspaces are
+`Design`, `Make`, `Render` and `Drawing`; the tabs `Start`, `Solid`,
+`Surface`, `Sheet Metal`, `Build`, `3D Print`, `Laser`, `CNC`, `Manage`
+and the modes' `Sketch`, `Drawing`, `Cut Sheet` and `Render`. A name is
+written as the toolbar shows it in English or in MitCad's language, or as
+the toolbar's key (`DESIGN`, `SHEET METAL`, `MAKE_PRINT`); case does not
+matter. A name MitCad does not have is refused with the list. The step's
+state and its events carry the toolbar's key (`{"chosen": "DESIGN"}`). A
+layout without a workspace selector (the title bar's tabs of the macOS
+Floating layout) refuses a selector or workspace step with the reason.
+
+```js
+const steps = [
+  {id: "selector", text: "This is the workspace selector. Click it.",
+   target: {workspace_selector: true}, done: {opened: "workspace_selector"}},
+  {id: "design", text: "Choose Design, the workspace for modeling.",
+   target: {workspace: "Design"}, done: {chosen: "Design"}},
+  {id: "surface", text: "Open the Surface tab.",
+   target: {tab: "Surface"}, done: {activated: "Surface"}},
+  {id: "timeline", text: "The timeline lists your features in order. Click Continue.",
+   target: {timeline: true}}   // no done: the page's Continue calls mitcad.endStep()
+];
+```
+
+The selector and the tab row are free during every step: opening the list,
+choosing a workspace and clicking a tab are no commands, so a step never
+refuses them. Escape in the selector's list (or in a menu) closes the list
+and leaves the step shown. A timeline step only points at the timeline:
+its clicks stay held back, as in every step.
 
 While a step is shown:
 
@@ -205,12 +352,84 @@ While a step is shown:
 - Clicks in the Browser, the timeline, the Projects and Configuration
   panels are held back, and so are picks in the view, unless the step
   takes picks, a command's panel is open, a plane is being picked or a
-  sketch is open. The callout says so briefly.
+  sketch is open. A left press that navigates (Alt + left where the
+  navigation scheme orbits so, the orientation cube's drag) is navigation,
+  free while the step allows it. The callout says so briefly, and the page
+  hears it (`held`, [Events](#events)).
   The toolbars, the menus, the open panel, dialogs and the tutorial pane
-  stay free.
+  stay free, in each of the pane's places.
 - Escape with no command open ends the step (`step_left`, reason
-  `escape`). The callout's Leave Tutorial, the pane's and Help › Leave
+  `escape`); Escape in a popup (a menu, the workspace selector's list)
+  closes the popup. The callout's Leave Tutorial, the pane's and Help › Leave
   Tutorial end it and close the tutorial (reason `leave`).
+
+### After a step with hold
+
+A step is done and the input is free again at once: a click in the view
+with a drawing tool still open starts another shape while the page plays
+its explanation. A step with `"hold": true` keeps the input held after it
+is done:
+
+- `step_done` comes at once, once, as for any step.
+- The callout and the outline go. No command runs but Leave Tutorial and,
+  while the step allows navigation, the camera's: a key, a button, a menu
+  or the command search alike (the log has `Guide: command <id> refused
+  during the hold after step <id>`, the page a `refused` event). Picks in
+  the view are held back, a drawing tool's points too, and so are clicks
+  in the Browser, the timeline, the Projects and Configuration panels.
+- The tutorial pane, Leave Tutorial, view navigation, the toolbars, the
+  menus, an open command's panel and dialogs stay free; Escape is the
+  window's own (it ends a drawing tool, it does not release the hold).
+- The hold ends when the page starts the next step (`mitcad.startStep`,
+  whose own commands and picks then run), calls `mitcad.releaseHold()` or
+  `mitcad.endStep()`, or when the tutorial is left or closed. Always:
+  Leave Tutorial frees all input.
+
+`mitcad.state().guide.holding` says whether a hold is on.
+
+```js
+const steps = [
+  {id: "tool", text: "Pick the 2-Point Rectangle tool.", target: {command: "sketch.rectangle"},
+   done: {command: "sketch.rectangle"}, hold: true},
+  {id: "draw", text: "Draw a rectangle, then click Finish Sketch.", target: {command: "sketch.finish"},
+   done: {mode: "idle"}}
+];
+mitcad.on("step_done", event => {
+  if (event.step === "tool") {
+    explain().then(() => mitcad.startStep(steps[1]));   // the page's own
+  }
+});
+```
+
+A MitCad without `hold` refuses a step with it ("A step has no field
+\"hold\""), and one without `releaseHold` has no such function on
+`window.mitcad`: a page that catches the refusal shows the step again
+without it and works with both.
+
+### Navigation steps
+
+A step with `"done": {"navigate": "orbit"}` (or `"pan"`, `"zoom"`) is done
+when the user moves the view with that action, as the navigation scheme
+chosen in Settings binds it, so the same tutorial works whichever scheme
+the learner uses:
+
+```json
+{"id": "orbit", "text": "Orbit the view: drag with the orbit gesture of your navigation scheme.",
+ "target": {"view": true}, "done": {"navigate": "orbit"}}
+```
+
+- What counts: a mouse drag bound to the action, the wheel and a pinch
+  (zoom), a trackpad scroll bound to it (pan, orbit or zoom), the
+  orientation cube's drag (orbit), and the arrow keys, whose turns are
+  orbits.
+- It is done once, when the camera has moved: a press of the gesture
+  without a move leaves the step open, and so does another action (a
+  zoom during an orbit step; the log has
+  `Guide: step <id> view zoomed, not its orbit` once a step). The camera
+  commands (Home, Fit, the standard views, a click on the orientation
+  cube's face) and the 3D mouse are none of the three.
+- The event is `step_done` with `done` `{"navigate": "orbit"}`; the log has
+  `Guide: step <id> done: the view orbited` (`panned`, `zoomed`).
 
 ## Events
 
@@ -220,9 +439,120 @@ id) and `sequence` (one per step started).
 
 | Event | Fields |
 |---|---|
-| `step_done` | `done`: `{"command": <id>, "committed": true}`, `{"started": <id>}`, `{"input": <key>, "value": <text typed>}`, `{"pick": <kind>}` or `{"mode": <mode>}`. |
-| `step_left` | `reason`: `escape`, `leave`, `ended` (by the page or MCP), `replaced` (by another step), `closed` (the tutorial closed). |
-| `refused` | `command`: the id of a command the step held back. |
+| `step_done` | `done`: `{"command": <id>, "committed": true}`, `{"started": <id>}`, `{"input": <key>, "value": <text typed>}`, `{"pick": <kind>}`, `{"mode": <mode>}`, `{"navigate": <action>}` (`orbit`, `pan`, `zoom`), `{"opened": "workspace_selector"}`, `{"chosen": <workspace>}` or `{"activated": <tab>}`. |
+| `step_left` | `reason`: `escape`, `leave`, `ended` (by the page or MCP), `replaced` (by another step), `closed` (the tutorial closed). Not sent when a hold after a step done ends. |
+| `refused` | `command`: the id of a command the step, or the hold after it, held back. |
+| `held` | A click or the wheel the step held back: `place` (`view`, `browser`, `timeline`, `projects`, `configuration`), `input` (`click`, `double_click`, `wheel`), `button` (`left`, `middle`, `right`, `other`; not for the wheel) and `modifiers` (the keys held: `shift`, `ctrl`, `alt`, `meta`). A held drag is one `held`, at its press; a held wheel at most one a second. |
+| `demonstration_ended` | `reason`: `played` (its plays ended), `stopped` (by the page), `replaced` (by another demonstration), `step` (the step was done or left; before its `step_done` or `step_left`). |
+
+`refused` and `held` are when a user tried something else: a page may show
+its help at once then, and after a delay of its own while the step is not
+done ([Demonstrations](#demonstrations)).
+
+## Demonstrations
+
+A page can show the user how to do a step over MitCad's own control: a
+mouse that moves to the Browser row and lights its left button, a keycap
+held while the mouse drags. The page makes the pictures and their timing;
+MitCad shows them over the step's target, on a layer that takes no input,
+and follows the target when the window is resized or its panes move.
+MitCad never moves the real pointer, and the user's own input goes
+through the pictures to the control under them: only the user does the
+step. The demonstration ends when its plays end, when the page stops it
+or starts another, and when the step is done or left.
+
+```js
+mitcad.demonstrate({
+  label: "Click Body1 with the left button",
+  repeat: 1,
+  frames: [
+    {image: "images/mouse.svg", offset: [70, 50], ms: 500},
+    {image: "images/mouse.svg", move: true, ms: 700},
+    {image: "images/mouse-left.svg", ms: 500},
+    {image: "images/mouse.svg", ms: 400}
+  ]
+});
+```
+
+| Field | Meaning |
+|---|---|
+| `frames` | Its frames, 1 to 64, shown one after the other. |
+| `repeat` | How many times it plays: 1 by default, `0` until it is stopped or the step ends; at most 100. |
+| `pause` | Milliseconds with nothing shown between two plays; default 0. |
+| `label` | What it shows, in words, at most 200 characters: the layer's accessible name, and MitCad's log. |
+
+A frame:
+
+| Field | Meaning |
+|---|---|
+| `image` | Its picture: an SVG, PNG or JPEG file of the tutorial's folder by its relative path, or a `data:` address (`data:image/svg+xml,…` or base64). At most 2 MB. A page can draw an SVG of its own, such as the user's keys ([The user's keys and gestures](#the-users-keys-and-gestures)). |
+| `size` | `[width, height]` in pixels (MitCad's logical pixels, drawn sharp on HiDPI screens); default the picture's own size (an SVG's `width` and `height`). At most 1024 a side. |
+| `at` | `[x, y]`: where it is in the target's rectangle, as parts of its width and height; default `[0.5, 0.5]`, the middle. |
+| `offset` | `[x, y]` pixels added to that place; default `[0, 0]`. |
+| `anchor` | `[x, y]`: the picture's point put at that place, as parts of its size; default `[0, 0]`, its top left (a pointer's tip). `[0.5, 0.5]` centres it. |
+| `ms` | How long it is shown, 1 to 20000 milliseconds; default 500. |
+| `move` | `true`: it glides from the previous frame's place to its own meanwhile; default `false`. |
+
+A target that is not shown (a Browser row scrolled away, a panel closed)
+hides the demonstration until it is shown again. The guide's state
+(`mitcad.state().guide`) has the target's rectangle, `target` (`x`, `y`,
+`width`, `height` in pixels of the design's window), for a page that
+sizes its pictures to it, and `demonstrating`.
+
+When to show it is the page's choice: after a delay of its own while the
+step is not done, or at once on `held` or `refused`. So is a still picture
+for users who prefer less motion (one frame, or CSS's
+`prefers-reduced-motion` in the page):
+
+```js
+let timer;
+function hint() { mitcad.demonstrate(clickRow); }
+mitcad.on("held", hint);
+mitcad.on("refused", hint);
+mitcad.on("step_done", () => clearTimeout(timer));
+mitcad.startStep(step).then(() => { timer = setTimeout(hint, 8000); });
+```
+
+## The user's keys and gestures
+
+A user may have changed a command's key or chosen another way to turn the
+view. `mitcad.shortcut(command)` and `mitcad.navigation()` give the ones
+that work on this user's MitCad now, so that a page says and draws those.
+
+`mitcad.shortcut("view.front")`:
+
+```json
+{"command": "view.front", "name": "Front View",
+ "shortcuts": [{"keys": [{"key": "1", "modifiers": []}], "text": "1"}]}
+```
+
+Each of `shortcuts` is one key sequence: its `keys` (a key and the
+modifiers held with it: `shift`, `ctrl`, `alt`, `meta`; on macOS `ctrl` is
+the Command key and `meta` the Control key) and `text`, as the platform
+writes it. A command with no key has `"shortcuts": []`: point at its
+button instead.
+
+`mitcad.navigation()` with Alt + left to orbit:
+
+```json
+{"orbit": [{"input": "left", "modifiers": ["alt"]}],
+ "pan": [{"input": "middle", "modifiers": []}],
+ "zoom": [{"input": "right", "modifiers": ["alt"]}, {"input": "scroll", "modifiers": []}],
+ "reverse_zoom": false, "custom": false}
+```
+
+Each gesture is a drag with a mouse button (`input` `left`, `middle`,
+`right`) or a scroll (`scroll`, the wheel or a two-finger scroll), with
+the keys held (`modifiers`), and `"key": "F4"` for the gesture of F4 held
+with the left button. They are in the order left, middle, right, scroll,
+then F4; a gesture that needs more keys than another one of the same
+input for the same action is left out (when the plain scroll zooms, so
+does Shift + scroll). `reverse_zoom` says the wheel zooms the other way;
+`custom` that the user set the gestures one by one.
+
+`mitcad.demonstrate`, `mitcad.stopDemonstration`, `mitcad.shortcut` and
+`mitcad.navigation` came with MitCad's tutorial hints; `mitcad.call` with
+their names does the same, and a MitCad without them rejects the call.
 
 ## Sources and download
 

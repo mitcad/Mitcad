@@ -43,4 +43,17 @@ void startThemePreference();
 // "Theme: system (light)" once it is settled.
 void applyThemePreference(ThemeChoice choice);
 
+// For tests (MITCAD_TEST_COLOR_SCHEME once the window shows, mitcad#2404;
+// not the test driver's color-scheme step, which stands for the desktop's
+// switch and asks the platform only): the scheme asked of the platform as
+// Light or Dark above, not stored. On Linux, where the platform may keep its palette
+// (Qt's GTK theme under Xvfb, its generic theme), MitCad's own palette
+// after the same wait; on Windows and macOS the platform's only. Logs
+// which scheme is in effect once it is settled: "Colour scheme in effect:
+// dark (the platform's palette)", "Colour scheme in effect: dark (MitCad's
+// own palette, window #… over the platform's light one)" or, where no own
+// palette is set, "Colour scheme in effect: light (the platform did not
+// switch to dark)".
+void applyTestColorScheme(bool dark);
+
 } // namespace mitcad

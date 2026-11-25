@@ -30,7 +30,7 @@ endif()
 include(cmake/VcpkgCompilerCache.cmake)
 
 project(Mitcad
-  VERSION 0.72.0
+  VERSION 0.73.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 mitcad_vcpkg_compiler_cache_done()

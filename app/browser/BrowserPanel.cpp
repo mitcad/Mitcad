@@ -3746,11 +3746,20 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
                                   ? tr("out of date: the model or the operation changed; Generate computes it again")
                               : suppressed ? tr("suppressed: left out of the toolpaths and the program")
                                            : tr("not generated yet: Generate computes its toolpath");
-        QTreeWidgetItem* opItem = addRow(setupItem, op, icon, QStringLiteral("%1: %2").arg(op.name, words));
+        // An operation Generate refuses for its place (mitcad#2392: on the
+        // main spindle after the sub-spindle's): red, the problem in words
+        // in its tooltip.
+        const QString problem = mitcad::modelMessage(operation.value(QStringLiteral("problem")).toString());
+        QTreeWidgetItem* opItem = addRow(setupItem, op, icon,
+                                         QStringLiteral("%1: %2").arg(op.name, problem.isEmpty() ? words : problem));
         if (suppressed) {
           setNameRole(opItem, ColorRole::TextHidden);
+        } else if (!problem.isEmpty()) {
+          setNameRole(opItem, ColorRole::ErrorText);
         }
-        states << QStringLiteral("%1 %2").arg(op.name, op.camState);
+        states << (problem.isEmpty() ? QStringLiteral("%1 %2").arg(op.name, op.camState)
+                                     : QStringLiteral("%1 %2 (%3)").arg(op.name, op.camState,
+                                                                       operation.value(QStringLiteral("problem")).toString()));
       }
       logged << QStringLiteral("%1 [%2]").arg(row.name, states.join(QStringLiteral(", ")));
     }
@@ -4469,6 +4478,22 @@ bool BrowserPanel::revealItem(const SelectionItem& item) {
     }
   }
   return revealKeys(keys);
+}
+
+BrowserNode BrowserPanel::nodeOfItem(const SelectionItem& item) const {
+  SelectionItem whole = item;
+  if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex) {
+    whole.kind = SelectKind::Body;
+  }
+  whole.name.clear();
+  whole.geometry.clear();
+  for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
+    const SelectionItem row = it.value().item();
+    if (row.isValid() && itemKey(row) == itemKey(whole) && !it.value().isSetMember()) {
+      return it.value();
+    }
+  }
+  return BrowserNode();
 }
 
 bool BrowserPanel::revealKeys(const QSet<QString>& keys) {

@@ -232,3 +232,16 @@ pub struct Fairing {
     /// The farthest a control point may move (mm).
     pub tolerance: f64,
 }
+
+// Curves of free edges: a loft's section of a surface body's free edges
+// (mitcad#2395).
+
+/// A free edge's curve as [`crate::kernel::Kernel::opening_curves`] gives
+/// it: in model space, as [`crate::kernel::Kernel::curves_of`] gives a
+/// named edge's, with the name of the one face the edge bounds (none when
+/// that face has no name).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreeEdgeCurve {
+    pub curve: crate::kernel::Curve3,
+    pub face: Option<FaceName>,
+}

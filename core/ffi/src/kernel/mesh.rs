@@ -6,10 +6,12 @@
 pub mod ffi {
     /// A body's closed triangle mesh: `vertices` x, y, z after each other
     /// (millimetres), `triangles` three vertex indices each, counter-clockwise
-    /// seen from outside.
+    /// seen from outside; `faces` each triangle's face, its index in the
+    /// shape's face order (mitcad#2385).
     struct TriangleMesh {
         vertices: Vec<f64>,
         triangles: Vec<u32>,
+        faces: Vec<u32>,
     }
 
     unsafe extern "C++" {

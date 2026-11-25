@@ -1157,6 +1157,7 @@
     "view.space_mouse_lock_rotation",
     "view.show_all_sketches",
     "view.hide_all_sketches",
+    "view.toggle_visibility",
     "view.property_sets",
     "view.projects",
     "view.chat",

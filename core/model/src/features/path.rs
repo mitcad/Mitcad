@@ -807,7 +807,7 @@ pub(crate) fn resolve_edges_on<K: Kernel>(
 }
 
 /// [`edge_curves`] of a given shape of the body.
-fn edge_curves_of<K: Kernel>(
+pub(crate) fn edge_curves_of<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     body: BodyUid,
     shape: &K::Shape,

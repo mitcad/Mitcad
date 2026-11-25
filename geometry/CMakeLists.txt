@@ -441,6 +441,12 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/end_face_dressup.cpp
   src/end_face_dressup.hpp)
+
+# Fillets of edges whose faces come tangent inside them, turning from
+# convex to concave there: split where the rounding vanishes (mitcad#2300).
+target_sources(mitcad_geometry PRIVATE
+  src/vanishing_split.cpp
+  src/vanishing_split.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1637,13 +1643,8 @@ if(BUILD_TESTING)
   # `test_y_tube_crotch --probe` prints the kernel's reports instead.
   add_executable(test_y_tube_crotch tests/test_y_tube_crotch.cpp)
   target_link_libraries(test_y_tube_crotch PRIVATE mitcad_geometry mitcad_warnings)
-  # Registered on Linux only until mitcad#2247: on Windows and macOS the
-  # kernel offset of the two rounding faces is invalid and the shell after
-  # the rounding fails (the executable is still built for its probes).
-  if(NOT WIN32 AND NOT APPLE)
-    add_test(NAME geometry.y_tube_crotch COMMAND test_y_tube_crotch)
-    set_tests_properties(geometry.y_tube_crotch PROPERTIES TIMEOUT 600)
-  endif()
+  add_test(NAME geometry.y_tube_crotch COMMAND test_y_tube_crotch)
+  set_tests_properties(geometry.y_tube_crotch PROPERTIES TIMEOUT 600)
 
   # The end of a shallow swept groove (a circle of radius 10, 1.5 deep,
   # along a line or an arc) rounded wider than its end cap is high
@@ -1721,8 +1722,9 @@ if(BUILD_TESTING)
   # (mitcad#2271): circles to slots of several proportions (the owner's R111
   # to 520 x 80 among them), an ellipse to a rounded rectangle, a circle to
   # a spline outline, shelled Inside, Outside and Both, Sharp and Rounded,
-  # walls at the thickness within 1e-6 mm; the owner's surface loft
-  # thickened. One ctest per loft and Keep or Merge.
+  # walls at the thickness within 1e-6 mm (Keep through one-edge sections
+  # too, mitcad#2308); the owner's surface loft and the circle to spline
+  # outline as a surface thickened. One ctest per loft and Keep or Merge.
   add_executable(test_loft_smooth_sections_shell tests/test_loft_smooth_sections_shell.cpp)
   target_link_libraries(test_loft_smooth_sections_shell PRIVATE mitcad_geometry mitcad_warnings)
   set(loft_smooth_sections_shell_parts
@@ -1739,7 +1741,9 @@ if(BUILD_TESTING)
     circle_spline_keep
     circle_spline_merge
     thicken_owner_keep
-    thicken_owner_merge)
+    thicken_owner_merge
+    thicken_circle_spline_keep
+    thicken_circle_spline_merge)
   foreach(part IN LISTS loft_smooth_sections_shell_parts)
     add_test(NAME geometry.loft_smooth_sections_shell.${part} COMMAND test_loft_smooth_sections_shell ${part})
     set_tests_properties(geometry.loft_smooth_sections_shell.${part} PROPERTIES TIMEOUT 600)
@@ -1816,8 +1820,72 @@ if(BUILD_TESTING)
   # wall (a face section, and an open half circle as a surface of curves),
   # the rim of a skewed barrel (a freeform face) and a block's top with
   # upright rails; a free loft does not; a section off its face is refused.
+  # mitcad#2377: a cylinder's rim with two rails (sampled between them; a
+  # tilted rail refused) and loose chains of a box's and a post's edges.
   add_executable(test_loft_perpendicular tests/test_loft_perpendicular.cpp)
   target_link_libraries(test_loft_perpendicular PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.loft_perpendicular COMMAND test_loft_perpendicular)
   set_tests_properties(geometry.loft_perpendicular PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # The rim between a loft's side and a cylinder pulled from its end face,
+  # convex in some places and concave in others, rounded (mitcad#2300): the
+  # owner's case at 5 mm, at 2 and 10 mm and with pulls of 50 and 400 mm,
+  # Tangent Edges Merge and Keep; one valid solid, the whole rim rounded,
+  # the roundings vanishing where its faces are tangent. The kernel_ parts:
+  # the body the fillet rounds (joined, split) rounded by the kernel's fillet
+  # alone with 2, 5 and 10 (OCCT port patches 2300, 2301, and 2302, 2303 for
+  # Keep at 2 mm). One ctest per part.
+  add_executable(test_fillet_loft_rim tests/test_fillet_loft_rim.cpp)
+  target_link_libraries(test_fillet_loft_rim PRIVATE mitcad_geometry mitcad_warnings)
+  foreach(part IN ITEMS owner_merge owner_keep radii_merge radii_keep pulls_merge pulls_keep far_end_unsplit
+                        kernel_merge kernel_keep)
+    add_test(NAME geometry.fillet_loft_rim.${part} COMMAND test_fillet_loft_rim ${part})
+    set_tests_properties(geometry.fillet_loft_rim.${part} PROPERTIES TIMEOUT 600)
+  endforeach()
+endif()
+
+if(BUILD_TESTING)
+  # A probe, not registered as a test (mitcad#2352, GitHub #620): roundings
+  # wider than the face beside their edge whose chains end at sharp corners
+  # (a ridge's and a spike's foot 1 in from a block's sides, a pocket's rim
+  # beside a thin sloped wall), with and without the corners rounded first:
+  # MitCad's fillet, the narrow-face check, the faces beyond grown and
+  # OCCT's own fillet, printed.
+  add_executable(test_probe_fillet_rim_narrow_corner tests/probe_fillet_rim_narrow_corner.cpp)
+  target_link_libraries(test_probe_fillet_rim_narrow_corner PRIVATE mitcad_geometry mitcad_warnings)
+  # A rounding wider than the ledge beside its edge, the face beyond rising
+  # from the ledge (GitHub #620's simpler case, mitcad#2352): a block with a
+  # spike whose foot is 1 in from its sides, its front top edge rounded with
+  # 1.5, 2 and 4: one valid solid, the rounding tangent to the block's
+  # front and the spike's front continued down, the volume exact.
+  add_executable(test_fillet_ledge_rising_face tests/test_fillet_ledge_rising_face.cpp)
+  target_link_libraries(test_fillet_ledge_rising_face PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_ledge_rising_face COMMAND test_fillet_ledge_rising_face)
+  set_tests_properties(geometry.fillet_ledge_rising_face PROPERTIES TIMEOUT 300)
+
+  # A block's two long top edges rounded where an oval pocket beside each
+  # lies closer to it than the rounding is wide (GitHub #635, mitcad#2365):
+  # pockets mirrored about the middle plane and turned half a turn, at 2.5
+  # and 4 mm; each edge alone, both in one set and in two. Each edge rounds
+  # the way the other does (the material, point by point, each other's
+  # image) or both fail in words; one valid closed solid each. `--probe`
+  # prints the faces and the kernel's fillet alone. Up to seven minutes on an
+  # idle machine (the 4 mm cases most of it).
+  add_executable(test_fillet_pocket_rims tests/test_fillet_pocket_rims.cpp)
+  target_link_libraries(test_fillet_pocket_rims PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_pocket_rims COMMAND test_fillet_pocket_rims)
+  set_tests_properties(geometry.fillet_pocket_rims PROPERTIES TIMEOUT 900)
+
+  # A cone standing on a ring with notches cut up from the ring's top
+  # through its wall (GitHub #642, mitcad#2383), shelled 2 mm inside with
+  # Sharp corners by MitCad's shell: a box notch, one and five notches of
+  # the reported shape; the shell builds with the inside of every face's
+  # wall, 2 mm behind each notch, five notches adding five times the wall
+  # of one (OCCT port patch 2383).
+  add_executable(test_shell_notched_cone tests/test_shell_notched_cone.cpp)
+  target_link_libraries(test_shell_notched_cone PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.shell_notched_cone COMMAND test_shell_notched_cone)
+  set_tests_properties(geometry.shell_notched_cone PROPERTIES TIMEOUT 300)
 endif()

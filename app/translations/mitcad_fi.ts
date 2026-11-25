@@ -1821,6 +1821,10 @@
         <translation>Tangentiaalinen piste</translation>
     </message>
     <message>
+        <source>Perpendicular to Face</source>
+        <translation>Kohtisuoraan tahkoon</translation>
+    </message>
+    <message>
         <source>Rails</source>
         <translation>Kiskot</translation>
     </message>
@@ -2011,6 +2015,10 @@
     <message>
         <source>Coarse</source>
         <translation>Karkea</translation>
+    </message>
+    <message>
+        <source>Normal to Curves</source>
+        <translation>Käyrien normaalin suuntaan</translation>
     </message>
     <message>
         <source>Keep</source>
@@ -3123,6 +3131,28 @@
     <message>
         <source>%1 Flat Pattern</source>
         <translation>%1: levitys</translation>
+    </message>
+    <message>
+        <source>%1 and %2</source>
+        <translation>%1 ja %2</translation>
+    </message>
+    <message numerus="yes">
+        <source>%1 and %n More</source>
+        <translation>
+            <numerusform>%1 ja %n muu</numerusform>
+            <numerusform>%1 ja %n muuta</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>The Selection (%n body(s))</source>
+        <translation>
+            <numerusform>Valinta (%n kappale)</numerusform>
+            <numerusform>Valinta (%n kappaletta)</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>%1 Drawing</source>
+        <translation>%1 – piirustus</translation>
     </message>
     <message>
         <source>Fit the Sheet</source>
@@ -12900,6 +12930,10 @@
         <translation>Nurkan vapautusleikkaus</translation>
     </message>
     <message>
+        <source>Used where two bends meet: at Flange corners and by Corner Relief</source>
+        <translation>Käytetään, missä kaksi taivutusta kohtaa: Laippa-piirteiden nurkissa ja Nurkan vapautusleikkaus -piirteessä</translation>
+    </message>
+    <message>
         <source>Corner Relief Width</source>
         <translation>Nurkan vapautusleikkauksen leveys</translation>
     </message>
@@ -13126,10 +13160,6 @@
     <message>
         <source>Used where a flange, bend or fold ends inside the sheet</source>
         <translation>Käytetään, kun laippa, taivutus tai taite päättyy levyn sisään</translation>
-    </message>
-    <message>
-        <source>Used by Corner Relief where two bends meet</source>
-        <translation>Nurkan vapautusleikkaus käyttää tätä, kun kaksi taivutusta kohtaa</translation>
     </message>
     <message>
         <source>Process, thickness, bend radius, allowance and reliefs that sheet faces use</source>
@@ -14860,6 +14890,14 @@
         <translation>Miten särmistä tehty paikka kohtaa niiden vieressä olevat tahkot</translation>
     </message>
     <message>
+        <source>Sections in order: sketch curves or chains of edges, or profiles and faces; points first or last</source>
+        <translation>Poikkileikkaukset järjestyksessä: luonnoksen käyrät tai särmäketjut tai profiilit ja tahkot; pisteet ensimmäisinä tai viimeisinä</translation>
+    </message>
+    <message>
+        <source>Select sketch curves and edges as sections, or profiles, faces and points; not both kinds.</source>
+        <translation>Valitse poikkileikkauksiksi luonnoksen käyriä ja särmiä tai profiileja, tahkoja ja pisteitä; ei molempia lajeja.</translation>
+    </message>
+    <message>
         <source>Stitch</source>
         <translation>Ompele</translation>
     </message>
@@ -15104,16 +15142,8 @@
         <translation>Pinta poikkileikkausten kautta järjestyksessä: käyrät, profiilit, tahkot tai pisteet</translation>
     </message>
     <message>
-        <source>Sections in order: sketch curves, or profiles and faces; points only first or last</source>
-        <translation>Poikkileikkaukset järjestyksessä: luonnoksen käyrät tai profiilit ja tahkot; pisteet vain ensimmäisinä tai viimeisinä</translation>
-    </message>
-    <message>
         <source>Merge: a section&apos;s smoothly joined curves make one face; Keep: a face per curve</source>
         <translation>Yhdistä: poikkileikkauksen sileästi liittyvät käyrät muodostavat yhden tahkon; Säilytä: oma tahko kullekin käyrälle</translation>
-    </message>
-    <message>
-        <source>Select sketch curves as sections, or profiles, faces and points; not both kinds.</source>
-        <translation>Valitse poikkileikkauksiksi luonnoksen käyriä tai profiileja, tahkoja ja pisteitä; ei molempia lajeja.</translation>
     </message>
     <message>
         <source>Rails guide a loft of profiles or faces: select those as sections, or remove the rails.</source>
@@ -15468,6 +15498,22 @@
         <translation>Yhdistä: poikkileikkauksen sileästi liittyvät särmät muodostavat yhden tahkon; Säilytä: oma tahko kullekin särmälle</translation>
     </message>
     <message>
+        <source>Thin walls along sketch curves, grown along the sketch normal</source>
+        <translation>Ohuet seinämät luonnoskäyriä pitkin, kasvatettuina luonnoksen normaalin suuntaan</translation>
+    </message>
+    <message>
+        <source>Sketch curves of one sketch, open or closed, or a flat intersection curve</source>
+        <translation>Yhden luonnoksen avoimet tai suljetut luonnoskäyrät tai tasomainen leikkauskäyrä</translation>
+    </message>
+    <message>
+        <source>With To Next the rib grows at right angles to the chord; Normal to Curves needs Depth Type Depth.</source>
+        <translation>Asetuksella Seuraavaan ripa kasvaa kohtisuoraan jänteeseen; Käyrien normaalin suuntaan vaatii syvyystyypiksi Syvyys.</translation>
+    </message>
+    <message>
+        <source>How the far side joins where the curves turn away from it</source>
+        <translation>Miten kauempi sivu yhtyy kohdissa, joissa käyrät kääntyvät siitä poispäin</translation>
+    </message>
+    <message>
         <source>Continue the curves&apos; free ends to the bodies&apos; faces; an end past a wall is cut back to it</source>
         <translation>Jatka käyrien vapaat päät kappaleiden tahkoihin; seinämän yli menevä pää lyhennetään siihen</translation>
     </message>
@@ -15590,10 +15636,6 @@
     <message>
         <source>Rib</source>
         <translation>Ripa</translation>
-    </message>
-    <message>
-        <source>Thin walls along open sketch curves, grown along the sketch normal</source>
-        <translation>Ohuet seinämät avoimia luonnoskäyriä pitkin, kasvatettuina luonnoksen normaalin suuntaan</translation>
     </message>
     <message>
         <source>A thin wall from an open sketch curve to the faces it reaches</source>
@@ -25011,6 +25053,18 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Piilota komponentit</translation>
     </message>
     <message>
+        <source>Show Components</source>
+        <translation>Näytä komponentit</translation>
+    </message>
+    <message>
+        <source>Show Selection</source>
+        <translation>Näytä valinta</translation>
+    </message>
+    <message>
+        <source>Hide Selection</source>
+        <translation>Piilota valinta</translation>
+    </message>
+    <message>
         <source>Make Transparent</source>
         <translation>Tee läpinäkyväksi</translation>
     </message>
@@ -26264,6 +26318,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Mittaa X säteenä karan akselista.</translation>
     </message>
     <message>
+        <source>Measure Z from the sub-spindle&apos;s jaws&apos; face, positive away from the main spindle.</source>
+        <translation>Mittaa Z vastakaran leukojen tahkosta, positiivinen poispäin pääkarasta.</translation>
+    </message>
+    <message>
         <source>Measure Z along the spindle axis.</source>
         <translation>Mittaa Z karan akselin suuntaisesti.</translation>
     </message>
@@ -26290,6 +26348,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Minimum %1 must be at or below Maximum %1.</source>
         <translation>Koordinaatin %1 alaraja saa olla enintään koordinaatin %1 ylärajan suuruinen.</translation>
+    </message>
+    <message>
+        <source>Enter X in machine coordinates and Z from the sub-spindle&apos;s jaws&apos; face, positive away from the main spindle. These zones move with the sub-spindle.</source>
+        <translation>Anna X konekoordinaatteina ja Z vastakaran leukojen tahkosta, positiivinen poispäin pääkarasta. Nämä kieltoalueet liikkuvat vastakaran mukana.</translation>
     </message>
     <message>
         <source>Enter the bounds in machine coordinates.</source>
@@ -26540,6 +26602,22 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Y:n ympäri kallistuva jyrsinpää: pyörivät työkalut työstävät kallistettuja tasoja</translation>
     </message>
     <message>
+        <source>Clamps the B head where it is tilted</source>
+        <translation>Lukitsee B-pään, kun se on kallistettu</translation>
+    </message>
+    <message>
+        <source>B Head Clamp</source>
+        <translation>B-pään lukitus</translation>
+    </message>
+    <message>
+        <source>Frees the B head to tilt it</source>
+        <translation>Vapauttaa B-pään kallistusta varten</translation>
+    </message>
+    <message>
+        <source>B Head Unclamp</source>
+        <translation>B-pään vapautus</translation>
+    </message>
+    <message>
         <source>Sub-spindle</source>
         <translation>Vastakara</translation>
     </message>
@@ -26548,12 +26626,212 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Toinen kara, joka ottaa työkappaleen vastaan ja sorvaa sen takapään</translation>
     </message>
     <message>
+        <source>The sub-spindle&apos;s slowest speed</source>
+        <translation>Vastakaran pienin nopeus</translation>
+    </message>
+    <message>
+        <source>Lowest Speed (rpm)</source>
+        <translation>Pienin nopeus (rpm)</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s fastest speed; 0: the main spindle&apos;s speeds</source>
+        <translation>Vastakaran suurin nopeus; 0: pääkaran nopeudet</translation>
+    </message>
+    <message>
+        <source>Highest Speed (rpm)</source>
+        <translation>Suurin nopeus (rpm)</translation>
+    </message>
+    <message>
+        <source>The machine Z of its jaws&apos; face nearest the main spindle; empty: its travel is not checked</source>
+        <translation>Koneen Z, jossa sen leukojen tahko on lähimpänä pääkaraa; tyhjä: sen liikealuetta ei tarkisteta</translation>
+    </message>
+    <message>
+        <source>Travel From Z</source>
+        <translation>Liikealue Z:sta</translation>
+    </message>
+    <message>
+        <source>The machine Z of its jaws&apos; face farthest from the main spindle</source>
+        <translation>Koneen Z, jossa sen leukojen tahko on kauimpana pääkarasta</translation>
+    </message>
+    <message>
+        <source>Travel To Z</source>
+        <translation>Liikealue Z:aan</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s chuck diameter: no tool behind its jaws&apos; face within it</source>
+        <translation>Vastakaran istukan halkaisija: sen sisällä ei saa olla työkalua leukojen tahkon takana</translation>
+    </message>
+    <message>
+        <source>How far the chuck reaches back from its jaws&apos; face; 0: without end</source>
+        <translation>Kuinka pitkälle istukka ulottuu taaksepäin leukojen tahkosta; 0: rajaton</translation>
+    </message>
+    <message>
+        <source>The diameter of the sub-spindle&apos;s housing behind its chuck; 0: not checked</source>
+        <translation>Vastakaran karakotelon halkaisija istukan takana; 0: ei tarkisteta</translation>
+    </message>
+    <message>
+        <source>Housing Diameter</source>
+        <translation>Karakotelon halkaisija</translation>
+    </message>
+    <message>
+        <source>How far the housing reaches back from the chuck; 0: without end</source>
+        <translation>Kuinka pitkälle karakotelo ulottuu taaksepäin istukasta; 0: rajaton</translation>
+    </message>
+    <message>
+        <source>Housing Length</source>
+        <translation>Karakotelon pituus</translation>
+    </message>
+    <message>
+        <source>The machine Z of its jaws&apos; face while the main spindle cuts; empty: its travel&apos;s end</source>
+        <translation>Koneen Z, jossa sen leukojen tahko on pääkaran työstäessä; tyhjä: sen liikealueen pää</translation>
+    </message>
+    <message>
+        <source>Waits at Z</source>
+        <translation>Odottaa Z:ssa</translation>
+    </message>
+    <message>
+        <source>Points of Z from the jaws&apos; face and diameter, as 0, 80; 40, 80; separated by ;</source>
+        <translation>Pisteet Z leukojen tahkosta ja halkaisija, kuten 0, 80; 40, 80; puolipisteellä (;) erotettuina</translation>
+    </message>
+    <message>
+        <source>Body Profile</source>
+        <translation>Rungon profiili</translation>
+    </message>
+    <message>
+        <source>Where the turret&apos;s body starts in X from the tool&apos;s point; empty: not checked</source>
+        <translation>Mistä revolverin runko alkaa X:ssä työkalun pisteestä; tyhjä: ei tarkisteta</translation>
+    </message>
+    <message>
+        <source>Turret Body X From</source>
+        <translation>Revolverin runko X alkaen</translation>
+    </message>
+    <message>
+        <source>Where the turret&apos;s body ends in X from the tool&apos;s point</source>
+        <translation>Mihin revolverin runko päättyy X:ssä työkalun pisteestä</translation>
+    </message>
+    <message>
+        <source>Turret Body X To</source>
+        <translation>Revolverin runko X asti</translation>
+    </message>
+    <message>
+        <source>Where the turret&apos;s body starts in Z from the tool&apos;s point</source>
+        <translation>Mistä revolverin runko alkaa Z:ssa työkalun pisteestä</translation>
+    </message>
+    <message>
+        <source>Turret Body Z From</source>
+        <translation>Revolverin runko Z alkaen</translation>
+    </message>
+    <message>
+        <source>Where the turret&apos;s body ends in Z, towards the sub-spindle</source>
+        <translation>Mihin revolverin runko päättyy Z:ssa, vastakaran suuntaan</translation>
+    </message>
+    <message>
+        <source>Turret Body Z To</source>
+        <translation>Revolverin runko Z asti</translation>
+    </message>
+    <message>
+        <source>The letter of the sub-spindle&apos;s axis along Z; B only without a B head</source>
+        <translation>Vastakaran Z-suuntaisen akselin kirjain; B vain ilman B-päätä</translation>
+    </message>
+    <message>
+        <source>Axis Letter</source>
+        <translation>Akselin kirjain</translation>
+    </message>
+    <message>
+        <source>Synchronize Spindles</source>
+        <translation>Tahdista karat</translation>
+    </message>
+    <message>
+        <source>Turns the sub-spindle with the main spindle</source>
+        <translation>Pyörittää vastakaraa pääkaran tahdissa</translation>
+    </message>
+    <message>
+        <source>Separate Spindles</source>
+        <translation>Erota karat</translation>
+    </message>
+    <message>
+        <source>Lets the spindles turn on their own again</source>
+        <translation>Antaa karojen taas pyöriä kummankin omaan tahtiinsa</translation>
+    </message>
+    <message>
+        <source>Close Chuck</source>
+        <translation>Sulje istukka</translation>
+    </message>
+    <message>
+        <source>Closes the sub-spindle&apos;s chuck on the part</source>
+        <translation>Sulkee vastakaran istukan työkappaleeseen</translation>
+    </message>
+    <message>
+        <source>Open Chuck</source>
+        <translation>Avaa istukka</translation>
+    </message>
+    <message>
+        <source>Opens the sub-spindle&apos;s chuck</source>
+        <translation>Avaa vastakaran istukan</translation>
+    </message>
+    <message>
+        <source>Open Main Chuck</source>
+        <translation>Avaa pääistukka</translation>
+    </message>
+    <message>
+        <source>Lets the main spindle&apos;s chuck go of the part when nothing parts it off</source>
+        <translation>Avaa pääkaran istukan työkappaleesta, kun mikään ei katkaise sitä</translation>
+    </message>
+    <message>
+        <source>Spindle Forward</source>
+        <translation>Kara eteenpäin</translation>
+    </message>
+    <message>
+        <source>Starts the sub-spindle forward</source>
+        <translation>Käynnistää vastakaran eteenpäin</translation>
+    </message>
+    <message>
+        <source>Spindle Reverse</source>
+        <translation>Kara taaksepäin</translation>
+    </message>
+    <message>
+        <source>Starts the sub-spindle in reverse</source>
+        <translation>Käynnistää vastakaran taaksepäin</translation>
+    </message>
+    <message>
+        <source>Spindle Stop</source>
+        <translation>Kara seis</translation>
+    </message>
+    <message>
+        <source>Stops the sub-spindle</source>
+        <translation>Pysäyttää vastakaran</translation>
+    </message>
+    <message>
+        <source>The blocks that switch the sub-spindle to its C axis, separated by ;</source>
+        <translation>Lauseet, jotka vaihtavat vastakaran C-akseliksi, puolipisteellä (;) erotettuina</translation>
+    </message>
+    <message>
+        <source>Clamps the sub-spindle&apos;s C axis where a hole is drilled</source>
+        <translation>Lukitsee vastakaran C-akselin, kun reikää porataan</translation>
+    </message>
+    <message>
+        <source>The control mirrors only Z</source>
+        <translation>Ohjaus peilaa vain Z:n</translation>
+    </message>
+    <message>
+        <source>On the sub-spindle X, Y and C keep the main spindle&apos;s directions</source>
+        <translation>Vastakaralla X, Y ja C pitävät pääkaran suunnat</translation>
+    </message>
+    <message>
         <source>Machine</source>
         <translation>Kone</translation>
     </message>
     <message>
         <source>Keep-Out Zones</source>
         <translation>Kieltoalueet</translation>
+    </message>
+    <message>
+        <source>Sub-Spindle</source>
+        <translation>Vastakara</translation>
+    </message>
+    <message>
+        <source>Sub-Spindle Zones</source>
+        <translation>Vastakaran kieltoalueet</translation>
     </message>
     <message>
         <source>%1: a length of zero or more.</source>
@@ -26570,6 +26848,34 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>%1: a number above zero.</source>
         <translation>%1: nollaa suurempi luku.</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s highest speed must be at or above its lowest.</source>
+        <translation>Vastakaran suurimman nopeuden on oltava vähintään sen pienin nopeus.</translation>
+    </message>
+    <message>
+        <source>The sub-spindle&apos;s travel: from a Z up to a Z, or both left empty.</source>
+        <translation>Vastakaran liikealue: Z:sta Z:aan, tai molemmat tyhjinä.</translation>
+    </message>
+    <message>
+        <source>%1: a machine Z, or left empty.</source>
+        <translation>%1: koneen Z tai tyhjä.</translation>
+    </message>
+    <message>
+        <source>%1: points of a Z and a diameter of zero or more, as 0, 80; 40, 80.</source>
+        <translation>%1: pisteitä, joissa Z ja halkaisija nolla tai enemmän, kuten 0, 80; 40, 80.</translation>
+    </message>
+    <message>
+        <source>%1: its points in order along Z.</source>
+        <translation>%1: sen pisteet järjestyksessä Z:n suunnassa.</translation>
+    </message>
+    <message>
+        <source>%1: two or more points, or left empty.</source>
+        <translation>%1: vähintään kaksi pistettä tai tyhjä.</translation>
+    </message>
+    <message>
+        <source>The turret&apos;s body: X and Z each from a lowest up to a highest, or all left empty.</source>
+        <translation>Revolverin runko: X ja Z kumpikin pienimmästä suurimpaan, tai kaikki tyhjinä.</translation>
     </message>
     <message>
         <source>Could not change the machine</source>
@@ -29989,6 +30295,70 @@ Haetaanko ne?</translation>
         <translation>Vapautetaan kohteen %1 muokkauslukkoa…</translation>
     </message>
     <message>
+        <source>The edit lock of %1 was removed: the changes made in place may not be saved to it.</source>
+        <translation>Kohteen %1 muokkauslukko poistettiin: paikallaan tehtyjä muutoksia ei ehkä voi tallentaa siihen.</translation>
+    </message>
+    <message>
+        <source>%1 took the edit lock of %2: the changes made in place cannot be saved to it.</source>
+        <translation>%1 otti kohteen %2 muokkauslukon: paikallaan tehtyjä muutoksia ei voi tallentaa siihen.</translation>
+    </message>
+    <message>
+        <source>%1 asks to edit %2, which you are editing in place.</source>
+        <translation>%1 pyytää saada muokata kohdetta %2, jota muokkaat paikallaan.</translation>
+    </message>
+    <message>
+        <source>%1 asks to edit %2, which you are editing in place: &quot;%3&quot;</source>
+        <translation>%1 pyytää saada muokata kohdetta %2, jota muokkaat paikallaan: &quot;%3&quot;</translation>
+    </message>
+    <message>
+        <source>Releasing finishes Edit in Place and hands the edit lock over.</source>
+        <translation>Vapauttaminen lopettaa paikallaan muokkauksen ja luovuttaa muokkauslukon.</translation>
+    </message>
+    <message>
+        <source>&amp;Save, Finish and Release</source>
+        <translation>&amp;Tallenna, lopeta ja vapauta</translation>
+    </message>
+    <message>
+        <source>&amp;Finish and Release</source>
+        <translation>&amp;Lopeta ja vapauta</translation>
+    </message>
+    <message>
+        <source>%1 was not released: Edit in Place goes on, and the edit lock stays yours.</source>
+        <translation>Kohdetta %1 ei vapautettu: paikallaan muokkaus jatkuu, ja muokkauslukko pysyy sinulla.</translation>
+    </message>
+    <message>
+        <source>The versions of %1 could not be sent: %2. Sync sends them later.</source>
+        <translation>Kohteen %1 versioita ei voitu lähettää: %2. Synkronointi lähettää ne myöhemmin.</translation>
+    </message>
+    <message>
+        <source>Taking the edit lock of %1…</source>
+        <translation>Otetaan kohteen %1 muokkauslukkoa…</translation>
+    </message>
+    <message>
+        <source>You are editing %1 in another window or on another computer (since %2): it cannot be edited in place here. Close it there first.</source>
+        <translation>Muokkaat mallia %1 toisessa ikkunassa tai toisella tietokoneella (%2 alkaen): sitä ei voi muokata paikallaan täällä. Sulje se ensin siellä.</translation>
+    </message>
+    <message>
+        <source>%1 is being edited by %2 (since %3): it cannot be edited in place. Ask them to release its edit lock first.</source>
+        <translation>Mallia %1 muokkaa %2 (%3 alkaen): sitä ei voi muokata paikallaan. Pyydä ensin vapauttamaan sen muokkauslukko.</translation>
+    </message>
+    <message>
+        <source>You are editing %1 in another window or on another computer (since %2): the changes made in place are not saved to it. Close it there first.</source>
+        <translation>Muokkaat mallia %1 toisessa ikkunassa tai toisella tietokoneella (%2 alkaen): paikallaan tehtyjä muutoksia ei tallenneta siihen. Sulje se ensin siellä.</translation>
+    </message>
+    <message>
+        <source>%1 is being edited by %2 (since %3): the changes made in place are not saved to it. Ask them to release its edit lock first.</source>
+        <translation>Mallia %1 muokkaa %2 (%3 alkaen): paikallaan tehtyjä muutoksia ei tallenneta siihen. Pyydä ensin vapauttamaan sen muokkauslukko.</translation>
+    </message>
+    <message>
+        <source>The edit lock of %1 changed while it was taken: try again.</source>
+        <translation>Kohteen %1 muokkauslukko muuttui sitä otettaessa: yritä uudelleen.</translation>
+    </message>
+    <message>
+        <source>The edit lock of %1 changed while it was taken: save again.</source>
+        <translation>Kohteen %1 muokkauslukko muuttui sitä otettaessa: tallenna uudelleen.</translation>
+    </message>
+    <message>
         <source>This remote does not accept MitCad&apos;s lock references: %1 has no edit lock.</source>
         <translation>Tämä etärepositorio ei hyväksy MitCadin lukkoviittauksia: kohteella %1 ei ole muokkauslukkoa.</translation>
     </message>
@@ -30747,10 +31117,6 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
         <translation>Luo piirustus…</translation>
     </message>
     <message>
-        <source>Adds a drawing of the design and opens its sheet</source>
-        <translation>Lisää mallista piirustuksen ja avaa sen arkin</translation>
-    </message>
-    <message>
         <source>Recover Designs…</source>
         <translation>Palauta mallit…</translation>
     </message>
@@ -31014,6 +31380,10 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     <message>
         <source>Brings x y coordinates of a file into the sketch as a spline or points</source>
         <translation>Tuo tiedoston x y -koordinaatit luonnokseen splininä tai pisteinä</translation>
+    </message>
+    <message>
+        <source>Adds a drawing of the design or of the selection and opens its sheet</source>
+        <translation>Lisää piirustuksen mallista tai valinnasta ja avaa sen arkin</translation>
     </message>
     <message>
         <source>Recompute All</source>
@@ -31435,12 +31805,20 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
         <translation>Kohdetta %1 ei löydy (%2).</translation>
     </message>
     <message>
+        <source>Edit in Place canceled.</source>
+        <translation>Paikallaan muokkaus peruttiin.</translation>
+    </message>
+    <message>
         <source>%1 is busy in its tab: finish there first.</source>
         <translation>%1 on varattu välilehdellään: lopeta siellä ensin.</translation>
     </message>
     <message>
         <source>%1 is open read-only: it cannot be edited in place.</source>
         <translation>%1 on avattu vain luku -tilassa: sitä ei voi muokata paikallaan.</translation>
+    </message>
+    <message>
+        <source>%1 It cannot be edited in place.</source>
+        <translation>%1 Sitä ei voi muokata paikallaan.</translation>
     </message>
     <message>
         <source>Could not open %1: %2</source>
@@ -31487,6 +31865,10 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
         <translation>Kohteen %1 paikallaan muokkaus lopetettu: mikään ei muuttunut.</translation>
     </message>
     <message>
+        <source>%1 is not saved: %2</source>
+        <translation>Kohdetta %1 ei tallennettu: %2</translation>
+    </message>
+    <message>
         <source>Save the changes made in place to %1?</source>
         <translation>Tallennetaanko paikallaan tehdyt muutokset kohteeseen %1?</translation>
     </message>
@@ -31505,6 +31887,14 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     <message>
         <source>%1 is edited in place in %2: finish there first.</source>
         <translation>Kohdetta %1 muokataan paikallaan kohteessa %2: lopeta siellä ensin.</translation>
+    </message>
+    <message>
+        <source>%1 is not released: %2</source>
+        <translation>Kohdetta %1 ei ole vapautettu: %2</translation>
+    </message>
+    <message>
+        <source>The changes made in place to %1 were not saved. The assembly keeps what it took from them as one step, which Undo takes back.</source>
+        <translation>Kohteeseen %1 paikallaan tehtyjä muutoksia ei tallennettu. Kokoonpano säilyttää niistä ottamansa yhtenä vaiheena, jonka Kumoa peruu.</translation>
     </message>
     <message>
         <source>Save the design first: its links are followed from its folder.</source>
@@ -32420,6 +32810,10 @@ Lisää tallennetun mallin.</translation>
     <message>
         <source>On the Diameter</source>
         <translation>Kehällä</translation>
+    </message>
+    <message>
+        <source>On the main spindle after the sub-spindle&apos;s operations: Generate refuses it.</source>
+        <translation>Pääkaralla vastakaran työstövaiheiden jälkeen: Laske ei hyväksy sitä.</translation>
     </message>
     <message>
         <source>Side</source>
@@ -35329,6 +35723,18 @@ Lisää tallennetun mallin.</translation>
         <translation>Näyttää tai piilottaa jokaisen komponentin luonnokset</translation>
     </message>
     <message>
+        <source>Hide/Show</source>
+        <translation>Piilota/näytä</translation>
+    </message>
+    <message>
+        <source>Hides the selected items, or shows them when the first is hidden</source>
+        <translation>Piilottaa valitut kohteet tai näyttää ne, kun ensimmäinen on piilotettu</translation>
+    </message>
+    <message>
+        <source>Select a body, component, sketch or construction geometry to hide or show it</source>
+        <translation>Valitse kappale, komponentti, luonnos tai apugeometria piilottaaksesi tai näyttääksesi sen</translation>
+    </message>
+    <message>
         <source>Show All Origins</source>
         <translation>Näytä kaikki origot</translation>
     </message>
@@ -35904,6 +36310,10 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
         <translation>Ne eivät leikkaa työkappaleesta mitään.</translation>
     </message>
     <message>
+        <source>The live tools on the sub-spindle: at most %1 mm left over the part&apos;s back. %2</source>
+        <translation>Pyörivät työkalut vastakaralla: työkappaleen takapään päälle jää enintään %1 mm. %2</translation>
+    </message>
+    <message>
         <source>The live tools on the face: at most %1 mm left over the part. %2</source>
         <translation>Pyörivät työkalut otsapinnalla: työkappaleen päälle jää enintään %1 mm. %2</translation>
     </message>
@@ -35926,6 +36336,13 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     <message>
         <source>The turned part: at most %1 mm of material left over it. %2</source>
         <translation>Sorvattu työkappale: sen päällä enintään %1 mm materiaalia jäljellä. %2</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n move(s) run into the sub-spindle or a zone moving with it.</source>
+        <translation>
+            <numerusform>%n liike törmää vastakaraan tai sen mukana liikkuvaan kieltoalueeseen.</numerusform>
+            <numerusform>%n liikettä törmää vastakaraan tai sen mukana liikkuvaan kieltoalueeseen.</numerusform>
+        </translation>
     </message>
     <message>
         <source>In 3D: %1 mm³ left over the part, %2 mm³ of it cut away.</source>
@@ -36218,6 +36635,10 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     <message>
         <source>Turns the part&apos;s back after the sub-spindle has taken it over</source>
         <translation>Sorvaa työkappaleen takapään, kun vastakara on ottanut sen vastaan</translation>
+    </message>
+    <message>
+        <source>Cuts the part&apos;s back after the sub-spindle has taken it over</source>
+        <translation>Työstää työkappaleen takapään, kun vastakara on ottanut sen vastaan</translation>
     </message>
     <message>
         <source>Revolutions per minute; empty: from the surface speed</source>
@@ -40252,6 +40673,46 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
         <translation>Versioille ei ole tekijää.</translation>
     </message>
     <message>
+        <source>Edit in Place</source>
+        <translation>Muokkaa paikallaan</translation>
+    </message>
+    <message>
+        <source>Looking for newer versions of %1…</source>
+        <translation>Etsitään kohteen %1 uudempia versioita…</translation>
+    </message>
+    <message>
+        <source>Newer versions of %1 could not be looked for (%2); it is edited as it is here.</source>
+        <translation>Kohteen %1 uudempia versioita ei voitu etsiä (%2); sitä muokataan sellaisena kuin se on täällä.</translation>
+    </message>
+    <message>
+        <source>A newer version of %1 is on the remote, and your versions not sent yet change it too: Sync asks which to keep. Sync first, then edit it in place.</source>
+        <translation>Etärepositoriossa on kohteen %1 uudempi versio, ja myös lähettämättömät versiosi muuttavat sitä: synkronointi kysyy, kumpi säilytetään. Synkronoi ensin ja muokkaa sitä sitten paikallaan.</translation>
+    </message>
+    <message>
+        <source>A newer version of %1 is on the remote, and the changes made in place before are not saved: save them first (Sync then asks which version to keep), then edit it in place.</source>
+        <translation>Etärepositoriossa on kohteen %1 uudempi versio, eikä aiemmin paikallaan tehtyjä muutoksia ole tallennettu: tallenna ne ensin (synkronointi kysyy sitten, mikä versio säilytetään) ja muokkaa sitä sitten paikallaan.</translation>
+    </message>
+    <message>
+        <source>Bringing %1 up to date…</source>
+        <translation>Päivitetään kohdetta %1 ajan tasalle…</translation>
+    </message>
+    <message>
+        <source>%1 changed with the sync; it stays open as it was, and Save asks how to keep it.</source>
+        <translation>Kohde %1 muuttui synkronoinnissa; se pysyy avoinna sellaisena kuin se oli, ja Tallenna kysyy, miten se säilytetään.</translation>
+    </message>
+    <message>
+        <source>%1 cannot be brought up to date: Sync needs your choice first. Sync, then edit it in place.</source>
+        <translation>Kohdetta %1 ei voi päivittää ajan tasalle: synkronointi tarvitsee ensin valintasi. Synkronoi ja muokkaa sitä sitten paikallaan.</translation>
+    </message>
+    <message>
+        <source>%1 cannot be brought up to date: %2</source>
+        <translation>Kohdetta %1 ei voi päivittää ajan tasalle: %2</translation>
+    </message>
+    <message>
+        <source>%1 could not be brought up to date (%2); it is edited as it is here.</source>
+        <translation>Kohdetta %1 ei voitu päivittää ajan tasalle (%2); sitä muokataan sellaisena kuin se on täällä.</translation>
+    </message>
+    <message>
         <source>The remote is busy: Sync again in a moment.</source>
         <translation>Etärepositorio on varattu: synkronoi uudelleen hetken kuluttua.</translation>
     </message>
@@ -43895,85 +44356,6 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     </message>
 </context>
 <context>
-    <name>mitcad::TutorialsDialog</name>
-    <message>
-        <source>Tutorials</source>
-        <translation>Tutoriaalit</translation>
-    </message>
-    <message>
-        <source>Tutorials show their steps beside your design and point at what to use next.</source>
-        <translation>Tutoriaalit näyttävät vaiheensa suunnitelmasi vieressä ja osoittavat, mitä käyttää seuraavaksi.</translation>
-    </message>
-    <message>
-        <source>Tutorial</source>
-        <translation>Tutoriaali</translation>
-    </message>
-    <message>
-        <source>Language</source>
-        <translation>Kieli</translation>
-    </message>
-    <message>
-        <source>Version</source>
-        <translation>Versio</translation>
-    </message>
-    <message>
-        <source>License</source>
-        <translation>Lisenssi</translation>
-    </message>
-    <message>
-        <source>Source</source>
-        <translation>Lähde</translation>
-    </message>
-    <message>
-        <source>Installed</source>
-        <translation>Asennettu</translation>
-    </message>
-    <message>
-        <source>Add Source…</source>
-        <translation>Lisää lähde…</translation>
-    </message>
-    <message>
-        <source>Update</source>
-        <translation>Päivitä</translation>
-    </message>
-    <message>
-        <source>Fetches the sources&apos; newest tutorials</source>
-        <translation>Hakee lähteiden uusimmat tutoriaalit</translation>
-    </message>
-    <message>
-        <source>Open</source>
-        <translation>Avaa</translation>
-    </message>
-    <message>
-        <source>These sources could not be fetched: %1</source>
-        <translation>Näitä lähteitä ei voitu hakea: %1</translation>
-    </message>
-    <message>
-        <source>No</source>
-        <translation>Ei</translation>
-    </message>
-    <message>
-        <source>No sources: Add Source… adds a repository of tutorials.</source>
-        <translation>Ei lähteitä: Lisää lähde… lisää tutoriaalien repositorion.</translation>
-    </message>
-    <message>
-        <source>No tutorials yet: Update fetches the sources.</source>
-        <translation>Ei vielä tutoriaaleja: Päivitä hakee lähteet.</translation>
-    </message>
-    <message>
-        <source>Add Source</source>
-        <translation>Lisää lähde</translation>
-    </message>
-    <message>
-        <source>A git repository of tutorials, by its address or its folder:</source>
-        <translation>Tutoriaalien git-repositorio, osoitteena tai kansiona:</translation>
-    </message>
-    <message>
-        <source>That repository is a source already.</source>
-        <translation>Se repositorio on jo lähde.</translation>
-    </message>
-</context>
-<context>
     <name>mitcad::UpdateClient</name>
     <message>
         <source>Updates are fetched over HTTPS only, not from %1.</source>
@@ -45240,6 +45622,14 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     <message>
         <source>E&amp;xtrude starts with:</source>
         <translation>&amp;Pursotus alkaa toiminnolla:</translation>
+    </message>
+    <message>
+        <source>&amp;Hide a sketch when a feature uses it</source>
+        <translation>&amp;Piilota luonnos, kun piirre käyttää sitä</translation>
+    </message>
+    <message>
+        <source>A shown sketch hides when a feature such as Extrude first uses it</source>
+        <translation>Näkyvä luonnos piilotetaan, kun piirre, kuten Pursotus, käyttää sitä ensimmäisen kerran</translation>
     </message>
     <message>
         <source>The orientation cube&apos;s size, with its arrows and Home button</source>

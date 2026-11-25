@@ -5,12 +5,22 @@
 // "surface" set), filled, sewn and made solid by Patch, Stitch and Thicken
 // (mitcad#456), and the surface features of the later families.
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include <QJsonArray>
 
+// Surface Loft's chains of edges (mitcad#2395).
+#include <BRep_Tool.hxx>
+#include <TopExp.hxx>
+#include <TopoDS_Vertex.hxx>
+
 #include "../framework/CommandRegistry.hpp"
+#include "../framework/OpeningEdges.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "Commands.hpp"
@@ -454,6 +464,175 @@ const QString kLoftRails = QStringLiteral("rails");
 // Tangent Edges (mitcad#2162), as the solid Loft's.
 const QString kLoftTangentEdges = QStringLiteral("tangent_edges");
 
+// --- Surface Loft's sections of edges (mitcad#2395)
+
+// Whole Opening and the `openings` entries, as the surface features' free
+// edges (below, "Free edges").
+InputDef wholeOpeningInput();
+QJsonArray openingEntries(const Selection& items);
+bool pickedOpeningEntry(const QJsonObject& entry);
+Selection openingEntryItems(const QString& body, const QJsonObject& entry);
+bool wholeOpeningsIn(const QJsonArray& entries);
+
+// The Whole Opening check of the Sections input (wholeOpeningInput's id).
+const QString kLoftWholeOpening = QStringLiteral("whole_opening");
+
+// Ends of edges this close meet (mm), as the model's paths join them.
+constexpr double kLoftEdgesMeet = 1.0e-4;
+
+// The body's edges (indices) an edge pick stands for: a named edge's, a
+// single free edge's, a whole opening's.
+std::vector<int> loftPickedEdges(const geometry::Shape& body, const SelectionItem& item) {
+  if (const auto at = freeEdgePoint(item)) {
+    const std::optional<int> edge = freeEdgeAt(body, openingOf(item), *at);
+    return edge ? std::vector<int>{*edge} : std::vector<int>{};
+  }
+  if (isOpeningEdge(item)) {
+    return openingEdges(body, openingOf(item));
+  }
+  return body.find_edges(item.name.toStdString());
+}
+
+// Whether two sets of a body's edges meet at an end.
+bool loftEdgesMeet(const geometry::Shape& body, const std::vector<int>& a, const std::vector<int>& b) {
+  const auto ends = [&body](int edge) {
+    TopoDS_Vertex first;
+    TopoDS_Vertex last;
+    TopExp::Vertices(body.edge(edge), first, last);
+    return std::array<TopoDS_Vertex, 2>{first, last};
+  };
+  for (const int i : a) {
+    for (const TopoDS_Vertex& v : ends(i)) {
+      for (const int j : b) {
+        for (const TopoDS_Vertex& w : ends(j)) {
+          if (!v.IsNull() && !w.IsNull() &&
+              (v.IsSame(w) || BRep_Tool::Pnt(v).Distance(BRep_Tool::Pnt(w)) <= kLoftEdgesMeet)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// The sections of the Sections input's picks: each pick a section of its
+// own, but an edge that meets the edges of the section before it, of the
+// same body, joins that section, a chain of the body's edges
+// (`{"type": "edges"}`), as a path's edges make one path.
+QVector<Selection> loftSectionGroups(const Selection& picks, const CommandContext& context) {
+  QVector<Selection> groups;
+  std::shared_ptr<geometry::Shape> shape; // the last section's body, for edges
+  std::vector<int> chain;                 // the last section's edges
+  for (const SelectionItem& item : picks) {
+    if (item.kind == SelectKind::Edge && shape && !groups.isEmpty()) {
+      const SelectionItem& before = groups.last().last();
+      if (before.kind == SelectKind::Edge && before.owner == item.owner && before.occurrence == item.occurrence) {
+        const std::vector<int> edges = loftPickedEdges(*shape, item);
+        if (loftEdgesMeet(*shape, chain, edges)) {
+          groups.last().append(item);
+          chain.insert(chain.end(), edges.begin(), edges.end());
+          continue;
+        }
+      }
+    }
+    groups.append(Selection{item});
+    chain.clear();
+    shape.reset();
+    if (item.kind == SelectKind::Edge) {
+      shape = context.bodyShape(item.owner);
+      if (shape) {
+        chain = loftPickedEdges(*shape, item);
+      }
+    }
+  }
+  return groups;
+}
+
+// The picks of an `edges` section as the Sections input lists them: its
+// named edges and free edges in the order of the chain (each meeting one
+// before it), so that loftSectionGroups makes them one section again; none
+// when the panel cannot show it (free edges other than picked ones).
+std::optional<Selection> loftEdgeSectionItems(const QJsonObject& section, const CommandContext& context) {
+  const QString body = str(section, "body");
+  Selection items;
+  if (section.contains(QStringLiteral("edges"))) {
+    const auto named = pathItems(
+        QJsonObject{{QStringLiteral("body"), body}, {QStringLiteral("edges"), section.value(QStringLiteral("edges"))}},
+        context);
+    if (!named) {
+      return std::nullopt;
+    }
+    items += *named;
+  }
+  for (const QJsonValue& value : section.value(QStringLiteral("openings")).toArray()) {
+    if (!pickedOpeningEntry(value.toObject())) {
+      return std::nullopt;
+    }
+    items += openingEntryItems(body, value.toObject());
+  }
+  if (items.isEmpty()) {
+    return std::nullopt;
+  }
+  const std::shared_ptr<geometry::Shape> shape = context.bodyShape(body);
+  if (!shape) {
+    return items;
+  }
+  // In chain order: each next pick one that meets those before it.
+  Selection ordered{items.takeFirst()};
+  std::vector<int> chain = loftPickedEdges(*shape, ordered.first());
+  while (!items.isEmpty()) {
+    int next = 0;
+    for (int i = 0; i < items.size(); ++i) {
+      if (loftEdgesMeet(*shape, chain, loftPickedEdges(*shape, items[i]))) {
+        next = i;
+        break;
+      }
+    }
+    const std::vector<int> edges = loftPickedEdges(*shape, items[next]);
+    chain.insert(chain.end(), edges.begin(), edges.end());
+    ordered.append(items.takeAt(next));
+  }
+  return ordered;
+}
+
+// The picks of the definition's sections, a section of curves that cannot
+// be shown left out; none when a chain of edges cannot be shown.
+std::optional<QVector<Selection>> loftSectionItems(const QJsonObject& feature, const CommandContext& context) {
+  QVector<Selection> sections;
+  for (const QJsonValue& value : feature.value(QStringLiteral("sections")).toArray()) {
+    const QJsonObject section = value.toObject();
+    const QString type = str(section, "type");
+    if (type == QStringLiteral("profile")) {
+      sections.append(Selection{
+          {SelectKind::Profile, str(section, "sketch"), str(section, "region"), QStringLiteral("plane")}});
+    } else if (type == QStringLiteral("face")) {
+      // Faces and points (mitcad#2345).
+      sections.append(Selection{itemOf(QJsonObject{{QStringLiteral("body"), section.value(QStringLiteral("body"))},
+                                                   {QStringLiteral("face"), section.value(QStringLiteral("face"))}},
+                                       context)});
+    } else if (type == QStringLiteral("point")) {
+      sections.append(Selection{itemOf(section.value(QStringLiteral("point")), context)});
+    } else if (type == QStringLiteral("edges")) {
+      // A chain of a body's edges (mitcad#2395).
+      const auto items = loftEdgeSectionItems(section, context);
+      if (!items) {
+        return std::nullopt;
+      }
+      sections.append(*items);
+    } else if (const auto items = pathItems(section, context)) {
+      sections.append(*items);
+    }
+  }
+  return sections;
+}
+
+// Whether the Sections input holds an open edge (Whole Opening shown).
+bool loftPicksOpenEdges(const CommandState& state) {
+  const Selection& items = state.items(QStringLiteral("sections"));
+  return std::any_of(items.begin(), items.end(), [](const SelectionItem& item) { return isOpeningEdge(item); });
+}
+
 CommandDef surfaceLoftCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.loft", QObject::tr("Surface Loft"), "surface-loft",
                                   QObject::tr("A surface through sections in order: curves, profiles, faces or "
@@ -463,16 +642,21 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
       // A 3D sketch's curves anywhere in space and its profiles (closed
       // loops in its sketch plane) too (mitcad#1550); faces of bodies and
       // surface bodies (their edges) and points at the ends as the solid
-      // Loft's (mitcad#2345).
+      // Loft's (mitcad#2345). Edges of bodies and free edges of surface
+      // bodies too, those that meet one section's chain (mitcad#2395,
+      // loftSectionGroups).
       selectionInput(QStringLiteral("sections"), QObject::tr("Sections"),
-                     SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Face | kPointKinds, 2, 0)
-          .withTooltip(QObject::tr("Sections in order: sketch curves, or profiles and faces; points only first or "
-                                   "last"))
+                     SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Edge | SelectKind::Face | kPointKinds,
+                     2, 0)
+          .withTooltip(QObject::tr("Sections in order: sketch curves or chains of edges, or profiles and faces; "
+                                   "points first or last"))
           .withAccepts([&context](const SelectionItem& item) { return spatialPathTakes(item, context); })
           .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
             return spatialPathRefusal(item, context);
           })
+          .withOpenings(kLoftWholeOpening)
           .withOrdered(),
+      wholeOpeningInput().withVisible(loftPicksOpenEdges),
   };
   // Start and End Condition as the solid Loft's (mitcad#2345).
   def.inputs += loftEndInputs(false);
@@ -509,8 +693,25 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
     QJsonArray sections;
     bool curves = false;
     bool profiles = false;
-    for (const SelectionItem& item : state.items(QStringLiteral("sections"))) {
-      if (item.kind == SelectKind::Profile) {
+    for (const Selection& group : loftSectionGroups(state.items(QStringLiteral("sections")), model)) {
+      const SelectionItem& item = group.first();
+      if (item.kind == SelectKind::Edge) {
+        // A chain of a body's edges, named and free (mitcad#2395).
+        curves = true;
+        Selection named;
+        Selection open;
+        for (const SelectionItem& edge : group) {
+          (isOpeningEdge(edge) ? open : named).append(edge);
+        }
+        QJsonObject section{{QStringLiteral("type"), QStringLiteral("edges")}, {QStringLiteral("body"), item.owner}};
+        if (!named.isEmpty()) {
+          section.insert(QStringLiteral("edges"), names(named, SelectKind::Edge));
+        }
+        if (!open.isEmpty()) {
+          section.insert(QStringLiteral("openings"), openingEntries(open));
+        }
+        sections.append(section);
+      } else if (item.kind == SelectKind::Profile) {
         profiles = true;
         sections.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("profile")},
                                     {QStringLiteral("sketch"), item.owner},
@@ -536,8 +737,8 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
       }
     }
     if (curves && profiles) {
-      return Built::failure(QObject::tr("Select sketch curves as sections, or profiles, faces and points; not "
-                                        "both kinds."),
+      return Built::failure(QObject::tr("Select sketch curves and edges as sections, or profiles, faces and "
+                                        "points; not both kinds."),
                             QStringLiteral("sections"));
     }
     QJsonArray rails;
@@ -583,24 +784,21 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
     return result;
   };
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+    // Chains of edges as their picks in chain order (mitcad#2395).
     Selection sections;
-    for (const QJsonValue& value : feature.value(QStringLiteral("sections")).toArray()) {
-      const QJsonObject section = value.toObject();
-      const QString type = str(section, "type");
-      if (type == QStringLiteral("profile")) {
-        sections.append({SelectKind::Profile, str(section, "sketch"), str(section, "region"), QStringLiteral("plane")});
-      } else if (type == QStringLiteral("face")) {
-        // Faces and points (mitcad#2345).
-        sections.append(itemOf(QJsonObject{{QStringLiteral("body"), section.value(QStringLiteral("body"))},
-                                           {QStringLiteral("face"), section.value(QStringLiteral("face"))}},
-                               context));
-      } else if (type == QStringLiteral("point")) {
-        sections.append(itemOf(section.value(QStringLiteral("point")), context));
-      } else if (const auto items = pathItems(section, context)) {
-        sections += *items;
+    if (const auto groups = loftSectionItems(feature, context)) {
+      for (const Selection& group : *groups) {
+        sections += group;
       }
     }
     state.setItems(QStringLiteral("sections"), sections);
+    QJsonArray entries;
+    for (const QJsonValue& value : feature.value(QStringLiteral("sections")).toArray()) {
+      for (const QJsonValue& entry : value.toObject().value(QStringLiteral("openings")).toArray()) {
+        entries.append(entry);
+      }
+    }
+    state.setChecked(kLoftWholeOpening, wholeOpeningsIn(entries));
     // Start and End Condition (mitcad#2345).
     loadLoftEnds(feature, state, context);
     const QJsonArray rails = feature.value(kLoftRails).toArray();
@@ -643,7 +841,9 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
       }
       chained = chain;
     }
-    for (const QJsonValue& value : feature.value(QStringLiteral("sections")).toArray()) {
+    const QJsonArray all = feature.value(QStringLiteral("sections")).toArray();
+    bool edges = false;
+    for (const QJsonValue& value : all) {
       const QJsonObject section = value.toObject();
       const QString type = str(section, "type");
       if (type == QStringLiteral("curves")) {
@@ -655,14 +855,31 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
         if (!isShowable(section.value(QStringLiteral("point")), context)) {
           return false;
         }
+      } else if (type == QStringLiteral("edges")) {
+        edges = true; // a chain of a body's edges (mitcad#2395)
       } else if (type != QStringLiteral("profile") && type != QStringLiteral("face")) {
         return false;
       }
     }
-    return true;
+    if (!edges) {
+      return true;
+    }
+    // Chains of edges the panel shows as picks that make the same sections
+    // again: no two neighbouring chains of one body that meet.
+    const auto groups = loftSectionItems(feature, context);
+    if (!groups) {
+      return false;
+    }
+    Selection picks;
+    for (const Selection& group : *groups) {
+      picks += group;
+    }
+    return loftSectionGroups(picks, context).size() == all.size();
   };
-  def.describe = [](const CommandState& state, const CommandContext&) {
-    return QStringLiteral("Added surface loft through %1 sections").arg(state.items(QStringLiteral("sections")).size());
+  // The sections, a chain of edges one (mitcad#2395).
+  def.describe = [](const CommandState& state, const CommandContext& context) {
+    return QStringLiteral("Added surface loft through %1 sections")
+        .arg(loftSectionGroups(state.items(QStringLiteral("sections")), context).size());
   };
   return def;
 }

@@ -839,6 +839,10 @@ bool DrawingWorkspace::open(const QString& uid) {
     finishTitleBlock(false);
   }
   const QString previous = m_drawing;
+  // Another drawing: Shows as it was before the selection's (mitcad#2399).
+  if (!m_selectionDrawing.isEmpty() && uid != m_selectionDrawing) {
+    dropSelectionSubject();
+  }
   m_drawing = uid;
   if (uid != previous) {
     m_sheet = 0;
@@ -889,6 +893,7 @@ void DrawingWorkspace::closeDrawing() {
   }
   m_drawing.clear();
   m_drawnSheet.clear();
+  dropSelectionSubject();
   // A sheet drawn in a job is no longer wanted (mitcad#1997).
   ++m_drawGeneration;
   m_drawNoteTimer->stop();
@@ -1190,6 +1195,43 @@ void DrawingWorkspace::startTool(const QString& id) {
     return;
   }
   setTool(m_tool == tool ? nullptr : tool);
+}
+
+void DrawingWorkspace::setSelectionSubject(const QString& choice, const QString& label) {
+  if (!isOpen() || choice.isEmpty()) {
+    return;
+  }
+  QHash<QString, QString>& options = m_options[QStringLiteral("drawing.base_view")];
+  // The choice before the first selection's, kept to come back.
+  if (m_selectionDrawing.isEmpty()) {
+    const auto before = options.constFind(QStringLiteral("subject"));
+    m_subjectBefore = before != options.constEnd() ? std::optional<QString>(before.value()) : std::nullopt;
+  }
+  m_selectionDrawing = m_drawing;
+  m_selectionChoice = {choice, label};
+  options.insert(QStringLiteral("subject"), choice);
+  qDebug().noquote() << QStringLiteral("Drawing Base View shows the selection: %1 (%2)").arg(choice, label);
+  if (m_tool != nullptr && m_tool->id == QStringLiteral("drawing.base_view")) {
+    fillPanel();
+  }
+}
+
+void DrawingWorkspace::dropSelectionSubject() {
+  if (m_selectionDrawing.isEmpty()) {
+    return;
+  }
+  QHash<QString, QString>& options = m_options[QStringLiteral("drawing.base_view")];
+  // Changed meanwhile: that choice stays.
+  if (options.value(QStringLiteral("subject")) == m_selectionChoice.first) {
+    if (m_subjectBefore) {
+      options.insert(QStringLiteral("subject"), *m_subjectBefore);
+    } else {
+      options.remove(QStringLiteral("subject"));
+    }
+  }
+  m_selectionDrawing.clear();
+  m_selectionChoice = {};
+  m_subjectBefore.reset();
 }
 
 void DrawingWorkspace::setTool(const DrawingToolDef* tool) {
@@ -1968,7 +2010,13 @@ QList<QPair<QString, QString>> DrawingWorkspace::subjects() const {
   } catch (const std::exception& e) {
     qDebug().noquote() << QStringLiteral("Drawing subjects not listed: %1").arg(QString::fromUtf8(e.what()));
   }
-  return subjectChoices(component, name, components, bodies, sheets);
+  QList<QPair<QString, QString>> choices = subjectChoices(component, name, components, bodies, sheets);
+  // The selection's bodies the drawing was made from (mitcad#2399), after
+  // the whole component.
+  if (m_selectionDrawing == m_drawing && m_selectionChoice.first.startsWith(QStringLiteral("selection:"))) {
+    choices.insert(1, m_selectionChoice);
+  }
+  return choices;
 }
 
 QList<QPair<QString, QString>> DrawingWorkspace::explodeChoices() const {

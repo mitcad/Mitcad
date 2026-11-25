@@ -1286,7 +1286,7 @@ QWidget* TestDriver::keyReceiver(QWidget*& window) {
   QWidget* host = window->window();
   QWidget* popup = QApplication::activePopupWidget();
   QWidget* active = QApplication::activeWindow();
-  if (popup == nullptr && active != host && (active == nullptr || GlassCard::hostWindow(active) != host)) {
+  if (popup == nullptr && active != host && (active == nullptr || GlassCard::keyboardHost(active) != host)) {
     // A window the system did not activate (a session without a user at the
     // console; macOS does not let a process started from a shell take the
     // focus) has no focused widget for Qt: QWidget::hasFocus() is false, and
@@ -1305,7 +1305,7 @@ QWidget* TestDriver::keyReceiver(QWidget*& window) {
   }
   QWidget* receiver = popup != nullptr ? popup : window;
   QWidget* focused = QApplication::focusWidget();
-  if (popup == nullptr && focused != nullptr && GlassCard::hostWindow(focused) == host) {
+  if (popup == nullptr && focused != nullptr && GlassCard::keyboardHost(focused) == host) {
     receiver = focused; // in the main window or in one of its panels' windows
   } else if (receiver->focusWidget() != nullptr) {
     receiver = receiver->focusWidget();

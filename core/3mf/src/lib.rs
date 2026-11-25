@@ -8,7 +8,10 @@
 //! build (the objects to print). [`write`] writes a [`Model`] as one build
 //! item: an object whose components place one mesh object per part, so
 //! slicers load the parts as one object in their positions, with the parts'
-//! names and colours (`basematerials`); with [`Model::objects`], as several
+//! names and colours (`basematerials`), and the colours of faces coloured
+//! on their own on their triangles (mitcad#2385: [`Mesh::triangle_colors`],
+//! each triangle's `pid` and `p1` naming a base material of the same
+//! group); with [`Model::objects`], as several
 //! build items, each an object of its own placements of the parts
 //! (mitcad#856: the pieces a slicer arranges on its plate one by one).
 //! [`read`] reads any core model back into parts with their placements
@@ -67,6 +70,12 @@ pub struct ImportRead {
 pub struct Mesh {
     pub vertices: Vec<[f64; 3]>,
     pub triangles: Vec<[u32; 3]>,
+    /// Each triangle's own colour (sRGB components in [0, 1]), None for
+    /// its part's ([`Part::color`]): the faces of a body coloured on their
+    /// own (mitcad#2385). Empty when no triangle has one, else one per
+    /// triangle. [`write`] writes them as the triangles' base materials
+    /// (their `pid` and `p1`), [`read`] reads them back.
+    pub triangle_colors: Vec<Option<[f64; 3]>>,
 }
 
 impl Mesh {
@@ -93,6 +102,7 @@ impl Mesh {
                 .iter()
                 .map(|&[a, b, c]| if mirrored { [a, c, b] } else { [a, b, c] })
                 .collect(),
+            triangle_colors: self.triangle_colors.clone(),
         }
     }
 

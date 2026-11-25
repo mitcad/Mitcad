@@ -720,6 +720,12 @@ impl DocState {
         if let FeatureDef::EdgeFrame(frame) = &resolved {
             crate::features::edge_frame::settle_angles(params, frame, owner).map_err(invalid)?;
         }
+        // Sheet rules added or edited cut their corner relief at flange
+        // corners (mitcad#2342); rules saved before keep their corners
+        // until they are edited. An explicit `false` stays.
+        if let FeatureDef::SheetRules(rules) = &mut resolved {
+            rules.flange_corner_relief.get_or_insert(true);
+        }
         // A Flex item's length is a reference parameter of its own
         // (mitcad#1713).
         if let FeatureDef::Flex(flex) = &mut resolved {
@@ -1961,6 +1967,11 @@ pub struct Document<K: Kernel> {
     /// The design edited in place in a holder (mitcad#2321,
     /// `document/edit_in_place.rs`). Runtime context only.
     in_place: Option<edit_in_place::InPlaceMode>,
+    /// Whether a planar sketch hides when a feature first uses it
+    /// (mitcad#2393, [`Document::set_hide_used_sketches`]): the user's
+    /// preference, on by default. Runtime context only: never saved or
+    /// undone.
+    hide_used_sketches: bool,
 }
 
 /// A `sketch` query's answer with what it was made from (mitcad#679): the
@@ -2031,6 +2042,7 @@ impl<K: Kernel> Document<K> {
             sketch_step_changes: Vec::new(),
             slicer_folders: None,
             in_place: None,
+            hide_used_sketches: true,
         }
     }
 
@@ -2424,6 +2436,7 @@ impl<K: Kernel> Document<K> {
             sketch_step_changes: Vec::new(),
             slicer_folders: self.slicer_folders.clone(),
             in_place: self.in_place.clone(),
+            hide_used_sketches: self.hide_used_sketches,
         })
     }
 
@@ -3178,9 +3191,10 @@ impl<K: Kernel> Document<K> {
         next.prune_selection_sets();
         // Explode views lose the occurrences deleted (mitcad#2113).
         next.prune_explode_views();
-        // A sketch that got its first consumer hides, one that lost its
-        // last shows (mitcad#7).
-        next.follow_sketch_use(&self.state);
+        // A sketch that got its first consumer hides (unless the user's
+        // preference keeps it shown, mitcad#2393), one that lost its last
+        // shows (mitcad#7).
+        next.follow_sketch_use(&self.state, self.hide_used_sketches);
         // Carriages that move together (mitcad#2274): an edit of one's
         // offset moves the others with it.
         if next.parameters != self.state.parameters {

@@ -162,6 +162,7 @@ const SettingsRule kRules[] = {
     {"sketch/escLeavesUnchangedSketch", "preferences", PathKind::None},
     {"sketch/showProfilesOnOpen", "preferences", PathKind::None},
     {"sketch/projectFaceOnCreate", "preferences", PathKind::None},
+    {"sketch/hideUsedSketches", "preferences", PathKind::None},
     {"suppliers/region", "preferences", PathKind::None},
     {"suppliers/shops", "preferences", PathKind::None},
     {"assembly/jointComponent", "preferences", PathKind::None},

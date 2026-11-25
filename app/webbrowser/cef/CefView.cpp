@@ -466,11 +466,9 @@ CefView::CefView(QWidget* parent, const QString& bridgeFolder)
 }
 
 CefView::~CefView() {
+  // The bridge is let go in closeBrowser: here when the view goes while CEF
+  // runs, else already at CEF's shutdown (mitcad#2394).
   closeBrowser();
-  if (m_router) {
-    m_bridge->clear();
-    m_router->RemoveHandler(m_bridge.get());
-  }
   cef::removeView(this);
 }
 
@@ -618,7 +616,26 @@ QRect CefView::fromCef(const QRect& rect) const {
                static_cast<int>(std::lround(rect.height() / m_scale)));
 }
 
+void CefView::releaseBridge() {
+  if (!m_router) {
+    return;
+  }
+  // No more events to the page, and the router's pending queries (the
+  // page's persistent "events" listener) cancelled with the handler. The
+  // router may be used on CEF's UI thread only, which exists only while CEF
+  // runs: after CefShutdown, RemoveHandler ends the process with a failed
+  // check (mitcad#2394).
+  m_bridge->clear();
+  if (cef::engineRunning()) {
+    m_router->RemoveHandler(m_bridge.get());
+  }
+  m_router = nullptr;
+}
+
 void CefView::closeBrowser() {
+  // The bridge first, while the browser can still tell its renderer the
+  // queries are cancelled.
+  releaseBridge();
   if (m_client) {
     m_client->detach();
   }

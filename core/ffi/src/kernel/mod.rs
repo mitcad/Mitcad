@@ -3471,6 +3471,62 @@ impl Kernel for OcctKernel {
             .map(|c| (c[0], [c[1], c[2], c[3]]))
             .collect())
     }
+
+    // Curves of free edges: a loft's section of a surface body's free
+    // edges (mitcad#2395; sketch_ref.rs, geometry's surface_offsets.hpp).
+
+    fn opening_curves(
+        &self,
+        shape: &Self::Shape,
+        opening: &mitcad_model::OpeningEdges<'_>,
+    ) -> Result<Vec<mitcad_model::surface_modelling::FreeEdgeCurve>, KernelError> {
+        let faces: Vec<String> = opening.faces.iter().map(ToString::to_string).collect();
+        let at: Vec<f64> = opening.at.iter().flatten().copied().collect();
+        let index = i32::try_from(opening.index)
+            .map_err(|_| KernelError::failed(format!("no opening {}", opening.index)))?;
+        let found =
+            sketch_ref::ffi::opening_curves(occt(shape)?, index, &faces, &at).map_err(failed)?;
+        found
+            .iter()
+            .map(|p| {
+                let face = match p.faces.first() {
+                    Some(f) => Some(
+                        f.parse::<FaceName>()
+                            .map_err(|e| KernelError::failed(format!("face name {f}: {e}")))?,
+                    ),
+                    None => None,
+                };
+                Ok(mitcad_model::surface_modelling::FreeEdgeCurve {
+                    curve: sketch_ref::curve(&p.curve),
+                    face,
+                })
+            })
+            .collect()
+    }
+
+    // Triangle meshes with their faces: the colours of faces coloured on
+    // their own in 3MF files (mitcad#2385; mesh.rs).
+
+    fn triangle_mesh_faces(
+        &self,
+        shape: &Self::Shape,
+        tolerance: &mitcad_model::exchange::MeshTolerance,
+    ) -> Result<mitcad_model::exchange::FacedTriangleMesh, KernelError> {
+        let mesh = mesh::ffi::triangle_mesh(
+            occt(shape)?,
+            tolerance.deviation,
+            tolerance.angle,
+            tolerance.face_triangles,
+        )
+        .map_err(failed)?;
+        Ok(mitcad_model::exchange::FacedTriangleMesh {
+            mesh: mitcad_model::exchange::TriangleMesh {
+                vertices: mesh.vertices.as_chunks::<3>().0.to_vec(),
+                triangles: mesh.triangles.as_chunks::<3>().0.to_vec(),
+            },
+            faces: mesh.faces,
+        })
+    }
 }
 
 /// Face or edge indices for the bridge (mitcad#714).

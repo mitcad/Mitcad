@@ -14,6 +14,7 @@
 class QGraphicsOpacityEffect;
 class QHBoxLayout;
 class QLabel;
+class QPropertyAnimation;
 class QSpacerItem;
 class QVBoxLayout;
 
@@ -128,7 +129,16 @@ public:
   // larger than requested because of its layout's minimum size; stacking
   // and hit testing must use that accepted size too.
   void setSlot(const QRect& slot);
-  QRect slot() const { return m_windowed ? QRect(m_slot.topLeft(), size()) : geometry(); }
+  // While the card moves to its slot (animateNextSlot): the slot it ends in.
+  QRect slot() const {
+    return m_slotMoving ? m_slot : (m_windowed ? QRect(m_slot.topLeft(), size()) : geometry());
+  }
+  // The next change of the slot moves the card there over `ms` milliseconds
+  // (its geometry animated, mitcad#2367: the tutorial pane's places) rather
+  // than at once; 0 or less: at once. A slot set during the move retargets
+  // it; slotMoveFinished comes when it ends.
+  void animateNextSlot(int ms) { m_slotMoveMs = ms; }
+  bool slotMoving() const { return m_slotMoving; }
 
   // Shown (or about to be, for a windowed card whose host window is not
   // shown yet) in the sense of !isHidden().
@@ -146,6 +156,12 @@ public:
   // for a windowed card, the window of the card's parent. The positions that
   // the application logs for the UI tests are in its coordinates.
   static QWidget* hostWindow(const QWidget* widget);
+  // The window whose keyboard `widget` shares: hostWindow(), or, for a
+  // floated dock (the Docked layout's panel torn off, a window of its own),
+  // the host window of the main window it belongs to, as Qt's own window
+  // shortcuts count it (mitcad#2391). Not for positions: a floated dock's
+  // are its own.
+  static QWidget* keyboardHost(const QWidget* widget);
   // `point` of `widget` in the host window's coordinates (mapTo does not
   // reach through a card's window).
   static QPoint mapToHost(const QWidget* widget, const QPoint& point);
@@ -202,6 +218,8 @@ signals:
   // The width grip (setWidthAdjustable) dragged, and released.
   void widthDragged(int width);
   void widthChosen(int width);
+  // A move to the slot (animateNextSlot) ended there.
+  void slotMoveFinished();
 
 protected:
   // The material inside `rect` (the card's rounded rectangle).
@@ -245,6 +263,9 @@ private:
   bool m_suppressed = false; // setSuppressed
   bool m_shownAfter = false; // setSuppressed: shown again when it ends
   QRect m_slot;
+  int m_slotMoveMs = 0;     // animateNextSlot
+  bool m_slotMoving = false;
+  QPropertyAnimation* m_slotMove = nullptr; // made on the first move
   qreal m_opacity = 1.0;
 
   QVBoxLayout* m_layout = nullptr;

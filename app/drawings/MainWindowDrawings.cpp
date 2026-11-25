@@ -476,10 +476,49 @@ void MainWindow::openDrawing(const QString& uid) {
   updateActions();
 }
 
-void MainWindow::createDrawing(const QString& component) {
+void MainWindow::createDrawing(const QString& component) { createDrawingOf(component, false); }
+
+drawings::SelectionSubject MainWindow::selectionDrawingSubject() const {
+  // The bodies and occurrences selected, in the view or the browser, in
+  // their order: (body, occurrence path) pairs, an occurrence's body empty.
+  QVector<QPair<QString, QString>> items;
+  for (const SelectionItem& item : m_selection) {
+    if (item.kind == SelectKind::Body && !item.owner.isEmpty()) {
+      items.append({item.owner, item.occurrence});
+    } else if (item.kind == SelectKind::Component && !item.occurrence.isEmpty()) {
+      items.append({QString(), item.occurrence});
+    }
+  }
+  if (items.isEmpty()) {
+    return {};
+  }
+  try {
+    return drawings::selectionSubject(items,
+                                      queryObject({{QStringLiteral("query"), QStringLiteral("components")}}),
+                                      queryArray(QStringLiteral("bodies")));
+  } catch (const std::exception& e) {
+    qDebug().noquote() << QStringLiteral("Create Drawing: the selection not read: %1").arg(QString::fromUtf8(e.what()));
+  }
+  return {};
+}
+
+void MainWindow::createDrawingOf(const QString& component, bool fromSelection) {
   if (!canChangeModel()) {
     showStatus(changeBlockedReason(), NoticeLevel::Error);
     return;
+  }
+  // File › Create Drawing with bodies or occurrences selected
+  // (mitcad#2399): the root's drawing of them, named for them, its first
+  // Base View showing them.
+  const drawings::SelectionSubject selected =
+      fromSelection && (component.isEmpty() || component == QStringLiteral("C0")) ? selectionDrawingSubject()
+                                                                                 : drawings::SelectionSubject();
+  if (!selected.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Create Drawing from the selection: %1 (%2)")
+                              .arg(selected.bodies == 1  ? QStringLiteral("1 body")
+                                   : selected.bodies > 1 ? QStringLiteral("%1 bodies").arg(selected.bodies)
+                                                         : selected.choice,
+                                   selected.shows);
   }
   // The dialog opens with the last choice (mitcad#1218), kept in the
   // user's settings.
@@ -503,6 +542,22 @@ void MainWindow::createDrawing(const QString& component) {
   }
   if (!component.isEmpty() && component != QStringLiteral("C0")) {
     command.insert(QStringLiteral("component"), component);
+  }
+  // Named for what it shows ("Bracket:3 Drawing"), a name of the root's
+  // drawings not taken.
+  if (!cut && !selected.isEmpty()) {
+    QStringList taken;
+    try {
+      for (const QJsonValue& value : queryArray(QStringLiteral("drawings"))) {
+        const QJsonObject drawing = value.toObject();
+        const QString owner = drawing.value(QStringLiteral("component")).toString();
+        if (owner.isEmpty() || owner == QStringLiteral("C0")) {
+          taken << drawing.value(QStringLiteral("name")).toString();
+        }
+      }
+    } catch (const std::exception&) {
+    }
+    command.insert(QStringLiteral("name"), drawings::drawingNameFor(selected.shows, taken));
   }
   QJsonObject result;
   if (!runModelCommand(command, &result)) {
@@ -529,6 +584,10 @@ void MainWindow::createDrawing(const QString& component) {
   // A new drawing's first view comes next (mitcad#725): Base View is on.
   // A cut sheet takes its parts from Add Parts.
   if (drawingOpen() && !cut) {
+    // Showing the selection the drawing was made from (mitcad#2399).
+    if (!selected.isEmpty()) {
+      m_drawingWorkspace->setSelectionSubject(selected.choice, selected.label);
+    }
     m_drawingWorkspace->startTool(QStringLiteral("drawing.base_view"));
   }
 }

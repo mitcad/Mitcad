@@ -639,8 +639,14 @@ impl Reader {
                             id_of(&triangle, "v2")?,
                             id_of(&triangle, "v3")?,
                         ]);
+                        let color = self.triangle_color(&triangle, object, id, materials)?;
+                        out.triangle_colors.push(color);
                     }
                 }
+            }
+            // No triangle of a colour of its own: none listed.
+            if out.triangle_colors.iter().all(Option::is_none) {
+                out.triangle_colors.clear();
             }
             let problem = if self.lenient {
                 lenient_mesh(&mut out, &label, id, kind)?
@@ -677,6 +683,50 @@ impl Reader {
             components.push((key, transform(&component, scale)?));
         }
         Ok(Object::Components { name, components })
+    }
+
+    /// A triangle's colour of its own (mitcad#2385): the base material its
+    /// `p1` names in the group of its `pid`, else of its object's `pid`
+    /// (the colour of its first corner, which [`crate::write`] gives all
+    /// three). None without `p1`, and for [`read_for_import`] where the
+    /// group is no base material group (a colour group of the Materials
+    /// extension) or has no such material.
+    fn triangle_color(
+        &self,
+        triangle: &Node<'_, '_>,
+        object: &Node<'_, '_>,
+        id: u32,
+        materials: &Materials,
+    ) -> Result<Option<[f64; 3]>, Error> {
+        if triangle.attribute("p1").is_none() {
+            return Ok(None);
+        }
+        let found = (|| {
+            let group = match triangle.attribute("pid") {
+                Some(_) => id_of(triangle, "pid")?,
+                None => id_of(object, "pid")?,
+            };
+            let index = id_of(triangle, "p1")?;
+            let colors = materials.get(&group).ok_or_else(|| {
+                error(format!(
+                    "a triangle of object {id} refers to material group {group}, which is not \
+                     defined"
+                ))
+            })?;
+            colors.get(index as usize).map(|c| c.1).ok_or_else(|| {
+                error(format!(
+                    "a triangle of object {id} refers to material {index} of group {group}, \
+                     which has {}",
+                    colors.len()
+                ))
+            })
+        })();
+        match found {
+            Ok(color) => Ok(Some(color)),
+            // The import takes the triangle in its part's colour.
+            Err(_) if self.lenient => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// The base material an object's `pid` and `pindex` name: its name and
@@ -749,8 +799,20 @@ fn lenient_mesh(
         )));
     }
     let before = mesh.triangles.len();
-    mesh.triangles
-        .retain(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0]);
+    let kept = |t: &[u32; 3]| t[0] != t[1] && t[1] != t[2] && t[2] != t[0];
+    // The triangles' own colours go with them (mitcad#2385).
+    if !mesh.triangle_colors.is_empty() {
+        let mut colors = std::mem::take(&mut mesh.triangle_colors).into_iter();
+        mesh.triangle_colors = mesh
+            .triangles
+            .iter()
+            .filter_map(|t| {
+                let color = colors.next().flatten();
+                kept(t).then_some(color)
+            })
+            .collect();
+    }
+    mesh.triangles.retain(kept);
     let mut said = Vec::new();
     let dropped = before - mesh.triangles.len();
     if dropped > 0 {

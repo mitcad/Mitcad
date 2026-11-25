@@ -48,3 +48,6 @@ mod loft_tangent_edges_tests;
 // A loft's Perpendicular to Face end condition and a surface loft of
 // curves with end conditions (mitcad#2345).
 mod loft_perpendicular_tests;
+// A rib's Direction Normal to Curves: the far side the chain offset by
+// the depth (mitcad#2398).
+mod rib_normal_tests;

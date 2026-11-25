@@ -396,6 +396,9 @@ impl<K: ImportKernel> Sheets<K> for Importer<'_, K> {
             "reference_side": side,
             "bend_relief": relief("bend_relief")?,
             "corner_relief": relief("corner_relief")?,
+            // The import replays the file's corners as they are built
+            // (mitcad#2342): no automatic corner relief at flange corners.
+            "flange_corner_relief": false,
         });
         let inferred = get("inferred")
             .as_array()

@@ -39,15 +39,30 @@ fn distance_squared(a: [f64; 3], b: [f64; 3]) -> f64 {
 
 /// The mesh with every edge longer than `max_edge` split at its middle,
 /// round by round until none is longer; as it is with `max_edge` 0 (no
-/// limit). More than `most` triangles is an error.
-pub(super) fn split_long_edges(
-    mut mesh: TriangleMesh,
+/// limit). More than `most` triangles is an error. The export splits with
+/// [`split_long_edges_faced`].
+#[cfg(test)]
+fn split_long_edges(
+    mesh: TriangleMesh,
     max_edge: f64,
     most: usize,
 ) -> Result<TriangleMesh, TooMany> {
+    split_long_edges_faced(mesh, Vec::new(), max_edge, most).map(|(mesh, _)| mesh)
+}
+
+/// [`split_long_edges`] of a mesh with each triangle's face (`faces`, one
+/// per triangle, or empty; mitcad#2385): the pieces of a triangle lie on
+/// its face.
+pub(super) fn split_long_edges_faced(
+    mut mesh: TriangleMesh,
+    mut faces: Vec<u32>,
+    max_edge: f64,
+    most: usize,
+) -> Result<(TriangleMesh, Vec<u32>), TooMany> {
     if max_edge <= 0.0 {
-        return Ok(mesh);
+        return Ok((mesh, faces));
     }
+    let faced = !faces.is_empty();
     let limit = max_edge * max_edge;
     for _ in 0..MOST_ROUNDS {
         // Which edges of each triangle are long: edge i runs from corner i
@@ -68,7 +83,7 @@ pub(super) fn split_long_edges(
             .map(|edges| 1 + edges.iter().filter(|l| **l).count())
             .sum();
         if pieces == mesh.triangles.len() {
-            return Ok(mesh);
+            return Ok((mesh, faces));
         }
         if pieces > most {
             return Err(TooMany { most });
@@ -79,7 +94,9 @@ pub(super) fn split_long_edges(
             at: HashMap::new(),
         };
         let mut triangles = Vec::with_capacity(pieces);
-        for (t, edges) in mesh.triangles.iter().zip(&long) {
+        let mut pieces_faces = Vec::with_capacity(if faced { pieces } else { 0 });
+        for (k, (t, edges)) in mesh.triangles.iter().zip(&long).enumerate() {
+            let before = triangles.len();
             match edges.iter().filter(|l| **l).count() {
                 0 => triangles.push(*t),
                 1 => {
@@ -105,11 +122,18 @@ pub(super) fn split_long_edges(
                     triangles.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
                 }
             }
+            if faced {
+                let face = faces.get(k).copied().unwrap_or_default();
+                pieces_faces.resize(pieces_faces.len() + triangles.len() - before, face);
+            }
         }
         mesh.vertices = middles.vertices;
         mesh.triangles = triangles;
+        if faced {
+            faces = pieces_faces;
+        }
     }
-    Ok(mesh)
+    Ok((mesh, faces))
 }
 
 /// The mesh's points with the middles of the edges split so far.
@@ -214,6 +238,34 @@ mod tests {
         directed
             .iter()
             .all(|((a, b), n)| *n == 1 && directed.get(&(*b, *a)) == Some(&1))
+    }
+
+    /// The pieces of a split triangle keep its face (mitcad#2385): each
+    /// side of the box its own face, every piece within its side's plane.
+    #[test]
+    fn split_triangles_keep_their_faces() {
+        let size = [10.0, 20.0, 30.0];
+        let box_mesh = cuboid(size);
+        let faces: Vec<u32> = (0..12).map(|t| t / 2).collect();
+        let (unsplit, same) =
+            split_long_edges_faced(box_mesh.clone(), faces.clone(), 0.0, MOST_TRIANGLES).unwrap();
+        assert_eq!((unsplit, same), (box_mesh.clone(), faces.clone()));
+        let (split, split_faces) =
+            split_long_edges_faced(box_mesh.clone(), faces, 3.0, MOST_TRIANGLES).unwrap();
+        assert_eq!(split.triangles.len(), split_faces.len());
+        assert!(split.triangles.len() > box_mesh.triangles.len());
+        // The sides in turn: -Z, +Z, -Y, +Y, -X, +X.
+        for (t, face) in split.triangles.iter().zip(&split_faces) {
+            let axis = [2, 2, 1, 1, 0, 0][*face as usize];
+            let at = if face % 2 == 0 { 0.0 } else { size[axis] };
+            for v in t {
+                let p = split.vertices[*v as usize];
+                assert!((p[axis] - at).abs() <= 1e-9, "{p:?} is off face {face}");
+            }
+        }
+        // Without faces, none.
+        let (_, none) = split_long_edges_faced(box_mesh, Vec::new(), 3.0, MOST_TRIANGLES).unwrap();
+        assert!(none.is_empty());
     }
 
     #[test]

@@ -31,13 +31,24 @@
 //! remove a whole domain or split the sheet is refused (the flange is too
 //! short for that relief), as is one reaching a seam of a third, folded bend;
 //! parallel bends have no junction.
+//!
+//! A Flange whose bend meets another bend at a corner cuts the rules' corner
+//! relief there by itself, the same way (mitcad#2342,
+//! [`flange_corner_reliefs`]): its corner already leaves the crossing zone
+//! open (a flange on the next edge cuts the earlier bend back to its tangent
+//! line; a flange on several edges ends its bends at the corner's miter), so
+//! the relief adds what reaches past that zone.
 
-use super::cut::developed_cut;
+use super::cut::{CutOutcome, developed_cut};
 use super::develop::{bend_record, bend_side, domain_label, planar_map, reconfigure};
 use super::*;
-use crate::features::sheet::ReliefKind;
+use crate::features::sheet::{Relief, ReliefKind};
 use crate::features::sheet_relief::SheetCornerReliefDef;
+use crate::features::{FeatureDef, FeatureEntry};
+use crate::fingerprint::Fingerprint;
+use crate::recompute::Read;
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 type V2 = [f64; 2];
 
@@ -289,20 +300,57 @@ pub(crate) fn corner_relief<K: Kernel>(
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (state, rules) = read(ctx, d.body)?;
     let relief = d.relief.clone().unwrap_or(rules.corner_relief.clone());
-    let thickness = rules.thickness;
     let [first, second] = d.bends[..] else {
         return Err("a corner relief names exactly two bends".into());
     };
     if relief.kind != ReliefKind::Tear && (!relief.width.is_finite() || relief.width <= TOLERANCE) {
         return Err("a corner relief requires a positive width".into());
     }
-    for bend in [first, second] {
-        bend_record(&state, bend, thickness)?;
+    let outcome = relieve(
+        ctx,
+        &state,
+        rules.thickness,
+        [first, second],
+        d.panel,
+        &relief,
+        0,
+        "the corner relief",
+    )?;
+    if let Some(domain) = outcome.removed.first() {
+        return Err(format!(
+            "the corner relief removes all material of {}; the flange is too short for it",
+            domain_label(*domain)
+        ));
     }
-    let panel = stationary_panel(&state, first, second, d.panel)?;
+    if !outcome.used_tools {
+        ctx.warn("the corner relief removes no material at the junction");
+    }
+    publish_pieces(ctx, outcome.state, &rules, Some("the corner relief"))
+}
+
+/// The relief `relief` cut at the junction of the bends `first` and
+/// `second` (see the module notes), `selected` the panel held while it is
+/// developed (none: the one [`stationary_panel`] finds). The relief's
+/// outline is the feature's generated curves from `slot`; `what` names the
+/// cut in errors.
+#[allow(clippy::too_many_arguments)]
+fn relieve<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    state: &SheetState,
+    thickness: f64,
+    [first, second]: [BendId; 2],
+    selected: Option<PanelId>,
+    relief: &Relief<f64>,
+    slot: u32,
+    what: &str,
+) -> Result<CutOutcome, String> {
+    for bend in [first, second] {
+        bend_record(state, bend, thickness)?;
+    }
+    let panel = stationary_panel(state, first, second, selected)?;
     // The bends developed: both, and every bend on the seam paths from the
     // panel to them (none when they leave it directly).
-    let parents = reach(&state, SheetDomainRef::Panel(panel));
+    let parents = reach(state, SheetDomainRef::Panel(panel));
     let mut open: Vec<BendId> = Vec::new();
     let mut entries = Vec::new();
     for bend in [first, second] {
@@ -333,19 +381,21 @@ pub(crate) fn corner_relief<K: Kernel>(
     let tool = match relief.kind {
         ReliefKind::Round => region(
             ctx.uid,
-            0,
+            slot,
             vec![SegmentGeometry::Circle {
                 center: centre,
                 radius: relief.width / 2.0,
                 start: 0.0,
             }],
         )?,
-        ReliefKind::Rectangular => {
-            polygon(ctx.uid, 0, &ccw(rectangular(&a, &b, centre, relief.width)))?
-        }
+        ReliefKind::Rectangular => polygon(
+            ctx.uid,
+            slot,
+            &ccw(rectangular(&a, &b, centre, relief.width)),
+        )?,
         ReliefKind::Tear => polygon(
             ctx.uid,
-            0,
+            slot,
             &ccw(vec![
                 junction(&a, &b, 0.0, 0.0)?,
                 junction(&a, &b, a.allowance, 0.0)?,
@@ -354,25 +404,203 @@ pub(crate) fn corner_relief<K: Kernel>(
             ]),
         )?,
     };
-    let outcome = developed_cut(
-        ctx,
-        &state,
-        thickness,
-        panel,
-        &open,
-        &[tool],
-        "the corner relief",
-    )?;
-    if let Some(domain) = outcome.removed.first() {
-        return Err(format!(
-            "the corner relief removes all material of {}; the flange is too short for it",
-            domain_label(*domain)
-        ));
+    developed_cut(ctx, state, thickness, panel, &open, &[tool], what)
+}
+
+/// The generated curves of the rules' corner relief at a flange's `n`-th
+/// corner start at `CORNER_SLOT + 100 n` (mitcad#2342): free in every
+/// hundred of a flange's curves (its trim, bends, walls and corner cuts
+/// use `0` to `89` of each).
+const CORNER_SLOT: u32 = 90;
+
+/// The bends that meet `bend` at a corner of `panel` (mitcad#2342): each
+/// other bend seamed to the panel whose seam ends where a seam of `bend` on
+/// the panel ends, the two not parallel. A Flange on the next edge of a
+/// corner meets an earlier one so: its trim cuts the earlier bend back to
+/// its own tangent line, and its bend runs to the earlier one's.
+pub(super) fn corner_bends(state: &SheetState, panel: PanelId, bend: BendId) -> Vec<BendId> {
+    let seams = |b: BendId| -> Vec<(V2, V2)> {
+        state
+            .joins
+            .iter()
+            .flat_map(|p| [(&p.first, &p.second), (&p.second, &p.first)])
+            .filter(|(here, there)| {
+                here.boundary.domain == SheetDomainRef::Panel(panel)
+                    && there.boundary.domain == SheetDomainRef::Bend(b)
+            })
+            .filter_map(|(here, _)| port_ends(state, here))
+            .collect()
+    };
+    let own = seams(bend);
+    let near = |p: V2, q: V2| (p[0] - q[0]).hypot(p[1] - q[1]) <= 1e-6;
+    let meet = |(a, b): (V2, V2), (c, d): (V2, V2)| {
+        let u = [b[0] - a[0], b[1] - a[1]];
+        let v = [d[0] - c[0], d[1] - c[1]];
+        let length = u[0].hypot(u[1]) * v[0].hypot(v[1]);
+        length > 1e-12
+            && (u[0] * v[1] - u[1] * v[0]).abs() / length > 1e-6
+            && [a, b].iter().any(|p| [c, d].iter().any(|q| near(*p, *q)))
+    };
+    let mut out: Vec<BendId> = Vec::new();
+    for other in state.bends.iter().map(|b| b.id) {
+        if other == bend || out.contains(&other) {
+            continue;
+        }
+        if seams(other)
+            .iter()
+            .any(|theirs| own.iter().any(|ours| meet(*ours, *theirs)))
+        {
+            out.push(other);
+        }
     }
-    if !outcome.used_tools {
-        ctx.warn("the corner relief removes no material at the junction");
+    out
+}
+
+/// The Corner Relief features of the design that name a bend of `flange`
+/// and are not suppressed: each one's uid and its two bends in order.
+fn corner_relief_features(
+    features: &[Arc<FeatureEntry>],
+    flange: FeatureUid,
+) -> Vec<(FeatureUid, [BendId; 2])> {
+    features
+        .iter()
+        .filter(|entry| !entry.suppressed)
+        .filter_map(|entry| match &entry.def {
+            FeatureDef::SheetCornerRelief(relief) => match relief.bends[..] {
+                [a, b] if a.feature == flange || b.feature == flange => {
+                    Some((entry.uid, [a.min(b), a.max(b)]))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// What a flange read of the Corner Relief features on its corners, for
+/// [`Read::CornerReliefs`] (mitcad#2342): their uids and bends, None
+/// without one. They come after the flange in the timeline, so the flange
+/// reads their definitions, not their results.
+pub(crate) fn corner_reliefs_key(
+    features: &[Arc<FeatureEntry>],
+    flange: FeatureUid,
+) -> Option<u128> {
+    let found = corner_relief_features(features, flange);
+    if found.is_empty() {
+        return None;
     }
-    publish_pieces(ctx, outcome.state, &rules, Some("the corner relief"))
+    let mut key = Fingerprint::new("flange corner reliefs");
+    for (uid, bends) in &found {
+        key.u64(uid.0);
+        for bend in bends {
+            key.u64(bend.feature.0).u32(bend.slot);
+        }
+    }
+    Some(key.finish())
+}
+
+/// Whether the feature that made `bend` has a relief of its own (a
+/// Flange's, a Bend's or a Fold's `relief`): its corners keep it.
+fn own_relief<K: Kernel>(ctx: &EvalContext<'_, K>, bend: BendId) -> bool {
+    ctx.feature_entry(bend.feature)
+        .is_ok_and(|entry| match &entry.def {
+            FeatureDef::SheetFlange(f) => f.relief.is_some(),
+            FeatureDef::SheetBend(b) => b.relief.is_some(),
+            FeatureDef::SheetFold(f) => f.relief.is_some(),
+            _ => false,
+        })
+}
+
+/// The rules' corner relief cut at the corners where the bends of the
+/// flange being evaluated meet other bends (mitcad#2342; commands.md,
+/// "Corner relief at flange corners"): `corners` the pairs, a bend of the
+/// flange first. Each is cut as the Corner Relief feature cuts it, in the
+/// panel both bends leave, with the rules' relief, when
+///
+/// - the rules relieve flange corners ([`SheetRulesDef::relieves_flange_corners`]);
+/// - no Corner Relief feature names the two bends (it relieves the corner
+///   instead; the flange reads those features' definitions,
+///   [`Read::CornerReliefs`]);
+/// - neither bend's feature has a relief of its own (the flange being
+///   evaluated is checked by its caller);
+/// - the two bends leave one common panel;
+/// - the relief reaches past the bends' crossing zone, which a flange's
+///   corner leaves open already: never a Tear, a Rectangular or Round
+///   relief only wider than the narrower bend's allowance.
+pub(super) fn flange_corner_reliefs<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    mut state: SheetState,
+    rules: &SheetRulesDef<f64>,
+    corners: &[[BendId; 2]],
+) -> Result<SheetState, String> {
+    if corners.is_empty() || !rules.relieves_flange_corners() {
+        return Ok(state);
+    }
+    let features = ctx.env.features;
+    let named: Vec<[BendId; 2]> = corner_relief_features(features, ctx.uid)
+        .into_iter()
+        .map(|(_, bends)| bends)
+        .collect();
+    ctx.reads.push(Read::CornerReliefs(
+        ctx.uid,
+        corner_reliefs_key(features, ctx.uid),
+    ));
+    let relief = &rules.corner_relief;
+    let thickness = rules.thickness;
+    for (n, &[own, other]) in corners.iter().enumerate() {
+        if named.contains(&[own.min(other), own.max(other)]) || own_relief(ctx, other) {
+            continue;
+        }
+        let common: Vec<PanelId> = neighbours(&state, own)
+            .intersection(&neighbours(&state, other))
+            .copied()
+            .collect();
+        let [panel] = common[..] else {
+            continue;
+        };
+        // (A bend whose development is stale is left as it is; a later
+        // feature that develops it says so.)
+        let (Ok(a), Ok(b)) = (
+            bend_record(&state, own, thickness),
+            bend_record(&state, other, thickness),
+        ) else {
+            continue;
+        };
+        let narrower = a.allowance.min(b.allowance);
+        if relief.kind == ReliefKind::Tear || relief.width <= narrower + TOLERANCE {
+            continue;
+        }
+        let outcome = relieve(
+            ctx,
+            &state,
+            thickness,
+            [own, other],
+            Some(panel),
+            relief,
+            CORNER_SLOT + 100 * n as u32,
+            "the rules' corner relief",
+        )
+        .map_err(|e| too_wide(&e))?;
+        if let Some(domain) = outcome.removed.first() {
+            return Err(too_wide(&format!(
+                "the rules' corner relief removes all material of {}",
+                domain_label(*domain)
+            )));
+        }
+        if outcome.used_tools {
+            state = outcome.state;
+        }
+    }
+    Ok(state)
+}
+
+/// A refusal of the rules' corner relief at a flange's corner, with what
+/// the user can do about it.
+fn too_wide(message: &str) -> String {
+    format!(
+        "{message}. The Corner Relief of the sheet rules does not fit at this flange's corner: \
+         make Corner Relief Width smaller, or give the flange a relief of its own"
+    )
 }
 
 #[cfg(test)]

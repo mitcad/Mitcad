@@ -187,7 +187,8 @@ void appendPlayback(const QJsonArray& moves, const WorkFrame& frame, int operati
 }
 
 bool ToolpathScene::empty() const {
-  return !tool && std::all_of(groups.begin(), groups.end(), [](const Group& group) { return group.segments.empty(); });
+  return !tool && machine.empty() &&
+         std::all_of(groups.begin(), groups.end(), [](const Group& group) { return group.segments.empty(); });
 }
 
 QString ToolpathScene::log() const {
@@ -254,6 +255,78 @@ QString shortNumber(double value) {
     text.chop(1);
   }
   return text == QStringLiteral("-0") ? QStringLiteral("0") : text;
+}
+
+bool mainAfterSub(const QJsonObject& setup, int edited, bool sub) {
+  if (sub) {
+    return false;
+  }
+  const QJsonArray operations = setup.value(QStringLiteral("operations")).toArray();
+  // Where the operation is: its own place, else last.
+  qsizetype end = operations.size();
+  for (qsizetype i = 0; i < operations.size(); ++i) {
+    if (edited > 0 && operations.at(i).toObject().value(QStringLiteral("id")).toInt() == edited) {
+      end = i;
+      break;
+    }
+  }
+  for (qsizetype i = 0; i < end; ++i) {
+    const QJsonObject op = operations.at(i).toObject();
+    if (op.value(QStringLiteral("sub_spindle")).toBool() && !op.value(QStringLiteral("suppressed")).toBool()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<float> subSpindleLines(const QJsonObject& subSpindle, double face, const WorkFrame& frame) {
+  constexpr int kSteps = 24;
+  std::vector<float> out;
+  const auto at = [&frame, face](const QJsonArray& point, double angle) {
+    const double behind = point.at(0).toDouble();
+    const double radius = point.at(1).toDouble();
+    return frame.toModel({radius * std::cos(angle), radius * std::sin(angle), face + behind});
+  };
+  for (const QJsonValue& value : subSpindle.value(QStringLiteral("outline")).toArray()) {
+    const QJsonArray part = value.toArray();
+    for (qsizetype i = 0; i < part.size(); ++i) {
+      const QJsonArray point = part.at(i).toArray();
+      if (point.size() != 2) {
+        continue;
+      }
+      // A circle where the radius is above zero.
+      if (point.at(1).toDouble() > 1e-9) {
+        for (int k = 0; k < kSteps; ++k) {
+          addSegment(out, at(point, 2.0 * kPi * k / kSteps), at(point, 2.0 * kPi * (k + 1) / kSteps));
+        }
+      }
+      // Four lines to the next point.
+      if (i + 1 < part.size()) {
+        const QJsonArray next = part.at(i + 1).toArray();
+        if (next.size() == 2) {
+          for (int k = 0; k < 4; ++k) {
+            const double angle = 0.5 * kPi * k;
+            addSegment(out, at(point, angle), at(next, angle));
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+std::optional<double> subSpindleFace(const QJsonObject& subSpindle, int operation) {
+  for (const QJsonValue& value : subSpindle.value(QStringLiteral("operations")).toArray()) {
+    const QJsonObject entry = value.toObject();
+    if (entry.value(QStringLiteral("id")).toInt() == operation) {
+      const QJsonValue face = entry.value(QStringLiteral("face"));
+      if (face.isDouble()) {
+        return face.toDouble();
+      }
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
 }
 
 } // namespace mitcad::cam

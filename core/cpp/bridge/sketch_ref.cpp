@@ -2,12 +2,15 @@
 #include "bridge/sketch_ref.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 #include "mitcad/geometry/sketch_ref.hpp"
+// Curves of free edges (mitcad#2395).
+#include "mitcad/geometry/surface_offsets.hpp"
 #include "mitcad_bridge/kernel/sketch_ref.h"
 
 namespace mitcad::bridge {
@@ -131,6 +134,28 @@ rust::Vec<double> section_points(const geometry::Shape& shape, rust::Str name, s
     result.push_back(p.X());
     result.push_back(p.Y());
     result.push_back(p.Z());
+  }
+  return result;
+}
+
+rust::Vec<SectionPiece> opening_curves(const geometry::Shape& shape, std::int32_t index,
+                                       rust::Slice<const rust::String> faces, rust::Slice<const double> at) {
+  geometry::OpeningEdges opening;
+  opening.index = index;
+  for (const rust::String& face : faces) {
+    opening.faces.emplace_back(face);
+  }
+  for (std::size_t i = 0; i + 2 < at.size(); i += 3) {
+    opening.at.emplace_back(at[i], at[i + 1], at[i + 2]);
+  }
+  rust::Vec<SectionPiece> result;
+  for (const geometry::FreeEdgeCurve& c : geometry::opening_curves(shape, opening)) {
+    SectionPiece piece{};
+    piece.curve = convert(c.curve);
+    if (!c.face.empty()) {
+      piece.faces.push_back(rust::String(c.face));
+    }
+    result.push_back(std::move(piece));
   }
   return result;
 }

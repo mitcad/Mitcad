@@ -83,8 +83,8 @@ mod face_colors;
 // The data the kernel reads and writes, below the model (mitcad#777).
 pub use mitcad_model_base::exchange::{
     BodyKind, BodyPlacement, ExportBody, ExportDefinition, ExportFormat, ExportInstance,
-    ExportOptions, ExportTree, FaceColor, FaceMeshes, FileRead, ImportAssembly, ImportBody,
-    ImportInstance, ImportPart, LengthUnit, MeshTolerance, ReadOptions, Refinement,
+    ExportOptions, ExportTree, FaceColor, FaceMeshes, FacedTriangleMesh, FileRead, ImportAssembly,
+    ImportBody, ImportInstance, ImportPart, LengthUnit, MeshTolerance, ReadOptions, Refinement,
     RefinementPreset, StepSchema, TriangleMesh,
 };
 
@@ -1157,23 +1157,113 @@ impl<K: Kernel> Document<K> {
         body: &BodyView<'_, K::Shape>,
         tolerance: &MeshTolerance,
     ) -> Result<TriangleMesh, ModelError> {
+        self.export_mesh_with_faces(body, tolerance, false)
+            .map(|(mesh, _)| mesh)
+    }
+
+    /// [`Document::export_mesh`], with `faces` each triangle's face too
+    /// (mitcad#2385: its index in the kernel's face order, one per
+    /// triangle; none without).
+    fn export_mesh_with_faces(
+        &self,
+        body: &BodyView<'_, K::Shape>,
+        tolerance: &MeshTolerance,
+        faces: bool,
+    ) -> Result<(TriangleMesh, Vec<u32>), ModelError> {
         let kind = self.kernel().body_kind(body.shape).map_err(kernel_error)?;
         if kind == BodyKind::Empty {
             return Err(invalid(format!("{} is empty", body.name)));
         }
-        let mesh = self
-            .kernel()
-            .triangle_mesh(body.shape, tolerance)
-            .map_err(|e| invalid(body_failure(&body.name, body.uid, &e)))?;
+        let failed =
+            |e: crate::kernel::KernelError| invalid(body_failure(&body.name, body.uid, &e));
+        let (mesh, faces) = if faces {
+            let faced = self
+                .kernel()
+                .triangle_mesh_faces(body.shape, tolerance)
+                .map_err(failed)?;
+            if faced.faces.len() != faced.mesh.triangles.len() {
+                return Err(invalid(format!(
+                    "{}: the kernel gave the faces of {} triangles for {}",
+                    body.name,
+                    faced.faces.len(),
+                    faced.mesh.triangles.len()
+                )));
+            }
+            (faced.mesh, faced.faces)
+        } else {
+            let mesh = self
+                .kernel()
+                .triangle_mesh(body.shape, tolerance)
+                .map_err(failed)?;
+            (mesh, Vec::new())
+        };
         if mesh.triangles.is_empty() {
             return Err(invalid(format!("{} has no triangles", body.name)));
         }
-        edges::split_long_edges(mesh, tolerance.max_edge, edges::MOST_TRIANGLES).map_err(|e| {
-            invalid(format!(
-                "{}: the maximum edge length {} mm would make more than {} triangles",
-                body.name, tolerance.max_edge, e.most
-            ))
-        })
+        edges::split_long_edges_faced(mesh, faces, tolerance.max_edge, edges::MOST_TRIANGLES)
+            .map_err(|e| {
+                invalid(format!(
+                    "{}: the maximum edge length {} mm would make more than {} triangles",
+                    body.name, tolerance.max_edge, e.most
+                ))
+            })
+    }
+
+    /// The mesh of a body for a 3MF file (mitcad#2385), with each
+    /// triangle's own colour, and the body's colour: `color` the body's as
+    /// the view gives it. The faces with appearances of their own
+    /// ([`Document::face_colors`]) colour their triangles where their
+    /// display colour is not the body's; the body then has a colour of its
+    /// own whatever `color` says (its appearance's display colour, else the
+    /// look of a body without one), which its other triangles take.
+    fn colored_3mf_mesh(
+        &self,
+        body: &BodyView<'_, K::Shape>,
+        tolerance: &MeshTolerance,
+        color: Option<[f64; 3]>,
+    ) -> Result<(mitcad_3mf::Mesh, Option<[f64; 3]>), ModelError> {
+        let face_colors = self.face_colors(body.uid);
+        if face_colors.is_empty() {
+            let mesh = self.export_mesh(body, tolerance)?;
+            let mesh = mitcad_3mf::Mesh {
+                vertices: mesh.vertices,
+                triangles: mesh.triangles,
+                triangle_colors: Vec::new(),
+            };
+            return Ok((mesh, color));
+        }
+        let own = color.unwrap_or_else(|| {
+            self.body_attributes(body.uid)
+                .appearance
+                .as_deref()
+                .and_then(|id| self.appearance(id))
+                .map_or_else(
+                    || crate::appearance::Appearance::default().display_color(),
+                    |a| a.display_color(),
+                )
+        });
+        let bytes = |c: [f64; 3]| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let by_face: BTreeMap<usize, [f64; 3]> = face_colors
+            .iter()
+            .filter(|f| bytes(f.color) != bytes(own))
+            .map(|f| (f.face, f.color))
+            .collect();
+        let (mesh, faces) = self.export_mesh_with_faces(body, tolerance, true)?;
+        let colors: Vec<Option<[f64; 3]>> = faces
+            .iter()
+            .map(|f| by_face.get(&(*f as usize)).copied())
+            .collect();
+        let triangle_colors = if colors.iter().any(Option::is_some) {
+            colors
+        } else {
+            Vec::new()
+        };
+        let mesh = mitcad_3mf::Mesh {
+            vertices: mesh.vertices,
+            triangles: mesh.triangles,
+            triangle_colors,
+        };
+        Ok((mesh, Some(own)))
     }
 
     /// An STL file of the bodies (mitcad#17): their triangle meshes as one
@@ -1486,7 +1576,9 @@ impl<K: Kernel> Document<K> {
                 exported.skipped.push((body.uid, why));
                 continue;
             }
-            let mesh = self.export_mesh(body, tolerance)?;
+            // With the colours of faces coloured on their own on their
+            // triangles (mitcad#2385).
+            let (mut mesh, part_color) = self.colored_3mf_mesh(body, tolerance, color(body.uid))?;
             let designed = placements(body.uid);
             let placed: Vec<mitcad_3mf::Placement> = designed
                 .iter()
@@ -1495,10 +1587,6 @@ impl<K: Kernel> Document<K> {
                     translation: t.translation,
                 })
                 .collect();
-            let mut mesh = mitcad_3mf::Mesh {
-                vertices: mesh.vertices,
-                triangles: mesh.triangles,
-            };
             exported.bodies.push(body.uid);
             exported.meshes.push(MeshSummary {
                 triangles: mesh.triangles.len(),
@@ -1573,7 +1661,7 @@ impl<K: Kernel> Document<K> {
                 design.push(members.iter().map(|&k| designed[k]).collect());
                 parts.push(mitcad_3mf::Part {
                     name,
-                    color: color(body.uid),
+                    color: part_color,
                     // The last group takes the mesh, the others a copy.
                     mesh: if g + 1 == count {
                         std::mem::take(&mut mesh)

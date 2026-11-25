@@ -93,7 +93,8 @@ action, with one Undo step. A missing or suppressed rule is an error.
 | `allowance` | Initially `{type: "k_factor", k: P}` with finite, dimensionless `0 <= k <= 1`. |
 | `reference_side` | `front` or `back`: the named material surface lying on the base sketch. |
 | `bend_relief` | A rectangular or round slot and default dimensions for a flange, bend or fold that ends inside the sheet. |
-| `corner_relief` | A shape and size for the Corner Relief feature. Multi-edge flanges use their own mitres and corner gaps. |
+| `corner_relief` | A shape and size for the Corner Relief feature and for the corners where a Flange's bend meets another bend (mitcad#2342). The walls of a flange on several edges still meet by its mitres and corner gaps. |
+| `flange_corner_relief` | Optional version flag (mitcad#2342): true when flanges cut `corner_relief` at their corners. Rules saved without it keep their corners until edited; adding or editing rules sets it. |
 
 The sketch's right-handed frame defines positive normal `n`. Front-to-back
 material direction is `+n`: with `reference_side = front`, the front is at
@@ -711,6 +712,29 @@ Decisions made while implementing the production Cut and the reliefs:
   corner reliefs, and Paste New/copies of split pieces beyond the generic
   sheet-state copy rules (all done later, see the mitcad#125 gap notes). The
   command UI and DXF export are mitcad#210.
+- **Corner relief at flange corners** (mitcad#2342,
+  `relief::flange_corner_reliefs`). A Flange cuts the rules' `corner_relief`
+  where its bend meets another bend at a corner of the panel both leave: a
+  flange on the next edge (the two bends' seams on the panel end at one point,
+  not parallel) and the corners between the edges of a flange on several edges.
+  The cut is the Corner Relief feature's, with the same `J0`, `C` and shapes.
+  Both constructions leave the crossing zone open: a later flange's trim cuts
+  the earlier bend back to its tangent line, and a mitred corner ends each bend
+  short of the other's. So Tear and reliefs no wider than the narrower bend's
+  allowance cut nothing and are skipped. A wider square or disc also takes
+  face, bend and wall material outside the zone. Corners are not relieved when
+  the rules' `flange_corner_relief` is not true (a version flag that `resolve`
+  sets on add and edit, so saved designs keep their corners until their rules
+  are edited), when the process is not metal, by a flange (or at a bend of a
+  flange, bend or fold) with its own `relief`, across a recorded corner gap,
+  or when a `sheet_corner_relief` names the two bends. That feature relieves
+  the corner instead; the flange reads its definition through
+  `Read::CornerReliefs`, like the flange-wall plane's `Read::WallFlange`.
+  Imports set the flag false. CLI fixtures: `sheet_flange_corner_relief` (two
+  flanges on adjacent edges) and `sheet_flange_edges_corner_relief` (a flange
+  on three edges, the reported case's rules): Rectangular, Round and Tear,
+  a width inside the zone, the flag, a flange's own relief and the override,
+  by analytic flat areas.
 
 ### Implementation notes (mitcad#210)
 
