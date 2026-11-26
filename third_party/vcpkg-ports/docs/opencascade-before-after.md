@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: MIT -->
 # The port patches' tests with and without each patch
 
-Made 2026-11-23 by `tools/occt-port-proof.py` (mitcad#1986): OCCT 8.0.1 with every
+Made 2026-11-26 by `tools/occt-port-proof.py` (mitcad#1986): OCCT 8.0.1 with every
 port patch (*with*), then with one patch reverted at the port's tip
 (*without*). A patch that does not revert alone is reverted together
 with the later patches that change the same lines, named in the second
@@ -35,11 +35,11 @@ it*), or shown together with the patch where they build on its lines
 (*together with*). A suite part is linked without the parts of
 its executable that do not build at that state.
 
-Verdicts: Test: none: 41; fails with several later patches reverted too: 21; fails without the patch: 130; fails without the patch (the test does not build): 5; not shown: 56; passes without the patch: 1.
+Verdicts: Test: none: 41; fails with several later patches reverted too: 21; fails without the patch: 133; fails without the patch (the test does not build): 5; not shown: 56; passes without the patch: 1.
 
 In-chain verdicts: fails without the patch at its place: 69; fails without the patch at its place (the test does not build without it): 2; fails without the patch at its place (the test needs the API it adds): 1; not shown: 7.
 
-Shown to fail without the patch at the tip or at its place in the chain: 207 of the 213 patches with a test (the others: 0058, 0071, 0072, 0170, 0171, 0180).
+Shown to fail without the patch at the tip or at its place in the chain: 210 of the 216 patches with a test (the others: 0058, 0071, 0072, 0170, 0171, 0180).
 
 | Patch | Reverted | Test | With | Without | Verdict | In chain | Before / with it | In-chain verdict |
 |---|---|---|---|---|---|---|---|---|
@@ -328,3 +328,6 @@ Shown to fail without the patch at the tip or at its place in the chain: 207 of 
 | 2142 | alone | `geometry.y_tube_crotch` | passed | failed in test_crotch_rounded_50, test_crotch_rounded_6 (fillet 50: fillet failed; the fillet is wider than the face beside its edge and would take that face away, but cannot meet the face beyond it (and 1 more such f) | fails without the patch | - | - | - |
 | 2143 | alone | `geometry.y_tube_crotch` | passed | failed in test_shell_after_rounding_50, test_shell_after_rounding_6 (shell after the fillet of 6: shell failed; the geometry kernel cannot join the offsets of the faces into the inside of the wall at this thickness) | fails without the patch | - | - | - |
 |  |  | `cli.y_tube_crotch_reported` | passed | failed (alone: test_shell_after_rounding_50, test_shell_after_rounding_6 fails) (y_tube_crotch_reported failed (no such file or directory):) |  |  | - |  |
+| 2433 | with 2462, 2463 | `geometry.port.2433` | passed | failed in test_rounded_top_open_wall_thicker_than_rounding (geometry/tests/port/p2433-face-vanishing-beside-a-removed-face.cpp:80: check failed: maker.IsDone()) | fails without the patch | - | - | - |
+| 2462 | alone | `geometry.port.2462` | passed | failed in test_top_open_wall_no_thicker_than_rounding (geometry/tests/port/p2462-wall-strip-at-a-removed-face-met-tangentially.cpp:96: check failed: maker.IsDone()) | fails without the patch | - | - | - |
+| 2463 | with 2462 | `geometry.port.2463` | passed | failed in test_rounded_top_open_arc_join (geometry/tests/port/p2463-arc-join-face-vanishing-beside-a-removed-face.cpp:79: check failed: maker.IsDone()) | fails without the patch | - | - | - |

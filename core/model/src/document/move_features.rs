@@ -984,6 +984,40 @@ fn follow_cut_scopes(state: &mut DocState, moved: &[FeatureUid], m: &ComponentMo
     }
 }
 
+/// The features `moved` of `source`, which make the bodies `bodies`, went
+/// into `to`, placed in `source` by `occurrence` (mitcad#2441: a linked
+/// design that came in as its one component read again with its root, the
+/// base feature of that component's bodies going into a component of its
+/// own): the cut scopes and the references to their geometry follow, as
+/// in Move History into Component. `keeps`: `source` still has bodies.
+pub(super) fn follow_into(
+    state: &mut DocState,
+    source: ComponentUid,
+    to: ComponentUid,
+    occurrence: OccurrenceUid,
+    moved: &[FeatureUid],
+    bodies: &[BodyUid],
+    keeps: bool,
+) {
+    follow_cut_scopes(
+        state,
+        moved,
+        &ComponentMove {
+            from: source,
+            to,
+            path: &|p: &OccurrencePath| {
+                let mut p = p.clone();
+                p.0.push(occurrence);
+                p
+            },
+            bodies,
+            keeps,
+        },
+    );
+    let going: BTreeSet<FeatureUid> = moved.iter().copied().collect();
+    follow_references(state, source, occurrence, &going, bodies, false);
+}
+
 /// The occurrence paths that lead to `source` and name geometry of the
 /// moved features take the new occurrence: sketch planes and projections
 /// of other components, combines' tools, joint origins, Isolate, and
@@ -1272,7 +1306,7 @@ fn follow_origin(
 fn plane_features(plane: &SketchPlane) -> BTreeSet<FeatureUid> {
     let mut references = References::default();
     match plane {
-        SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
+        SketchPlane::Face { face, body, .. } | SketchPlane::Developed { face, body, .. } => {
             references.features.extend(face.features());
             if let Some(body) = body {
                 references.body(*body);

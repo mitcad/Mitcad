@@ -8,14 +8,17 @@
 //! follow it. One undo step (`sketch.redefine_plane` in commands.md).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
-use super::{Document, ModelError, invalid};
+use super::{DocState, Document, ModelError, invalid};
 use crate::expr::{EvalContext, Expr, Lookup, Quantity, with_decimal_points};
 use crate::features::{FeatureDef, SketchDef, SketchPlane, ValueInput};
 use crate::ids::{FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
+use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
-use crate::recompute::FeatureStatus;
+use crate::profile::SketchFrame;
+use crate::recompute::{FeatureStatus, Recomputed};
 use crate::sketch::placement::SketchPlacement;
 
 /// A change of a sketch's plane and of its place on it.
@@ -78,7 +81,7 @@ fn plain_zero(value: &ValueInput) -> bool {
 /// The features a plane is made by.
 fn plane_features(plane: &SketchPlane) -> BTreeSet<FeatureUid> {
     match plane {
-        SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
+        SketchPlane::Face { face, body, .. } | SketchPlane::Developed { face, body, .. } => {
             let mut features = face.features();
             if let Some(body) = body {
                 features.insert(body.feature);
@@ -128,7 +131,9 @@ impl<K: Kernel> Document<K> {
                 .map_err(|e| invalid(format!("{name} cannot use this plane: {e}")))?,
                 None => None,
             };
-            if *plane != old.plane || link != old.plane_link {
+            // The same face is the same plane, its placed frame (mitcad#2409)
+            // given or not.
+            if !plane.same_plane(&old.plane) || link != old.plane_link {
                 plane_changed = true;
                 // A plane of the sketch's own component comes before it
                 // (another component's is found where its link shows it).
@@ -220,10 +225,248 @@ impl<K: Kernel> Document<K> {
     }
 }
 
+/// The frame a sketch on a planar face is to keep from where it was placed
+/// (mitcad#2409) after an edit that leaves it none: `before` is the sketch
+/// before the edit (None for a new one), `plane` its plane's frame as the
+/// edit's recompute found it. A sketch placed on a face by the edit, new or
+/// moved to another face, keeps the frame it has now, so nothing moves
+/// when it is placed; one whose placed frame an edit left out on the same
+/// face keeps the one it had. A sketch that had none on the same face (a
+/// design saved before mitcad#2409) stays without one: its frame keeps the
+/// default rule, so nothing moves in it. A planar sketch and a 3D sketch
+/// (its support, mitcad#2465) are alike here: a sketch converted from one
+/// kind to the other keeps its uid and its plane, so it is the same sketch
+/// on the same face.
+fn frame_to_keep(
+    before: Option<Placing<'_>>,
+    now: Placing<'_>,
+    plane: Option<&SketchFrame>,
+) -> Option<SketchFrame> {
+    let (SketchPlane::Face { placed: None, .. }, link) = now else {
+        return None;
+    };
+    match before {
+        Some((old, old_link)) if old.same_plane(now.0) && old_link == link => old.placed().copied(),
+        _ => plane.copied(),
+    }
+}
+
+/// A sketch's plane and the link to the component whose plane it is (None
+/// for its own): a planar sketch's plane, a 3D sketch's support
+/// (mitcad#2465).
+type Placing<'a> = (&'a SketchPlane, Option<&'a OccurrenceLink>);
+
+/// The plane of a planar or 3D sketch; None for any other feature.
+fn placing(def: &FeatureDef) -> Option<Placing<'_>> {
+    match def {
+        FeatureDef::Sketch(def) => Some((&def.plane, def.plane_link.as_ref())),
+        FeatureDef::SpatialSketch(def) => Some((&def.support, def.planar.plane_link.as_ref())),
+        _ => None,
+    }
+}
+
+/// The plane of a planar or 3D sketch, to change.
+fn placing_mut(def: &mut FeatureDef) -> Option<&mut SketchPlane> {
+    match def {
+        FeatureDef::Sketch(def) => Some(&mut def.plane),
+        FeatureDef::SpatialSketch(def) => Some(&mut def.support),
+        _ => None,
+    }
+}
+
+/// The frame of the plane of sketch `uid` as `result` found it: the planar
+/// output's plane (a 3D sketch has one when it solved). A 3D sketch whose
+/// sketch plane gave no profiles (it did not solve, or its curves in the
+/// plane did not make regions) takes its frame when it is the support's:
+/// without an own frame or a placement on the support (mitcad#2465).
+fn found_plane<S>(
+    def: &FeatureDef,
+    uid: FeatureUid,
+    result: &Recomputed<S>,
+) -> Option<SketchFrame> {
+    if let Some(output) = result.sketches.get(&uid) {
+        return Some(output.value.plane);
+    }
+    let FeatureDef::SpatialSketch(def) = def else {
+        return None;
+    };
+    if def.frame.is_some() || def.planar.placement.is_some() {
+        return None;
+    }
+    result.result(uid)?.output.as_ref()?.spatial.as_ref()?.frame
+}
+
+impl DocState {
+    /// Gives the sketches an edit placed on planar faces the frames they
+    /// have now (mitcad#2409, [`frame_to_keep`]), in the edit's step: their
+    /// frames stay as the recompute made them, and a later edit of an
+    /// earlier feature that tilts the face takes them with it. 3D sketches
+    /// on faces keep theirs the same way (mitcad#2465).
+    pub(crate) fn keep_face_sketch_frames<S>(&mut self, before: &DocState, result: &Recomputed<S>) {
+        for i in 0..self.features.len() {
+            let entry = &self.features[i];
+            let Some(now) = placing(&entry.def) else {
+                continue;
+            };
+            if !matches!(now.0, SketchPlane::Face { placed: None, .. }) {
+                continue;
+            }
+            let old = before.entry(entry.uid).and_then(|old| placing(&old.def));
+            let plane = found_plane(&entry.def, entry.uid, result);
+            let Some(frame) = frame_to_keep(old, now, plane.as_ref()) else {
+                continue;
+            };
+            let mut kept = (**entry).clone();
+            if let Some(SketchPlane::Face { placed, .. }) = placing_mut(&mut kept.def) {
+                *placed = Some(Box::new(frame));
+            }
+            self.features[i] = Arc::new(kept);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::plain_zero;
-    use crate::features::ValueInput;
+    use super::{frame_to_keep, placing, plain_zero};
+    use crate::features::{FeatureDef, SketchDef, SketchPlane, SpatialSketchDef, ValueInput};
+    use crate::profile::SketchFrame;
+
+    fn side(placed: Option<SketchFrame>) -> SketchPlane {
+        SketchPlane::Face {
+            face: Box::new("F2:side(c2[c1,c3])".parse().unwrap()),
+            body: None,
+            placed: placed.map(Box::new),
+        }
+    }
+
+    /// [`frame_to_keep`] of two sketch definitions.
+    fn keep(
+        before: Option<&FeatureDef>,
+        now: &FeatureDef,
+        plane: Option<&SketchFrame>,
+    ) -> Option<SketchFrame> {
+        frame_to_keep(
+            before.map(|b| placing(b).unwrap()),
+            placing(now).unwrap(),
+            plane,
+        )
+    }
+
+    #[test]
+    fn a_3d_sketch_placed_on_a_face_keeps_its_frame() {
+        // mitcad#2465: a 3D sketch's support as a planar sketch's plane.
+        let spatial = |placed: Option<SketchFrame>| {
+            FeatureDef::SpatialSketch(SpatialSketchDef::new(side(placed)))
+        };
+        let planar = |placed: Option<SketchFrame>| {
+            FeatureDef::Sketch(SketchDef {
+                plane: side(placed),
+                ..SketchDef::default()
+            })
+        };
+        let now = SketchFrame {
+            origin: [60.0, 0.0, 0.0],
+            x_axis: [0.0, -1.0, 0.0],
+            y_axis: [0.0, 0.0, -1.0],
+        };
+        let kept = SketchFrame {
+            origin: [59.8, 5.2, 0.0],
+            ..now
+        };
+        // Created on the face: the frame it has now.
+        assert_eq!(keep(None, &spatial(None), Some(&now)), Some(now));
+        // Its support moved onto the face from an origin plane or another
+        // face: the frame it has now.
+        let on_xy = FeatureDef::SpatialSketch(SpatialSketchDef::new(SketchPlane::Xy));
+        assert_eq!(keep(Some(&on_xy), &spatial(None), Some(&now)), Some(now));
+        let other = FeatureDef::SpatialSketch(SpatialSketchDef::new(SketchPlane::on_face(
+            "F2:end(r{c1})".parse().unwrap(),
+            None,
+        )));
+        assert_eq!(keep(Some(&other), &spatial(None), Some(&now)), Some(now));
+        // An edit that left the placed frame out keeps the one it had.
+        assert_eq!(
+            keep(Some(&spatial(Some(kept))), &spatial(None), Some(&now)),
+            Some(kept)
+        );
+        // A 3D sketch saved before: none, the default rule, also after an
+        // edit of it.
+        assert_eq!(keep(Some(&spatial(None)), &spatial(None), Some(&now)), None);
+        // Converted from a planar sketch on the same face (the same uid):
+        // the planar sketch's placed frame or none, as it had.
+        assert_eq!(keep(Some(&planar(None)), &spatial(None), Some(&now)), None);
+        assert_eq!(
+            keep(Some(&planar(Some(kept))), &spatial(None), Some(&now)),
+            Some(kept)
+        );
+        // And back to a planar sketch.
+        assert_eq!(keep(Some(&spatial(None)), &planar(None), Some(&now)), None);
+        // One kept already, a support that is no face, not evaluated.
+        assert_eq!(keep(None, &spatial(Some(kept)), Some(&now)), None);
+        assert_eq!(keep(None, &on_xy, Some(&now)), None);
+        assert_eq!(keep(None, &spatial(None), None), None);
+        // Another component's face where it was its own: placed again.
+        let mut linked = SpatialSketchDef::new(side(None));
+        linked.planar.plane_link = Some(crate::links::OccurrenceLink::default());
+        assert_eq!(
+            keep(
+                Some(&spatial(Some(kept))),
+                &FeatureDef::SpatialSketch(linked),
+                Some(&now)
+            ),
+            Some(now)
+        );
+    }
+
+    #[test]
+    fn a_sketch_placed_on_a_face_keeps_its_frame() {
+        let face = |placed: Option<SketchFrame>| {
+            FeatureDef::Sketch(SketchDef {
+                plane: side(placed),
+                ..SketchDef::default()
+            })
+        };
+        let other = FeatureDef::Sketch(SketchDef {
+            plane: SketchPlane::on_face("F2:end(r{c1})".parse().unwrap(), None),
+            ..SketchDef::default()
+        });
+        let now = SketchFrame {
+            origin: [60.0, 0.0, 0.0],
+            x_axis: [0.0, -1.0, 0.0],
+            y_axis: [0.0, 0.0, -1.0],
+        };
+        let kept = SketchFrame {
+            origin: [59.8, 5.2, 0.0],
+            ..now
+        };
+        // New, or moved onto the face: the frame it has now.
+        assert_eq!(keep(None, &face(None), Some(&now)), Some(now));
+        assert_eq!(keep(Some(&other), &face(None), Some(&now)), Some(now));
+        assert_eq!(
+            keep(Some(&face(Some(kept))), &face(None), Some(&now)),
+            Some(kept),
+            "an edit that left the placed frame out keeps the one it had"
+        );
+        // A design saved before mitcad#2409: none, the default rule.
+        assert_eq!(keep(Some(&face(None)), &face(None), Some(&now)), None);
+        // One kept already, a plane that is no face, a sketch not evaluated.
+        assert_eq!(keep(None, &face(Some(kept)), Some(&now)), None);
+        assert_eq!(
+            keep(None, &FeatureDef::Sketch(SketchDef::default()), Some(&now)),
+            None
+        );
+        assert_eq!(keep(None, &face(None), None), None);
+        // Another component's face where it was its own: placed again.
+        let linked = FeatureDef::Sketch(SketchDef {
+            plane: side(None),
+            plane_link: Some(crate::links::OccurrenceLink::default()),
+            ..SketchDef::default()
+        });
+        assert_eq!(
+            keep(Some(&face(Some(kept))), &linked, Some(&now)),
+            Some(now)
+        );
+    }
 
     #[test]
     fn plain_zeros_are_constant_zero_values() {

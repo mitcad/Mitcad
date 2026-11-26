@@ -18,8 +18,11 @@ cmake_minimum_required(VERSION 3.24)
 # edges in one feature (a design made from the reporter's, stored beside the
 # archives as it is, its archive given as `-` and the design copied into
 # WORK); both scripts check the same exact geometry, so the one feature
-# builds what the two build. Skipped when the folder or every archive is not
-# there.
+# builds what the two build. GitHub #667's (`github-667/`, mitcad#2419): the
+# corner of a handle's hole beside a straight stretch 0.104 wide, tangent to
+# the hole's round end, rounded with 3 mm: the ball takes the stretch away
+# and rolls on over the round end, the volume exact. Skipped when the folder
+# or every archive is not there.
 #
 # cmake -DCLI=<mitcad-cli> -DSCRIPTS=<tools/cli/tests> -DWORK=<folder> -P fillet-exact-reported-test.cmake
 
@@ -45,7 +48,8 @@ set(cases
   "github-536:01a7f736:11e014d7:fillet_exact_reported536_two.json" # two features (mitcad#2312)
   "github-536:-:4eacad45:fillet_exact_reported536.json" # the same edges in one
   "github-566:7e2ab5e2:f225bd10:fillet_exact_reported566.json" # the back edge rounded past its end faces
-  "github-566:2b8580b9:2d7fda11:fillet_exact_reported566b.json") # the back edge bevelled past them
+  "github-566:2b8580b9:2d7fda11:fillet_exact_reported566b.json" # the back edge bevelled past them
+  "github-667:8e0858c4:a1bd64bd:fillet_exact_reported667.json") # a hole's corner past a narrow stretch (mitcad#2419)
 
 set(reported "$ENV{MITCAD_MITCAD_REPORTED}")
 if(reported STREQUAL "" OR NOT IS_DIRECTORY "${reported}")

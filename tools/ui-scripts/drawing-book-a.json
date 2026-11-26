@@ -1,0 +1,13 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A linked design of tools/ui-drawing-book-test.sh (mitcad#2448): a 10 mm cube, Drawing1 of two A3 sheets and Extra, which the book leaves out."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"}, "corner": [0, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_drawing", "name": "Drawing1", "size": "A3"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front", "at": [150, 120]},
+  {"cmd": "add_drawing_sheet", "drawing": "D1"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "sheet": 1, "type": "base", "direction": "top", "at": [150, 120]},
+  {"cmd": "add_drawing", "name": "Extra", "size": "A4"},
+  {"cmd": "add_drawing_view", "drawing": "D2", "type": "base", "direction": "front", "at": [100, 100]},
+  {"expect": {"bodies": 1}}
+]

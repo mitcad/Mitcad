@@ -1,0 +1,20 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. The three Corner Relief types at the corners of a flange on four edges, on the reported design of GitHub mitcad/Mitcad#614 (mitcad#2424; run by sheet-flange-corner-relief-reported-test.cmake, never committed): Sheet Rules t = 1, r = 1, K = 0.44 (BA = 0.72 pi), Bend Relief and Corner Relief Rectangular 1 mm; a 130 x 50 Sheet Face cut back to 126 x 46; one Flange of outer length 10, Inside, on its four edges (Corner Gap t). As saved, the rules have no flange_corner_relief, so the corners stay as before mitcad#2342: each bend ends 1/sqrt2 short of the tangent lines' inner corner J0, the round bend ends the report saw. Editing the rules sets the flag: Tear lets the bends meet at J0; Rectangular 1 mm ends each bend 1 mm short of J0 and takes a 1 mm square from the face's corner, 4 (1 + 2 BA) less flat area than Tear; Round 1 mm cuts a disc of diameter 1 centred at J0, 3 pi / 4 less than Tear. Every flat pattern is valid."},
+  {"comment":"As saved (no flag): the bends end 1/sqrt2 short of J0."},
+  {"expect":{"feature":"F5","status":"ok","bodies":1,"body":"F3.b0","volume":9363.947421815752,"faces":54}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid"}}},
+  {"cmd":"set_flat_pattern","body":"F3.b0"},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":9332.059331583285}}},
+  {"comment":"Rectangular 1 mm, the rules edited (the flag set)."},
+  {"cmd":"edit_feature","uid":"F2","def":{"type":"sheet_rules","thickness":1,"bend_radius":1,"allowance":{"type":"k_factor","k":0.44},"reference_side":"front","bend_relief":{"type":"rectangular","width":1,"depth":2},"corner_relief":{"type":"rectangular","width":1,"depth":2}}},
+  {"expect":{"feature":"F5","status":"ok","bodies":1,"body":"F3.b0","volume":9354.426514708688,"faces":62}},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":9322.759260760504}}},
+  {"comment":"Round 1 mm."},
+  {"cmd":"edit_feature","uid":"F2","def":{"type":"sheet_rules","thickness":1,"bend_radius":1,"allowance":{"type":"k_factor","k":0.44},"reference_side":"front","bend_relief":{"type":"rectangular","width":1,"depth":2},"corner_relief":{"type":"round","width":1,"depth":2}}},
+  {"expect":{"feature":"F5","status":"ok","bodies":1,"body":"F3.b0","volume":9374.854426293085,"faces":58}},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":9342.498639954989}}},
+  {"comment":"Tear: the bends meet at each J0."},
+  {"cmd":"edit_feature","uid":"F2","def":{"type":"sheet_rules","thickness":1,"bend_radius":1,"allowance":{"type":"k_factor","k":0.44},"reference_side":"front","bend_relief":{"type":"rectangular","width":1,"depth":2},"corner_relief":{"type":"tear","width":1,"depth":2}}},
+  {"expect":{"feature":"F5","status":"ok","bodies":1,"body":"F3.b0","volume":9377.276070630227,"faces":46}},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":9344.854834445181}}}
+]

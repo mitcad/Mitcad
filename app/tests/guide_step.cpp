@@ -286,6 +286,116 @@ void holdSteps() {
   CHECK(error.contains(QStringLiteral("hold")));
 }
 
+// The learner's sketch input (mitcad#2440): a plane as target and done, a
+// drawing tool's point by its snap or its coordinates, a value box's value;
+// each read, written back and refused with the reason.
+void sketchInputSteps() {
+  QString error;
+  const GuideStep plane = parsed(R"({"id": "plane", "text": "Pick the XY plane.", "target": {"plane": "XY"},
+                                    "done": {"plane": "xy"}, "allow": ["sketch.create"]})",
+                                 &error);
+  CHECK(error.isEmpty());
+  CHECK(plane.target == GuideStep::Target::Plane);
+  CHECK(plane.done == GuideStep::Done::Plane);
+  CHECK(plane.takesPicks());
+  CHECK(plane.plane() == QStringLiteral("XY"));
+  CHECK(plane.planeMatches({QStringLiteral("xy")}));
+  CHECK(!plane.planeMatches({QStringLiteral("xz")}));
+  CHECK(!plane.planeMatches({QStringLiteral("face"), QStringLiteral("F2:top")}));
+  CHECK(plane.allowsCommand(QStringLiteral("sketch.create")));
+  CHECK(GuideStep::parse(plane.toJson(), &error).toJson() == plane.toJson());
+  CHECK(plane.toJson().value(QStringLiteral("done")).toObject().value(QStringLiteral("plane")).toString() ==
+        QStringLiteral("xy"));
+  // A construction plane by its name or uid, any face, a face by its
+  // reference; no plane named: any plane.
+  const GuideStep named = parsed(R"({"text": "x", "target": {"command": "sketch.create"},
+                                    "done": {"plane": "Plane1"}})",
+                                 &error);
+  CHECK(error.isEmpty());
+  CHECK(named.target == GuideStep::Target::Command);
+  CHECK(!named.takesPicks());
+  CHECK(named.planeMatches({QStringLiteral("F4"), QStringLiteral("plane1")}));
+  CHECK(!named.planeMatches({QStringLiteral("F5"), QStringLiteral("Plane2")}));
+  const GuideStep face = parsed(R"({"text": "x", "target": {"plane": "face"}, "done": {"mode": "sketch"}})", &error);
+  CHECK(error.isEmpty());
+  CHECK(face.plane() == QStringLiteral("face"));
+  CHECK(face.planeMatches({QStringLiteral("face"), QStringLiteral("F2:top")}));
+  CHECK(!face.planeMatches({QStringLiteral("yz")}));
+  const GuideStep top = parsed(R"({"text": "x", "target": {"view": "face"}, "done": {"plane": "F2:top"}})", &error);
+  CHECK(error.isEmpty());
+  CHECK(top.planeMatches({QStringLiteral("face"), QStringLiteral("F2:top")}));
+  CHECK(!top.planeMatches({QStringLiteral("face"), QStringLiteral("F2:bottom")}));
+  CHECK(named.toJson().contains(QStringLiteral("done")));
+  const GuideStep anyPlane = parsed(R"({"text": "x", "target": {"command": "a"}, "done": {"command": "a"}})", &error);
+  CHECK(anyPlane.plane().isEmpty());
+  CHECK(anyPlane.planeMatches({QStringLiteral("yz")}));
+  CHECK(parsed(R"({"text": "x", "target": {"plane": "XY"}, "done": {"plane": "XZ"}})", &error).id.isEmpty());
+  CHECK(error.contains(QStringLiteral("one plane")));
+  CHECK(parsed(R"({"text": "x", "target": {"plane": ""}})", &error).id.isEmpty());
+  CHECK(parsed(R"({"text": "x", "target": {"command": "a"}, "done": {"plane": ""}})", &error).id.isEmpty());
+
+  // A point by its snap: the origin, held back elsewhere.
+  const GuideStep origin = parsed(R"({"id": "corner", "text": "Click the origin.", "target": {"view": true},
+                                     "done": {"point": "origin"}})",
+                                  &error);
+  CHECK(error.isEmpty());
+  CHECK(origin.done == GuideStep::Done::Point);
+  CHECK(origin.pointPlaces == QStringList{QStringLiteral("origin")});
+  CHECK(!origin.pointAtGiven);
+  CHECK(origin.pointMatches({{QStringLiteral("origin"), QStringLiteral("x_axis"), QStringLiteral("y_axis"),
+                              QStringLiteral("point")},
+                             QPointF(0, 0)}));
+  CHECK(!origin.pointMatches({{QStringLiteral("grid")}, QPointF(10, 5)}));
+  CHECK(!origin.pointMatches({{QStringLiteral("x_axis")}, QPointF(10, 0)}));
+  CHECK(GuideStep::parse(origin.toJson(), &error).toJson() == origin.toJson());
+  CHECK(origin.toJson().value(QStringLiteral("done")).toObject().value(QStringLiteral("point")).toString() ==
+        QStringLiteral("origin"));
+  // Several places: any of them.
+  const GuideStep axes = parsed(R"({"text": "x", "target": {"view": true}, "done": {"point": ["x_axis", "y_axis"]}})",
+                                &error);
+  CHECK(error.isEmpty());
+  CHECK(axes.pointMatches({{QStringLiteral("y_axis"), QStringLiteral("point")}, QPointF(0, 7)}));
+  CHECK(!axes.pointMatches({{QStringLiteral("curve")}, QPointF(3, 7)}));
+  CHECK(GuideStep::parse(axes.toJson(), &error).toJson() == axes.toJson());
+  // Coordinates: where it snapped, within the tolerance.
+  const GuideStep at = parsed(R"({"text": "x", "target": {"view": true}, "done": {"point": [20, -10.5]}})", &error);
+  CHECK(error.isEmpty());
+  CHECK(at.pointAtGiven);
+  CHECK(at.pointMatches({{QStringLiteral("grid")}, QPointF(20, -10.5)}));
+  CHECK(at.pointMatches({{QStringLiteral("free")}, QPointF(20.0005, -10.5)}));
+  CHECK(!at.pointMatches({{QStringLiteral("grid")}, QPointF(20, -10)}));
+  CHECK(GuideStep::parse(at.toJson(), &error).toJson() == at.toJson());
+  // Only a Point step matches a point.
+  CHECK(!plane.pointMatches({{QStringLiteral("origin")}, QPointF(0, 0)}));
+  CHECK(parsed(R"({"text": "x", "target": {"view": true}, "done": {"point": "corner"}})", &error).id.isEmpty());
+  CHECK(error.contains(QStringLiteral("corner")) && error.contains(QStringLiteral("x_axis")));
+  CHECK(parsed(R"({"text": "x", "target": {"view": true}, "done": {"point": []}})", &error).id.isEmpty());
+  CHECK(parsed(R"({"text": "x", "target": {"view": true}, "done": {"point": [1, 2, 3]}})", &error).id.isEmpty());
+  CHECK(parsed(R"({"text": "x", "target": {"view": true}, "done": {"point": true}})", &error).id.isEmpty());
+  CHECK(parsed(R"({"text": "x", "target": {"view": true}, "done": {"point": "origin", "value": "1"}})", &error)
+            .id.isEmpty());
+
+  // A value box's value: read, written back; it needs its value.
+  const GuideStep width = parsed(R"({"id": "width", "text": "Type the width 40.", "target": {"field": "width"},
+                                    "done": {"field": "width", "value": "40 mm"}})",
+                                 &error);
+  CHECK(error.isEmpty());
+  CHECK(width.target == GuideStep::Target::Field);
+  CHECK(width.targetName == QStringLiteral("width"));
+  CHECK(width.done == GuideStep::Done::Field);
+  CHECK(width.doneName == QStringLiteral("width"));
+  CHECK(width.value == QStringLiteral("40 mm"));
+  CHECK(width.commands().isEmpty());
+  CHECK(!width.takesPicks());
+  CHECK(guideValueMatches(QStringLiteral("40"), width.value));
+  CHECK(!guideValueMatches(QStringLiteral("4"), width.value));
+  CHECK(GuideStep::parse(width.toJson(), &error).toJson() == width.toJson());
+  CHECK(parsed(R"({"text": "x", "target": {"field": "width"}, "done": {"field": "width"}})", &error).id.isEmpty());
+  CHECK(error.contains(QStringLiteral("field")));
+  CHECK(parsed(R"({"text": "x", "target": {"field": ""}, "done": {"field": "width", "value": "1"}})", &error)
+            .id.isEmpty());
+}
+
 } // namespace
 
 int guideStepTests() {
@@ -297,6 +407,7 @@ int guideStepTests() {
   navigateSteps();
   refusals();
   holdSteps();
+  sketchInputSteps();
   return failures;
 }
 MITCAD_UNIT_TEST(guideStepTests);

@@ -282,6 +282,44 @@ fn a_renamed_face_takes_its_new_name() {
     assert_eq!(bodies(&doc), before);
 }
 
+/// A face with its own wall thickness (mitcad#2443) renamed by a rounded
+/// corner: the shell finds it again with a warning, Auto Fix writes the new
+/// name into `face_thicknesses`, and the shelled body is the same.
+#[test]
+fn a_renamed_face_with_its_own_thickness_takes_its_new_name() {
+    let mut doc = block();
+    let back = "F2:side(c3[c2,c4])";
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "shell", "body": "F2.b0",
+               "faces": [back], "inside": 2,
+               "face_thicknesses": [{"faces": [FRONT], "inside": 5}]}}),
+    );
+    assert_eq!(status(&doc, 3), FeatureStatus::Ok);
+    round_corner(&mut doc, "c1", "c2");
+    command(&mut doc, json!({"cmd": "set_marker", "position": 2}));
+    let front = side(&doc, "c1");
+    assert_ne!(front, FRONT);
+    command(&mut doc, json!({"cmd": "set_marker", "position": 3}));
+    let said = format!("face {FRONT} found as {front} after a change in Sketch1");
+    assert_eq!(warnings(&doc, 3), [said.as_str()]);
+    let before = bodies(&doc);
+
+    let report = auto_fix(&mut doc, &["F3"]);
+    assert_eq!(
+        report["message"], "Auto Fix: 1 of 1 warning fixed",
+        "{report}"
+    );
+    assert_eq!(
+        def(&doc, "F3")["face_thicknesses"][0]["faces"],
+        json!([front])
+    );
+    assert_eq!(def(&doc, "F3")["faces"], json!([back]));
+    assert_eq!(status(&doc, 3), FeatureStatus::Ok);
+    assert!(warnings(&doc, 3).is_empty());
+    assert_eq!(bodies(&doc), before);
+}
+
 /// The extrusion's region renamed: its end face takes the region's new
 /// key, so the shell that removes that face finds it again, and the same
 /// Auto Fix writes the face's new name into the shell too.

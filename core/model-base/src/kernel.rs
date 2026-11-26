@@ -145,12 +145,15 @@ pub trait Kernel: Send {
 
     /// Moves faces along their normals (positive out of the material); the
     /// neighbours follow along their own surfaces. The faces keep their names.
+    /// With `tangent_chain` the faces joined to them through smooth edges
+    /// move too, as [`Kernel::replace_faces`] takes them (mitcad#2438).
     fn offset_faces(
         &self,
         _feature: FeatureUid,
         _body: &Self::Shape,
         _faces: &[FaceName],
         _distance: f64,
+        _tangent_chain: bool,
     ) -> Result<Self::Shape, KernelError> {
         Err(KernelError::Unsupported("offset faces"))
     }
@@ -984,8 +987,8 @@ pub trait Kernel: Send {
     /// chain rounds together when one of them is selected (the edges that
     /// meet end to end in the same direction, within 0.01 rad, between
     /// faces at an angle); with `faces` the groups of faces connected
-    /// through smooth edges, which a shell, draft or replace face with a
-    /// tangent chain takes together (each face by its first name). Every
+    /// through smooth edges, which a shell, draft, replace face or offset
+    /// face with a tangent chain takes together (each face by its first name). Every
     /// edge or face is in at most one group; one in none stands alone.
     fn tangent_chains(
         &self,
@@ -2392,6 +2395,40 @@ pub trait Kernel: Send {
     ) -> Result<crate::exchange::FacedTriangleMesh, KernelError> {
         Err(KernelError::Unsupported("triangle meshes with their faces"))
     }
+
+    // Curved sheet faces developed: Convert to Sheet Metal of cylindrical
+    // and conical faces (mitcad#2435; `sheet/folded/curved.rs`).
+
+    /// The faces `faces` of `shape` (every piece of each name), all on one
+    /// cylinder or cone (stored so or as another surface within 1e-6 mm of
+    /// it) and joined at shared edges, developed at the neutral surface of
+    /// a sheet `thickness` thick whose front they are, `neutral_depth` (K t)
+    /// from its inner surface, in the chart
+    /// [`crate::sheet_charts::SheetFaceDevelopment`] describes: the angle
+    /// about the axis counted from where the faces start. Faces of other or
+    /// several surfaces, faces not joined, running to a cone's apex or more
+    /// than once round, and a name of no face are errors.
+    fn sheet_face_development(
+        &self,
+        _shape: &Self::Shape,
+        _faces: &[FaceName],
+        _neutral_depth: f64,
+        _thickness: f64,
+    ) -> Result<crate::sheet_charts::SheetFaceDevelopment, KernelError> {
+        Err(KernelError::Unsupported("developments of curved faces"))
+    }
+
+    /// How the face (every piece of the name) bends: its Gaussian
+    /// curvature's largest magnitude over a grid of points inside it, and
+    /// the size of its box. Zero for a face that lies flat without
+    /// stretching (a plane, cylinder or cone).
+    fn face_bending(
+        &self,
+        _shape: &Self::Shape,
+        _face: &FaceName,
+    ) -> Result<crate::sheet_charts::FaceBending, KernelError> {
+        Err(KernelError::Unsupported("the bending of faces"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -2777,7 +2814,9 @@ pub enum FilletSize<'a> {
 }
 
 /// Removed faces (none: a closed void) and the wall thickness inside and
-/// outside the surface; `rounded` rounds the outer corners.
+/// outside the surface; `rounded` rounds the outer corners. `own` are the
+/// faces whose wall has a thickness of its own (mitcad#2443); the rest
+/// keep `inside` and `outside`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShellSpec<'a> {
     pub faces: &'a [FaceName],
@@ -2785,6 +2824,20 @@ pub struct ShellSpec<'a> {
     pub outside: f64,
     pub tangent_chain: bool,
     pub rounded: bool,
+    pub own: &'a [ShellFace],
+}
+
+/// A face whose shell wall has a thickness of its own (mitcad#2443):
+/// `inside` and `outside` in place of the shell's, each greater than zero
+/// exactly where the shell's is. The kernel offsets faces that meet
+/// smoothly as one (and, rounded, the faces a rounding joins): with the
+/// tangent chain the faces tangent to one take its thickness, and a face
+/// joined so to one of another thickness is refused, both painted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShellFace {
+    pub face: FaceName,
+    pub inside: f64,
+    pub outside: f64,
 }
 
 /// Faces tilted by `angle` (radians) about their intersection with the

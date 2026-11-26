@@ -39,6 +39,7 @@ fn output(curves: &[RegionCurve]) -> SketchOutput {
     let (info, layout) = regions_and_layout(curves);
     SketchOutput {
         frame: SketchFrame::XY,
+        plane: SketchFrame::XY,
         base: SketchFrame::XY,
         regions: info.iter().map(|r| r.profile.clone()).collect(),
         region_info: info,

@@ -35,7 +35,10 @@
 // (<reason>)", "Guide: holding input after step <id>", "Guide: command <id>
 // refused during the hold after step <id>", "Guide: hold after step <id>
 // released (<reason>)", "Guide: step <id> view zoomed, not its orbit"
-// (orbited, panned, zoomed; once an action a step),
+// (orbited, panned, zoomed; once an action a step), "Guide: step <id>
+// plane xz, not its XY", "Guide: step <id> point at grid (10, 5), not its
+// origin", "Guide: step <id> value 25 in width, not its 40" (mitcad#2440:
+// input held back that missed the step, each a "mismatch" event),
 // "Guide callout at x,y", "Guide leave button at x,y"; the target's
 // rectangle as "Guide: step <id> target at x,y wxh" and, in the top
 // window's coordinates as the toolbar's places, "Guide: step <id> outline
@@ -97,6 +100,15 @@ struct GuideHost {
   // Alt + left orbit, the orientation cube's drag): a left press that does
   // is free while the step allows navigation (mitcad#2369).
   std::function<bool(const QPoint& position, Qt::MouseButton button, Qt::KeyboardModifiers keys)> navigationPress;
+  // A 2D sketch's drawing tool's value box `key` (mitcad#2440): whether the
+  // tool shows it now, and in `typed` its text when the user typed a value
+  // into it (empty while it shows the value under the pointer).
+  std::function<bool(const QString& key, QString* typed)> toolField;
+  // Whether a job computes the model now (a preview): what completes a step
+  // is checked only while it does not, so that nothing that follows a step's
+  // end (the actions' update, the page's next step) reads the document while
+  // the job has it (mitcad#2440).
+  std::function<bool()> busy;
 };
 
 class TutorialGuide : public QObject {
@@ -142,6 +154,22 @@ public:
   // action is done; another action is logged once a step and leaves it.
   void viewNavigated(const QString& action);
 
+  // The learner's sketch input one interaction at a time (mitcad#2440).
+  // A sketch is about to be made on the plane `names` (GuideStep::
+  // planeMatches; `shown` is its name for the log and the event): true
+  // when the step takes it (any plane while it names none); another plane
+  // is held back (the callout's note, a "mismatch" event, the log).
+  bool planeAllowed(const QStringList& names, const QString& shown);
+  // The sketch was made on the plane `names`: a Plane step on it is done.
+  void planeMade(const QStringList& names);
+  // A 2D sketch's drawing tool is about to take a click placing `point`,
+  // or Enter (`point` null): true lets it through. A Point step: a click
+  // at a place it waits for is done and goes through, another is held
+  // back. A Field step while the tool shows its value box: a click or
+  // Enter with the value typed there is done and goes through, with
+  // another value (typed, or the one under the pointer) held back.
+  bool drawingInput(const GuidePoint* point);
+
   // The view's picks held back, with a step or without one, as a step that
   // takes no picks holds them (mitcad#2367: while the tutorial pane is
   // centred over the view); navigation stays as the step has it (free
@@ -167,7 +195,7 @@ public:
   QRect calloutRect() const;
 
 signals:
-  // {"event": "step_done" | "step_left" | "refused" | "held" |
+  // {"event": "step_done" | "step_left" | "refused" | "held" | "mismatch" |
   //  "demonstration_ended", "step": <id>, "sequence": n, ...}
   // (docs/tutorials.md "Events").
   void guideEvent(const QJsonObject& event);
@@ -184,6 +212,11 @@ private:
   void placeCallout(const QRect& target);
   void showNote(const QString& note);
   void finish(const QJsonObject& done, const QString& what);
+  // Input that misses the step's plane, point or value (mitcad#2440): held
+  // back by the caller; logged "Guide: step <id> <what>, not its
+  // <wanted>", the callout's `note` and a "mismatch" event with what the
+  // user did (`got`, shaped as step_done's `done`).
+  void mismatch(const QJsonObject& got, const QString& what, const QString& wanted, const QString& note);
   void emitEvent(QJsonObject event);
   // Whether the press `mouse` on `widget` (of the window) is held back now,
   // and the name of the place for the log.

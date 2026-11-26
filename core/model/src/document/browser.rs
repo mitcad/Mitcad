@@ -122,7 +122,7 @@ impl DocState {
     /// Whether a feature is shown by default: a sketch while no feature
     /// uses it (`used`: [`DocState::used_sketches`]), construction geometry
     /// always.
-    fn shown_by_default(entry: &FeatureEntry, used: &BTreeSet<FeatureUid>) -> bool {
+    pub(crate) fn shown_by_default(entry: &FeatureEntry, used: &BTreeSet<FeatureUid>) -> bool {
         !(matches!(entry.def, FeatureDef::Sketch(_)) && used.contains(&entry.uid))
     }
 
@@ -143,8 +143,10 @@ impl DocState {
     /// undo step. With `hide` false (the user's preference, mitcad#2393) a
     /// planar sketch that was shown before and got its first consumer
     /// keeps its light bulb on instead: it is set, as the default now
-    /// hides it. A sketch the command made has no light bulb before it and
-    /// follows the default.
+    /// hides it. A sketch the command made keeps the light bulb the command
+    /// gave it, if any (a copy its source's, mitcad#2449: the copy of a
+    /// used sketch its source shows was hidden again here), else follows
+    /// the default.
     pub(crate) fn follow_sketch_use(&mut self, before: &DocState, hide: bool) {
         let same = self.features.len() == before.features.len()
             && self
@@ -172,7 +174,10 @@ impl DocState {
                 .collect()
         };
         for uid in was.symmetric_difference(&now) {
-            self.feature_visibility.remove(uid);
+            // (Only the sketches that were there before the command.)
+            if before.entry(*uid).is_some() {
+                self.feature_visibility.remove(uid);
+            }
         }
         for uid in kept {
             if self.entry(uid).is_some() {

@@ -759,10 +759,16 @@ pub struct LightBulb {
 /// entity list follow (`ref | str16 name | u8 0 | u32 n | ref[n]`) comes
 /// after `u32 k | u8 0 | u8 light bulb` (1 on, 0 off; `k` is open). It
 /// equals the reference dumps' `isVisible` for every sketch of the reference
-/// models (`tests/design_models.rs`). Files whose sketch class is version
-/// 16 or older, and some of 17, lay this part out otherwise: None, as
-/// when the place is not found exactly once.
+/// models (`tests/design_models.rs`). Sketch classes 15 to 17 keep the same
+/// part in the object's sub-chunk instead ([`sub_chunk_light_bulb`],
+/// mitcad#2449). None when neither place is found exactly once.
 pub fn light_bulb(seg: &Segment, s: &Object) -> Option<LightBulb> {
+    main_light_bulb(seg, s).or_else(|| sub_chunk_light_bulb(seg, s))
+}
+
+/// The light bulb in the sketch object's main part (sketch class 18 and
+/// most of 17), see [`light_bulb`].
+fn main_light_bulb(seg: &Segment, s: &Object) -> Option<LightBulb> {
     let d = seg.data(s);
     let start = header_end(d)?;
     let mut found = None;
@@ -786,6 +792,46 @@ pub fn light_bulb(seg: &Segment, s: &Object) -> Option<LightBulb> {
         });
     }
     found
+}
+
+/// The light bulb of sketch classes 15 to 17 (mitcad#2449), kept in the
+/// object's sub-chunk: after the sub-chunk's header (`str8 tag | u64 id |
+/// str8 name`) and its first reference, `u32 k | u8 0 | u8 light bulb`,
+/// then the part that follows it in the main part of class 18 (`[ref
+/// SKETCH_NAME_ANCHOR] | str16 name | u8 0 | u32 n | ref[n]`; the anchor
+/// reference is missing in class 16 and older 17). Checked against the API
+/// reference dumps: the 48 sketches of the three class 17 designs of the
+/// corpus that have both shown and hidden sketches (6 shown, 42 hidden)
+/// and the 30 hidden ones of class 16 and 17 designs without the anchor;
+/// none differs. None where the sub-chunk is laid out otherwise.
+fn sub_chunk_light_bulb(seg: &Segment, s: &Object) -> Option<LightBulb> {
+    let start = seg.sub_start(s);
+    if start == 0 {
+        return None;
+    }
+    let d = seg.data(s).get(start..)?;
+    let p = seg.ref_at(d, header_end(d)?)?.end;
+    // `u32 k | u8 0 | u8 light bulb`.
+    let bulb = *d.get(p + 5)?;
+    if u32_at(d, p).is_none() || d.get(p + 4) != Some(&0) || bulb > 1 {
+        return None;
+    }
+    let mut q = p + 6;
+    if let Some(r) = seg
+        .ref_at(d, q)
+        .filter(|r| seg.guid_of(r.id) == Some(SKETCH_NAME_ANCHOR))
+    {
+        q = r.end;
+    }
+    let (_, e) = str16_at(d, q)?;
+    let n = u32_at(d, e + 1).unwrap_or(u32::MAX) as usize;
+    if d.get(e) != Some(&0) || n > 100_000 || refs_from(seg, d, e + 5, n).len() != n {
+        return None;
+    }
+    Some(LightBulb {
+        on: bulb == 1,
+        raw: d[p..p + 6].to_vec(),
+    })
 }
 
 /// The name a user gave a sketch: the `str16` after the reference to the
@@ -2388,6 +2434,98 @@ mod tests {
         s.handles.clear();
         s.fit_points = vec![5];
         assert_eq!(spline_kind(&s, false, false), "SketchFittedSpline");
+    }
+
+    /// A reference `01 id 00 00`.
+    fn reference(out: &mut Vec<u8>, id: u64) {
+        out.push(1);
+        out.extend(id.to_le_bytes());
+        out.extend([0, 0]);
+    }
+
+    /// An object header `str8 tag | u64 id | str8 name` (empty name).
+    fn object_header(out: &mut Vec<u8>, id: u64) {
+        out.extend(3u32.to_le_bytes());
+        out.extend(b"256");
+        out.extend(id.to_le_bytes());
+        out.extend(0u32.to_le_bytes());
+    }
+
+    /// A segment of a sketch object (id 10) of class `version` whose
+    /// sub-chunk keeps the light bulb `bulb` (with the name anchor's
+    /// reference where `anchor`), the anchor (id 12) and a curve (id 20).
+    fn old_sketch(version: u32, bulb: u8, anchor: bool) -> crate::stream::Segment {
+        use crate::stream::{ClassRecord, MetaStream, Segment};
+        let mut bulk = Vec::new();
+        // The sketch: its main part, then the sub-chunk.
+        object_header(&mut bulk, 10);
+        bulk.extend([0, 1, 0, 0, 0]);
+        let sub = bulk.len() as u64;
+        object_header(&mut bulk, 11);
+        reference(&mut bulk, 20);
+        bulk.extend(7u32.to_le_bytes());
+        bulk.extend([0, bulb]);
+        if anchor {
+            reference(&mut bulk, 12);
+        }
+        bulk.extend(0u32.to_le_bytes()); // the name: empty
+        bulk.push(0);
+        bulk.extend(1u32.to_le_bytes());
+        reference(&mut bulk, 20);
+        bulk.extend([0, 0, 0, 1]);
+        let anchor_at = bulk.len() as u64;
+        object_header(&mut bulk, 12);
+        let curve_at = bulk.len() as u64;
+        object_header(&mut bulk, 20);
+        let class = |guid: &str, version: u32, ids: Vec<u64>| ClassRecord {
+            guid: guid.to_owned(),
+            parent: String::new(),
+            version,
+            module: String::new(),
+            ids,
+        };
+        let meta = MetaStream {
+            segment: "Design".to_owned(),
+            h0: 0,
+            guid: String::new(),
+            magic: 0x0800_1d0e,
+            version: vec![0],
+            segment2: String::new(),
+            module: String::new(),
+            h1: [0, 0],
+            classes: vec![
+                class(SKETCH, version, vec![10]),
+                class(SKETCH_NAME_ANCHOR, 3, vec![12]),
+                class(SKETCH_LINE, 1, vec![20]),
+            ],
+            named_roots: Vec::new(),
+            index: vec![(10, 0), (12, anchor_at), (20, curve_at)],
+            subchunks: vec![(10, sub)],
+            next_id: None,
+            external: Vec::new(),
+            feature_versions: Vec::new(),
+            tail_ok: false,
+        };
+        Segment::new(meta, bulk)
+    }
+
+    /// Sketch classes 15 to 17 keep the light bulb in the sketch's
+    /// sub-chunk, with or without the name anchor's reference after it
+    /// (mitcad#2449).
+    #[test]
+    fn reads_the_light_bulb_of_older_sketch_classes() {
+        for (version, anchor) in [(17, true), (16, false), (15, false)] {
+            for bulb in [0u8, 1] {
+                let seg = old_sketch(version, bulb, anchor);
+                let sketch = seg.object(10).expect("the sketch");
+                let read = light_bulb(&seg, sketch).expect("read");
+                assert_eq!(read.on, bulb == 1, "class {version}, anchor {anchor}");
+                assert_eq!(read.raw, [7, 0, 0, 0, 0, bulb]);
+            }
+        }
+        // Anything but 0 or 1 is no light bulb.
+        let seg = old_sketch(16, 2, false);
+        assert_eq!(light_bulb(&seg, seg.object(10).unwrap()), None);
     }
 
     /// An ellipse's normal is its major direction across its minor one.

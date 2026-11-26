@@ -2739,6 +2739,19 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   // Floating, the platform's until one is chosen. Not in the native macOS
   // frontend, which has its own.
   QComboBox* layoutChoice = nullptr;
+  // The timeline as the strip at the bottom or the History list under the
+  // Browser (mitcad#2427, GitHub mitcad/Mitcad#581), beside the Layout (the
+  // page fits a 768 px high screen): applied to every window when the
+  // dialog is accepted, at once in the Settings window.
+  auto* timelineChoice = new QComboBox;
+  timelineChoice->setObjectName(QStringLiteral("timelinePresentation"));
+  timelineChoice->addItem(tr("Strip"), timelinePresentationId(TimelinePresentation::Strip));
+  timelineChoice->addItem(tr("History list"), timelinePresentationId(TimelinePresentation::HistoryList));
+  timelineChoice->setCurrentIndex(
+      std::max(0, timelineChoice->findData(timelinePresentationId(timelinePresentation()))));
+  timelineChoice->setToolTip(tr("Strip: icons at the bottom; History list: named rows under the Browser"));
+  auto* timelineLabel = new QLabel(tr("Timeline:"));
+  timelineLabel->setBuddy(timelineChoice);
   if (layoutChoosable()) {
     layoutChoice = new QComboBox;
     layoutChoice->setObjectName(QStringLiteral("layout"));
@@ -2746,7 +2759,29 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     layoutChoice->addItem(tr("Floating"), int(ChromeStyle::Floating));
     layoutChoice->setCurrentIndex(layoutChoice->findData(int(layoutPreference().value_or(defaultChromeStyle()))));
     layoutChoice->setToolTip(tr("Docked: panels in docks around the 3D view; Floating: cards over it"));
-    display->addRow(tr("&Layout:"), layoutChoice);
+    auto* layoutRow = new QHBoxLayout;
+    layoutRow->addWidget(layoutChoice);
+    layoutRow->addSpacing(12);
+    layoutRow->addWidget(timelineLabel);
+    layoutRow->addWidget(timelineChoice);
+    layoutRow->addStretch(1);
+    auto* layoutLabel = new QLabel(tr("&Layout:"));
+    layoutLabel->setBuddy(layoutChoice);
+    display->addRow(layoutLabel, layoutRow);
+  } else {
+    display->addRow(timelineLabel, timelineChoice);
+  }
+  const auto applyTimelinePresentation = [timelineChoice] {
+    const TimelinePresentation chosen = timelinePresentationFromId(timelineChoice->currentData().toString());
+    if (chosen != timelinePresentation()) {
+      qDebug().noquote() << QStringLiteral("Preferences: timeline %1").arg(timelinePresentationId(chosen));
+    }
+    setTimelinePresentation(chosen);
+  };
+  if (window != nullptr) {
+    connect(timelineChoice, &QComboBox::currentIndexChanged, host, saving(applyTimelinePresentation));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, timelineChoice, applyTimelinePresentation);
   }
   // The quick-access group (mitcad#1189), beside the Layout: shown by
   // default; unchecked, it is not shown in either layout (nor in the AppKit

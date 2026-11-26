@@ -558,12 +558,14 @@ void CamMachinesDialog::showMachine() {
     qInfo().noquote() << QStringLiteral("CAM machine zones: %1: %2")
                              .arg(text(machine, "id"), QString::fromUtf8(zones.toJson(QJsonDocument::Compact)));
     // A mill-turn's codes and sub-spindle (mitcad#2375), the turret's body
-    // (mitcad#2405).
+    // (mitcad#2405) and those of single stations (mitcad#2412).
     const QJsonObject latheJson = body.value(QStringLiteral("lathe")).toObject();
     if (latheJson.contains(QStringLiteral("mill_turn")) || latheJson.contains(QStringLiteral("sub_spindle"))) {
       const QJsonDocument codes(QJsonObject{{QStringLiteral("mill_turn"), latheJson.value(QStringLiteral("mill_turn"))},
                                             {QStringLiteral("sub_spindle"), latheJson.value(QStringLiteral("sub_spindle"))},
-                                            {QStringLiteral("turret_body"), latheJson.value(QStringLiteral("turret_body"))}});
+                                            {QStringLiteral("turret_body"), latheJson.value(QStringLiteral("turret_body"))},
+                                            {QStringLiteral("station_bodies"),
+                                             latheJson.value(QStringLiteral("station_bodies"))}});
       qInfo().noquote() << QStringLiteral("CAM machine mill-turn codes: %1: %2")
                                .arg(text(machine, "id"), QString::fromUtf8(codes.toJson(QJsonDocument::Compact)));
     }
@@ -702,7 +704,8 @@ bool CamMachinesDialog::evaluate(const QString& typed, const QString& kind, doub
   }
 }
 
-std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObject zone, bool lathe, bool sub) {
+std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObject zone, bool lathe, bool sub,
+                                                      bool latheY) {
   const QJsonObject bounds = zone.value(QStringLiteral("bounds")).toObject();
   QJsonArray minimum = bounds.value(QStringLiteral("min")).toArray();
   QJsonArray maximum = bounds.value(QStringLiteral("max")).toArray();
@@ -726,8 +729,11 @@ std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObje
   const auto shown = [adding](double value) {
     return adding ? QString() : QString::number(value, 'g', QLocale::FloatingPointShortest) + QStringLiteral(" mm");
   };
+  // A lathe's Y on a lathe with a Y axis (mitcad#2412); equal bounds (as
+  // a lathe's zones had before) are shown empty: not limited in Y.
+  const bool yUnlimited = lathe && maximum.at(1).toDouble() <= minimum.at(1).toDouble();
   for (int axis = 0; axis < 3; ++axis) {
-    if (lathe && axis == 1) {
+    if (lathe && !latheY && axis == 1) {
       continue;
     }
     const QString label = zoneAxis(axis, lathe);
@@ -736,9 +742,17 @@ std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObje
     // sub-spindle's jaws' face.
     const QString tip = !lathe      ? QString()
                         : axis == 0 ? tr("Measure X as a radius from the spindle axis.")
+                        : axis == 1 ? tr("Measure Y along the Y axis; leave both empty for a zone not limited in Y.")
                         : sub       ? tr("Measure Z from the sub-spindle's jaws' face, positive away from the main "
                                          "spindle.")
                                     : tr("Measure Z along the spindle axis.");
+    if (lathe && axis == 1 && yUnlimited) {
+      fields[axis].minimum = field(QStringLiteral("camMachineZoneMinY"), QString(), tip);
+      fields[axis].maximum = field(QStringLiteral("camMachineZoneMaxY"), QString(), tip);
+      form->addRow(tr("Minimum %1").arg(label), fields[axis].minimum);
+      form->addRow(tr("Maximum %1").arg(label), fields[axis].maximum);
+      continue;
+    }
     fields[axis].minimum = field(QStringLiteral("camMachineZoneMin") + key, shown(minimum.at(axis).toDouble()), tip);
     fields[axis].maximum = field(QStringLiteral("camMachineZoneMax") + key, shown(maximum.at(axis).toDouble()), tip);
     form->addRow(tr("Minimum %1").arg(label), fields[axis].minimum);
@@ -764,8 +778,8 @@ std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObje
       refuse(name, tr("Enter a name for the zone."));
       return;
     }
-    // A lathe's checker uses X and Z. Keep an existing zone's Y bounds
-    // when editing a machine that came from a file or a library.
+    // A lathe without a Y axis checks X and Z: an existing zone keeps its Y
+    // bounds (from a file or a library); with a Y axis Y is asked too.
     QJsonArray lo = minimum;
     QJsonArray hi = maximum;
     for (int axis = 0; axis < 3; ++axis) {
@@ -776,6 +790,14 @@ std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObje
       const QString label = zoneAxis(axis, lathe);
       double lower = 0.0;
       double upper = 0.0;
+      // A lathe's zone not limited in Y: both ends empty, kept as equal
+      // bounds (mitcad#2412).
+      if (lathe && axis == 1 && range.minimum->text().trimmed().isEmpty() &&
+          range.maximum->text().trimmed().isEmpty()) {
+        lo.replace(axis, 0.0);
+        hi.replace(axis, 0.0);
+        continue;
+      }
       if (!evaluate(range.minimum->text(), QStringLiteral("length"), &lower) || !std::isfinite(lower)) {
         refuse(range.minimum, tr("Enter a length for Minimum %1.").arg(label));
         return;
@@ -802,7 +824,8 @@ std::optional<QJsonObject> CamMachinesDialog::askZone(QDialog* parent, QJsonObje
   return zone;
 }
 
-QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones, bool lathe, bool sub) {
+QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones, bool lathe, bool sub,
+                                              std::function<bool()> latheY) {
   auto* page = new QWidget;
   auto* layout = new QVBoxLayout(page);
   // The zones moving with the sub-spindle (mitcad#2392): their own list and
@@ -817,12 +840,9 @@ QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones,
   list->setObjectName(prefix + QStringLiteral("List"));
   list->setRootIsDecorated(false);
   panel::setCompactIndentation(list, panel::Indent::Flat);
-  QStringList headers{tr("Name"), zoneAxis(0, lathe)};
-  if (!lathe) {
-    headers << zoneAxis(1, lathe);
-  }
-  headers << zoneAxis(2, lathe);
-  list->setHeaderLabels(headers);
+  // Y on a mill, and on a lathe with a Y axis as the list is shown
+  // (mitcad#2412).
+  const auto withY = [lathe, latheY] { return !lathe || (latheY && latheY()); };
   list->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
   layout->addWidget(list, 1);
 
@@ -840,8 +860,16 @@ QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones,
   actions->addStretch(1);
   layout->addLayout(actions);
 
-  const auto showZones = [this, list, &zones, lathe](int selected) {
+  const auto showZones = [this, list, &zones, lathe, withY](int selected) {
     list->clear();
+    const bool y = withY();
+    QStringList headers{tr("Name"), zoneAxis(0, lathe)};
+    if (y) {
+      headers << zoneAxis(1, lathe);
+    }
+    headers << zoneAxis(2, lathe);
+    list->setColumnCount(static_cast<int>(headers.size()));
+    list->setHeaderLabels(headers);
     for (const QJsonValue& value : std::as_const(zones)) {
       const QJsonObject zone = value.toObject();
       const QJsonObject bounds = zone.value(QStringLiteral("bounds")).toObject();
@@ -850,10 +878,16 @@ QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones,
       const QString name = text(zone, "name");
       QStringList cells{name.isEmpty() ? tr("Unnamed zone") : name};
       for (int axis = 0; axis < 3; ++axis) {
-        if (!lathe || axis != 1) {
-          cells << tr("%1 to %2").arg(m_host.lengthText(lo.at(axis).toDouble()),
-                                     m_host.lengthText(hi.at(axis).toDouble()));
+        if (axis == 1 && !y) {
+          continue;
         }
+        // A lathe's zone with equal Y bounds is not limited in Y.
+        if (axis == 1 && lathe && hi.at(1).toDouble() <= lo.at(1).toDouble()) {
+          cells << tr("Not limited");
+          continue;
+        }
+        cells << tr("%1 to %2").arg(m_host.lengthText(lo.at(axis).toDouble()),
+                                   m_host.lengthText(hi.at(axis).toDouble()));
       }
       new QTreeWidgetItem(list, cells);
     }
@@ -867,16 +901,16 @@ QWidget* CamMachinesDialog::machineZonesPage(QDialog* dialog, QJsonArray& zones,
     remove->setEnabled(selected);
   };
   connect(list, &QTreeWidget::currentItemChanged, page, enableActions);
-  connect(add, &QPushButton::clicked, page, [this, dialog, &zones, lathe, sub, showZones] {
-    if (const auto zone = askZone(dialog, {}, lathe, sub)) {
+  connect(add, &QPushButton::clicked, page, [this, dialog, &zones, lathe, sub, showZones, withY] {
+    if (const auto zone = askZone(dialog, {}, lathe, sub, lathe && withY())) {
       zones.append(*zone);
       showZones(static_cast<int>(zones.size()) - 1);
     }
   });
-  const auto editZone = [this, dialog, list, &zones, lathe, sub, showZones] {
+  const auto editZone = [this, dialog, list, &zones, lathe, sub, showZones, withY] {
     const int row = list->indexOfTopLevelItem(list->currentItem());
     if (row >= 0) {
-      if (const auto zone = askZone(dialog, zones.at(row).toObject(), lathe, sub)) {
+      if (const auto zone = askZone(dialog, zones.at(row).toObject(), lathe, sub, lathe && withY())) {
         zones.replace(row, *zone);
         showZones(row);
       }
@@ -1211,6 +1245,12 @@ void CamMachinesDialog::editMachine() {
       field(QStringLiteral("camMachineSubProfile"), profileText.join(QStringLiteral("; ")),
             tr("Points of Z from the jaws' face and diameter, as 0, 80; 40, 80; separated by ;"));
   subForm->addRow(tr("Body Profile"), subProfile);
+  // The turret's page, on every lathe (mitcad#2412): its body round the
+  // tool, checked against the main chuck, the fixed zones, the sub-spindle
+  // and the zones moving with it, and the bodies of single stations
+  // ("station: X from, X to, Z from, Z to" separated by ";").
+  auto* turretPage = new QWidget;
+  auto* turretForm = new QFormLayout(turretPage);
   const QJsonObject turretJson = latheJson.value(QStringLiteral("turret_body")).toObject();
   const auto turretEnd = [&turretJson, &mm](const char* key, int end) {
     const QJsonArray range = turretJson.value(QLatin1String(key)).toArray();
@@ -1218,16 +1258,30 @@ void CamMachinesDialog::editMachine() {
   };
   QLineEdit* turretXMin = field(QStringLiteral("camMachineTurretXMin"), turretEnd("x", 0),
                                 tr("Where the turret's body starts in X from the tool's point; empty: not checked"));
-  subForm->addRow(tr("Turret Body X From"), turretXMin);
+  turretForm->addRow(tr("Turret Body X From"), turretXMin);
   QLineEdit* turretXMax = field(QStringLiteral("camMachineTurretXMax"), turretEnd("x", 1),
                                 tr("Where the turret's body ends in X from the tool's point"));
-  subForm->addRow(tr("Turret Body X To"), turretXMax);
+  turretForm->addRow(tr("Turret Body X To"), turretXMax);
   QLineEdit* turretZMin = field(QStringLiteral("camMachineTurretZMin"), turretEnd("z", 0),
                                 tr("Where the turret's body starts in Z from the tool's point"));
-  subForm->addRow(tr("Turret Body Z From"), turretZMin);
+  turretForm->addRow(tr("Turret Body Z From"), turretZMin);
   QLineEdit* turretZMax = field(QStringLiteral("camMachineTurretZMax"), turretEnd("z", 1),
-                                tr("Where the turret's body ends in Z, towards the sub-spindle"));
-  subForm->addRow(tr("Turret Body Z To"), turretZMax);
+                                tr("Where the turret's body ends in Z, away from the main spindle"));
+  turretForm->addRow(tr("Turret Body Z To"), turretZMax);
+  QStringList stationText;
+  for (const QJsonValue& value : latheJson.value(QStringLiteral("station_bodies")).toArray()) {
+    const QJsonObject station = value.toObject();
+    const QJsonArray xs = station.value(QStringLiteral("x")).toArray();
+    const QJsonArray zs = station.value(QStringLiteral("z")).toArray();
+    stationText << QStringLiteral("%1: %2, %3, %4, %5")
+                       .arg(station.value(QStringLiteral("station")).toInt())
+                       .arg(mm(xs.at(0).toDouble()), mm(xs.at(1).toDouble()), mm(zs.at(0).toDouble()),
+                            mm(zs.at(1).toDouble()));
+  }
+  QLineEdit* stationBodies =
+      field(QStringLiteral("camMachineTurretStations"), stationText.join(QStringLiteral("; ")),
+            tr("A station's own body, as 3: 0, 120, -30, 25 for X from, X to, Z from, Z to; separated by ;"));
+  turretForm->addRow(tr("Station Bodies"), stationBodies);
   auto* subAxis = new QComboBox;
   subAxis->setObjectName(QStringLiteral("camMachineSubAxis"));
   for (const QString& letter : {QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("E")}) {
@@ -1304,12 +1358,19 @@ void CamMachinesDialog::editMachine() {
   auto* tabs = new QTabWidget;
   tabs->tabBar()->setObjectName(QStringLiteral("camMachineTabs"));
   tabs->addTab(machinePage, tr("Machine"));
-  tabs->addTab(machineZonesPage(&dialog, zones, lathe), tr("Keep-Out Zones"));
+  // The zones' Y on a lathe with a Y axis, as the form has it when a zone
+  // is shown or edited (mitcad#2412).
+  const auto latheYAxis = [lathe, liveTools, yAxis] { return lathe && liveTools->isChecked() && yAxis->isChecked(); };
+  tabs->addTab(machineZonesPage(&dialog, zones, lathe, false, latheYAxis), tr("Keep-Out Zones"));
   // The sub-spindle's page, with the sub-spindle (mitcad#2375), and the
   // zones moving with it (mitcad#2392).
   const int subTab = tabs->addTab(subPage, tr("Sub-Spindle"));
   QJsonArray subZones = subJson.value(QStringLiteral("zones")).toArray();
-  const int subZonesTab = tabs->addTab(machineZonesPage(&dialog, subZones, lathe, true), tr("Sub-Spindle Zones"));
+  const int subZonesTab =
+      tabs->addTab(machineZonesPage(&dialog, subZones, lathe, true, latheYAxis), tr("Sub-Spindle Zones"));
+  // The turret's page on every lathe (mitcad#2412).
+  const int turretTab = tabs->addTab(turretPage, tr("Turret"));
+  tabs->setTabVisible(turretTab, lathe);
   const auto showSubTab = [tabs, subTab, subZonesTab, subSpindle, lathe] {
     tabs->setTabVisible(subTab, lathe && subSpindle->isChecked());
     tabs->setTabVisible(subZonesTab, lathe && subSpindle->isChecked());
@@ -1461,19 +1522,48 @@ void CamMachinesDialog::editMachine() {
         message->setText(tr("%1: two or more points, or left empty.").arg(tr("Body Profile")));
         return;
       }
-      // The turret's body: X and Z from the tool, all four or none.
-      for (int i = 0; turretSet && i < 4; ++i) {
-        if (!evaluate(turretFields[i]->text(), QStringLiteral("length"), &turretEnds[i])) {
-          tabs->setCurrentIndex(subTab);
-          message->setText(tr("The turret's body: X and Z each from a lowest up to a highest, or all left empty."));
-          return;
-        }
-      }
-      if (turretSet && (turretEnds[0] > turretEnds[1] || turretEnds[2] > turretEnds[3])) {
-        tabs->setCurrentIndex(subTab);
+    }
+    // The turret's body: X and Z from the tool, all four or none; on every
+    // lathe, on its own page (mitcad#2412).
+    for (int i = 0; lathe && turretSet && i < 4; ++i) {
+      if (!evaluate(turretFields[i]->text(), QStringLiteral("length"), &turretEnds[i])) {
+        tabs->setCurrentIndex(turretTab);
         message->setText(tr("The turret's body: X and Z each from a lowest up to a highest, or all left empty."));
         return;
       }
+    }
+    if (lathe && turretSet && (turretEnds[0] > turretEnds[1] || turretEnds[2] > turretEnds[3])) {
+      tabs->setCurrentIndex(turretTab);
+      message->setText(tr("The turret's body: X and Z each from a lowest up to a highest, or all left empty."));
+      return;
+    }
+    // The bodies of single stations (mitcad#2412): "station: X from, X to,
+    // Z from, Z to" separated by ";", each range from its lowest.
+    QJsonArray stationList;
+    const QStringList stationEntries =
+        lathe ? stationBodies->text().split(QLatin1Char(';'), Qt::SkipEmptyParts) : QStringList();
+    for (const QString& entry : stationEntries) {
+      if (entry.trimmed().isEmpty()) {
+        continue;
+      }
+      const QStringList head = entry.split(QLatin1Char(':'));
+      const QStringList parts = head.size() == 2 ? head.at(1).split(QLatin1Char(',')) : QStringList();
+      bool numbered = false;
+      const int number = head.size() == 2 ? head.at(0).trimmed().toInt(&numbered) : 0;
+      double ends[4] = {};
+      bool read = numbered && parts.size() == 4;
+      for (int i = 0; read && i < 4; ++i) {
+        read = evaluate(parts.at(i), QStringLiteral("length"), &ends[i]);
+      }
+      if (!read || ends[0] > ends[1] || ends[2] > ends[3]) {
+        tabs->setCurrentIndex(turretTab);
+        message->setText(tr("%1: each a station and its X from, X to, Z from and Z to, as 3: 0, 120, -30, 25.")
+                             .arg(tr("Station Bodies")));
+        return;
+      }
+      stationList.append(QJsonObject{{QStringLiteral("station"), number},
+                                     {QStringLiteral("x"), QJsonArray{ends[0], ends[1]}},
+                                     {QStringLiteral("z"), QJsonArray{ends[2], ends[3]}}});
     }
     const double x0 = min.at(0).toDouble();
     const double y0 = latheY ? -0.5 * values[1] : min.at(1).toDouble();
@@ -1596,13 +1686,20 @@ void CamMachinesDialog::editMachine() {
           subData.insert(QStringLiteral("profile"), subProfilePoints);
         }
         latheJson.insert(QStringLiteral("sub_spindle"), subData);
-        if (turretSet) {
-          latheJson.insert(QStringLiteral("turret_body"),
-                           QJsonObject{{QStringLiteral("x"), QJsonArray{turretEnds[0], turretEnds[1]}},
-                                       {QStringLiteral("z"), QJsonArray{turretEnds[2], turretEnds[3]}}});
-        } else {
-          latheJson.remove(QStringLiteral("turret_body"));
-        }
+      }
+      // The turret's body and those of single stations, on every lathe
+      // (mitcad#2405, mitcad#2412).
+      if (turretSet) {
+        latheJson.insert(QStringLiteral("turret_body"),
+                         QJsonObject{{QStringLiteral("x"), QJsonArray{turretEnds[0], turretEnds[1]}},
+                                     {QStringLiteral("z"), QJsonArray{turretEnds[2], turretEnds[3]}}});
+      } else {
+        latheJson.remove(QStringLiteral("turret_body"));
+      }
+      if (!stationList.isEmpty()) {
+        latheJson.insert(QStringLiteral("station_bodies"), stationList);
+      } else {
+        latheJson.remove(QStringLiteral("station_bodies"));
       }
       body.insert(QStringLiteral("lathe"), latheJson);
     }

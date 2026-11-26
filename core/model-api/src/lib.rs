@@ -246,6 +246,9 @@ mod drawing_welds;
 // allow-list of read-only queries (mitcad#2371).
 mod tutorial_bridge;
 pub use tutorial_bridge::{TUTORIAL_QUERIES, tutorial_query};
+// The drawing book: drawings of the design and of its linked designs
+// printed as one job (mitcad#2448).
+mod drawing_book;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -1454,6 +1457,10 @@ named_enum! {
             path: String,
             #[serde(default)]
             base: Option<String>,
+            // The open design's file: `back`, a chain of links from `path`
+            // back to it (mitcad#2428).
+            #[serde(default)]
+            design: Option<String>,
         },
         // Forms (mitcad#1757, `form.rs`): the whole cage for drawing and
         // picking, the limit surface's preview mesh.
@@ -1554,6 +1561,14 @@ named_enum! {
         // of its animation (mitcad#2113, `explode.rs`).
         "explode_views" => ExplodeViews,
         "explode_view" => ExplodeView(explode::ExplodeQuery),
+        // The drawing book checked against the design and its linked
+        // designs, and its sheets written for printing (mitcad#2448,
+        // `drawing_book.rs`).
+        "drawing_book" => DrawingBook {
+            #[serde(default)]
+            base: Option<String>,
+        },
+        "drawing_book_sheets" => DrawingBookSheets(drawing_book::SheetsQuery),
     }
 }
 
@@ -2349,7 +2364,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             // The design at values of a parameter, on a copy (mitcad#1730).
             Query::ParameterRange(query) => parameter_range::query(self, &query)?,
             // Whether a link to a file would be followed (mitcad#1719).
-            Query::LinkCheck { path, base } => components::link_check_json(&path, base.as_deref())?,
+            Query::LinkCheck { path, base, design } => {
+                components::link_check_json(&path, base.as_deref(), design.as_deref())?
+            }
             // Forms (mitcad#1757).
             Query::FormCage(query) => form::form_cage(self, &query)?,
             Query::FormLimit(query) => form::form_limit(self, query)?,
@@ -2422,6 +2439,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             // Exploded views (mitcad#2113).
             Query::ExplodeViews => explode::views_json(self),
             Query::ExplodeView(query) => explode::view_json(self, &query)?,
+            // The drawing book (mitcad#2448).
+            Query::DrawingBook { base } => drawing_book::book_json(self, base.as_deref()),
+            Query::DrawingBookSheets(query) => drawing_book::sheets_json(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);

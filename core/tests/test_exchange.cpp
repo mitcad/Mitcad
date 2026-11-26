@@ -325,8 +325,12 @@ void test_base_features_from_shapes(const fs::path& dir) {
   run(*document, R"({"cmd": "import_file", "path": )" + json_path(step) + R"(, "wrap": false})");
   const std::string feature(document->query(R"({"query": "feature", "uid": "F5"})"));
   CHECK(contains(feature, R"("color":[1.0,0.5,0.0],"name":"Cube")"));
-  CHECK(contains(std::string(document->query(R"({"query": "bodies"})")),
-                 R"j({"name":"Cube (2)","uid":"F5.b0"})j"));
+  // The colour is the body's appearance too, which the view draws
+  // (mitcad#2423): the body lists it before its name.
+  const std::string listed(document->query(R"({"query": "bodies"})"));
+  CHECK(contains(listed, R"j("name":"Cube (2)","uid":"F5.b0"})j"));
+  CHECK(contains(listed, R"j({"appearance":"custom)j"));
+  CHECK(contains(std::string(document->query(R"({"query": "appearances"})")), "Imported color 255 128 0"));
 
   // The cube cut out of the block's corner, as a fallback replay of a cut.
   auto cube = mitcad::bridge::new_shape_list();

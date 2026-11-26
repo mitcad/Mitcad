@@ -16,7 +16,10 @@
 # on it and an operation on the main spindle after the sub-spindle's
 # (mitcad#2392); the sub-spindle's profile and the turret's body in Edit
 # Machine…, the turret running into the sub-spindle's chuck, Simulate
-# drawing the sub-spindle where it waits and at the grip (mitcad#2405).
+# drawing the sub-spindle where it waits and at the grip (mitcad#2405); a
+# fixed zone with its Y, the Turret page with a station's own body, the
+# turret running into the fixed zone, Simulate drawing the zones and the
+# turret (mitcad#2412).
 # Usage: tools/ui-macos-cam-mill-turn-sub-test.sh <app> <mitcad-cli> [output directory]
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

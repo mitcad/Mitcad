@@ -245,6 +245,9 @@ void MainWindow::updateStartPage(const QString& tab) {
     }
   }
   updateStartToolbar();
+  // The toolbar panel hidden by the user (mitcad#2426): no reveal over the
+  // page, the top edge's band back after it.
+  applyToolbarPanelHidden();
   if (!start) {
     logToolbarPanelAfterStart();
   }
@@ -274,15 +277,19 @@ void MainWindow::updateStartToolbar() {
     if (bar->isHidden()) {
       bar->show();
     }
+    // Also while View › Toolbar Panel hides it (mitcad#2426); while it is
+    // revealed at the top edge the reveal places it.
     const bool start = startPageShown();
-    if (m_dockedPanel->isHidden() != start) {
-      m_dockedPanel->setVisible(!start);
+    const bool shown = !start && !m_toolbarPanelHidden;
+    if (!toolbarPanelRevealed() && m_dockedPanel->isHidden() == shown) {
+      m_dockedPanel->setVisible(shown);
     }
     const StartToolbar wanted = start ? StartToolbar::Hidden : StartToolbar::Whole;
     if (wanted != m_startToolbar) {
       m_startToolbar = wanted;
-      qDebug().noquote() << (start ? QStringLiteral("Docked toolbar panel hidden (Start)")
-                                   : QStringLiteral("Docked toolbar panel shown"));
+      qDebug().noquote() << (start   ? QStringLiteral("Docked toolbar panel hidden (Start)")
+                             : shown ? QStringLiteral("Docked toolbar panel shown")
+                                     : QStringLiteral("Docked toolbar panel hidden (View › Toolbar Panel)"));
     }
     return;
   }
@@ -297,8 +304,10 @@ void MainWindow::updateStartToolbar() {
     // to: New and Open lead on.
     wanted = designTabs || m_noDesign ? StartToolbar::Hidden : StartToolbar::TabRow;
   }
-  // Also when a kept dock state hid or showed the bar (restoreState).
-  const bool hidden = wanted == StartToolbar::Hidden;
+  // Also when a kept dock state hid or showed the bar (restoreState). View ›
+  // Toolbar Panel hides the whole bar here (mitcad#2426; no reveal at the
+  // top edge in this comparison layout).
+  const bool hidden = wanted == StartToolbar::Hidden || (wanted == StartToolbar::Whole && m_toolbarPanelHidden);
   if (bar->isHidden() != hidden) {
     bar->setVisible(!hidden);
   }
@@ -330,6 +339,12 @@ void MainWindow::logToolbarPanelAfterStart() {
   TestSync::singleShot(0, this, [this] {
     if (startPageShown()) {
       return; // back on the page meanwhile
+    }
+    // The user's state given back (mitcad#2426): hidden, the way back at
+    // the top edge.
+    if (m_toolbarPanelHidden) {
+      qInfo().noquote() << QStringLiteral("Toolbar panel after the Start page: hidden (View › Toolbar Panel)");
+      return;
     }
     const QWidget* panel = nullptr;
     QString layout = QStringLiteral("Docked");

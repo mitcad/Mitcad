@@ -73,6 +73,11 @@ pub mod ffi {
         neutral_radius: f64,
         angle_extent: f64,
         inner_is_front: bool,
+        /// A conical panel (mitcad#2435): `origin` its neutral cone's apex,
+        /// `x_axis` and `y_axis` the radial start and the angular direction.
+        cone: bool,
+        half_angle: f64,
+        neutral_depth: f64,
     }
     struct SheetMember {
         domain: SheetDomain,
@@ -151,6 +156,26 @@ pub mod ffi {
         angle_extent: f64,
         radius: f64,
     }
+    /// A cylindrical or conical face developed (mitcad#2435; see
+    /// `SheetFaceDevelopment`).
+    struct SheetDevelopedFace {
+        cone: bool,
+        origin: [f64; 3],
+        axis: [f64; 3],
+        radial_start: [f64; 3],
+        angular_direction: [f64; 3],
+        neutral_radius: f64,
+        half_angle: f64,
+        turn: f64,
+        closed: bool,
+        inner_is_front: bool,
+        faces: Vec<SheetFootprintFace>,
+    }
+    /// How a face bends (mitcad#2435; see `FaceBending`).
+    struct SheetFaceBending {
+        gaussian: f64,
+        size: f64,
+    }
     unsafe extern "C++" {
         include!("bridge/sheet.hpp");
         include!("bridge/trycatch.hpp");
@@ -180,13 +205,23 @@ pub mod ffi {
             cylinder: &SheetFootprintCylinder,
             tolerance: f64,
         ) -> Result<Vec<SheetFootprintFace>>;
+        /// The faces on one cylinder or cone developed at the neutral
+        /// surface `neutral_depth` from the inner one (mitcad#2435).
+        fn sheet_face_development(
+            shape: &Shape,
+            faces: &[String],
+            neutral_depth: f64,
+            thickness: f64,
+        ) -> Result<SheetDevelopedFace>;
+        /// How the face bends (mitcad#2435).
+        fn sheet_face_bending(shape: &Shape, face: &str) -> Result<SheetFaceBending>;
     }
 }
 
 use super::{Shape, failed, occt, profile};
 use cxx::SharedPtr;
 use mitcad_model::sheet::*;
-use mitcad_model::{KernelError, SegmentGeometry};
+use mitcad_model::{FaceName, KernelError, SegmentGeometry};
 
 fn curve_key(id: &SheetCurveId) -> String {
     match id {
@@ -299,6 +334,9 @@ pub fn shape(spec: &SheetShapeSpec<'_>) -> Result<SheetGeometry<SharedPtr<Shape>
                 neutral_radius: 0.,
                 angle_extent: 0.,
                 inner_is_front: true,
+                cone: false,
+                half_angle: 0.,
+                neutral_depth: 0.,
             };
             match &p.embedding {
                 SheetEmbedding::Plane {
@@ -321,6 +359,17 @@ pub fn shape(spec: &SheetShapeSpec<'_>) -> Result<SheetGeometry<SharedPtr<Shape>
                     output.y_axis = c.angular_direction;
                     output.inside_radius = c.inside_radius;
                     output.neutral_radius = c.neutral_radius;
+                    output.angle_extent = c.angle_extent;
+                    output.inner_is_front = c.inner_is_front;
+                }
+                SheetEmbedding::Cone(c) => {
+                    output.cone = true;
+                    output.origin = c.apex;
+                    output.axis = c.axis;
+                    output.x_axis = c.radial_start;
+                    output.y_axis = c.angular_direction;
+                    output.half_angle = c.half_angle;
+                    output.neutral_depth = c.neutral_depth;
                     output.angle_extent = c.angle_extent;
                     output.inner_is_front = c.inner_is_front;
                 }
@@ -630,4 +679,50 @@ pub fn cylinder_footprint(
         .into_iter()
         .map(|face| face.edges.into_iter().map(read_curve).collect())
         .collect()
+}
+
+/// The faces of `shape` on one cylinder or cone developed at the neutral
+/// surface (mitcad#2435).
+pub fn face_development(
+    shape: &SharedPtr<Shape>,
+    faces: &[FaceName],
+    neutral_depth: f64,
+    thickness: f64,
+) -> Result<SheetFaceDevelopment, KernelError> {
+    let names: Vec<String> = faces.iter().map(ToString::to_string).collect();
+    let developed = ffi::sheet_face_development(occt(shape)?, &names, neutral_depth, thickness)
+        .map_err(failed)?;
+    Ok(SheetFaceDevelopment {
+        origin: developed.origin,
+        axis: developed.axis,
+        radial_start: developed.radial_start,
+        angular_direction: developed.angular_direction,
+        neutral_radius: if developed.cone {
+            0.0
+        } else {
+            developed.neutral_radius
+        },
+        half_angle: if developed.cone {
+            developed.half_angle
+        } else {
+            0.0
+        },
+        turn: developed.turn,
+        closed: developed.closed,
+        inner_is_front: developed.inner_is_front,
+        faces: developed
+            .faces
+            .into_iter()
+            .map(|face| face.edges.into_iter().map(read_curve).collect())
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+/// How the face of `shape` bends (mitcad#2435).
+pub fn face_bending(shape: &SharedPtr<Shape>, face: &FaceName) -> Result<FaceBending, KernelError> {
+    let bending = ffi::sheet_face_bending(occt(shape)?, &face.to_string()).map_err(failed)?;
+    Ok(FaceBending {
+        gaussian: bending.gaussian,
+        size: bending.size,
+    })
 }

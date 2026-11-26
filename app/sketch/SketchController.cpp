@@ -1414,6 +1414,12 @@ bool SketchController::confirm() {
     return true;
   }
   if (m_tool) {
+    // A tutorial's guide step may hold Enter back (mitcad#2440): a value
+    // box with another value than the step's.
+    if (m_guideCheck && m_tool->snaps() && !m_guideCheck(nullptr)) {
+      m_overlay->update();
+      return true;
+    }
     if (!m_tool->confirm()) {
       stopTool();
       hint(tr("Sketch: choose a tool, or %1.").arg(m_registry.shortcutHint(QStringLiteral("sketch.finish"))));
@@ -3864,6 +3870,13 @@ bool SketchController::viewerEvent(QEvent* event) {
       // acquired line's extension, or where one meets another curve,
       // releases the acquired lines.
       m_dwellTimer.stop();
+      // A tutorial's guide step may hold the click back (mitcad#2440): a
+      // point it does not wait for, a value box with another value.
+      m_guideHeldPress = m_cursorValid && m_guideCheck && m_tool->snaps() && !m_guideCheck(&m_snap);
+      if (m_guideHeldPress) {
+        m_overlay->update();
+        return true;
+      }
       const bool onExtension = m_cursorValid && m_snap.onExtension();
       if (m_cursorValid) {
         // The keys held reach the tool with the place (mitcad#2090).
@@ -3950,7 +3963,9 @@ bool SketchController::viewerEvent(QEvent* event) {
     }
     if (m_tool) {
       updateCursor(e->position());
-      if (m_cursorValid) {
+      // The release of a press a guide step held back is held back too.
+      const bool held = std::exchange(m_guideHeldPress, false);
+      if (m_cursorValid && !held) {
         m_tool->release(m_snap);
       }
       m_overlay->update();
@@ -3997,7 +4012,11 @@ bool SketchController::viewerEvent(QEvent* event) {
     }
     if (m_tool) {
       updateCursor(e->position());
-      m_tool->doubleClick(m_snap);
+      // The second press of a double-click, as a press (mitcad#2440).
+      m_guideHeldPress = m_cursorValid && m_guideCheck && m_tool->snaps() && !m_guideCheck(&m_snap);
+      if (!m_guideHeldPress) {
+        m_tool->doubleClick(m_snap);
+      }
       m_overlay->update();
       return true;
     }

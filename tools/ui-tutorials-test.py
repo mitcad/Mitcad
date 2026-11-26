@@ -239,6 +239,7 @@ HINTS_PAGE = r"""<!doctype html>
 <p><a href="#row" id="row">Start the Browser step</a></p>
 <p><a href="#stop" id="stop">Stop the hint</a></p>
 <p><a href="#show" id="show">Show the hint</a></p>
+<p><a href="#controls" id="controls">Read the controls</a></p>
 <script>
 function say(text) { console.log('mitcad:tutorial:' + text); }
 function svg(width, height, body) {
@@ -281,6 +282,24 @@ function gestureWords(gesture) {
 }
 function gestureText(gesture) {
   return gesture.input + (gesture.modifiers.length ? '+' + gesture.modifiers.join('+') : '');
+}
+// One device's gestures for an action (mitcad#2439), or "none".
+function deviceText(navigation, device, action) {
+  return navigation[device][action].map(gestureText).join(' ') || 'none';
+}
+// The learner's controls as they are now (mitcad#2439): View Front's key,
+// the mouse's orbit and the trackpad's orbit, pan and zoom.
+function readControls() {
+  mitcad.shortcut('view.front').then(function (answer) {
+    say('controls key ' + (answer.shortcuts.map(function (shortcut) { return shortcut.text; }).join(' ') || 'none'));
+  });
+  mitcad.navigation().then(function (navigation) {
+    say('controls ' + navigation.platform + ': mouse orbit ' + deviceText(navigation, 'mouse', 'orbit') +
+        ', mouse zoom ' + deviceText(navigation, 'mouse', 'zoom') +
+        ', trackpad orbit ' + deviceText(navigation, 'trackpad', 'orbit') +
+        ', trackpad pan ' + deviceText(navigation, 'trackpad', 'pan') +
+        ', trackpad zoom ' + deviceText(navigation, 'trackpad', 'zoom'));
+  });
 }
 // The row's hint: the mouse comes from below right, clicks with its left
 // button there and lets go.
@@ -337,6 +356,7 @@ if (!window.mitcad) {
     return false;
   };
   document.getElementById('show').onclick = function () { demonstrate(rowHint(0)); return false; };
+  document.getElementById('controls').onclick = function () { readControls(); return false; };
   // The learner's keys and gestures; a demonstration with no step shown is
   // refused.
   mitcad.shortcut('view.front').then(function (answer) {
@@ -345,6 +365,7 @@ if (!window.mitcad) {
   mitcad.shortcut('no.such').then(function () { say('shortcut of no.such'); },
                                   function (error) { say('shortcut refused: ' + error.message); });
   mitcad.navigation().then(function (navigation) { say('navigation orbit ' + gestureText(navigation.orbit[0])); });
+  readControls();
   demonstrate(rowHint(1));
 }
 </script>
@@ -1679,7 +1700,8 @@ def prepare_hints(directory):
 
 def hints_workflow(source):
     """The driver's steps of the hints' run: the learner's keys and gestures
-    read by the page; the Browser-row step's demonstration over the row
+    read by the page, the mouse's and the trackpad's each on its own, and
+    read again after the scheme and a key changed (mitcad#2439); the Browser-row step's demonstration over the row
     after the page's delay, a click held back on the timeline heard by the
     page and its hint at once, stopped by the page, and the learner's own
     click through the playing hint completing the step; the orbit step's
@@ -1708,9 +1730,29 @@ def hints_workflow(source):
         "expect-log '^Tutorial page says: shortcut view\\.front 1$' 30",
         "expect-log '^Tutorial page says: shortcut refused: MitCad has no command no\\.such$' 30",
         "expect-log '^Tutorial page says: navigation orbit left\\+alt$' 30",
+        # Each device on its own (mitcad#2439): with Alt + left, pressing
+        # the pad with Alt orbits, the slide and the pinch zoom.
+        "expect-log '^Tutorial page says: controls key 1$' 30",
+        "expect-log '^Tutorial page says: controls (?:linux|windows|macos): mouse orbit left\\+alt, "
+        "mouse zoom right\\+alt wheel, trackpad orbit drag\\+alt, trackpad pan none, "
+        "trackpad zoom slide pinch$' 30",
         # No step shown: no demonstration.
         "expect-log '^Tutorial page says: demonstration refused: No guide step is shown' 30",
         "expect-no-log '^Guide: demonstration on step '",
+        # The scheme and View Front's key changed while the tutorial runs
+        # (mitcad#2439): the page's next calls answer with them, no restart.
+        "mark",
+        "view-navigation trackpad",
+        "expect-log '^View navigation: trackpad$' 20",
+        "set-setting shortcuts/view.front Ctrl+Shift+F",
+        "invoke-widget tutorialPage clickLink 'Read the controls'",
+        "expect-log '^Tutorial page says: controls key Ctrl\\+Shift\\+F$' 30",
+        "expect-log '^Tutorial page says: controls (?:linux|windows|macos): mouse orbit left\\+alt middle\\+shift right, "
+        "mouse zoom wheel, trackpad orbit slide\\+alt drag\\+alt, trackpad pan slide drag\\+shift\\+alt, "
+        "trackpad zoom slide\\+shift slide\\+ctrl pinch$' 30",
+        # Back to the run's scheme for the orbit step below.
+        "view-navigation alt-buttons",
+        "expect-log '^View navigation: alt-buttons$' 20",
         # A body, whose Browser row the step names.
         "mark",
         "model-command '%s'" % json.dumps(block),
@@ -1790,7 +1832,8 @@ def run_hints(app, cli, directory, qt_bin=None, component=None):
     del cli  # the same arguments as the other UI tests; nothing to build here
     directory = prepare_hints(directory)
     run_app(app, directory, "hints", qt_bin, component, settings=HINTS_SETTINGS)
-    print("PASS: Tutorial hints: the learner's keys and gestures read; the Browser-row step's demonstration over "
+    print("PASS: Tutorial hints: the learner's keys and gestures read, per device, and read again after the "
+          "scheme and a key changed; the Browser-row step's demonstration over "
           "the row, a held click heard by the page, the hint stopped, only the learner's click doing the step; "
           "the orbit step's demonstration of Alt + left until Leave Tutorial")
 

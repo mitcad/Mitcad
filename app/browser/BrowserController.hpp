@@ -646,6 +646,14 @@ private:
   void selectBinding(const BindingEntry& entry);
   void showAllBindings();
   QPointer<BindingsCard> m_bindingsCard;
+
+  // A light bulb of the timeline's History list (mitcad#2427): a sketch's
+  // or a construction feature's own (as its Browser row's), or the bodies
+  // the feature made or last changed (DocumentSnapshot::bodiesByFeature):
+  // hidden while any is shown, else shown, in one undo step ("Hide
+  // Extrude1"), those that follow Show When left as they are; logged
+  // "Visibility History/<name>: shown|hidden".
+  void timelineEye(const QString& uid);
 };
 
 } // namespace mitcad

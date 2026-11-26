@@ -23,3 +23,5 @@ mod print_service_tests;
 // A whole design linked with its components, joints and grounding
 // (mitcad#2209).
 mod link_tree_tests;
+// A design of one component inserted as that component (mitcad#2429).
+mod single_component_tests;

@@ -18,6 +18,7 @@
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
@@ -33,6 +34,8 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp_Pnt2d.hxx>
+#include <gp_Vec.hxx>
 
 #include "face_select.hpp"
 #include "history.hpp"
@@ -329,6 +332,53 @@ ShapePtr apply(BRepAlgoAPI_BooleanOperation&& operation, const Shape& shape,
   return namer.shape();
 }
 
+// True when the cell lies on the material side of the replaced faces: a
+// point just off a piece of them into the cell is inside the body.
+bool on_material_side(const Shape& body, const TopoDS_Shape& cell, const ShapeMap& source_images) {
+  for (TopExp_Explorer f(cell, TopAbs_FACE); f.More(); f.Next()) {
+    if (!source_images.Contains(f.Current())) {
+      continue;
+    }
+    const TopoDS_Face& face = TopoDS::Face(f.Current());
+    double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    BRepTopAdaptor_FClass2d inside(face, Precision::PConfusion());
+    const BRepAdaptor_Surface surface(face);
+    const double step = std::max(1.0e-4, 10.0 * BRep_Tool::Tolerance(face));
+    for (const int cells : {5, 24}) {
+      for (int a = 0; a < cells; ++a) {
+        for (int b = 0; b < cells; ++b) {
+          const gp_Pnt2d uv(u0 + (u1 - u0) * (a + 0.5) / cells,
+                            v0 + (v1 - v0) * (b + 0.5) / cells);
+          if (inside.Perform(uv) != TopAbs_IN) {
+            continue;
+          }
+          gp_Pnt p;
+          gp_Vec du;
+          gp_Vec dv;
+          surface.D1(uv.X(), uv.Y(), p, du, dv);
+          gp_Vec normal = du.Crossed(dv);
+          if (normal.Magnitude() < 1.0e-12) {
+            continue;
+          }
+          normal.Normalize();
+          // The side of the piece the cell is on, whichever way the face
+          // is oriented in it.
+          for (const double side : {1.0, -1.0}) {
+            const gp_Pnt off = p.Translated(normal * (side * step));
+            BRepClass3d_SolidClassifier in_cell(cell, off, Precision::Confusion());
+            if (in_cell.State() == TopAbs_IN) {
+              BRepClass3d_SolidClassifier in_body(body.occt(), off, Precision::Confusion());
+              return in_body.State() == TopAbs_IN;
+            }
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 int solid_count(const TopoDS_Shape& shape) {
   int count = 0;
   for (TopExp_Explorer it(shape, TopAbs_SOLID); it.More(); it.Next()) {
@@ -476,11 +526,16 @@ ShapePtr replace_by_slab(const Shape& body, const std::vector<int>& faces, const
 
   // The cells between the faces and the target: bounded by both. A cell
   // must be on one side of the body's surface: inside it (removed) or
-  // outside (added).
+  // outside (added). A cell on the material side of the faces that
+  // reaches past the body's other faces (the target past the far side of
+  // a wall) is removed as far as the body goes, which opens the wall
+  // (mitcad#2381); one to add would grow the body into itself and does not
+  // count.
   struct Cell {
     TopoDS_Shape solid;
     double volume = 0.0;
     bool inside = false;
+    bool through = false;     // removed, reaching past the other faces
     std::vector<int> sources; // indices into source_images
   };
   std::vector<Cell> cells;
@@ -507,22 +562,31 @@ ShapePtr replace_by_slab(const Shape& body, const std::vector<int>& faces, const
     if (share > kMixed && share < 1.0 - kMixed) {
       // Through the body's surface elsewhere: the target lies past the
       // body's other faces there.
-      through = true;
-      continue;
+      if (!on_material_side(body, cell.solid, source_images)) {
+        through = true;
+        continue;
+      }
+      cell.through = true;
     }
-    cell.inside = share >= 0.5;
+    cell.inside = cell.through || share >= 0.5;
     cells.push_back(cell);
   }
   // A face piece between the target on both sides moves to the nearer
-  // one: of two cells at a piece, the smaller.
+  // one: of two cells at a piece, the smaller; through the body only when
+  // no cell on either side stays within it.
   std::vector<bool> kept(cells.size(), false);
   for (int s = 1; s <= source_images.Extent(); ++s) {
     int best = -1;
-    for (std::size_t c = 0; c < cells.size(); ++c) {
-      const auto& own = cells[c].sources;
-      if (std::find(own.begin(), own.end(), s) != own.end() &&
-          (best < 0 || cells[c].volume < cells[static_cast<std::size_t>(best)].volume)) {
-        best = static_cast<int>(c);
+    for (const bool through_cells : {false, true}) {
+      for (std::size_t c = 0; c < cells.size(); ++c) {
+        const auto& own = cells[c].sources;
+        if (cells[c].through == through_cells && std::find(own.begin(), own.end(), s) != own.end() &&
+            (best < 0 || cells[c].volume < cells[static_cast<std::size_t>(best)].volume)) {
+          best = static_cast<int>(c);
+        }
+      }
+      if (best >= 0) {
+        break;
       }
     }
     if (best >= 0) {

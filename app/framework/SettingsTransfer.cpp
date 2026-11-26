@@ -118,6 +118,7 @@ const SettingsRule kRules[] = {
     {"drawing/cornerDotSize", "preferences", PathKind::None},
     {"browser/activateButtonPlace", "preferences", PathKind::None}, // mitcad#2223
     {"browser/showEyePlace", "preferences", PathKind::None},
+    {"timeline/presentation", "preferences", PathKind::None}, // mitcad#2427
     // The View menu.
     {"view/style", "preferences", PathKind::None},
     {"view/componentColors", "preferences", PathKind::None},

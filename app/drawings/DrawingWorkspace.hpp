@@ -87,6 +87,7 @@
 #include <QPoint>
 #include <QPointF>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -155,7 +156,14 @@ public:
   // drawing opened, or this one closed, Base View's Shows is what it was
   // before, unless it was changed meanwhile.
   void setSelectionSubject(const QString& choice, const QString& label);
-  // Esc: a tool's picks go (the sheet's own), else the tool, else the
+  // The open drawing's component ("C0" for the root's).
+  QString component() const;
+  // Create Drawing of Flat Pattern (mitcad#2446): the Flat Pattern of the
+  // sheet-metal body `body` placed at once on the sheet shown, fitted to the
+  // sheet in its middle, with its bend notes, and selected (its panel
+  // shown). False with the model's reason shown when it is refused.
+  bool placeFlatPattern(const QString& body);
+  // Esc:a tool's picks go (the sheet's own), else the tool, else the
   // selection; the drawing stays open (mitcad#725).
   void escape();
   // Exports the drawing to a file (pdf, svg, dxf by its extension); false
@@ -336,6 +344,9 @@ private:
   // A base view's Shows list (subjectChoices): the drawing's component,
   // its occurrences and its bodies by name.
   QList<QPair<QString, QString>> subjects() const;
+  // Flat Pattern View's Shows list (mitcad#2446, flatPatternChoices): the
+  // Flat Patterns of the drawing's component's sheet-metal bodies.
+  QList<QPair<QString, QString>> flatSubjects() const;
   // Base View's Shows back to what it was before setSelectionSubject.
   void dropSelectionSubject();
   // A base view's Exploded View list (mitcad#2113): Assembled, then the
@@ -345,6 +356,11 @@ private:
   // occurrences and bodies (subjectRows) checked as `subject` shows them;
   // a change sends the bodies checked as the view's subject.
   QWidget* showsList(int view, const QJsonObject& subject);
+  // The place of the base view's Shows tree in the panel (mitcad#2434),
+  // kept by drawing and view before fillPanel takes the tree away, for
+  // the tree it builds next: a visibility edit redraws the drawing and
+  // rebuilds the panel, and the list stays unfolded and scrolled as it was.
+  void keepShowsPlace();
   // The 3D view's direction for Current View; empty, with why in the
   // status bar, when there is none.
   QJsonObject cameraDirection();
@@ -536,6 +552,16 @@ private:
   QWidget* m_panel = nullptr;
   QLabel* m_panelTitle = nullptr;
   QFormLayout* m_form = nullptr;
+  // A base view's Shows tree's place (keepShowsPlace, mitcad#2434): its
+  // occurrences unfolded, its row at the top and its current row, each row
+  // by its occurrence path and body ("O1/O2|uid"); by drawing and view
+  // ("D1/3").
+  struct ShowsPlace {
+    QSet<QString> open;
+    QString top;
+    QString current;
+  };
+  QHash<QString, ShowsPlace> m_showsPlaces;
   QString m_loggedButtons;
   QString m_loggedTitle;
   QString m_loggedColumn; // place
@@ -545,6 +571,9 @@ private:
   // last (mitcad#1546).
   QString m_loggedLines;
   QString m_loggedPens;
+  // The Flat Pattern views' blanks and bend lines as logged last
+  // (mitcad#2446).
+  QString m_loggedFlats;
   // The dimensions' values and angles last logged (mitcad#2047).
   QString m_loggedDimensions;
   bool m_updatingTabs = false;

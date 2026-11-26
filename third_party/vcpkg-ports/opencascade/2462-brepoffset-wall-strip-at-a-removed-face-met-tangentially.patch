@@ -1,0 +1,445 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: a removed face met only tangentially is closed by wall strips along
+the normal (mitcad#2462).
+
+A removed face (a cap) whose edges each bound a kept face tangent to it
+there whose offset does not vanish (a top with all its edges rounded,
+shelled with the top open by a wall no thicker than the rounding; GitHub
+#645's loft, 2 mm with 2 mm roundings): the kept faces' offsets run under
+the cap, parallel to it at its edges, and never meet it. The thick solid
+intersected the cap all the same, found no section, and failed (the
+intersection join) or came out invalid (the arc join).
+
+Such a cap is now no cap: MakeOffsetShape takes it out of the caps and of
+the images SetFaces gave it, its edges are free edges of the offset, and
+after the faces are built MakeMissingWalls, restricted to those edges,
+builds the strip from each edge to its offset, which MakeThickSolid glues
+in; Clear empties the walls. In the intersection join the offsets of two
+roundings mitred at a corner touch at the offset of the corner's vertex on
+the cap, and the intersection of their enlarged offsets is two curves
+crossing there, all kept: Inter3D now cuts it there
+(DropBranchesAtTangentEnd), keeping of the pieces at that point only the
+one going back along the edge.
+
+Not covered: a wall as thick as a circular rounding (its offset vanishes,
+and the face beyond meets the cap on the cap's edge), and a rounding of
+more than four edges beside a cap where the wall is thicker than it
+(FindVanishingFaces takes four-edged faces only): see the topic doc.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2462.
+
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index 172d778f..7125a167 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -48,6 +48,7 @@
+ #include <BRepOffset_MakeOffset.hxx>
+ #include <BRepOffset_Offset.hxx>
+ #include <BRepOffset_Tool.hxx>
++#include <ChFi3d.hxx>
+ #include <BRepTools.hxx>
+ #include <BRepTools_Quilt.hxx>
+ #include <BRepTools_Substitution.hxx>
+@@ -402,6 +403,56 @@ static bool SectionRunsInsideCap(const TopoDS_Edge& theS, const TopoDS_Face& the
+   return aClassifier.State() == TopAbs_IN;
+ }
+ 
++//! The removed faces (theCaps) that the shape meets only tangentially, each
++//! of their edges bounding one kept face tangent to them there whose offset
++//! does not vanish: the kept faces' offsets run under such a face, parallel
++//! to it at its edges, and never meet it (a top whose edges are all rounded,
++//! the wall no thicker than the rounding). The wall ends there at the
++//! edges' offsets (mitcad#2462).
++static void FindCapsMetTangentially(
++  const NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>& theCaps,
++  const BRepOffset_Analyse&                                            theAnalyse,
++  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>&        theVanished,
++  NCollection_List<TopoDS_Shape>&                                      theFound)
++{
++  for (int i = 1; i <= theCaps.Extent(); ++i)
++  {
++    const TopoDS_Face& aCap    = TopoDS::Face(theCaps(i));
++    bool               bAll    = true;
++    int                aNbEdge = 0;
++    for (TopExp_Explorer aExp(aCap, TopAbs_EDGE); aExp.More() && bAll; aExp.Next())
++    {
++      const TopoDS_Edge& aE = TopoDS::Edge(aExp.Current());
++      if (BRep_Tool::Degenerated(aE))
++      {
++        continue;
++      }
++      if (!theAnalyse.HasAncestor(aE) || theAnalyse.Ancestors(aE).Extent() != 1)
++      {
++        // an edge to another removed face, or a seam
++        bAll = false;
++        break;
++      }
++      const TopoDS_Face& aF = TopoDS::Face(theAnalyse.Ancestors(aE).First());
++      if (theVanished.Contains(aF))
++      {
++        bAll = false;
++        break;
++      }
++      if (BRep_Tool::Continuity(aE, aF, aCap) == GeomAbs_C0 && !ChFi3d::IsTangentFaces(aE, aF, aCap))
++      {
++        bAll = false;
++        break;
++      }
++      ++aNbEdge;
++    }
++    if (bAll && aNbEdge > 0)
++    {
++      theFound.Append(aCap);
++    }
++  }
++}
++
+ static BRepOffset_Error checkSinglePoint(const double                            theUParam,
+                                          const double                            theVParam,
+                                          const occ::handle<Geom_Surface>&        theSurf,
+@@ -637,7 +688,8 @@ static void FillContours(
+   const BRepOffset_Analyse& Analyser,
+   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>&
+                                                                             Contours,
+-  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& MapEF)
++  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& MapEF,
++  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>*             theEdges = nullptr)
+ {
+   NCollection_List<TopoDS_Shape> Edges;
+ 
+@@ -659,7 +711,8 @@ static void FillContours(
+           continue;
+         }
+         const NCollection_List<BRepOffset_Interval>& Lint = Analyser.Type(anEdge);
+-        if (!Lint.IsEmpty() && Lint.First().Type() == ChFiDS_FreeBound)
++        if (!Lint.IsEmpty() && Lint.First().Type() == ChFiDS_FreeBound
++            && (!theEdges || theEdges->Contains(anEdge)))
+         {
+           MapEF.Bind(anEdge, aFace);
+           Edges.Append(anEdge);
+@@ -783,6 +836,8 @@ void BRepOffset_MakeOffset::Clear()
+   myDone = false;
+   myGenerated.Clear();
+   myResMap.Clear();
++  // (the walls of an earlier run, mitcad#2462)
++  myWalls.Clear();
+ }
+ 
+ //=================================================================================================
+@@ -1048,6 +1103,36 @@ void BRepOffset_MakeOffset::MakeOffsetShape(const Message_ProgressRange& theRang
+   const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>* pVanished =
+     aMFVanished.IsEmpty() ? nullptr : &aMFVanished;
+ 
++  //--------------------------------------------------------------------
++  // Removed faces the shape meets only tangentially, beside faces whose
++  // offset stays: the offsets of the faces round them never meet them.
++  // They are no caps: the offset ends at those faces' edges, as at free
++  // edges, and walls along the normal from each edge to its offset close
++  // the thick solid (mitcad#2462).
++  //--------------------------------------------------------------------
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aMEStrip;
++  if (!myThickening && !myFaces.IsEmpty()
++      && !(myInter && myIsPlanar && myJoin == GeomAbs_Intersection)
++      && std::abs(myOffset) > Precision::Confusion() && myFaceOffset.IsEmpty())
++  {
++    NCollection_List<TopoDS_Shape> aLStrip;
++    FindCapsMetTangentially(myFaces, myAnalyse, aMFVanished, aLStrip);
++    for (NCollection_List<TopoDS_Shape>::Iterator aIt(aLStrip); aIt.More(); aIt.Next())
++    {
++      for (TopExp_Explorer aExpE(aIt.Value(), TopAbs_EDGE); aExpE.More(); aExpE.Next())
++      {
++        if (!BRep_Tool::Degenerated(TopoDS::Edge(aExpE.Current())))
++        {
++          aMEStrip.Add(aExpE.Current());
++        }
++      }
++      // (SetFaces made it its own image)
++      myFaces.RemoveKey(aIt.Value());
++      myInitOffsetFace.RemoveRoot(aIt.Value());
++      myImageOffset.RemoveRoot(aIt.Value());
++    }
++  }
++
+   if (myJoin == GeomAbs_Arc)
+   {
+     BuildOffsetByArc(aPS.Next(aSteps(PIOperation_BuildOffsetBy)), pVanished, &aLAcross);
+@@ -1115,6 +1200,17 @@ void BRepOffset_MakeOffset::MakeOffsetShape(const Message_ProgressRange& theRang
+ 
+   aPSInter.Close();
+ 
++  if (!aMEStrip.IsEmpty())
++  {
++    // the walls at the edges of removed faces met only tangentially
++    // (mitcad#2462); MakeThickSolid adds them
++    MakeMissingWalls(Message_ProgressRange(), &aMEStrip);
++    if (myError != BRepOffset_NoError)
++    {
++      return;
++    }
++  }
++
+   if (myThickening)
+   {
+     MakeMissingWalls(aPS.Next(aSteps(PIOperation_MakeMissingWalls)));
+@@ -1229,7 +1325,9 @@ void BRepOffset_MakeOffset::MakeThickSolid(const Message_ProgressRange& theRange
+   // Construction of a solid with the initial shell, parallel shell
+   // limited by caps.
+   //--------------------------------------------------------------------
+-  if (!myFaces.IsEmpty())
++  // (myWalls: the walls at the edges of removed faces met only tangentially,
++  // which are no longer in myFaces, mitcad#2462)
++  if (!myFaces.IsEmpty() || (!myThickening && !myWalls.IsEmpty()))
+   {
+     TopoDS_Solid    Res;
+     TopExp_Explorer exp;
+@@ -1252,6 +1350,12 @@ void BRepOffset_MakeOffset::MakeThickSolid(const Message_ProgressRange& theRange
+         YaResult = true;
+         Glue.Add(exp.Current().Reversed());
+       }
++      // the walls, oriented as the faces of the shape they join
++      for (NCollection_List<TopoDS_Shape>::Iterator aItW(myWalls); aItW.More() && !myThickening;
++           aItW.Next())
++      {
++        Glue.Add(aItW.Value());
++      }
+ #ifdef OCCT_DEBUG
+       if (YaResult == 0)
+       {
+@@ -3995,7 +4099,9 @@ static void UpdateInitOffset(BRepAlgo_Image&         myInitOffset,
+ 
+ //=================================================================================================
+ 
+-void BRepOffset_MakeOffset::MakeMissingWalls(const Message_ProgressRange& theRange)
++void BRepOffset_MakeOffset::MakeMissingWalls(
++  const Message_ProgressRange&                                  theRange,
++  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>* theEdges)
+ {
+   // clang-format off
+   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> Contours; //Start vertex + list of connected edges (free boundary)
+@@ -4004,7 +4110,7 @@ void BRepOffset_MakeOffset::MakeMissingWalls(const Message_ProgressRange& theRan
+          MapEF; // Edges of contours: edge + face
+   double OffsetVal = std::abs(myOffset);
+ 
+-  FillContours(myFaceComp, myAnalyse, Contours, MapEF);
++  FillContours(myFaceComp, myAnalyse, Contours, MapEF, theEdges);
+ 
+   Message_ProgressScope aPS(theRange, "Making missing walls", Contours.Extent());
+   for (int ic = 1; ic <= Contours.Extent(); ic++, aPS.Next())
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.hxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.hxx
+index c8dd0116..bedac086 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.hxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.hxx
+@@ -225,7 +225,10 @@ private:
+   Standard_EXPORT void CorrectConicalFaces();
+ 
+   //! Private method used to build walls for thickening the shell
+-  Standard_EXPORT void MakeMissingWalls(const Message_ProgressRange& theRange);
++  //! theEdges: the free edges to build walls at (all when null).
++  Standard_EXPORT void MakeMissingWalls(
++    const Message_ProgressRange&                                  theRange,
++    const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>* theEdges = nullptr);
+ 
+   //! Removes INTERNAL edges from the result
+   Standard_EXPORT void RemoveInternalEdges();
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+index 0d6e1b06..c630bb27 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -2964,6 +2964,182 @@ static void JoinCreaseAcrossInnerTangency(
+   }
+ }
+ 
++//=======================================================================
++// function : DropBranchesAtTangentEnd
++// purpose  : Where the faces of RefEdge are tangent to each other at an end
++//            of it (two roundings mitred at a corner, both tangent there to
++//            a face that is removed or to a common neighbour; mitcad#2462),
++//            their offsets touch at that end's offset point, and the
++//            intersection of the enlarged offsets is two curves crossing
++//            there: the branch along the edge and three more leaving the
++//            point (the other curve, and the run past the end). All are
++//            connected, CheckIntersFF keeps them all, and the offset faces
++//            got no loop from them where no other offset trims them there
++//            (at the edges of a removed face met tangentially). The offset of
++//            the edge ends at that point: of the edges meeting there only the
++//            one that leaves it back along the edge is kept, with the edges
++//            connected to the rest of the branch other than through the
++//            point. Only where the faces are tangent at the end and not at
++//            the edge's middle, and the branch along the edge reaches the
++//            point; elsewhere nothing changes.
++//=======================================================================
++static void DropBranchesAtTangentEnd(const TopoDS_Edge&                                             RefEdge,
++                                     const TopoDS_Face&                                             RefFace1,
++                                     const TopoDS_Face&                                             RefFace2,
++                                     const TopoDS_Face&                                             OffsetFace1,
++                                     NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>& TrueEdges)
++{
++  if (RefEdge.IsNull() || RefFace1.IsNull() || RefFace2.IsNull() || TrueEdges.Extent() < 2
++      || BRep_Tool::Degenerated(RefEdge))
++  {
++    return;
++  }
++  const double aTolAngle = 1.e-4;
++  // The sine of the angle between the faces' normals at a parameter of the
++  // edge, -1 where not computed.
++  const auto aSine = [&](const double theT, gp_Vec& theN) {
++    gp_Vec aN[2];
++    for (int k = 0; k < 2; k++)
++    {
++      const TopoDS_Face&              aF = k == 0 ? RefFace1 : RefFace2;
++      double                          f2d, l2d;
++      const occ::handle<Geom2d_Curve> aPC = BRep_Tool::CurveOnSurface(RefEdge, aF, f2d, l2d);
++      if (aPC.IsNull())
++      {
++        return -1.;
++      }
++      const gp_Pnt2d      aUV = aPC->Value(theT);
++      BRepAdaptor_Surface aS(aF, false);
++      gp_Pnt              aP;
++      gp_Vec              aDU, aDV;
++      aS.D1(aUV.X(), aUV.Y(), aP, aDU, aDV);
++      aN[k] = aDU.Crossed(aDV);
++      if (aN[k].Magnitude() <= gp::Resolution())
++      {
++        return -1.;
++      }
++    }
++    theN = aN[0];
++    return aN[0].Crossed(aN[1]).Magnitude() / (aN[0].Magnitude() * aN[1].Magnitude());
++  };
++  double                         aT1, aT2;
++  const occ::handle<Geom_Curve>& aC = BRep_Tool::Curve(RefEdge, aT1, aT2);
++  if (aC.IsNull())
++  {
++    return;
++  }
++  gp_Vec       aNDummy;
++  const double aSinMid = aSine(0.5 * (aT1 + aT2), aNDummy);
++  if (aSinMid <= aTolAngle)
++  {
++    return;
++  }
++  for (int aEnd = 0; aEnd < 2 && TrueEdges.Extent() > 1; aEnd++)
++  {
++    const double aT = aEnd == 0 ? aT1 : aT2;
++    gp_Vec       aN;
++    const double aSinEnd = aSine(aT, aN);
++    if (aSinEnd < 0. || aSinEnd > aTolAngle)
++    {
++      continue;
++    }
++    // The direction into the edge at that end.
++    gp_Pnt aPEnd;
++    gp_Vec aIn;
++    aC->D1(aT, aPEnd, aIn);
++    if (aEnd == 1)
++    {
++      aIn.Reverse();
++    }
++    if (aIn.Magnitude() <= gp::Resolution())
++    {
++      continue;
++    }
++    aIn.Normalize();
++    // The point where the offsets touch: the end's nearest point on the
++    // offset surface (along the common normal).
++    GeomAPI_ProjectPointOnSurf aOnOffset(aPEnd, BRep_Tool::Surface(OffsetFace1));
++    if (!aOnOffset.IsDone() || aOnOffset.NbPoints() == 0)
++    {
++      continue;
++    }
++    const gp_Pnt aPQ   = aOnOffset.NearestPoint();
++    const double aNear = std::max(1.e-4, 1.e-3 * aOnOffset.LowerDistance());
++    // The edges with a vertex at that point, and whether each leaves it
++    // back along the edge (its middle on the inner side of the point).
++    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aAtPoint, aDrop;
++    for (int i = 1; i <= TrueEdges.Extent(); i++)
++    {
++      const TopoDS_Edge& aE = TopoDS::Edge(TrueEdges(i));
++      bool               bAt = false;
++      for (TopExp_Explorer aV(aE, TopAbs_VERTEX); aV.More() && !bAt; aV.Next())
++      {
++        bAt = BRep_Tool::Pnt(TopoDS::Vertex(aV.Current())).Distance(aPQ) <= aNear;
++      }
++      if (!bAt)
++      {
++        continue;
++      }
++      aAtPoint.Add(aE);
++      BRepAdaptor_Curve aEC(aE);
++      const gp_Vec      aToMid(aPQ, aEC.Value(0.5 * (aEC.FirstParameter() + aEC.LastParameter())));
++      if (aToMid.Magnitude() <= aNear || aToMid.Dot(aIn) < 0.25 * aToMid.Magnitude())
++      {
++        aDrop.Add(aE);
++      }
++    }
++    // Only where the branch along the edge reaches the point and others
++    // leave it.
++    if (aDrop.IsEmpty() || aDrop.Extent() == aAtPoint.Extent())
++    {
++      continue;
++    }
++    // The edges connected to the kept ones other than through the point.
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aKept;
++    for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator aIt(aAtPoint); aIt.More(); aIt.Next())
++    {
++      if (!aDrop.Contains(aIt.Value()))
++      {
++        aKept.Add(aIt.Value());
++      }
++    }
++    for (int iK = 1; iK <= aKept.Extent(); iK++)
++    {
++      for (TopExp_Explorer aVK(aKept(iK), TopAbs_VERTEX); aVK.More(); aVK.Next())
++      {
++        const TopoDS_Shape& aV = aVK.Current();
++        if (BRep_Tool::Pnt(TopoDS::Vertex(aV)).Distance(aPQ) <= aNear)
++        {
++          continue;
++        }
++        for (int i = 1; i <= TrueEdges.Extent(); i++)
++        {
++          if (aKept.Contains(TrueEdges(i)) || aDrop.Contains(TrueEdges(i)))
++          {
++            continue;
++          }
++          for (TopExp_Explorer aV2(TrueEdges(i), TopAbs_VERTEX); aV2.More(); aV2.Next())
++          {
++            if (aV2.Current().IsSame(aV))
++            {
++              aKept.Add(TrueEdges(i));
++              break;
++            }
++          }
++        }
++      }
++    }
++    if (TracingCrease())
++    {
++      std::fprintf(stderr,
++                   "offset crease: faces tangent at an end, the offsets touching at (%.6f %.6f %.6f): %d of %d "
++                   "edges kept\n",
++                   aPQ.X(), aPQ.Y(), aPQ.Z(), aKept.Extent(), TrueEdges.Extent());
++    }
++    TrueEdges = aKept;
++  }
++}
++
+ //=================================================================================================
+ 
+ void BRepOffset_Tool::Inter3D(const TopoDS_Face&              F1,
+@@ -3039,6 +3215,11 @@ void BRepOffset_Tool::Inter3D(const TopoDS_Face&              F1,
+     {
+       DropCrossingsPastTangentEnd(RefEdge, theRefFace1, theRefFace2, TrueEdges, aAllEdges, F1, F2, aMerged, aCut,
+                                   theAnalyse);
++      if (aMerged.IsNull() && aCut.IsEmpty())
++      {
++        // (mitcad#2462)
++        DropBranchesAtTangentEnd(RefEdge, theRefFace1, theRefFace2, F1, TrueEdges);
++      }
+     }
+     // (The pieces' curves on both offset faces first: where one cannot be
+     // built, the cut is not taken, and the branch is kept whole.)

@@ -1485,6 +1485,10 @@ if(BUILD_TESTING)
   # planes of Mirror, Split Body, Align, sketches and construction planes
   # (mitcad#1554).
   add_test(NAME cli.sheet_face_planes COMMAND mitcad-cli run "${scripts}/sheet_face_planes.json")
+  # Convert to Sheet Metal of cylindrical and conical faces, opened at their
+  # seams, a hole developed, their Flat Patterns and DXFs; faces that cannot
+  # be laid flat refused (mitcad#2435).
+  add_test(NAME cli.sheet_convert_curved COMMAND mitcad-cli run "${scripts}/sheet_convert_curved.json")
 endif()
 
 # Sheet Unfold, Refold and Flat Pattern (mitcad#208): actual L, U and Z
@@ -2579,7 +2583,9 @@ endif()
 # mitcad#1819) or whose rounded corners meet (GitHub #403, mitcad#1954, and
 # GitHub #536's four upright edges as one feature and as two, mitcad#2312),
 # and an edge of such a body rounded or bevelled past the flat faces at its
-# ends (GitHub #566, mitcad#2229): the reported designs' dressups are built
+# ends (GitHub #566, mitcad#2229), and a handle's hole corner rounded past a
+# narrow stretch onto the hole's round end (GitHub #667, mitcad#2419;
+# geometry.fillet_narrow_face_hole_wall): the reported designs' dressups are built
 # at their size, with no warning or
 # information, the side faces taken away, or refused in words (skipped
 # without the report's archives under MITCAD_MITCAD_REPORTED; the synthetic
@@ -3228,10 +3234,15 @@ if(BUILD_TESTING)
     SKIP_REGULAR_EXPRESSION "replace face tilted round reported: skipped" TIMEOUT 600)
 endif()
 
-# Shells with Sharp corners on reporters' designs (GitHub #642, mitcad#2383),
-# found by their content ids under MITCAD_MITCAD_REPORTED and opened in a
-# copy: the revolved cone with five notches through its wall shells 2 mm
-# inside, Sharp (OCCT port patch 2383); skipped without the designs.
+# Shells with Sharp corners on reporters' designs (GitHub #642 and #645,
+# mitcad#2383, mitcad#2415), found by their content ids under
+# MITCAD_MITCAD_REPORTED and opened in a copy: the revolved cone with five
+# notches through its wall shells 2 mm inside, Sharp (OCCT port patch
+# 2383); the disk with an arm tangent to it, its seam on the tangent line,
+# 2, 1 and 5 mm, and #645's loft cut to a slot, closed, 2 mm (patch 2415),
+# with its top open, 2 and 1 mm, Sharp and Rounded (patch 2462); the cone
+# shelled again with the step's top at 3 mm, a wall of its own
+# (mitcad#2443); skipped without the designs.
 if(BUILD_TESTING)
   add_test(NAME cli.shell_sharp_reported
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
@@ -3251,6 +3262,203 @@ if(BUILD_TESTING)
     COMMAND mitcad-cli run "${scripts}/sheet_flange_corner_relief.json")
   add_test(NAME cli.sheet_flange_edges_corner_relief
     COMMAND mitcad-cli run "${scripts}/sheet_flange_edges_corner_relief.json")
+endif()
+
+# The three Corner Relief types at the corners of a flange on four edges,
+# with the reported rules (mitcad#2411): Rectangular, Round and Tear give
+# three different corners, measured from the tangent lines' inner corner.
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_flange_corner_relief_types
+    COMMAND mitcad-cli run "${scripts}/sheet_flange_corner_relief_types.json")
+endif()
+
+# The same on the reported design of GitHub #614 under MITCAD_MITCAD_REPORTED
+# (mitcad#2424): as saved, then Rectangular, Round and Tear 1 mm, three
+# different corners and a valid flat pattern each; skipped without the file.
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_flange_corner_relief_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/sheet-flange-corner-relief-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/sheet-flange-corner-relief-reported-test.cmake")
+  set_tests_properties(cli.sheet_flange_corner_relief_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "sheet flange corner relief reported: skipped" TIMEOUT 600)
+endif()
+
+# A sketch on a drafted face after the Draft's fixed plane changes
+# (mitcad#2408, follow-up of mitcad#2351, GitHub #622): the reported design,
+# found by its content id under MITCAD_MITCAD_REPORTED, recomputes with the
+# Draft about the offset plane, its sketch on the drafted face; the sketch
+# follows the face through plane edits and is redefined onto it (skipped
+# without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.draft_neutral_plane_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/draft-neutral-plane-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/draft-neutral-plane-reported-test.cmake")
+  set_tests_properties(cli.draft_neutral_plane_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "draft neutral plane reported: skipped" TIMEOUT 600)
+endif()
+
+# Convert to Sheet Metal on the reported rectangle-to-round transition
+# (mitcad#2435): its loft's sides refused as bending two ways, its neck's
+# split cylinder made a sheet with an exact blank (skipped without
+# `github-684/` under MITCAD_MITCAD_REPORTED; the synthetic cases are
+# cli.sheet_convert_curved).
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_convert_curved_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/sheet-convert-curved-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/sheet-convert-curved-reported-test.cmake")
+  set_tests_properties(cli.sheet_convert_curved_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "sheet convert curved reported: skipped" TIMEOUT 600)
+endif()
+
+# GitHub #635's design (mitcad#2365), found by its content id under
+# MITCAD_MITCAD_REPORTED and opened in a copy: the block's end edges rounded
+# where a counterbore's rim comes 1 mm from each end face, each counterbore's
+# wall cutting its rounding alike at both ends (OCCT port patch 2365): one
+# valid solid without a note, the volumes and the faces beside the
+# counterbores the mirror image's (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_counterbore_seam_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-counterbore-seam-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-counterbore-seam-reported-test.cmake")
+  set_tests_properties(cli.fillet_counterbore_seam_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet counterbore seam reported: skipped" TIMEOUT 900)
+endif()
+
+# Turn Roughing along a concave R15 shoulder fillet (mitcad#2420, GitHub
+# #668): the reported shaft, found by its content id under
+# MITCAD_MITCAD_REPORTED, opened through mitcad-cli mcp; its turning profile,
+# the roughing's arc, the program's G2 and the simulated stock against the
+# CAD fillet (skipped without the design).
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.turn_fillet_reported
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/turn-fillet-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/turn-fillet-reported")
+    set_tests_properties(cli.turn_fillet_reported PROPERTIES TIMEOUT 900
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+      SKIP_REGULAR_EXPRESSION "turn fillet reported: skipped")
+  endif()
+endif()
+
+# GitHub #577's design (mitcad#2380), found by its content id under
+# MITCAD_MITCAD_REPORTED and opened in a copy: the benchmark's last step, a
+# circular pattern of the nozzle's features with its chamfers and roundings,
+# one valid solid without a note, every copy chamfered and rounded (skipped
+# without the design; GitHub #582's design is cli.fillet_nozzle_dome_reported).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_dome_pattern_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-dome-pattern-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-dome-pattern-reported-test.cmake")
+  set_tests_properties(cli.fillet_dome_pattern_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet dome pattern reported: skipped" TIMEOUT 900)
+  # A circular pattern of a boss and a hole through all in it (mitcad#2380):
+  # each copy of the hole reaches through the boss's copy before it, also
+  # where the bodies before the pattern end short of the copy.
+  add_test(NAME cli.pattern_through_all_copied_boss
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/pattern_through_all_copied_boss.json")
+endif()
+
+# GitHub #620's design (mitcad#2352), found by its content id under
+# MITCAD_MITCAD_REPORTED and opened in a copy: three tangent-chained edges
+# round a pocket's rim rounded with 1.5 (the design's suppressed Fillet14),
+# which 0.71.0 refused at a corner past a narrow face: one closed solid
+# without a note, the rounding at 1.5, the volume pinned; Fillet15 after it
+# as well (skipped without the design; the synthetic ledge case is
+# geometry.fillet_ledge_rising_face).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_rim_corner_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-rim-corner-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-rim-corner-reported-test.cmake")
+  set_tests_properties(cli.fillet_rim_corner_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet rim corner reported: skipped" TIMEOUT 900)
+endif()
+
+# A mirror of a boss extruded to the next face (mitcad#2430): Adjust builds
+# the image again, ending on the lower face on its side; Identical reflects
+# the finished boss, which reaches nothing there.
+if(BUILD_TESTING)
+  add_test(NAME cli.mirror_to_next COMMAND mitcad-cli run "${scripts}/mirror_to_next.json")
+endif()
+
+# GitHub #640's design (mitcad#2430), found by its content id under
+# MITCAD_MITCAD_REPORTED and unpacked into a work folder: its mirror, saved
+# without a compute option, keeps its result; edited to Adjust, the mirrored
+# extrusions are built again at the image (skipped without the design).
+if(BUILD_TESTING)
+  add_test(NAME cli.mirror_to_next_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/mirror-to-next-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/mirror-to-next-reported-test.cmake")
+  set_tests_properties(cli.mirror_to_next_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "mirror to next reported: skipped" TIMEOUT 600)
+endif()
+
+# A mirror of a rib and of a web To Next (mitcad#2431): Adjust builds each
+# again at the image, down to the lower face on its side, its thickness on
+# the image's side; Identical reflects the finished rib, which reaches
+# nothing there.
+if(BUILD_TESTING)
+  add_test(NAME cli.mirror_rib_to_next COMMAND mitcad-cli run "${scripts}/mirror_rib_to_next.json")
+endif()
+
+# A pattern of a mirror of a boss extruded to the next face (mitcad#2432):
+# with Adjust the mirrored boss is built again at each copy and ends on the
+# lower face there; a mirror with Identical gives the pattern its reflected
+# finished tool, whose copy reaches nothing.
+if(BUILD_TESTING)
+  add_test(NAME cli.mirror_pattern_to_next
+    COMMAND mitcad-cli run "${scripts}/mirror_pattern_to_next.json")
+endif()
+
+# A lip on the top edge of a tray's wall (mitcad#2445): folded in, its ends
+# keep the Corner Gap short of the tray's end walls; folded out, on a long
+# and a short wall, as before; the flat patterns valid; a lip that crosses
+# the tray refused naming itself and the wall it hits.
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_flange_lip
+    COMMAND mitcad-cli run "${scripts}/sheet_flange_lip.json")
+endif()
+
+# Shell with faces of their own wall thickness (mitcad#2443, GitHub #642's
+# second request): a block's bottom at its own thickness Inside, Outside,
+# Both, closed and Rounded inside, a cylinder's side, the thicknesses
+# edited; the walls measured and the volumes exact; Rounded outside refused.
+if(BUILD_TESTING)
+  add_test(NAME cli.shell_own_thickness COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/shell_own_thickness.json")
+endif()
+
+# A reported .f3z assembly package (mitcad#2449), found by its content id
+# under MITCAD_F3D_REPORTED (else the f3d-reported folder beside
+# MITCAD_F3D_CORPUS) with its STEP export: the copies of its documents show
+# and hide their sketches as the documents do, its bodies are where the
+# STEP file has them, and no more items fall back than the fixed state
+# (skipped without the files). Imported with four threads (its documents
+# side by side) and again with one: both give the same design.
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.f3d_reported_package
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/f3d-reported-package-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/f3d-reported-package" --compare-serial)
+    set_tests_properties(cli.f3d_reported_package PROPERTIES TIMEOUT 7200
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "f3d reported package: skipped")
+  endif()
 endif()
 
 # Every mitcad-cli test (mitcad-cli loads Qt's DLLs, mitcad-cli render): on

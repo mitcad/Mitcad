@@ -7,9 +7,10 @@
 # Sketch Dimension's right-click menu (mitcad#1540, GitHub #203), through
 # the real UI on a design that mitcad-cli makes
 # (tools/ui-scripts/sketch-tangent-dimension.json: a circle of diameter 20
-# about the fixed origin, a free circle of radius 5 about (30, 0)): a
-# right-click on the first circle offers Center and Tangent for it and
-# Driving and Driven; Tangent picks it by its tangent side, the second
+# about the fixed origin, a free circle of radius 5 about (30, 0), a line
+# below them): a right-click on the first circle offers Center, Tangent
+# Near and Tangent Far for it and Driving and Driven; Tangent Near picks it
+# by its tangent side, the second
 # circle is picked by its centre, and 18 typed adds a
 # tangent_point_distance that moves the free centre to 28; then both
 # circles by their tangent sides and Driven add a driven
@@ -18,7 +19,9 @@
 # tools/ui-windows-sketch-tangent-dimension-test.ps1 runs on Windows.
 # The tool's prompts name the right-click Driven, and an existing
 # dimension's context menu has Make Driven and Make Driving, each one undo
-# step (mitcad#2055).
+# step (mitcad#2055). Tangent Far on the second circle and a line below
+# both preview 30 from the line to the circle's far side, and 32 typed adds
+# a far tangent_distance (mitcad#2451).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-tangent-dimension-test.sh
@@ -41,8 +44,8 @@ for _ in $(seq 1 600); do
 done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'tangent dimension driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
-ui_expect_log 'Context menu: Center | Tangent | Driving (current) | Driven | Cancel' \
-  'the right-click on a circle offers Center, Tangent, Driving and Driven'
+ui_expect_log 'Context menu: Center | Tangent Near | Tangent Far | Driving (current) | Driven | Cancel' \
+  'the right-click on a circle offers Center, Tangent Near, Tangent Far, Driving and Driven'
 ui_expect_log 'Sketch Dimension preview: tangent_point_distance 20.00' 'the preview from the tangent side to the centre'
 grep -Eq 'Added dimension k[0-9]+ tangent_point_distance d[0-9]+ = 18 mm$' "$UI_LOG" ||
   { ui_fail 'no tangent_point_distance added with the value 18'; exit 1; }
@@ -53,5 +56,9 @@ ui_expect_log 'then right-click for Driven.' 'the Pick prompt names the right-cl
 ui_expect_log 'Right-click: Driven.' 'the Place prompt names the right-click Driven'
 ui_expect_log 'Undo: Make Driven in Sketch1' 'Make Driven from the context menu, one undo step'
 ui_expect_log 'Undo: Make Driving in Sketch1' 'Make Driving from the context menu, one undo step'
+ui_expect_log 'Sketch Dimension preview: tangent_distance far 30.00' 'the preview from the line to the far side'
+grep -Eq 'Added dimension k[0-9]+ tangent_distance far d[0-9]+ = 32 mm$' "$UI_LOG" ||
+  { ui_fail 'no far tangent_distance added with the value 32'; exit 1; }
+echo 'ok   Tangent Far: a dimension from a line to the far side added with the value 32'
 ui_expect_log 'TestDriver: done' 'tangent and center picks from the right-click menu'
 ui_finish 'UI sketch dimension tangent and center picks'

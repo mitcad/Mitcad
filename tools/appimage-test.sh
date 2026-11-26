@@ -512,6 +512,10 @@ file "$WORK/demo.png" | grep -q 'PNG image data, [1-9]' || ui_fail "no screensho
 echo "ok   the demo block's screenshot ($(stat -c %s "$WORK/demo.png") bytes)"
 entry=$WORK/home/.local/share/applications/mitcad.desktop
 grep -qx "Exec=\"$COPY\"" "$entry" || ui_fail "no desktop file running the AppImage in $entry"
+# The keys AppImage managers list programs by (mitcad#2413).
+grep -qxF "TryExec=$COPY" "$entry" || ui_fail "no TryExec naming the AppImage in $entry"
+grep -qx "X-AppImage-Name=MitCad" "$entry" || ui_fail "no X-AppImage-Name in $entry"
+grep -qxF "X-AppImage-Version=$VERSION" "$entry" || ui_fail "no X-AppImage-Version=$VERSION in $entry"
 [ -f "$WORK/home/.local/share/icons/hicolor/256x256/apps/mitcad.png" ] || ui_fail "no icon in the user's data folder"
 echo "ok   the desktop file and the icons in the user's data folder"
 

@@ -41,6 +41,9 @@ mod flex;
 // Exploded views of assemblies (mitcad#2113).
 mod explode;
 
+// The drawing book (mitcad#2448).
+mod drawing_book;
+
 /// A family's module: its commands with a schema, in the reference's
 /// order, and its schemas as [`spec`] writes them.
 type Family = (&'static [&'static str], fn(&str) -> Option<Value>);
@@ -61,6 +64,7 @@ const FAMILIES: &[Family] = &[
     (form::COMMANDS, form::spec),
     (flex::COMMANDS, flex::spec),
     (explode::COMMANDS, explode::spec),
+    (drawing_book::COMMANDS, drawing_book::spec),
 ];
 
 /// The JSON Schema dialect of the schemas.

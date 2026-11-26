@@ -73,6 +73,44 @@ impl Drop for Scratch {
     }
 }
 
+/// Writes the script `text` to `path` as an executable program (a fake
+/// git, `ssh-keyscan` or hook). A test thread that starts a program while
+/// this one holds a write descriptor to the file hands that descriptor to
+/// its child until the child has started its own program, and running the
+/// script meanwhile fails with ETXTBSY ("Text file busy", mitcad#2416); so
+/// on Unix a shell of its own writes the file and makes it executable,
+/// and this process never holds a descriptor a child could inherit. The
+/// file appears under its own name only once complete.
+fn write_executable(path: &Path, text: &str) {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut shell = Command::new("sh")
+            .arg("-c")
+            .arg("cat > \"$1.tmp\" && chmod 755 \"$1.tmp\" && mv -f \"$1.tmp\" \"$1\"")
+            .arg("sh")
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // The pipe ends with `stdin`, dropped here: `cat` sees its end.
+        let mut stdin = shell.stdin.take().unwrap();
+        stdin.write_all(text.as_bytes()).unwrap();
+        drop(stdin);
+        let status = shell.wait().unwrap();
+        assert!(
+            status.success(),
+            "could not write {}: {status}",
+            path.display()
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, text).unwrap();
+    }
+}
+
 fn author() -> Identity {
     Identity::new("Mitcad Test", "test@example.invalid").unwrap()
 }

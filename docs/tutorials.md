@@ -114,7 +114,7 @@ The tutorial's own pages get `window.mitcad`. Its calls return promises.
 | `mitcad.demonstrate(demonstration)` | Plays the page's input demonstration over the step's target ([Demonstrations](#demonstrations)), replacing one playing. Resolves to the guide's state; rejects with the reason when no step is shown or the demonstration is not valid. |
 | `mitcad.stopDemonstration()` | Stops the demonstration playing. Resolves to `{"stopped": true}`, or `false` when none played. |
 | `mitcad.shortcut(command)` | A command's keys as the user has them now ([The user's keys and gestures](#the-users-keys-and-gestures)). Rejects when MitCad has no such command. |
-| `mitcad.navigation()` | The view's orbit, pan and zoom gestures of the user's navigation scheme ([The user's keys and gestures](#the-users-keys-and-gestures)). |
+| `mitcad.navigation()` | The view's orbit, pan and zoom gestures of the user's navigation scheme, for the mouse and the trackpad each on its own ([The user's keys and gestures](#the-users-keys-and-gestures)). |
 | `mitcad.on(event, listener)`, `mitcad.off(event, listener)` | Listens to the guide's events ([Events](#events)); `"*"` listens to all. |
 | `mitcad.call(name, args)` | The calls above by name (`start_step`, `end_step`, `release_hold`, `state`, `query`, `set_progress`, `place` with `{"side": <side>}`, `open_design`, `leave`, `demonstrate`, `stop_demonstration`, `shortcut` with `{"command": <id>}`, `navigation`). |
 
@@ -296,8 +296,8 @@ finds the target and outlines it, and places the callout beside it.
 |---|---|
 | `id` | The step's name, echoed in its events. Default `step`. |
 | `text` | The callout's text, at most 400 characters. Required. |
-| `target` | One of: `{"command": <id>}` (its button where one is shown; the ids are in [app/COMMANDS.md](../app/COMMANDS.md)), `{"input": <key>}` (an input of the open command's panel, by the key ui_state lists), `{"browser": <name>}` (a Browser row by its name), `{"view": true}` or `{"view": <kind or kinds>}` (the 3D view, picks of those kinds), `{"workspace_selector": true}` (the toolbar's workspace selector), `{"workspace": <name>}` (a workspace by its name: its entry in the selector's list while the list is open, else the selector), `{"tab": <name>}` (a toolbar tab by its name; another workspace's tab: the selector), `{"timeline": true}` (the timeline, a place to point at). |
-| `done` | What completes the step, one of: `{"command": <id>}` (the command finished with OK, or an action ran), `{"started": <id>}` (its panel opened), `{"input": <key>, "value": <text>}` (the value typed into the open panel's input, and left for a moment; a length's "mm" may be left out), `{"pick": true}` or `{"pick": <kind or kinds>}` (a new pick of those kinds), `{"mode": <mode>}` (the window is in that mode: `idle`, `pick_plane`, `sketch`, `command`; a sketch opened is `sketch`, a sketch finished `idle`), `{"navigate": <action>}` (the user orbited, panned or zoomed the view: `orbit`, `pan`, `zoom`; see [Navigation steps](#navigation-steps)), `{"opened": "workspace_selector"}` (the selector's list opened), `{"chosen": <workspace>}` (the workspace shown, with the selector's list closed: at once when it is shown already as the step starts, else once the user chose it), `{"activated": <tab>}` (the tab shown: at once when it is shown already). Optional: a step without `done` stays until the page ends it (`mitcad.endStep()`, a page's Continue), Escape or Leave Tutorial. |
+| `target` | One of: `{"command": <id>}` (its button where one is shown; the ids are in [app/COMMANDS.md](../app/COMMANDS.md)), `{"input": <key>}` (an input of the open command's panel, by the key ui_state lists), `{"browser": <name>}` (a Browser row by its name), `{"view": true}` or `{"view": <kind or kinds>}` (the 3D view, picks of those kinds), `{"workspace_selector": true}` (the toolbar's workspace selector), `{"workspace": <name>}` (a workspace by its name: its entry in the selector's list while the list is open, else the selector), `{"tab": <name>}` (a toolbar tab by its name; another workspace's tab: the selector), `{"timeline": true}` (the timeline, a place to point at), `{"plane": <plane>}` (the view, where the plane to sketch on is picked; only that plane takes a sketch during the step, [Sketch input steps](#sketch-input-steps)), `{"field": <key>}` (a drawing tool's value box, such as a rectangle's `width`, while the tool shows it). |
+| `done` | What completes the step, one of: `{"command": <id>}` (the command finished with OK, or an action ran), `{"started": <id>}` (its panel opened), `{"input": <key>, "value": <text>}` (the value typed into the open panel's input, and left for a moment; a length's "mm" may be left out), `{"pick": true}` or `{"pick": <kind or kinds>}` (a new pick of those kinds), `{"mode": <mode>}` (the window is in that mode: `idle`, `pick_plane`, `sketch`, `command`; a sketch opened is `sketch`, a sketch finished `idle`), `{"navigate": <action>}` (the user orbited, panned or zoomed the view: `orbit`, `pan`, `zoom`; see [Navigation steps](#navigation-steps)), `{"opened": "workspace_selector"}` (the selector's list opened), `{"chosen": <workspace>}` (the workspace shown, with the selector's list closed: at once when it is shown already as the step starts, else once the user chose it), `{"activated": <tab>}` (the tab shown: at once when it is shown already), `{"plane": <plane>}` (a sketch made on that plane), `{"point": <place or places, or [x, y]>}` (the next point of a sketch's drawing tool placed there), `{"field": <key>, "value": <text>}` (the value typed into the drawing tool's value box); the last three are in [Sketch input steps](#sketch-input-steps). Optional: a step without `done` stays until the page ends it (`mitcad.endStep()`, a page's Continue), Escape or Leave Tutorial. |
 | `allow` | More command ids the step allows. |
 | `navigation` | View navigation: the wheel, the mouse buttons and keys the navigation scheme binds, the orientation cube, and the camera commands (`view.home`, `view.fit`, the standard views, the projection, the arrow keys' turns `view.turn_left`, `view.turn_right`, `view.turn_up`, `view.turn_down`). Default `true`; a `navigate` step needs it. |
 | `hold` | `true`: once the step is done, the input stays held while the page shows what comes next ([After a step with hold](#after-a-step-with-hold)). Default `false`. |
@@ -431,6 +431,78 @@ the learner uses:
 - The event is `step_done` with `done` `{"navigate": "orbit"}`; the log has
   `Guide: step <id> done: the view orbited` (`panned`, `zoomed`).
 
+### Sketch input steps
+
+A step can check the learner's sketch input one interaction at a time
+(mitcad#2440): the plane a sketch goes on, where a drawing tool's next
+point lands, and a value typed into a drawing tool's value box. Input that
+misses is held back: nothing is made, the callout says *Not this plane.*,
+*Not this place.* or *Not this value.*, the page hears a `mismatch` event
+([Events](#events)) and the learner can try again.
+
+```js
+const steps = [
+  {id: "plane", text: "Click Create Sketch, then the XY plane.",
+   target: {plane: "XY"}, done: {plane: "XY"}, allow: ["sketch.create"]},
+  {id: "corner", text: "Pick 2-Point Rectangle, then click the origin for the first corner.",
+   target: {view: true}, done: {point: "origin"}, allow: ["sketch.rectangle"]},
+  {id: "width", text: "Type 40 for the width.",
+   target: {field: "width"}, done: {field: "width", value: "40 mm"}, allow: ["sketch.rectangle"]}
+];
+mitcad.on("mismatch", event => showHint(event.got));   // the page's own
+```
+
+- **A plane**: `{"plane": <plane>}` as the target, the done or both (the
+  same plane). The plane is `XY`, `XZ` or `YZ` (the origin's planes),
+  `face` (any face), a construction plane's name as the Browser shows it
+  (`Plane1`), or a face by its reference, as `mitcad.query({query:
+  "sketch"})` gives it in `plane.face` (`F2:top`); case does not matter.
+  A step names a plane the design has; another one is refused with the
+  reason. During the step a sketch goes only on that plane, however it is
+  started (a pick in the view or the Browser while Create Sketch waits for
+  a plane, Create Sketch with a plane selected, a Browser row's Create
+  Sketch); the done is met when the sketch is made on it, 2D or 3D. A
+  plane target outlines the view and takes its picks. The log has `Guide:
+  step <id> plane xz, not its XY` for a plane held back and `Guide: step
+  <id> done: a sketch on XY`.
+- **A point**: `{"point": <place>}`, a list of places (any of them) or the
+  coordinates `[x, y]` in the sketch, in mm (within 0.001 mm). It is the
+  next point of a 2D sketch's drawing tool (Line, 2-Point Rectangle,
+  Circle, …) placed with a click: a click where the point does not snap to
+  the place is held back and the tool keeps what it has; the click at the
+  place completes the step and goes on to the tool. Enter, which places
+  no point where the pointer snapped, is left to the tool. The places:
+  `origin`, `x_axis`, `y_axis` (on the sketch's axis; the origin is on
+  both), `point` (a point of the sketch, the origin's too), `center` (a
+  circle's or an arc's), `midpoint`, `quadrant`, `intersection`, `curve`
+  (along a curve of the sketch), `extension` (on a line's extension),
+  `body_vertex`, `body_midpoint`, `body_edge`, `body_center`,
+  `body_section` (where the sketch plane cuts a body), `grid` and `free`
+  (no snap). The log has `Guide: step <id> point at grid (10, 5), not its
+  origin` and `Guide: step <id> done: a point at origin (0, 0)`.
+- **A value**: `{"field": <key>, "value": <text>}`, the value typed into a
+  drawing tool's value box, by its key: `width` and `height` (the
+  rectangles), `radius` (a rounded rectangle's corners, an arc's),
+  `diameter` (a circle's), `length` and `angle` (a line's), `sides` (a
+  polygon's). It is matched as an input's value is (`"40"` is `"40 mm"`).
+  The step is done once the value typed stays a moment, or at the click or
+  Enter that uses the box while it holds that value. While the tool shows
+  the box, a click or Enter that would use another value (another typed
+  one, or the value under the pointer when nothing is typed) is held back.
+  The log has `Guide: step <id> value 25 in width, not its 40` (`not
+  typed`) and `Guide: step <id> done: 40 typed into width`.
+
+The events: `step_done` with `done` `{"plane": "XY"}`, `{"point":
+"origin", "at": [0, 0]}` (the place the step waited for, or for
+coordinates the one it snapped to) or `{"field": "width", "value": "40"}`;
+`mismatch` with `got` the same shapes for the input held back (`"value":
+""` when nothing was typed). MitCad's UI test `app.ui-*-guide-sketch-input`
+(`tools/ui-scripts/guide-sketch-input.mitcad-ui`) takes each of them.
+
+A MitCad without these refuses such a step ("A step's target takes exactly
+one of …"): a page that catches the refusal can show the step with a
+`mode` done instead.
+
 ## Events
 
 The events come to `mitcad.on` listeners and, for MCP, in the resource
@@ -439,15 +511,16 @@ id) and `sequence` (one per step started).
 
 | Event | Fields |
 |---|---|
-| `step_done` | `done`: `{"command": <id>, "committed": true}`, `{"started": <id>}`, `{"input": <key>, "value": <text typed>}`, `{"pick": <kind>}`, `{"mode": <mode>}`, `{"navigate": <action>}` (`orbit`, `pan`, `zoom`), `{"opened": "workspace_selector"}`, `{"chosen": <workspace>}` or `{"activated": <tab>}`. |
+| `step_done` | `done`: `{"command": <id>, "committed": true}`, `{"started": <id>}`, `{"input": <key>, "value": <text typed>}`, `{"pick": <kind>}`, `{"mode": <mode>}`, `{"navigate": <action>}` (`orbit`, `pan`, `zoom`), `{"opened": "workspace_selector"}`, `{"chosen": <workspace>}`, `{"activated": <tab>}`, `{"plane": <plane>}`, `{"point": <place>, "at": [x, y]}` or `{"field": <key>, "value": <text typed>}`. |
+| `mismatch` | `got`: what the user did that a sketch input step held back ([Sketch input steps](#sketch-input-steps)): `{"plane": <its name>}`, `{"point": <where it snapped>, "at": [x, y]}`, `{"field": <key>, "value": <text typed, or "">}`. |
 | `step_left` | `reason`: `escape`, `leave`, `ended` (by the page or MCP), `replaced` (by another step), `closed` (the tutorial closed). Not sent when a hold after a step done ends. |
 | `refused` | `command`: the id of a command the step, or the hold after it, held back. |
 | `held` | A click or the wheel the step held back: `place` (`view`, `browser`, `timeline`, `projects`, `configuration`), `input` (`click`, `double_click`, `wheel`), `button` (`left`, `middle`, `right`, `other`; not for the wheel) and `modifiers` (the keys held: `shift`, `ctrl`, `alt`, `meta`). A held drag is one `held`, at its press; a held wheel at most one a second. |
 | `demonstration_ended` | `reason`: `played` (its plays ended), `stopped` (by the page), `replaced` (by another demonstration), `step` (the step was done or left; before its `step_done` or `step_left`). |
 
-`refused` and `held` are when a user tried something else: a page may show
-its help at once then, and after a delay of its own while the step is not
-done ([Demonstrations](#demonstrations)).
+`refused`, `held` and `mismatch` are when a user tried something else: a
+page may show its help at once then, and after a delay of its own while
+the step is not done ([Demonstrations](#demonstrations)).
 
 ## Demonstrations
 
@@ -518,41 +591,85 @@ mitcad.startStep(step).then(() => { timer = setTimeout(hint, 8000); });
 A user may have changed a command's key or chosen another way to turn the
 view. `mitcad.shortcut(command)` and `mitcad.navigation()` give the ones
 that work on this user's MitCad now, so that a page says and draws those.
+Both are read at each call: a key changed in Keyboard Shortcuts or a
+navigation scheme or gesture changed in Preferences is in the next answer,
+with no restart. Words in the page's language are the page's own: the
+answers give the structure (device, button or gesture, keys held) for a
+sentence and for a picture or an animation alike.
 
 `mitcad.shortcut("view.front")`:
 
 ```json
 {"command": "view.front", "name": "Front View",
- "shortcuts": [{"keys": [{"key": "1", "modifiers": []}], "text": "1"}]}
+ "shortcuts": [{"keys": [{"key": "1", "modifiers": []}], "text": "1"}],
+ "platform": "linux"}
 ```
 
 Each of `shortcuts` is one key sequence: its `keys` (a key and the
 modifiers held with it: `shift`, `ctrl`, `alt`, `meta`; on macOS `ctrl` is
-the Command key and `meta` the Control key) and `text`, as the platform
-writes it. A command with no key has `"shortcuts": []`: point at its
-button instead.
+the Command key, `alt` the Option key and `meta` the Control key) and
+`text`, as the platform writes it. `platform` is `macos`, `windows` or
+`linux`, so that a page names the keys as that keyboard has them. A
+command with no key has `"shortcuts": []`: name its menu command or point
+at its button instead.
 
-`mitcad.navigation()` with Alt + left to orbit:
+`mitcad.navigation()` with Alt + left to orbit (in Preferences: Alt + left
+orbits, Alt + middle pans, Alt + right zooms):
 
 ```json
-{"orbit": [{"input": "left", "modifiers": ["alt"]}],
+{"mouse": {
+   "orbit": [{"device": "mouse", "input": "left", "modifiers": ["alt"]}],
+   "pan": [{"device": "mouse", "input": "middle", "modifiers": []}],
+   "zoom": [{"device": "mouse", "input": "right", "modifiers": ["alt"]},
+            {"device": "mouse", "input": "wheel", "modifiers": []}]},
+ "trackpad": {
+   "orbit": [{"device": "trackpad", "input": "drag", "fingers": 1, "modifiers": ["alt"]}],
+   "pan": [],
+   "zoom": [{"device": "trackpad", "input": "slide", "fingers": 2, "modifiers": []},
+            {"device": "trackpad", "input": "pinch", "fingers": 2, "modifiers": []}]},
+ "orbit": [{"input": "left", "modifiers": ["alt"]}],
  "pan": [{"input": "middle", "modifiers": []}],
  "zoom": [{"input": "right", "modifiers": ["alt"]}, {"input": "scroll", "modifiers": []}],
- "reverse_zoom": false, "custom": false}
+ "reverse_zoom": false, "custom": false, "platform": "linux"}
 ```
 
-Each gesture is a drag with a mouse button (`input` `left`, `middle`,
-`right`) or a scroll (`scroll`, the wheel or a two-finger scroll), with
-the keys held (`modifiers`), and `"key": "F4"` for the gesture of F4 held
-with the left button. They are in the order left, middle, right, scroll,
-then F4; a gesture that needs more keys than another one of the same
-input for the same action is left out (when the plain scroll zooms, so
-does Shift + scroll). `reverse_zoom` says the wheel zooms the other way;
-`custom` that the user set the gestures one by one.
+`mouse` and `trackpad` each list what that device does for `orbit`, `pan`
+and `zoom`; an empty list says the device has no gesture for it (with the
+scheme above a trackpad does not pan: the page can point at the view's
+other controls instead). Each gesture names its `device`, its `input` and
+the keys held (`modifiers`, as above), and `"key": "F4"` for the one with
+F4 held:
+
+- The mouse: a drag with the `left`, `middle` or `right` button, then the
+  `wheel`, which zooms in every scheme whatever keys are held.
+- The trackpad (a touchpad too, and a mouse's touch surface): `slide`,
+  two fingers moved on the pad (`"fingers": 2`), as the scheme has it: in
+  the Trackpad schemes it pans, orbits with one key and zooms with
+  another (with the macOS default, Option and a two-finger slide orbits:
+  `{"input": "slide", "modifiers": ["alt"]}`), with Custom as the user set
+  it, in the other schemes every slide zooms; `pinch`, two fingers moved apart or together, which zooms
+  in every scheme whatever keys are held; `drag`, the pad (or its button)
+  pressed and moved (`"fingers": 1`), which is the mouse's left button.
+  They are in that order.
+
+A gesture that needs more keys than another one of the same input for the
+same action is left out (when the plain slide zooms, so does Shift +
+slide). `reverse_zoom` says the wheel and the slide zoom the other way
+(the pinch follows the fingers); `custom` that the user set the gestures
+one by one.
+
+`orbit`, `pan` and `zoom` at the top are the answer's first form, kept for
+the pages that read it: the same gestures as the scheme's table has them,
+`input` `left`, `middle`, `right` or `scroll` (the wheel and the
+two-finger slide alike), in the order left, middle, right, scroll, then
+F4. A new page reads `mouse` and `trackpad`: with a trackpad scheme the
+first form's `scroll` is the slide, while the wheel still zooms.
 
 `mitcad.demonstrate`, `mitcad.stopDemonstration`, `mitcad.shortcut` and
 `mitcad.navigation` came with MitCad's tutorial hints; `mitcad.call` with
 their names does the same, and a MitCad without them rejects the call.
+`mouse`, `trackpad` and `platform` came with a later MitCad; a page that
+finds them missing reads the first form.
 
 ## Sources and download
 

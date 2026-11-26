@@ -4856,7 +4856,11 @@ std::string worded_failure(const std::string& kernel, const std::string& where) 
 // faces beyond continued along their own surfaces up to the edge's other
 // face (faces_beyond_grown), so that the ball takes the narrow face away and
 // rolls on over the face beyond, as where the geometry kernel's own rounding
-// runs onto it. The result is taken where it is one closed solid holding a
+// runs onto it. A face beyond that bends away from the material (a hole's
+// round wall after a short straight stretch tangent to it, the corner
+// beside it rounded, mitcad#2419, GitHub #667) is continued the same way,
+// the space between it and the narrow face filled, which the rounding
+// covers. The result is taken where it is one closed solid holding a
 // face of the rounding and the whole input lies within it (a rounding of
 // concave edges only adds material: the material taken away with the
 // narrow face is filled again, the narrow face consumed all along), with
@@ -4864,7 +4868,8 @@ std::string worded_failure(const std::string& kernel, const std::string& where) 
 // (added_past_walls, mitcad#2330); its faces are named after the picked
 // edges. Null otherwise (never throws but
 // for cancelling and invalid arguments); `applies` tells whether there was
-// such a narrow face. Other narrow faces beside the edges, still narrow on
+// such a narrow face with material taken away past it (not only space
+// filled). Other narrow faces beside the edges, still narrow on
 // that body, are continued past their far edges there (over_narrow_faces).
 template <class Build>
 ShapePtr over_tangent_far_edges(const std::string& feature, const Shape& input, const std::vector<int>& owner,
@@ -4877,7 +4882,10 @@ ShapePtr over_tangent_far_edges(const std::string& feature, const Shape& input, 
     if (!grown) {
       return nullptr;
     }
-    applies = true;
+    // (Only filled past faces beyond bending away from the material,
+    // mitcad#2419: where that fails, the other ways past the narrow faces
+    // are tried as before.)
+    applies = !grown->filled;
     ShapePtr made;
     try {
       made = build(*grown->body, grown->owner);
@@ -5133,9 +5141,10 @@ ShapePtr past_narrow_faces(const std::string& feature, const Shape& input, const
     }
   };
   // A narrow face whose far edges go on tangentially into convex faces
-  // beyond (a step's riser running into a round face): the ball takes it
-  // away and rolls on over the faces beyond (over_tangent_far_edges,
-  // mitcad#2208). Continued along its own surface (over_narrow_faces), the
+  // beyond (a step's riser running into a round face), or into faces
+  // bending away from the material (a hole's round wall, mitcad#2419): the
+  // ball takes it away and rolls on over the faces beyond
+  // (over_tangent_far_edges, mitcad#2208). Continued along its own surface (over_narrow_faces), the
   // ball would keep to that surface, and the rounding, the space filled past
   // the far edge cut out again, would hang beside the face beyond as a
   // sheet: where the rounding over such a face cannot be built, it fails

@@ -208,6 +208,40 @@ Bnd_Box box_of(const Shape& shape) {
   return box;
 }
 
+// The tight box of the shape's geometry, without its triangulations and
+// tolerances (lost_reach's second look).
+Bnd_Box tight_box_of(const TopoDS_Shape& shape) {
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(shape, box, false, false);
+  return box;
+}
+
+// Whether the box `inner` reaches past the box `outer` by more than
+// `slack` on a side.
+bool reaches_past(const Bnd_Box& inner, const Bnd_Box& outer, double slack) {
+  if (inner.IsVoid()) {
+    return false;
+  }
+  if (outer.IsVoid()) {
+    return true;
+  }
+  double a[6];
+  double b[6];
+  inner.Get(a[0], a[1], a[2], a[3], a[4], a[5]);
+  outer.Get(b[0], b[1], b[2], b[3], b[4], b[5]);
+  for (int k = 0; k < 3; ++k) {
+    if (a[k] < b[k] - slack || a[k + 3] > b[k + 3] + slack) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// How far a body may reach past the union that joins it before the union
+// is taken to have left part of it out (mm, mitcad#2384): far above the
+// noise of tight boxes and of a caller's fuzzy join, far below a lost arm.
+constexpr double kReachSlack = 1.0e-2;
+
 // Above this edge count, a planar trim witness is cheaper than measuring
 // every face/face distance near the tool (notably caps with many holes).
 constexpr int kPlanarEdges = 64;
@@ -1471,6 +1505,65 @@ BooleanResult merged_boolean(BooleanOp op, const std::vector<const Shape*>& targ
         }
         return std::nullopt;
       };
+      // (mitcad#2384) Whether the pieces of a join that hold the tool do
+      // not reach as far as the tool or a target they merged, by more than
+      // kReachSlack (or four times the caller's tolerance): a union reaches
+      // at least as far as each body it joins in every direction (a body's
+      // farthest point lies on the union's boundary, or inside another body
+      // that reaches farther). The geometry kernel's union of a loft with
+      // its mirror image (GitHub mitcad/Mitcad#641) kept the loft alone:
+      // the section of the two sides ended 4 micrometres short of the point
+      // where they share their tangent plane, so the mirror image's side
+      // was not cut there and was classified inside the loft as a whole. A
+      // valid solid of the loft's volume, merged with the tool by the faces
+      // they share, which the volume check (lost_volume) cannot tell from
+      // the union. The boxes OCCT keeps are looked at first; a body that
+      // reaches past them is measured again with tight boxes.
+      const auto lost_reach = [&](const std::vector<detail::FaceNamer::Piece>& solids,
+                                  const std::vector<std::pair<const Shape*, int>>& joined) {
+        std::vector<const Shape*> operands{&tool};
+        std::vector<TopoDS_Shape> holding;
+        Bnd_Box held;
+        for (const detail::FaceNamer::Piece& piece : solids) {
+          if (piece.sources.count(tool_tag) == 0) {
+            continue;
+          }
+          holding.push_back(piece.shape->occt());
+          held.Add(box_of(*piece.shape));
+          for (const auto& [target, i] : joined) {
+            if (piece.sources.count(i) > 0 && std::find(operands.begin(), operands.end(), target) == operands.end()) {
+              operands.push_back(target);
+            }
+          }
+        }
+        if (holding.empty()) {
+          return false;
+        }
+        const double slack = std::max(kReachSlack, 4.0 * within);
+        std::vector<const Shape*> past;
+        for (const Shape* operand : operands) {
+          if (reaches_past(operand == &tool ? tool_box : box_of(*operand), held, slack)) {
+            past.push_back(operand);
+          }
+        }
+        if (past.empty()) {
+          return false;
+        }
+        Bnd_Box tight;
+        for (const TopoDS_Shape& shape : holding) {
+          tight.Add(tight_box_of(shape));
+        }
+        return std::any_of(past.begin(), past.end(), [&](const Shape* operand) {
+          return reaches_past(tight_box_of(operand->occt()), tight, slack);
+        });
+      };
+      // A join whose pieces lost reach (lost_reach) is wrong: it fails in
+      // words rather than leave out part of a body without a word.
+      const auto refuse_lost_reach = [] {
+        throw std::runtime_error(
+            "the join leaves out part of a body it joins: the geometry kernel's union does not reach as far as the "
+            "body (where their faces meet tangentially, the kernel may not find where they cross)");
+      };
       // Only the targets the tool touches: fusing all of them would also
       // merge targets that overlap each other but not the tool.
       std::vector<std::pair<const Shape*, int>> near;
@@ -1515,6 +1608,9 @@ BooleanResult merged_boolean(BooleanOp op, const std::vector<const Shape*>& targ
           if (std::optional<std::vector<detail::FaceNamer::Piece>> fuzzy = without_volume_loss(near)) {
             solids = std::move(*fuzzy);
           }
+        }
+        if (merged && lost_reach(solids, near)) {
+          refuse_lost_reach();
         }
         if (merged && within > 0.0) {
           int count = 0;
@@ -1626,6 +1722,9 @@ BooleanResult merged_boolean(BooleanOp op, const std::vector<const Shape*>& targ
         if (solids.empty()) {
           throw std::runtime_error("the join gave an empty result");
         }
+        if (lost_reach(solids, joined)) {
+          refuse_lost_reach();
+        }
         result.pieces = to_pieces(solids);
         return result;
       }
@@ -1653,6 +1752,9 @@ BooleanResult merged_boolean(BooleanOp op, const std::vector<const Shape*>& targ
           result.pieces = to_pieces(*fuzzy);
           return result;
         }
+      }
+      if (!lost && lost_reach(exact_solids, joined)) {
+        refuse_lost_reach();
       }
       // An exact join that could not build its solids of all the faces
       // (OCCT cannot orient them and leaves faces unused: no solid at all,

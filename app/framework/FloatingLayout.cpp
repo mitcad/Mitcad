@@ -238,6 +238,30 @@ void FloatingLayout::setFlushRow(QWidget* row) {
   requestLayout();
 }
 
+void FloatingLayout::setRowHidden(QWidget* row, bool hidden, bool overlay) {
+  for (Row& entry : m_rows) {
+    if (entry.widget != row) {
+      continue;
+    }
+    entry.hidden = hidden;
+    entry.overlay = hidden && overlay;
+    if (hidden && !entry.overlay) {
+      row->hide();
+    } else if (entry.parts.empty()) {
+      row->show();
+    }
+    // A row of parts shows while one of them does (layoutCards). At once
+    // in a shown window (the reveal raises the row right away), else with
+    // the next layout.
+    if (isVisible()) {
+      layoutCards();
+    } else {
+      requestLayout();
+    }
+    return;
+  }
+}
+
 std::vector<std::pair<QString, QRect>> FloatingLayout::cardsOf(const Row& row) {
   if (row.cards) {
     return row.cards();
@@ -633,9 +657,19 @@ void FloatingLayout::layoutCards() {
   int rowTop = barBottom + kMargin;
   int rowsBottom = -1; // none shown
   std::vector<QRect> rowCards; // in the view's coordinates
+  // A hidden row revealed over the view (setRowHidden): placed where it
+  // would be, raised over the cards at the end, taking no room.
+  QPointer<QWidget> overlayRow;
+  QRect overlaySlot;
   for (const Row& row : m_rows) {
     QWidget* widget = row.widget;
     if (widget == nullptr) {
+      continue;
+    }
+    if (row.hidden && !row.overlay) {
+      if (!widget->isHidden()) {
+        widget->hide();
+      }
       continue;
     }
     if (!row.parts.empty()) {
@@ -668,6 +702,11 @@ void FloatingLayout::layoutCards() {
     }
     if (!m_windowed) {
       widget->raise();
+    }
+    if (row.overlay && !m_windowed) {
+      overlayRow = widget;
+      overlaySlot = slot;
+      continue;
     }
     rowTop = slot.bottom() + 1 + kGap;
     rowsBottom = slot.bottom() + 1;
@@ -909,6 +948,10 @@ void FloatingLayout::layoutCards() {
     if (m_band != nullptr && !m_band->isHidden()) {
       m_band->raise();
     }
+    // The revealed row over every card (mitcad#2426).
+    if (overlayRow != nullptr && !overlayRow->isHidden()) {
+      overlayRow->raise();
+    }
   }
   m_viewer->setOverlayInsets(QMargins(0, insetTop, cubeRight, hasBottom ? view.bottom() + 1 - bottomEdge : 0));
   std::vector<QRect> covered;
@@ -921,6 +964,9 @@ void FloatingLayout::layoutCards() {
   }
   if (m_band != nullptr && m_band->isShown()) {
     covered.push_back(m_band->slot().translated(-view.topLeft()));
+  }
+  if (overlayRow != nullptr && !overlayRow->isHidden()) {
+    covered.push_back(overlaySlot.translated(-view.topLeft()));
   }
   m_viewer->setCoveredRects(covered);
   // The rows' cards: the free area starts below them, and the view picks
@@ -971,6 +1017,13 @@ void FloatingLayout::logCards() {
       continue;
     }
     const auto named = cardsOf(row);
+    if (row.overlay && !m_windowed) {
+      // Revealed over the view (mitcad#2426): its card alone, marked, and
+      // not a row the other cards keep below.
+      const QPoint at = GlassCard::mapToHost(row.widget.data(), QPoint(0, 0));
+      cards << entryText(row.widget->objectName() + QStringLiteral(" (over the view)"), at, row.widget->size());
+      continue;
+    }
     if (row.cards) {
       // A row of cards of its own (the title row, the ribbon), then its
       // cards.

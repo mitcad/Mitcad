@@ -828,9 +828,12 @@ host builds it in an Ubuntu 24.04 build root
 it with `--appimage-extract-and-run`.
 
 At each start the AppImage writes its desktop file (`Exec` = the
-AppImage, `StartupWMClass=Mitcad`) and icons into `$XDG_DATA_HOME` if they
-differ, so docks show the icon, and with them the file managers'
-thumbnails of designs (mitcad#1539): the bundled `mitcad-thumbnailer`
+AppImage, `StartupWMClass=Mitcad`, `TryExec`, `X-AppImage-Name` and
+`X-AppImage-Version` for AppImage managers, merged into an entry already
+there so that a manager's own keys stay, mitcad#2413) and icons into
+`$XDG_DATA_HOME` if they differ, so docks show the icon, and with them
+the file managers' thumbnails of designs (mitcad#1539): the bundled
+`mitcad-thumbnailer`
 copied to `$XDG_DATA_HOME/mitcad/bin`, its entry
 (`thumbnailers/mitcad.thumbnailer`, from
 [packaging/linux/mitcad.thumbnailer](../packaging/linux/mitcad.thumbnailer))
@@ -957,7 +960,13 @@ Run in the isolated environments:
 - `ctest --preset dev`: geometry, bridge, model, solver, import,
   `mitcad-cli` scripts (`tools/cli/tests`), SPDX headers, dependency
   licences. `core.vcs.*` and `cli.remote` use a bare repository in a temp
-  folder and a fake `ssh`; no network; skipped without git. `cli.library`
+  folder and a fake `ssh`; no network; skipped without git. A test that
+  runs a script it wrote (a fake git, `ssh-keyscan` or hook) writes it
+  with `write_executable` (`core/vcs/src/tests.rs`): a shell of its own
+  writes the file, as a write descriptor held by the test binary can be
+  inherited by a program another test thread starts at that moment, and
+  running the script then fails with "Text file busy" (mitcad#2416).
+  `cli.library`
   makes a small parts library of fasteners with
   `tools/libraries/make-fastener-library.py` in the build tree, then one
   of every size with the smallest and largest rows inserted (needs git
@@ -1378,6 +1387,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
 | `MITCAD_TEST_GL_FAILURE=init\|reconnect\|throw` | The 3D view's attach to the graphics card fails (mitcad#2125, `OcctViewer::initializeGL`): `init` its first attach sees a driver that answers no GL version, as after a driver reset; `reconnect` the attaches after it; `throw` makes those throw `Standard_NullObject` where OCCT's `OpenGl_Context::Init` did. While it is set, a move of the view to another window, or a screen change of its window (the TestDriver's `screen-change`, which tells every shown window that its screen changed), counts as Qt making its surface again on every platform; `throw` also makes Component from Web's screen change (`CefView::screenChanged`) throw, which it catches and logs once. It is read at every attach: the TestDriver's `unset-env MITCAD_TEST_GL_FAILURE` (or `set-env NAME VALUE`, for `MITCAD_TEST_*` variables only) ends the failure while the app runs (`tools/ui-gl-failure-test.sh`, `app.ui-windows-gl-failure`). On Linux through EGL, `start` makes the first start's graphics check fail for every EGL context of Qt's (mitcad#2292, `framework/GraphicsStart.hpp`): MitCad then starts again in the same process on X11 with GLX, where the window draws and the 3D view draws in its own EGL context, read back into the window; `start-view` does the same and makes the 3D view's own EGL context fail in every start, so that the window draws and the 3D view says it cannot start (`tools/ui-gl-start-failure-test.sh`). |
 | `MITCAD_SHELL_TRACE=1` | Shell prints `shell trace:` lines on standard error (mitcad#2050, `geometry/src/shell_cavity.cpp`): why the geometry kernel's offset failed, what the cavity it falls back on found (the plates, thin faces and faces under removed ones), each step of it that failed (an inward offset with its `BRepOffset_Error` code, a thin part or rounding that could not be taken away, a kept face the cavity cut into) and a refused result, for a design whose Shell fails. |
+| `MITCAD_SHELL_DUMP=<folder>` | Shell writes the geometry kernel's thick-solid input and result as `shell-<stamp>-<n>-thick-input.brep` and `shell-<stamp>-<n>-thick-result.brep` (the stamp per process) into the folder (mitcad#2462, `geometry/src/shell_cavity.cpp`), so that a failing or invalid result can be taken apart in DRAW or the OCCT lab; with `MITCAD_SHELL_TRACE` the trace names the files. |
 | `MITCAD_TEST_3DXWARE=1` | Windows: the 3DxWare runtime's stand-in (mitcad#2152, `app/platform/windows/SpaceMouse3DxWare.cpp`) loads in place of the installed `siappdll.dll` and reports one device, `Test 3D mouse`, so the 3D mouse's backend asks for MitCad's window at the moment a real driver start does; it opens the device only for a window and sends no events (`app.ui-windows-space-mouse-3dxware`). |
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
@@ -1910,6 +1920,18 @@ in the distro only:
   (mitcad#2382); skipped with a message without it.
   `geometry.suite.faceops` (`test_replace_tilted_round_top`) covers a pin's
   round top onto planes above, across and below it without the file.
+  ctest `cli.draft_neutral_plane_reported`
+  (`tools/cli/draft-neutral-plane-reported-test.cmake`) finds the archive
+  in `github-622/` by its content id, unpacks it into the build folder and
+  runs `draft_neutral_plane_reported.json` on the design in it: with its
+  Draft about an offset plane, as saved, every feature computes and the
+  sketch on the drafted slot floor lies on it; the sketch follows the
+  floor when the fixed plane goes back to the XZ plane and to the offset
+  plane again, and Redefine Sketch Plane takes the drafted floor
+  (mitcad#2408); skipped with a message without it. `core.bridge`
+  (`test_sketch_on_a_drafted_face_follows_the_draft`) and
+  `geometry.suite.faceops` (`test_draft_about_a_moved_plane`) cover the
+  same on synthetic bodies without the file (mitcad#2351).
   ctest `core.bridge` (`core/tests/test_bridge.cpp`,
   `test_reported_screw_joint_keeps_earlier_joint`; alone:
   `test_bridge screw-joint-530`) opens the design in `github-530/`
@@ -1922,6 +1944,28 @@ in the distro only:
   `placements`. Skipped with a message without it. The mock kernel's
   `earlier_joint_kept` tests (`core/model-tests/joints`) cover the rule
   without the file.
+  `tools/ui-drawing-shows-place-test.sh` finds the archive in
+  `github-683/` by its content id, unpacks it into its work folder and
+  opens the design in it (100 bodies under one occurrence, a drawing
+  whose front view draws 98): in the view's Shows the occurrence
+  unfolded, the list scrolled to its end, two bodies cleared one after
+  the other and one undone, the list keeps its place through each
+  rebuild (mitcad#2434); skipped with a message without it. The same
+  test's 20 placed plates cover it without the file, Docked and
+  Floating.
+  ctest `cli.turn_fillet_reported`
+  (`tools/cli/turn-fillet-reported-test.py`) finds the archive in
+  `github-668/` by its content id, unpacks the design in it into the
+  build folder and opens it through `mitcad-cli mcp --read-only`: Setup
+  1's turning profile has the shaft's R15 shoulder fillet as an arc on the
+  CAD fillet (the body's torus face), concave; Turn Roughing 1 rounds it
+  clockwise 14.2 about its centre (the 0.8 nose radius off it, moved by
+  the stock to leave); the program writes that arc as
+  `G2 X126.059 Z-439.701 I14.2 K0.`; and the simulated stock follows the
+  fillet with the stock to leave within 0.03 mm (mitcad#2420); skipped with a message without it. The `turning` tests of
+  `mitcad-model` (`split_profile`, an outside and a bore fillet, and a
+  fillet roughed, finished, posted and simulated) cover it without the
+  file.
 
 ### SolidCraft designs
 

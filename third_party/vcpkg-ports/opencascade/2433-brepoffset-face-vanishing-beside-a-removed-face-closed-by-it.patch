@@ -1,0 +1,336 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: a face whose offset vanishes beside a removed face is closed by the
+removed face (mitcad#2433).
+
+A box with its top edges rounded 2 mm, shelled inside with the top open and
+Sharp corners (the intersection join) by a wall thicker than the rounding:
+the roundings' offsets turn inside out. FindVanishingFaces (patch 0100)
+finds such faces and has the offsets of the faces on both sides of them
+meet each other instead, but only where there is a kept face on both sides:
+across the edge to the removed top it found none (a free edge of the shape
+without its caps), kept the roundings, and the thick solid failed at any
+thickness ("the offset faces do not close up" in MitCad).
+
+Where that edge bounds a removed face, the removed face is now the face
+beyond: ConnexIntAcrossVanished leaves such a pair to ContextIntByInt, which
+intersects the offset of the kept face on the other side of the vanishing
+faces with the removed face, as at an edge between the two, and gives the
+section to both edges. Where that section runs past the removed face's edge
+instead of inside it (over the vanishing faces, outside the body: a wall no
+thicker than the rounding is wide, or a removed face turning towards the
+rounding), it is not taken, and the offset fails as before.
+
+Not covered: a wall no thicker than the rounding (the rounding's offset does
+not vanish and never meets the removed face it is tangent to: the edge gets
+no image, at any thickness below the radius and at the radius itself), and
+the arc join (Rounded), whose ContextIntByArc still passes over vanishing
+faces.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2433.
+
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+index e72b85e2..28caf006 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+@@ -24,6 +24,7 @@
+ #include <TopoDS_Iterator.hxx>
+ #include <BRepAlgo_AsDes.hxx>
+ #include <BRepAlgo_Image.hxx>
++#include <BRepClass_FaceClassifier.hxx>
+ #include <BRepLib_MakeVertex.hxx>
+ #include <BRepOffset_Analyse.hxx>
+ #include <BRepOffset_Inter3d.hxx>
+@@ -57,6 +58,96 @@
+ #include <Geom_Surface.hxx>
+ #include <Precision.hxx>
+ 
++//=======================================================================
++// function : AcrossToCap
++// purpose  : The kept face across faces whose offset vanishes from the edge
++//           theE of the removed face theCap (theAcross: face A, its edge,
++//           face B, its edge, as BRepOffset_MakeOffset finds them), and its
++//           edge to them; a null face where there is none (mitcad#2433).
++//=======================================================================
++static TopoDS_Face AcrossToCap(const NCollection_List<TopoDS_Shape>* theAcross,
++                               const TopoDS_Face&                    theCap,
++                               const TopoDS_Shape&                   theE,
++                               TopoDS_Edge&                          theEdge)
++{
++  theEdge.Nullify();
++  if (!theAcross || theE.ShapeType() != TopAbs_EDGE)
++  {
++    return TopoDS_Face();
++  }
++  NCollection_List<TopoDS_Shape>::Iterator it(*theAcross);
++  while (it.More())
++  {
++    TopoDS_Shape aF[2], aE[2];
++    for (int k = 0; k < 2 && it.More(); ++k)
++    {
++      aF[k] = it.Value();
++      it.Next();
++      if (!it.More())
++      {
++        return TopoDS_Face();
++      }
++      aE[k] = it.Value();
++      it.Next();
++    }
++    for (int k = 0; k < 2; ++k)
++    {
++      if (aF[k].IsSame(theCap) && aE[k].IsSame(theE) && !aF[1 - k].IsSame(theCap))
++      {
++        theEdge = TopoDS::Edge(aE[1 - k]);
++        return TopoDS::Face(aF[1 - k]);
++      }
++    }
++  }
++  return TopoDS_Face();
++}
++
++//=======================================================================
++// function : SectionInsideCap
++// purpose  : Whether the section of a kept face's offset with the removed
++//           face theCap, across faces whose offset vanishes from theCap's
++//           edge theE, runs inside theCap there: its point nearest to the
++//           middle of theE is inside theCap. Where it runs past theE (over
++//           the vanishing faces, outside the body: a wall no thicker than
++//           they are wide where theCap turns towards them) the offset
++//           cannot be closed by theCap (mitcad#2433).
++//=======================================================================
++static bool SectionInsideCap(const NCollection_List<TopoDS_Shape>& theSection,
++                             const TopoDS_Face&                    theCap,
++                             const TopoDS_Edge&                    theE)
++{
++  double                         aF, aL;
++  const occ::handle<Geom_Curve>& aCE = BRep_Tool::Curve(theE, aF, aL);
++  if (aCE.IsNull())
++  {
++    return false;
++  }
++  const gp_Pnt aPE = aCE->Value(0.5 * (aF + aL));
++  gp_Pnt       aBest;
++  double       aBestDist = -1.;
++  for (NCollection_List<TopoDS_Shape>::Iterator it(theSection); it.More(); it.Next())
++  {
++    double                         aF1, aL1;
++    const occ::handle<Geom_Curve>& aC = BRep_Tool::Curve(TopoDS::Edge(it.Value()), aF1, aL1);
++    if (aC.IsNull())
++    {
++      continue;
++    }
++    GeomAPI_ProjectPointOnCurve aProj(aPE, aC, aF1, aL1);
++    if (aProj.NbPoints() > 0 && (aBestDist < 0. || aProj.LowerDistance() < aBestDist))
++    {
++      aBestDist = aProj.LowerDistance();
++      aBest     = aProj.NearestPoint();
++    }
++  }
++  if (aBestDist < 0.)
++  {
++    return false;
++  }
++  BRepClass_FaceClassifier aClassifier(theCap, aBest, Precision::Confusion());
++  return aClassifier.State() == TopAbs_IN;
++}
++
+ //=======================================================================
+ // function : ContinuityAcrossTangentialSides
+ // purpose  : The continuity to extend theF's B-spline or Bezier surface at
+@@ -1306,6 +1397,7 @@ void BRepOffset_Inter3d::ConnexIntAcrossVanished(
+   {
+     TopoDS_Face F[2], NF[2];
+     TopoDS_Edge E[2];
++    bool        bCap = false;
+     for (int k = 0; k < 2; ++k)
+     {
+       if (k == 1)
+@@ -1315,7 +1407,16 @@ void BRepOffset_Inter3d::ConnexIntAcrossVanished(
+       F[k] = TopoDS::Face(it.Value());
+       it.Next();
+       E[k] = TopoDS::Edge(it.Value());
+-      //
++      // A removed face beyond the vanishing faces (mitcad#2433): the offset
++      // on the other side meets it in ContextIntByInt.
++      bCap = bCap || !MapSF.IsBound(F[k]);
++    }
++    if (bCap)
++    {
++      continue;
++    }
++    for (int k = 0; k < 2; ++k)
++    {
+       const TopoDS_Face OF = TopoDS::Face(MapSF(F[k]).Face());
+       if (!MES.IsBound(OF))
+       {
+@@ -1443,7 +1544,8 @@ void BRepOffset_Inter3d::ContextIntByInt(
+   NCollection_List<TopoDS_Shape>&                                                      Failed,
+   const Message_ProgressRange&                                                         theRange,
+   const bool                                                                           bIsPlanar,
+-  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>*                        theVanished)
++  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>*                        theVanished,
++  const NCollection_List<TopoDS_Shape>*                                                theAcross)
+ {
+   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> MV;
+   TopExp_Explorer                                        exp;
+@@ -1604,15 +1706,23 @@ void BRepOffset_Inter3d::ContextIntByInt(
+       itF.Initialize(Anc);
+       for (; itF.More(); itF.Next())
+       {
+-        const TopoDS_Face& F = TopoDS::Face(itF.Value());
++        TopoDS_Face F = TopoDS::Face(itF.Value());
++        // The edge of the kept face across faces whose offset vanishes,
++        // where F is one of them (mitcad#2433).
++        TopoDS_Edge EAcross;
+         if (theVanished && theVanished->Contains(F))
+         {
+-          continue;
++          F = AcrossToCap(theAcross, CF, aS, EAcross);
++          if (F.IsNull() || !MapSF.IsBound(F))
++          {
++            continue;
++          }
++        }
++        OF = TopoDS::Face(MapSF(F).Face());
++        if (EAcross.IsNull())
++        {
++          OE = TopoDS::Edge(MapSF(F).Generated(E));
+         }
+-        OF                       = TopoDS::Face(MapSF(F).Face());
+-        TopoDS_Shape aLocalShape = MapSF(F).Generated(E);
+-        OE                       = TopoDS::Edge(aLocalShape);
+-        //      OE = TopoDS::Edge(MapSF(F).Generated(E));
+         if (!MES.IsBound(OF))
+         {
+           BRepOffset_Tool::EnLargeFace(OF, NF, true, true);
+@@ -1629,6 +1739,11 @@ void BRepOffset_Inter3d::ContextIntByInt(
+           LOE.Append(OE);
+           BRepOffset_Tool::Inter3D(WCF, NF, LInt1, LInt2, Side, E, CF, F);
+           SetDone(NF, CF);
++          if (!EAcross.IsNull() && !LInt1.IsEmpty() && !SectionInsideCap(LInt1, CF, E))
++          {
++            LInt1.Clear();
++            LInt2.Clear();
++          }
+           if (!LInt1.IsEmpty())
+           {
+             Store(CF, NF, LInt1, LInt2);
+@@ -1656,6 +1771,23 @@ void BRepOffset_Inter3d::ContextIntByInt(
+               }
+               Build.Bind(aS, C);
+             }
++            if (!EAcross.IsNull())
++            {
++              // the kept face's edge to the vanishing faces ends there too
++              B.MakeCompound(C);
++              if (Build.IsBound(EAcross))
++              {
++                for (exp.Init(Build(EAcross), TopAbs_EDGE); exp.More(); exp.Next())
++                {
++                  B.Add(C, exp.Current());
++                }
++              }
++              for (it.Initialize(LInt1); it.More(); it.Next())
++              {
++                B.Add(C, it.Value());
++              }
++              Build.Bind(EAcross, C);
++            }
+           }
+           else
+           {
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.hxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.hxx
+index 4e144419..eb0e8b65 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.hxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.hxx
+@@ -109,7 +109,8 @@ public:
+     NCollection_List<TopoDS_Shape>&                                                      Failed,
+     const Message_ProgressRange&                                                         theRange,
+     const bool bIsPlanar = false,
+-    const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>* theVanished = nullptr);
++    const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>* theVanished = nullptr,
++    const NCollection_List<TopoDS_Shape>*                         theAcross   = nullptr);
+ 
+   //! Computes connections of the not offset faces that have to be connected by arcs
+   Standard_EXPORT void ContextIntByArc(
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index c0797ed7..35e64d0d 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -320,6 +320,7 @@ static void FindVanishingFaces(
+   const GeomAbs_JoinType                                                    theJoin,
+   const NCollection_DataMap<TopoDS_Shape, double, TopTools_ShapeMapHasher>& theFaceOffset,
+   const double                                                              theOffset,
++  const NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& theCapOfEdge,
+   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>&                   theVanished,
+   NCollection_List<TopoDS_Shape>&                                           theAcross);
+ 
+@@ -966,11 +967,22 @@ void BRepOffset_MakeOffset::MakeOffsetShape(const Message_ProgressRange& theRang
+   if (!myThickening && !(myInter && myIsPlanar && myJoin == GeomAbs_Intersection)
+       && (std::abs(myOffset) > Precision::Confusion() || !myFaceOffset.IsEmpty()))
+   {
++    // The removed faces (caps) by their edges: a face vanishing next to a
++    // cap is closed by the cap (mitcad#2433).
++    NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aCapOfEdge;
++    for (int i = 1; i <= myFaces.Extent(); ++i)
++    {
++      for (TopExp_Explorer aExpE(myFaces(i), TopAbs_EDGE); aExpE.More(); aExpE.Next())
++      {
++        aCapOfEdge.Bind(aExpE.Current(), myFaces(i));
++      }
++    }
+     FindVanishingFaces(myFaceComp,
+                        myAnalyse,
+                        myJoin,
+                        myFaceOffset,
+                        myOffset,
++                       aCapOfEdge,
+                        aMFVanished,
+                        aLAcross);
+   }
+@@ -1748,6 +1760,7 @@ static void FindVanishingFaces(
+   const GeomAbs_JoinType                                                               theJoin,
+   const NCollection_DataMap<TopoDS_Shape, double, TopTools_ShapeMapHasher>& theFaceOffset,
+   const double                                                              theOffset,
++  const NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& theCapOfEdge,
+   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>&                   theVanished,
+   NCollection_List<TopoDS_Shape>&                                           theAcross)
+ {
+@@ -1835,6 +1848,12 @@ static void FindVanishingFaces(
+             const TopoDS_Face aG = OtherFace(theAnalyse, aEC, aCur);
+             if (aG.IsNull())
+             {
++              if (theCapOfEdge.IsBound(aEC))
++              {
++                // the edge of a removed face: the cap closes aF there
++                // (mitcad#2433)
++                break;
++              }
+               // a free or open edge: aF cannot be closed
+               aRemove = i;
+               break;
+@@ -1902,6 +1921,11 @@ static void FindVanishingFaces(
+         for (int aGuard = 0; aGuard < 100; ++aGuard)
+         {
+           aG[k] = OtherFace(theAnalyse, aE[k], aCur);
++          if (aG[k].IsNull() && theCapOfEdge.IsBound(aE[k]))
++          {
++            // a removed face beyond: its offset is the cap itself
++            aG[k] = TopoDS::Face(theCapOfEdge(aE[k]));
++          }
+           if (!theVanished.Contains(aG[k]))
+           {
+             break;
+@@ -2072,7 +2096,8 @@ void BRepOffset_MakeOffset::BuildOffsetByInter(
+                          Failed,
+                          aPSOuter.Next(aSteps(BuildOffsetByInter_ContextIntByInt)),
+                          myIsPlanar,
+-                         pVanished);
++                         pVanished,
++                         &aLAcross);
+   if (!aPSOuter.More())
+   {
+     myError = BRepOffset_UserBreak;

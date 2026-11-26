@@ -92,7 +92,7 @@ on the curve would slide along it (mitcad#396).
 | `EqualSize` (circle and ellipse copies) | equal radius / equal minor radius |
 | `Distance`, `Length`, `MajorRadius` | `|q - p| - d` |
 | `PointLineDistance`, `LineDistance` | signed distance `- side * d` |
-| `TangentDistance(circle, line)` | signed distance of the centre `- side * (r + d)` |
+| `TangentDistance(circle, line)` | signed distance of the centre `- side * (r + d)`; `far` (mitcad#2451): `- side * (d - r)`, to the far side |
 | `RadiusGap(a, b)` (mitcad#445) | `r_b - r_a - side * d`: the gap between concentric circles or arcs |
 | `HorizontalDistance`, `VerticalDistance` | `dx - side * d`, `dy - side * d`; `signed` (mitcad#404): `side` is 1 and `d` may be negative |
 | `Angle(a, b)` | oriented angle from `a` to `flip * b` minus `sigma * value` (wrapped) |

@@ -3,7 +3,7 @@
 //! `commands.md`).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -414,14 +414,30 @@ fn copied_into_project(
 
 /// The `link_check` query (mitcad#1719): whether a link to `path` from the
 /// design whose folder is `base` would be followed when the design opens
-/// again, and the folder a copy into the project would go into.
-pub(crate) fn link_check_json(path: &str, base: Option<&str>) -> Result<Value, ApiError> {
+/// again, and the folder a copy into the project would go into. With
+/// `design` (the open design's file, mitcad#2428) also `back`: the files
+/// from `path` to `design` along their links when `path` is that design or
+/// links back to it (inserting it would make the design a component of
+/// itself), else null.
+pub(crate) fn link_check_json(
+    path: &str,
+    base: Option<&str>,
+    design: Option<&str>,
+) -> Result<Value, ApiError> {
     let base = base.map(PathBuf::from);
     let check = mitcad_model::check_link(path, base.as_deref())?;
+    let back = match design {
+        Some(design) => mitcad_model::link_back(path, base.as_deref(), Path::new(design))?,
+        None => None,
+    };
     Ok(json!({
         "file": check.file.to_string_lossy(),
         "followed": check.followed,
         "folder": check.folder.as_ref().map(|f| f.to_string_lossy().into_owned()),
+        "back": back.map(|chain| chain
+            .iter()
+            .map(|f| f.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()),
     }))
 }
 

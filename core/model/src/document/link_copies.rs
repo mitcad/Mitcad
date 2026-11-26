@@ -58,6 +58,65 @@ pub fn check_link(path: &str, base: Option<&Path>) -> Result<LinkCheck, ModelErr
     })
 }
 
+/// The design files from `path` (absolute, or relative to `base`) to the
+/// design file `design` along their links (mitcad#2428): `[path]` when
+/// `path` is `design` itself, `[path, a, design]` when `path` links `a`
+/// and `a` links `design`, and so on; None when no chain of links leads
+/// to `design`. Inserting such a file into `design` would make the design
+/// a component of itself, so Insert Component and a design dropped from
+/// the Projects panel refuse it. Every link is walked, also one that would
+/// not be followed (outside the project): its file on disk still links
+/// back. A file that is not there or cannot be read links nothing; a loop
+/// of links that does not reach `design` ends.
+pub fn link_back(
+    path: &str,
+    base: Option<&Path>,
+    design: &Path,
+) -> Result<Option<Vec<PathBuf>>, ModelError> {
+    let start = absolute(path, base)?;
+    let design = absolute(&design.to_string_lossy(), None)?;
+    let real_design = std::fs::canonicalize(&design).ok();
+    let is_design = |file: &Path| {
+        file == design
+            || real_design
+                .as_ref()
+                .is_some_and(|real| std::fs::canonicalize(file).is_ok_and(|f| &f == real))
+    };
+    if is_design(&start) {
+        return Ok(Some(vec![start]));
+    }
+    // Breadth first, so that the chain said is the shortest; each file's
+    // parent in it.
+    let mut parents: BTreeMap<PathBuf, Option<PathBuf>> = BTreeMap::new();
+    parents.insert(start.clone(), None);
+    let mut queue = std::collections::VecDeque::from([start]);
+    while let Some(file) = queue.pop_front() {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let from = file.parent().unwrap_or(Path::new("")).to_path_buf();
+        for link in crate::file::linked_paths(&text) {
+            let Ok(linked) = absolute(&link, Some(&from)) else {
+                continue;
+            };
+            if parents.contains_key(&linked) {
+                continue;
+            }
+            parents.insert(linked.clone(), Some(file.clone()));
+            if is_design(&linked) {
+                let mut chain = vec![linked];
+                while let Some(Some(parent)) = chain.last().and_then(|last| parents.get(last)) {
+                    chain.push(parent.clone());
+                }
+                chain.reverse();
+                return Ok(Some(chain));
+            }
+            queue.push_back(linked);
+        }
+    }
+    Ok(None)
+}
+
 /// Copies the design file `path` (absolute, or relative to `base`) into
 /// the `parts/` folder of the project of the design whose folder is
 /// `base` (without a project: of that folder), so that a link to the copy

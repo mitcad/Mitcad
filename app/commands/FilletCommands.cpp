@@ -947,6 +947,12 @@ bool onFaces(const CommandState& state) {
   return !items.isEmpty() && items.first().kind == SelectKind::Face;
 }
 
+// Faces continued by Offset, an offset_face, take Tangent Chain
+// (mitcad#2438); shown before the first pick too, as the hover follows it.
+bool offsetsFaces(const CommandState& state) {
+  return (state.items(kTarget).isEmpty() || onFaces(state)) && state.choice(kContinue) == QStringLiteral("offset");
+}
+
 // Straight or Along the Walls: a press_pull, which takes a taper.
 bool continued(const CommandState& state) {
   const QString how = state.choice(kContinue);
@@ -1049,6 +1055,10 @@ CommandDef pressPullCommand(const CommandContext& context) {
                      SelectKind::Face | SelectKind::Edge | SelectKind::Profile, 1, 0)
           .withTooltip(QObject::tr("Faces to offset, edges to fillet or profiles to extrude, one "
                                    "kind at a time"))
+          .withHoverChain(SelectKind::Face, QStringLiteral("tangent_chain"),
+                          [](const CommandState& state) {
+                            return state.choice(kContinue) == QStringLiteral("offset");
+                          })
           .withOnPick([](const SelectionItem&, CommandState& state, const CommandContext& model) {
             readRun(state, model);
           }),
@@ -1103,6 +1113,10 @@ CommandDef pressPullCommand(const CommandContext& context) {
             }
             return std::nullopt;
           }),
+      // As Offset Face's (mitcad#2438).
+      checkInput(QStringLiteral("tangent_chain"), QObject::tr("Tangent Chain"), true)
+          .withTooltip(QObject::tr("Also move the faces that continue the selected ones smoothly"))
+          .withVisible(offsetsFaces),
       choiceInput(kTaperType, QObject::tr("Taper Type"), kPullTapers, QStringLiteral("none"))
           .withTooltip(QObject::tr("Draft leans each new wall; Scale grows or shrinks the whole outline"))
           .withVisible(continued),
@@ -1204,6 +1218,9 @@ CommandDef pressPullCommand(const CommandContext& context) {
                     {QStringLiteral("body"), body},
                     {QStringLiteral("faces"), names(items, SelectKind::Face)},
                     {QStringLiteral("distance"), distance}};
+      if (state.checked(QStringLiteral("tangent_chain"))) {
+        result.def.insert(QStringLiteral("tangent_chain"), true);
+      }
     } else {
       result.def = {{QStringLiteral("type"), QStringLiteral("fillet")},
                     {QStringLiteral("body"), body},

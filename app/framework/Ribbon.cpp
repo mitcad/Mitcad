@@ -250,6 +250,27 @@ QString menuEntries(const QMenu* menu) {
   return entries.join(QStringLiteral(" | "));
 }
 
+// A menu's entries that cannot be chosen now, by name as menuEntries names
+// them (without a submenu's entries): the arrow keys pass over them, so a
+// test choosing an entry by its place counts them out (mitcad#2446: Flat
+// Pattern View without a sheet-metal body). Logged before the menu's own
+// line as "Ribbon menu disabled DRAWING/CREATE: Flat Pattern View", as the
+// browser's context menus log theirs.
+void logDisabledEntries(const QMenu* menu, const QString& path) {
+  QStringList disabled;
+  for (const QAction* action : menu->actions()) {
+    if (action->isSeparator() || !action->isVisible() || action->isEnabled()) {
+      continue;
+    }
+    QString name = action->text();
+    name.remove(QLatin1Char('&'));
+    disabled << name;
+  }
+  if (!disabled.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Ribbon menu disabled %1: %2").arg(path, disabled.join(QStringLiteral(" | ")));
+  }
+}
+
 // The palette's text colour at a fraction of full opacity: the hover and pressed
 // highlights and the quiet fills, which are right on a light and a dark palette.
 QColor textTint(const QPalette& palette, int alpha) {
@@ -3351,6 +3372,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
     }
     submenu->setIcon(m_registry.action((primary != nullptr ? primary : commands.front())->id)->icon());
     connect(submenu, &QMenu::aboutToShow, submenu, [submenu, path] {
+      logDisabledEntries(submenu, path);
       qDebug().noquote() << QStringLiteral("Ribbon menu %1: %2").arg(path, menuEntries(submenu));
     });
     if (mac) {
@@ -3395,6 +3417,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
                               .arg(key(tab, group), ownButtons.join(QStringLiteral(", ")));
   }
   connect(menu, &QMenu::aboutToShow, menu, [menu, name = key(tab, group)] {
+    logDisabledEntries(menu, name);
     qDebug().noquote() << QStringLiteral("Ribbon menu %1: %2").arg(name, menuEntries(menu));
   });
   // The commands the user pinned in this group, after its own buttons

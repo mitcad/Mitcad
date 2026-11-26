@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: MIT
+# File › Drawing Book… (mitcad#2448) on main.mitcad, which links a.mitcad
+# twice and b.mitcad once (tools/ui-drawing-book-test.sh): the dialog offers
+# a's drawings once and b's; a's and b's Drawing1 are checked apart, b's
+# design is moved above a's, the cover page checked and a title typed; Save
+# keeps the book as one undo step and File › Save writes it; opened again
+# it shows the same choice, and Print… prints the cover, b's sheet and a's
+# two sheets to the test's PDF (MITCAD_TEST_PRINT_PDF), Extra left out.
+# All geometry is synthetic.
+wait-idle
+capture-undo-depth before
+
+# The dialog: a once though it is linked twice, then b; nothing chosen.
+mark
+command file.drawing_book
+focus-dialog '^Drawing Book$'
+wait-log '^Drawing Book opened: a[.]mitcad \[Drawing1, Extra\] [|] b[.]mitcad \[Drawing1\]$'
+expect-log '^Drawing Book: none; cover off; print disabled$'
+
+# a's Drawing1 (the current row), then b's Drawing1, checked.
+mark
+key space
+wait-log '^Drawing Book: a[.]mitcad/Drawing1; cover off; print enabled$'
+key Down Down Down space
+wait-log '^Drawing Book: a[.]mitcad/Drawing1 [|] b[.]mitcad/Drawing1; cover off; print enabled$'
+
+# b's design moved above a's: the book's order.
+key Up
+mark
+key alt+u
+wait-log '^Drawing Book moved b[.]mitcad up$'
+wait-log '^Drawing Book: b[.]mitcad/Drawing1 [|] a[.]mitcad/Drawing1; cover off; print enabled$'
+
+# The cover page and the title.
+mark
+key alt+c
+wait-log '^Drawing Book: b[.]mitcad/Drawing1 [|] a[.]mitcad/Drawing1; cover on; print enabled$'
+key alt+t
+type 'Project book'
+
+# Save: one undo step, then written with the design.
+mark
+button '^Save$'
+focus-main
+wait-log '^Drawing Book saved: b[.]mitcad/Drawing1 [|] a[.]mitcad/Drawing1; cover on; changed$'
+expect-undo-depth ${before} 1
+mark
+command file.save
+wait-log '^Saved .*/main[.]mitcad$'
+
+# Opened again: the same choice; Print… prints the cover and the three
+# sheets in the book's order, and keeps the book as it was.
+mark
+command file.drawing_book
+focus-dialog '^Drawing Book$'
+wait-log '^Drawing Book opened: b[.]mitcad \[Drawing1\] [|] a[.]mitcad \[Drawing1, Extra\]$'
+expect-log '^Drawing Book: b[.]mitcad/Drawing1 [|] a[.]mitcad/Drawing1; cover on; print enabled$'
+mark
+button '^Print'
+focus-main
+wait-log '^Drawing Book saved: b[.]mitcad/Drawing1 [|] a[.]mitcad/Drawing1; cover on; unchanged$'
+wait-log '^Print dialog skipped [(]test[)]: printing to '
+wait-log '^Printed drawing book Project book: 4 page[(]s[)], cover, b[.]mitcad/Drawing1 [(]1[)], a[.]mitcad/Drawing1 [(]2[)] to ' 60
+expect-undo-depth ${before} 1
+quit

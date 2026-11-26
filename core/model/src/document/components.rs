@@ -1449,6 +1449,14 @@ impl<K: Kernel> Document<K> {
                 "only a linked design takes chosen parts; a copy takes the whole design",
             ));
         }
+        // A design whose root holds nothing of its own and one component
+        // (a new design's shape) comes in as that component, copied or
+        // linked whole (mitcad#2429, GitHub mitcad/Mitcad#618).
+        let single = options
+            .parts
+            .is_none()
+            .then(|| super::link_tree::single_component(&source))
+            .flatten();
         // Chosen parts of the design only (mitcad#2130).
         let mut chosen = None;
         // The whole design with its components, read only (mitcad#2209).
@@ -1462,11 +1470,12 @@ impl<K: Kernel> Document<K> {
             super::link_parts::check_found(&read.parts, path)?;
             chosen = Some(read.parts);
             (Some((read.bodies, read.looks)), read.mounts)
-        } else if options.link && super::link_tree::has_components(&source) {
+        } else if options.link && (single.is_some() || super::link_tree::has_components(&source)) {
             // Its root's own bodies in the linked component, its
-            // components beside them (mitcad#2209).
+            // components beside them (mitcad#2209); or its one component's
+            // bodies and the components placed in it (mitcad#2429).
             let origin = CopySource::Document(resolved.parent());
-            let mut read = self.design_tree(&source, path, &origin)?;
+            let mut read = self.design_tree(&source, path, &origin, single.as_ref())?;
             let bodies = std::mem::take(&mut read.root);
             let looks = std::mem::take(&mut read.root_looks);
             let mounts = std::mem::take(&mut read.mounts);
@@ -1479,7 +1488,13 @@ impl<K: Kernel> Document<K> {
             let (bodies, mounts, looks) = self.design_parts_looked(&source, path, &origin)?;
             (Some((bodies, looks)), mounts)
         } else if options.mount.is_some() {
-            (None, self.design_mounts(&source)?)
+            let mounts = self.design_mounts(&source)?;
+            // In the coordinates of the one component copied (mitcad#2429).
+            let mounts = match &single {
+                Some(top) => super::link_tree::mounts_in_top(top, mounts),
+                None => mounts,
+            };
+            (None, mounts)
         } else {
             (None, Vec::new())
         };
@@ -1488,7 +1503,13 @@ impl<K: Kernel> Document<K> {
             Some(mount) => Some(self.plan_mount(&mounts, mount, &wanted)?),
             None => None,
         };
-        let transform = plan.as_ref().map_or(options.transform, |p| p.placement);
+        // The one component where the design's root places it, moved by
+        // the insert's placement (mitcad#2429).
+        let dropped = match &single {
+            Some(top) => options.transform.after(&top.placement),
+            None => options.transform,
+        };
+        let transform = plan.as_ref().map_or(dropped, |p| p.placement);
         let label = format!("Insert {}", file_label(path));
         self.apply(|state| {
             let name = match &options.name {
@@ -1499,8 +1520,13 @@ impl<K: Kernel> Document<K> {
                 None => state.free_component_name(&wanted),
             };
             let made = state.assembly.create(Some(&name), None);
-            // The design's root policy comes with it (mitcad#220).
-            state.assembly.set_policy(made, source.assembly.root_policy);
+            // The design's root policy comes with it (mitcad#220); the
+            // one component's when it comes in as that (mitcad#2429).
+            let policy = match &single {
+                Some(top) => source.assembly.policy(top.component),
+                None => source.assembly.root_policy,
+            };
+            state.assembly.set_policy(made, policy);
             let occurrence = state.assembly.place(made, parent, transform);
             let frames = match bodies {
                 Some((bodies, looks)) => {
@@ -1535,9 +1561,11 @@ impl<K: Kernel> Document<K> {
                     frames
                 }
                 None => {
+                    // The design's root, or its one component (mitcad#2429).
+                    let from: Vec<OccurrenceUid> = single.iter().map(|t| t.occurrence).collect();
                     let (_, copy) = state.copy_component_mapped(
                         &source,
-                        &[],
+                        &from,
                         made,
                         None,
                         CopySource::Document(resolved.parent()),

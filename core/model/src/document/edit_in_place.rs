@@ -132,17 +132,25 @@ impl<K: Kernel> Document<K> {
     /// The assembly around a linked component, to edit its design in place
     /// (mitcad#2321): the holder's other visible bodies as they are placed
     /// now, in the coordinates of the component where its first occurrence
-    /// places it. The bodies of the component's own occurrences are left
+    /// places it (of the design's root, where the component stands for
+    /// the design's one component, mitcad#2429). The bodies of the component's own occurrences are left
     /// out. Refused for a component that is not edited in place
     /// ([`Document::in_place_link`]).
     pub fn in_place_context(
         &self,
         component: ComponentUid,
     ) -> Result<InPlaceContext<K::Shape>, ModelError> {
-        self.in_place_link(component)?;
+        let link = self.in_place_link(component)?;
+        // A component that stands for its design's one component
+        // (mitcad#2429) lies where the design's root places that one.
+        let top = link
+            .tree
+            .as_ref()
+            .and_then(|t| t.top)
+            .map_or(Transform::IDENTITY, |t| t.placement);
         let a = &self.state.assembly;
         let path = crate::links::first_path(a, component, None).map_err(invalid)?;
-        let into = inverse(&self.path_transform(&path));
+        let into = top.after(&inverse(&self.path_transform(&path)));
         let own = |o: &OccurrenceUid| a.occurrence(*o).is_some_and(|o| o.component == component);
         let mut bodies = Vec::new();
         for instance in self.instances() {

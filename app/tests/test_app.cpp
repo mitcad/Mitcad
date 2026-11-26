@@ -1039,6 +1039,47 @@ void printTests() {
   CHECK(mitcad::printStartBodies({sketch}, instances, &selected).size() == 3);
   CHECK(!selected);
 
+  // While Isolate is on (mitcad#2475): a component selected and the bodies
+  // shown stand for the placements the view shows; a body selected in its
+  // placement stays that placement alone, though another occurrence shares
+  // the body, and only that placement is printed.
+  const mitcad::SelectionItem isolatedBase{mitcad::SelectKind::Component, QString(), QString(), QString(),
+                                           QStringLiteral("O2")};
+  CHECK(mitcad::printStartBodies({}, instances, &selected, {isolatedBase}) ==
+        mitcad::Selection({body("F2.b0", "O2/O4")}));
+  CHECK(!selected);
+  const mitcad::SelectionItem arm{mitcad::SelectKind::Component, QStringLiteral("C3"), QString(), QString(),
+                                  QStringLiteral("O1")};
+  CHECK(mitcad::printStartBodies({base}, instances, &selected, {isolatedBase}) ==
+        mitcad::Selection({body("F2.b0", "O2/O4")}));
+  CHECK(selected);
+  // A component outside the isolation shows nothing: the isolated bodies.
+  CHECK(mitcad::printStartBodies({arm}, instances, &selected, {isolatedBase}) ==
+        mitcad::Selection({body("F2.b0", "O2/O4")}));
+  CHECK(!selected);
+  // One body isolated in one of its two placements, a face of it selected.
+  const mitcad::Selection isolatedPin{body("F2.b0", "O1")};
+  CHECK(mitcad::printStartBodies({face}, instances, &selected, isolatedPin) ==
+        mitcad::Selection({body("F2.b0", "O1")}));
+  CHECK(selected);
+  CHECK(mitcad::printStartBodies({}, instances, &selected, isolatedPin) == isolatedPin);
+  CHECK(!selected);
+  files.clear();
+  for (const mitcad::PrintPiece& piece :
+       mitcad::printPieces({QStringLiteral("F2.b0")}, {QStringLiteral("Pin")}, instances, isolatedPin)) {
+    files << QStringLiteral("%1 %2 %3").arg(piece.body, piece.occurrence, piece.name);
+  }
+  CHECK(files == QStringList({QStringLiteral("F2.b0 O1 Pin (Arm:1)")}));
+  // Isolated items that are no body or component show nothing.
+  CHECK(mitcad::printStartBodies({}, instances, &selected, {sketch}).isEmpty());
+  // Send the Design's Plates starts on with plates, unless the bodies come
+  // from a printable selection or Isolate is on.
+  CHECK(mitcad::printPlatesAtStart(2, false, false));
+  CHECK(!mitcad::printPlatesAtStart(0, false, false));
+  CHECK(!mitcad::printPlatesAtStart(2, true, false));
+  CHECK(!mitcad::printPlatesAtStart(2, false, true));
+  CHECK(!mitcad::printPlatesAtStart(1, true, true));
+
   // The pieces with print bed faces to choose from (mitcad#857): two or
   // more choices, the file's own object first; the key does not depend on
   // the order of the faces.
@@ -1166,12 +1207,56 @@ void printTests() {
 
 // The AppImage's desktop file and icons in the user's data folder.
 void desktopEntryTests() {
-  // Exec runs the AppImage, quoted, with the specification's escapes.
+  // Exec runs the AppImage, quoted, with the specification's escapes;
+  // TryExec names it, and the X-AppImage keys that AppImage managers list
+  // programs by are there for a fresh entry (mitcad#2413).
+  const QString kVersion = QStringLiteral("1.2.3");
   const QString bundled = QStringLiteral("[Desktop Entry]\nName=Mitcad\nExec=mitcad\nIcon=mitcad\n");
-  CHECK(mitcad::desktopEntryFor(bundled, QStringLiteral("/home/a b/Mitcad.AppImage")) ==
-        QStringLiteral("[Desktop Entry]\nName=Mitcad\nExec=\"/home/a b/Mitcad.AppImage\"\nIcon=mitcad\n"));
-  CHECK(mitcad::desktopEntryFor(bundled, QStringLiteral("/x/$a\"b")) ==
-        QStringLiteral("[Desktop Entry]\nName=Mitcad\nExec=\"/x/\\\\$a\\\\\"b\"\nIcon=mitcad\n"));
+  CHECK(mitcad::desktopEntryFor(bundled, QStringLiteral("/home/a b/Mitcad.AppImage"), kVersion, QString()) ==
+        QStringLiteral("[Desktop Entry]\nName=Mitcad\nExec=\"/home/a b/Mitcad.AppImage\"\n"
+                       "TryExec=/home/a b/Mitcad.AppImage\nIcon=mitcad\nX-AppImage-Name=Mitcad\n"
+                       "X-AppImage-Version=1.2.3\n"));
+  CHECK(mitcad::desktopEntryFor(bundled, QStringLiteral("/x/$a\"b"), QString(), QString()) ==
+        QStringLiteral("[Desktop Entry]\nName=Mitcad\nExec=\"/x/\\\\$a\\\\\"b\"\nTryExec=/x/$a\"b\nIcon=mitcad\n"
+                       "X-AppImage-Name=Mitcad\n"));
+
+  // An entry an AppImage manager wrote for the same AppImage: its own keys
+  // (TryExec, X-AppImage-Name, a key of its own) and groups stay, the
+  // bundled keys are the bundled file's (Icon), the version is the running
+  // one's, and what the manager put around the program in Exec stays.
+  const QString manager = QStringLiteral("/home/u/AppImages/mitcad.appimage");
+  const QString shipped =
+      QStringLiteral("# A comment\n[Desktop Entry]\nType=Application\nName=MitCad\nExec=mitcad\nIcon=mitcad\n"
+                     "Terminal=false\n");
+  const QString managed =
+      QStringLiteral("[Desktop Entry]\nType=Application\nName=MitCad\n"
+                     "Exec=env DESKTOPINTEGRATION=1 /home/u/AppImages/mitcad.appimage %U\n"
+                     "TryExec=/home/u/AppImages/mitcad.appimage\nIcon=old-icon\nX-AppImage-Name=MitCad Manager\n"
+                     "X-AppImage-Version=0.9.0\nX-Manager-Key=kept\n\n"
+                     "[Desktop Action Remove]\nName=Remove\nExec=manager --remove\n");
+  const QString merged = mitcad::desktopEntryFor(shipped, manager, kVersion, managed);
+  CHECK(merged == QStringLiteral("# A comment\n[Desktop Entry]\nType=Application\nName=MitCad\n"
+                                 "Exec=env DESKTOPINTEGRATION=1 \"/home/u/AppImages/mitcad.appimage\" %U\n"
+                                 "TryExec=/home/u/AppImages/mitcad.appimage\nIcon=mitcad\nTerminal=false\n"
+                                 "X-AppImage-Name=MitCad Manager\nX-AppImage-Version=1.2.3\nX-Manager-Key=kept\n\n"
+                                 "[Desktop Action Remove]\nName=Remove\nExec=manager --remove\n"));
+  // Merged again: the same text, so nothing is written.
+  CHECK(mitcad::desktopEntryFor(shipped, manager, kVersion, merged) == merged);
+  // The same entry, another AppImage running (it moved): Exec and TryExec
+  // are this one's, without the manager's arguments; the manager's keys
+  // stay.
+  CHECK(mitcad::desktopEntryFor(shipped, QStringLiteral("/opt/MitCad.AppImage"), kVersion, managed) ==
+        QStringLiteral("# A comment\n[Desktop Entry]\nType=Application\nName=MitCad\n"
+                       "Exec=\"/opt/MitCad.AppImage\"\nTryExec=/opt/MitCad.AppImage\nIcon=mitcad\nTerminal=false\n"
+                       "X-AppImage-Name=MitCad Manager\nX-AppImage-Version=1.2.3\nX-Manager-Key=kept\n\n"
+                       "[Desktop Action Remove]\nName=Remove\nExec=manager --remove\n"));
+  // An entry an earlier MitCad wrote (no TryExec, Exec only the AppImage):
+  // the keys added; Windows line ends read as line ends.
+  CHECK(mitcad::desktopEntryFor(bundled, QStringLiteral("/apps/Mitcad.AppImage"), kVersion,
+                                QStringLiteral("[Desktop Entry]\r\nName=Mitcad\r\nExec=\"/apps/Mitcad.AppImage\"\r\n"
+                                               "Icon=mitcad\r\n")) ==
+        QStringLiteral("[Desktop Entry]\nName=Mitcad\nExec=\"/apps/Mitcad.AppImage\"\nTryExec=/apps/Mitcad.AppImage\n"
+                       "Icon=mitcad\nX-AppImage-Name=Mitcad\nX-AppImage-Version=1.2.3\n"));
 
   QTemporaryDir temp;
   const QString appDir = temp.filePath(QStringLiteral("AppDir"));
@@ -1188,15 +1273,16 @@ void desktopEntryTests() {
     QFile file(path);
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
   };
-  mitcad::DesktopIntegration result = mitcad::integrateAppImage(QStringLiteral("/apps/Mitcad.AppImage"), appDir, data);
+  mitcad::DesktopIntegration result =
+      mitcad::integrateAppImage(QStringLiteral("/apps/Mitcad.AppImage"), appDir, data, kVersion);
   CHECK(result.error.isEmpty());
   CHECK(result.written.size() == 3);
   CHECK(result.written.last() == data + QStringLiteral("/applications/mitcad.desktop"));
   CHECK(read(data + QStringLiteral("/applications/mitcad.desktop")).contains("\nExec=\"/apps/Mitcad.AppImage\"\n"));
   CHECK(read(data + QStringLiteral("/icons/hicolor/256x256/apps/mitcad.png")) == "256");
   // Started again: nothing to write; the AppImage moved: only the desktop file.
-  CHECK(mitcad::integrateAppImage(QStringLiteral("/apps/Mitcad.AppImage"), appDir, data).written.isEmpty());
-  result = mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data);
+  CHECK(mitcad::integrateAppImage(QStringLiteral("/apps/Mitcad.AppImage"), appDir, data, kVersion).written.isEmpty());
+  result = mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data, kVersion);
   CHECK(result.written == QStringList{data + QStringLiteral("/applications/mitcad.desktop")});
 
   // File managers' thumbnails (mitcad#1539): the entry runs the copy of
@@ -1213,7 +1299,7 @@ void desktopEntryTests() {
   CHECK(write(appDir + QStringLiteral("/usr/bin/mitcad-thumbnailer"), "program"));
   CHECK(write(appDir + QStringLiteral("/usr/share/thumbnailers/mitcad.thumbnailer"), entry.toUtf8()));
   CHECK(write(appDir + QStringLiteral("/usr/share/mime/packages/mitcad.xml"), "<mime-info/>"));
-  result = mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data);
+  result = mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data, kVersion);
   const QString copy = data + QStringLiteral("/mitcad/bin/mitcad-thumbnailer");
   CHECK(result.error.isEmpty());
   CHECK(result.written == (QStringList{copy, data + QStringLiteral("/mime/packages/mitcad.xml"),
@@ -1225,9 +1311,24 @@ void desktopEntryTests() {
   CHECK(read(data + QStringLiteral("/mime/packages/mitcad.xml")) == "<mime-info/>");
   CHECK(read(data + QStringLiteral("/thumbnailers/mitcad.thumbnailer"))
             .contains(QStringLiteral("\nExec=\"%1\" %i %o %s\n").arg(copy).toUtf8()));
-  CHECK(mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data).written.isEmpty());
+  CHECK(mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data, kVersion).written.isEmpty());
+  // An AppImage manager's entry in the data folder (mitcad#2413): merged,
+  // its keys kept; started again, nothing to write; updated to another
+  // version, only the desktop file.
+  const QString desktopFile = data + QStringLiteral("/applications/mitcad.desktop");
+  CHECK(write(desktopFile, "[Desktop Entry]\nName=Mitcad\nExec=/opt/Mitcad.AppImage\n"
+                           "TryExec=/opt/Mitcad.AppImage\nX-AppImage-Name=Mitcad\nX-Manager-Key=kept\n"));
+  result = mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data, kVersion);
+  CHECK(result.error.isEmpty() && result.written == QStringList{desktopFile});
+  CHECK(read(desktopFile) == "[Desktop Entry]\nName=Mitcad\nExec=\"/opt/Mitcad.AppImage\"\n"
+                             "TryExec=/opt/Mitcad.AppImage\nIcon=mitcad\nX-AppImage-Name=Mitcad\n"
+                             "X-AppImage-Version=1.2.3\nX-Manager-Key=kept\n");
+  CHECK(mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data, kVersion).written.isEmpty());
+  result = mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data, QStringLiteral("1.2.4"));
+  CHECK(result.written == QStringList{desktopFile});
+  CHECK(read(desktopFile).contains("\nX-AppImage-Version=1.2.4\n"));
   // No AppDir: an error, nothing written.
-  result = mitcad::integrateAppImage(QStringLiteral("/a"), temp.filePath(QStringLiteral("none")), data);
+  result = mitcad::integrateAppImage(QStringLiteral("/a"), temp.filePath(QStringLiteral("none")), data, kVersion);
   CHECK(!result.error.isEmpty() && result.written.isEmpty());
 }
 

@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: MIT
+# Shell with faces of their own thickness (mitcad#2443; app/COMMANDS.md
+# "Shell: faces with their own thickness"), on shell-own-thickness.json (a
+# box 60 x 40 x 30 from the origin, Box1, F1, F1.b0, 72000 mm3):
+#   1. Shell: Own Thickness, Add Faces (the new row's Faces active), the
+#      front (F1:side0, y 0) picked into it; Faces/Body activated and the
+#      top picked (removed); Inside 2 mm, the row's Inside Thickness 5 mm:
+#      the cavity 56 x 33 x 28, the wall 20256 mm3.
+#   2. Shell1 reopened: the row loaded with its 5 mm; edited to 4 mm: the
+#      cavity 56 x 34 x 28, the wall 18688 mm3.
+# Run by tools/ui-shell-own-thickness-test.sh (Linux),
+# tools/ui-windows-shell-own-thickness-test.ps1 (Windows) and
+# tools/ui-macos-shell-own-thickness-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The front in a row of its own thickness, the top removed.
+mark
+command solid.shell
+wait-log '^Command Shell started' 30
+wait-log '^Pick face F1[.]b0/F1:side0 at ' 20
+wait-log '^Panel Shell add face_thicknesses at ' 20
+wait-idle 30
+mark
+click-logged '^Panel Shell add face_thicknesses at '
+wait-log '^Shell: added face_thicknesses row 1$' 20
+wait-log '^Panel Shell input face_thicknesses[.]0[.]inside at ' 20
+wait-idle 30
+mark
+click-pick 'face F1[.]b0/F1:side0 at '
+wait-log '^Shell Faces: 1 face' 20
+wait-idle 30
+mark
+click-logged '^Panel Shell input faces at '
+wait-idle 30
+click-pick 'face F1[.]b0/F1:top at '
+wait-log '^Shell Faces/Body: 1 face' 20
+wait-idle 30
+mark
+type-in '^Panel Shell input face_thicknesses[.]0[.]inside at ' '5 mm'
+wait-log '^Preview Shell: ok' 60
+wait-idle 30
+mark
+button '^OK$'
+wait-log '^Added shell removing 1 face[(]s[)], 1 face[(]s[)] at their own thickness$' 60
+wait-idle 60
+capture first 'Body \S+ [(]F1[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${first} 20256 1e-6 0.01
+wait-log '^Timeline Shell1 at ' 30
+
+# 2. Reopened, the row's thickness edited.
+mark
+dblclick-logged '^Timeline Shell1 at '
+wait-log 'Editing F2 with Shell' 30
+wait-log '^Preview Shell: ok' 60
+wait-idle 30
+expect-input-text face_thicknesses.0.inside '^5 mm$'
+mark
+type-in '^Panel Shell input face_thicknesses[.]0[.]inside at ' '4 mm'
+wait-log '^Preview Shell: ok' 60
+wait-idle 30
+mark
+button '^OK$'
+wait-idle 60
+capture second 'Body \S+ [(]F1[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${second} 18688 1e-6 0.01
+expect-never 'Failed features: [^n]|Recompute failed|TestDriver: FAIL'

@@ -153,6 +153,7 @@ struct JointHighlight;
 struct FileVersion;
 struct MountPart;
 struct RecoverableSession;
+class ToolbarPanelReveal; // the hidden toolbar panel's reveal (mitcad#2426)
 
 namespace sketch {
 class SketchPalette;
@@ -562,7 +563,17 @@ public:
   // Create Drawing (`component`'s, the root's "C0"); `fromSelection`
   // (File › Create Drawing, mitcad#2399): of the root's bodies and
   // occurrences selected, when there are any (selectionDrawingSubject).
-  void createDrawingOf(const QString& component, bool fromSelection);
+  // `flatBody` (Create Drawing of Flat Pattern, mitcad#2446): the drawing
+  // is named for that sheet-metal body's Flat Pattern, which is placed on
+  // it at once (a cut sheet: of that body).
+  void createDrawingOf(const QString& component, bool fromSelection, const QString& flatBody = QString());
+  // Create Drawing of Flat Pattern (mitcad#2446; the Flat Pattern row's
+  // menu, the Sheet Metal tab): a new drawing of the root, asked for as
+  // Create Drawing asks, with `body`'s Flat Pattern placed at Fit the Sheet.
+  void createFlatPatternDrawing(const QString& body) override;
+  // The Flat Patterns the open drawing's Flat Pattern View can show
+  // (mitcad#2446, drawings::flatPatternChoices); none without a drawing.
+  QList<QPair<QString, QString>> drawingFlatPatterns() const;
   drawings::SelectionSubject selectionDrawingSubject() const;
   bool isDrawingOpen() const override { return drawingOpen(); }
   // A drawing's sheet drawn in a job (mitcad#1997, DocumentSession::queryAsync).
@@ -1807,7 +1818,27 @@ private:
   bool importPointFile(const QString& path, bool interactive, QString* error);
   void insertMesh();
   void insertDxf();
-  void insertComponent(const QString& path = QString());
+  // Insert Component: `path` asked for when empty; `at` an
+  // insert_component `transform` (a drop's place, mitcad#2428), else the
+  // origin.
+  void insertComponent(const QString& path = QString(), const QJsonValue& at = QJsonValue());
+  // Why `path` cannot be inserted into this design (mitcad#2428): it is
+  // this design, or it links it (directly or through other designs), said
+  // in words for the message band; empty when it can be.
+  QString insertRefusal(const QString& path);
+  // A design of the Projects panel dragged onto the 3D view (mitcad#2428,
+  // files/MainWindowFiles.cpp): whether the view is under the global point
+  // (not a card or panel over it, not the Start page), and the drop there:
+  // refused at once when insertRefusal says so, else inserted through
+  // Insert Component at the face under the drop, as dropped files are
+  // (dropTransform), waiting while a command is open (Arrival::project).
+  bool viewTakesProjectDesign(const QPoint& global) const;
+  void dropProjectDesign(const QString& path, const QPoint& global);
+  void insertDroppedDesign(const QString& path, std::optional<QPointF> onView);
+  // insert_component's `transform` for a drop at a place of the view
+  // (mitcad#1894): at the point of the face there, its Z along the face's
+  // normal, in the active component's coordinates; null over empty space.
+  QJsonValue dropTransform(const QPointF& onView);
   void insertOpenDesign();
   // Insert › Component from Web (mitcad#1579, webbrowser/MainWindowComponentWeb.cpp):
   // the command where Qt WebEngine is built in, its window (one per design
@@ -1860,6 +1891,7 @@ private:
     bool web = false;   // a download (else a drop)
     std::optional<QPointF> onView; // a drop's place on the view
     QString waitedFor;  // what it waited for (empty: only for the model or those before it)
+    bool project = false; // a design of the Projects panel, inserted with Insert Component (mitcad#2428)
   };
   QList<Arrival> m_arrivals;
   // The kept copies' folders (WebDownloadFolders), while any waits.
@@ -1887,6 +1919,10 @@ private:
   // Files dropped on the window (openDropped) by the gate: as from Idle, at
   // once beside an inspection, or waiting.
   void arriveDropped(const QStringList& paths, std::optional<QPointF> onView);
+  // A design dragged from the Projects panel onto the view (mitcad#2428):
+  // inserted now from Idle, else kept until the open command, an
+  // inspection too, closes.
+  void arriveProjectDesign(const Arrival& arrival);
   void openDroppedNow(const QStringList& paths, std::optional<QPointF> onView);
   // The web browser component (CEF and the module, BrowserComponent.hpp):
   // the installed one's window, the first download (asked once, with its
@@ -1917,6 +1953,14 @@ private:
   void leaveTutorial();
   // The step's target in this window's coordinates; null when not shown.
   QRect guideTargetRect(const GuideStep& step) const;
+  // The names a guide step may give the plane or face `item` a sketch goes
+  // on (mitcad#2440, GuideStep::planeMatches): "xy" (an origin plane), a
+  // construction plane's uid and name, "face" and the face's reference;
+  // in `shown` the one for the log and the events.
+  QStringList guidePlaneNames(const SelectionItem& item, QString* shown) const;
+  // Whether the step shown lets a sketch be made on `item` (createSketchOnPick):
+  // a step on another plane holds it back with its note.
+  bool guideAllowsPlane(const SelectionItem& item);
   TutorialGuide* m_guide = nullptr;
   // The tutorial pane (tutorials/MainWindowTutorials.cpp): a tutorial
   // package's pages on the web browser component (downloaded first when it
@@ -2161,6 +2205,13 @@ private:
   void printCurrent();
   void logPrintTarget();
   QString m_loggedPrintTarget;
+  // File › Drawing Book… (mitcad#2448; printing/MainWindowDrawingBook.cpp):
+  // the drawings of the design and of its linked designs chosen and put in
+  // order (drawings/DrawingBookDialog), kept with the design, and printed
+  // as one job with the optional cover page first.
+  CommandDef drawingBookCommand();
+  void editDrawingBook();
+  void printDrawingBook();
   // `whole`: the occurrences selected as components when the panel
   // started (paths of uids), each sent whole as one 3MF object (mitcad#856).
   // `bedFaces`: the print bed faces chosen for 3MF pieces with several
@@ -3348,6 +3399,22 @@ private:
   std::vector<float> m_camMachineLines;
   QString m_loggedCamSubSpindle;
   void showCamSubSpindle(int operation, const QString& name);
+  // A lathe setup's fixed and moving zones and its turret's body as
+  // Simulate draws them (mitcad#2412): cam_simulate's `zones` and `turret`
+  // per operation with the setup's name and work frame, added to
+  // m_camMachineLines after the sub-spindle at the slider's place (the
+  // turret round the tool's point in the work coordinates; "CAM zones
+  // drawn: …", "CAM turret drawn: …"), cleared with the stock.
+  struct CamMachineDrawn {
+    QString setup;
+    QJsonArray zones;
+    QJsonArray turret;
+    cam::WorkFrame frame;
+  };
+  std::optional<CamMachineDrawn> m_camMachineDrawn;
+  QString m_loggedCamZones;
+  QString m_loggedCamTurret;
+  void showCamMachineParts(int operation, const QString& name, const cam::Point3& tip);
   // Post Process…: the setup, its controller and units asked (its own by
   // default), cam_post written through the save dialog with the dialect's
   // extension ("CAM post written: <path>: grbl, millimetres, 40 lines").
@@ -3586,6 +3653,57 @@ private:
   QString m_loggedExplode;
   // The command the shown explode was last logged as kept for (UI tests).
   QString m_loggedExplodeKept;
+
+  // View › Toolbar Panel (mitcad#2426, GitHub mitcad/Mitcad#571;
+  // MainWindowToolbarPanel.cpp): the toolbar panel hidden in every window
+  // and design by one setting (view/toolbarPanelHidden, kept between
+  // starts), shown for a while by a rest of the pointer at the view's top
+  // edge (ToolbarPanelReveal). The Start page hides it as before; leaving
+  // the page gives the user's state back.
+  void registerToolbarPanelCommands();
+  // After the panels: the entry's check mark, the reveal, the kept state.
+  void setUpToolbarPanelHiding();
+  // The setting for every window, logged and said once (the way back).
+  void setToolbarPanelHiddenEverywhere(bool hidden);
+  // The setting applied to this window: its panel hidden or shown, the
+  // reveal's band, the entry's check mark.
+  void applyToolbarPanelHidden();
+  bool toolbarPanelRevealed() const;
+  // The panel shown over the view and back (the reveal's hooks), and the
+  // band's place in its parent (none while the panel shows or over the
+  // Start page).
+  void revealToolbarPanel();
+  void concealToolbarPanel(const QString& how);
+  QRect toolbarPanelBand() const;
+  // The widget that shows: the Floating layout's panel row (the ribbon),
+  // the Docked layout's panel; null without either (the AppKit frontend,
+  // the macOS Docked toolbar of MITCAD_MAC_UI).
+  QWidget* toolbarPanelWidget() const;
+  // A command's panel opened (startFeatureCommand): started from the
+  // revealed toolbar panel, the panel stays until the command ends
+  // (mitcad#2472, ToolbarPanelReveal::keepFor).
+  void keepToolbarPanelFor(CommandSession& session);
+  ToolbarPanelReveal* m_toolbarPanelReveal = nullptr;
+  // Kept for a command's panel, the revealed panel takes its room as when
+  // shown (keepToolbarPanelFor) until it goes (concealToolbarPanel).
+  bool m_toolbarPanelRoom = false;
+  bool m_toolbarPanelHidden = false;
+
+  // The timeline's History list (mitcad#2427, GitHub mitcad/Mitcad#581;
+  // browser/MainWindowTimelineList.cpp): Preferences › Display › Timeline
+  // shows the timeline as the bottom strip or as the History list in the
+  // left column under the Browser, its panel moved there: the same
+  // "timelineDock" dock split under the Browser's (Docked) or card stacked
+  // under the Browser's in the left column (Floating), with the sketch's
+  // items in its place while a sketch is edited. Followed at once, logged
+  // "Timeline panel: history list under the Browser" or "Timeline panel:
+  // strip at the bottom".
+  void followTimelinePresentation();
+  void applyTimelinePresentation();
+  // The Floating card's content height for its page in sight.
+  int timelineCardContentHeight() const;
+  QPointer<GlassCard> m_timelineCard; // Floating
+  QString m_loggedTimelinePanel;
 };
 
 } // namespace mitcad

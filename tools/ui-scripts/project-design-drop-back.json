@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design of the Projects panel dropped onto the 3D view (mitcad#2428), tools/ui-scripts/project-design-drop.mitcad-ui: back.mitcad, run in the project's folder, links the open design assembly.mitcad, so its drop onto that design is refused."},
+  {"cmd": "insert_component", "path": "assembly.mitcad"},
+  {"expect": {"bodies": 1, "instances": 1, "world_volume": 8000}}
+]

@@ -17,8 +17,12 @@
 #     message band's row above the timeline (mitcad#1042; the timeline's
 #     top without a message) less the gap, the rows scroll, and the
 #     scroll bar is at the card's left, left of the rows.
-#   - Back to Card at once: the place beside the rows is gone, and a click
-#     there is the card's again (the plate is not picked).
+#   - The wheel between two rows' boxes (mitcad#2414) scrolls the rows to
+#     the top and to the bottom, and past either end it still does not reach
+#     the view, nor on a row; beside the rows the wheel is the view's.
+#   - Back to Card at once: the places beside and between the rows are
+#     gone, a click there is the card's again (the plate is not picked),
+#     and the wheel on the card's rows scrolls them, not the camera.
 # The Windows counterpart is tools/ui-windows-browser-rows-test.ps1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -118,6 +122,37 @@ browser_height_becomes() {
 
 # scroll_range: the rows' last logged vertical scroll range.
 scroll_range() { grep -o '^Browser scroll range [0-9]*$' "$UI_LOG" | tail -1 | grep -o '[0-9]*$'; }
+
+# browser_scroll: where the rows are scrolled to, as last logged.
+browser_scroll() { grep -o '^Browser scroll [0-9]*$' "$UI_LOG" | tail -1 | grep -o '[0-9]*$'; }
+
+# scroll_becomes eq|lt|gt value description: waits until the rows' logged
+# scroll compares so with the value.
+scroll_becomes() {
+  local now
+  for _ in $(seq 1 25); do
+    now=$(browser_scroll)
+    [ -n "$now" ] && [ "$now" -"$1" "$2" ] && { echo "ok   $3 ($now)"; return 0; }
+    sleep 0.2
+  done
+  ui_fail "$3: the rows are scrolled to $now, not $1 $2"
+}
+
+# wheel_logged "place" button notches: wheel notches (4 up, 5 down) at a
+# logged place (ui_step syncs after them).
+wheel_logged() {
+  local at
+  at=$(ui_logged_at "$1") || exit 1
+  ui_step "$3 wheel notch(es) $([ "$2" = 4 ] && echo up || echo down) at '$1'" \
+    xdotool mousemove $at click --repeat "$3" --delay 30 "$2"
+}
+
+# no_view_wheel description: the view got no wheel since the mark (it logs
+# "View wheel at" when it does).
+no_view_wheel() {
+  [ "$(count_new "View wheel at")" = 0 ] || ui_fail "$1 reached the view: $(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "View wheel at" | head -1)"
+  echo "ok   $1 did not reach the view"
+}
 
 ui_start_display
 # The default layout: Floating (mitcad#429).
@@ -225,15 +260,60 @@ read -r RX _ <<< "$(ui_logged_at "Browser Root")"
 [ "$SX" -lt "$RX" ] || ui_fail "the scroll bar at x $SX is not left of the rows (Root at $RX)"
 echo "ok   the rows scroll ($(scroll_range)); the scroll bar at the card's left ($SX, Root's name at $RX)"
 
+echo "--- The wheel between the rows scrolls them, never the camera (mitcad#2414)"
+ui_sync
+ui_place_valid "Browser between rows" || ui_fail "no place between two rows' boxes is logged"
+ui_mark
+# Up to the top (the rows may start scrolled), and on past it.
+wheel_logged "Browser between rows" 4 40
+scroll_becomes eq 0 "the wheel between the rows scrolled them to the top"
+wheel_logged "Browser between rows" 4 3
+scroll_becomes eq 0 "the wheel up between the rows at the top"
+no_view_wheel "the wheel between the rows at the top"
+ui_mark
+wheel_logged "Browser between rows" 5 3
+scroll_becomes gt 0 "the wheel down between the rows scrolls them"
+no_view_wheel "the wheel down between the rows"
+ui_mark
+# Down to the bottom, and on past it, between the rows and on a row.
+wheel_logged "Browser between rows" 5 60
+scroll_becomes eq "$(scroll_range)" "the wheel between the rows scrolled them to the bottom"
+wheel_logged "Browser between rows" 5 3
+ui_step "the wheel down on a row"        ui_browser_wheel down
+scroll_becomes eq "$(scroll_range)" "the wheel down between the rows and on a row at the bottom"
+no_view_wheel "the wheel between the rows and on a row at the bottom"
+# Beside the rows the wheel is the view's: a notch in (the plate still
+# fills the view for the click below).
+ui_mark
+wheel_logged "Browser view beside the rows" 4 1
+ui_expect_new "View wheel at" "the wheel beside the rows reached the view"
+scroll_becomes eq "$(scroll_range)" "the rows did not scroll with the wheel beside them"
+read -r BX BY <<< "$(ui_logged_at "Browser view beside the rows")"
+
 echo "--- Back to Card"
 set_background card Up
 ui_expect_new "Browser view beside the rows out of sight" "the place beside the rows is gone"
+ui_expect_new "Browser between rows out of sight" "the place between the rows is gone"
 ui_mark
 ui_step "click where the rows left room" xdotool mousemove "$BX" "$BY" click 1
 sleep 0.5
 # The card's tree may select the row there; the plate behind is not picked.
 [ "$(count_new "Selected: 1 face")" = 0 ] || ui_fail "the click went past the card to the view"
 echo "ok   the card takes the click again"
+# The card's rows still scroll with the wheel (mitcad#2414), the camera
+# stays.
+ui_sync
+[ "$(scroll_range)" -gt 0 ] || ui_fail "the card's rows do not scroll"
+S0=$(browser_scroll)
+ui_mark
+if [ "$S0" -gt 0 ]; then
+  ui_step "the wheel up on a row of the card"   ui_browser_wheel up
+  scroll_becomes lt "$S0" "the card's rows scroll up with the wheel"
+else
+  ui_step "the wheel down on a row of the card" ui_browser_wheel down
+  scroll_becomes gt "$S0" "the card's rows scroll down with the wheel"
+fi
+no_view_wheel "the wheel on the card's rows"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 
 ui_finish "UI browser rows test"

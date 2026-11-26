@@ -10,6 +10,14 @@
 //!   one of the document of that name is used again), and the faces get it
 //!   as their appearance in the import's undo step. The body's colour stays
 //!   as it was (the base body's colour).
+//! - Bodies (mitcad#2423): a body's own colour in the file, which the base
+//!   body keeps, becomes the body's appearance in the same way (the
+//!   appearance of its colour, shared with faces of that colour), so that
+//!   the view, which draws appearances, shows it: a STEP or IGES import
+//!   flat or as components. The appearances are made before the base
+//!   features and set on the bodies in the change that adds them
+//!   ([`Document::body_color_looks`]), so that the import's recompute stays
+//!   its last (the `recomputed` count of its result).
 //! - Export: the faces with appearances of their own are written in their
 //!   appearances' display colours beside the body's colour
 //!   ([`ExportBody::face_colors`]); the kernel writes them to STEP and IGES
@@ -17,9 +25,10 @@
 
 use std::collections::BTreeMap;
 
-use super::FaceColor;
+use super::{BaseInput, FaceColor};
 use crate::appearance::AppearanceChange;
 use crate::document::{Document, ModelError};
+use crate::features::Operation;
 use crate::ids::BodyUid;
 use crate::kernel::Kernel;
 
@@ -41,7 +50,7 @@ fn bytes(color: [f64; 3]) -> [u8; 3] {
     color.map(|c| (c * 255.0).round().clamp(0.0, 255.0) as u8)
 }
 
-/// The name of the appearance of an imported face colour.
+/// The name of the appearance of an imported body or face colour.
 fn appearance_name(color: [f64; 3]) -> String {
     let [r, g, b] = bytes(color);
     format!("Imported color {r} {g} {b}")
@@ -68,10 +77,10 @@ impl<K: Kernel> Document<K> {
             .collect()
     }
 
-    /// The document appearance of an imported face colour: the one made
-    /// for its bytes in this import, else an appearance of the document of
-    /// its name and colour, else a new one.
-    fn face_color_appearance(
+    /// The document appearance of an imported body or face colour: the one
+    /// made for its bytes in this import, else an appearance of the
+    /// document of its name and colour, else a new one.
+    fn color_appearance(
         &mut self,
         color: [f64; 3],
         made: &mut BTreeMap<[u8; 3], String>,
@@ -152,7 +161,7 @@ impl<K: Kernel> Document<K> {
             }
             for (color, faces) in groups.into_values() {
                 let set = self
-                    .face_color_appearance(color, &mut made)
+                    .color_appearance(color, &mut made)
                     .and_then(|id| self.set_face_appearance(input.body, &faces, Some(&id)));
                 if let Err(e) = set {
                     warnings.push(format!("{label}: the colors of its faces: {e}"));
@@ -165,5 +174,47 @@ impl<K: Kernel> Document<K> {
             }
         }
         warnings
+    }
+
+    /// The appearances of the colours of the new bodies of base features an
+    /// import is about to add (mitcad#2423, see the module documentation),
+    /// made now: per feature, per body the appearance id (none for a body
+    /// without a colour, which keeps its material's look, and for a feature
+    /// that makes no new bodies), and per feature what could not be done,
+    /// in words. Each appearance made is an undo step of its own; the
+    /// import merges them into its step.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn body_color_looks(
+        &mut self,
+        features: &[BaseInput<K::Shape>],
+    ) -> (Vec<Vec<Option<String>>>, Vec<Vec<String>>) {
+        let mut made = BTreeMap::new();
+        let mut looks = Vec::with_capacity(features.len());
+        let mut warnings = Vec::with_capacity(features.len());
+        for base in features {
+            let mut ids = Vec::with_capacity(base.bodies.len());
+            let mut said = Vec::new();
+            let new_bodies = matches!(base.operation, Operation::NewBody | Operation::NewComponent);
+            for (i, body) in base.bodies.iter().enumerate() {
+                let Some(color) = body.color.filter(|_| new_bodies) else {
+                    ids.push(None);
+                    continue;
+                };
+                match self.color_appearance(color, &mut made) {
+                    Ok(id) => ids.push(Some(id)),
+                    Err(e) => {
+                        let label = match body.name.as_deref().map(str::trim) {
+                            Some(name) if !name.is_empty() => name.to_owned(),
+                            _ => format!("body {i}"),
+                        };
+                        said.push(format!("{label}: its color: {e}"));
+                        ids.push(None);
+                    }
+                }
+            }
+            looks.push(ids);
+            warnings.push(said);
+        }
+        (looks, warnings)
     }
 }

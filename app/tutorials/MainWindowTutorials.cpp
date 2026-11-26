@@ -670,18 +670,17 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
     result = {{QStringLiteral("stopped"), playing}};
   } else if (call == QLatin1String("shortcut")) {
     // A command's keys as the learner has them now (mitcad#2366, GitHub
-    // mitcad/Mitcad#625): an empty list for a command with none.
-    const QString id = args.value(QStringLiteral("command")).toString();
-    const CommandDef* def = m_registry->find(id);
-    if (def == nullptr) {
-      *error = QStringLiteral("MitCad has no command %1").arg(id);
+    // mitcad/Mitcad#625; mitcad#2439): an empty list for a command with
+    // none; read at each call, so a key changed in Keyboard Shortcuts is in
+    // the next answer.
+    if (!guideShortcutAnswer(*m_registry, args.value(QStringLiteral("command")).toString(), &result, error)) {
       return false;
     }
-    result = {{QStringLiteral("command"), def->id},
-              {QStringLiteral("name"), def->name},
-              {QStringLiteral("shortcuts"), guideShortcutsJson(m_registry->effectiveShortcuts(def->id))}};
   } else if (call == QLatin1String("navigation")) {
-    // The view's gestures of the learner's navigation scheme (mitcad#2366).
+    // The view's gestures of the learner's navigation scheme (mitcad#2366),
+    // the mouse's and the trackpad's each on its own (mitcad#2439): the
+    // view's settings now, so a scheme or gesture changed in Preferences is
+    // in the next answer.
     if (m_viewer == nullptr) {
       *error = QStringLiteral("This window has no 3D view");
       return false;

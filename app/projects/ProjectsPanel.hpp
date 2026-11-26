@@ -95,6 +95,12 @@ public:
     // Projects card, or shows the panel or its dock), false once the naming
     // has ended (the window puts the panel back as it was).
     std::function<void(bool)> showForNaming;
+    // A design row dragged out of the panel onto the 3D view (mitcad#2428):
+    // whether the view takes a design at the global point (the open
+    // design's view is there, not a panel or card over it), and the drop
+    // there, which inserts the design (absolute path) as a component.
+    std::function<bool(const QPoint&)> viewTakesDesign;
+    std::function<void(const QString&, const QPoint&)> designDroppedOnView;
   };
 
   // The kinds of rows. Message: the refusal of a name typed, below the row
@@ -330,6 +336,10 @@ private:
   // A row dragged onto another: the folder it moves to, or none.
   bool dropTarget(const QTreeWidgetItem* dragged, const QTreeWidgetItem* over, QString* folder) const;
   void dropped(QTreeWidgetItem* dragged, QTreeWidgetItem* over);
+  // A design row dragged out of the panel (mitcad#2428): whether the 3D
+  // view at the global point takes it, and the drop there (Host).
+  bool viewTakes(const QTreeWidgetItem* dragged, const QPoint& global) const;
+  void droppedOnView(QTreeWidgetItem* dragged, const QPoint& global);
 
   Host m_host;
   ProjectsTreeWidget* m_tree = nullptr;

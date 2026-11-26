@@ -442,6 +442,37 @@ first, the file counts the new piece alone). The rest, with the cause:
   entity of another document; the fix is in the extrusion, not in the
   references.
 
+### A grounded occurrence placed along the paths inside it (mitcad#2449)
+
+A reported assembly package grounds its shell, a component of another
+document that holds the robot's frame parts (21 occurrences), and the
+file keeps the shell's placement only along the paths inside it, as
+*Occurrences moved by a part inside them* above describes: the shell's
+own object has the identity its insert gave it, the paths give it a
+move of 53.015 mm ((0, 1.856, 52.983) mm), which the shell's own file
+does not have. The placements worked out from the paths were left out
+for grounded occurrences (`captures::read_steps`: MitCad does not move a
+grounded occurrence), so the shell stayed at the identity and every part
+in it was 53.015 mm from where the file and its STEP export have it.
+Now an occurrence placed along the paths inside
+it takes that placement even where it is grounded
+(`Captures::worked_out`; the import frees it for the move and grounds it
+again); a grounded occurrence the file stores a placement of keeps its
+stored one. On the package the shell's parts are now where the STEP
+export has them (889 of its 3534 solids have a body of the import within
+0.1 mm, 872 before). Most of the rest are in three assemblies of an
+older file layout and in the printed circuit boards' inner levels: those
+assemblies (written by builds 2.0.7463 to 2.0.9305) keep no external
+documents in the MetaStream's tail; their occurrence objects name the
+other document's component as `01 | u64 id | 01 | u32 0 | str16 GUID |
+00 | str8 class GUID | str16 role GUID | 00`, the role GUID being the
+one the file's `RedirectionsStream.dat` gives the referenced file
+(`references[].properties.neutronRole`, with the designs' URNs), and
+their transforms lie further in the object. The decoder reads neither,
+so those occurrences have no document and the assemblies come in empty.
+Test: `core.import`
+(`a_grounded_occurrence_placed_along_paths_inside_it_takes_their_placement`).
+
 ## Derived designs (mitcad#324)
 
 A derive item (`DerivedContext`) brings bodies of other documents into

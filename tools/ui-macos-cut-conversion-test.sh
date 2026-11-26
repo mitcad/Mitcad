@@ -25,12 +25,10 @@ for phase in direct fresh; do
 done
 for operation in Join NewBody; do
   if [ "$operation" = Join ]; then
-    export MITCAD_CONVERSION_START_KEY=Down
     export MITCAD_CONVERSION_START_LABEL=Join
     export MITCAD_CONVERSION_START_COUNT=2
     export MITCAD_CONVERSION_START_VOLUME=8640
   else
-    export MITCAD_CONVERSION_START_KEY=Home
     export MITCAD_CONVERSION_START_LABEL='New Body'
     export MITCAD_CONVERSION_START_COUNT=3
     export MITCAD_CONVERSION_START_VOLUME=8800

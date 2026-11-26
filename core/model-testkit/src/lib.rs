@@ -1645,9 +1645,28 @@ impl Kernel for MockKernel {
         spec: &ShellSpec<'_>,
     ) -> Result<MockShape, KernelError> {
         self.call("shell")?;
+        // Faces with their own thickness (mitcad#2443), when there are any:
+        // `,own=<face>:<inside>/<outside>;…`.
+        let own = if spec.own.is_empty() {
+            String::new()
+        } else {
+            let faces: Vec<String> = spec
+                .own
+                .iter()
+                .map(|own| {
+                    format!(
+                        "{}:{}/{}",
+                        own.face,
+                        number(own.inside),
+                        number(own.outside)
+                    )
+                })
+                .collect();
+            format!(",own={}", faces.join(";"))
+        };
         let mut shape = MockShape::merged(
             format!(
-                "shell({},{},{})",
+                "shell({},{},{}{own})",
                 body.history,
                 number(spec.inside),
                 number(spec.outside)
@@ -1691,10 +1710,13 @@ impl Kernel for MockKernel {
         body: &MockShape,
         _faces: &[FaceName],
         distance: f64,
+        tangent_chain: bool,
     ) -> Result<MockShape, KernelError> {
         self.call("offset_faces")?;
+        // The tangent chain (mitcad#2438) is marked only where it is on.
+        let chain = if tangent_chain { ",tangent_chain" } else { "" };
         Ok(MockShape {
-            history: format!("offset({},{})", body.history, number(distance)),
+            history: format!("offset({},{}{chain})", body.history, number(distance)),
             ..body.clone()
         })
     }

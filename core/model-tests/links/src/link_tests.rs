@@ -10,6 +10,7 @@ use mitcad_model::Document;
 use mitcad_model::features::SketchPlane;
 use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::kernel::Curve3;
+use mitcad_model::reorient::{Turn, TurnAxis};
 use mitcad_model::test_support::allow_attachments;
 use mitcad_model::test_support::{extrude, num};
 use mitcad_model::testing::MockKernel;
@@ -552,7 +553,7 @@ fn copied_links(
     let projection = &sketch.1.projections[0];
     assert_eq!(projection.body, Some(tool));
     assert_eq!(projection.link.as_ref(), Some(link));
-    let mitcad_model::features::SketchPlane::Face { face, body } = &sketch.1.plane else {
+    let mitcad_model::features::SketchPlane::Face { face, body, .. } = &sketch.1.plane else {
         panic!("copied sketch lost its face plane");
     };
     assert_eq!(*body, Some(tool));
@@ -794,7 +795,7 @@ fn links_picked_in_another_instance_of_the_subassembly_stay_external() {
                 if s.plane_link.as_ref().is_some_and(|l| l.source == source) =>
             {
                 external_sketches += 1;
-                let mitcad_model::features::SketchPlane::Face { body, face } = &s.plane else {
+                let mitcad_model::features::SketchPlane::Face { body, face, .. } = &s.plane else {
                     panic!("external plane remains a face");
                 };
                 assert_eq!(*body, Some(tool));
@@ -1528,4 +1529,59 @@ fn a_join_that_touches_only_a_child_occurrences_body_names_it() {
     doc.edit_feature(join, &extrude(sketch, &[&region], 5.0, "new_body", &[]))
         .unwrap();
     assert!(doc.status(join).unwrap().is_ok(), "{:?}", doc.status(join));
+}
+
+#[test]
+fn a_sketch_on_a_face_of_another_component_turns_with_the_design() {
+    // B's sketch on A's top face, linked (mitcad#100), keeps the frame it
+    // was placed with in B's coordinates (mitcad#2409). Reorient Design
+    // turns both components in their own coordinates and the occurrences
+    // with them, so the face, seen in B's coordinates, turns with the
+    // design: the placed frame turns too, and the sketch's frame is its old
+    // one turned, without an own frame. Left unturned, the placed frame
+    // would keep its old in-plane axes, and Reorient Design would need an
+    // own frame to turn the sketch back onto the design.
+    //
+    // Turned about Z: the mock kernel gives an extrusion's end face as its
+    // box's top (+Z) whatever the turn, which is the turned face only for a
+    // turn about Z (the top stays the top, at z = 5 + 10 + 3 = 18 in B).
+    let (mut doc, body, face, _) = siblings();
+    let created = command(
+        &mut doc,
+        json!({"cmd": "sketch.create", "plane": {"face": face, "body": body},
+               "occurrence": "O1"}),
+    );
+    let sketch = created["uid"].clone();
+    let uid: FeatureUid = sketch.as_str().unwrap().parse().unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_rectangle", "sketch": sketch, "corner": [102, -48],
+               "width": 4, "height": 3}),
+    );
+    assert!(doc.status(uid).unwrap().is_ok(), "{:?}", doc.status(uid));
+    let frame = doc.sketch_output(uid).unwrap().frame;
+    assert!(near(&frame.origin, &[0.0, 0.0, 18.0]), "{frame:?}");
+    let placed = |doc: &Document<MockKernel>| {
+        let mitcad_model::features::FeatureDef::Sketch(def) = &doc.feature(uid).unwrap().def else {
+            panic!("a sketch");
+        };
+        assert!(def.frame.is_none(), "no own frame: {:?}", def.frame);
+        def.plane
+            .placed()
+            .copied()
+            .expect("the frame it was placed with")
+    };
+    let before = placed(&doc);
+    command(
+        &mut doc,
+        json!({"cmd": "reorient_design", "axis": "z", "degrees": 90}),
+    );
+    assert!(doc.status(uid).unwrap().is_ok(), "{:?}", doc.status(uid));
+    let turn = Turn::about(TurnAxis::Z, 1);
+    let same = |a: &mitcad_model::SketchFrame, b: &mitcad_model::SketchFrame| {
+        near(&a.origin, &b.origin) && near(&a.x_axis, &b.x_axis) && near(&a.y_axis, &b.y_axis)
+    };
+    let now = doc.sketch_output(uid).unwrap().frame;
+    assert!(same(&now, &turn.frame(&frame)), "{now:?}");
+    assert!(same(&placed(&doc), &turn.frame(&before)));
 }

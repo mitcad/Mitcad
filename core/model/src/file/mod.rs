@@ -172,6 +172,13 @@
 //! `point`, `seconds`), see [`crate::explode`]. Steps' occurrences that
 //! are gone are refused, as the commands leave none.
 //!
+//! The drawing book (mitcad#2448), when anything of it is set:
+//! `drawing_book` (`title`, `"cover": true`, `drawings`: each with
+//! `source`, the linked design's file as its link saves it (left out for
+//! the design's own drawing), `drawing`, its id there, and `name`), see
+//! [`crate::DrawingBook`]. A drawing that is gone loads; the book's entries
+//! say so.
+//!
 //! Point clouds (mitcad#2240), when there are any: `point_clouds` (`name`,
 //! `"visible": false`, `occurrence`, `placement` (`linear`, `translation`)
 //! unless it is the identity, `origin`, `file_name`, `file_points`,

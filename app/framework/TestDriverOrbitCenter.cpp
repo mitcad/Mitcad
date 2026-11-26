@@ -4,7 +4,8 @@
 // and the last orbit's point (capture-view-orbit-center,
 // expect-view-orbit-center), a model point's place in the view
 // (capture-view-point, expect-view-point, capture-view-place) and input at
-// it (click-view-point, drag-view-point, tooltip-view-point); see
+// it (click-view-point, drag-view-point, tooltip-view-point,
+// drag-logged-to-view-point from a logged place, mitcad#2428); see
 // TestDriver.hpp.
 #include "TestDriver.hpp"
 
@@ -17,7 +18,9 @@
 #include <QHelpEvent>
 #include <QPoint>
 #include <QPointF>
+#include <QPointer>
 #include <QRectF>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QtLogging>
 
@@ -109,7 +112,8 @@ bool TestDriver::runOrbitCenterStep(const QString& name, const QStringList& a, i
                        name == QLatin1String("expect-view-orbit-center") ||
                        name == QLatin1String("capture-view-point") || name == QLatin1String("expect-view-point") ||
                        name == QLatin1String("capture-view-place") || name == QLatin1String("click-view-point") ||
-                       name == QLatin1String("drag-view-point") || name == QLatin1String("tooltip-view-point");
+                       name == QLatin1String("drag-view-point") || name == QLatin1String("tooltip-view-point") ||
+                       name == QLatin1String("drag-logged-to-view-point");
   if (!matches) {
     return false;
   }
@@ -267,6 +271,40 @@ bool TestDriver::runOrbitCenterStep(const QString& name, const QStringList& a, i
     return true;
   }
 
+  if (name == QLatin1String("drag-logged-to-view-point")) {
+    // drag-logged-to-view-point <regex> <x,y,z>: a drag from a logged place
+    // (a Projects panel row) to the model point's place in the view, the
+    // button held all the way, as the user drags a design onto the view
+    // (mitcad#2428). The point's place is taken once the logged one is
+    // there.
+    const QRegularExpression first(a.at(0));
+    const std::optional<gp_Pnt> point = pointArg(a.at(1));
+    if (!first.isValid() || !point) {
+      fail(line, QStringLiteral("drag-logged-to-view-point <regex> <x,y,z>"));
+      return true;
+    }
+    const auto from = std::make_shared<QPoint>();
+    const QPointer<OcctViewer> target(view);
+    whenReady([this, first, from] { return loggedPoint(first, 0, *from); }, 6,
+              QStringLiteral("no place logged for '%1'").arg(a.at(0)),
+              [this, target, from, at = *point, text = a.at(1), line] {
+                if (!target) {
+                  fail(line, QStringLiteral("the 3D view is gone"));
+                  return;
+                }
+                target->settleCamera();
+                const QPointF place = target->toWidgetF(at);
+                if (!QRectF(target->rect()).contains(place)) {
+                  fail(line, QStringLiteral("%1 is outside the view (at %2)").arg(text, placeText(place)));
+                  return;
+                }
+                qDebug().noquote() << QStringLiteral("TestDriver: drag-logged-to-view-point to %1").arg(placeText(place));
+                queueDrag(*from, target->mapTo(topWindow(), place.toPoint()), Qt::LeftButton, Qt::NoModifier);
+              },
+              topWindow());
+    return true;
+  }
+
   // click-view-point <x,y,z> [button] [mods], drag-view-point <x,y,z> <dx>
   // <dy> [button] [mods]: at the model point's place in the view.
   const bool drag = name == QLatin1String("drag-view-point");
@@ -317,6 +355,8 @@ const TestDriver::StepSpec kStepSpecs[] = {
     {"drag-view-point", 3, 5, TestDriver::kInputOfMain},
     // A tooltip at a model point (mitcad#2265).
     {"tooltip-view-point", 1, 1, TestDriver::kInputOfMain},
+    // A design dragged from the Projects panel onto the view (mitcad#2428).
+    {"drag-logged-to-view-point", 2, 2, TestDriver::kInputOfMain},
 };
 
 } // namespace

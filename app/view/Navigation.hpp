@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QPointF>
 #include <QSettings>
+#include <QString>
 #include <QVector>
 #include <Qt>
 
@@ -88,6 +89,33 @@ inline QPointF scrollDragDelta(const NavigationSettings& settings, NavigationAct
     delta = -delta;
   }
   return delta;
+}
+
+// Whether Qt's platform plugin swapped a trackpad scroll's axes because Alt
+// is held, so the view swaps them back (a trackpad's two fingers keep their
+// own directions under Alt, and Alt + scroll orbits the way they move). Qt
+// swaps the axes of every scroll while Alt is held, so that Alt + a wheel
+// scrolls sideways:
+// - xcb (GitHub mitcad/Mitcad#381): a touchpad's scroll arrives as wheel
+//   steps, without phase or pixel deltas, so only its touchpad device tells
+//   it from a wheel;
+// - Wayland (GitHub mitcad/Mitcad#662): Qt gives pixel deltas only for a
+//   finger or continuous scroll, never for a wheel, so they tell a
+//   trackpad's scroll; its device is no help there.
+// Other platforms do not swap. A wheel keeps Qt's swap everywhere.
+inline bool trackpadScrollAxesSwapped(const QString& platform, Qt::KeyboardModifiers keys, bool touchpadDevice,
+                                      bool hasPixelDelta) {
+  if (!keys.testFlag(Qt::AltModifier)) {
+    return false;
+  }
+  if (platform == QLatin1String("xcb")) {
+    return touchpadDevice;
+  }
+  // "wayland", "wayland-egl" and the other Wayland plugins.
+  if (platform.startsWith(QLatin1String("wayland"))) {
+    return hasPixelDelta;
+  }
+  return false;
 }
 
 // The arrow keys' step: 1 to 90 degrees, 15 when it is no number.

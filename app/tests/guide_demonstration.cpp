@@ -6,17 +6,24 @@
 // size and the window's pixel ratio, refused with the reason; where its
 // frames are at a moment over the target (a glide, a pause between plays,
 // its end); a command's keys and the view's gestures of a navigation
-// scheme as the page gets them.
+// scheme as the page gets them, the mouse's and the trackpad's each on its
+// own, and a key changed in the registry in the next answer (mitcad#2439).
 #include "UnitTests.hpp"
+#include "framework/CommandRegistry.hpp"
 #include "tutorials/GuideBindings.hpp"
 #include "tutorials/GuideDemonstration.hpp"
 
 #include <cmath>
 #include <cstdio>
+#include <utility>
 
 #include <QBuffer>
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QSettings>
+#include <QStringList>
+#include <QTemporaryDir>
 
 namespace {
 
@@ -30,6 +37,18 @@ void check(bool condition, const char* expression, int line) {
 }
 
 #define CHECK(expr) check((expr), #expr, __LINE__)
+
+// A JSON comparison that prints both values when it fails.
+void checkJson(const QJsonArray& actual, const QJsonArray& expected, const char* expression, int line) {
+  if (actual != expected) {
+    std::fprintf(stderr, "guide_demonstration.cpp:%d: check failed: %s (actual %s, expected %s)\n", line,
+                 expression, QJsonDocument(actual).toJson(QJsonDocument::Compact).constData(),
+                 QJsonDocument(expected).toJson(QJsonDocument::Compact).constData());
+    ++failures;
+  }
+}
+
+#define CHECK_JSON(actual, expected) checkJson((actual), (expected), #actual " == " #expected, __LINE__)
 
 using namespace mitcad;
 
@@ -249,6 +268,210 @@ void bindings() {
   CHECK(guideShortcutsJson({QKeySequence()}).isEmpty());
 }
 
+// A gesture of the device lists (mitcad#2439).
+QJsonObject onDevice(const char* device, const char* input, QStringList modifiers, int fingers = 0) {
+  QJsonObject result = gesture(input, std::move(modifiers));
+  result.insert(QStringLiteral("device"), QLatin1String(device));
+  if (fingers > 0) {
+    result.insert(QStringLiteral("fingers"), fingers);
+  }
+  return result;
+}
+
+QJsonArray deviceGestures(const QJsonObject& navigation, const char* device, const char* action) {
+  return navigation.value(QLatin1String(device)).toObject().value(QLatin1String(action)).toArray();
+}
+
+// The mouse's and the trackpad's gestures each on its own (mitcad#2439,
+// GitHub mitcad/Mitcad#627) for each kind of scheme: the wheel and the
+// pinch zoom in every scheme, the two-finger slide as the scheme's table
+// has it, the pad pressed and moved as the left button.
+void deviceBindings() {
+  const QString shift = QStringLiteral("shift");
+  const QString ctrl = QStringLiteral("ctrl");
+  const QString alt = QStringLiteral("alt");
+  const QJsonObject wheel = onDevice("mouse", "wheel", {});
+  const QJsonObject pinch = onDevice("trackpad", "pinch", {}, 2);
+  NavigationSettings settings;
+
+  // The middle button's scheme: every slide zooms; no trackpad gesture
+  // orbits or pans.
+  settings.scheme = NavigationScheme::MiddlePan;
+  QJsonObject navigation = guideNavigationJson(settings);
+  CHECK(deviceGestures(navigation, "mouse", "orbit") == QJsonArray({onDevice("mouse", "middle", {shift})}));
+  CHECK(deviceGestures(navigation, "mouse", "pan") == QJsonArray({onDevice("mouse", "middle", {})}));
+  CHECK(deviceGestures(navigation, "mouse", "zoom") == QJsonArray({wheel}));
+  CHECK(deviceGestures(navigation, "trackpad", "orbit").isEmpty());
+  CHECK(deviceGestures(navigation, "trackpad", "pan").isEmpty());
+  CHECK(deviceGestures(navigation, "trackpad", "zoom") == QJsonArray({onDevice("trackpad", "slide", {}, 2), pinch}));
+  // The first form stays as it was.
+  CHECK(navigation.value(QStringLiteral("zoom")).toArray() == QJsonArray({gesture("scroll", {})}));
+#if defined(Q_OS_MACOS)
+  CHECK(navigation.value(QStringLiteral("platform")).toString() == QStringLiteral("macos"));
+#elif defined(Q_OS_WIN)
+  CHECK(navigation.value(QStringLiteral("platform")).toString() == QStringLiteral("windows"));
+#else
+  CHECK(navigation.value(QStringLiteral("platform")).toString() == QStringLiteral("linux"));
+#endif
+  CHECK(navigation.value(QStringLiteral("platform")).toString() == guidePlatformName());
+
+  // Alt with the buttons: the pad pressed with Alt orbits.
+  settings.scheme = NavigationScheme::AltButtons;
+  navigation = guideNavigationJson(settings);
+  CHECK(deviceGestures(navigation, "mouse", "orbit") == QJsonArray({onDevice("mouse", "left", {alt})}));
+  CHECK(deviceGestures(navigation, "mouse", "zoom") == QJsonArray({onDevice("mouse", "right", {alt}), wheel}));
+  CHECK(deviceGestures(navigation, "trackpad", "orbit") == QJsonArray({onDevice("trackpad", "drag", {alt}, 1)}));
+  CHECK(deviceGestures(navigation, "trackpad", "pan").isEmpty());
+
+  // The trackpad scheme: the plain slide pans, with Alt (Option) it
+  // orbits, with Shift or Ctrl (Command) it zooms; the mouse's wheel still
+  // zooms with any key.
+  settings.scheme = NavigationScheme::Trackpad;
+  navigation = guideNavigationJson(settings);
+  CHECK(deviceGestures(navigation, "trackpad", "orbit") ==
+        QJsonArray({onDevice("trackpad", "slide", {alt}, 2), onDevice("trackpad", "drag", {alt}, 1)}));
+  CHECK(deviceGestures(navigation, "trackpad", "pan") ==
+        QJsonArray({onDevice("trackpad", "slide", {}, 2), onDevice("trackpad", "drag", {shift, alt}, 1)}));
+  CHECK(deviceGestures(navigation, "trackpad", "zoom") ==
+        QJsonArray({onDevice("trackpad", "slide", {shift}, 2), onDevice("trackpad", "slide", {ctrl}, 2), pinch}));
+  CHECK(deviceGestures(navigation, "mouse", "orbit") ==
+        QJsonArray({onDevice("mouse", "left", {alt}), onDevice("mouse", "middle", {shift}), onDevice("mouse", "right", {})}));
+  CHECK(deviceGestures(navigation, "mouse", "pan") ==
+        QJsonArray({onDevice("mouse", "left", {shift, alt}), onDevice("mouse", "middle", {}), onDevice("mouse", "right", {shift})}));
+  CHECK(deviceGestures(navigation, "mouse", "zoom") == QJsonArray({wheel}));
+
+  // Shift orbits with the slide, Ctrl or Alt zooms.
+  settings.scheme = NavigationScheme::TrackpadShift;
+  navigation = guideNavigationJson(settings);
+  CHECK(deviceGestures(navigation, "trackpad", "orbit") ==
+        QJsonArray({onDevice("trackpad", "slide", {shift}, 2), onDevice("trackpad", "drag", {alt}, 1)}));
+  CHECK(deviceGestures(navigation, "trackpad", "zoom") ==
+        QJsonArray({onDevice("trackpad", "slide", {ctrl}, 2), onDevice("trackpad", "slide", {alt}, 2), pinch}));
+
+  // F4 held with the left button, on either device.
+  settings.scheme = NavigationScheme::MiddlePanF4;
+  navigation = guideNavigationJson(settings);
+  QJsonObject f4 = onDevice("mouse", "left", {});
+  f4.insert(QStringLiteral("key"), QStringLiteral("F4"));
+  CHECK(deviceGestures(navigation, "mouse", "orbit") == QJsonArray({onDevice("mouse", "middle", {shift}), f4}));
+  QJsonObject padF4 = onDevice("trackpad", "drag", {}, 1);
+  padF4.insert(QStringLiteral("key"), QStringLiteral("F4"));
+  CHECK(deviceGestures(navigation, "trackpad", "orbit") == QJsonArray({padF4}));
+
+  // A custom table: the learner's slide with Ctrl orbits; the table starts
+  // with every slide zooming (navigationBindings(Custom)), so the plain one
+  // still zooms and stands for the other keys.
+  settings.scheme = NavigationScheme::Custom;
+  settings.customBindings = navigationBindings(NavigationScheme::Custom);
+  for (NavigationBinding& binding : settings.customBindings) {
+    if (binding.input == NavigationInput::TrackpadScroll && binding.modifiers == Qt::ControlModifier) {
+      binding.action = NavigationAction::Orbit;
+    }
+  }
+  navigation = guideNavigationJson(settings);
+  CHECK(deviceGestures(navigation, "trackpad", "orbit") == QJsonArray({onDevice("trackpad", "slide", {ctrl}, 2)}));
+  CHECK(deviceGestures(navigation, "trackpad", "pan").isEmpty());
+  CHECK(deviceGestures(navigation, "trackpad", "zoom") == QJsonArray({onDevice("trackpad", "slide", {}, 2), pinch}));
+  CHECK(deviceGestures(navigation, "mouse", "orbit").isEmpty());
+  CHECK(deviceGestures(navigation, "mouse", "zoom") == QJsonArray({wheel}));
+}
+
+// The test's own settings: the registry saves the keys there.
+struct OwnSettings {
+  QTemporaryDir directory;
+  QString organization = QCoreApplication::organizationName();
+  QString application = QCoreApplication::applicationName();
+  QSettings::Format format = QSettings::defaultFormat();
+  OwnSettings() {
+    QCoreApplication::setOrganizationName(QStringLiteral("MitcadGuideBindingsTest"));
+    QCoreApplication::setApplicationName(QStringLiteral("MitcadGuideBindingsTest"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory.path());
+    QSettings settings;
+    settings.clear();
+    settings.sync();
+  }
+  ~OwnSettings() {
+    QCoreApplication::setOrganizationName(organization);
+    QCoreApplication::setApplicationName(application);
+    QSettings::setDefaultFormat(format);
+  }
+  OwnSettings(const OwnSettings&) = delete;
+  OwnSettings& operator=(const OwnSettings&) = delete;
+};
+
+CommandDef command(const char* id, const char* name, const QKeySequence& key) {
+  CommandDef def;
+  def.id = QString::fromLatin1(id);
+  def.name = QString::fromLatin1(name);
+  def.kind = CommandDef::Kind::Action;
+  def.mode = CommandDef::Mode::Model;
+  def.shortcut = key;
+  def.icon = QStringLiteral("extrude");
+  return def;
+}
+
+// The bridge's `shortcut` answer (mitcad#2439): the command's key now, a
+// key the learner changes in the next answer with no restart, none as an
+// empty list, an unknown command refused in words.
+void shortcutAnswers() {
+  OwnSettings own;
+  CHECK(own.directory.isValid());
+  CommandRegistry registry;
+  registry.add(command("view.front", "Front View", QKeySequence(Qt::Key_1)));
+  registry.add(command("x.none", "No Key", QKeySequence()));
+  const auto keysOf = [](const QJsonObject& answer) {
+    QJsonArray keys;
+    for (const QJsonValue& shortcut : answer.value(QStringLiteral("shortcuts")).toArray()) {
+      keys.append(shortcut.toObject().value(QStringLiteral("keys")));
+    }
+    return keys;
+  };
+  // One shortcut of one key, as keysOf lists it: [[{key, modifiers}]].
+  // Built by append: QJsonArray({inner}) with a QJsonArray inner is a copy
+  // of inner under MSVC, not a list of one (0.74.0-rc3's app.unit).
+  const auto oneKey = [](const char* name, QStringList modifiers) {
+    QJsonArray names;
+    for (const QString& modifier : modifiers) {
+      names.append(modifier);
+    }
+    QJsonArray keys;
+    keys.append(QJsonObject{{QStringLiteral("key"), QLatin1String(name)}, {QStringLiteral("modifiers"), names}});
+    QJsonArray shortcuts;
+    shortcuts.append(keys);
+    return shortcuts;
+  };
+
+  QJsonObject answer;
+  QString error;
+  CHECK(guideShortcutAnswer(registry, QStringLiteral("view.front"), &answer, &error));
+  CHECK(answer.value(QStringLiteral("command")).toString() == QStringLiteral("view.front"));
+  CHECK(answer.value(QStringLiteral("name")).toString() == QStringLiteral("Front View"));
+  CHECK(answer.value(QStringLiteral("platform")).toString() == guidePlatformName());
+  CHECK_JSON(keysOf(answer), oneKey("1", {}));
+
+  // Changed in Keyboard Shortcuts: the next answer has it.
+  registry.setShortcut(QStringLiteral("view.front"), QKeySequence(QStringLiteral("Ctrl+Shift+F")));
+  CHECK(guideShortcutAnswer(registry, QStringLiteral("view.front"), &answer, &error));
+  CHECK_JSON(keysOf(answer), oneKey("F", {QStringLiteral("shift"), QStringLiteral("ctrl")}));
+  // Cleared: no key, the page names the command instead.
+  registry.setShortcut(QStringLiteral("view.front"), QKeySequence());
+  CHECK(guideShortcutAnswer(registry, QStringLiteral("view.front"), &answer, &error));
+  CHECK(answer.value(QStringLiteral("shortcuts")).toArray().isEmpty());
+  // Back to its default.
+  registry.setShortcut(QStringLiteral("view.front"), QKeySequence(Qt::Key_1));
+  CHECK(guideShortcutAnswer(registry, QStringLiteral("view.front"), &answer, &error));
+  CHECK_JSON(keysOf(answer), oneKey("1", {}));
+
+  CHECK(guideShortcutAnswer(registry, QStringLiteral("x.none"), &answer, &error));
+  CHECK(answer.value(QStringLiteral("shortcuts")).toArray().isEmpty());
+
+  answer = {};
+  CHECK(!guideShortcutAnswer(registry, QStringLiteral("no.such"), &answer, &error));
+  CHECK(error == QStringLiteral("MitCad has no command no.such"));
+  CHECK(answer.isEmpty());
+}
+
 } // namespace
 
 int guideDemonstrationTests() {
@@ -257,6 +480,8 @@ int guideDemonstrationTests() {
   readDemonstration();
   refusals();
   bindings();
+  deviceBindings();
+  shortcutAnswers();
   return failures;
 }
 MITCAD_UNIT_TEST(guideDemonstrationTests);

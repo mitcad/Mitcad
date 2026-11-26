@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "../browser/DocumentSnapshot.hpp"
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Theme.hpp"
@@ -949,13 +950,20 @@ Slicer panelSlicer(const PrintSettings& settings, const QVector<Slicer>& found) 
   return saved.isValid() ? saved : found.value(0);
 }
 
-Selection printStartBodies(const Selection& selection, const QJsonArray& instances, bool* selected) {
+Selection printStartBodies(const Selection& selection, const QJsonArray& instances, bool* selected,
+                           const Selection& isolation) {
   Selection bodies;
   const auto add = [&bodies](const QString& body, const QString& occurrence) {
     const SelectionItem item{SelectKind::Body, body, QString(), QString(), occurrence};
     if (!bodies.contains(item)) {
       bodies.append(item);
     }
+  };
+  // A placement the view shows: visible, and isolated while Isolate is on
+  // (mitcad#2475).
+  const auto shown = [&isolation](const QJsonObject& instance, const QString& occurrence) {
+    return instance.value(QStringLiteral("visible")).toBool() &&
+           DocumentSnapshot::isolationShows(isolation, instance.value(QStringLiteral("body")).toString(), occurrence);
   };
   for (const SelectionItem& item : selection) {
     if (item.kind == SelectKind::Body || item.kind == SelectKind::Face || item.kind == SelectKind::Edge ||
@@ -965,7 +973,7 @@ Selection printStartBodies(const Selection& selection, const QJsonArray& instanc
       for (const QJsonValue& value : instances) {
         const QJsonObject instance = value.toObject();
         const QString occurrence = placementOf(instance);
-        if (instance.value(QStringLiteral("visible")).toBool() &&
+        if (shown(instance, occurrence) &&
             (occurrence == item.occurrence || occurrence.startsWith(item.occurrence + QLatin1Char('/')))) {
           add(instance.value(QStringLiteral("body")).toString(), occurrence);
         }
@@ -976,12 +984,17 @@ Selection printStartBodies(const Selection& selection, const QJsonArray& instanc
   if (bodies.isEmpty()) {
     for (const QJsonValue& value : instances) {
       const QJsonObject instance = value.toObject();
-      if (instance.value(QStringLiteral("visible")).toBool()) {
-        add(instance.value(QStringLiteral("body")).toString(), placementOf(instance));
+      const QString occurrence = placementOf(instance);
+      if (shown(instance, occurrence)) {
+        add(instance.value(QStringLiteral("body")).toString(), occurrence);
       }
     }
   }
   return bodies;
+}
+
+bool printPlatesAtStart(int plates, bool printableSelection, bool isolated) {
+  return plates > 0 && !printableSelection && !isolated;
 }
 
 SlicerPreferencesBox::SlicerPreferencesBox(QWidget* parent) : QGroupBox(tr("3D Print"), parent) {

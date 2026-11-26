@@ -754,8 +754,10 @@ if(BUILD_TESTING)
   # parser and planner on the host (MITCAD_GRBL_SIM) and grblHAL's
   # simulator (MITCAD_GRBLHAL_SIM), both GPL programs run apart, never
   # linked; skipped without the variable (docs/cam.md, "Simulation and
-  # checks").
-  foreach(sim grbl grblhal)
+  # checks"). The LinuxCNC turning post's programs through LinuxCNC's
+  # stand-alone interpreter (MITCAD_LINUXCNC_SIM, mitcad#2425,
+  # core/cam/tests/linuxcnc_lathe_sim.rs), the same way.
+  foreach(sim grbl grblhal linuxcnc)
     add_test(NAME core.cam_${sim}_sim
       COMMAND "${CMAKE_COMMAND}" "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-debug.tsv"
               "-DTEST_NAME=core.cam_${sim}_sim"

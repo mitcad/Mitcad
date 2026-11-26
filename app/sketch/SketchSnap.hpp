@@ -155,6 +155,17 @@ std::vector<std::pair<V2, V2>> extensionGuides(const SketchModel& model, const S
 // (SketchModel::pointAxes). Empty elsewhere.
 QString axesAt(const SketchModel& model, const Snap& snap);
 
+// The places a point placed where `snap` went is at, as a tutorial's guide
+// step names them (mitcad#2440, guidePointPlaces() in
+// tutorials/GuideStep.hpp), the most particular first: "origin" (its snap,
+// or a point the sketch has there), "x_axis" and "y_axis" (onto an axis, a
+// point held on it, the origin), "center" and "point" (a point of the
+// sketch, the origin's too), "midpoint", "quadrant", "intersection",
+// "extension" (onto a line's extension, or where one meets a curve),
+// "curve" (along a curve of the sketch), "body_vertex", "body_midpoint",
+// "body_edge", "body_center", "body_section", "grid", and "free" for none.
+QStringList snapPlaces(const SketchModel& model, const Snap& snap);
+
 // The constraint that holds `point` on the axis `snap` went onto
 // (mitcad#948): coincident with the axis's entity, which `entity` gives for
 // the snap's curve (SketchOp::axisInput: the line the sketch has, or one

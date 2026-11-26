@@ -114,6 +114,45 @@ impl CopySource<'_> {
 }
 
 impl DocState {
+    /// The light bulbs of the copied sketches and construction features
+    /// (mitcad#2449): a copy is shown or hidden as its source is. Only a
+    /// light bulb that differs from the copy's default is kept, as
+    /// [`Document::set_feature_visible`](super::Document::set_feature_visible)
+    /// keeps them: a sketch is used in the copy as in its source (its
+    /// consumers are copied with it), unless a feature outside the copy
+    /// used it, and then the copy follows its default. Before, the copies
+    /// of another document's design (the `.f3d` import's components of
+    /// other documents) showed every sketch that document hides and no
+    /// feature uses. The display sizes of copied planes and axes come
+    /// along too (mitcad#1748).
+    fn copy_light_bulbs(&mut self, source: &DocState, uids: &HashMap<FeatureUid, FeatureUid>) {
+        let mut sizes: Vec<(FeatureUid, f64)> = source
+            .datum_display_sizes
+            .iter()
+            .filter_map(|(uid, size)| uids.get(uid).map(|copy| (*copy, *size)))
+            .collect();
+        sizes.sort_by_key(|(uid, _)| *uid);
+        self.datum_display_sizes.extend(sizes);
+        let mut bulbs: Vec<(FeatureUid, bool)> = source
+            .feature_visibility
+            .iter()
+            .filter_map(|(uid, on)| uids.get(uid).map(|copy| (*copy, *on)))
+            .collect();
+        if bulbs.is_empty() {
+            return;
+        }
+        bulbs.sort_by_key(|(uid, _)| *uid);
+        let used = self.used_sketches();
+        for (uid, on) in bulbs {
+            let Some(entry) = self.entry(uid) else {
+                continue;
+            };
+            if Self::shown_by_default(entry, &used) != on {
+                self.feature_visibility.insert(uid, on);
+            }
+        }
+    }
+
     /// Adds a feature with resolved values at the marker: checked, and a
     /// new-component operation makes its component, placed in the
     /// feature's own. Returns the component it made.
@@ -398,6 +437,7 @@ impl DocState {
                     .insert(*copied, params.expression(expression));
             }
         }
+        self.copy_light_bulbs(source, &uids);
         // Import only appearances used by copied bodies/faces. Existing
         // target definitions stay unchanged even when ids or names collide.
         let appearances = if same_document {

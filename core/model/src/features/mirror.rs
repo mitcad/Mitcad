@@ -2,9 +2,19 @@
 //! Mirror: bodies, features or faces reflected in a plane. It
 //! is a pattern of one copy, element 1 (faces `<mirror>:inst1(<name>)`). A
 //! mirrored body is a new body unless `combine` joins it to its original
-//! when they touch; a mirrored feature's tool is reflected as a finished
-//! body (a reflected sketch frame would be left-handed) and combined with
-//! the bodies again with the feature's operation.
+//! when they touch. A mirrored feature's tool is combined with the bodies
+//! again with the feature's operation: with `compute` `adjust` (the default
+//! of a mirror made or edited since mitcad#2430) an extrusion whose end
+//! depends on bodies (to the next face, up to an object, through all) is
+//! rebuilt at the mirrored place, its profile and direction reflected and
+//! its end found again there, as a pattern's copies are, and so is a rib or
+//! a web To Next or with Extend Ends (mitcad#2431); any other tool,
+//! and every tool with `identical` or `optimized`, is reflected as a
+//! finished body. A mirror saved without `compute` (a design written
+//! before mitcad#2430) reflects every finished tool, as it did, until it is
+//! edited ([`MirrorDef::settle_compute`]). A pattern with Adjust whose
+//! features include a mirror that rebuilds builds the mirrored tool again
+//! at each of its copies too (mitcad#2432).
 
 use std::marker::PhantomData;
 
@@ -38,8 +48,15 @@ pub struct MirrorDef<P = ParamId> {
     /// its original, as a pattern's `combine_any` (mitcad#1006).
     #[serde(default, skip_serializing_if = "is_false")]
     pub combine_any: bool,
-    #[serde(default, skip_serializing_if = "is_adjust")]
-    pub compute: ComputeOption,
+    /// How the copies of features are computed, as a pattern's `compute`.
+    /// A version flag besides (mitcad#2430): a mirror saved without it (a
+    /// design written before) works as `adjust` but reflects every
+    /// finished tool, as mirrors did, until it is edited; a mirror of
+    /// features added or edited without it gets `adjust`
+    /// ([`MirrorDef::settle_compute`], `Document::resolve`), which rebuilds
+    /// an extrusion up to an object or through all at the mirrored place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute: Option<ComputeOption>,
     /// Copies of features act only on the bodies each feature changed
     /// where the feature has no participants of its own (the `.f3d`
     /// import's mirrors, mitcad#74); by default on the feature's
@@ -72,13 +89,31 @@ pub struct MirrorDef<P = ParamId> {
     pub marker: PhantomData<P>,
 }
 
-fn is_adjust(option: &ComputeOption) -> bool {
-    *option == ComputeOption::Adjust
-}
-
 impl<P> MirrorDef<P> {
     pub const TYPE: &'static str = "mirror";
     pub const BASE_NAME: &'static str = "Mirror";
+
+    /// The compute option it works with: `adjust` when none is stored.
+    pub fn compute_option(&self) -> ComputeOption {
+        self.compute.unwrap_or_default()
+    }
+
+    /// Whether its copies of features are rebuilt where they are reflected
+    /// (mitcad#2430): `adjust` stored, as a mirror made or edited since
+    /// has it. A mirror saved without `compute` reflects the finished
+    /// tools, as mirrors did before.
+    pub fn rebuilds_reflected_tools(&self) -> bool {
+        self.compute == Some(ComputeOption::Adjust)
+    }
+
+    /// Gives a mirror of features made or edited by a command without
+    /// `compute` the default, `adjust` (mitcad#2430). Design files are read
+    /// without it, so that their mirrors keep the results they had.
+    pub(crate) fn settle_compute(&mut self) {
+        if matches!(self.objects, PatternObjects::Features { .. }) {
+            self.compute.get_or_insert(ComputeOption::Adjust);
+        }
+    }
 
     map_params! {
         MirrorDef {
@@ -163,7 +198,7 @@ impl<K: Kernel> Evaluate<K> for MirrorDef {
         repeat(
             ctx,
             &self.objects,
-            self.compute,
+            self.compute_option(),
             self.original_bodies,
             &[element],
             Combine::of(self.combine, self.combine_any),

@@ -32,7 +32,10 @@
 //! along its curve to the bodies, or cuts it back to the wall it crosses,
 //! as a rib's ends are cut back. Both rebuild their tool at each copy of a
 //! pattern ([`Evaluate::placed_tool`]), so that To Next and Extend Ends are
-//! solved again where the copy lands.
+//! solved again where the copy lands, and at the image of a mirror of
+//! features with compute `adjust` (mitcad#2431): the curves and the sketch
+//! frame reflected, a rib's side 1 and side 2 swapped and a web flipped,
+//! so that the tool is the original's image before it meets the bodies.
 //!
 //! A Draft Angle (`draft_angle`, mitcad#2102) leans both sides of the wall
 //! so that it is thicker where it meets the body, for moulded parts: the
@@ -552,12 +555,19 @@ impl Thin<'_, ParamId> {
     /// pattern, so that a copy where the room is narrower or lower is cut
     /// back to the walls and reaches the faces there. A depth without
     /// Extend Ends depends on no body: the pattern moves the tool instead.
+    /// A mirror's reflection (mitcad#2431) rebuilds it at the image too, so
+    /// that a mirrored To Next rib ends on the faces on its own side
+    /// ([`Self::tool`] turns its sides over); any other placement (a scaled
+    /// copy) moves the finished tool.
     fn placed_tool<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
         feature: FeatureUid,
         placement: &Transform,
     ) -> Option<Result<K::Shape, String>> {
+        if !placement.is_orthogonal() {
+            return None;
+        }
         if matches!(self.extent, RibExtent::Depth { .. }) && !self.extend_ends {
             return None;
         }
@@ -626,9 +636,20 @@ impl Thin<'_, ParamId> {
         })
     }
 
-    /// The kernel's tool from the curves moved by the rigid `placement`
-    /// (the identity for the feature itself), its faces named after
-    /// `feature`, reaching `bodies`.
+    /// The kernel's tool from the curves moved by `placement` (the identity
+    /// for the feature itself), its faces named after `feature`, reaching
+    /// `bodies`.
+    ///
+    /// `placement` is rigid, or a mirror's reflection (mitcad#2431). The
+    /// reflected sketch frame (its x and y axes reflected) has its own
+    /// normal, x × y, the reverse of the reflected sketch normal, and the
+    /// kernel takes every side from that normal ([`RibSpec`]). Sides in the
+    /// sketch plane stay the images of the original's: a rib grows to the
+    /// left of its chain with the normal up, so its flip, its direction
+    /// and the far side of Normal to Curves are kept, as a web's side 1
+    /// and side 2 are. Sides along the normal turn over: a rib's side 1
+    /// and side 2 swap, and a web, which grows along the normal, is
+    /// flipped.
     fn tool<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
@@ -637,6 +658,12 @@ impl Thin<'_, ParamId> {
         values: &Values,
         bodies: Vec<K::Shape>,
     ) -> Result<K::Shape, String> {
+        let reflected = placement.determinant() < 0.0;
+        let (flip, location) = match (reflected, self.web) {
+            (false, _) => (self.flip, self.location),
+            (true, true) => (!self.flip, self.location),
+            (true, false) => (self.flip, other_side(self.location)),
+        };
         let (frame, curves) = self.curves.resolve(ctx)?;
         let direction = self.direction.resolve(ctx, &frame)?;
         let (frame, curves, direction) = if placement.is_identity() {
@@ -680,7 +707,7 @@ impl Thin<'_, ParamId> {
                 &frame,
                 &chains[0],
                 depth,
-                self.flip,
+                flip,
                 self.corners,
                 values.draft_angle != 0.0,
             )?,
@@ -693,9 +720,9 @@ impl Thin<'_, ParamId> {
             web: self.web,
             chains: &chains,
             thickness: values.thickness,
-            location: self.location,
+            location,
             depth: values.depth,
-            flip: self.flip,
+            flip,
             bodies,
             extend_ends: self.extend_ends,
             end_offset: values.end_offset,
@@ -888,8 +915,27 @@ struct Values {
     draft_angle: f64,
 }
 
-/// A curve moved by a rigid motion.
+/// The thickness on the other side of the sketch plane: a rib's side 1
+/// and side 2 seen from a reflected frame, whose normal is the reverse of
+/// the reflected sketch normal (mitcad#2431).
+fn other_side(location: ThicknessLocation) -> ThicknessLocation {
+    match location {
+        ThicknessLocation::Symmetric => ThicknessLocation::Symmetric,
+        ThicknessLocation::Side1 => ThicknessLocation::Side2,
+        ThicknessLocation::Side2 => ThicknessLocation::Side1,
+    }
+}
+
+/// A curve moved by a rigid motion or reflected by a mirror (mitcad#2431),
+/// point for point at the same parameters. A conic's points are
+/// `center + major cos t x + minor sin t (normal × x)`: reflected, the
+/// cross product of the reflected normal and x axis is the reverse of the
+/// reflected y axis, so the reflected conic's normal is reversed to keep
+/// its points; a helix's axis is reversed for the same reason and its
+/// pitch with it (a right-handed helix reflects into a left-handed one).
 fn moved_curve(t: &Transform, curve: &Curve3) -> Curve3 {
+    // -1 for a reflection.
+    let hand = if t.determinant() < 0.0 { -1.0 } else { 1.0 };
     match curve {
         Curve3::Point(p) => Curve3::Point(t.apply_point(*p)),
         Curve3::Line { start, end } => Curve3::Line {
@@ -907,7 +953,7 @@ fn moved_curve(t: &Transform, curve: &Curve3) -> Curve3 {
             closed,
         } => Curve3::Conic {
             center: t.apply_point(*center),
-            normal: t.apply_vector(*normal),
+            normal: scale(t.apply_vector(*normal), hand),
             x_axis: t.apply_vector(*x_axis),
             major: *major,
             minor: *minor,
@@ -936,12 +982,129 @@ fn moved_curve(t: &Transform, curve: &Curve3) -> Curve3 {
             end,
         } => Curve3::Helix {
             center: t.apply_point(*center),
-            axis: t.apply_vector(*axis),
+            axis: scale(t.apply_vector(*axis), hand),
             x_axis: t.apply_vector(*x_axis),
             radius: *radius,
-            pitch: *pitch,
+            pitch: hand * *pitch,
             start: *start,
             end: *end,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::features::path::{conic_point, helix_point};
+
+    /// The mirror in the plane x = 30, tilted a little so that no axis
+    /// lines up with a model axis.
+    fn mirror() -> Transform {
+        Transform::mirror([30.0, 0.0, 0.0], [1.0, 0.2, -0.3]).unwrap()
+    }
+
+    fn near(a: [f64; 3], b: [f64; 3]) -> bool {
+        distance(a, b) < 1e-9
+    }
+
+    #[test]
+    fn a_reflected_arc_runs_through_the_reflected_points() {
+        let t = mirror();
+        assert!(t.determinant() < 0.0);
+        let (center, normal, x_axis) = ([5.0, 2.0, 1.0], [0.0, 0.6, 0.8], [1.0, 0.0, 0.0]);
+        let arc = Curve3::Conic {
+            center,
+            normal,
+            x_axis,
+            major: 7.0,
+            minor: 4.0,
+            start: 0.3,
+            end: 2.1,
+            closed: false,
+        };
+        let Curve3::Conic {
+            center: c,
+            normal: n,
+            x_axis: x,
+            start,
+            end,
+            ..
+        } = moved_curve(&t, &arc)
+        else {
+            panic!("a conic")
+        };
+        assert_eq!((start, end), (0.3, 2.1));
+        for s in [0.3, 1.0, 2.1] {
+            let image = t.apply_point(conic_point(center, normal, x_axis, (7.0, 4.0), s));
+            assert!(near(conic_point(c, n, x, (7.0, 4.0), s), image), "at {s}");
+        }
+        // A rigid motion keeps the normal.
+        let turned = Transform::rotation([0.0; 3], [0.0, 0.0, 1.0], 0.7).unwrap();
+        let Curve3::Conic { normal: n, .. } = moved_curve(&turned, &arc) else {
+            panic!("a conic")
+        };
+        assert!(near(n, turned.apply_vector(normal)));
+    }
+
+    #[test]
+    fn a_reflected_helix_turns_the_other_way() {
+        let t = mirror();
+        let (center, axis, x_axis) = ([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let helix = Curve3::Helix {
+            center,
+            axis,
+            x_axis,
+            radius: 5.0,
+            pitch: 2.0,
+            start: 0.0,
+            end: 9.0,
+        };
+        let Curve3::Helix {
+            center: c,
+            axis: a,
+            x_axis: x,
+            radius,
+            pitch,
+            ..
+        } = moved_curve(&t, &helix)
+        else {
+            panic!("a helix")
+        };
+        assert_eq!(pitch, -2.0);
+        for s in [0.0, 4.0, 9.0] {
+            let image = t.apply_point(helix_point(center, axis, x_axis, (5.0, 2.0), s));
+            assert!(
+                near(helix_point(c, a, x, (radius, pitch), s), image),
+                "at {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn side_one_and_side_two_swap_across_a_reflected_frame() {
+        assert_eq!(
+            other_side(ThicknessLocation::Side1),
+            ThicknessLocation::Side2
+        );
+        assert_eq!(
+            other_side(ThicknessLocation::Side2),
+            ThicknessLocation::Side1
+        );
+        assert_eq!(
+            other_side(ThicknessLocation::Symmetric),
+            ThicknessLocation::Symmetric
+        );
+        // The reflected frame's own normal is the reverse of the reflected
+        // sketch normal: side 1 of the image lies where side 2 of the
+        // reflected frame does.
+        let t = mirror();
+        let frame = SketchFrame {
+            origin: [0.0, 20.0, 0.0],
+            x_axis: [1.0, 0.0, 0.0],
+            y_axis: [0.0, 0.0, -1.0],
+        };
+        let image = t.apply_frame(&frame);
+        let reflected_normal = t.apply_vector(frame.normal());
+        assert!(dot(image.normal(), reflected_normal) < -1.0 + 1e-12);
     }
 }

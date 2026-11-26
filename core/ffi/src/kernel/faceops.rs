@@ -26,11 +26,16 @@ pub mod ffi {
         extend: bool,
     }
 
+    /// The faces with a thickness of their own (mitcad#2443): `own_faces`
+    /// with their `own_inside` and `own_outside` thickness, one each.
     struct ShellParams {
         inside: f64,
         outside: f64,
         tangent_chain: bool,
         rounded: bool,
+        own_faces: Vec<String>,
+        own_inside: Vec<f64>,
+        own_outside: Vec<f64>,
     }
 
     /// `two_sided` uses `angle2` on the other side of the plane.
@@ -71,6 +76,7 @@ pub mod ffi {
             body: &Shape,
             faces: &[String],
             distance: f64,
+            tangent_chain: bool,
         ) -> Result<SharedPtr<Shape>>;
         fn delete_faces(feature: &str, body: &Shape, faces: &[String]) -> Result<SharedPtr<Shape>>;
         fn replace_faces(

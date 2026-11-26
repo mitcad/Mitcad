@@ -1,0 +1,187 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: an analytic blend whose contact passes over a hole of its face is
+cut by the hole's wall also where the wall's seam runs up from its rim
+under the blend: the cut is made in two pieces, one on each side of the
+seam, and the seam is cut where the blend crosses it (mitcad#2365, GitHub
+mitcad/Mitcad#635).
+
+The case: a block's end edges along a chamfered bottom rounded with 2,
+with a counterbore 15 wide through the chamfer whose rim comes 1 mm from
+each end face. The contact on the chamfer passes over the counterbore.
+Where the counterbore's seam lies away from the rounding (at one end), the
+gap is filled as patch 0055 fills it: the blend runs on over the hole and
+the counterbore's wall cuts it. At the other end, the same counterbore
+turned the other way, its seam runs up from the rim under the blend, and
+ChFi3d_KPartCutPiece refuses a piece with a vertex of the face beyond
+under the blend (0055: B would have to grow along that edge up to the
+cut). The gap was left to the walking, which rounded the wall's top
+from the end face over to the counterbore's wall: 1.22 mm3 more material
+than the mirror image at the other end, the end face's edge with the
+rounding bent down beside the hole, two more faces. Rounded together, the
+two ends differed the same way.
+
+- ChFi3d_KPartCutChainFrom: in a chain round from the face beyond back to
+  it (Round, ChFi3d_FillKPartGaps' last resort for a gap whose two ends lie
+  on one face beyond), the face's own seam leads back to the face: the
+  chain is that face twice, the seam the edge crossed between them. The
+  crossing is found as for any edge (ChFi3d_KPartEdgeCrossing), and the
+  seam, in the chain's cut edges, no longer refuses the pieces' vertex
+  check.
+- ChFi3d_KPartChainPieces: a crossing on a seam of a chain of one face
+  twice is taken, for the piece before it, on the side of the seam (its
+  p-curve and its orientation in the face) nearest the piece's start on
+  the face (Prev's arc), for the piece after it on the side nearest that
+  piece's end (Next's arc); its transition on the seam is the one of the
+  piece before.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2365.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 3ef534cd..5b9b53a4 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -9866,6 +9866,16 @@ static bool ChFi3d_KPartCutChainFrom(const TopOpeBRepDS_DataStructure&
+         Bk = TopoDS::Face(it.Value());
+       }
+     }
++    // (Round, from the face beyond back to it across its own seam: the
++    // face's seam runs up from the vertex where it meets N under the blend,
++    // as a hole's wall whose seam lies within the rounding's width of the
++    // rounded edge, mitcad#2365; the cut crosses the seam.)
++    const bool aSeam = Bk.IsNull() && Round && Bi.IsSame(Bn) && Faces.Length() == 1
++                       && BRep_Tool::IsClosed(Ej, Bi);
++    if (aSeam)
++    {
++      Bk = Bi;
++    }
+     if (Bk.IsNull() || Bk.IsSame(N) || (!Fo.IsNull() && Bk.IsSame(Fo)))
+     {
+       continue;
+@@ -9873,7 +9883,7 @@ static bool ChFi3d_KPartCutChainFrom(const TopOpeBRepDS_DataStructure&
+     // (A chain round from the face beyond back to it: that face again at
+     // its end.)
+     bool seen = false;
+-    for (int i = 1; i <= Faces.Length() && !seen; i++)
++    for (int i = 1; i <= Faces.Length() && !seen && !aSeam; i++)
+     {
+       seen = Faces.Value(i).IsSame(Bk) && !(Round && i == 1 && Faces.Length() > 1);
+     }
+@@ -10043,10 +10053,63 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+       aB.MakeVertex(aBeyond(i), Crossings.Value(i).P, tol3d);
+     }
+   }
++  // The point of the cut's end on the face beyond, on Prev's or Next's arc
++  // there (where the side of a seam the crossing is taken on is chosen).
++  const auto endOnFace = [&](const bool isPrev, const TopoDS_Face& B, gp_Pnt2d& uv) {
++    const occ::handle<ChFiDS_SurfData>& aSD = isPrev ? Prev : Next;
++    if (aSD.IsNull())
++    {
++      return false;
++    }
++    const ChFiDS_CommonPoint& CP = aSD->Vertex(!isPrev, ons);
++    if (!CP.IsOnArc())
++    {
++      return false;
++    }
++    TopoDS_Face BF = B;
++    BF.Orientation(TopAbs_FORWARD);
++    double                          f = 0., l = 0.;
++    const occ::handle<Geom2d_Curve> pc = BRep_Tool::CurveOnSurface(TopoDS::Edge(CP.Arc()), BF, f, l);
++    if (pc.IsNull())
++    {
++      return false;
++    }
++    uv = pc->Value(CP.ParameterOnArc());
++    return true;
++  };
++  // On a seam of the face beyond (a chain from that face round to it across
++  // its seam): the seam's side nearest Ref, the point on that side's p-curve
++  // and the seam's orientation in the face there; false off a seam.
++  const auto seamSide = [&](const ChFi3d_KPartCrossing& X, const TopoDS_Face& BF, const gp_Pnt2d& Ref, gp_Pnt2d& uv,
++                            TopAbs_Orientation& anOri) {
++    if (!X.Along.IsNull() || X.Beyond || !BRep_Tool::IsClosed(X.E, BF))
++    {
++      return false;
++    }
++    double aBest = RealLast();
++    for (const TopAbs_Orientation o : {TopAbs_FORWARD, TopAbs_REVERSED})
++    {
++      double                          f = 0., l = 0.;
++      const occ::handle<Geom2d_Curve> pc = BRep_Tool::CurveOnSurface(TopoDS::Edge(X.E.Oriented(o)), BF, f, l);
++      if (pc.IsNull())
++      {
++        continue;
++      }
++      const gp_Pnt2d p = pc->Value(X.wE);
++      if (p.Distance(Ref) < aBest)
++      {
++        aBest = p.Distance(Ref);
++        uv    = p;
++        anOri = o;
++      }
++    }
++    return aBest < RealLast();
++  };
+   // A crossing as the end of a piece (on its face before) and as the start
+   // of the next one (on its face after): the point on the edge crossed,
+-  // with the transition of an end on that arc.
+-  const auto crossingEnd = [&](const int i, const TopoDS_Face& B, ChFi3d_KPartCutEnd& anEnd) {
++  // with the transition of an end on that arc (AsEnd: the end of the piece
++  // before the crossing, else the start of the piece after it).
++  const auto crossingEnd = [&](const int i, const TopoDS_Face& B, ChFi3d_KPartCutEnd& anEnd, const bool AsEnd) {
+     const ChFi3d_KPartCrossing& X  = Crossings.Value(i);
+     TopoDS_Face                 BF = B;
+     BF.Orientation(TopAbs_FORWARD);
+@@ -10067,6 +10130,24 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+     {
+       return false;
+     }
++    // (A crossing on the face's own seam, the chain from Prev to Next on
++    // both its sides (mitcad#2365): the end of the piece before it on the
++    // side Prev's arc lies on, the start of the piece after it on Next's;
++    // the transition on the seam as the piece before crosses it.)
++    TopAbs_Orientation aSeamOri = TopAbs_FORWARD;
++    bool               onSeam   = false;
++    {
++      gp_Pnt2d aBefore, anAfter, uvBefore, uvAfter;
++      TopAbs_Orientation oBefore = TopAbs_FORWARD, oAfter = TopAbs_FORWARD;
++      if (n == 2 && Faces.First().IsSame(Faces.Last()) && endOnFace(true, BF, aBefore)
++          && endOnFace(false, BF, anAfter) && seamSide(X, BF, aBefore, uvBefore, oBefore)
++          && seamSide(X, BF, anAfter, uvAfter, oAfter) && oBefore != oAfter)
++      {
++        onSeam    = true;
++        aSeamOri  = oBefore;
++        anEnd.uvB = AsEnd ? uvBefore : uvAfter;
++      }
++    }
+     anEnd.tO  = X.tO;
+     // (On a closed line of the other contact, the crossing's parameter is
+     // taken in the period around the middle of Full's own stretch: a long
+@@ -10093,7 +10174,10 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+     }
+     else
+     {
+-      anEnd.CPN.SetArc(tol3d, X.E, X.wE, TopAbs::Compose(aTraB, edgeInFace(X.E, BiF).Orientation()));
++      anEnd.CPN.SetArc(tol3d,
++                       X.E,
++                       X.wE,
++                       TopAbs::Compose(aTraB, onSeam ? aSeamOri : edgeInFace(X.E, BiF).Orientation()));
+     }
+     anEnd.CPO.Reset();
+     anEnd.CPO.SetPoint(DStr.Curve(FO.LineIndex()).Curve()->Value(X.tO));
+@@ -10156,11 +10240,11 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+     // (The chain's own ends, given where Prev or Next is missing.)
+     const ChFi3d_KPartCutEnd* aGivenStart = k > 1 ? &aStart : (Prev.IsNull() ? GivenStart : nullptr);
+     const ChFi3d_KPartCutEnd* aGivenEnd   = k < n ? &anEnd : (Next.IsNull() ? GivenEnd : nullptr);
+-    if (k > 1 && !crossingEnd(k - 1, Bk, aStart))
++    if (k > 1 && !crossingEnd(k - 1, Bk, aStart, false))
+     {
+       return false;
+     }
+-    if (k < n && !crossingEnd(k, Bk, anEnd))
++    if (k < n && !crossingEnd(k, Bk, anEnd, true))
+     {
+       return false;
+     }

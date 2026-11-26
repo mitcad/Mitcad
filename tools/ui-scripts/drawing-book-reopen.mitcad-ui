@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# File › Drawing Book… (mitcad#2448) after main.mitcad is opened again and
+# b.mitcad was saved without its drawing (tools/ui-drawing-book-test.sh):
+# the book kept its order and its cover page; b's Drawing1 is named as gone
+# and Print… is disabled until it is unchecked; Cancel leaves the book.
+# All geometry is synthetic.
+wait-idle
+capture-undo-depth before
+
+mark
+command file.drawing_book
+focus-dialog '^Drawing Book$'
+wait-log '^Drawing Book opened: b[.]mitcad \[Drawing1\] [|] a[.]mitcad \[Drawing1, Extra\]$'
+expect-log '^Drawing Book: b[.]mitcad/Drawing1 [|] a[.]mitcad/Drawing1; cover on; print disabled: Drawing1 is no longer in b[.]mitcad$'
+
+# The gone drawing (the current row) unchecked: the book prints again.
+mark
+key space
+wait-log '^Drawing Book: a[.]mitcad/Drawing1; cover on; print enabled$'
+
+# Cancel: nothing changes.
+mark
+key Escape
+focus-main
+wait-log '^Drawing Book cancelled$'
+expect-undo-depth ${before} 0
+quit

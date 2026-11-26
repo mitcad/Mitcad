@@ -45,3 +45,5 @@ mod cell_grid_tests;
 mod cone_tests;
 // Point to Point along one axis only (mitcad#2339).
 mod move_along_tests;
+// A mirror rebuilds an extrusion to the next face at the image (mitcad#2430).
+mod mirror_rebuild_tests;

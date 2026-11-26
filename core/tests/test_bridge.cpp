@@ -30,6 +30,7 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRep_Builder.hxx>
@@ -2840,6 +2841,97 @@ void test_reported_screw_joint_keeps_earlier_joint() {
   }
 }
 
+// mitcad#2381 (GitHub #648): a cup with a flange, its pocket's floor
+// replaced onto the flange's outside face under it, or onto a plane past
+// it. The wall between goes: a through-hole with no face across the
+// opening, the body closed, its volume the cup's without the floor.
+void test_replaced_floor_opens_a_through_hole() {
+  // The flange 90 across and 6 thick (F2), the cup 60 across up to z = 30
+  // (F4), its pocket 40 across from the open end down to z = 6 (F6).
+  const auto cup = [] {
+    auto document = mitcad::new_document();
+    run(*document, R"({"cmd": "sketch.create"})"); // F1
+    run(*document, sketch_circle("F1", 0, 0, 90));
+    run(*document, extrude("F1", "r{c1}", 6, "new_body")); // F2
+    run(*document, R"({"cmd": "sketch.create"})"); // F3
+    run(*document, sketch_circle("F3", 0, 0, 60));
+    run(*document, R"({"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "r{c1}"}], "start": {"type": "offset", "offset": 6}, "extent": {"type": "distance", "distance": 24}, "operation": "join", "participants": ["F2.b0"]}})"); // F4
+    run(*document, R"({"cmd": "sketch.create"})"); // F5
+    run(*document, sketch_circle("F5", 0, 0, 40));
+    run(*document, R"({"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F5", "region": "r{c1}"}], "start": {"type": "offset", "offset": 6}, "extent": {"type": "distance", "distance": 30}, "operation": "cut", "participants": ["F2.b0"]}})"); // F6
+    return document;
+  };
+  // The name of the body's planar face whose centre is on the axis at
+  // height z and whose area is `area`; empty when there is none.
+  const auto face_at = [](const mitcad::Document& document, double z, double area) {
+    const auto body = document.body_shape("F2.b0");
+    for (int i = 0; body && i < body->face_count(); ++i) {
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(body->face(i), props);
+      const gp_Pnt centre = props.CentreOfMass();
+      if (near(props.Mass(), area) && centre.Distance(gp_Pnt(0, 0, z)) < 1e-6 &&
+          !body->face_names(i).empty()) {
+        return body->face_names(i).front();
+      }
+    }
+    return std::string();
+  };
+  const double flange = kPi * 45.0 * 45.0 * 6.0;
+  const double wall = kPi * (30.0 * 30.0 - 20.0 * 20.0) * 24.0;
+  const double through = flange + wall - kPi * 20.0 * 20.0 * 6.0;
+
+  const auto first = cup();
+  CHECK(near(body_volume(*first), flange + wall));
+  const std::string floor = face_at(*first, 6.0, kPi * 400.0);
+  const std::string bottom = face_at(*first, 0.0, kPi * 45.0 * 45.0);
+  CHECK(!floor.empty() && !bottom.empty());
+  if (floor.empty() || bottom.empty()) {
+    return;
+  }
+  const std::string onto_bottom = R"({"body": "F2.b0", "face": )" + quoted(bottom) + "}";
+  const std::string targets[] = {
+      // The flange's outside face, a face of the body itself.
+      onto_bottom,
+      // A plane 4 mm past it.
+      R"({"type": "plane", "origin": [0, 0, -4], "normal": [0, 0, 1]})",
+  };
+  for (const std::string& target : targets) {
+    auto document = cup();
+    run(*document, R"({"cmd": "add_feature", "def": {"type": "replace_face", "body": "F2.b0", "faces": [)" +
+                       quoted(floor) + R"(], "target": )" + target + R"(, "tangent_chain": false}})"); // F7
+    const std::string timeline(document->query(R"({"query": "timeline"})"));
+    CHECK(!contains(timeline, R"("status":"error")"));
+    if (contains(timeline, R"("status":"error")")) {
+      std::fprintf(stderr, "replace onto %s: %s\n", target.c_str(), timeline.c_str());
+    }
+    CHECK(body_count(*document) == 1);
+    CHECK(near(body_volume(*document), through));
+    const auto body = document->body_shape("F2.b0");
+    CHECK(body != nullptr);
+    if (!body) {
+      continue;
+    }
+    // Closed: valid, every shell without free edges.
+    CHECK(BRepCheck_Analyzer(body->occt()).IsValid());
+    int shells = 0;
+    for (TopExp_Explorer it(body->occt(), TopAbs_SHELL); it.More(); it.Next()) {
+      ++shells;
+      CHECK(BRep_Tool::IsClosed(it.Current()));
+    }
+    CHECK(shells == 1);
+    // Nothing across the opening: the hole's axis keeps the pocket's
+    // radius from the body at every height, through the flange too.
+    for (const double z : {0.0, 2.0, 4.0, 6.0, 18.0, 30.0}) {
+      BRepExtrema_DistShapeShape measure(BRepBuilderAPI_MakeVertex(gp_Pnt(0, 0, z)).Vertex(),
+                                         body->occt());
+      CHECK(measure.IsDone() && std::abs(measure.Value() - 20.0) < 1e-6);
+    }
+    // The floor is gone, and no replaced face is left in its place.
+    CHECK(body->find_faces(floor).empty());
+    CHECK(body->find_faces("F7:replace(" + floor + ")").empty());
+  }
+}
+
 // The point `[x, y, z]` after `"key":[` in a JSON text, looked for from
 // `from` on; none when it has none.
 std::optional<gp_Vec> json_triple(const std::string& text, const std::string& key, std::size_t from) {
@@ -3030,6 +3122,287 @@ void test_sketch_on_a_drafted_face_follows_the_draft() {
   CHECK(on_face(side, "on the whole face again"));
 }
 
+// A sketch's frame as the sketch query gives it: its origin and axes.
+struct SketchAxes {
+  gp_Pnt origin;
+  gp_Vec x;
+  gp_Vec y;
+
+  gp_Pnt point(double u, double v) const { return origin.Translated(x * u + y * v); }
+  gp_Vec normal() const { return x.Crossed(y); }
+};
+
+// The `sketch` query's frame, or with `query` "sketch3d" a 3D sketch's
+// (mitcad#2465).
+std::optional<SketchAxes> sketch_axes(const mitcad::Document& document, const std::string& uid,
+                                      const std::string& query = "sketch") {
+  const std::string json(document.query(R"({"query": ")" + query + R"(", "uid": ")" + uid + "\"}"));
+  const std::size_t frame = json.find("\"frame\":{");
+  if (frame == std::string::npos) {
+    return std::nullopt;
+  }
+  const auto origin = json_triple(json, "origin", frame);
+  const auto x = json_triple(json, "x_axis", frame);
+  const auto y = json_triple(json, "y_axis", frame);
+  if (!origin || !x || !y) {
+    return std::nullopt;
+  }
+  return SketchAxes{gp_Pnt(origin->XYZ()), *x, *y};
+}
+
+// The design text without the frames its face sketches were placed with
+// (mitcad#2409): the design as saved before them. Counts what it took out.
+std::string without_placed_frames(std::string json, int& taken) {
+  taken = 0;
+  for (std::size_t at = json.find("\"placed\""); at != std::string::npos; at = json.find("\"placed\"", at)) {
+    // The key's object, to its closing brace.
+    std::size_t close = json.find('{', at);
+    for (int depth = 0; close < json.size(); ++close) {
+      depth += json[close] == '{' ? 1 : json[close] == '}' ? -1 : 0;
+      if (depth == 0) {
+        break;
+      }
+    }
+    // From the comma before the key (the face's name comes first).
+    std::size_t from = at;
+    while (from > 0 && json[from - 1] != ',') {
+      --from;
+    }
+    if (from == 0 || close >= json.size()) {
+      break;
+    }
+    json.erase(from - 1, close + 2 - from);
+    at = from - 1;
+    ++taken;
+  }
+  return json;
+}
+
+// A sketch on a drafted side face keeps its place on the face when the
+// draft's pull direction flips or its angle changes sign (mitcad#2409,
+// follow-up of mitcad#2351): the frame it was placed with turns with the
+// face about the draft's hinge, where the default frame of a face facing
+// near +X would turn half a turn and put the circle off the face. A design
+// saved before keeps the default frame.
+void test_sketch_on_a_drafted_face_keeps_its_place() {
+  auto document = mitcad::new_demo_document(); // Sketch1 (F1, 60 x 40), Extrude1 (F2, 20 mm)
+  const std::string side = "F2:side(c2[c1,c3])"; // x = 60, y 0..40, z 0..20
+  const auto draft = [&side](const std::string& angle, const std::string& more) {
+    return R"({"type": "draft", "body": "F2.b0", "faces": [")" + side + R"("], "plane": "xz", "angle": ")" + angle +
+           "\"" + more + "}";
+  };
+  const auto edit_draft = [&](const std::string& def) {
+    return run(*document, R"({"cmd": "edit_feature", "uid": "F3", "def": )" + def + "}");
+  };
+  // Draft1 (F3): the side 5 degrees about the XZ plane: its hinge is the
+  // line x = 60, y = 0 (the fixed plane's section of the side).
+  run(*document, R"({"cmd": "add_feature", "def": )" + draft("5 deg", "") + "}");
+  // Sketch2 (F4) on the drafted side.
+  run(*document, R"({"cmd": "sketch.create", "plane": {"face": ")" + side + R"(", "body": "F2.b0"}})");
+  CHECK(feature_ok(*document, "Draft1"));
+  CHECK(feature_ok(*document, "Sketch2"));
+  // The plane keeps the frame it was placed with.
+  const std::string sketch(document->query(R"({"query": "sketch", "uid": "F4"})"));
+  CHECK(contains(sketch, R"("placed":{"origin":)"));
+  const auto placed = sketch_axes(*document, "F4");
+  CHECK(placed.has_value());
+  if (!placed) {
+    return;
+  }
+  // An off-centre circle on it, about (60, 26, 13) on the face, whichever
+  // way the frame's axes point.
+  const gp_Vec normal = placed->normal();
+  const gp_Vec offset(placed->origin, gp_Pnt(60.0, 26.0, 13.0));
+  const gp_Vec along = offset - normal * offset.Dot(normal);
+  const double u = std::round(along.Dot(placed->x) * 1000.0) / 1000.0;
+  const double v = std::round(along.Dot(placed->y) * 1000.0) / 1000.0;
+  run(*document, sketch_circle("F4", u, v, 6));
+  CHECK(feature_ok(*document, "Sketch2"));
+  const gp_Pnt centre = placed->point(u, v);
+  // On the side, within it: the circle lies on the face.
+  const auto inside = [](const gp_Pnt& p) {
+    return p.Y() > 3.0 && p.Y() < 37.0 && p.Z() > 3.0 && p.Z() < 17.0 && std::abs(p.X() - 60.0) < 6.0;
+  };
+  CHECK(inside(centre));
+  // Where the tilt about the hinge takes the centre: turned about z through
+  // (60, 0) by the angle from the placed frame's normal to the new one.
+  const auto tilted = [&](const gp_Vec& normal) {
+    const gp_Vec n0 = placed->normal();
+    const double angle = std::atan2(n0.Crossed(normal).Z(), n0.Dot(normal));
+    const double dx = centre.X() - 60.0;
+    const double dy = centre.Y();
+    return gp_Pnt(60.0 + dx * std::cos(angle) - dy * std::sin(angle), dx * std::sin(angle) + dy * std::cos(angle),
+                  centre.Z());
+  };
+  const auto keeps_its_place = [&](const char* what) {
+    const auto now = sketch_axes(*document, "F4");
+    if (!now || !feature_ok(*document, "Draft1") || !feature_ok(*document, "Sketch2")) {
+      std::fprintf(stderr, "  %s: no frame\n", what);
+      return false;
+    }
+    const gp_Pnt at = now->point(u, v);
+    const gp_Pnt expected = tilted(now->normal());
+    const bool ok = at.Distance(expected) < 0.01 && inside(at) && now->x.Dot(placed->x) > 0.9;
+    if (!ok) {
+      std::fprintf(stderr, "  %s: centre (%.4f, %.4f, %.4f), expected (%.4f, %.4f, %.4f)\n", what, at.X(), at.Y(),
+                   at.Z(), expected.X(), expected.Y(), expected.Z());
+    }
+    return ok;
+  };
+  CHECK(keeps_its_place("placed"));
+
+  // The pull direction flipped: the side leans the other way, the circle
+  // stays on it, turned about the hinge.
+  edit_draft(draft("5 deg", R"(, "flip": true)"));
+  CHECK(keeps_its_place("flipped"));
+  // The angle's sign changed instead, and another angle.
+  edit_draft(draft("-5 deg", ""));
+  CHECK(keeps_its_place("negative angle"));
+  edit_draft(draft("8 deg", ""));
+  CHECK(keeps_its_place("8 degrees"));
+  // Back as it was placed: where it was.
+  edit_draft(draft("5 deg", ""));
+  const auto back = sketch_axes(*document, "F4");
+  CHECK(back && back->point(u, v).Distance(centre) < 1e-6);
+
+  // A design saved before mitcad#2409 (no placed frame) opens with the
+  // sketch where it was, and keeps the default frame: it gets no placed
+  // frame by opening or by an edit, and the flip turns it as before.
+  int taken = 0;
+  const std::string old = without_placed_frames(std::string(document->to_json()), taken);
+  CHECK(taken == 1);
+  auto opened = mitcad::load_document(old);
+  run(*opened, R"({"cmd": "recompute"})");
+  const auto reopened = sketch_axes(*opened, "F4");
+  CHECK(reopened && reopened->point(u, v).Distance(centre) < 1e-6);
+  run(*opened, R"({"cmd": "edit_feature", "uid": "F3", "def": )" + draft("5 deg", R"(, "flip": true)") + "}");
+  CHECK(feature_ok(*opened, "Sketch2"));
+  const auto turned = sketch_axes(*opened, "F4");
+  CHECK(turned && turned->x.Dot(placed->x) < -0.9);
+  CHECK(!contains(std::string(opened->to_json()), "\"placed\""));
+}
+
+// The first point of a 3D sketch where the solve put it, in the
+// component's coordinates (the `sketch3d` query's `position`).
+std::optional<gp_Pnt> spatial_point(const mitcad::Document& document, const std::string& uid) {
+  const std::string json(document.query(R"({"query": "sketch3d", "uid": ")" + uid + "\"}"));
+  const std::size_t points = json.find("\"points\":[");
+  if (points == std::string::npos) {
+    return std::nullopt;
+  }
+  const auto at = json_triple(json, "position", points);
+  if (!at) {
+    return std::nullopt;
+  }
+  return gp_Pnt(at->XYZ());
+}
+
+// A 3D sketch created on a drafted side face keeps its place on the face
+// (mitcad#2465, follow-up of mitcad#2409): sketch3d.create stores the
+// face's frame in the support, which turns with the face about the draft's
+// hinge when the pull direction flips or the angle changes sign, where the
+// default frame of a face facing near +X would turn half a turn and put
+// the point off the face. A 3D sketch saved before keeps the default frame.
+void test_spatial_sketch_on_a_drafted_face_keeps_its_place() {
+  auto document = mitcad::new_demo_document(); // Sketch1 (F1, 60 x 40), Extrude1 (F2, 20 mm)
+  const std::string side = "F2:side(c2[c1,c3])"; // x = 60, y 0..40, z 0..20
+  const auto draft = [&side](const std::string& angle, const std::string& more) {
+    return R"({"type": "draft", "body": "F2.b0", "faces": [")" + side + R"("], "plane": "xz", "angle": ")" + angle +
+           "\"" + more + "}";
+  };
+  const auto edit_draft = [&](const std::string& def) {
+    return run(*document, R"({"cmd": "edit_feature", "uid": "F3", "def": )" + def + "}");
+  };
+  // Draft1 (F3): the side 5 degrees about the XZ plane, hinged on the line
+  // x = 60, y = 0.
+  run(*document, R"({"cmd": "add_feature", "def": )" + draft("5 deg", "") + "}");
+  // 3DSketch1 (F4) created on the drafted side: its support keeps the
+  // frame it was created with.
+  const std::string created =
+      run(*document, R"({"cmd": "sketch3d.create", "support": {"face": ")" + side + R"(", "body": "F2.b0"}})");
+  CHECK(contains(created, R"("uid":"F4")"));
+  CHECK(feature_ok(*document, "Draft1"));
+  CHECK(feature_ok(*document, "3DSketch1"));
+  const std::string sketch(document->query(R"({"query": "sketch3d", "uid": "F4"})"));
+  CHECK(contains(sketch, R"("placed":{"origin":)"));
+  const auto placed = sketch_axes(*document, "F4", "sketch3d");
+  CHECK(placed.has_value());
+  if (!placed) {
+    return;
+  }
+  // A fixed point on the side, about (60, 26, 13), off its middle,
+  // whichever way the frame's axes point.
+  const gp_Vec normal = placed->normal();
+  const gp_Vec offset(placed->origin, gp_Pnt(60.0, 26.0, 13.0));
+  const gp_Vec along = offset - normal * offset.Dot(normal);
+  const double u = std::round(along.Dot(placed->x) * 1000.0) / 1000.0;
+  const double v = std::round(along.Dot(placed->y) * 1000.0) / 1000.0;
+  run(*document, R"({"cmd": "sketch3d.add_point", "sketch": "F4", "at": [)" + std::to_string(u) + "," +
+                     std::to_string(v) + R"(,0], "fixed": true})");
+  CHECK(feature_ok(*document, "3DSketch1"));
+  const gp_Pnt point = placed->point(u, v);
+  const auto solved = spatial_point(*document, "F4");
+  CHECK(solved && solved->Distance(point) < 1e-6);
+  const auto inside = [](const gp_Pnt& p) {
+    return p.Y() > 3.0 && p.Y() < 37.0 && p.Z() > 3.0 && p.Z() < 17.0 && std::abs(p.X() - 60.0) < 6.0;
+  };
+  CHECK(inside(point));
+  // Where the tilt about the hinge takes the point: turned about z through
+  // (60, 0) by the angle from the placed frame's normal to the new one.
+  const auto tilted = [&](const gp_Vec& normal) {
+    const gp_Vec n0 = placed->normal();
+    const double angle = std::atan2(n0.Crossed(normal).Z(), n0.Dot(normal));
+    const double dx = point.X() - 60.0;
+    const double dy = point.Y();
+    return gp_Pnt(60.0 + dx * std::cos(angle) - dy * std::sin(angle), dx * std::sin(angle) + dy * std::cos(angle),
+                  point.Z());
+  };
+  const auto keeps_its_place = [&](const char* what) {
+    const auto now = sketch_axes(*document, "F4", "sketch3d");
+    const auto at = spatial_point(*document, "F4");
+    if (!now || !at || !feature_ok(*document, "Draft1") || !feature_ok(*document, "3DSketch1")) {
+      std::fprintf(stderr, "  %s: no frame or point\n", what);
+      return false;
+    }
+    const gp_Pnt expected = tilted(now->normal());
+    const bool ok = at->Distance(expected) < 0.01 && inside(*at) && now->x.Dot(placed->x) > 0.9;
+    if (!ok) {
+      std::fprintf(stderr, "  %s: point (%.4f, %.4f, %.4f), expected (%.4f, %.4f, %.4f)\n", what, at->X(), at->Y(),
+                   at->Z(), expected.X(), expected.Y(), expected.Z());
+    }
+    return ok;
+  };
+  CHECK(keeps_its_place("placed"));
+
+  // The pull direction flipped, the angle's sign changed, another angle:
+  // the point stays on the side, turned about the hinge.
+  edit_draft(draft("5 deg", R"(, "flip": true)"));
+  CHECK(keeps_its_place("flipped"));
+  edit_draft(draft("-5 deg", ""));
+  CHECK(keeps_its_place("negative angle"));
+  edit_draft(draft("8 deg", ""));
+  CHECK(keeps_its_place("8 degrees"));
+  edit_draft(draft("5 deg", ""));
+  const auto back = spatial_point(*document, "F4");
+  CHECK(back && back->Distance(point) < 1e-6);
+
+  // A 3D sketch saved without the frame opens unchanged and keeps the
+  // default frame: it gets none by opening or by an edit, and the flip
+  // turns it half a turn as before.
+  int taken = 0;
+  const std::string old = without_placed_frames(std::string(document->to_json()), taken);
+  CHECK(taken == 1);
+  auto opened = mitcad::load_document(old);
+  run(*opened, R"({"cmd": "recompute"})");
+  const auto reopened = spatial_point(*opened, "F4");
+  CHECK(reopened && reopened->Distance(point) < 1e-6);
+  run(*opened, R"({"cmd": "edit_feature", "uid": "F3", "def": )" + draft("5 deg", R"(, "flip": true)") + "}");
+  CHECK(feature_ok(*opened, "3DSketch1"));
+  const auto turned = sketch_axes(*opened, "F4", "sketch3d");
+  CHECK(turned && turned->x.Dot(placed->x) < -0.9);
+  CHECK(!contains(std::string(opened->to_json()), "\"placed\""));
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3048,6 +3421,14 @@ int main(int argc, char** argv) {
   }
   if (argc > 1 && std::string(argv[1]) == "drafted-face-2351") {
     test_sketch_on_a_drafted_face_follows_the_draft();
+    return failures == 0 ? 0 : 1;
+  }
+  if (argc > 1 && std::string(argv[1]) == "drafted-face-2409") {
+    test_sketch_on_a_drafted_face_keeps_its_place();
+    return failures == 0 ? 0 : 1;
+  }
+  if (argc > 1 && std::string(argv[1]) == "drafted-face-2465") {
+    test_spatial_sketch_on_a_drafted_face_keeps_its_place();
     return failures == 0 ? 0 : 1;
   }
   test_block_fillet_and_dimension_change();
@@ -3091,6 +3472,9 @@ int main(int argc, char** argv) {
   test_reported_screw_joint_keeps_earlier_joint();
   test_boundary_distances_without_a_surface();
   test_sketch_on_a_drafted_face_follows_the_draft();
+  test_sketch_on_a_drafted_face_keeps_its_place();
+  test_replaced_floor_opens_a_through_hole();
+  test_spatial_sketch_on_a_drafted_face_keeps_its_place();
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

@@ -2,7 +2,12 @@
 cmake_minimum_required(VERSION 3.24)
 # Shells on reporters' designs (never committed): GitHub #466 (mitcad#2050),
 # a plate with a cylinder on one rounded corner, its foot rounded, shelled
-# 2 mm inside with the cylinder's top and the plate's bottom removed. Each
+# 2 mm inside with the cylinder's top and the plate's bottom removed;
+# GitHub #641 (mitcad#2384), a three-way pipe (a loft mirrored and joined,
+# its crotch rounded): its mirrored half there (the kernel's union kept the
+# loft alone, OCCT port patch 2384), the crotch rounded, and the pipe
+# shelled 5 mm inside with its three ends removed, Rounded, and Sharp with
+# and without the crotch's rounding (mitcad#2418, OCCT port patch 2418). Each
 # report's archive is found in its folder under MITCAD_MITCAD_REPORTED by
 # its content id (the first 8 hex digits of the SHA-256), the design in it
 # by its own, unpacked into WORK so that nothing is written beside the
@@ -22,7 +27,8 @@ endforeach()
 # (content ids) and the script that opens it.
 set(cases
   "github-466:53c6486f:b6232239:shell_reported466.json" # 2 mm inside, two faces open
-  "github-466:53c6486f:b6232239:shell_reported466_plain.json") # the same without its roundings
+  "github-466:53c6486f:b6232239:shell_reported466_plain.json" # the same without its roundings
+  "github-641:26657c01:92b2040d:shell_reported641.json") # the three-way pipe joined, 5 mm inside Rounded and Sharp
 
 set(reported "$ENV{MITCAD_MITCAD_REPORTED}")
 if(reported STREQUAL "" OR NOT IS_DIRECTORY "${reported}")

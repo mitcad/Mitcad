@@ -282,6 +282,120 @@ pub struct CylinderEmbedding {
     pub inner_is_front: bool,
 }
 
+/// A conical panel's chart (mitcad#2435): the development of its neutral
+/// cone about the apex, lengths and angles kept. Chart point `(x, y)` is at
+/// the distance `rho = hypot(x, y)` from `apex` along the generator and the
+/// developed angle `phi = atan2(y, x)` (taken in `[-w, 2 pi - w)`, `w` half
+/// the angle the development leaves free, `pi - angle_extent / 2`), which
+/// is the angle `phi / sin(half_angle)` about `axis` from `radial_start`
+/// towards `angular_direction`. The material lies from `neutral_depth`
+/// inside the neutral cone (towards the axis) to `thickness -
+/// neutral_depth` outside it; `neutral_depth` is K t.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConeEmbedding {
+    /// The apex of the neutral cone.
+    pub apex: [f64; 3],
+    /// From the apex where the radius grows (a unit vector).
+    pub axis: [f64; 3],
+    pub radial_start: [f64; 3],
+    pub angular_direction: [f64; 3],
+    /// Radians, strictly between 0 and pi/2.
+    pub half_angle: f64,
+    /// From the inner surface to the neutral one, mm.
+    pub neutral_depth: f64,
+    /// The developed angle the chart's material lies in, from 0 (radians,
+    /// less than `2 pi sin(half_angle)`).
+    pub angle_extent: f64,
+    pub inner_is_front: bool,
+}
+
+impl ConeEmbedding {
+    /// The developed angle of chart point `p` in the chart's window.
+    pub fn developed_angle(&self, p: [f64; 2]) -> f64 {
+        let free = std::f64::consts::PI - self.angle_extent / 2.0;
+        let mut phi = p[1].atan2(p[0]);
+        if phi < -free {
+            phi += std::f64::consts::TAU;
+        }
+        phi
+    }
+
+    /// The model point of chart point `p` at `depth` from the front
+    /// surface towards the back (`0..=thickness`).
+    pub fn point(&self, p: [f64; 2], depth: f64, thickness: f64) -> [f64; 3] {
+        let (frame, offset) = self.frame(p, depth, thickness);
+        let rho = p[0].hypot(p[1]);
+        let (s, c) = self.half_angle.sin_cos();
+        let generator: [f64; 3] = std::array::from_fn(|i| s * frame[0][i] + c * self.axis[i]);
+        let normal: [f64; 3] = std::array::from_fn(|i| c * frame[0][i] - s * self.axis[i]);
+        std::array::from_fn(|i| self.apex[i] + rho * generator[i] + offset * normal[i])
+    }
+
+    /// The radial and the angular direction about the axis at chart point
+    /// `p`, and the offset from the neutral cone (outwards, mm) of `depth`
+    /// from the front surface.
+    pub fn frame(&self, p: [f64; 2], depth: f64, thickness: f64) -> ([[f64; 3]; 2], f64) {
+        let theta = self.developed_angle(p) / self.half_angle.sin();
+        let (s, c) = theta.sin_cos();
+        let radial =
+            std::array::from_fn(|i| c * self.radial_start[i] + s * self.angular_direction[i]);
+        let angular =
+            std::array::from_fn(|i| -s * self.radial_start[i] + c * self.angular_direction[i]);
+        let front = if self.inner_is_front {
+            -self.neutral_depth
+        } else {
+            thickness - self.neutral_depth
+        };
+        let offset = if self.inner_is_front {
+            front + depth
+        } else {
+            front - depth
+        };
+        ([radial, angular], offset)
+    }
+
+    /// The chart point and the depth from the front surface of a model
+    /// point, or None at the axis or outside the chart's angle.
+    pub fn coordinates(&self, point: [f64; 3], thickness: f64) -> Option<([f64; 2], f64)> {
+        let d: [f64; 3] = std::array::from_fn(|i| point[i] - self.apex[i]);
+        let along = d[0] * self.axis[0] + d[1] * self.axis[1] + d[2] * self.axis[2];
+        let w: [f64; 3] = std::array::from_fn(|i| d[i] - along * self.axis[i]);
+        let r = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
+        if r <= 1e-12 {
+            return None;
+        }
+        let x =
+            w[0] * self.radial_start[0] + w[1] * self.radial_start[1] + w[2] * self.radial_start[2];
+        let y = w[0] * self.angular_direction[0]
+            + w[1] * self.angular_direction[1]
+            + w[2] * self.angular_direction[2];
+        let mut theta = y.atan2(x);
+        let (s, c) = self.half_angle.sin_cos();
+        let turn = std::f64::consts::TAU;
+        let free = (turn - self.angle_extent / s) / 2.0;
+        if theta < -free {
+            theta += turn;
+        }
+        let phi = theta * s;
+        if phi < -1e-9 || phi > self.angle_extent + 1e-9 {
+            return None;
+        }
+        let rho = r * s + along * c;
+        let offset = r * c - along * s;
+        let front = if self.inner_is_front {
+            -self.neutral_depth
+        } else {
+            thickness - self.neutral_depth
+        };
+        let depth = if self.inner_is_front {
+            offset - front
+        } else {
+            front - offset
+        };
+        Some(([rho * phi.cos(), rho * phi.sin()], depth))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaterialParity {
@@ -306,6 +420,8 @@ pub enum SheetEmbedding {
         front_to_back_sign: MaterialParity,
     },
     Cylinder(CylinderEmbedding),
+    /// A conical panel (mitcad#2435).
+    Cone(ConeEmbedding),
 }
 
 impl SheetEmbedding {
@@ -325,8 +441,58 @@ impl SheetEmbedding {
                 angular_direction: t.apply_vector(c.angular_direction),
                 ..c.clone()
             }),
+            Self::Cone(c) => Self::Cone(ConeEmbedding {
+                apex: t.apply_point(c.apex),
+                axis: t.apply_vector(c.axis),
+                radial_start: t.apply_vector(c.radial_start),
+                angular_direction: t.apply_vector(c.angular_direction),
+                ..c.clone()
+            }),
         }
     }
+}
+
+/// A cylindrical or conical face of a body developed into a sheet chart
+/// ([`crate::kernel::Kernel::sheet_face_development`], mitcad#2435).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetFaceDevelopment {
+    /// A cylinder: a point of its axis; a cone: the apex of the neutral
+    /// cone.
+    pub origin: [f64; 3],
+    /// A cylinder's axis; a cone's, from the apex where its radius grows.
+    pub axis: [f64; 3],
+    /// Across the axis where the face starts (its least angle about it).
+    pub radial_start: [f64; 3],
+    /// Across the axis and `radial_start`: the way the face runs round.
+    pub angular_direction: [f64; 3],
+    /// The neutral cylinder's radius; 0 for a cone.
+    pub neutral_radius: f64,
+    /// A cone's half angle (radians); 0 for a cylinder.
+    pub half_angle: f64,
+    /// How far the faces run round their axis (radians, up to a full turn).
+    pub turn: f64,
+    /// The faces close on themselves round the axis (at a seam edge, or
+    /// where the faces meet again).
+    pub closed: bool,
+    /// The faces' outward normal points to the axis: the front is the
+    /// sheet's inner surface.
+    pub inner_is_front: bool,
+    /// Each face's edges in the chart: a cylinder's `(angle * neutral
+    /// radius, along the axis from origin)`, a cone's development about the
+    /// apex. A generator is a line and a circle round the axis a line (a
+    /// cylinder's) or an arc about the apex (a cone's), from their exact
+    /// ends; other edges are B-splines through their exact development,
+    /// within 1e-8 mm of it.
+    pub faces: Vec<Vec<BoundedCurve2>>,
+}
+
+/// How a face bends ([`crate::kernel::Kernel::face_bending`],
+/// mitcad#2435): the largest Gaussian curvature (1/mm², its magnitude) at
+/// points spread over the face, and the size of its box (mm).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceBending {
+    pub gaussian: f64,
+    pub size: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

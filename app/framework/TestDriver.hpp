@@ -281,6 +281,9 @@
 //   drag-view-point <x,y,z> <dx> <dy> [button] [mods]  a drag from it
 //   tooltip-view-point <x,y,z>  the tooltip request of a pointer resting at
 //                           a model point's place (mitcad#2265)
+//   drag-logged-to-view-point <regex> <x,y,z>  a drag from a logged place
+//                           (a Projects panel row) to a model point's
+//                           place in the view (mitcad#2428)
 //   expect-navigation-runtime       saved navigation bindings and camera gestures
 //   expect-assistant-setup <mode>    isolated real setup controls and config results
 //   agent-menu <row> on|off         the agent indicator's menu filled as it opens,

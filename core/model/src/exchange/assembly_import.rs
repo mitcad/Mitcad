@@ -441,9 +441,11 @@ impl<K: Kernel> Document<K> {
         if inputs.is_empty() {
             return Ok(());
         }
-        let added = self.add_base_features(label, inputs)?;
+        // The bodies' colours as their appearances (mitcad#2423).
+        let added = self.add_base_features_with(label, inputs, true)?;
         for (entry, imported) in owners.into_iter().zip(added) {
-            // What the faces' colours could not do (mitcad#2313).
+            // What the bodies' and the faces' colours could not do
+            // (mitcad#2423, mitcad#2313).
             placing.warnings.extend(imported.warnings.iter().cloned());
             placing.made[entry].feature = Some(imported);
         }

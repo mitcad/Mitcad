@@ -6,6 +6,7 @@
 #include <array>
 #include <exception>
 #include <map>
+#include <new>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -15,6 +16,7 @@
 #include <BOPAlgo_Alerts.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_BooleanOperation.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
@@ -26,10 +28,14 @@
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
+#include <BRepLib.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffset_Analyse.hxx>
 #include <BRepOffset_MakeOffset.hxx>
+#include <ChFiDS_TypeOfConcavity.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <Geom2d_Curve.hxx>
 #include <BRepTools.hxx>
@@ -347,6 +353,167 @@ TopoDS_Shape offset_input(const TopoDS_Shape& shape) {
   return it.More() ? shape : only;
 }
 
+// Offsets of their own on faces of a body (a shell's faces with their own
+// thickness, mitcad#2443), by the face's index, signed as the offset they
+// replace.
+using FaceOffsets = std::map<int, double>;
+
+// The faces of the body other than `face` that the geometry kernel's
+// offset gives the offset of `face` (BRepOffset_MakeOffset::
+// UpdateFaceOffset): those that meet it smoothly, and with `rounded` (an
+// offset with rounded joins) those a rounding joins to it (along convex
+// edges for an offset out of the material, concave ones into it), and so
+// on from them; found by the kernel's own analysis of the faces it offsets.
+std::vector<int> offset_together(const Shape& body, const BRepOffset_Analyse& analyse, int face, double offset,
+                                 bool rounded) {
+  BRep_Builder builder;
+  TopoDS_Compound group;
+  builder.MakeCompound(group);
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
+  seen.Add(body.face(face));
+  if (rounded) {
+    analyse.AddFaces(body.face(face), group, seen, ChFiDS_Tangential, offset < 0.0 ? ChFiDS_Concave : ChFiDS_Convex);
+  } else {
+    analyse.AddFaces(body.face(face), group, seen, ChFiDS_Tangential);
+  }
+  std::vector<int> faces;
+  for (TopExp_Explorer it(group, TopAbs_FACE); it.More(); it.Next()) {
+    const int f = body.face_index(it.Current());
+    if (f >= 0 && f != face && std::find(faces.begin(), faces.end(), f) == faces.end()) {
+      faces.push_back(f);
+    }
+  }
+  return faces;
+}
+
+// Checks the offsets of their own (`own`, of the body's faces other than
+// the `removed` ones; the rest are offset by `offset`) against the faces the
+// geometry kernel offsets as one (offset_together): it would give them all
+// one of their offsets. With `tangent_chain` a face that meets one with an
+// offset of its own smoothly takes that offset (added to `own`); a face that
+// meets it so with another offset, or (in a `rounded` offset) is joined to
+// it by a rounding with another offset, is refused, both faces painted.
+void spread_own_offsets(const Shape& body, const std::set<int>& removed, double offset, bool rounded,
+                        bool tangent_chain, FaceOffsets& own) {
+  if (own.empty()) {
+    return;
+  }
+  BRep_Builder builder;
+  TopoDS_Compound kept;
+  builder.MakeCompound(kept);
+  for (int f = 0; f < body.face_count(); ++f) {
+    if (removed.count(f) == 0) {
+      builder.Add(kept, body.face(f));
+    }
+  }
+  // The angle below which the kernel's offset takes two faces for meeting
+  // smoothly (BRepOffset_MakeOffset::MakeOffsetShape).
+  double tolerance = kTolerance;
+  for (TopExp_Explorer it(body.occt(), TopAbs_VERTEX); it.More(); it.Next()) {
+    tolerance = std::max(tolerance, BRep_Tool::Tolerance(TopoDS::Vertex(it.Current())));
+  }
+  const double angle =
+      4.0 * std::asin(std::min(tolerance / (std::abs(offset * 0.5) + Precision::Confusion()), 1.0));
+  const BRepOffset_Analyse analyse(kept, angle);
+  const auto value = [&](int f) { return own.count(f) > 0 ? own.at(f) : offset; };
+  const auto differ = [](double a, double b) { return std::abs(a - b) > kTolerance; };
+  const auto refuse = [&](int a, int b, const std::string& said) {
+    const std::string first = detail::primary_name(body, a);
+    const std::string second = detail::primary_name(body, b);
+    throw std::invalid_argument(placed_error(said, said + " (" + first + ", " + second + ")",
+                                             {face_place(first), face_place(second)}));
+  };
+  const FaceOffsets given = own;
+  for (const auto& [face, distance] : given) {
+    for (const int other : offset_together(body, analyse, face, distance, false)) {
+      if (!differ(value(other), distance)) {
+        continue;
+      }
+      if (tangent_chain && own.count(other) == 0) {
+        own[other] = distance;
+        continue;
+      }
+      refuse(face, other,
+             tangent_chain || given.count(other) > 0
+                 ? "shell failed; two faces that meet smoothly have different thicknesses of their own, and "
+                   "the geometry kernel offsets such faces as one"
+                 : "shell failed; a face with its own thickness meets a face of another thickness smoothly, and "
+                   "the geometry kernel offsets such faces as one: give them one thickness or turn on Tangent "
+                   "Chain");
+    }
+  }
+  if (!rounded) {
+    return;
+  }
+  for (const auto& [face, distance] : FaceOffsets(own)) {
+    for (const int other : offset_together(body, analyse, face, distance, true)) {
+      if (differ(value(other), distance)) {
+        refuse(face, other,
+               "shell failed; a rounding of the wall would join a face with its own thickness to a face of "
+               "another thickness, and the geometry kernel rounds only walls of one thickness: give them one "
+               "thickness or choose the Sharp shell type");
+      }
+    }
+  }
+}
+
+// OCCT's thick solid with offsets of their own on faces
+// (BRepOffset_MakeOffset::SetOffsetOnFace, mitcad#2443): what
+// MakeThickSolidByJoin does, which takes no such offsets, so that the
+// result's history (Modified, Generated) stays the thick solid's.
+class ThickSolidWithOwnOffsets : public BRepOffsetAPI_MakeThickSolid {
+public:
+  void make(const TopoDS_Shape& solid, const NCollection_List<TopoDS_Shape>& closing, double offset,
+            GeomAbs_JoinType join, const std::vector<std::pair<TopoDS_Face, double>>& own,
+            const Message_ProgressRange& range) {
+    NotDone();
+    myLastUsedAlgo = OffsetAlgo_JOIN;
+    myOffsetShape.Initialize(solid, offset, kTolerance, BRepOffset_Skin, false, false, join, false, false);
+    for (const TopoDS_Shape& face : closing) {
+      myOffsetShape.AddFace(TopoDS::Face(face));
+    }
+    for (const auto& [face, distance] : own) {
+      myOffsetShape.SetOffsetOnFace(face, distance);
+    }
+    myOffsetShape.MakeThickSolid(range);
+    if (!myOffsetShape.IsDone()) {
+      return;
+    }
+    myShape = myOffsetShape.Shape();
+    Done();
+  }
+};
+
+// OCCT's offset of a whole body with offsets of their own on faces, as
+// ThickSolidWithOwnOffsets for PerformByJoin.
+class OffsetShapeWithOwnOffsets : public BRepOffsetAPI_MakeOffsetShape {
+public:
+  void make(const TopoDS_Shape& solid, double offset, GeomAbs_JoinType join,
+            const std::vector<std::pair<TopoDS_Face, double>>& own, const Message_ProgressRange& range) {
+    NotDone();
+    myLastUsedAlgo = OffsetAlgo_JOIN;
+    myOffsetShape.Initialize(solid, offset, kTolerance, BRepOffset_Skin, false, false, join, false, false);
+    for (const auto& [face, distance] : own) {
+      myOffsetShape.SetOffsetOnFace(face, distance);
+    }
+    myOffsetShape.MakeOffsetShape(range);
+    if (!myOffsetShape.IsDone()) {
+      return;
+    }
+    myShape = myOffsetShape.Shape();
+    Done();
+  }
+};
+
+// The faces of `own` as the kernel's offset takes them.
+std::vector<std::pair<TopoDS_Face, double>> own_faces(const Shape& body, const FaceOffsets& own) {
+  std::vector<std::pair<TopoDS_Face, double>> faces;
+  for (const auto& [face, distance] : own) {
+    faces.emplace_back(body.face(face), distance);
+  }
+  return faces;
+}
+
 // Names the faces generated by an offset or thick solid from the body's
 // edges and vertices (wall ends at removed faces, rounded joins) when they
 // have no name yet.
@@ -482,8 +649,9 @@ void cut_end_slivers(const TopoDS_Shape& shape) {
 // the face is often smooth: a stored body's B-splines whose knots repeat as
 // often as their degree, such as rational arcs. Each piece offsets on its
 // own, which gives the same wall (mitcad#158). `removed` (faces of the body)
-// becomes the pieces of those faces.
-ShapePtr split_at_creases(const Shape& body, std::set<int>& removed) {
+// becomes the pieces of those faces, and so do the faces of `own` (offsets
+// of their own, mitcad#2443), each piece with its face's offset.
+ShapePtr split_at_creases(const Shape& body, std::set<int>& removed, FaceOffsets* own = nullptr) {
   bool creased = false;
   for (int i = 0; i < body.face_count() && !creased; ++i) {
     const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(body.face(i));
@@ -499,14 +667,30 @@ ShapePtr split_at_creases(const Shape& body, std::set<int>& removed) {
   if (split.IsNull()) {
     return nullptr;
   }
+  // The split leaves some edges' curves on their faces on ranges other than
+  // their 3D curve's, with the edge still flagged same-parameter: an
+  // invalid edge (BRepCheck_InvalidSameParameterFlag), harmless to a closed
+  // offset, which keeps no face of the body, but carried into a thick
+  // solid's outside of the wall (GitHub #645's loft with its top open,
+  // mitcad#2462). Their curves on faces are put on the 3D curve's range.
+  for (TopExp_Explorer it(split, TopAbs_EDGE); it.More(); it.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+    if (!BRep_Tool::SameRange(edge)) {
+      BRepLib::SameRange(edge, Precision::PConfusion());
+    }
+  }
   const occ::handle<ShapeBuild_ReShape> context = divide.GetContext();
   std::vector<Shape::NamedFace> faces;
   std::vector<TopoDS_Shape> removed_pieces;
+  std::vector<std::pair<TopoDS_Shape, double>> own_pieces;
   for (int i = 0; i < body.face_count(); ++i) {
     for (TopExp_Explorer it(context->Apply(body.face(i)), TopAbs_FACE); it.More(); it.Next()) {
       faces.push_back({it.Current(), body.face_names(i)});
       if (removed.count(i) > 0) {
         removed_pieces.push_back(it.Current());
+      }
+      if (own != nullptr && own->count(i) > 0) {
+        own_pieces.emplace_back(it.Current(), own->at(i));
       }
     }
   }
@@ -519,35 +703,56 @@ ShapePtr split_at_creases(const Shape& body, std::set<int>& removed) {
     }
     pieces.insert(index);
   }
+  FaceOffsets offsets;
+  for (const auto& [piece, offset] : own_pieces) {
+    const int index = out->face_index(piece);
+    if (index < 0) {
+      return nullptr;
+    }
+    offsets[index] = offset;
+  }
   removed = pieces;
+  if (own != nullptr) {
+    *own = offsets;
+  }
   return out;
 }
 
 // The wall between the body's surface and its offset by `offset` (negative
 // inside), with the removed faces open. The outside of the wall keeps the
-// face names; the inside is offset(<face>).
+// face names; the inside is offset(<face>). The faces of `own_offsets` (of
+// the input) are offset by their own offsets (spread_own_offsets).
 ShapePtr thick_solid(const std::string& feature, const Shape& input, const std::set<int>& removed_faces,
-                     double offset, GeomAbs_JoinType join) {
+                     double offset, GeomAbs_JoinType join, const FaceOffsets& own_offsets = {},
+                     bool tangent_chain = true) {
   // OCCT's offset widens the tolerances of its input's sub-shapes.
   const ShapePtr copy = detail::working_copy(input);
   cut_end_slivers(copy->occt());
   std::set<int> removed = removed_faces;
-  const ShapePtr split = split_at_creases(*copy, removed);
+  FaceOffsets own = own_offsets;
+  const ShapePtr split = split_at_creases(*copy, removed, &own);
   const Shape& body = split ? *split : *copy;
+  spread_own_offsets(body, removed, offset, join == GeomAbs_Arc, tangent_chain, own);
   NCollection_List<TopoDS_Shape> closing;
   for (int f : removed) {
     closing.Append(body.face(f));
   }
-  BRepOffsetAPI_MakeThickSolid maker;
+  ThickSolidWithOwnOffsets maker;
+  detail::shell_dump("thick-input", body.occt());
   detail::interruptible([&](const Message_ProgressRange& range) {
     named_failure([&] {
-      maker.MakeThickSolidByJoin(body.occt(), closing, offset, kTolerance, BRepOffset_Skin, false,
-                                 false, join, false, range);
+      if (own.empty()) {
+        maker.MakeThickSolidByJoin(body.occt(), closing, offset, kTolerance, BRepOffset_Skin, false,
+                                   false, join, false, range);
+      } else {
+        maker.make(body.occt(), closing, offset, join, own_faces(body, own), range);
+      }
     });
   });
   if (!maker.IsDone()) {
     throw std::runtime_error(offset_failure(maker.MakeOffset()));
   }
+  detail::shell_dump("thick-result", maker.Shape());
   const TopoDS_Shape result = single_solid(maker.Shape(), "the shell");
   detail::FaceNamer namer(result);
   for (int i = 0; i < body.face_count(); ++i) {
@@ -589,6 +794,28 @@ ShapePtr thick_solid(const std::string& feature, const Shape& input, const std::
         caps.push_back(it.Current());
       }
     }
+    // Where the body meets the removed face only tangentially, the wall
+    // ends in strips along the normal from the face's edges to their offsets
+    // (OCCT port patch 2462): the faces holding its edges.
+    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> removed_edges;
+    for (TopExp_Explorer it(body.face(f), TopAbs_EDGE); it.More(); it.Next()) {
+      removed_edges.Add(it.Current());
+    }
+    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> body_faces;
+    for (TopExp_Explorer it(body.occt(), TopAbs_FACE); it.More(); it.Next()) {
+      body_faces.Add(it.Current());
+    }
+    for (TopExp_Explorer it(result, TopAbs_FACE); it.More(); it.Next()) {
+      if (namer.named(it.Current()) || body_faces.Contains(it.Current())) {
+        continue;
+      }
+      for (TopExp_Explorer edges(it.Current(), TopAbs_EDGE); edges.More(); edges.Next()) {
+        if (removed_edges.Contains(edges.Current())) {
+          caps.push_back(it.Current());
+          break;
+        }
+      }
+    }
     for (const TopoDS_Shape& cap : caps) {
       if (cap.ShapeType() == TopAbs_FACE && !namer.named(cap)) {
         namer.add(cap, name);
@@ -601,19 +828,28 @@ ShapePtr thick_solid(const std::string& feature, const Shape& input, const std::
 
 // The body offset by `offset` as a closed solid, with each face named after
 // the body face it comes from: the same names, or offset(<face>) with `inner`.
+// The faces of `own_offsets` (of the input) are offset by their own offsets
+// (spread_own_offsets).
 ShapePtr offset_body(const std::string& feature, const Shape& input, double offset,
-                     GeomAbs_JoinType join, bool inner) {
+                     GeomAbs_JoinType join, bool inner, const FaceOffsets& own_offsets = {},
+                     bool tangent_chain = true) {
   // OCCT's offset widens the tolerances of its input's sub-shapes.
   const ShapePtr copy = detail::working_copy(input);
   cut_end_slivers(copy->occt());
   std::set<int> none;
-  const ShapePtr split = split_at_creases(*copy, none);
+  FaceOffsets own = own_offsets;
+  const ShapePtr split = split_at_creases(*copy, none, &own);
   const Shape& body = split ? *split : *copy;
+  spread_own_offsets(body, none, offset, join == GeomAbs_Arc, tangent_chain, own);
   const TopoDS_Shape solid = offset_input(body.occt());
-  BRepOffsetAPI_MakeOffsetShape maker;
+  OffsetShapeWithOwnOffsets maker;
   detail::interruptible([&](const Message_ProgressRange& range) {
     named_failure([&] {
-      maker.PerformByJoin(solid, offset, kTolerance, BRepOffset_Skin, false, false, join, false, range);
+      if (own.empty()) {
+        maker.PerformByJoin(solid, offset, kTolerance, BRepOffset_Skin, false, false, join, false, range);
+      } else {
+        maker.make(solid, offset, join, own_faces(body, own), range);
+      }
     });
   });
   if (!maker.IsDone()) {
@@ -796,6 +1032,186 @@ ShapePtr cavity_shell(const std::string& feature, const Shape& input, const std:
   return result;
 }
 
+// The offsets of a shell's faces with their own thickness (mitcad#2443),
+// by the body's face index: into the material (negative) and out of it.
+struct OwnOffsets {
+  FaceOffsets inside;
+  FaceOffsets outside;
+};
+
+// The faces of the shell's `own` on the body, with their offsets. Refused:
+// a thickness on a side the shell's wall has not (or none where it has),
+// a removed face, a face given two thicknesses.
+OwnOffsets own_offsets(const Shape& body, const ShellSpec& spec, const std::set<int>& removed) {
+  OwnOffsets offsets;
+  for (const ShellFace& own : spec.own) {
+    require_not_negative("a face's own inside thickness", own.inside);
+    require_not_negative("a face's own outside thickness", own.outside);
+    if ((own.inside > 0.0) != (spec.inside > 0.0) || (own.outside > 0.0) != (spec.outside > 0.0)) {
+      throw std::invalid_argument(face_error(own.face,
+                                             "a face's own thickness must be on the sides of the shell's wall: "
+                                             "inside, outside or both, as the shell's thickness",
+                                             "the own thickness of face " + own.face +
+                                                 " must be on the sides of the shell's wall"));
+    }
+    for (const int f : detail::resolve_faces(body, {own.face}, "faces with their own thickness")) {
+      const std::string name = detail::primary_name(body, f);
+      if (removed.count(f) > 0) {
+        throw std::invalid_argument(face_error(name, "a face the shell removes cannot have its own thickness",
+                                               "face " + name + " is removed; it cannot have its own thickness"));
+      }
+      const bool twice = (offsets.inside.count(f) > 0 && offsets.inside.at(f) != -own.inside) ||
+                         (offsets.outside.count(f) > 0 && offsets.outside.at(f) != own.outside);
+      if (twice) {
+        throw std::invalid_argument(face_error(name, "a face is given two thicknesses of its own",
+                                               "face " + name + " is given two thicknesses of its own"));
+      }
+      if (own.inside > 0.0) {
+        offsets.inside[f] = -own.inside;
+      }
+      if (own.outside > 0.0) {
+        offsets.outside[f] = own.outside;
+      }
+    }
+  }
+  return offsets;
+}
+
+// Whether `build` succeeds; a cancel or a failed allocation goes on (OCCT's
+// failures are std::exceptions).
+template <class Build>
+bool builds(Build&& build) {
+  try {
+    build();
+    return true;
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const Standard_OutOfMemory&) {
+    throw;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+// What an error says.
+std::string what_of(const std::exception_ptr& failure) {
+  try {
+    std::rethrow_exception(failure);
+  } catch (const std::exception& error) {
+    return error.what();
+  } catch (...) {
+  }
+  return std::string();
+}
+
+// The shell of a body with faces of their own thickness (mitcad#2443): the
+// walls as shell() builds them, each face offset by its own thickness in
+// the geometry kernel's offset, without the cavity (which has one
+// thickness). Where the kernel's offset fails and the shell builds at its
+// own thickness alone, the faces whose own thickness the walls around them
+// cannot meet are found one by one, and the error paints them; where it
+// fails at the shell's thickness too, that failure stands.
+ShapePtr own_thickness_shell(const std::string& feature, const Shape& body, const ShellSpec& spec,
+                             const std::set<int>& removed, GeomAbs_JoinType join, const OwnOffsets& own) {
+  // The largest wall inside, for the notes of missing walls.
+  double inside = spec.inside;
+  for (const auto& [face, offset] : own.inside) {
+    inside = std::max(inside, -offset);
+  }
+  const auto build = [&](const OwnOffsets& offsets) {
+    ShapePtr result;
+    if (removed.empty()) {
+      const ShapePtr outer =
+          spec.outside > 0.0 ? offset_body(feature, body, spec.outside, join, false, offsets.outside, spec.tangent_chain)
+                             : std::make_shared<Shape>(body);
+      const ShapePtr inner =
+          spec.inside > 0.0 ? offset_body(feature, body, -spec.inside, join, true, offsets.inside, spec.tangent_chain)
+                            : renamed_as_inner(feature, body);
+      result = hollow(*outer, *inner);
+      check_result(result, "the shell");
+      if (spec.inside > 0.0) {
+        detail::note_missing_walls(feature, body, removed, inside, *result);
+      }
+      return result;
+    }
+    ShapePtr inner;
+    if (spec.inside > 0.0) {
+      inner = thick_solid(feature, body, removed, -spec.inside, join, offsets.inside, spec.tangent_chain);
+      check_result(inner, "the shell");
+      detail::note_missing_walls(feature, body, removed, inside, *inner);
+    }
+    if (spec.outside == 0.0) {
+      return inner;
+    }
+    const ShapePtr outer = thick_solid(feature, body, removed, spec.outside, join, offsets.outside, spec.tangent_chain);
+    if (inner) {
+      result = fuse_walls(*inner, *outer);
+      result->copy_notes(*inner);
+    } else {
+      result = outer;
+    }
+    check_result(result, "the shell");
+    return result;
+  };
+  std::exception_ptr failure;
+  try {
+    return build(own);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const Standard_OutOfMemory&) {
+    throw;
+  } catch (const std::invalid_argument&) {
+    // Refused before the offset (spread_own_offsets).
+    throw;
+  } catch (const std::runtime_error& error) {
+    detail::shell_trace(std::string("the offset with faces of their own thickness failed: ") + error.what());
+    failure = std::current_exception();
+  } catch (const Standard_Failure& error) {
+    detail::shell_trace(std::string("the offset with faces of their own thickness raised ") + error.what());
+    failure = std::current_exception();
+  }
+  if (!builds([&] { build(OwnOffsets()); })) {
+    std::rethrow_exception(failure);
+  }
+  std::set<int> faces;
+  for (const FaceOffsets* side : {&own.inside, &own.outside}) {
+    for (const auto& [face, offset] : *side) {
+      faces.insert(face);
+    }
+  }
+  std::vector<int> unmet;
+  for (const int face : faces) {
+    OwnOffsets alone;
+    if (own.inside.count(face) > 0) {
+      alone.inside[face] = own.inside.at(face);
+    }
+    if (own.outside.count(face) > 0) {
+      alone.outside[face] = own.outside.at(face);
+    }
+    if (!builds([&] { build(alone); })) {
+      unmet.push_back(face);
+    }
+  }
+  if (unmet.empty()) {
+    unmet.assign(faces.begin(), faces.end());
+  }
+  std::vector<ErrorPlace> places;
+  std::string names;
+  for (const int face : unmet) {
+    places.push_back(face_place(detail::primary_name(body, face)));
+    names += (names.empty() ? "" : ", ") + detail::primary_name(body, face);
+  }
+  const std::string said =
+      unmet.size() == 1
+          ? "shell failed; the wall of a face cannot be built at its own thickness: the walls of the faces "
+            "around it do not meet it"
+          : "shell failed; the walls of faces cannot be built at their own thicknesses: the walls of the faces "
+            "around them do not meet them";
+  throw std::runtime_error(placed_error(said, said + " (" + names + "); " + what_of(failure), places));
+}
+
 } // namespace
 
 ShapePtr shell(const std::string& feature, const Shape& body, const ShellSpec& spec) {
@@ -816,6 +1232,11 @@ ShapePtr shell(const std::string& feature, const Shape& body, const ShellSpec& s
     }
   }
   const GeomAbs_JoinType join = spec.rounded ? GeomAbs_Arc : GeomAbs_Intersection;
+  if (!spec.own.empty()) {
+    const std::set<int> removed = as_set(faces);
+    const OwnOffsets own = own_offsets(body, spec, removed);
+    return detail::run("shell", [&] { return own_thickness_shell(feature, body, spec, removed, join, own); });
+  }
   return detail::run("shell", [&] {
     // Where the kernel's offset fails, the inside of the wall is the body
     // less a cavity: parts no thicker than the wall stay solid.
@@ -1670,17 +2091,68 @@ ShapePtr offset_across_seams(const std::string& feature, const Shape& body,
   return moved;
 }
 
+// True when the planar face, moved `distance` along its normal out of the
+// material (negative: into it), reaches the body's surface on the far side
+// (mitcad#2381): the region it sweeps, continued a little past where it
+// stops, does not lie inside the body. Moved there by the offset, the face
+// would stay as a face of no thickness on that surface (a pocket's floor
+// onto the outside face under it caps the opening) or pass through the
+// body; the region between the faces and the target is removed instead
+// (replace_by_slab), which opens the wall between.
+bool reaches_far_side(const Shape& body, int face, double distance) {
+  if (!(distance < -kTolerance)) {
+    return false;
+  }
+  const std::optional<gp_Pln> plane = detail::face_plane(body.face(face));
+  if (!plane) {
+    return false;
+  }
+  // Far enough past the target that a wall the target lands on shows as a
+  // part of the swept region outside the body (at least 1e-3 of it).
+  const double past = std::max(0.01, 1.0e-3 * -distance);
+  // On a copy of the face: the body stays as it is.
+  BRepPrimAPI_MakePrism sweep(body.face(face), gp_Vec(plane->Axis().Direction()) * (distance - past),
+                              true);
+  if (!sweep.IsDone()) {
+    return false;
+  }
+  const double swept = std::abs(detail::volume_of(sweep.Shape()));
+  if (!(swept > 0.0)) {
+    return false;
+  }
+  BRepAlgoAPI_Common common;
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(body.occt());
+  NCollection_List<TopoDS_Shape> tools;
+  tools.Append(sweep.Shape());
+  common.SetArguments(arguments);
+  common.SetTools(tools);
+  common.SetNonDestructive(true);
+  detail::build(common);
+  if (!common.IsDone() || common.HasErrors()) {
+    // Not measured: the faces move by the offset, as they did before this
+    // check.
+    return false;
+  }
+  const double inside = std::abs(detail::volume_of(common.Shape()));
+  return swept - inside > 1.0e-6 * swept;
+}
 
 } // namespace
 
 ShapePtr offset_faces(const std::string& feature, const Shape& body,
-                      const std::vector<std::string>& faces, double distance) {
+                      const std::vector<std::string>& faces, double distance,
+                      bool tangent_chain) {
   detail::require_finite("offset distance", distance);
   if (distance == 0.0) {
     throw std::invalid_argument("the offset distance must not be zero");
   }
   detail::require_surfaces(body.occt(), "offset faces");
-  const std::vector<int> chosen = detail::resolve_faces(body, faces, "faces to offset");
+  std::vector<int> chosen = detail::resolve_faces(body, faces, "faces to offset");
+  if (tangent_chain) {
+    // As Replace Face's: the faces the hover's chain shows (mitcad#2438).
+    chosen = detail::tangent_closure(body, chosen);
+  }
   return detail::run("offset faces", [&] {
     // Where a moved face continues smoothly into a face that stays (the
     // pieces of a split face, a face tangent to a rounding that stays), the
@@ -1830,6 +2302,17 @@ ShapePtr replace_faces(const std::string& feature, const Shape& body,
       replaced = replaced.empty() ? detail::primary_name(body, f) : replaced;
     }
     const std::string name = face_name(feature, "replace", replaced);
+    // A face moved into the material up to the body's far side or past it
+    // (a pocket's floor onto the outside face under it, or beyond): the
+    // region between the faces and the target is removed, so the wall
+    // between goes and the opening is open (mitcad#2381).
+    if (!tilted && std::any_of(moves.begin(), moves.end(), [&](const auto& move) {
+          return reaches_far_side(body, move.first, move.second);
+        })) {
+      ShapePtr through = detail::replace_by_slab(body, chosen, target, name);
+      check_result(through, "replacing faces");
+      return through;
+    }
     NCollection_List<TopoDS_Shape> moved;
     ShapePtr result;
     const bool still = std::all_of(moves.begin(), moves.end(), [](const auto& move) {

@@ -54,7 +54,8 @@ int drawingToolsTests() {
     CHECK(tool.tooltip.size() <= 80);
     CHECK(tool.place == !tool.placeHint.isEmpty());
   }
-  CHECK(names == QStringList({QStringLiteral("Base View"), QStringLiteral("Projected View"),
+  CHECK(names == QStringList({QStringLiteral("Base View"), QStringLiteral("Flat Pattern View"),
+                              QStringLiteral("Projected View"),
                               QStringLiteral("Section View"), QStringLiteral("Detail View"),
                               QStringLiteral("Break"), QStringLiteral("Dimension"), QStringLiteral("Ordinate"),
                               QStringLiteral("Baseline"), QStringLiteral("Model Items"), QStringLiteral("Center Mark"),
@@ -83,7 +84,7 @@ int drawingToolsTests() {
   // Pattern and Edge Extension (mitcad#729); Dimensions with Model Items
   // (mitcad#1406); Text with Hole Callout after Note (mitcad#2054); Symbols
   // with Weld Symbol and Propose Welds (mitcad#2350).
-  CHECK(groups.count(0) == 5 && groups.count(1) == 6 && groups.count(2) == 4 && groups.count(3) == 3 &&
+  CHECK(groups.count(0) == 6 && groups.count(1) == 6 && groups.count(2) == 4 && groups.count(3) == 3 &&
         groups.count(4) == 5 && groups.count(5) == 3);
   CHECK(toolGroupName(0) == QStringLiteral("Create") && toolGroupName(1) == QStringLiteral("Geometry") &&
         toolGroupName(2) == QStringLiteral("Dimensions") && toolGroupName(3) == QStringLiteral("Text") &&
@@ -215,6 +216,63 @@ int drawingToolsTests() {
   command = base->command(QStringLiteral("D1"), 0, picks(0, {QPointF(10, 20)}),
                           {{QStringLiteral("subject"), QStringLiteral("flat:F2.b0")}});
   CHECK(command.value(QStringLiteral("subject")).toObject() == flatSubject);
+  // Base View's list has its Flat Patterns after a separator (mitcad#2446):
+  // the first of them, none without.
+  CHECK(firstFlatPattern(withFlat) == 4);
+  CHECK(firstFlatPattern(rootList) == -1);
+  // Flat Pattern View's list (mitcad#2446): the Flat Patterns alone, of
+  // the drawing's component's own sheet-metal bodies.
+  CHECK(flatPatternChoices(QStringLiteral("C0"), allBodies, sheets) ==
+        (QList<QPair<QString, QString>>{{QStringLiteral("flat:F2.b0"), QStringLiteral("Base Flat Pattern")}}));
+  CHECK(flatPatternChoices(QString(), allBodies, sheets).size() == 1);
+  CHECK(flatPatternChoices(QStringLiteral("C1"), allBodies, sheets) ==
+        (QList<QPair<QString, QString>>{{QStringLiteral("flat:F5.b0"), QStringLiteral("Arm body Flat Pattern")}}));
+  CHECK(flatPatternChoices(QStringLiteral("C0"), allBodies, QJsonArray()).isEmpty());
+  CHECK(flatPatternChoices(QStringLiteral("C2"), allBodies, sheets).isEmpty());
+  // Flat Pattern View (mitcad#2446): after Base View, the flat-pattern
+  // icon, a click places a base view of the Flat Pattern its Shows names,
+  // fitted to the sheet unless a scale is chosen, its bend notes on unless
+  // cleared; nothing without a Flat Pattern or a point.
+  const DrawingToolDef* flatTool = drawingTool(QStringLiteral("drawing.flat_pattern_view"));
+  CHECK(flatTool != nullptr);
+  if (flatTool != nullptr) {
+    CHECK(flatTool->icon == QStringLiteral("flat-pattern") && flatTool->pick == SheetPick::Point);
+    CHECK(toolGroup(*flatTool) == 0 && !flatTool->place && !flatTool->iconOnly);
+    command = flatTool->command(QStringLiteral("D1"), 0, picks(0, {QPointF(150, 150)}),
+                                {{QStringLiteral("subject"), QStringLiteral("flat:F2.b0")}});
+    CHECK(command.value(QStringLiteral("cmd")).toString() == QStringLiteral("add_drawing_view"));
+    CHECK(command.value(QStringLiteral("type")).toString() == QStringLiteral("base"));
+    CHECK(command.value(QStringLiteral("subject")).toObject() == flatSubject);
+    CHECK(command.value(QStringLiteral("at")).toArray() == QJsonArray({150.0, 150.0}));
+    CHECK(!command.contains(QStringLiteral("scale")) && !command.contains(QStringLiteral("direction")));
+    command = flatTool->command(QStringLiteral("D1"), 1, picks(0, {QPointF(150, 150)}),
+                                {{QStringLiteral("subject"), QStringLiteral("flat:F2.b0")},
+                                 {QStringLiteral("scale"), QStringLiteral("1:1")},
+                                 {QStringLiteral("bend_notes"), QStringLiteral("false")}});
+    CHECK(command.value(QStringLiteral("scale")).toString() == QStringLiteral("1:1"));
+    CHECK(command.value(QStringLiteral("sheet")).toInt() == 1);
+    CHECK(command.value(QStringLiteral("subject")).toObject().value(QStringLiteral("bend_notes")) ==
+          QJsonValue(false));
+    CHECK(flatTool->command(QStringLiteral("D1"), 0, picks(0, {QPointF(150, 150)}), none).isEmpty());
+    CHECK(flatTool->command(QStringLiteral("D1"), 0, picks(0, {QPointF(150, 150)}),
+                            {{QStringLiteral("subject"), QStringLiteral("body:F2.b0")}})
+              .isEmpty());
+    CHECK(flatTool->command(QStringLiteral("D1"), 0, ToolPicks(),
+                            {{QStringLiteral("subject"), QStringLiteral("flat:F2.b0")}})
+              .isEmpty());
+  }
+  // Create Drawing of Flat Pattern's view (mitcad#2446): where the model
+  // places it (no `at`), fitted to the sheet, with its bend notes.
+  command = flatPatternView(QStringLiteral("D2"), 0, QStringLiteral("flat:F2.b0"), QStringLiteral("fit"), true, nullptr);
+  CHECK(command.value(QStringLiteral("drawing")).toString() == QStringLiteral("D2"));
+  CHECK(command.value(QStringLiteral("subject")).toObject() == flatSubject);
+  CHECK(!command.contains(QStringLiteral("at")) && !command.contains(QStringLiteral("scale")));
+  // The command search finds both by "flat", "unfold", "blank" and
+  // "development".
+  for (const char* word : {"flat", "unfold", "blank", "development"}) {
+    CHECK(toolKeywords(QStringLiteral("drawing.flat_pattern_view")).contains(QString::fromLatin1(word)));
+    CHECK(flatPatternKeywords().contains(QString::fromLatin1(word)));
+  }
   // The view panel's Shows (mitcad#1293): the root's own bodies, then each
   // occurrence with its component's bodies and its occurrences.
   const QVector<SubjectRow> rows = subjectRows(QStringLiteral("C0"), components, allBodies);

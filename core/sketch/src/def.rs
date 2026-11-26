@@ -33,7 +33,7 @@ use crate::text::{self, TextOutline};
 use crate::topo::{FaceName, RegionKey};
 use crate::{
     ConicRho, Constraint, ConstraintKind, ConstraintUid, Dimension, DimensionKind, Entity,
-    EntityIndex, EntityKind, Projection, Ref, SketchText, TextValue, ValueRange,
+    EntityIndex, EntityKind, Projection, Ref, SketchText, TangentSide, TextValue, ValueRange,
 };
 use mitcad_vec3::dot;
 
@@ -49,7 +49,10 @@ use crate::occurrence::OccurrenceLink;
 /// ([`DatumPlane::on_plane`]): the face's outward normal, the origin's
 /// projection as origin and the x axis along the projection of +X (of +Y
 /// when the face faces ±X), so a face facing +Z gets the XY frame and one
-/// facing +Y the XZ frame.
+/// facing +Y the XZ frame. A face plane that keeps the frame it had when
+/// the sketch was placed (`placed`, mitcad#2409) carries that frame onto
+/// the face as it is now instead ([`DatumPlane::carry`]), so that a face an
+/// earlier edit tilts takes the sketch with it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum SketchPlane {
     #[default]
@@ -63,6 +66,14 @@ pub enum SketchPlane {
     Face {
         face: Box<FaceName>,
         body: Option<BodyUid>,
+        /// The face's frame when the sketch was placed on it (mitcad#2409),
+        /// written `"placed": {"origin": [..], "x_axis": [..], "y_axis":
+        /// [..]}` in the sketch's component's coordinates: carried onto the
+        /// face as it is now ([`DatumPlane::carry`]), so the sketch keeps
+        /// its place and in-plane orientation when an earlier edit tilts
+        /// the face. None (designs saved before it) gives every planar
+        /// face's default frame.
+        placed: Option<Box<SketchFrame>>,
     },
     /// A cylindrical or conical face (mitcad#1768), written
     /// `{"face": "F2:side(c1)", "body": "F2.b0", "developed": {"angle": 0.5}}`:
@@ -99,8 +110,45 @@ impl SketchPlane {
     /// (mitcad#1768), with its body when named.
     pub fn face(&self) -> Option<(&FaceName, Option<BodyUid>)> {
         match self {
-            Self::Face { face, body } | Self::Developed { face, body, .. } => Some((face, *body)),
+            Self::Face { face, body, .. } | Self::Developed { face, body, .. } => {
+                Some((face, *body))
+            }
             _ => None,
+        }
+    }
+
+    /// A planar face plane without a placed frame: the default frame until
+    /// the sketch is placed ([`SketchPlane::Face`]'s `placed`).
+    pub fn on_face(face: FaceName, body: Option<BodyUid>) -> Self {
+        Self::Face {
+            face: Box::new(face),
+            body,
+            placed: None,
+        }
+    }
+
+    /// The frame a planar face plane keeps from when the sketch was placed
+    /// (mitcad#2409).
+    pub fn placed(&self) -> Option<&SketchFrame> {
+        match self {
+            Self::Face { placed, .. } => placed.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Whether the planes are the same plane, a planar face's placed frame
+    /// aside: what moving a sketch to another plane compares.
+    pub fn same_plane(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Face { face, body, .. },
+                Self::Face {
+                    face: other_face,
+                    body: other_body,
+                    ..
+                },
+            ) => face == other_face && body == other_body,
+            _ => self == other,
         }
     }
 
@@ -113,7 +161,22 @@ impl SketchPlane {
     /// The frame of a plane through `point` with the outward `normal`, as
     /// for every planar face ([`DatumPlane::on_plane`]).
     pub fn face_frame(point: [f64; 3], normal: [f64; 3]) -> SketchFrame {
-        DatumPlane::on_plane(point, normalize(normal)).frame()
+        Self::face_frame_placed(point, normal, None)
+    }
+
+    /// [`SketchPlane::face_frame`] of a face plane with the frame it had
+    /// when the sketch was placed (mitcad#2409): that frame carried onto
+    /// the plane ([`DatumPlane::carry`]); the default frame without one.
+    pub fn face_frame_placed(
+        point: [f64; 3],
+        normal: [f64; 3],
+        placed: Option<&SketchFrame>,
+    ) -> SketchFrame {
+        let plane = DatumPlane::on_plane(point, normalize(normal));
+        match placed {
+            Some(placed) => plane.carry(placed),
+            None => plane.frame(),
+        }
     }
 }
 
@@ -132,6 +195,9 @@ struct FacePlane {
     /// (mitcad#1768).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     developed: Option<DevelopedPlane>,
+    /// A planar face's frame when the sketch was placed (mitcad#2409).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    placed: Option<Box<SketchFrame>>,
 }
 
 /// The developed form of a face plane (mitcad#1768): the angle about the
@@ -150,16 +216,18 @@ impl Serialize for SketchPlane {
             Self::Xz => serializer.serialize_str("xz"),
             Self::Yz => serializer.serialize_str("yz"),
             Self::Construction(uid) => serializer.collect_str(uid),
-            Self::Face { face, body } => FacePlane {
+            Self::Face { face, body, placed } => FacePlane {
                 face: (**face).clone(),
                 body: *body,
                 developed: None,
+                placed: placed.clone(),
             }
             .serialize(serializer),
             Self::Developed { face, body, angle } => FacePlane {
                 face: (**face).clone(),
                 body: *body,
                 developed: Some(DevelopedPlane { angle: *angle }),
+                placed: None,
             }
             .serialize(serializer),
         }
@@ -182,10 +250,30 @@ impl<'de> Deserialize<'de> for SketchPlane {
             },
             value @ serde_json::Value::Object(_) => {
                 let plane: FacePlane = serde_json::from_value(value).map_err(D::Error::custom)?;
+                if let Some(placed) = &plane.placed {
+                    if plane.developed.is_some() {
+                        return Err(D::Error::custom(
+                            "a developed face plane keeps no placed frame (its development sets \
+                             it)",
+                        ));
+                    }
+                    let finite = [placed.origin, placed.x_axis, placed.y_axis]
+                        .iter()
+                        .flatten()
+                        .all(|v| v.is_finite());
+                    let normal = cross(placed.x_axis, placed.y_axis);
+                    if !finite || unit_above(normal, 0.0).is_none() {
+                        return Err(D::Error::custom(
+                            "a face plane's placed frame needs an origin and two axes that are \
+                             not along each other",
+                        ));
+                    }
+                }
                 Ok(match plane.developed {
                     None => Self::Face {
                         face: Box::new(plane.face),
                         body: plane.body,
+                        placed: plane.placed,
                     },
                     Some(developed) if developed.angle.is_finite() => Self::Developed {
                         face: Box::new(plane.face),
@@ -509,6 +597,10 @@ impl FoundRegions<'_> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SketchOutput {
     pub frame: SketchFrame,
+    /// The plane's frame alone, before the sketch's own frame and its
+    /// placement: what a face sketch keeps its x direction from when it is
+    /// placed (mitcad#2409). A curved face's sketch: its carrier plane.
+    pub plane: SketchFrame,
     /// The frame before the placement on the plane (mitcad#787): the
     /// plane's frame with the sketch's own frame; `frame` when the sketch
     /// has no placement. What moves a sketch's own frame (Reorient Design)
@@ -1868,7 +1960,13 @@ impl<P> SketchDef<P> {
                     }
                     vec![(cv(*a), LINE), (cv(*b), LINE)]
                 }
-                D::TangentDistance { circle, line } => {
+                D::TangentDistance { circle, line, side } => {
+                    // Near or far (mitcad#2451): a line has no inside.
+                    if !matches!(side, TangentSide::Outside | TangentSide::Far) {
+                        return Err(format!(
+                            "{what}: a tangent distance to a line takes side outside or far"
+                        ));
+                    }
                     vec![(cv(*circle), ROUND), (cv(*line), LINE)]
                 }
                 D::ConcentricDistance { a, b } => {
@@ -1908,7 +2006,17 @@ impl<P> SketchDef<P> {
                     }
                     vec![(cv(*a), ROUND), (cv(*b), ROUND)]
                 }
-                D::TangentPointDistance { circle, point, .. } => {
+                D::TangentPointDistance {
+                    circle,
+                    point,
+                    side,
+                } => {
+                    // A circle and a point have one side each (mitcad#2451).
+                    if *side == TangentSide::NearFar {
+                        return Err(format!(
+                            "{what}: a tangent distance to a point takes side outside, inside or far"
+                        ));
+                    }
                     vec![(cv(*circle), ROUND), (p(*point), ANY)]
                 }
             };
@@ -2117,5 +2225,74 @@ mod upright_tests {
                 placed.normal()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod placed_frame_tests {
+    use super::{SketchFrame, SketchPlane};
+    use mitcad_vec3::{dot, norm, sub};
+    use serde_json::json;
+
+    /// mitcad#2409: a face plane keeps the frame it had when the sketch was
+    /// placed as `placed`; one written without it (a design saved before)
+    /// reads and writes as it was.
+    #[test]
+    fn a_face_plane_keeps_its_placed_frame_in_the_file() {
+        let old = json!({"face": "F2:side(c2[c1,c3])", "body": "F2.b0"});
+        let plane: SketchPlane = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(plane.placed(), None);
+        assert_eq!(serde_json::to_value(&plane).unwrap(), old);
+
+        let frame = json!({"origin": [60.0, 0.0, 0.0], "x_axis": [0.0, -1.0, 0.0], "y_axis": [0.0, 0.0, -1.0]});
+        let kept = json!({"face": "F2:side(c2[c1,c3])", "body": "F2.b0", "placed": frame});
+        let with_frame: SketchPlane = serde_json::from_value(kept.clone()).unwrap();
+        assert_eq!(
+            with_frame.placed(),
+            Some(&SketchFrame {
+                origin: [60.0, 0.0, 0.0],
+                x_axis: [0.0, -1.0, 0.0],
+                y_axis: [0.0, 0.0, -1.0],
+            })
+        );
+        assert_eq!(serde_json::to_value(&with_frame).unwrap(), kept);
+        // The same face, its placed frame aside.
+        assert!(with_frame.same_plane(&plane));
+        assert_ne!(with_frame, plane);
+        let top = SketchPlane::on_face("F2:end(r{c1})".parse().unwrap(), None);
+        assert!(!with_frame.same_plane(&top));
+        assert!(SketchPlane::Xy.same_plane(&SketchPlane::Xy));
+        assert!(!SketchPlane::Xy.same_plane(&SketchPlane::Xz));
+
+        // Axes along each other, or a developed plane's frame: refused.
+        let along = json!({"face": "F2:top", "placed": {"origin": [0.0, 0.0, 0.0], "x_axis": [1.0, 0.0, 0.0], "y_axis": [2.0, 0.0, 0.0]}});
+        assert!(serde_json::from_value::<SketchPlane>(along).is_err());
+        let developed =
+            json!({"face": "F2:side(c1)", "developed": {"angle": 0.5}, "placed": frame});
+        assert!(serde_json::from_value::<SketchPlane>(developed).is_err());
+    }
+
+    /// The frame of a face tilted the other way about its hinge: carried
+    /// with the face from the placed frame, where the default rule turns
+    /// half a turn and moves the origin along the face.
+    #[test]
+    fn a_placed_frame_survives_a_tilt_of_the_other_sign() {
+        let angle = 8f64.to_radians();
+        let normal = |sign: f64| [angle.cos(), sign * angle.sin(), 0.0];
+        let hinge = [60.0, 0.0, 0.0];
+        let placed = SketchPlane::face_frame(hinge, normal(1.0));
+        let flipped = SketchPlane::face_frame(hinge, normal(-1.0));
+        assert!(dot(placed.x_axis, flipped.x_axis) < -0.9);
+        let carried = SketchPlane::face_frame_placed(hinge, normal(-1.0), Some(&placed));
+        assert!(dot(placed.x_axis, carried.x_axis) > 0.9);
+        assert!((dot(carried.normal(), normal(-1.0)) - 1.0).abs() < 1e-12);
+        // The origin keeps its distance from the hinge line (along z).
+        let from_hinge = |p: [f64; 3]| norm(sub([p[0], p[1], 0.0], hinge));
+        assert!((from_hinge(carried.origin) - from_hinge(placed.origin)).abs() < 1e-9);
+        // Without a placed frame, the default.
+        assert_eq!(
+            SketchPlane::face_frame_placed(hinge, normal(1.0), None),
+            placed
+        );
     }
 }

@@ -33,7 +33,7 @@ std::shared_ptr<geometry::Shape> draft(rust::Str feature, const geometry::Shape&
                                        const ShapeList& plane_shapes, const DraftParams& params);
 std::shared_ptr<geometry::Shape> offset_faces(rust::Str feature, const geometry::Shape& body,
                                               rust::Slice<const rust::String> faces,
-                                              double distance);
+                                              double distance, bool tangent_chain);
 std::shared_ptr<geometry::Shape> delete_faces(rust::Str feature, const geometry::Shape& body,
                                               rust::Slice<const rust::String> faces);
 std::shared_ptr<geometry::Shape> replace_faces(rust::Str feature, const geometry::Shape& body,

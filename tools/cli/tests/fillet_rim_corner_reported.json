@@ -1,0 +1,21 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #620's design (mitcad#2352; opened with --open, never committed; tools/cli/fillet-rim-corner-reported-test.cmake): the body Kap (F2.b0), one closed solid of volume 15123.107095 with its two 1.5 roundings suppressed. Fillet14 (F39, d73 = 1.5, Tangent Chain) picks three edges round the pocket on the bottom face F2:start: the bottom edge of the triangular face F17:start, the bottom edge of the wall F19:side(c140[c127,c125])#0, and the edge between the roundings F18 (3) and F32 (4.25), whose tangent chain runs down F18's edges with the narrow wall F19:side(c140[c127,c125])#1 and the sharp upright corner edge between F17:start and that wall to the bottom. 0.71.0 refused it: 'the fillet is wider than the face beside its edge and would take that face away, but cannot meet the face beyond it, at its corner with the bevel of 1 more edge'. Now: the rounding of F17:start's bottom edge carried past the triangle's narrow end onto F18 and round the corner with a sphere to F19's bottom edge, the upright corner rounded with 1.5, and a corner patch where it meets the bottom's rounding; one closed solid without a note, no face under 0.1 mm2 (the smallest, 0.138, is the input's)."},
+  {"cmd": "suppress_feature", "uid": "F39", "suppressed": false},
+  {"expect": {"feature": "Fillet14", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F39"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"query": {"query": "bodies", "properties": true}, "some": {"uid": "F2.b0", "kind": "solid"}}},
+  {"expect": {"body": "F2.b0", "min_face_area": 0.1,
+    "has_face": "F39:corner(V{F17:start(r{c14[c17,c19],c17[c16+c19,c14],c19[c16+c17,c14]})|F19:side(c140[c127,c125])#1|F2:start(r{c101[c120,c127+c133],c108[c119,c127+c133],c115[c121+c127,c122+c127],c117[c119,c120],c119[c117,c108],c120[c101,c117],c127[c101+c133,c115+c121],c127[c115+c122,c139],c127[c128,c108+c133],c127[c140,c128],c128[c127,c127],c132[c139,c139],c132[c140,c139],c132[c140,c140],c139[c132,c127],c140[c132,c127]})})"}},
+  {"expect": {"body": "F2.b0",
+    "has_face": "F39:fillet(E{F17:start(r{c14[c17,c19],c17[c16+c19,c14],c19[c16+c17,c14]})|F2:start(r{c101[c120,c127+c133],c108[c119,c127+c133],c115[c121+c127,c122+c127],c117[c119,c120],c119[c117,c108],c120[c101,c117],c127[c101+c133,c115+c121],c127[c115+c122,c139],c127[c128,c108+c133],c127[c140,c128],c128[c127,c127],c132[c139,c139],c132[c140,c139],c132[c140,c140],c139[c132,c127],c140[c132,c127]})})"}},
+  {"expect": {"body": "F2.b0",
+    "has_face": "F39:fillet(E{F19:side(c140[c127,c125])#0|F2:start(r{c101[c120,c127+c133],c108[c119,c127+c133],c115[c121+c127,c122+c127],c117[c119,c120],c119[c117,c108],c120[c101,c117],c127[c101+c133,c115+c121],c127[c115+c122,c139],c127[c128,c108+c133],c127[c140,c128],c128[c127,c127],c132[c139,c139],c132[c140,c139],c132[c140,c140],c139[c132,c127],c140[c132,c127]})})"}},
+  {"comment": "The rounding takes 10.81 off the body (15123.107095 before)."},
+  {"expect": {"body": "F2.b0", "volume": 15112.29644972, "tolerance": 2e-6}},
+  {"comment": "Fillet15 (F40, d74 = 1.5, seven edges round the pocket's other side) after it: one closed solid without a note."},
+  {"cmd": "suppress_feature", "uid": "F40", "suppressed": false},
+  {"expect": {"feature": "Fillet15", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "feature", "uid": "F40"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"query": {"query": "bodies", "properties": true}, "some": {"uid": "F2.b0", "kind": "solid"}}},
+  {"expect": {"body": "F2.b0", "volume": 15068.5376007, "tolerance": 2e-6}}
+]

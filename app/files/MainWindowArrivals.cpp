@@ -13,7 +13,10 @@
 // when it closes, in the order they arrived, with one Move on the last
 // download. Nothing asks to close the command: waiting loses nothing,
 // closing would lose its inputs. A download that waits is a copy of its
-// own, kept until it comes in; a design closed first drops them, said.
+// own, kept until it comes in; a design closed first drops them, said. A
+// design dragged from the Projects panel onto the view (mitcad#2428) is an
+// arrival too: inserted through Insert Component, which asks how, so it
+// waits for an inspection as well.
 #include "../MainWindow.hpp"
 
 #include <algorithm>
@@ -250,6 +253,35 @@ void MainWindow::arriveDropped(const QStringList& paths, std::optional<QPointF> 
 }
 
 // ---------------------------------------------------------------------------
+// A design dragged from the Projects panel onto the view (mitcad#2428)
+
+void MainWindow::arriveProjectDesign(const Arrival& given) {
+  const ArrivalGate gate = arrivalGate();
+  // From Idle with nothing waiting, and in a read-only window (whose
+  // Insert Component says why): at once.
+  if (windowReadOnly() || (gate == ArrivalGate::Now && m_arrivals.isEmpty() && !modelBusy())) {
+    insertDroppedDesign(given.paths.first(), given.onView);
+    return;
+  }
+  // Insert Component asks how to insert it: it waits for an inspection
+  // too, as designs of other formats do.
+  Arrival arrival = given;
+  arrival.waitedFor = gate != ArrivalGate::Now ? arrivalWaitsFor() : QString();
+  m_arrivals.append(arrival);
+  const QString file = QFileInfo(arrival.paths.first()).fileName();
+  if (arrival.waitedFor.isEmpty()) {
+    if (modelBusy()) {
+      whenIdle(this, [this] { scheduleArrivals(); });
+    } else {
+      scheduleArrivals();
+    }
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Dropped %1 waits until %2 is finished or canceled").arg(file, arrival.waitedFor);
+  showHint(tr("%1 comes in when %2 is finished or canceled.").arg(file, arrival.waitedFor));
+}
+
+// ---------------------------------------------------------------------------
 // Bringing them in
 
 void MainWindow::bringInBeside(const QString& what, const std::function<void()>& insert) {
@@ -290,6 +322,11 @@ void MainWindow::bringIn(const Arrival& arrival, ArrivalGate gate) {
       qInfo().noquote() << QStringLiteral("Component from Web: could not import %1: %2").arg(list, error);
     }
     showWebNote(inserted ? tr("Imported %1.").arg(list) : tr("Could not import %1: %2").arg(list, error), !inserted);
+    return;
+  }
+  if (arrival.project) {
+    // Never beside an inspection (insertsBeside: a design waits).
+    insertDroppedDesign(arrival.paths.first(), arrival.onView);
     return;
   }
   if (gate == ArrivalGate::Beside) {

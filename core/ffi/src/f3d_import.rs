@@ -2712,7 +2712,7 @@ impl Drop for TryEnd {
 pub(crate) const HANG_RETRIES: usize = 8;
 
 /// The stack of an import thread (the main thread's is 8 MiB on Linux).
-const IMPORT_STACK: usize = 256 << 20;
+pub(crate) const IMPORT_STACK: usize = 256 << 20;
 
 /// Smaller stacks an import thread is started on when the full one does
 /// not fit: an abandoned try keeps its stack and memory, and under an

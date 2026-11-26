@@ -28,7 +28,9 @@
 //! their own) is the occurrence that places the component the next level
 //! sits in, where one occurrence does; the same id elsewhere is then that
 //! occurrence too. Levels inside components of other documents are left
-//! out, and so are grounded occurrences (Mitcad does not move them).
+//! out, and so are grounded occurrences (Mitcad does not move them),
+//! except one of a component of another document that the file places
+//! only along the paths inside it (mitcad#1892, mitcad#2449).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -96,9 +98,21 @@ pub struct Captures {
     /// the index of their item, whose point of the timeline they are at
     /// (their own indices come after the timeline's items).
     parts: HashMap<i64, i64>,
+    /// The occurrences of components of other documents whose placements
+    /// were worked out from the paths inside them (mitcad#1892): the file
+    /// keeps no placement of their own, so they are placed there even
+    /// where they are grounded (mitcad#2449).
+    worked_out: std::collections::BTreeSet<OccurrenceUid>,
 }
 
 impl Captures {
+    /// Whether the occurrence's placement was worked out from the paths
+    /// inside it ([`Captures::last`] places it even where it is grounded,
+    /// mitcad#2449).
+    pub(crate) fn worked_out(&self, occurrence: OccurrenceUid) -> bool {
+        self.worked_out.contains(&occurrence)
+    }
+
     /// The point of the timeline of the item at `index`: its own index,
     /// or for a part of an item in another component that item's.
     pub(crate) fn timeline_at(&self, index: i64) -> i64 {
@@ -493,11 +507,15 @@ fn read_steps(
                         .collect()
                 })
                 .filter(|r: &Vec<_>| !r.is_empty());
+            let from_inside = worked_out.is_some();
             let read = worked_out.or(read);
             let o = f3d
                 .and_then(|f| f.object_id)
                 .and_then(|id| components.occurrence(id));
             if let (Some(read), Some(o)) = (&read, o) {
+                if from_inside {
+                    out.worked_out.insert(o);
+                }
                 out.steps.entry(o).or_insert_with(|| read.clone());
                 let local = out.path_steps.entry(o).or_default();
                 for &(index, world) in read {
@@ -554,7 +572,12 @@ fn read_steps(
         let Some(occurrence) = assembly.occurrence(o) else {
             continue;
         };
-        if occurrence.grounded {
+        // A grounded occurrence stays where the file stores it, unless the
+        // file stores no placement of its own: an occurrence of a
+        // component of another document placed along the paths inside it
+        // (mitcad#2449: a grounded shell of an assembly stayed at the
+        // identity its insert gives, all the parts in it 53 mm off).
+        if occurrence.grounded && !out.worked_out.contains(&o) {
             continue;
         }
         let Some(world) = out.steps[&o].last().map(|(_, t)| *t) else {

@@ -98,6 +98,20 @@ QJsonObject baseView(const QString& drawing, int sheet, const ToolPicks& picks,
   return command;
 }
 
+// Flat Pattern View (mitcad#2446): a base view of the Flat Pattern its
+// Shows names, where the click is.
+QJsonObject flatPatternViewTool(const QString& drawing, int sheet, const ToolPicks& picks,
+                                const QHash<QString, QString>& options) {
+  if (picks.points.isEmpty()) {
+    return {};
+  }
+  const DrawingToolDef& tool = *drawingTool(QStringLiteral("drawing.flat_pattern_view"));
+  const QPointF at = picks.points.first();
+  return flatPatternView(drawing, sheet, optionValue(tool, options, QStringLiteral("subject")),
+                         optionValue(tool, options, QStringLiteral("scale")),
+                         yes(optionValue(tool, options, QStringLiteral("bend_notes"))), &at);
+}
+
 QJsonObject projectedView(const QString& drawing, int sheet, const ToolPicks& picks,
                           const QHash<QString, QString>& /*options*/) {
   if (picks.view <= 0 || picks.points.isEmpty()) {
@@ -794,6 +808,15 @@ QVector<DrawingToolDef> makeTools() {
                  check(QStringLiteral("tangent_edges"), Text::tr("Tangent Edges"), false),
                  check(QStringLiteral("shaded"), Text::tr("Shaded"), false)},
                 &baseView, false, QString(), nullptr, nullptr, false});
+  // A sheet-metal body's Flat Pattern (mitcad#2446): Shows lists only the
+  // Flat Patterns (the workspace's, flatPatternChoices), the first chosen.
+  tools.append({QStringLiteral("drawing.flat_pattern_view"), Text::tr("Flat Pattern View"),
+                QStringLiteral("flat-pattern"), Text::tr("Places a sheet-metal body's Flat Pattern on the sheet"),
+                SheetPick::Point, Text::tr("Click where the Flat Pattern goes"),
+                {choice(QStringLiteral("subject"), Text::tr("Shows"), {}, QString()),
+                 choice(QStringLiteral("scale"), Text::tr("Scale"), scaleChoices(true), QStringLiteral("fit")),
+                 check(QStringLiteral("bend_notes"), Text::tr("Bend Notes"), true)},
+                &flatPatternViewTool, false, QString(), nullptr, nullptr, false});
   tools.append({QStringLiteral("drawing.projected_view"), Text::tr("Projected View"),
                 QStringLiteral("drawing-projected-view"), Text::tr("Projects a view from one beside it"),
                 SheetPick::OutOfView, Text::tr("Drag out of a view, or click where the next view goes"), {},
@@ -921,8 +944,16 @@ QStringList toolKeywords(const QString& id) {
     out << QStringLiteral("welding") << QStringLiteral("fillet weld") << QStringLiteral("butt weld");
   } else if (id == QStringLiteral("drawing.propose_welds")) {
     out << QStringLiteral("welding") << QStringLiteral("weld symbols") << QStringLiteral("frame joints");
+  } else if (id == QStringLiteral("drawing.flat_pattern_view")) {
+    // mitcad#2446.
+    out << flatPatternKeywords();
   }
   return out;
+}
+
+QStringList flatPatternKeywords() {
+  return {QStringLiteral("flat"),  QStringLiteral("flat pattern"), QStringLiteral("unfold"),
+          QStringLiteral("blank"), QStringLiteral("development"),  QStringLiteral("sheet metal")};
 }
 
 namespace {
@@ -975,9 +1006,7 @@ QList<QPair<QString, QString>> subjectChoices(const QString& component, const QS
   const QJsonArray tree = components.value(QStringLiteral("occurrences")).toArray();
   bool found = false;
   addOccurrences(root ? tree : childrenOf(tree, component, &found), QString(), QString(), out);
-  // The component's own bodies, by uid: their Flat Patterns follow.
-  QHash<QString, QString> own;
-  QStringList order;
+  // The component's own bodies.
   for (const QJsonValue& value : bodies) {
     const QJsonObject body = value.toObject();
     const QString owner = body.value(QStringLiteral("component")).toString();
@@ -985,23 +1014,65 @@ QList<QPair<QString, QString>> subjectChoices(const QString& component, const QS
     const QString uid = body.value(QStringLiteral("uid")).toString();
     if (mine && !uid.isEmpty()) {
       const QString bodyName = body.value(QStringLiteral("name")).toString();
-      own.insert(uid, bodyName.isEmpty() ? uid : bodyName);
-      order.append(uid);
-      out.append({QStringLiteral("body:") + uid, own.value(uid)});
+      out.append({QStringLiteral("body:") + uid, bodyName.isEmpty() ? uid : bodyName});
     }
   }
   // Each sheet-metal body's Flat Pattern (mitcad#2280), in the bodies'
   // order.
+  out.append(flatPatternChoices(component, bodies, sheetBodies));
+  return out;
+}
+
+QList<QPair<QString, QString>> flatPatternChoices(const QString& component, const QJsonArray& bodies,
+                                                  const QJsonArray& sheetBodies) {
+  const bool root = component.isEmpty() || component == QStringLiteral("C0");
   QSet<QString> sheets;
   for (const QJsonValue& value : sheetBodies) {
     sheets.insert(value.toObject().value(QStringLiteral("body")).toString());
   }
-  for (const QString& uid : order) {
-    if (sheets.contains(uid)) {
-      out.append({QStringLiteral("flat:") + uid, flatPatternLabel(own.value(uid))});
+  QList<QPair<QString, QString>> out;
+  if (sheets.isEmpty()) {
+    return out;
+  }
+  for (const QJsonValue& value : bodies) {
+    const QJsonObject body = value.toObject();
+    const QString owner = body.value(QStringLiteral("component")).toString();
+    const bool mine = root ? owner.isEmpty() || owner == QStringLiteral("C0") : owner == component;
+    const QString uid = body.value(QStringLiteral("uid")).toString();
+    if (mine && !uid.isEmpty() && sheets.contains(uid)) {
+      const QString bodyName = body.value(QStringLiteral("name")).toString();
+      out.append({QStringLiteral("flat:") + uid, flatPatternLabel(bodyName.isEmpty() ? uid : bodyName)});
     }
   }
   return out;
+}
+
+int firstFlatPattern(const QList<QPair<QString, QString>>& choices) {
+  for (qsizetype i = 0; i < choices.size(); ++i) {
+    if (choices.at(i).first.startsWith(QStringLiteral("flat:"))) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+QJsonObject flatPatternView(const QString& drawing, int sheet, const QString& choice, const QString& scale,
+                            bool bendNotes, const QPointF* at) {
+  QJsonObject subject = subjectOf(choice);
+  if (subject.value(QStringLiteral("type")).toString() != QStringLiteral("flat_pattern")) {
+    return {};
+  }
+  // On when left out (the model's default).
+  if (!bendNotes) {
+    subject.insert(QStringLiteral("bend_notes"), false);
+  }
+  QJsonObject command = view(drawing, sheet, QStringLiteral("base"));
+  command.insert(QStringLiteral("subject"), subject);
+  if (at != nullptr) {
+    command.insert(QStringLiteral("at"), point(*at));
+  }
+  addScale(command, scale);
+  return command;
 }
 
 QString flatPatternLabel(const QString& body) { return Text::tr("%1 Flat Pattern").arg(body); }

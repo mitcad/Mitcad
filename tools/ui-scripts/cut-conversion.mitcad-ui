@@ -10,8 +10,8 @@ focus-widget input_distance
 key ctrl+a
 type 50
 expect-log '^Extrude Distance: 50( mm)? = 50 mm$'
-click-logged '^Panel Extrude input operation at '
-key Home ${MITCAD_CONVERSION_START_KEY} Return
+wait-idle
+qt-choice input_operation "${MITCAD_CONVERSION_START_LABEL}"
 button '^OK$'
 expect-log 'Added extrude \(${MITCAD_CONVERSION_START_LABEL}\)' 30
 expect-model-bodies ${MITCAD_CONVERSION_START_COUNT} ${MITCAD_CONVERSION_START_VOLUME}
@@ -24,8 +24,8 @@ mark
 dblclick-logged '^Timeline Extrude1 at '
 expect-log 'Editing F4 with Extrude'
 expect-no-log 'Extrude: hidden targets start unchecked'
-click-logged '^Panel Extrude input operation at '
-key Home Down Down Return
+wait-idle
+qt-choice input_operation 'Cut'
 expect-log 'Extrude: Operation = Cut'
 expect-log 'Cut target C0@: eligible, checked, intersects'
 expect-log 'Cut target C1@O1: eligible, unchecked, intersects, hidden'
@@ -55,8 +55,8 @@ expect-model-bodies 2 7840
 
 # A committed Cut->Join must retain its dormant scope and exclusions.
 dblclick-logged '^Timeline Extrude1 at '
-click-logged '^Panel Extrude input operation at '
-key Home Down Return
+wait-idle
+qt-choice input_operation 'Join'
 button '^OK$'
 expect-log 'Edited F4' 30
 expect-model-bodies 2 8640

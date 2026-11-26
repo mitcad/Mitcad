@@ -1,4 +1,4 @@
-# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695, 2170, 2284
+# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695, 2170, 2284, 2384
 
 OCCT's face merge after booleans (`ShapeUpgrade_UnifySameDomain`) and the
 boolean's wire splitter, and the volume integration that measures a
@@ -46,6 +46,12 @@ boolean's result (2284). The face merge's speed-ups are 0006 in
   on a face to its 3D curve: a reported ring's common with a union
   measured a volume that moved by 4.1e-6 relative with the point it was
   integrated about (mitcad#2284).
+- **2384** puts a walking intersection line's end on a surface's boundary
+  within a room that grows with a parameter range longer than a full turn:
+  the section of a loft's side parametrized by arc length with its mirror
+  image stopped 4.2 micrometres below the top, where the two sides are
+  tangent, and the union of the loft with its mirror image kept the loft
+  alone (mitcad#2384, GitHub mitcad/Mitcad#641).
 
 ## 0110: a chain that cannot be concatenated
 
@@ -523,6 +529,45 @@ the part of the volume that depended on the point it was integrated
 about. Over the 33 shared cases only volumes change (by up to 4.7e-5
 relative, on the wall's run-on); no case's validity, faces or success.
 
+## 2384: a walk's end put on the boundary at any parameter scale
+
+The patch 2384 comes from mitcad#2384 (GitHub mitcad/Mitcad#641): a
+three-way pipe made of a loft from a circle of radius 170 at z = 315 to
+one of radius 85 at z = 0 centred at x = 225, mirrored about x = 0 and
+joined. Mirror3 said ok, but the body was the loft alone (its volume and
+box), and the reporter's rounding of the crotch and Shell found no
+mirrored half. The loft's side is an oblique cone, a B-spline of degree
+8 x 1 parametrized by arc length (u 0 .. 1068.14 round the top circle,
+v 0 .. 387.10 along the line at u = 0). It crosses its mirror image in the
+plane x = 0 along a curve from (0, 170, 315) down to (0, 0, 142.26) and up
+to (0, -170, 315); at both ends the two sides share their tangent plane.
+
+The section of the two sides came out short: the walk from (0, 170, 315)
+stopped at (0, -169.9989, 314.9959), 4.288 micrometres from the top
+circle's point. The top circle was then not split there, the mirror
+image's side was not cut, the boolean classified it inside the loft as a
+whole, and the union was a valid solid of the loft's volume. The kernel's
+own through-sections loft of the same circles (v over [0, 1]) joined
+right, its section ending on the boundary.
+
+### 2384-intwalk-walk-end-put-on-a-boundary-within-a-room-scaled-to-the-parameter-range
+
+`IntPatch_PrmPrmIntersection` calls `IntWalk_PWalking::PutToBoundary`
+after each walk: an end of the line that lies within `aTol` of a
+surface's boundary in one of its parameters is taken there, and
+`SeekPointOnBoundary` looks for the surfaces' common point on the
+boundary from it (by distance minimisation, within its own tolerance, or
+adds none). `aTol` is a thousandth of a parameter (1e-3 times the
+smallest range, at most 1). On a surface over [0, 1] or an angle that is a
+thousandth of its size, 0.3 mm on the kernel's own loft; on the loft
+parametrized by arc length it was a micrometre, and the walk had stopped
+5e-3 in v below the top. The patch gives each parameter of each surface a
+room of its own: `aTol` for a range up to 2 pi, as before (analytic
+surfaces and those over [0, 1] are unchanged), and `aTol * range / (2 pi)`
+for a longer one; `IsParallel` keeps `aTol`. The point put on the
+boundary is still the surfaces' common point that `SeekPointOnBoundary`
+finds.
+
 ## Reports and tests
 
 - 0220: mitcad#284 and the coaxial cylinders' join in
@@ -595,3 +640,21 @@ relative, on the wall's run-on); no case's validity, faces or success.
   of the ring's; the record keeps the strips the joints leave out of an
   integration along the pcurves alone and the volumes that integration
   gave.
+- 2384: mitcad#2384 and `geometry/tests/test_mirror_loft_join.cpp` (ctest
+  `geometry.mirror_loft_join`): the reporter's loft, alone and with its two
+  end extrusions, joined to its mirror image is one valid solid reaching
+  both arms' ends with the union's volume (twice the loft's half at
+  x >= 0, integrated over the height); without the patch the join refuses
+  in words (geometry/src/boolean.cpp, a union that does not reach as far
+  as a body it joins). The reporter's design in
+  `tools/cli/tests/shell_reported641.json` (ctest `cli.shell_reported`,
+  from `MITCAD_MITCAD_REPORTED`). In the OCCT lab, the case
+  2384-loft-mirror-join (MitCad's loft and its mirror image as B-rep
+  files, written by `test_mirror_loft_join --write`): without the patch the
+  section of the two sides has 4 edges and ends 0.004288 mm from
+  (0, -170, 315), and the fuse has 3 faces, the loft's volume and x from
+  -171.9; with it 5 edges ending on both points, and the fuse 5 faces,
+  27 047 300 mm3 (6 digits), x -310.9 .. 310.9, valid. The 44 other shared
+  cases are unchanged; 2384-loft-mirror-join-proxy (the same cone as a
+  rational B-spline made in DRAW, by arc length and over [0, 1]) joins
+  right with and without the patch.

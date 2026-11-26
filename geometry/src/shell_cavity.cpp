@@ -2,6 +2,7 @@
 #include "shell_cavity.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1358,6 +1359,35 @@ void shell_trace(const std::string& line) {
     std::fprintf(stderr, "shell trace: %s\n", line.c_str());
     std::fflush(stderr);
   }
+}
+
+void shell_dump(const std::string& what, const TopoDS_Shape& shape) {
+  std::string folder;
+#ifdef _MSC_VER
+  char* value = nullptr;
+  std::size_t length = 0;
+  if (_dupenv_s(&value, &length, "MITCAD_SHELL_DUMP") == 0 && value != nullptr) {
+    folder = value;
+    std::free(value);
+  }
+#else
+  if (const char* value = std::getenv("MITCAD_SHELL_DUMP")) {
+    folder = value;
+  }
+#endif
+  if (folder.empty() || shape.IsNull()) {
+    return;
+  }
+  // Numbered within the process, under a stamp of the process's first dump,
+  // so that runs writing into one folder keep their files apart.
+  static const std::string stamp =
+      std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count());
+  static int count = 0;
+  const std::string path = folder + "/shell-" + stamp + "-" + std::to_string(++count) + "-" + what + ".brep";
+  const bool written = BRepTools::Write(shape, path.c_str());
+  shell_trace((written ? "wrote " : "could not write ") + path);
 }
 
 } // namespace mitcad::geometry::detail

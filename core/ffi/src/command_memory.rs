@@ -12,7 +12,9 @@
 //! left (mitcad#2032). The bridge's own imports (`import_f3d`,
 //! `import_ipt`, ... in `lib.rs`) keep their own guard and are not stopped
 //! by this one; nor are undo and redo (`lib.rs`), which put back what a
-//! refused command array changed.
+//! refused command array changed. A command refused before it started is
+//! not run at all and says that the memory was in use before it; a sketch
+//! edit's error advises freeing memory (mitcad#2437).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -131,8 +133,13 @@ impl Document {
             }
         };
         let limit = LIMIT.load(Ordering::Relaxed);
+        // Refused before it started, the command is not run at all
+        // (mitcad#2437): a sketch edit checks no monitor before it changes
+        // the sketch.
         let result =
-            memory_guard::guarded_for(&monitor, work, measurer(limit), || action(&mut self.0));
+            memory_guard::guarded_command(&monitor, work, measurer(limit), ApiError, || {
+                action(&mut self.0)
+            });
         if attached.is_none() {
             self.0.set_monitor(None);
         }

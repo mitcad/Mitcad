@@ -40,6 +40,23 @@ BrowserControlPlace browserEyePlace();
 void setBrowserActivatePlace(BrowserControlPlace place);
 void setBrowserEyePlace(BrowserControlPlace place);
 
+// How the timeline is shown (mitcad#2427, GitHub mitcad/Mitcad#581,
+// Preferences > Display > Timeline): Strip, the default, the bar of icons
+// at the bottom; History list, a panel in the left column under the Browser
+// with a row per timeline item, its name beside its icon, and the marker a
+// bar between the rows (TimelineWidget::Presentation). Every window
+// follows a change at once.
+enum class TimelinePresentation { Strip, HistoryList };
+// The choice's settings value ("strip", "list") and back; an unknown value
+// is Strip.
+QString timelinePresentationId(TimelinePresentation presentation);
+TimelinePresentation timelinePresentationFromId(const QString& id);
+// The saved choice (settings "timeline/presentation"), Strip without one.
+TimelinePresentation timelinePresentation();
+// Saves the choice and tells every window (timelinePresentationChanged)
+// when it changed; Restore Defaults saves Strip.
+void setTimelinePresentation(TimelinePresentation presentation);
+
 // Tells the windows' Browsers that the preference changed.
 class BrowserPreferencesNotifier : public QObject {
   Q_OBJECT
@@ -52,6 +69,9 @@ signals:
   // The Activate radio button's or the Show eye's place changed
   // (mitcad#2223); both are read again.
   void controlPlacesChanged();
+  // The timeline's presentation changed (mitcad#2427): Strip or History
+  // list, read again with timelinePresentation().
+  void timelinePresentationChanged();
 };
 
 } // namespace mitcad

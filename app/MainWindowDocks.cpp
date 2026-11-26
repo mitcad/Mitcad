@@ -9,6 +9,7 @@
 
 #include <QAction>
 #include <QDockWidget>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QtLogging>
@@ -83,6 +84,10 @@ void MainWindow::restoreDockArrangement(bool first, MainWindow* from) {
   if (!keepsDockArrangement()) {
     return;
   }
+  // The timeline's dock where Preferences › Display › Timeline puts it,
+  // whatever arrangement came (mitcad#2427), after the default arrangement
+  // was taken with it at the bottom.
+  const auto placeTimeline = qScopeGuard([this] { applyTimelinePresentation(); });
   // The default arrangement for Restore Default Layout, as the window made
   // its docks.
   captureDefaultDocks();
@@ -231,6 +236,9 @@ void MainWindow::restoreDefaultDocks() {
     qWarning().noquote() << QStringLiteral("Dock state: the default arrangement did not restore");
     return;
   }
+  // The timeline's dock where Preferences › Display › Timeline puts it
+  // (mitcad#2427): the default arrangement has it at the bottom.
+  applyTimelinePresentation();
   QStringList names;
   for (const QDockWidget* dock : docks) {
     if (!m_renderDocks.contains(dock)) {

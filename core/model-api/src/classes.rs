@@ -589,6 +589,9 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("auto_explode", Model),
     // Weld symbols proposed from BUILD's joints (mitcad#2350).
     ("propose_drawing_welds", Model),
+    // The drawing book's drawings, title and cover page (mitcad#2448): it
+    // names linked designs' files, it reads none.
+    ("set_drawing_book", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -903,6 +906,10 @@ const QUERIES: &[(&str, ApiClass)] = &[
     // Exploded views (mitcad#2113).
     ("explode_views", Model),
     ("explode_view", Model),
+    // The drawing book (mitcad#2448): both read the linked designs' files,
+    // and the sheets are written as files.
+    ("drawing_book", FileIo),
+    ("drawing_book_sheets", FileIo),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

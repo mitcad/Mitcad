@@ -131,6 +131,46 @@ impl DatumPlane {
         Self::from_normal(scale(normal, dot(normal, point)), normal, None)
     }
 
+    /// The frame a sketch had on a face when it was placed, `placed`,
+    /// carried onto this plane, the face as it is now (mitcad#2409), the
+    /// way the face moved when an earlier edit tilted it: turned about the
+    /// line where the two planes meet (a draft's hinge) by the angle
+    /// between their normals, or moved along the normal when they are
+    /// parallel. The sketch keeps its place and in-plane orientation on the
+    /// face; an untilted, unmoved face gives `placed` itself. This plane's
+    /// own frame when `placed` is no frame (axes along each other) or the
+    /// face is turned over (the normals opposite: no tilt does that).
+    pub fn carry(&self, placed: &SketchFrame) -> SketchFrame {
+        let normal = self.normal();
+        let x0 = unit(placed.x_axis);
+        let n0 = x0.and_then(|x| unit(cross(x, placed.y_axis)));
+        let (Some(x0), Some(n0)) = (x0, n0) else {
+            return self.frame();
+        };
+        let before = DatumPlane {
+            origin: placed.origin,
+            x_axis: x0,
+            y_axis: cross(n0, x0),
+        };
+        let (origin, x) = match before.intersection(self) {
+            Some(hinge) => {
+                let turn = |v: Vec3| rotate_onto(v, n0, normal);
+                let from_hinge = sub(placed.origin, hinge.origin);
+                (add(hinge.origin, turn(from_hinge)), turn(x0))
+            }
+            None if dot(n0, normal) > 0.0 => (placed.origin, x0),
+            None => return self.frame(),
+        };
+        // On the plane exactly, x at right angles to its normal.
+        let x_axis =
+            unit(sub(x, scale(normal, dot(normal, x)))).unwrap_or_else(|| default_x_axis(normal));
+        SketchFrame {
+            origin: self.project(origin),
+            x_axis,
+            y_axis: cross(normal, x_axis),
+        }
+    }
+
     pub fn normal(&self) -> Vec3 {
         cross(self.x_axis, self.y_axis)
     }
@@ -515,6 +555,53 @@ mod tests {
         ));
         assert!(near(rotate_onto(z, z, [0.0, -1.0, 0.0]), [0.0, -1.0, 0.0]));
         assert!(near(rotate_onto(z, z, [0.0, 0.0, -1.0]), [0.0, 0.0, -1.0]));
+    }
+
+    #[test]
+    fn a_placed_frame_is_carried_as_its_face_tilts() {
+        // A side face near +X drafted about the hinge x = 20, z = 0 one way
+        // and the other (mitcad#2409): the default frame turns half a turn,
+        // the carried one turns with the face about the hinge.
+        let near_mm = |a: Vec3, b: Vec3| norm(sub(a, b)) < 1e-9;
+        let angle = 5f64.to_radians();
+        let tilted = |sign: f64| [angle.cos(), 0.0, sign * angle.sin()];
+        let hinge = [20.0, 0.0, 0.0];
+        let first = DatumPlane::on_plane(hinge, tilted(1.0));
+        let flipped = DatumPlane::on_plane(hinge, tilted(-1.0));
+        assert!(dot(first.x_axis, flipped.x_axis) < -0.98);
+        let placed = first.frame();
+        let carried = flipped.carry(&placed);
+        assert!(dot(placed.x_axis, carried.x_axis) > 0.98);
+        assert!(near(carried.normal(), flipped.normal()));
+        assert!(flipped.distance_to(carried.origin).abs() < 1e-9);
+        // A point of the sketch goes where the tilt about the hinge takes it.
+        let at = [5.0, -3.0];
+        let turned = add(
+            hinge,
+            rotate(sub(placed.point(at), hinge), [0.0, 1.0, 0.0], 2.0 * angle),
+        );
+        assert!(near_mm(carried.point(at), turned));
+        // The face as it was: the placed frame itself.
+        let same = first.carry(&placed);
+        assert!(near_mm(same.origin, placed.origin));
+        assert!(near(same.x_axis, placed.x_axis) && near(same.y_axis, placed.y_axis));
+        // A parallel face 5 mm on: moved along the normal.
+        let offset = DatumPlane::on_plane(add(hinge, scale(tilted(1.0), 5.0)), tilted(1.0));
+        let moved = offset.carry(&placed);
+        assert!(near_mm(
+            moved.origin,
+            add(placed.origin, scale(tilted(1.0), 5.0))
+        ));
+        assert!(near(moved.x_axis, placed.x_axis));
+        // Turned over, or no frame: the plane's own.
+        let over = DatumPlane::on_plane(hinge, scale(tilted(1.0), -1.0));
+        assert_eq!(over.carry(&placed), over.frame());
+        let none = SketchFrame {
+            origin: hinge,
+            x_axis: [1.0, 0.0, 0.0],
+            y_axis: [1.0, 0.0, 0.0],
+        };
+        assert_eq!(flipped.carry(&none), flipped.frame());
     }
 
     #[test]

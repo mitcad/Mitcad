@@ -69,10 +69,28 @@ struct CylinderEmbedding {
   bool inner_is_front = true;
 };
 
+// A conical panel (mitcad#2435): its chart is the development of the
+// neutral cone about its apex. Chart point (x, y) lies hypot(x, y) from the
+// apex along the generator, at the developed angle atan2(y, x) (taken in
+// [-w, 2 pi - w), w = pi - angle_extent / 2), which is the angle
+// atan2(y, x) / sin(half_angle) about the axis from radial_start towards
+// angular_direction. The material reaches neutral_depth inside the neutral
+// cone and thickness - neutral_depth outside it. Not joined by ports.
+struct ConeEmbedding {
+  gp_Pnt apex;
+  gp_Dir axis{0, 0, 1};
+  gp_Dir radial_start{1, 0, 0};
+  gp_Dir angular_direction{0, 1, 0};
+  double half_angle = 0;
+  double neutral_depth = 0;
+  double angle_extent = 0;
+  bool inner_is_front = true;
+};
+
 struct SheetPatch {
   SheetDomainRef domain;
   std::vector<MaterialRegion> regions;
-  std::variant<PlaneEmbedding, CylinderEmbedding> embedding;
+  std::variant<PlaneEmbedding, CylinderEmbedding, ConeEmbedding> embedding;
 };
 
 struct ShapePortSide {

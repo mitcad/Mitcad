@@ -215,7 +215,13 @@ ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Sh
 // so that the rounding of the new edge between the other face and the face
 // beyond, at the same size, is that rounding; the material taken away lies
 // inside what the rounding adds where it takes the whole narrow face away
-// (the caller checks that its result holds the whole input).
+// (the caller checks that its result holds the whole input). Where the face
+// beyond bends away from the material instead (a hole's round wall, the
+// narrow face a short straight stretch tangent to it before a corner,
+// mitcad#2419), the face beyond continued runs out of the material under
+// the narrow face: the space between the narrow face, the face beyond
+// continued and the other face's surface (between the walls at the strip's
+// ends) is filled instead, and it too lies inside what the rounding adds.
 struct FacesBeyondGrown {
   // The body with the narrow faces replaced, its faces named after the
   // input's.
@@ -231,6 +237,10 @@ struct FacesBeyondGrown {
   // face (the face the ball touches beside the narrow one), as edge and
   // face indices of the input (mitcad#2330: added_past_walls).
   std::vector<std::pair<int, int>> replaced;
+  // Whether the space past every narrow face was filled (its faces beyond
+  // bending away from the material, mitcad#2419) and no material taken
+  // away.
+  bool filled = false;
 };
 
 // The body for the rounding of the selected edges (`owner`, by edge: the
@@ -238,10 +248,13 @@ struct FacesBeyondGrown {
 // each narrow face beside a concave selected edge replaced as above: a face
 // of one selected edge whose far edges (its edges that do not meet that
 // edge) are all nearer the edge than `contact` and all go on tangentially
-// into convex faces beyond. The edge's faces and the faces beyond are
-// planes, cylinders, cones, spheres or tori. None when there is no such
-// face, or the material to take away is not bounded by the narrow face, the
-// face beyond and the other face's surface near the edge.
+// into faces beyond, convex ones (material taken away) or ones bending
+// away from the material (space filled, between the walls at the strip's
+// ends, mitcad#2419). The edge's faces, the faces beyond and those walls
+// are planes, cylinders, cones, spheres or tori. None when there is no such
+// face, or the material to take away (the space to fill) is not bounded by
+// the narrow face, the face beyond and the other face's surface (and those
+// walls) near the edge.
 //
 // `rising` (mitcad#2352, GitHub #620): instead, a narrow face beside a
 // convex selected edge whose far edges across it (those wholly nearer the

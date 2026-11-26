@@ -14,7 +14,9 @@
 #      writes the 3MF (a fixture slicer that does nothing).
 #   4. Undo gives Body2 its Fixture Draft again: the panel shows Per body.
 #   5. Two plates, Left with Body1 and Right with Body2 (mitcad#1807): Send
-#      to Slicer with only Body1 selected sends the design's plates, and
+#      to Slicer with only Body1 selected starts with Send the Design's
+#      Plates off and the row on Body1's process (mitcad#2475); the box
+#      ticked sends the design's plates, and
 #      the row shows what the plates' bodies print with, Per body; Fixture
 #      Fine chosen there is set on both bodies (not on the root), one undo
 #      step; Send writes the plates' 3MF over step 3's, which the wrappers
@@ -137,8 +139,8 @@ model-command '{"cmd":"place_on_plate","plate":"Left","items":[{"body":"Body1"}]
 model-command '{"cmd":"place_on_plate","plate":"Right","items":[{"body":"Body2"}]}'
 wait-idle
 
-# Only Body1 selected: the plates are sent, and the Process row shows what
-# the plates' bodies print with, Per body.
+# Only Body1 selected: the selected body is sent, Send the Design's Plates
+# starts off (mitcad#2475) and the Process row shows Body1's process.
 mark
 click-logged '^Browser Root/Bodies/Body1 at '
 wait-log '^Make card: Body1: .*; process Fixture Fine \(body Body1\); '
@@ -146,12 +148,24 @@ wait-idle
 mark
 command make.print3d
 wait-log '^Command Send to Slicer started'
-wait-log '^3D Print plates: 2$'
+wait-log '^3D Print plates: 2, off: the bodies selected$'
 wait-log '^3D Print panel: 1 selected: Body1; format 3mf'
+wait-log '^3D Print placements: F1\.b0$'
+wait-log '^Panel Send to Slicer input process shows: Fixture Fine$'
+wait-log '^Panel Send to Slicer input plates at '
+wait-log '^Panel Send to Slicer input process at [0-9]+,[0-9]+$'
+expect-no-log '^3D Print process per body: '
+
+# The box ticked: the plates are sent, and the Process row shows what the
+# plates' bodies print with, Per body. The row stays where the panel placed
+# it: its place is logged again only if it moves (or is hidden), so no new
+# place line is waited for here (on Windows the row does not move).
+mark
+click-logged '^Panel Send to Slicer input plates at '
 wait-log '^3D Print process per body: .*Fixture Fine: Body1'
 wait-log '^3D Print process per body: .*Fixture Draft: Body2'
 wait-log '^Panel Send to Slicer input process shows: Per body$'
-wait-log '^Panel Send to Slicer input process at '
+expect-no-log '^Panel Send to Slicer input process at .*\(hidden\)$'
 
 # Fixture Fine chosen in the panel: set on both bodies, one undo step.
 capture-undo-depth plates

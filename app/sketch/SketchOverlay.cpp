@@ -228,6 +228,9 @@ struct Linear {
 // that the extension starts at the foot on it.
 const Curve2* lineOf(const CurveData& line) { return line.axis.isEmpty() ? &line.curve : nullptr; }
 
+// A tangent dimension to a circle's far side (mitcad#2451).
+bool isFar(const DimensionData& d) { return d.json.value(QStringLiteral("side")).toString() == QStringLiteral("far"); }
+
 std::optional<Linear> linearOf(const DimensionData& d, const SketchModel& model, const V2& text) {
   const Resolver r{model};
   const QString& t = d.type;
@@ -282,12 +285,14 @@ std::optional<Linear> linearOf(const DimensionData& d, const SketchModel& model,
     if (circle == nullptr || line == nullptr || !circle->isCircular() || !line->isLine()) {
       return std::nullopt;
     }
-    // From the circle's nearest point to the line, along the perpendicular.
+    // From the circle's nearest point to the line, along the perpendicular;
+    // far (mitcad#2451), from its farthest point.
     const V2 dir = unit(line->curve.b - line->curve.a);
     const V2 centre = circle->curve.center;
     const V2 foot = line->curve.a + dir * dot(centre - line->curve.a, dir);
     const V2 towards = dist(foot, centre) > 1e-9 ? unit(foot - centre) : perp(dir);
-    return Linear{centre + towards * circle->curve.radius, foot, towards, lineOf(*line)};
+    const double toSide = isFar(d) ? -circle->curve.radius : circle->curve.radius;
+    return Linear{centre + towards * toSide, foot, towards, lineOf(*line)};
   }
   if (t == QStringLiteral("tangent_point_distance")) {
     // From the circle's side nearest the point (mitcad#1540), along the
@@ -299,7 +304,9 @@ std::optional<Linear> linearOf(const DimensionData& d, const SketchModel& model,
     }
     const V2 centre = circle->curve.center;
     const V2 u = dist(*p, centre) > 1e-9 ? unit(*p - centre) : V2{1, 0};
-    return Linear{centre + u * circle->curve.radius, *p, u};
+    // Far (mitcad#2451): from the side away from the point.
+    const double toSide = isFar(d) ? -circle->curve.radius : circle->curve.radius;
+    return Linear{centre + u * toSide, *p, u};
   }
   if (t == QStringLiteral("tangent_circle_distance")) {
     // Between the nearest sides along the line of the centres (mitcad#1540):
@@ -322,7 +329,13 @@ std::optional<Linear> linearOf(const DimensionData& d, const SketchModel& model,
     }
     const V2 apart = b->curve.center - a->curve.center;
     const V2 u = norm(apart) > 1e-9 ? unit(apart) : V2{1, 0};
-    return Linear{a->curve.center + u * a->curve.radius, b->curve.center - u * b->curve.radius, u};
+    // Far (mitcad#2451): between the outer tangents, each circle's side
+    // away from the other; near_far: from `a`'s near side to `b`'s far one.
+    const QString side = d.json.value(QStringLiteral("side")).toString();
+    const bool farA = side == QStringLiteral("far");
+    const bool farB = farA || side == QStringLiteral("near_far");
+    return Linear{a->curve.center + u * (farA ? -a->curve.radius : a->curve.radius),
+                  b->curve.center + u * (farB ? b->curve.radius : -b->curve.radius), u};
   }
   if (t == QStringLiteral("concentric_distance")) {
     // Between the rims along the radius toward the value (mitcad#445).

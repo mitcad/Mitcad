@@ -427,7 +427,11 @@ label.
     literals outside system menu items.
 11. **Tooltips** say in one short line what the control is or does; the
     limits and the ctest `repo.tooltips` are in
-    [the code conventions](development.md#code-conventions).
+    [the code conventions](development.md#code-conventions). A command
+    disabled by a condition of its own says why in its tooltip while it
+    is (`CommandDef::disabledReason`, mitcad#2446): "Flat Pattern View:
+    the design has no sheet-metal body", a lowercase reason after the
+    name.
 12. **Counts** (mitcad#1758). A count goes into its text as `%n`, with the
     count given to `tr()` (`tr("%n face(s)", nullptr, faces)`), so that
     every language shows its own forms ("1 face", "3 faces";
@@ -772,7 +776,8 @@ Where the window's messages are shown and kept (mitcad#1042,
 
 Work the user started elsewhere and that arrives while a command's panel,
 a sketch or Create Sketch's plane pick is open (a Component from Web
-download, files dropped on the window; mitcad#2281) is neither refused nor
+download, files dropped on the window; mitcad#2281; a design dragged from
+the Projects panel onto the 3D view, mitcad#2428) is neither refused nor
 ignored, and no dialog asks to close the command:
 
 - **Beside an inspection: at once.** A command that changes nothing in the
@@ -899,7 +904,7 @@ dynamic value.
 | | `Handle` | #e07b1a | manipulators, the timeline marker's handle, snaps, drawing picks | |
 | | `Provisional`, `FeatureFaces` | orange, amber | a mesh being made; a selected Fillet's own faces | |
 | | `HandleActive` | #ffffff | an axis-colored handle (Free Move's arrows and rings) hovered or dragged, white over its dark halo: none of the axis colors, no status hue, not the selection's blue that the Z axis' is close to (mitcad#1707); other handles take `Select` | |
-| View | `Body`, `Edge`, `HiddenEdge`, `Thread`, `BuildVolume`, `PrintBed`, `SectionCap`, `DatumPlane`, `DatumAxis`, `ProfileFill` | | the view's own objects; Simulate's machine parts (a lathe's sub-spindle, mitcad#2405) as thin lines in `Edge`, apart from the tool's `Handle` | |
+| View | `Body`, `Edge`, `HiddenEdge`, `Thread`, `BuildVolume`, `PrintBed`, `SectionCap`, `DatumPlane`, `DatumAxis`, `ProfileFill` | | the view's own objects; Simulate's machine parts (a lathe's sub-spindle, mitcad#2405; its zones and its turret's body, mitcad#2412) as thin lines in `Edge`, apart from the tool's `Handle` | |
 | Sketch | `SketchFree`, `SketchFixed`, `SketchCenterline`, `SketchConstruction`, `SketchProjected`, `SketchInactive`, `SketchDriven`, `SketchDimension`, `SketchAxis`, `SketchPicked`, `SketchPreview`, `SketchGuide`, `SketchTrim`, `SketchHalo` | one value for the view and the overlay, by the background | the sketch's states | |
 | Domain | `Component0`–`Component7` | #e0892a, #3aa35b, #8e5bd0, #2aa7a7, #5560c8, #8d6e63, #c45a9a, #3d8bd9 | the components: timeline bands, section caps, Component Colors (no red, no olive) | |
 | | `AxisX`, `AxisY`, `AxisZ` | #e84f4f, #4cb05e, #3f8cff | the axes: view cube, joint triad, Free Move's arrows and rings (mitcad#1581) | |
@@ -1072,6 +1077,24 @@ the radio button's place so that the eyes line up. The name is elided a
 gap before the column; the fx badge and the Make marker stay after the
 name. With the Rows background every row's box reaches the column at the
 card's right edge, and the card's width counts the column in.
+
+**The History list** (mitcad#2427, Preferences › Display › Timeline:
+History list) is the timeline as a tree of the left column, under the
+Browser: a row per timeline item, the first at the top, painted by the
+Browser's own row delegate (`browser/BrowserRows.hpp`: no second
+painting of a row), so its selection band, owner's mark, component bar,
+fx badge and eye are the Browser's, the eye where **Browser Show eye**
+puts the Browser's. A feature's state is its name's color role and the
+level's badge on its icon, as in the Browser (failed, warned); a
+rolled-back or suppressed feature has the hidden rows' gray, a suppressed
+one is struck through; a search match has a tint of the search's color.
+A timeline group is a folder row (Tree indentation, its fold arrow) with
+its features under it; a run of features the filter hides is one gray
+row. The marker is a 2 px bar between two rows in the strip's marker
+color, its handle at the bar's left end in the handles' color; a press
+within 4 px of the bar takes it. Its buttons (playback, filter, search)
+are one row above the list at its left, and the search's field a row of
+its own under them, as wide as the panel.
 
 **An empty list says how to fill it** where the way is not in sight
 (mitcad#2083): one short line, "No … yet." and the action, in the
@@ -1346,13 +1369,46 @@ whole, only a longer one is elided in the middle (mitcad#2060,
 mitcad#2082). The row narrows the tabs to their elided names only when it
 has no room for them.
 
+**The active design's tab** has the chosen tab's look, as the toolbar
+panel's shown tab (mitcad#2426): a block of the accent (`accentColor`) of
+the control radius, its name in DemiBold and its × in the color for text
+on the accent (`AccentText`) — white on the light theme's blue, dark on
+the dark theme's lighter blue. The other tabs are flat on the bar, their
+names in the quieter text, a hovered one on `HoverFill`. Never a faint
+tint of the text for the active tab: beside the hover fill it did not
+tell which design is active, in either theme.
+
 ## 13. The toolbar panel
 
 Under the top bar, across the view between the view margins (the
 Docked layout: across the window, above the docks, as far from the
 window's sides and from the bar as the Floating layout has it from the
 view's), the same height in every workspace (logged `Ribbon panel height DESIGN: N`, equal
-for Design, Make, Render and Drawing). The workspaces: **Design** (the
+for Design, Make, Render and Drawing), unless the user hid it.
+
+**Hidden** (View › Toolbar Panel, `Ctrl+F1`; mitcad#2426): in either
+layout the panel goes and the view takes its height (Floating: the cards
+and the view's free area move up under the top bar; Docked: the view and
+the docks). The top bar stays. One setting for every window, new ones
+too, kept between starts. While hidden, the pointer resting about 300 ms
+on a band 4 px high under the top bar shows the panel **over** the view at
+its usual place: nothing under it moves (Floating: over the cards; Docked:
+over the view's top, on the window's color). It goes again once the
+pointer has left it and no menu, pop-up, dialog or command panel opened
+from it is open; a held mouse button (a drag of the view across the edge)
+shows nothing. A command started from it keeps it while its command panel
+is open (mitcad#2472); the panel then takes its room as when shown (the
+cards and the docks below it), because over them it would cover the top
+of that command panel, and gives it back when it goes after the command
+ended. A command started otherwise (its key, the command search) while
+the panel is hidden neither shows nor keeps it.
+The way back is always there: the View entry, the key, the edge; the
+first hide says it once (Information, in the message band or the status
+bar). The Start page hides the panel in either case; leaving it gives the
+user's state back. The panel is never moved to another edge of the window
+or floated (declined on GitHub mitcad/Mitcad#571).
+
+The workspaces: **Design** (the
 Solid, Surface, Sheet Metal, Build and Manage tabs), **Make** (a tab per
 manufacturing method: 3D Print, Laser and CNC; its entry in the list
 reads "3D Print · Laser · CNC"), **Render** (its stages) and
@@ -1444,6 +1500,18 @@ stage list) start at the view margin's left and one card gap under the
 toolbar panel; the right column's (Render's settings) likewise at the
 right.
 
+**The left column** holds, from the top, the Projects, Configuration,
+Favorite Parameters and Browser cards and, with Preferences › Display ›
+Timeline: History list (mitcad#2427), the Timeline card under the
+Browser's: titled Timeline, with its chevron, as wide as the Browser's
+card, its content with the Browser card's margins. The cards share the
+column's height; the boundary between two of them is dragged and the
+split kept (`floating/leftSplit`). Docked, the same order is the docks of
+the left area: the Timeline dock is split under the Browser's dock
+(two fifths of the column at first), the separator between them dragged
+and kept with the docks' arrangement. Back to Strip, the Timeline card or
+dock returns to the bottom.
+
 - **One header per card**: its title (0.95, DemiBold) and at most a
   folding chevron and a small badge or button at its right. No second
   title inside it. A card that the user shows and hides (a tool card
@@ -1458,6 +1526,14 @@ right.
   headings).
 - **No horizontal scroll**: a card's content is as wide as the card; long
   names elide.
+- **Several fields on one line** (mitcad#2421): fields side by side in a
+  card or panel (a command panel's list of values, Fillet's Mid Radii)
+  stay on one line only when every field shows a short value whole (seven
+  digits) beside its own buttons. Otherwise each field goes on a line of
+  its own under the row's name, its label in a column beside it, and
+  where even that is too narrow under its label across the card
+  (`ListLineLayout`). A field is never squeezed below that width, and its
+  error or hint under it is as wide as the field and as high as its text.
 - **Tabs in a narrow card** (mitcad#2083): a row of tabs in a card or
   panel (the pages it shows, or what its list lists) stays tabs only
   when every tab shows its whole name at the card's narrowest width (the
@@ -1478,6 +1554,8 @@ right.
 ## 15. The bottom bar
 
 One bottom bar in every workspace: Design's timeline, Render's Shots bar.
+With the History list (mitcad#2427) Design has none: the timeline is a
+card or dock of the left column (chapter 14).
 Both are one-row bars between the view margins, as high as the timeline
 (its strip, its scroll bar while the features do not fit), with the bar
 margins (16 px at the sides, 4 above and below) and the card radius. The
@@ -1543,7 +1621,7 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
 | Hover | on a button, tab or chip a translucent tint of the text color (about 8 %) of the control radius; on a row or a cell `HoverFill`; in the 3D view, the sketch and the drawings `Hover`. A button's hover ends when its menu closes with the pointer off the button (an entry chosen below it, mitcad#2061) |
 | Pressed | the same tint, stronger (about 14 %) |
 | Disabled | the palette's disabled text color (further from `Text` than `TextSecondary`) and the icon's disabled form; no fill |
-| Checked / chosen | the accent: a filled rectangle (the shown tab), an outline (a toggle) |
+| Checked / chosen | the accent: a filled rectangle (the shown tab: the toolbar panel's, and the active design's in the top bar, mitcad#2426), an outline (a toggle) |
 | Selected row | a band of the accent (`Action`, translucent) across the row's whole width, of the control radius, inset 2 px; also in a popup's list (the parameter suggestions), where a hovered row takes `HoverFill`, so that hover and selection differ |
 | Highlighted row of a pop-up list | the selected row's band, the row's text in its usual colour: every drop-down's list (a combo box's, editable or not), a completer's and a list in a pop-up window (Command Search), in both themes and layouts; never the system's highlight colour as a square band (mitcad#2084) |
 | Selected text | the palette's `Highlight` and `HighlightedText` (the accent with `AccentText`) in every field, also a field over the view (the sketch's value fields, in their light values); never `HoverFill` |

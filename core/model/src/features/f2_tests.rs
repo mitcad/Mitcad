@@ -931,3 +931,49 @@ fn fillet_full_round_reads_writes_and_rebuilds() {
     .to_string();
     assert!(error.contains("not every edge of the body"), "{error}");
 }
+
+#[test]
+fn offset_face_tangent_chain_reaches_the_kernel_and_stays_out_of_old_files() {
+    // mitcad#2438: Offset Face (and Press Pull on faces) with Tangent Chain
+    // passes it to the kernel; a definition without it, as every stored
+    // offset before, offsets the listed faces alone and is written back
+    // without it.
+    let mut b = block();
+    let chained = add!(
+        b,
+        json!({"type": "offset_face", "body": b.body, "faces": [top(&b)], "distance": 2.0,
+               "tangent_chain": true}),
+    )
+    .unwrap();
+    assert_eq!(status(&b, chained), FeatureStatus::Ok);
+    assert!(
+        history(&b, b.body).ends_with(",2,tangent_chain)"),
+        "{}",
+        history(&b, b.body)
+    );
+    let alone = add!(
+        b,
+        json!({"type": "offset_face", "body": b.body, "faces": [top(&b)], "distance": 1.0}),
+    )
+    .unwrap();
+    assert_eq!(status(&b, alone), FeatureStatus::Ok);
+    assert!(
+        history(&b, b.body).ends_with(",2,tangent_chain),1)"),
+        "{}",
+        history(&b, b.body)
+    );
+    let chain_of = |uid| {
+        let crate::features::FeatureDef::OffsetFace(def) = &b.doc.feature(uid).unwrap().def else {
+            panic!("an offset face");
+        };
+        def.tangent_chain
+    };
+    assert!(chain_of(chained));
+    assert!(!chain_of(alone));
+    // Files keep both; the offset without the chain is written without it.
+    let json = b.doc.to_json();
+    assert_eq!(json.to_string().matches("tangent_chain").count(), 1);
+    let loaded = crate::Document::from_json(&json, crate::testing::MockKernel::default()).unwrap();
+    assert_eq!(loaded.state(), b.doc.state());
+    assert_eq!(loaded.to_json(), json);
+}

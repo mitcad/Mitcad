@@ -769,8 +769,13 @@ macro_rules! primitive_feature {
                 // A face found again on the later bodies could lie elsewhere;
                 // the pattern moves the finished tool instead.
                 // So could a placement's references (mitcad#656).
+                // Its extent depends on no body: a mirror's reflected
+                // finished tool is its image (mitcad#2430).
                 let common = self.common();
-                if matches!(common.plane, Some(GeomRef::Face { .. })) || common.at.is_some() {
+                if matches!(common.plane, Some(GeomRef::Face { .. }))
+                    || common.at.is_some()
+                    || !placement.is_rigid()
+                {
                     return None;
                 }
                 Some(

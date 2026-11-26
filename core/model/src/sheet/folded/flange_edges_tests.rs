@@ -229,3 +229,119 @@ fn a_sheet_saved_without_gaps_still_loads_and_gaps_are_kept() {
     let moved = with.transformed(&crate::transform::Transform::translation([0.0, 0.0, 5.0]));
     assert!(close(moved.gaps[0].line[1], [40.0, 0.0, 25.0]));
 }
+
+/// Where the bend of a flange's edge ends at a corner the rules' corner
+/// relief opens (mitcad#2411): the edge y = 0 of a face reaching to
+/// x = 40 at the corner, Inside, t = 1, r = 1 (its tangent line at y = 2,
+/// its wall at y = 0..1 from z = 2 up), the next edge's tangent line at
+/// x = 38 (J0 = (38, 2)), the corner's bisecting plane x + y = 40.
+#[test]
+fn a_bend_at_an_opened_corner_runs_to_the_other_tangent_line_as_its_wall_covers_it() {
+    let bend = |angle: f64| CylinderEmbedding {
+        centre: [0.0, 2.0, 2.0],
+        axis: [1.0, 0.0, 0.0],
+        radial_start: [0.0, 0.0, -1.0],
+        angular_direction: [0.0, -1.0, 0.0],
+        inside_radius: 1.0,
+        neutral_radius: 1.44,
+        angle_extent: angle,
+        inner_is_front: false,
+    };
+    let upper = |limit: Limit| match limit {
+        Limit::Upper(v) => v,
+        _ => panic!("not an upper limit"),
+    };
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    let n = [-half, -half, 0.0];
+    let mitre = |gap: f64| Keep {
+        normal: n,
+        offset: dot(n, [39.5, 0.5, 0.0]) + gap / 2.0,
+    };
+    let tangent = Keep {
+        normal: [-1.0, 0.0, 0.0],
+        offset: -38.0,
+    };
+    let c = bend(FRAC_PI_2);
+    // Gap 1: the bisecting plane ends the bend g/sqrt2 short of J0, its
+    // wall's root reaches x = 39 - g/sqrt2; opened, the bend runs to J0.
+    let open = Opened {
+        mitre: mitre(1.0),
+        tangent,
+    };
+    assert!((upper(bend_limit(&c, 1.0, &open.mitre)) - (38.0 - half)).abs() < 1e-12);
+    assert!((upper(root_limit(&c, 1.0, &open.mitre)) - (39.0 - half)).abs() < 1e-12);
+    let reached = upper(opened_limit(&c, 1.0, &open, &[open.mitre]));
+    assert!((reached - 38.0).abs() < 1e-12, "{reached}");
+    // Gap 3: the wall's root ends short of J0, and so does the bend.
+    let open = Opened {
+        mitre: mitre(3.0),
+        tangent,
+    };
+    let reached = upper(opened_limit(&c, 1.0, &open, &[open.mitre]));
+    assert!((reached - (39.0 - 3.0 * half)).abs() < 1e-12, "{reached}");
+    // Past a half turn the bend keeps the bisecting plane's limit.
+    let past = bend(1.2 * std::f64::consts::PI);
+    let kept = upper(opened_limit(&past, 1.0, &open, &[open.mitre]));
+    assert!((kept - upper(bend_limit(&past, 1.0, &open.mitre))).abs() < 1e-12);
+}
+
+/// A tray's long wall and an end wall beside the end of its top edge
+/// (mitcad#2445): wall 0 of [`tray_corner`] (in y = -1..0, x from 0 to
+/// 39, 20 high) and wall 1 in the slab x = `at`..`at + 1`, from y = 2 to
+/// 30, as high.
+fn lip_tray(at: f64) -> SheetState {
+    let mut state = tray_corner(false);
+    state.charts.truncate(1);
+    state.charts.push(rectangle(
+        1,
+        SketchFrame {
+            origin: [at, 0.0, 0.0],
+            x_axis: [0.0, 1.0, 0.0],
+            y_axis: [0.0, 0.0, 1.0],
+        },
+        (2.0, 30.0),
+    ));
+    state
+}
+
+#[test]
+fn a_lip_keeps_the_gap_short_of_a_wall_beside_its_end() {
+    let rules = rules();
+    // A lip of 9 on the long wall's top edge, Bend Line, folded either
+    // way: its wall level at the top, 1 to 10 off the long wall on its
+    // side.
+    let keeps = |state: &SheetState| -> Vec<Vec<Keep>> {
+        [FRAC_PI_2, -FRAC_PI_2]
+            .map(|angle| {
+                let metrics = BendMetrics::past_half_turn(angle, None, &rules).unwrap();
+                let tangent = metrics.offset(SheetPosition::BendLine).unwrap();
+                let edge = EdgeGeometry::new(state, &rim(0), tangent, &metrics).unwrap();
+                [End::Start, End::End]
+                    .into_iter()
+                    .flat_map(|end| {
+                        walls_beside(state, uid("F9"), panel(0), 1.0, &edge, end, 1.0, 9.0)
+                    })
+                    .map(|(keep, _, _)| keep)
+                    .collect()
+            })
+            .into_iter()
+            .collect()
+    };
+    // The end wall stands 0.5 to 1.5 past the edge's end at x = 0: folded
+    // over it the lip would pass into its top; it keeps the gap short of
+    // its surface x = 1.5 (x >= 2.5). Folded the other way, it is clear.
+    let found = keeps(&lip_tray(0.5));
+    assert_eq!(
+        found.iter().filter(|k| !k.is_empty()).count(),
+        1,
+        "{found:?}"
+    );
+    let all: Vec<&Keep> = found.iter().flatten().collect();
+    assert_eq!(all.len(), 1, "{found:?}");
+    assert!(norm(sub(all[0].normal, [1.0, 0.0, 0.0])) < 1e-9, "{all:?}");
+    assert!((all[0].offset - 2.5).abs() < 1e-9, "{all:?}");
+    // An end wall already clear of the edge's end (x = -1.5..-0.5, 0.5
+    // short of it), or across from neither end: no keep, the lip as it is.
+    assert!(keeps(&lip_tray(-1.5)).iter().all(Vec::is_empty));
+    assert!(keeps(&lip_tray(60.0)).iter().all(Vec::is_empty));
+}

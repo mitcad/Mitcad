@@ -54,3 +54,6 @@ mod pattern_driven_uses_2057_tests;
 // The face's own edges and the outline a sketch got when it was made do
 // not split an area the sketch's own curves close (mitcad#2197).
 mod own_area_profiles_2197_tests;
+// A 3D sketch created on a planar face keeps the frame it was placed with
+// when the face leans the other way (mitcad#2465).
+mod spatial_face_frame_2465_tests;

@@ -1485,6 +1485,14 @@ pub(crate) fn flange<K: Kernel>(
     // The fold's own allowance in place of the rules' (mitcad#1939).
     let rules = rules.with_fold_allowance(d.allowance.as_ref());
     free(&state, &d.boundary)?;
+    // A wall beside an end of the edge that the flange would pass into (a
+    // lip on the top edge of a tray's wall, folded in over the tray, at
+    // the tray's end walls; mitcad#2445): the end keeps the corner gap
+    // short of it, as an end that meets an existing flange across a bend
+    // does.
+    if super::flange_edges::meets_wall_beside(d, ctx, &state, &rules) {
+        return super::flange_edges::flange_edges(d, ctx);
+    }
     let run = if d.run {
         Some(collinear_run(&state, &d.boundary)?)
     } else {
@@ -1733,7 +1741,9 @@ pub(crate) fn flange<K: Kernel>(
             .collect();
         state = super::relief::flange_corner_reliefs(ctx, state, &rules, &corners)?;
     }
+    // Walls that pass into each other: what to change (mitcad#2445).
     publish(ctx, state, &rules, None)
+        .map_err(|e| super::flange_edges::advised(e, super::flange_edges::WALL_CLEARS))
 }
 
 /// A half open corner (mitcad#1410): the flange's wall (its panel slot 0)

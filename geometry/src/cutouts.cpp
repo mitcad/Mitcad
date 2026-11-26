@@ -2464,15 +2464,19 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
       }
     }
     // The picked edges beside a narrow face replaced: each with its other
-    // face and the faces beyond the narrow face's far edges.
+    // face and the faces beyond the narrow face's far edges (and, where the
+    // space past the faces beyond is filled, the walls at the strip's ends,
+    // which the filled space's ends lie on).
     struct Replaced {
       int edge = -1;
       int other = -1;
       std::vector<int> beyond;
+      std::vector<int> ends;
     };
     std::vector<Replaced> replaced;
     std::vector<int> narrow;
     ShapeList taken;
+    ShapeList added;
     // (The vertices of the picked edges and of the far edges: the edges
     // through them on the merged faces' boundaries are joined again.)
     std::vector<gp_Pnt> loose;
@@ -2517,6 +2521,9 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
         bool fits = true;
         std::vector<int> rims;
         std::vector<int> beyond;
+        // (The faces across the narrow face's edges that meet the picked
+        // edge: the walls at the ends of the strip, mitcad#2419.)
+        std::vector<int> ends;
         for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More() && fits; ex.Next()) {
           const TopoDS_Edge& side = TopoDS::Edge(ex.Current());
           if (side.IsSame(edge) || BRep_Tool::Degenerated(side)) {
@@ -2530,15 +2537,18 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
           for (TopExp_Explorer vx(side, TopAbs_VERTEX); vx.More() && !meets; vx.Next()) {
             meets = vx.Current().IsSame(first) || vx.Current().IsSame(last);
           }
-          if (meets) {
-            continue;
-          }
           const int r = body.edge_index(side);
           int b = -1;
           if (r >= 0) {
             for (const int f : edge_faces.at(r)) {
               b = f != n ? f : b;
             }
+          }
+          if (meets) {
+            if (b >= 0 && b != other && std::find(ends.begin(), ends.end(), b) == ends.end()) {
+              ends.push_back(b);
+            }
+            continue;
           }
           if (rising) {
             if (!wholly_within(side, edge, contact - tolerance)) {
@@ -2564,45 +2574,93 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
         // other face's surface, into the narrow face's material, out of the
         // faces' beyond, near the face.
         const Box box = grown(bounds_of(face), contact + tolerance);
-        std::optional<TopoDS_Shape> region = side_holding(body.face(other), point_and_normal(face).first, box, tolerance);
-        const std::optional<TopoDS_Shape> under = side_of(face, false, box);
-        if (!region || !under) {
+        const std::optional<TopoDS_Shape> beside =
+            side_holding(body.face(other), point_and_normal(face).first, box, tolerance);
+        if (!beside) {
           continue;
         }
-        region = boolean<BRepAlgoAPI_Common>(*region, *under);
-        for (const int b : beyond) {
-          const std::optional<TopoDS_Shape> out = side_of(body.face(b), true, box);
-          if (!out) {
-            region.reset();
-            break;
+        // The region on the narrow face's side of the other face's surface,
+        // on one side of the narrow face's surface (`into` its material or
+        // out of it) and on the other side of the faces' beyond (out of
+        // their material or into it); none where a surface is not one
+        // side_of takes.
+        const auto between = [&](bool into) -> std::optional<TopoDS_Shape> {
+          const std::optional<TopoDS_Shape> across = side_of(face, !into, box);
+          if (!across) {
+            return std::nullopt;
           }
-          region = boolean<BRepAlgoAPI_Common>(*region, *out);
-        }
-        if (!region) {
-          continue;
-        }
-        const TopoDS_Shape material = boolean<BRepAlgoAPI_Common>(*region, solid);
+          TopoDS_Shape region = boolean<BRepAlgoAPI_Common>(*beside, *across);
+          for (const int b : beyond) {
+            const std::optional<TopoDS_Shape> side = side_of(body.face(b), into, box);
+            if (!side) {
+              return std::nullopt;
+            }
+            region = boolean<BRepAlgoAPI_Common>(region, *side);
+          }
+          return region;
+        };
         ShapeList pieces;
         bool bounded = true;
-        for (TopExp_Explorer px(material, TopAbs_SOLID); px.More(); px.Next()) {
-          const TopoDS_Shape& piece = px.Current();
-          if (absolute_volume_of(piece) <= 1.0e-9 * std::max(1.0, body_volume) ||
-              !within_distance(piece, face, tolerance) || !within_distance(piece, edge, tolerance)) {
+        // The solids of `found` beside the narrow face and the edge, larger
+        // than `least`, each bounded by the faces' surfaces and the body,
+        // never by the box (else it is no narrow strip beside the edge).
+        const auto collect = [&](const TopoDS_Shape& found, double least) {
+          for (TopExp_Explorer px(found, TopAbs_SOLID); px.More(); px.Next()) {
+            const TopoDS_Shape& piece = px.Current();
+            if (absolute_volume_of(piece) <= least || !within_distance(piece, face, tolerance) ||
+                !within_distance(piece, edge, tolerance)) {
+              continue;
+            }
+            const Box b = bounds_of(piece);
+            for (std::size_t i = 0; i < 3; ++i) {
+              bounded = bounded && b[i] > box[i] + 10.0 * tolerance && b[i + 3] < box[i + 3] - 10.0 * tolerance;
+            }
+            pieces.Append(BRepBuilderAPI_Copy(piece).Shape());
+          }
+        };
+        if (const std::optional<TopoDS_Shape> region = between(true)) {
+          collect(boolean<BRepAlgoAPI_Common>(*region, solid), 1.0e-9 * std::max(1.0, body_volume));
+        } else {
+          continue;
+        }
+        // Faces beyond that bend away from the material instead (a hole's
+        // round wall, the narrow face a short straight stretch tangent to
+        // it before a corner, mitcad#2419, GitHub #667): continued past the
+        // far edges they run out of the material, under the narrow face, to
+        // the other face's surface. The space between the narrow face, the
+        // faces beyond continued and the other face's surface is filled
+        // (between the walls at the strip's ends, on their material's side),
+        // so that the faces beyond run on to the other face; the ball, which
+        // touches the faces beyond past the far edges, rolls over all of it,
+        // and what is filled lies inside what the rounding adds (the caller
+        // checks that its result holds the whole input). (Slivers: with a
+        // strip 0.1 wide before a wall of radius 9, the space filled is 0.6
+        // micrometres deep at most, so its size is measured against the
+        // strip's, not the body's.)
+        bool fill = false;
+        if (pieces.IsEmpty() && bounded && !rising) {
+          std::optional<TopoDS_Shape> region = between(false);
+          for (const int w : ends) {
+            if (!region) {
+              break;
+            }
+            const std::optional<TopoDS_Shape> wall =
+                side_surface(body.face(w)) ? side_of(body.face(w), false, box) : std::nullopt;
+            region = wall ? std::optional<TopoDS_Shape>(boolean<BRepAlgoAPI_Common>(*region, *wall)) : std::nullopt;
+          }
+          if (!region) {
             continue;
           }
-          // (Bounded by those faces' surfaces and the body, never by the
-          // box: else it is no narrow strip beside the edge.)
-          const Box b = bounds_of(piece);
-          for (std::size_t i = 0; i < 3; ++i) {
-            bounded = bounded && b[i] > box[i] + 10.0 * tolerance && b[i + 3] < box[i + 3] - 10.0 * tolerance;
-          }
-          pieces.Append(BRepBuilderAPI_Copy(piece).Shape());
+          GProp_GProps strip;
+          BRepGProp::SurfaceProperties(face, strip, 1.0e-9);
+          collect(boolean<BRepAlgoAPI_Cut>(*region, solid), 1.0e-6 * std::abs(strip.Mass()) * contact);
+          fill = true;
         }
         if (pieces.IsEmpty() || !bounded) {
           continue;
         }
         for (const TopoDS_Shape& piece : pieces) {
-          taken.Append(piece);
+          (fill ? added : taken).Append(piece);
         }
         for (const TopoDS_Vertex& v : {first, last}) {
           loose.push_back(BRep_Tool::Pnt(v));
@@ -2613,23 +2671,40 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
           }
         }
         narrow.push_back(n);
-        replaced.push_back({e, other, beyond});
+        replaced.push_back({e, other, beyond, fill ? ends : std::vector<int>{}});
         break;
       }
     }
     if (replaced.empty()) {
       return std::nullopt;
     }
-    // The body with that material taken away, the pieces of the other faces
-    // and of the faces beyond on their surfaces merged.
-    BRepAlgoAPI_Cut cut;
-    const TopoDS_Shape cleared = boolean(solid, taken, cut);
-    const occ::handle<BRepTools_History> history = cut.History();
+    // The body with that material taken away and that space filled, the
+    // pieces of the other faces, of the faces beyond and of the walls at the
+    // filled strips' ends on their surfaces merged.
+    occ::handle<BRepTools_History> history;
+    TopoDS_Shape cleared = solid;
+    if (!taken.IsEmpty()) {
+      BRepAlgoAPI_Cut cut;
+      cleared = boolean(cleared, taken, cut);
+      history = cut.History();
+    }
+    if (!added.IsEmpty()) {
+      BRepAlgoAPI_Fuse fuse;
+      cleared = boolean(cleared, added, fuse);
+      if (history.IsNull()) {
+        history = fuse.History();
+      } else {
+        history->Merge(fuse.History());
+      }
+    }
     std::vector<occ::handle<Geom_Surface>> surfaces;
     for (const Replaced& r : replaced) {
       surfaces.push_back(BRep_Tool::Surface(body.face(r.other)));
       for (const int b : r.beyond) {
         surfaces.push_back(BRep_Tool::Surface(body.face(b)));
+      }
+      for (const int w : r.ends) {
+        surfaces.push_back(BRep_Tool::Surface(body.face(w)));
       }
     }
     const TopoDS_Shape grown_body = merged_on(cleared, surfaces, solid, tolerance, *history, loose);
@@ -2648,6 +2723,7 @@ std::optional<FacesBeyondGrown> faces_beyond_grown(const Shape& body, const std:
     for (const Replaced& r : replaced) {
       out.replaced.emplace_back(r.edge, r.other);
     }
+    out.filled = taken.IsEmpty();
     const Shape& m = *out.body;
     // The faces of `m` an input face became.
     const auto images = [&](const TopoDS_Shape& face) {

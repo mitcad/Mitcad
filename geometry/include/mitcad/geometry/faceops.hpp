@@ -14,15 +14,26 @@
 
 namespace mitcad::geometry {
 
+// A face whose wall has a thickness of its own (mitcad#2443): `inside` and
+// `outside` in place of the shell's, each greater than zero exactly where
+// the shell's is.
+struct ShellFace {
+  std::string face;
+  double inside = 0.0;
+  double outside = 0.0;
+};
+
 // Removed faces (none: a closed void), and the wall thickness inside and
 // outside the body's surface (one may be zero). Rounded joins outer corners
-// with arcs (a rounded offset), else they stay sharp.
+// with arcs (a rounded offset), else they stay sharp. `own` are faces whose
+// wall has a thickness of its own; the rest keep the shell's.
 struct ShellSpec {
   std::vector<std::string> faces;
   double inside = 0.0;
   double outside = 0.0;
   bool tangent_chain = true;
   bool rounded = false;
+  std::vector<ShellFace> own;
 };
 
 // Hollows the body. The outside of the wall keeps the names of the body's
@@ -40,6 +51,17 @@ struct ShellSpec {
 // wall does not fit under face …; it is left solid there", or "the inside
 // of the wall runs past face …". Where the wall fits under no face, the
 // shell fails with that message.
+//
+// Faces with a thickness of their own (mitcad#2443) are offset by it in the
+// geometry kernel's own offset (a thickness for each face). The kernel
+// offsets faces that meet smoothly as one, and in a rounded shell also the
+// faces a rounding joins: such faces take one thickness. With the tangent
+// chain the faces tangent to one with its own thickness take it too; a face
+// joined so to one of another thickness is refused, the faces painted. The
+// cavity above is not built for such a shell (it has one thickness): where
+// the kernel's offset fails, the shell fails, and where it succeeds at the
+// shell's thickness alone, the error paints the faces whose own thickness
+// the neighbouring walls cannot meet.
 ShapePtr shell(const std::string& feature, const Shape& body, const ShellSpec& spec);
 
 // Tilts the faces about their intersection with the fixed plane by `angle`.
@@ -69,9 +91,12 @@ ShapePtr draft(const std::string& feature, const Shape& body, const DraftSpec& s
 // and only the region at the moved faces, cut off at the seams along their
 // normals, is removed from the body or added to it. The step's faces are
 // <feature>:step(<moved face>) ("#k" for several); where the step cannot
-// be made the offset fails saying so.
+// be made the offset fails saying so. With `tangent_chain` (mitcad#2438)
+// the faces joined to the listed ones through smooth edges move with them,
+// grown as replace_faces grows its faces.
 ShapePtr offset_faces(const std::string& feature, const Shape& body,
-                      const std::vector<std::string>& faces, double distance);
+                      const std::vector<std::string>& faces, double distance,
+                      bool tangent_chain = false);
 
 // Removes the faces and heals the body by extending the neighbouring faces
 // until they close the gap; fails when they cannot.

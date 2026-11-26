@@ -350,7 +350,7 @@ Buttons: Create Sketch, Face, Flange, Bend. MODIFY:
 |---|---|
 | `corners` | Corner Relief, Corner Round, Corner Chamfer |
 | `flat` | Unfold, Refold, Flat Pattern, Show Flat Pattern |
-| `export` | Export Flat Pattern… (a second place, its home Laser › Export) |
+| `export` | Export Flat Pattern… (a second place, its home Laser › Export), Create Drawing of Flat Pattern… (mitcad#2446), Export Bend Table… (a second place) |
 
 Buttons: Unfold, Flat Pattern. RULES: Sheet Rules (a button) and Edit
 Sheet Rules, second places of Manage › Rules.
@@ -1063,11 +1063,14 @@ Modifiers:
   draws the shown preview again when the input is activated or left;
   `Preview bodies:` lists the overlays with ` tool`
   (`F2.b0 in O2 at 30,0,0 tool`).
-- `withHoverChain(kinds, check)`: while the check input `check` (a
-  top-level one) is on, the hover over an edge or face of a body of
+- `withHoverChain(kinds, check[, when])`: while the check input `check` (a
+  top-level one) is on, and `when` (optional, a test of the state) says
+  so too, the hover over an edge or face of a body of
   `kinds` shows its whole tangent chain, what the operation takes with
   the pick (mitcad#290): Fillet's and Chamfer's edges, the faces of
-  Shell, Draft and Replace Face, all with `tangent_chain`. Picks stay the
+  Shell, Draft, Replace Face and Offset Face, and Press Pull's faces
+  while Continue is Offset (its `when`, mitcad#2438), all with
+  `tangent_chain`. Picks stay the
   item clicked. The session asks the model's `tangent_chains` query once
   per body and kind in a command run (logged as `Tangent chains of F2.b0
   (edges): 2 in 3 ms`, `(slow)` over a second; a failure is a warning and
@@ -2774,6 +2777,13 @@ window, an open command's panel, the sketch or what else is open, a
 command only for sketches, else the command's own
 `CommandDef::disabledReason` (or "not available now").
 
+A command with a `disabledReason` of its own says it on the ribbon and in
+the menus too (mitcad#2446, `CommandRegistry::updateEnabled`): while its
+own `enabled` holds it back, its action's tooltip is its name and that
+reason ("Flat Pattern View: the design has no sheet-metal body"), and its
+usual tooltip comes back once it is enabled again or held back by the mode
+(an open command, a sketch), which the ribbon does not explain.
+
 **The top bar's left group (Windows and Linux, mitcad#2129).** The group
 is the title row's first part (`TitleBar::setRowControls`,
 `QuickAccessGroup::setTopBar`; the row part `titleQuickAccess`, its ☰ the
@@ -3852,7 +3862,13 @@ in the frame that moves the camera, just before OCCT draws that frame,
 and drawn by OCCT in its overlay layer (`Graphic3d_ZLayerId_TopOSD`),
 pixel for pixel. It is painted again only when what it shows changed
 (`SketchOverlay::update`) or the camera, the view's size or its pixel
-ratio did; a widget over the view was painted again after every frame,
+ratio did. Each picture is a texture of its own, which OCCT lets go only
+in full frames, not in the immediate frames in which only the picture
+changed: the view draws a full frame once two pictures were replaced since
+the last one (mitcad#2437, `view/ReplacedPictures.hpp`; before, the
+textures of a Sketch Dimension value that followed the pointer took
+gigabytes, and on Apple silicon the memory guard refused the dimension).
+A widget over the view was painted again after every frame,
 and Qt then composed the window's area under the view again, which held
 sketch mode to about 30 frames a second on a 144 Hz screen. The mouse
 stays the view's: the controller asks the overlay what lies under it
@@ -4892,9 +4908,10 @@ one undo step, named after what the action makes.
   (`SketchTool::menu`, asked by `SketchController::toolMenu`, shown by
   `MainWindow::showContextMenu`). For the circle or arc under the pointer
   (one picked, or one a left click would pick there, which the choice then
-  picks) or else the last one picked it offers **Center** and **Tangent**:
-  whether the dimension goes to its center (as a left click picks it, the
-  default) or to its nearest tangent side; then **Driving** and **Driven**
+  picks) or else the last one picked it offers **Center**, **Tangent
+  Near** and **Tangent Far** (mitcad#2451): whether the dimension goes to
+  its center (as a left click picks it, the default), to its nearest
+  tangent side or to its far side; then **Driving** and **Driven**
   for the dimension being made, and **Cancel** (the tool's Esc). The
   current choices have a check mark. With nothing picked and no circle or
   arc under the pointer there is no menu and the right-click stays the
@@ -4912,16 +4929,28 @@ one undo step, named after what the action makes.
   without the over-constraint warning. The choices are reset with the
   picks after each dimension. Logged `Sketch Dimension menu for c5 (to
   pick)` (`(picked)`, or `for the dimension`), `Context menu: Center |
-  Tangent | Driving (current) | Driven | Cancel`, `Sketch Dimension: c5 by
-  its tangent side` (`by its center`), `Sketch Dimension: driven`
+  Tangent Near | Tangent Far | Driving (current) | Driven | Cancel`,
+  `Sketch Dimension: c5 by its tangent side` (`by its far tangent side`,
+  `by its center`), `Sketch Dimension: driven`
   (`driving`), `Sketch Dimension preview: tangent_point_distance 20.00`
-  (`tangent_circle_distance inside 3.00`, a driven one's `(13.00)`),
-  `Added dimension k7 tangent_point_distance d3 = 18` and `Added driven
-  dimension k8 tangent_circle_distance = 13.00`. Tests:
+  (`tangent_circle_distance inside 3.00`, `tangent_distance far 30.00`, a
+  driven one's `(13.00)`), `Added dimension k7 tangent_point_distance d3 =
+  18` and `Added driven dimension k8 tangent_circle_distance = 13.00`.
+  **Tangent Far** (mitcad#2451, GitHub #646) adds `"side": "far"`: with a
+  line `tangent_distance` from the line to the circle's far side (the
+  center's distance plus the radius: the top of an arc above a line);
+  with a point or another circle's center `tangent_point_distance` far
+  (the distance plus the radius, the point inside or outside); two
+  circles both far `tangent_circle_distance` far (the outer tangents, the
+  centers' distance plus both radii); one near and one far
+  `tangent_circle_distance` with `"side": "near_far"`, the near one as `a`.
+  The preview and the stored dimension draw to the far tangent point on
+  the same line (`linearOf`, `isFar`). Tests:
   `tools/ui-sketch-tangent-dimension-test.sh` and
   `tools/ui-windows-sketch-tangent-dimension-test.ps1` (ctest
   `app.ui-windows-sketch-tangent-dimension`), one input script
-  `tools/ui-scripts/sketch-tangent-dimension.mitcad-ui`.
+  `tools/ui-scripts/sketch-tangent-dimension.mitcad-ui` (its step 5:
+  Tangent Far on a circle and a line, 32 typed).
 - **Make Driven, Make Driving; the prompts name Driven** (mitcad#2055,
   GitHub mitcad/Mitcad#467): the sketch's context menu on one selected
   dimension offers **Make Driven** for a driving one and **Make Driving**
@@ -9149,6 +9178,65 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   Card, Restore Defaults) and `browser-control-places-docked.mitcad-ui`
   (ctests `app.ui-windows-browser-control-places`,
   `app.ui-macos-browser-control-places`).
+- **The timeline's History list** (mitcad#2427, GitHub mitcad/Mitcad#581;
+  `TimelineWidget::setPresentation`, `TimelineHistoryList`,
+  `browser/MainWindowTimelineList.cpp`): Preferences › Display ›
+  **Timeline** (beside **Layout**), **Strip** (`strip`, the default) or
+  **History list** (`list`), the setting `timeline/presentation`, applied
+  at once in every window (`BrowserPreferencesNotifier::
+  timelinePresentationChanged`); Restore Defaults (Display) saves Strip,
+  settings export and import carry it (group `preferences`). The History
+  list is the same TimelineWidget with its strip hidden: its playback,
+  filter and search buttons in a row, the search's field on a row of its
+  own under them, and a tree of a row per timeline item in timeline order
+  (the first at the top) with its icon and full name, painted by the
+  Browser's row delegate (`browser/BrowserRows.hpp`). The rows show the
+  strip's state (it keeps the items, the marker, the folded groups, the
+  selection, the owners' marks and the search's matches) and pass every
+  gesture to the strip's own code and TimelineWidget's signals, so the
+  BrowserController does the rest as for the strip: a click, Ctrl+click
+  and Shift+click select (`featuresClicked`), a double-click edits, the
+  context menu is the feature's (a group's row: the group's), F2 and
+  the menu's Rename rename in the row, Delete deletes, Ctrl+F opens the
+  search, a dragged row moves its feature (the `can_reorder` answer and
+  its reason while dragging, a red line where it cannot go), the pointer
+  previews as on the strip and the tooltip is the cell's. The marker is a
+  bar between the rows with its handle at the left, dragged up and down to
+  the boundaries the strip allows (`markerDragStarted`, `markerDragged`,
+  `markerDragFinished`). A timeline group is a folder row with its fold
+  arrow and its features under it; the arrow (or a double-click on the
+  row) folds or opens it in the strip's one state (`setGroupCollapsed`).
+  A run of features the filter hides is one gray row. A sketch, a
+  construction feature and a feature with bodies at the marker it made
+  (its uid in theirs, `F4.b0`) or last changed (`last_feature`;
+  `DocumentSnapshot::bodiesByFeature`) has a light bulb
+  (`TimelineWidget::eyeClicked`, `BrowserController::timelineEye`): the
+  sketch's or construction feature's own (`set_feature_visible`), or the
+  bodies' (`set_body_visible` for each, one undo step "Hide Extrude1",
+  shown while any is, those that follow Show When left as they are).
+  The panel moves with the choice: Docked, the `timelineDock` dock is
+  split under the Browser's dock in its area (two fifths of the column,
+  then as dragged and kept with the docks' arrangement, also after a
+  restored or default arrangement) and back to the bottom; Floating, the
+  `timelineDock` card becomes a card of the left column under the
+  Browser's (title Timeline, chevron, the Browser card's width, sharing
+  the column with its kept split) and back to the bottom bar. While a
+  sketch is edited the sketch's work steps take its place there as at the
+  bottom. Logs: `Preferences: timeline list` (`strip`), `Timeline panel:
+  history list under the Browser` (`strip at the bottom`), `Timeline
+  presentation: history list` (`strip`), `History list: Sketch1, Base,
+  [Posts: Post, Cap], (2 hidden); marker after Base` (a folded group
+  `[Posts folded]`; `marker at the start`), `History row <name> at x,y`,
+  `History group <name> at x,y`, `History group <name> arrow at x,y`,
+  `History eye <name> at x,y`, `History fx <name> at x,y`, `History
+  marker at x,y`, `History eye <name>: shown|hidden`, `History selected:
+  <names>|nothing`, `History group <name> folded|opened`, `History eye
+  click <name>`, `Visibility History/<name>: hidden|shown`, `Renaming
+  <name> in the History list`. Tests: `app.unit`
+  (`tests/timeline_presentation.cpp`), `tools/ui-timeline-history-list-test.sh`
+  with the shared scripts `tools/ui-scripts/timeline-history-list.mitcad-ui`
+  (Floating) and `timeline-history-list-docked.mitcad-ui` (Docked)
+  (ctest `app.ui-windows-timeline-history-list`).
 - **The Browser card's height** (mitcad#425, the Floating layout on every
   platform): the card is as high as its rows in sight
   (`BrowserPanel::contentHeight`) and grows down as rows open, up to the
@@ -12005,6 +12093,24 @@ between two walls), so an edit highlights what the feature uses.
   in, ft), then `export_flat_pattern_dxf` with that `units`; the log line
   ends with the unit written (`…, in in`) and the hint names it; a refusal
   shows the model's reasons. Allowed in a read-only window.
+- **Create Drawing of Flat Pattern…** (`sheet.flat_pattern_drawing`,
+  mitcad#2446; Sheet Metal › Modify after Export Flat Pattern…, and the
+  menus of the Flat Pattern row and of a sheet-metal body with a Flat
+  Pattern in the browser): the selected sheet's (or the first with a Flat
+  Pattern, or the only one) Flat Pattern on a new drawing of the root.
+  The Create Drawing dialog asks for its sheet as File › Create Drawing
+  does (`MainWindow::createFlatPatternDrawing`, `createDrawingOf` with the
+  body); the drawing is named for it (`Plate Flat Pattern Drawing`,
+  `drawingNameFor`), opened, and the Flat Pattern placed at once:
+  `add_drawing_view` `base` with `{"type": "flat_pattern", "body": …}`, no
+  `at` and no `scale` (the model's place in the sheet's middle, Fit the
+  Sheet; `DrawingWorkspace::placeFlatPattern`), the view selected, logged
+  `Create Drawing of Flat Pattern: F3.b0` and `Drawing Flat Pattern placed:
+  view 1 of F3.b0`. A cut sheet chosen in the dialog takes that body as its
+  part. Disabled while no sheet is selected and none is the only one or
+  has a Flat Pattern, its tooltip saying why (`the design has no
+  sheet-metal body`, `select a sheet-metal body first`). The command
+  search finds it by "flat", "unfold", "blank" and "development".
 - **Export Bend Table…** (`sheet.export_bend_table`) is available in Sheet
   Metal › Modify and Laser › Export. The save dialog offers CSV and JSON.
   The `export_bend_table` command reads the same Flat Pattern as the DXF
@@ -12016,9 +12122,11 @@ default; `BrowserNode::Type::SheetRules`, `FlatPattern`): its rules
 (`SheetRules1 (2 mm, R 3 mm, K 0.3)`; double-click and Edit Sheet Rules edit
 the feature, Find in Timeline) and, once set, its Flat Pattern (light bulb:
 Show Flat; double-click and Edit Flat Pattern open Flat Pattern on it; Show
-Flat/Folded, Export DXF..., Delete). A Flat Pattern that is not valid is red
+Flat/Folded, Export DXF..., Create Drawing of Flat Pattern… (mitcad#2446),
+Delete). A Flat Pattern that is not valid is red
 with the reasons in its tooltip. The body's menu adds Edit Sheet Rules and
-Create Flat Pattern or Export Flat Pattern. The rows come from the
+Create Flat Pattern, or Export Flat Pattern and Create Drawing of Flat
+Pattern…. The rows come from the
 `sheet_bodies` query (`DocumentSnapshot::sheets`). Test:
 `tools/ui-windows-sheet-test.ps1` (ctest `app.ui-windows-sheet`: Face with its
 own rules, Flange, rule edits of thickness, K and radius, Cancel, Flat
@@ -13440,6 +13548,28 @@ settings in the user's settings (`ViewSettings`, group `view`);
   `tools/ui-windows-sketch-origin-test.ps1` (larger, taller than wide and
   back; maximized and restored on Windows, where the window station
   maximizes it).
+- **The view's picture and picks follow a resized window** (mitcad#2422,
+  GitHub mitcad/Mitcad#672): OCCT takes the view's size at each frame from
+  the framebuffer it draws into, at the size of the viewport set then
+  (`OpenGl_FrameBuffer::InitWrapper` reads `GL_VIEWPORT`). Qt sets that
+  viewport in its own context before `paintGL()`; on X11 with GLX, where
+  the view draws in its own EGL context and is read back into the window
+  (mitcad#2292), nothing set it there, so the context kept the size of the
+  last frame: a window made larger showed the old picture size with black
+  margins, one made smaller cut it off, and the picks stayed at the old
+  size, away from what the view showed, until MitCad was started again.
+  `OcctViewer::bindViewEglFramebuffer` now sets the viewport to the
+  view's framebuffer, which is the view's size in device pixels. After a
+  resize, once a frame is drawn and the view rests, the view logs
+  `View size: 1480x900, device pixels 1480x900, drawn 1480x900` (`, read
+  back 1480x900` in its own EGL context) and warns `3D view: drawn at
+  1180x750 pixels (read back 1480x900), but the view is 1480x900 pixels:
+  the picture and the picks do not fit the window` when they differ, for
+  a user's report. Test: `tools/ui-view-resize-test.sh` (with Qt's EGL
+  context and with GLX and the view's own context: larger, smaller, as
+  large as the screen, which stands for a maximize on Xvfb, and the first
+  size again; the drawn size, the origin's place moving with the view,
+  the edges drawn and a pick of the XY plane after each).
 - **A new design shows its origin, seen from the default view**
   (mitcad#1683, mitcad#1809): so that a beginner finds the origin for the
   first sketch, a new design opens with its Origin folder's light bulb
@@ -13744,6 +13874,17 @@ settings in the user's settings (`ViewSettings`, group `view`);
   elsewhere; xcb swaps a scroll's axes while Alt is held, and the view
   swaps them back for these scrolls, so Alt + scroll moves in the
   fingers' direction. Windows and macOS are unchanged.
+  On native Wayland (`MITCAD_WAYLAND=1`, GitHub mitcad/Mitcad#662) Qt
+  swaps the axes of every scroll while Alt is held too; there a
+  trackpad's scroll is told from a wheel by its pixel deltas (Qt gives
+  them only for a finger or continuous scroll, never for a wheel), and
+  the view swaps such a scroll's axes back, so Alt + scroll orbits the
+  way the fingers move, as Shift + scroll does under Trackpad (Shift
+  orbit). A wheel keeps Qt's swap. The decision is
+  `trackpadScrollAxesSwapped` in `view/Navigation.hpp` (app.unit
+  `trackpadScrollAxesTests`); native Wayland input cannot be synthesised
+  on the hidden test display, so the Wayland gesture itself is checked
+  by hand with a physical touchpad.
   `tools/ui-navigation-device-scroll-test.sh` (step
   `expect-device-scroll`, script
   `tools/ui-scripts/navigation-device-scroll.mitcad-ui`) sends a
@@ -13872,7 +14013,8 @@ settings in the user's settings (`ViewSettings`, group `view`);
     `expect-view-orbit-center`, `capture-view-point`, `capture-view-place`,
     `expect-view-point`, `click-view-point`, `drag-view-point`, and
     `tooltip-view-point` (the tooltip request at a model point's place,
-    mitcad#2265).
+    mitcad#2265), `drag-logged-to-view-point` (a drag from a logged place,
+    a Projects panel row, to a model point's place, mitcad#2428).
 - **Home and the standard views' keys** (mitcad#1684): `view.home` has
   the default key Home and `view.front`, `view.back`, `view.left`,
   `view.right`, `view.top`, `view.bottom`, `view.iso` the keys 1 to 7 in
@@ -15360,7 +15502,7 @@ UI thread.
 | `materials/PolyHavenTextureSource.*`, `materials/TextureFetcher.*` | Poly Haven as an online texture source (mitcad#313): reading the API's lists, the cached list, files and thumbnails, the downloads; the requests of online sources (Qt Network, or fixture files for UI tests) |
 | `framework/Cursors.*`, `framework/Icons.*`, `framework/Numbers.*` | the sketch tools' pointer; icons from `app/icons`; numbers with decimal commas |
 | `framework/AppSettings.*` | general settings (autosave) |
-| `framework/DesktopEntry.*` | the Linux desktop file and icons an AppImage installs for itself |
+| `framework/DesktopEntry.*` | the Linux desktop file and icons an AppImage installs for itself; the desktop file (`Exec`, `TryExec`, `X-AppImage-Name`, `X-AppImage-Version`) is merged into one already there, so an AppImage manager's keys and its arguments around the same AppImage in `Exec` stay (mitcad#2413; `desktopEntryFor`, tested in `test_app`'s `desktopEntryTests`) |
 | `framework/ModelWorker.*`, `framework/ComputeProgress.*`, `MainWindowJobs.cpp` | background computation: the worker thread, a job's control and stage (`ModelJob`, `AttachedJob`), the progress dialog, `MainWindow::runJob` |
 | `framework/ResultCache.*`, `framework/CachePreferences.*`, `framework/CacheDiagnostics.*` | the result store's folder, build id and settings, its clean-up; Preferences' Cache group; Help › Diagnostics |
 | `framework/Diagnostics.hpp`, `framework/TestSync.*` | environment switches for test logs and delays; the UI tests' sync |
@@ -15859,7 +16001,18 @@ the 3D Print tab's first button, alone in its Slice group (the owner,
   selection stands for (`printStartBodies`: a face, edge or vertex its
   body, an occurrence the bodies shown in it), or with nothing of that
   selected the bodies with a shown instance (`instances`); a body item per
-  placement, with its occurrence. The Make card's **Send to Slicer**
+  placement, with its occurrence. While Isolate is on (mitcad#2475), an
+  occurrence selected and the no-selection start take only the placements
+  the view shows (`DocumentSnapshot::isolationShows`, as the view
+  decides), so a body placed twice with one occurrence isolated starts
+  with that placement alone. Logged `3D Print panel: <n>
+  selected|isolated|visible: <names>; …` and `3D Print placements: <uid>
+  <occurrence>, …`; tests: `app.unit` (`printStartBodies`,
+  `printPlatesAtStart`) and `tools/ui-print-isolate-test.sh` (the shared
+  scripts `tools/ui-scripts/print-isolate*.mitcad-ui`: STL and 3MF of an
+  isolated, selected placement whose body another occurrence shares, the
+  isolated start with the plates off until ticked, the plates on again
+  without Isolate). The Make card's **Send to Slicer**
   (mitcad#1377, [The Make tabs](#the-make-tabs)) starts it with the card's
   body alone. A click on a body in the view adds or
   removes it (Ctrl and Shift as in other inputs, a window adds several);
@@ -16145,8 +16298,9 @@ the 3D Print tab's first button, alone in its Slice group (the owner,
   the Make card with none on the root shows in the panel, a second body
   with another process gives Per body, and a choice in the panel changes
   both bodies' process in one undo step; then with the two bodies on two
-  plates of their own (mitcad#1807) and the plates sent, only Body1
-  selected, the row says Per body again and a choice there changes both
+  plates of their own (mitcad#1807) and only Body1 selected, the panel
+  starts with the plates off and Body1's process (mitcad#2475); the plates
+  ticked, the row says Per body again and a choice there changes both
   bodies' process in one undo step; the plates' 3MF written last carries
   it (`tools/ui-scripts/body-process-send-verify.py`, the Windows wrapper
   reading it alike). Under Process the row **Own settings**, always
@@ -16800,6 +16954,69 @@ command). Logged `Print available: sketch Sketch1` (`drawing Drawing1`,
   `tools/ui-build-test.sh` (the Cut List's Print…), the File menu of
   `tools/ui-file-test.sh`.
 
+### Drawing book
+
+**File › Drawing Book…** (`file.drawing_book`; mitcad#2448, GitHub
+mitcad/Mitcad#687; `printing/MainWindowDrawingBook.cpp`,
+`drawings/DrawingBookDialog.*`, `printing/BookCover.*`) keeps a print set
+of existing drawings with the main design: drawings of the design itself
+and of the designs it links, in the book's order, printed as one job. An
+action of the File menu after Print… (always shown), also in the command
+search (keywords drawing book, print set, cover page, linked designs,
+drawings, print); model mode, refused with the reason while the design
+cannot change (read-only, a command open).
+
+- **The dialog** (`Drawing Book`, the model's `drawing_book` query with the
+  design file's folder as `base`): **Title** (its placeholder the design's
+  name, which an untitled book prints); a grouped list of the drawings by
+  design: **This design**, then each linked design once by its file's name
+  (several components or placements linked to one file are one row; its
+  tooltip names the file and the components), its drawings with
+  checkboxes and their sheet counts. The book's drawings come first,
+  checked, in its order, their designs in the order of their first
+  drawing; the other designs and drawings after them. Same-named drawings
+  of two designs are separate rows. **Move Up** (Alt+U) and **Move Down**
+  (Alt+D) move the current drawing within its design, or the current
+  design with its drawings. **Cover page** (Alt+C, off by default): a page
+  with the title and the contents before the first sheet. Cut sheets are
+  not offered.
+- **Problems before printing:** a chosen drawing that is gone, or whose
+  design is no longer linked or cannot be read (a link outside the
+  project, a file that is missing or no design), has a warning icon with
+  the reason as its tooltip; the dialog's message line lists them ("These
+  drawings cannot be printed: Drawing1 is no longer in b.mitcad. Uncheck
+  them, or correct their designs, to print the book.") and **Print…** is
+  disabled until they are unchecked or corrected. A design that cannot be
+  read is shown with its reason even when none of its drawings is chosen.
+- **Save** keeps the book with the design as one undo step (`Edit
+  Drawing Book`, `set_drawing_book`; nothing changed is no step);
+  **Print…** (the default button) keeps it and prints it; Cancel leaves
+  it. Logged `Drawing Book opened: b.mitcad [Drawing1] | a.mitcad
+  [Drawing1, Extra] | This design [Assembly]`, `Drawing Book:
+  b.mitcad/Drawing1 | a.mitcad/Drawing1; cover on; print enabled` (`print
+  disabled: <problems>`) whenever the choice changes, `Drawing Book moved
+  a.mitcad up`, `Drawing Book saved: …; cover on; changed`, `Drawing Book
+  cancelled`.
+- **Printing:** the model writes every sheet of the chosen drawings as
+  SVG into a temporary folder in the book's order (`drawing_book_sheets`):
+  the design's own on a copy of the design, a linked design's from its
+  file as it is now, read only, so edits saved to a source drawing are in
+  the next print and no source design changes. The cover (when checked,
+  `printing::bookCover`: the first sheet's size, a frame, the title large
+  a third down, a rule and one line per drawing, "Drawing1 of a.mitcad, 2
+  sheets") goes first; the pages go to the system's print dialog and
+  `printing::printSheets` as a drawing's sheets do (each on a page of its
+  size; a printer that keeps its paper fits them). Logged `Printed drawing
+  book Project book: 4 page(s), cover, b.mitcad/Drawing1 (1), …  to
+  <printer or file>`; the status line says `Printed the drawing book
+  Project book on 4 pages.`
+- Tests: `core.model` drawing tests
+  (`core/model-tests/drawing/src/drawing_book_tests.rs`), `app.unit`
+  (`tests/drawing_book.cpp`: the dialog's groups, order, command and
+  problems; the cover's picture), `tools/ui-drawing-book-test.sh` (two
+  linked designs, one linked twice, printed to a PDF through the dialog),
+  the File menu of `tools/ui-file-test.sh`.
+
 ### File dialogs' folders
 
 `framework/DialogFolders` (mitcad#498). The file dialogs come in groups,
@@ -17379,7 +17596,8 @@ unsaved changes asked as with Open), **New Design** and **New Folder**
 folder; no toolbar button), **Delete** (Del; confirmed, with the
 designs it holds, changes no version holds and whether it is open), a
 **drag** onto a folder, a project or a design (its folder) of the same
-project (`move`), **Version History...** (the design opened first),
+project (`move`; a design dragged out of the panel onto the 3D view is
+inserted there as a component, [below](#a-design-dragged-onto-the-3d-view-mitcad2428)), **Version History...** (the design opened first),
 **Show in Folder**, **Project Settings...** (mitcad#152, #153: the
 toolbar's button for the selected project, folder or design's project;
 a double-click on a Cloud project; the current project's as
@@ -17539,6 +17757,74 @@ file, Add Files… and a drop from the file manager (the driver's
 `drop-files-logged`), a rename and a delete, each one version), the
 `app.unit` tests of the marks and the elision (`tests/project_rows.cpp`,
 the other files' in `tests/project_files.cpp`) and the project tests above.
+
+#### A design dragged onto the 3D view (mitcad#2428)
+
+GitHub mitcad/Mitcad#561. A design row of the Projects panel dragged out
+of the panel and let go over the 3D view of the open design is inserted
+there as a component of the active component, through Insert Component
+(`MainWindow::insertComponent` with the drop's `transform`;
+`files/MainWindowFiles.cpp`, `dropProjectDesign`):
+
+- **The drag** stays the panel's own (the tree keeps the mouse while its
+  button is down, `ProjectsTreeWidget`): over the rows it moves designs
+  and folders as before; outside the rows over the 3D view
+  (`viewTakesProjectDesign`: the view of a design, not the Start page,
+  not where a card of the Floating layout or a floating dock is over it)
+  a design row shows the copy cursor (`Qt::DragCopyCursor`: a drop
+  inserts), and its release there is the drop. Folders and other files
+  are not inserted: over the view they keep the refused cursor, and their
+  release there moves nothing. Floating and Docked alike (the Projects
+  card or its dock).
+- **Refused at once** (`MainWindow::insertRefusal`, also Insert
+  Component's own check before it asks anything): the open design itself
+  and a design that links it, directly or through other designs (the
+  `link_check` query's `back` with `design`, [commands.md](../core/model-api/src/commands.md),
+  "Linked designs from outside the project"), which would make the design
+  a component of itself. A warning in words in the message band (and the
+  Docked status line): `assembly.mitcad is this design: a design cannot be
+  a component of itself.`, `back.mitcad links this design, so this design
+  would become a component of itself.`, `top.mitcad links this design
+  through sub.mitcad, so this design would become a component of itself.`
+- **How:** Insert Component's questions, as from the command: a design in
+  the project asks **Insert Component** (Linked with Whole design, the
+  default on Enter, or Choose parts…; or Copy), one outside the design's
+  project the outside-link question (mitcad#1719). One undo step.
+- **Where:** as dropped design files (mitcad#1894, `dropTransform`): at
+  the point of the face under the drop with its Z along the face's normal
+  (`render::surfaceAt`, `dropPlacement`, in the active component's
+  coordinates); over empty space at the origin. A drop on a face keeps the
+  camera; at the origin the view is fitted, as Insert Component does.
+- **While a command is open** (mitcad#2281, `Arrival::project`,
+  `arriveProjectDesign`): the drop waits, as dropped files do, also for
+  an inspection (Insert Component asks how): `bracket.mitcad comes in when
+  Extrude is finished or canceled.` in the message band, and when the
+  command closes it is inserted at the place where it was dropped. A
+  design replaced in the window before drops it, said.
+- **Logs:** `Projects panel: dragging Shop/bracket.mitcad`, `Projects
+  panel: dragging Shop/bracket.mitcad over the 3D view` (each time the
+  pointer comes over the view), `Projects panel: drop of
+  Shop/bracket.mitcad on the 3D view`, `Projects panel: bracket.mitcad
+  dropped on the 3D view at 412,288` (view pixels), `Projects panel:
+  bracket.mitcad goes in at the face under the drop, at 10.000, 10.000,
+  20.000 mm` or `… goes in at the origin (no face under the drop)`,
+  `Dropped bracket.mitcad waits until Extrude is finished or canceled`,
+  `Insert Component refused: back.mitcad links back to the open design:
+  back.mitcad > assembly.mitcad`, then Insert Component's own (`Insert
+  Component asked: bracket.mitcad`, `Insert Component: linked, whole
+  design`, `Inserted component bracket (linked) from bracket.mitcad`).
+- **Tests:** `tools/ui-project-design-drop-test.sh` (Floating and
+  Docked), the Windows `app.ui-windows-project-design-drop` and the macOS
+  `app.ui-macos-project-design-drop` with the shared driver script
+  `tools/ui-scripts/project-design-drop.mitcad-ui` (the driver's
+  `drag-logged-to-view-point`: a drag from a logged row to a model point's
+  place in the view): a design dropped on a cube's top face inserted
+  linked at the face's point with its Z along the normal (one undo step),
+  dropped again while Extrude is open (it waits; after Cancel, Copy
+  inserts a copy at its point), and a design that links the open one and
+  the open design itself refused in words; the model's
+  `link_check_finds_a_chain_of_links_back_to_the_open_design`
+  (`core/model-tests/assembly/src/link_copy_tests.rs`).
 
 ### Project picker
 
@@ -19913,6 +20199,26 @@ SVG at several sizes (`themeIcon`).
   `tools/ui-macos-press-pull-continued-test.sh`); a BUILD part's free end:
   `tools/ui-scripts/derived-part-edit.mitcad-ui` (step 3, on Linux,
   Windows and macOS).
+- **Offset Face and Press Pull: Tangent Chain** (mitcad#2438). Offset
+  Face's panel has **Tangent Chain** (on by default, as in Shell, Draft
+  and Replace Face; tooltip "Also move the faces that continue the
+  selected ones smoothly"), and its Faces input shows the chain on the
+  hover (`withHoverChain`). Press Pull has the same check, shown while
+  nothing is picked or faces are picked with Continue at Offset
+  (`offsetsFaces`); its hover shows the chain only while Continue is
+  Offset (the `when` of `withHoverChain`), as Straight and Along the
+  Walls (`press_pull`) carry the picked faces alone. On, `build` writes
+  `"tangent_chain": true` into the `offset_face`; off, it leaves it out,
+  the model's default (the faces alone, as every stored offset before).
+  Offset Face's `load` reads it with false as the default, so an offset
+  stored before opens with the check off and keeps its faces. Picks stay
+  the face clicked; the model grows the chain
+  ([commands.md](../core/model-api/src/commands.md#face-features-shell-draft-offset_face-delete_face-replace_face-split_body-split_face)).
+  Test: `tools/ui-offset-face-tangent-chain-test.sh` (a block with one
+  rounded corner: one click on its front with Offset Face, the hover
+  showing 3 faces, moves the front, the rounding and the side 2 mm out;
+  off, the front alone with a step at the rounding; Press Pull on the
+  front with Offset the same 3 faces 5 mm out).
 - **Fillet and Chamfer handles** (`withManipulator`, mitcad#534): each
   set's handle stands on the set's first edge that can take one (a face
   picked in Edges gives none), at the edge's middle as the view shows the
@@ -21584,6 +21890,7 @@ next screenshot.
 | `Window context menu: Browser \| Timeline \| Projects \| Command \| Chat` | the window's own menu of its panels opened (a right-click on a dock's title, the Docked toolbar or the ribbon's tab row): its entries, never Toolbar (mitcad#1451: that entry hid the design's whole Docked ribbon); none in the Floating layout, which has no docks; `tools/ui-docked-ribbon-test.sh`, `app.ui-windows-docked-ribbon` |
 | `Ribbon split SKETCH/CREATE/Circles at x,y`, `Ribbon split SKETCH/CREATE/Circles arrow at x,y` | a subgroup's split button: the part that starts its default, the arrow that opens the submenu (mitcad#222; logged with the group menus) |
 | `Ribbon menu SKETCH/CREATE: Line \| Rectangles > [2-Point Rectangle \| …] \| … \| Sketch Dimension`, `Ribbon menu SKETCH/CREATE/Circles: Center Diameter Circle \| …` | a group menu or a subgroup's submenu as it opens (`-` a separator, a submenu as `Name > [its entries]`; the SOLID CREATE menu: `Create Sketch \| - \| Extrude \| … \| - \| Pattern > [Rectangular Pattern \| …] \| Mirror \| - \| Machine Elements > [Gear | Pulley | Bearing]`, mitcad#579)\| Pulley]`, mitcad#579) |
+| `Ribbon menu disabled DRAWING/CREATE: Flat Pattern View` | just before a group menu's or submenu's line, its entries that cannot be chosen now (mitcad#2446; none, no line): the arrow keys pass over them, so the tests that choose an entry by its place (`ui_ribbon_menu_choose`, `Ui-RibbonMenuSkipped`) do not count them |
 | `Ribbon SKETCH/CREATE/Rectangles after its menu: not hovered` (`hovered`), `Ribbon SKETCH/MODIFY after its menu: not hovered` | a split button's or a group caption's drawn hover once its menu has closed: the menu took the pointer without a Leave, so the hover ends there where the pointer is off the button (mitcad#2061, `tools/ui-sketch-create-menu-test.sh`) |
 | `Ribbon group SOLID/MODIFY buttons: solid.press_pull, solid.fillet, solid.chamfer, solid.shell` | a group's own buttons (its layout buttons, a split button by its default) in the menu's order, once the ribbon makes the group, whether the row shows them or folds them; no line for a group without buttons, nor for the extras' or the user's pins (mitcad#1778, `tools/ui-solid-menus-test.sh`, `app.ui-windows-solid-menus`) |
 | `Ribbon pinned SOLID/CREATE/solid.sweep at x,y` | a pinned command's button, in its own group (mitcad#1001, mitcad#1084; logged with the group menus) |
@@ -21722,6 +22029,7 @@ next screenshot.
 | `Preferences: ribbon labels labels` (`icons`), `Ribbon labels: labels (rows <h> px high, <d> px for the labels)` (`Ribbon labels: icons (rows <h> px high)`), `Ribbon group SOLID/CREATE labels: Sketch, Extrude, Revolve, Hole`, `Ribbon collapsed SOLID: INSERT, SELECT` (`none`), `Ribbon more SOLID: INSERT, SELECT` (`none`; the toolbar panel's » menu, mitcad#1990), `Ribbon more SOLID at x,y`, `Ribbon more menu SOLID: Insert, Select` | Preferences › Display › Toolbar labels (mitcad#1936, [Toolbar labels](#toolbar-labels)): the choice saved, the rows' height and each group's labels after a change, and a tab's groups collapsed to their names whenever they change (`tools/ui-ribbon-labels-test.sh`) |
 | `Browser rows width <w> (widest row <n>, at most <p>% of <view>: <limit>)`, `Browser name elided <path>: tooltip "<line>"`, `Browser names elided: <n>`, `Preferences: browser rows at most <p>%`, `Browser card edge at x,y` (`Browser card edge: none`), `Browser card width <w> remembered`, `Browser card width <w> (remembered)` | the Browser card's width in the Floating layout (mitcad#1932): with Rows the width for its widest row and its limit, when it changed; the rows in sight whose name is elided, with their tooltip's first line (the name in full), and their count; the limit saved in Preferences; with Card its width grip, the width remembered when a drag ends and restored at the start (`tools/ui-browser-widths-test.sh`) |
 | `Browser controls: activate classic, eye right` (`right`, `classic`), `Browser right edge at x,y` (`… out of sight`), `Preferences: browser activate button right` (`classic`), `Preferences: browser show eye right` (`classic`) | the Browser rows' Activate radio button and Show eye places (mitcad#2223): with the rows' places, and while one is in the right column the visible right edge it lines up at; the choices saved in Preferences (`tools/ui-browser-control-places-test.sh`) |
+| `Timeline panel: history list under the Browser` (`strip at the bottom`), `Timeline presentation: history list` (`strip`), `Preferences: timeline list` (`strip`), `History list: Sketch1, Base, [Posts: Post, Cap]; marker after Base`, `History row <name> at x,y`, `History group <name> at x,y`, `History group <name> arrow at x,y`, `History eye <name> at x,y`, `History marker at x,y`, `History eye <name>: shown`, `History selected: <names>`, `Renaming <name> in the History list`, `Visibility History/<name>: hidden` | the timeline's History list (mitcad#2427): where the timeline's panel is, the rows in timeline order with the marker's place, the rows', groups', eyes' and marker's places, the eyes' states and the selection (`tools/ui-timeline-history-list-test.sh`) |
 | `Browser scroll range 240`, `Browser scroll bar at x,y` (`… out of sight`) | the rows' vertical scroll range (0 while every row fits; mitcad#425: the Floating Browser card grows to the timeline before it scrolls) and the vertical scroll bar in sight, the tree's or, with Rows, the one at the card's left (`BrowserPanel::setScrollBarOnLeft`), with the rows' places (`tools/ui-browser-rows-test.sh`, `app.ui-windows-browser-rows`) |
 | `Browser selected: <paths>`, `Visibility <path>: hidden`, `Visibility <path>: hidden (during Extrude)`, `Command Extrude: 1 visibility change(s) kept`, `Renaming <path>`, `Renamed Body1 to Plate`, `Renamed body F3.b0 with its component to Bracket` (mitcad#291), `Activated Bracket`, `Isolated …`, `Copied …`, `Pasted Bracket:1 as Bracket:2`, `Placed Bracket:2 at (90, 0, 0)`, `Paste of Bracket:3 cancelled`, `Ground Bracket:2`, `Deleted Bracket:2`, `New component in Root`, `Placement warning: <text>` (mitcad#292), `Look at plane F4`, `View top`, `Units: in`, `Found … in the browser` | browser actions |
 | `Activate component asked: Box:1 (active Root)`, `Activate component question at 318,76 461x159, the pick at 548,315 (clear of it)`, `Activate component answer: activate Box:1`, `Activate component answer: keep in Root, don't ask again`, `Activated Box` | Create Sketch or a Construct command picked another component's geometry and asked whether to activate it, and the answer (mitcad#960, [Activating the picked component](#activating-the-picked-component)) |
@@ -21783,6 +22091,7 @@ next screenshot.
 | `View: new design framed, scale 233.285 mm per view height at 1480x900` | a new design's first view framed (mitcad#1000): the model height the view shows, and the view's size |
 | `View: new design looks along -0.568,0.654,-0.5, up -0.328,0.377,0.866; the origin at 760,470, the free area's centre at 760,470` | after the framing line of a new design, seen from the default view (mitcad#1683, mitcad#1809): the view direction and up, and where the origin and the middle of the cards' free area are (window coordinates); not under `MITCAD_NEW_DESIGN_VIEW=0` |
 | `View: resized to 1920x1080, maximized, scale 233.285 mm per view height` (`, full screen`; no state for a normal window) | the view's size changed and came to rest (mitcad#1000); a resize keeps the height the view shows |
+| `View size: 1480x900, device pixels 1480x900, drawn 1480x900` (`, read back 1480x900` in the view's own EGL context), `3D view: drawn at 1180x750 pixels (read back 1480x900), but the view is 1480x900 pixels: the picture and the picks do not fit the window` | after a resize of the view, once a frame was drawn and the view rests (mitcad#2422): its size, in device pixels, the size OCCT draws and picks at and the frame read back; the warning when they differ; `tools/ui-view-resize-test.sh` |
 | `View navigation: 24 frame(s), 0 repaint(s) of widgets over the view, sketch overlay painted 23 time(s) by the view, Print Analysis overlay set 0 time(s)` (the widgets' object names in brackets after their count when there are any, `(parameterPicker, viewHome)`; a drawing the view draws itself only while it is shown, `sketch overlay` or `shown dimensions`; the overlay's count only while a Print Analysis is drawn) | a navigation of the view ended (`OcctViewer::navigationFinished`: a drag released, a wheel burst or an animation over): the frames drawn meanwhile, how often a widget over the view was painted again (each repaint makes Qt compose the window's whole area under the view again at that frame, which costs milliseconds per million pixels of the view: mitcad#768), how often the drawings over the view that the view draws itself were painted with its frames (`OcctViewer::addPaintLayer`, mitcad#2296: sketch mode's overlay, the dimensions shown outside sketch mode; no widget, nothing composed), and how often the Print Analysis overlay was set (a camera move computes nothing again) |
 | `3D mouse: Raw Input connected (SpaceMouse Compact (HID 256f:c635))` (`spacenavd connected (/var/run/spnav.sock)`, `IOKit HID connected (…)`; also when a device comes later), `3D mouse: none` (no device or daemon at start; the backend keeps listening), `3D mouse: off` (Preferences has it off), `3D mouse: Raw Input disconnected`, `3D mouse: button 1 runs view.fit` (debug; `3D mouse: button 3 has no command`, `3D mouse: view.look_at is not available now`), `3D mouse: rotation locked` and `3D mouse: rotation unlocked` (debug, Lock Rotation; ` in the sketch` after it in a sketch, mitcad#1910), `3D mouse: button 27 runs view.space_mouse_lock_rotation by default` (a device whose rotation lock key is known, as it connects; mitcad#1910), `3D mouse motion: 42 frame(s), 0.70 s, 58.6 fps, longest frame 33.4 ms, 1 grid rebuild(s), turned 12.3 degrees, panned 0.41 view heights, zoom 1.25x, object mode` (debug; when the cap comes to rest: its frames' timing, the time from the first frame to the last, their rate, the longest interval between two of them, `longest frame 41.0 ms with a grid rebuild` when the layout grid was rebuilt in it, and how many times the grid was rebuilt in the motion (mitcad#1023: an uneven motion shows as a low rate or a long frame); what the motion did, a zoom above 1 closer, and the Navigation mode, `camera mode` or `fly mode`, then `, horizon locked` with Lock horizon; mitcad#978), just before it `3D mouse axes: tx 0.00, ty 0.00, tz 0.00, rx -0.62, ry 0.03, rz 0.00; strongest rx: in Object mode the model tilts its top away from the user` (debug, on every platform, mitcad#1720: each axis's largest deflection in the motion, sign kept, in the view's frame before Reverse, and what the strongest one does to the model in Object mode: `moves right`/`left`, `moves up`/`down`, `comes closer`/`moves away`, `tilts its top toward`/`away from the user`, `turns counter-clockwise`/`clockwise seen from above`, `rolls counter-clockwise`/`clockwise as the user sees it`; a check with a device compares it with what the cap did); on Windows (debug, mitcad#1034) `3D mouse: SpaceNavigator (HID 046d:c626): reports of 13 bytes (dwSizeHid), the longest input report 13 bytes, the rotation in report 2 of its own by its report descriptor` (at a device's first report; the rotation also `in report 1 with the translation` or `not known`), `3D mouse: SpaceNavigator (HID 046d:c626) sends report ids 1, 2, its rotation in report 2 of its own` (when a new report id comes), `3D mouse report: id 1 [01 5e 01 00 00 00 00 00 00 00 00 00 00], id 2 [02 00 00 00 00 64 00 00 00 00 00 00 00]; 12 report(s); t 350 0 0, r 0 0 100` (while the cap moves, at most one line per 100 ms and one when it comes to rest: the last report of each id with its padding, how many came, and the HID translation and rotation read from them); `3D mouse: wheel ignored during a motion (delta 0, -120)` (debug, mitcad#1981: a wheel in the 3D view while the cap is deflected or 300 ms after it, at most ten lines a second, `, 4 more not logged` after the next one) and `3D mouse: key Ctrl+Left during a motion` (debug: a key pressed in the view then, possibly the driver's emulated input); on Windows with 3DxWare (mitcad#2152) `3D mouse: 3DxWare connected (SpaceMouse Compact via 3DxWare)` (also when the start is tried again once the design sits in its shown frame), `3D mouse: 3DxWare has a device, MitCad's window is not shown yet` (a start before then: Raw Input meanwhile), and with the runtime's stand-in (`MITCAD_TEST_3DXWARE=1`) `3D mouse: test 3DxWare runtime (MITCAD_TEST_3DXWARE) reports one device` and `3D mouse: test 3DxWare runtime opened its device`; `3D mouse: 3DxWare follows the active design's window` (mitcad#2297: the driver's session opened again for the active design's top-level window; the connected, none, off and disconnected lines come once for the process, not once per design) | a 3D mouse (mitcad#951, `view/SpaceMouseController.*`, `view/SpaceMouseView.cpp`); the test driver's `space-mouse` and `space-mouse-button` steps give the same input |
 | `Layout grid 5 mm, major 25 mm, 18.2 px apart` | the layout grid's spacing changed, logged when the camera rests, and again after a change of the spacing or the design's unit; in the design's unit (`Layout grid 0.25 in, major 1 in, 22.5 px apart`, mitcad#1210) |
@@ -23071,7 +23380,14 @@ drawing commands; it computes no geometry of its own.
   `Drawing view 1 Shows changed: 3 bodies`; the panel logs `Drawing view
   1 shows 2 of 3 bodies` and each row in sight, `Drawing panel
   drawingViewShows row Plate:3 at x,y`: a click selects it, Space checks
-  or clears it) and **Update from Model** (`drawingViewUpdate`, across the
+  or clears it; the panel built again after such an edit, or after any
+  other rebuild, keeps the tree's place for the same drawing and view,
+  mitcad#2434: its unfolded occurrences, its row at the top and its
+  current row, each row by its occurrence path and body,
+  `DrawingWorkspace::keepShowsPlace` before the old tree goes and
+  `ShowsPlaceKeeper` once the new one is shown, logged `Drawing view 1
+  Shows place before the rebuild: 1 unfolded, top row Plate:8, current
+  row Body1` and the same `… after the rebuild: …`) and **Update from Model** (`drawingViewUpdate`, across the
   panel under Shows, so its whole text fits at the narrowest panel: the
   component's occurrences and bodies the 3D view shows now, `subject`
   `{"type": "design"}`, undo step `Update view 1 of Drawing1`, logged
@@ -23262,7 +23578,10 @@ drawing commands; it computes no geometry of its own.
   "Line styles in drawing views"). The sheet logs the views' choices when
   they change, `Drawing lines: view 1: edge E{…} of F2.b0 thick phantom`
   (or `none`, `lineStylesText`), and the pens its views' lines take,
-  `Drawing view pens: phantom_thick, thick, thin`. The Line and Arc tools'
+  `Drawing view pens: phantom_thick, thick, thin`, and its Flat Pattern
+  views' blanks and bend lines (mitcad#2446), `Drawing Flat Pattern views:
+  view 1: Plate, 50.65 x 20.00, 1 bend line(s) (0 up, 1 down)` (or
+  `none`). The Line and Arc tools'
   Pattern and a drawn line's panel offer Long Dash Double Dot too
   (`phantom`, ISO 128 type 05). Tests: `app/tests/drawing_tools.cpp`;
   `tools/ui-drawing-edge-line-test.sh` (Linux) and
@@ -23290,7 +23609,8 @@ drawing commands; it computes no geometry of its own.
 
   | Tool | Picks | Options | Command |
   |---|---|---|---|
-  | Base View (`drawing.base_view`) | a click: the view's middle | Shows (mitcad#725: the drawing's component by its name, `design`; each occurrence in it by its path of names, `occurrence:O1/O4`; each of its own bodies, `body:F2.b0`; then each of its own sheet-metal bodies' Flat Pattern, `flat:F3.b0`, `Plate Flat Pattern`, mitcad#2280; from the `components`, `bodies` and `sheet_bodies` queries, `subjectChoices`), Orientation (Front, Top, Right, Back, Bottom, Left, Isometric, Isometric Top Left, Isometric Bottom Right, Isometric Bottom Left, Current View: the 3D view's camera as `{"toward_eye", "up"}`), Scale (Fit the Sheet, as in the view panel, or a scale, a ratio typed too, mitcad#1169), Hidden Edges, Tangent Edges, Shaded | `add_drawing_view` `base` (with `subject` unless the whole component, which the model records as the bodies the 3D view shows at that moment, mitcad#1293; a Flat Pattern looks along its pattern's frame whatever Orientation says; `direction` the camera for Current View); then Projected View starts from it |
+  | Base View (`drawing.base_view`) | a click: the view's middle | Shows (mitcad#725: the drawing's component by its name, `design`; each occurrence in it by its path of names, `occurrence:O1/O4`; each of its own bodies, `body:F2.b0`; then each of its own sheet-metal bodies' Flat Pattern, `flat:F3.b0`, `Plate Flat Pattern`, mitcad#2280; from the `components`, `bodies` and `sheet_bodies` queries, `subjectChoices`), Orientation (Front, Top, Right, Back, Bottom, Left, Isometric, Isometric Top Left, Isometric Bottom Right, Isometric Bottom Left, Current View: the 3D view's camera as `{"toward_eye", "up"}`), Scale (Fit the Sheet, as in the view panel, or a scale, a ratio typed too, mitcad#1169), Hidden Edges, Tangent Edges, Shaded | `add_drawing_view` `base` (with `subject` unless the whole component, which the model records as the bodies the 3D view shows at that moment, mitcad#1293; a Flat Pattern looks along its pattern's frame whatever Orientation says; `direction` the camera for Current View); then Projected View starts from it. The Flat Patterns follow the bodies after a separator of their own (mitcad#2446, `firstFlatPattern`; logged `Drawing Base View Shows: 1 Flat Pattern(s) after a separator`) |
+  | Flat Pattern View (`drawing.flat_pattern_view`, mitcad#2446; the Create group's second button and its menu's second entry, the `flat-pattern` icon, short label `Flat View`) | a click: the view's middle | Shows (the Flat Patterns alone of the drawing's component's own sheet-metal bodies, `flatPatternChoices`; the first chosen, logged `Drawing Flat Pattern View shows: flat:F3.b0 of 1`), Scale (Fit the Sheet or a scale), Bend Notes (on) | `add_drawing_view` `base` with `{"type": "flat_pattern", "body": …}` (`"bend_notes": false` when cleared), `at`, `scale` (`flatPatternView`); the view selected after it. Disabled while the drawing's component has no sheet-metal body of its own (`MainWindow::drawingFlatPatterns`), its tooltip saying why (`Flat Pattern View: the design has no sheet-metal body`); the bar's own button says it in the status bar. The command search finds it by "flat", "unfold", "blank", "development" |
   | Projected View (`drawing.projected_view`) | a drag out of a view, or a click beside the view picked (the selected one, or one clicked) | | `add_drawing_view` `projected` with `at`; the side follows from where it is |
   | Section View (`drawing.section_view`) | two clicks on a view: the line; a third: where it goes. Each of the two snaps as Line's do, on the view of the first (mitcad#1362; shown under the pointer, logged `Drawing point snapped to {…}` and `Drawing point 1 at x,y (snapped)`); the second, when it snaps to no point, turns about the first onto 0°, 45°, 90° or a multiple when within 4° of one, its length kept (`snapLineAngle`; the rubber band shows it with the hint `90°`, logged `Drawing snap: section line at 90 degrees` and `Drawing point 2 at x,y (at 90 degrees)`); a point wins over the angle; Shift: as clicked | Letter (the next free), Hatching, Look the Other Way | `add_drawing_view` `section` with `line`, `flip`, `at` |
   | Detail View (`drawing.detail_view`) | a click on a view (the middle), a second (the radius), a third: where it goes | Letter, Scale (Twice Its Parent's, as in the view panel, or a scale, a ratio typed too, mitcad#1169) | `add_drawing_view` `detail` with `at` |
@@ -25810,7 +26130,10 @@ choices are, and Close keeps them. Floating and Docked alike.
   it away. Fit (F6) takes it in.
 - **Send to Slicer** sends the design's plates when it has any: **Send the
   Design's Plates** (with 3MF, on by default then) exports every plate
-  instead of the bodies chosen (`export` with `plates`), each body in the
+  instead of the bodies chosen (`export` with `plates`). It starts off
+  when Bodies comes from a printable selection or Isolate is on
+  (mitcad#2475, `printPlatesAtStart`): those placements are sent until
+  the box is ticked. Each body in the
   color shown. One 3MF of every plate for a slicer that keeps several
   (the Bambu family, PrusaSlicer from 2.9 on: `slicerTakesPlates`, a
   PrusaSlicer whose program names an older version takes a file per
@@ -25822,7 +26145,8 @@ choices are, and Close keeps them. Floating and Docked alike.
   <name>`, `Plates: <item> on <plate>`, `Plates: Spiral vase of <plate>
   on|off`, `Plate view: <plate>: <n> pieces: <body> x<count>, …` (`Plate
   view: none`), `Plate setting <plate> <key> = <text>`; Send to Slicer's
-  `3D Print plates: <n>`, `3D Print plate <name>: <n> pieces in <file>`
+  `3D Print plates: <n>` (`, off: the bodies selected|isolated` when the
+  box starts off), `3D Print plate <name>: <n> pieces in <file>`
   and `3D Print: plates one_file|file_per_plate for <dialect>: <files>`.
 - Tests: `tools/ui-print-plates-test.sh` (Linux, light in Floating and
   dark in Docked), `tools/ui-windows-print-plates-test.ps1`
@@ -29135,7 +29459,8 @@ every program starts with the same notice as comments.
   `CAM machine controllers: router: grbl, grblhal, …`; the milling
   dialects are grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4,
   LinuxCNC, Makera Carvera and Makera Carvera Air, mitcad#2349; Post
-  Process's Controller offers the same list), Delete
+  Process's Controller offers the same list; the turning dialects are
+  Fanuc (turning) and LinuxCNC (turning), mitcad#2425), Delete
   Machine, Import from Library… (`cam_library`: the user's and the
   project's machines, `cam_machine_from_library`) and Save to Library
   (My Library, This Project's Library: `cam_machine_to_library`); both
@@ -30746,7 +31071,8 @@ an axis; the design's Z through the bodies when none).
   leaves it; `cam/CamStock.hpp` `turnedStockMesh`) and shows its summary
   in words under the slider (the material left over the part, whether a
   tool cut into it), the stock cleared when Simulate closes; Post Process… writes the lathe's
-  dialect (`fanuc_turning`, `.nc`).
+  dialect (`fanuc_turning`, `.nc`; or `linuxcnc_turning`, `.ngc`, every
+  operation longhand, mitcad#2425).
 - **Messages** say what is wrong in words: "Add a setup on a lathe first:
   New Setup with a lathe as its machine.", "Give the thread's pitch.",
   "The lathe has no tools yet: add them with Machines and Tools…."; the
@@ -30955,6 +31281,38 @@ guide steps are in [docs/tutorials.md](../docs/tutorials.md).
   datums' places logged for UI tests keep clear of the callout as of the
   cards (`TutorialGuide::calloutRect`, logged again when it moves;
   mitcad#2311).
+- **Sketch input steps** (mitcad#2440, GitHub mitcad/Mitcad#628;
+  docs/tutorials.md "Sketch input steps"): a `plane` target or done
+  (`XY`, `XZ`, `YZ`, `face`, a construction plane's name or uid, a face's
+  reference; `startGuideStep` refuses a plane the design lacks) is checked
+  in `createSketchOnPick`, every way a sketch starts: another plane is
+  held back (`TutorialGuide::planeAllowed`; `Guide: step <id> plane xz,
+  not its XY`, the note "Not this plane. Pick the one the step names.")
+  and the sketch made on the plane completes a `plane` done (`Guide: step
+  <id> done: a sketch on XY`). A plane target outlines the view and takes
+  its picks. A `point` done (a place of `sketch::snapPlaces`, places, or
+  `[x, y]` within 0.001 mm) and a `field` done (a value box's key and
+  value) go through `SketchController::setGuideCheck`: before a 2D
+  sketch's tool that snaps takes a click (and its release and
+  double-click) or Enter, `TutorialGuide::drawingInput` lets it through or
+  holds it back, the tool keeping its state. A click at the place
+  completes a point step and goes to the tool (`Guide: step <id> done: a
+  point at origin (0, 0)`); elsewhere it is held back (`Guide: step <id>
+  point at grid (10, 5), not its origin`, the note "Not this place. Click
+  where the step says."). A field step is done once the value typed into
+  the box (`sketchField_<key>`, a `field` target's outline) stays 600 ms,
+  or at a click or Enter with it typed; while the tool shows the box, a
+  click or Enter with another value or none typed is held back (`Guide:
+  step <id> value 25 in width, not its 40`, `value not typed in width`,
+  the note "Not this value. Type the one the step gives."). Each held back
+  input is a `mismatch` event with `got`. While a job computes the model
+  (a panel's preview), the guide's tick checks no done condition
+  (`GuideHost::busy`): a step is done at the first tick after the job, so
+  what follows its end (the actions' update, the page's next step) never
+  reads the document under the job. UI test
+  `tools/ui-scripts/guide-sketch-input.mitcad-ui` (Linux
+  `tools/ui-guide-sketch-input-test.sh`, `app.ui-windows-guide-sketch-input`,
+  `app.ui-macos-guide-sketch-input`).
 - **A step with hold** (`"hold": true`, mitcad#2368): once done (`step_done`
   sent at once, once) it logs `Guide: holding input after step <id>` and
   keeps the application event filter: its callout and outline hidden, every
@@ -32434,9 +32792,10 @@ sub-spindle's profile".
   *Turret Body Z From*, *Turret Body Z To* (`camMachineTurretXMin`,
   `camMachineTurretXMax`, `camMachineTurretZMin`, `camMachineTurretZMax`:
   the turret's body from the tool's point, all four or none; sends
-  `turret_body`, removed when all four are empty). A point that does not
-  read, points out of order, a single point or ends the wrong way round
-  are said under the pages and show the Sub-Spindle page.
+  `turret_body`, removed when all four are empty; on the Turret page
+  since mitcad#2412). A point that does not read, points out of order, a
+  single point or ends the wrong way round are said under the pages and
+  show the Sub-Spindle page.
 - **Simulate** draws the sub-spindle of a lathe setup (its chuck, its
   housing and its profile, revolved about the spindle axis: a circle at
   each point of a part and four lines along it, in the edges' color,
@@ -32445,8 +32804,8 @@ sub-spindle's profile".
   setup's work zero on the machine), at the grip for the parting off and
   for the sub-spindle's operations, which the view draws on the part
   where it was. It moves with the slider through the hand-over and goes
-  when Simulate closes. The fixed zones are not drawn, nor are the zones
-  moving with it. Generate and Simulate say the turret's hits in words as
+  when Simulate closes. The zones and the turret are drawn since
+  mitcad#2412 (below). Generate and Simulate say the turret's hits in words as
   the tool's ("Turn Facing 2: the turret runs into the sub-spindle's
   chuck.").
 - **Log lines** (for UI tests): `CAM machine mill-turn codes: …` with
@@ -32460,3 +32819,266 @@ sub-spindle's profile".
   the profile and the turret's body typed on the Sub-Spindle page, the
   turret's hit in Simulate and in the lathe check, the sub-spindle drawn
   at the grip and, with the work zero on the machine, where it waits.
+
+## The zones and the turret drawn in Simulate, the turret against the main chuck and the fixed zones (mitcad#2412)
+
+`cam/CamMachinesDialog.cpp` (the Turret page, the zones' Y),
+`cam/MainWindowCamStock.cpp` (`showCamMachineParts`, the turret's hits),
+`cam/MainWindowCam.cpp` (the scene), `cam/CamToolpaths.cpp`
+(`cam::operationEntry`, `cam::zoneLines`, `cam::turretLines`, the tool's
+work point in `PlaybackPoint::work`), `view/CamToolpathOverlay.cpp` (the
+lines); the model's commands in `core/model-api/src/commands.md`, "CAM:
+the zones and the turret drawn in Simulate, the turret against the main
+chuck and the fixed zones"; the design in `docs/cam.md`, "The zones and
+the turret drawn, the turret against the main chuck and the fixed zones".
+
+- **Machines and Tools…**: Edit Machine… of any lathe has a **Turret**
+  page (after the Sub-Spindle Zones page): *Turret Body X From*, *Turret
+  Body X To*, *Turret Body Z From*, *Turret Body Z To* (moved there from
+  the Sub-Spindle page, the same object names; sends `turret_body` on
+  every lathe) and *Station Bodies* (`camMachineTurretStations`: a
+  station's own body as "3: 0, 120, -30, 25" for its X from, X to, Z from
+  and Z to, entries separated by ";"; empty: none; sends
+  `station_bodies`, removed when empty). An entry that does not read or
+  whose ends are the wrong way round is said under the pages and shows the
+  Turret page; a station off the turret or twice is refused by the model
+  in words.
+- **Zones' Y on a lathe:** Add Zone… and Edit Zone… on the Keep-Out Zones
+  and Sub-Spindle Zones pages ask *Minimum Y* and *Maximum Y*
+  (`camMachineZoneMinY`, `camMachineZoneMaxY`) on a lathe whose *C axis
+  and live tools* and *Y axis* are checked when the zone is added or
+  edited; both left empty keep the zone not limited in Y (equal bounds,
+  as before; an existing one shows them empty). The zone lists then have a
+  Y column ("Not limited" for such a zone). Without the Y axis a lathe's
+  zones are asked in X and Z as before.
+- **Simulate** draws, with the sub-spindle and in its style (the edges'
+  color, never picked), the zones where they are as the operation at the
+  slider's place cuts (a box of twelve lines, a rectangle where the zone
+  has no depth in Y; the fixed zones only with the setup's work zero on
+  the machine, those moving with the sub-spindle where it is; nearer the
+  main spindle for the sub-spindle's operations, as the view keeps the
+  part where it was) and the turret's body as a rectangle round the
+  tool's point, moving with it. Its summary adds "%n move(s) bring the
+  turret into the chuck or a fixed zone." and, when nothing else was
+  found first, the warning names the first hit. Generate lists the same
+  findings ("Turn Facing 1: the turret runs into Tailstock.").
+- **Log lines** (for UI tests): `CAM machine mill-turn codes: …` with
+  `station_bodies`, `CAM turret hits: Setup 1: 1`, `CAM turret hit Setup
+  1: Turn Facing 1: the turret runs into Tailstock.`, `CAM zones drawn:
+  Setup 1: Turn Facing 1: 2 zone(s), 1 moving, 16 segments`, `CAM zone
+  drawn: Setup 1: Turn Facing 1: Tailstock at Z -700 to 1300` (each zone
+  after it), `CAM turret drawn: Setup 1: Turn Facing 1: X 0 to 100, Z -20
+  to 20 from the tool` or `… : none` (each when it changes, so once per
+  operation).
+- **Tests:** `app/tests/cam_machine_drawn.cpp` (app.unit) and the UI test
+  `tools/ui-scripts/cam-mill-turn-sub.mitcad-ui` (Linux, and as
+  `app.ui-windows-cam-mill-turn-sub` and `app.ui-macos-cam-mill-turn-sub`):
+  a fixed zone with its Y on the Keep-Out Zones page, the guard moving
+  with the sub-spindle left without Y, the turret's body and the flat
+  mill's station's own on the Turret page, the turret running into the
+  fixed zone in the lathe check and in Simulate, the zones and the turret
+  drawn without and with the work zero on the machine.
+
+## Toolbar panel hidden (mitcad#2426, GitHub mitcad/Mitcad#571)
+
+More room for the model: the toolbar panel (the workspace selector, the
+tabs, the search field and the groups) hidden with a key, shown for a
+while at the view's top edge, kept between starts.
+
+- **View › Toolbar Panel** (`view.toolbar_panel`, `app/MainWindowToolbarPanel.cpp`):
+  a checkable entry, checked while the panel shows, after View › Comment
+  Pins and before View › Panels. Default key `Ctrl+F1` (`⌘F1` on macOS);
+  rebindable in Tools › Keyboard Shortcuts, also to a single key; the
+  command search finds it (toolbar, ribbon, panel, hide, room, full
+  screen). It works while a command runs. Not offered by the AppKit
+  frontend (disabled there).
+- **Hidden, the view takes the panel's height.** Floating: the panel's row
+  of the `FloatingLayout` is hidden (`FloatingLayout::setRowHidden`); the
+  cards (Browser, Command, the right panels) and the view's free area
+  (the orientation cube) move up under the top bar. Docked: the panel
+  under the top bar is hidden and the view and the docks move up. The top
+  bar (☰, the quick-access group, the document tabs, the indicators)
+  stays. In the macOS comparison layouts of `MITCAD_MAC_UI` the ribbon or
+  the Docked toolbar is hidden, without the reveal.
+- **One setting for every window:** `view/toolbarPanelHidden` (true while
+  hidden), applied to every open window and design at once, to every new
+  one, and at the next start. Not part of the settings' export.
+- **The reveal at the top edge** (`app/framework/ToolbarPanelReveal`): a
+  band 4 px high under the top bar across the view (Floating: under the
+  title row; Docked: the view's top edge). The pointer resting on it for
+  300 ms shows the panel over the view, which keeps its place: Floating,
+  the row at its usual place over the cards, which keep theirs (with native
+  glass, whose cards are windows of their own, the row takes its room as
+  when shown); Docked, the panel taken out of the top bar and placed over
+  the view's top on the window's color. It goes again 400 ms after the
+  pointer left the panel and the band, once no menu or pop-up (a group's
+  menu, the workspace list), no dialog and no held mouse button is open
+  and the keyboard is not in the panel's search field. A command started
+  from it runs as usual and keeps it while the command's panel is open
+  (mitcad#2472; below).
+  No reveal while a mouse button is held: a drag of the view (orbit, a
+  sketch drag) across the band shows nothing, as the view holds the
+  pointer. No reveal over the Start page.
+- **A command started from the revealed panel keeps it** (mitcad#2472,
+  `ToolbarPanelReveal::keepFor`, `MainWindow::keepToolbarPanelFor`): a
+  command with a command panel (Extrude, Measure, …) started while the
+  panel is revealed by the last input there, a click on one of its buttons,
+  an entry of one of its menus or pop-ups (a group's menu, the » menu) or
+  a command chosen in its search field, keeps the panel shown while the command's
+  panel is open, wherever the pointer goes. So that it covers neither the
+  command's panel nor the cards, the panel then takes its room as when
+  shown (Floating: the cards, the Command card among them, and the view's
+  free area move down below it; Docked: it goes back into the top bar and
+  the view and the docks move down). Once the command ends (OK, Cancel,
+  Esc) it goes 400 ms later with the pointer away from it, giving the room
+  back, or, with the pointer on it, once the pointer leaves it; another
+  command started from it meanwhile keeps it again. A command started any
+  other way (its key, the command search, the Browser) while the panel is
+  hidden neither reveals nor keeps it; an action (a view command) has no
+  command panel and keeps nothing.
+- **The way back is always there:** the View entry, the key and the
+  reveal. The first time the panel is hidden (per profile,
+  `view/toolbarPanelHiddenTold`), the message band (Floating) or the
+  status bar (Docked) says once, as Information: "Toolbar panel hidden.
+  Press Ctrl+F1 or move the pointer to the top edge to show it." (the
+  current key in the platform's form; without a key: "Choose View ›
+  Toolbar Panel or move the pointer to the top edge to show it."). So the
+  trap of mitcad#1451 (a hidden toolbar that nothing brought back) does not
+  return.
+- **The Start page** hides the panel as before (it has no workspace);
+  leaving it gives the user's state back, hidden or shown.
+- **Log lines** (for UI tests): `Toolbar panel hidden (Ctrl+F1)` (the
+  command, with its key in portable text, or `no key`), `Toolbar panel
+  shown`, `Toolbar panel hidden (kept setting)` (a window set up with it
+  hidden: at start, a new design), `Toolbar panel reveal band at x,y: wxh`
+  (its middle in the window's coordinates, as it moves) and `Toolbar panel
+  reveal band: none`, `Toolbar panel revealed at top edge: panel x,y wxh, on top`
+  (or `…, ribbon_<id> covered at x,y by <widget>` when a card or another
+  widget is over one of its buttons; then the ribbon's places, `Ribbon
+  button … at x,y`), `Toolbar panel revealed: a press on <widget> (in|outside
+  the panel)` (each press while revealed, the widget it reaches first),
+  `Toolbar panel kept (command panel Measure open)` (a command started from
+  it, mitcad#2472), `Toolbar panel takes its room while kept (Floating)` (or
+  `(Docked)`), `Toolbar panel released (command Measure ended)`, `Toolbar panel
+  hidden again (the pointer left it)` (or `(the command ended)`, `(the Start
+  page)`), `Toolbar
+  panel back in place (shown for good)`, `Toolbar panel after the Start
+  page: hidden (View › Toolbar Panel)`, `Docked toolbar panel hidden (View
+  › Toolbar Panel)`. While revealed, the Floating layout logs the row as
+  `ribbon (over the view) x,y wxh` in `Floating cards: …`, not counted in
+  its rows' bottom.
+- **The active design's tab** in the top bar is a block of the accent with
+  its name in DemiBold in the color for text on the accent, and its × in
+  that color too (`RowTabClose` in `app/DocumentFrame.cpp`): before, a
+  faint tint of the text that read as little more than the hovered tab's
+  fill. The other tabs: their names in the quieter text, the hover fill
+  under the pointer.
+- **Tests:** `tools/ui-toolbar-panel-hide-test.sh` (Linux) and
+  `app.ui-windows-toolbar-panel-hide` (`tools/ui-windows-toolbar-panel-hide-test.ps1`),
+  both in the Floating and the Docked layout with the shared input scripts
+  `tools/ui-scripts/toolbar-panel-hide.mitcad-ui` (Ctrl+F1 hides it, the
+  message once, the setting, the view's room grows; a rest on the band
+  reveals it over the view, whose room stays; a group's menu keeps it while
+  the pointer is elsewhere; Measure started from its button keeps it, taking
+  its room, while its command panel is open, also with the pointer away
+  (mitcad#2472); Esc with the pointer on it leaves it shown and Measure
+  from it keeps it again; Esc with the pointer away hides it and gives the
+  room back; Measure by its key I neither reveals nor keeps it; a drag
+  across the band shows nothing; View › Toolbar
+  Panel shows it with the room back; hidden again without the message; a
+  new design hidden; the Start page and back) and
+  `tools/ui-scripts/toolbar-panel-hide-restart.mitcad-ui` (hidden after the
+  restart, revealed, Ctrl+F1 shows it and keeps it so).
+
+## A list's values in a narrow panel (mitcad#2421)
+
+GitHub mitcad/Mitcad#671. A command panel's list whose rows are values only
+(Fillet's Mid Radii with Set, Position and Radius, its Control Radii with
+Set and Radius) put each row's name, every value's label and field and the
+row's ✕ on one line. In the Command panel's 300 px (Floating and Docked)
+the three Mid Radii fields were squeezed to a few pixels each, their step
+buttons and fx over the text, and an error under a field wrapped a word to
+a line. Now each row is laid out by `framework/ListLineLayout`:
+
+- **One line** while every field gets its readable width there: seven
+  digits beside its trailing buttons (the step buttons, fx, a shown mark)
+  in its font and frame (`ListLineLayout::readableWidth`). The fields share
+  what the line has beyond that.
+- **Stacked** where they do not: the row's name and ✕ on a line of their
+  own, then each value on a line under it, the labels in a column as wide
+  as the widest and the fields beside them as wide as the rest of the line.
+  The Mid Radii and the Control Radii rows are stacked in the 300 px panel
+  at every Text size (the panel's width grows with it).
+- **Under** where even that leaves a field less than its readable width:
+  each field under its label, across the whole width.
+- A field's note (its error or its value's hint) is as wide as the field
+  and as high as its text in every arrangement; the lines under it move
+  down. Labels, the name and ✕ stand on the center line of their fields'
+  line edits. Tab goes through the fields in the panel's order, a row's
+  Set, Position, Radius, then the next row's (`CommandPanel::stepFocus`).
+- **Logs:** with the panel's places, `Panel <command> row <list>.<n> one
+  line|stacked|under` for each row of such a list, and `Panel <command>
+  inputs clipped: …` also names `<key> field (<readable> of <width>)` (a
+  list's field narrower than its readable width) and `<key> note (<needed>
+  of <height>)` (a list's note lower than its text).
+- **Tests:** `app/tests/list_line_layout.cpp` (app.unit: one line at its
+  width and wider, stacked and under narrower, every field at least its
+  readable width and every label whole, a long error's note as high as its
+  text with the lines under it moved, a hidden value left out) and
+  `tools/ui-fillet-mid-radii-test.sh` with the shared script
+  `tools/ui-scripts/fillet-mid-radii.mitcad-ui` on a stepped block
+  (`fillet-mid-radii.json`), in the Floating and the Docked layout at Text
+  size 100% and 150%: a Variable fillet with two Mid Radii, both rows
+  stacked and no input of the panel ever clipped, the fields typed through
+  with Tab from the first row's Set to the second row's Position, an
+  invalid Radius's error under its field with nothing clipped, a valid one
+  taking it away.
+
+## Shell: faces with their own thickness (mitcad#2443)
+
+GitHub mitcad/Mitcad#642 (the second request): in Shell, faces get a wall
+thickness of their own; the rest keep the shell's.
+
+- **Panel** (`commands/FaceCommands.cpp`, `shellCommand`): a list *Own
+  Thickness* (`face_thicknesses`, tooltip "Faces whose wall is thicker or
+  thinner than the shell's") after Shell Type, no row at first, *Add
+  Faces* adds a row *Faces %1*: *Faces* (faces of the shelled body, any
+  number, no mesh faces), *Inside Thickness* and *Outside Thickness*
+  (lengths, `4 mm`, not below 0), each shown as the shell's *Direction*
+  has that side (`state.whole()`). `build` writes each row as
+  `{"faces", "inside", "outside"}` with the sides Direction has; a row's
+  face of another body is refused under the row's Faces. `load` fills the
+  rows from the feature; a side an entry leaves out shows the shell's
+  thickness. `describe` adds ", N face(s) at their own thickness" when
+  there are any ("Added shell removing 1 face(s), 1 face(s) at their own
+  thickness").
+- **Model** (`core/model/src/features/shell.rs`, `commands.md` "Shell:
+  faces with their own thickness"): `face_thicknesses`, each entry's
+  values parameters of their own (`face_thicknesses[i].own_inside`, `.own_outside`: "Shell1 own_inside")
+  after the shell's; the faces references renamed and found again as the
+  removed faces are. Refused in the check: an entry without faces or
+  without a side, a side the shell has not, a removed face, a face listed
+  twice, a thickness not above 0 (each with the face painted). The kernel
+  gets every face with both sides (`ShellSpec::own`, `ShellFace`).
+- **Geometry** (`geometry/src/faceops.cpp`, `shell`, `own_thickness_shell`):
+  OCCT's offset with a value for each face (`SetOffsetOnFace`) in a thick
+  solid and a whole-body offset made as `MakeThickSolidByJoin` and
+  `PerformByJoin` make them, so the names stay the shell's; the faces it
+  offsets as one (`BRepOffset_Analyse`: tangent, and in a Rounded shell
+  joined by a rounding) checked first (`spread_own_offsets`); no cavity;
+  the faces whose own thickness the walls cannot meet found one by one
+  and painted in the error.
+- **Tests:** `geometry.shell_own_thickness`
+  (`geometry/tests/test_shell_own_thickness.cpp`: exact volumes and wall
+  planes Inside, Outside, Both, closed, Rounded inside, a cylinder's side,
+  the tangent chain; the refusals); `cli.shell_own_thickness`
+  (`tools/cli/tests/shell_own_thickness.json`: a block's bottom at 5 mm
+  measured, edited, the other directions, a cylinder); the reporter's
+  design in `cli.shell_sharp_reported` (`shell_own_thickness_reported642.json`:
+  the step's top at its own thickness); the model's checks with the mock
+  kernel (`core/model/src/features/shell.rs` tests); the UI test
+  `tools/ui-shell-own-thickness-test.sh` (Linux), `app.ui-windows-shell-own-thickness`
+  and `app.ui-macos-shell-own-thickness`, all running
+  `tools/ui-scripts/shell-own-thickness.mitcad-ui`: a box shelled with its
+  top removed and its front in a row at 5 mm, the volume; reopened, the
+  row's thickness edited to 4 mm, the volume again.

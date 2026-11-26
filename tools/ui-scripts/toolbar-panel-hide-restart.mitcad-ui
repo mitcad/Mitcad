@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# View › Toolbar Panel (mitcad#2426) after a restart: the start after
+# tools/ui-scripts/toolbar-panel-hide.mitcad-ui, which ended with the toolbar
+# panel hidden, in the same layout and profile:
+#   1. The panel starts hidden (the kept setting), the reveal band under the
+#      top bar; a rest on it shows the panel, which goes again once the
+#      pointer left it.
+#   2. Ctrl+F1 shows it again, kept as shown; nothing said.
+# Run by tools/ui-toolbar-panel-hide-test.sh (Linux) and
+# tools/ui-windows-toolbar-panel-hide-test.ps1 (Windows), in both layouts.
+expect-ever 'View area' 30
+wait-idle
+window-resize 1280 800
+wait-idle
+expect-ever '^Toolbar panel hidden \(kept setting\)$' 30
+expect-setting view/toolbarPanelHidden true
+expect-ever '^Toolbar panel reveal band at ' 30
+expect-never '^(?:Floating cards: .*; ribbon \d|Docked top bar: .*; ribbon \d)'
+
+# 1. Revealed and gone again.
+mark
+hover-logged '^Toolbar panel reveal band at '
+wait-log '^Toolbar panel revealed at top edge: panel '
+pointer-logged move '^Toolbar panel reveal band at ' none 0 320
+wait-log '^Toolbar panel hidden again \(the pointer left it\)$'
+
+# 2. Shown by its key, and kept so.
+mark
+key ctrl+F1
+wait-log '^Toolbar panel shown$'
+wait-log '^Toolbar panel reveal band: none$'
+wait-log '^(?:Floating cards: .*; ribbon \d|Docked top bar: .*; ribbon \d)'
+expect-setting view/toolbarPanelHidden false
+expect-no-log '^Status info: Toolbar panel'

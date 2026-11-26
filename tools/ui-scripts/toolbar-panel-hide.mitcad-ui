@@ -1,0 +1,165 @@
+# SPDX-License-Identifier: MIT
+# View › Toolbar Panel (mitcad#2426, GitHub mitcad/Mitcad#571), in a window of
+# 1280 x 800 with a fresh profile, in the layout the test starts MitCad in
+# (Floating or Docked; the same steps for both):
+#   1. Ctrl+F1 hides the toolbar panel: logged with its key, the way back
+#      said once (Information), the setting kept; the view's room grows by
+#      the panel's height (Floating: the rows' bottom, Docked: the view's
+#      top move up); the reveal band shows under the top bar.
+#   2. A rest of the pointer on the band shows the panel over the view: the
+#      view's room stays. A group's menu opened from it keeps it while the
+#      pointer is elsewhere; once the menu closes, it goes.
+#   3. Measure by its key, with the panel hidden, neither reveals nor
+#      keeps it.
+#   4. A drag from the view across the band shows nothing.
+#   5. View › Toolbar Panel shows it again (the room back), Ctrl+F1 hides it
+#      again without the message.
+#   6. A new design opens with it hidden; the Start page hides the panel as
+#      before, and leaving it gives the hidden state back.
+#   7. With a body in the design, shown again, a command from it runs
+#      (Fillet); the panel stays while its command panel is open, taking its
+#      room as when shown, also with the pointer away (mitcad#2472); ended
+#      with the pointer on it, it stays and another command from it keeps it
+#      again; ended with the pointer away, it goes.
+# The app ends with the panel hidden: tools/ui-scripts/toolbar-panel-hide-
+# restart.mitcad-ui checks the next start. Run by tools/ui-toolbar-panel-
+# hide-test.sh (Linux) and tools/ui-windows-toolbar-panel-hide-test.ps1
+# (Windows), in both layouts.
+expect-ever 'View area' 30
+wait-idle
+window-resize 1280 800
+wait-idle
+expect-ever '^Ribbon button solid\.extrude at ' 30
+expect-command-enabled view.toolbar_panel true
+# The bottom of what the panel takes from the view, with the panel shown:
+# the Floating rows', the Docked view's top.
+capture shown '^(?|Floating cards: [^;]*floating rows bottom (\d+);.*; ribbon \d|Docked top bar: window \d+x\d+, view top (\d+);.*; ribbon \d)' 30
+
+# 1. Hidden by its key.
+mark
+key ctrl+F1
+wait-log '^Toolbar panel hidden \(Ctrl\+F1\)$'
+expect-log '^Status info: Toolbar panel hidden\. Press Ctrl\+F1 or move the pointer to the top edge to show it\.$'
+wait-log '^Toolbar panel reveal band at \d+,\d+: \d+x4$'
+expect-setting view/toolbarPanelHidden true
+capture hidden '^(?|Floating cards: (?!.*; ribbon )[^;]*floating rows bottom (\d+);|Docked top bar: window \d+x\d+, view top (\d+);(?!.*; ribbon ))'
+expect-less ${hidden} ${shown}
+expect-no-log '^Docked top bar: .*; ribbon '
+
+# 2. Revealed by a rest on the band, over the view, whose room stays; a
+# group's menu keeps it.
+mark
+hover-logged '^Toolbar panel reveal band at '
+wait-log '^Toolbar panel revealed at top edge: panel .*, on top$'
+wait-log '^(?:Floating cards: [^;]*floating rows bottom ${hidden};.*; ribbon \(over the view\) |Docked top bar: window \d+x\d+, view top ${hidden};.*; ribbon \d)'
+wait-log '^Ribbon SOLID/CREATE at '
+mark
+click-logged '^Ribbon SOLID/CREATE at '
+wait-log '^Ribbon menu SOLID/CREATE: '
+pointer-logged move '^Toolbar panel reveal band at ' none 0 320
+sleep 900
+expect-no-log '^Toolbar panel hidden again'
+key Escape
+wait-log '^Toolbar panel hidden again \(the pointer left it\)$'
+
+# 3. A command started by its key (Measure's I) while the panel is hidden,
+# the pointer over the view, neither reveals nor keeps it.
+mark
+key i
+wait-log '^Command Measure started'
+sleep 900
+key Escape
+wait-idle
+expect-no-log '^Toolbar panel (?:revealed|kept|takes its room)'
+
+# 4. A drag from the view across the band, held there, shows nothing.
+mark
+pointer-logged press '^Toolbar panel reveal band at ' left 0 320
+pointer-logged move '^Toolbar panel reveal band at ' left 0 -320
+sleep 900
+pointer-logged release '^Toolbar panel reveal band at ' left 0 0
+sleep 600
+expect-no-log '^Toolbar panel revealed'
+wait-idle
+
+# 5. View › Toolbar Panel shows it; Ctrl+F1 hides it again, said only once.
+mark
+menu 'View/Toolbar Panel'
+wait-log '^Toolbar panel shown$'
+wait-log '^Toolbar panel reveal band: none$'
+expect-setting view/toolbarPanelHidden false
+capture back '^(?|Floating cards: [^;]*floating rows bottom (\d+);.*; ribbon \d|Docked top bar: window \d+x\d+, view top (\d+);.*; ribbon \d)'
+expect-near ${back} ${shown} 0 0
+mark
+key ctrl+F1
+wait-log '^Toolbar panel hidden \(Ctrl\+F1\)$'
+wait-log '^Toolbar panel reveal band at '
+expect-no-log '^Status info: Toolbar panel hidden'
+
+# 6. A new design: hidden there too (an empty untitled design's window
+# takes it; a window set up with the setting is the restart script's). The
+# Start page hides the panel as before; leaving it gives the hidden state
+# back.
+mark
+key ctrl+n
+wait-log 'New document'
+wait-idle
+sleep 500
+expect-no-log '^Toolbar panel shown$'
+expect-no-log '^(?:Floating cards: .*; ribbon \d|Docked top bar: .*; ribbon \d)'
+expect-no-log '^Toolbar panel reveal band: none$'
+expect-setting view/toolbarPanelHidden true
+mark
+click-logged '^Ribbon tab START at '
+wait-log '^Start page shown$' 10
+wait-log '^Toolbar panel reveal band: none$'
+wait-idle
+mark
+leave-start-page
+wait-log '^Start page hidden$' 10
+wait-log '^Toolbar panel after the Start page: hidden \(View . Toolbar Panel\)$'
+wait-log '^Toolbar panel reveal band at '
+expect-setting view/toolbarPanelHidden true
+
+# 7. A body in the design (step 6 needed it empty): Fillet, enabled only
+# with a body, is a button of Modify, which stays whole also where the
+# window is narrower than asked (Windows' 1024 x 768 desktop takes its size
+# back; Inspect's Measure is then only in the group's menu).
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[0,0],"length":20,"width":10,"height":5,"operation":"new_body"}}'
+wait-idle
+
+# A command from the revealed panel runs, and the panel stays while its
+# command panel is open (mitcad#2472), taking its room as when shown (the
+# command's panel below it), also with the pointer away; ended with the
+# pointer on the panel, it stays, and another command from it keeps it
+# again; ended with the pointer away, the panel goes and gives the room back.
+mark
+hover-logged '^Toolbar panel reveal band at '
+wait-log '^Toolbar panel revealed at top edge: panel .*, on top$'
+wait-log '^Ribbon button solid\.fillet at '
+click-logged '^Ribbon button solid\.fillet at '
+wait-log '^Toolbar panel revealed: a press on ribbon_solid\.fillet \(in the panel\)$'
+wait-log '^Command Fillet started'
+wait-log '^Toolbar panel kept \(command panel Fillet open\)$'
+wait-log '^Toolbar panel takes its room while kept '
+wait-log '^(?:Floating cards: [^;]*floating rows bottom ${shown};.*; ribbon \d|Docked top bar: window \d+x\d+, view top ${shown};.*; ribbon \d)'
+wait-idle
+mark
+key Escape
+wait-log '^Toolbar panel released \(command Fillet ended\)$'
+sleep 900
+expect-no-log '^Toolbar panel hidden again'
+mark
+wait-idle
+click-logged '^Ribbon button solid\.fillet at '
+wait-log '^Command Fillet started'
+wait-log '^Toolbar panel kept \(command panel Fillet open\)$'
+pointer-logged move '^Toolbar panel reveal band at ' none 0 320
+sleep 900
+expect-no-log '^Toolbar panel hidden again'
+mark
+key Escape
+wait-log '^Toolbar panel released \(command Fillet ended\)$'
+wait-log '^Toolbar panel hidden again \(the command ended\)$'
+wait-log '^(?:Floating cards: (?!.*; ribbon )[^;]*floating rows bottom ${hidden};|Docked top bar: window \d+x\d+, view top ${hidden};(?!.*; ribbon ))'
+wait-idle

@@ -183,6 +183,10 @@ struct PrintPanel {
   Slicer other;          // one chosen by hand (Other program...)
   QString previous;      // the Slicer choice before Other program...
   bool selected = false; // the bodies came from the selection
+  // The bodies came from a printable selection, or Isolate was on: the
+  // design's plates start off (mitcad#2475).
+  bool printableSelection = false;
+  bool isolated = false;
   QStringList whole;     // the occurrences selected as components (mitcad#856)
   // The print bed faces chosen for 3MF pieces with several, and the piece
   // asked about now (mitcad#857): until the panel closes.
@@ -1849,7 +1853,8 @@ CommandDef MainWindow::print3dCommand() {
           .withAccepts([this](const SelectionItem& item) { return printable(bodyShape(item.owner)); })
           .withOnChange(sentChanged),
       // The design's print plates instead of the bodies (mitcad#1050): on
-      // by default when the design has plates, with 3MF only.
+      // by default when the design has plates, with 3MF only; off when the
+      // bodies come from a printable selection or Isolate (mitcad#2475).
       checkInput(QStringLiteral("plates"), tr("Send the Design's Plates"), false)
           .withTextBeside()
           .withVisible([this, threeMf](const CommandState& state) { return threeMf(state) && printPlateCount() > 0; })
@@ -2294,9 +2299,12 @@ CommandDef MainWindow::print3dCommand() {
   };
   // What the selection stands for (faces, edges and vertices their bodies,
   // as Export takes it; an occurrence the bodies shown in it), else every
-  // visible body.
+  // visible body; while Isolate is on, of those the placements the view
+  // shows (mitcad#2475).
   def.preselect = [this, panel](const Selection& before, CommandState& state, const CommandContext&) {
-    const Selection start = printStartBodies(before, queryArray(QStringLiteral("instances")), &panel->selected);
+    panel->isolated = !m_isolation.isEmpty();
+    const Selection start =
+        printStartBodies(before, queryArray(QStringLiteral("instances")), &panel->selected, m_isolation);
     // Components selected: each sent whole, as assembled (mitcad#856).
     panel->whole.clear();
     for (const SelectionItem& item : before) {
@@ -2318,6 +2326,7 @@ CommandDef MainWindow::print3dCommand() {
       seen << item.owner;
     }
     state.setItems(QStringLiteral("bodies"), bodies);
+    panel->printableSelection = panel->selected && !bodies.isEmpty();
     if (!leftOut.isEmpty()) {
       qWarning().noquote() << QStringLiteral("3D Print: left out %1").arg(leftOut.join(QStringLiteral(", ")));
     }
@@ -2353,11 +2362,18 @@ CommandDef MainWindow::print3dCommand() {
     panel->previous = slicerChoice(current);
     state.setChoice(QStringLiteral("slicer"), panel->previous);
     state.setChecked(QStringLiteral("reuse"), settings.reuseWindow);
-    // The design's print plates, when it has any (mitcad#1050).
+    // The design's print plates, when it has any (mitcad#1050), unless the
+    // bodies come from a printable selection or Isolate is on: then those
+    // are sent until the box asks for the plates (mitcad#2475).
     const int plates = printPlateCount();
-    state.setChecked(QStringLiteral("plates"), plates > 0);
+    const bool platesOn = printPlatesAtStart(plates, panel->printableSelection, panel->isolated);
+    state.setChecked(QStringLiteral("plates"), platesOn);
     if (plates > 0) {
-      qInfo().noquote() << QStringLiteral("3D Print plates: %1").arg(plates);
+      qInfo().noquote() << QStringLiteral("3D Print plates: %1%2")
+                               .arg(plates)
+                               .arg(platesOn                       ? QString()
+                                    : panel->printableSelection ? QStringLiteral(", off: the bodies selected")
+                                                                : QStringLiteral(", off: the bodies isolated"));
     }
     qInfo().noquote() << QStringLiteral("3D Print open slicer window: %1")
                              .arg(settings.reuseWindow ? QStringLiteral("on") : QStringLiteral("off"));
@@ -2383,9 +2399,17 @@ CommandDef MainWindow::print3dCommand() {
     qDebug().noquote() << QStringLiteral("3D Print printer: %1").arg(designPrinterName());
     qDebug().noquote() << QStringLiteral("3D Print panel: %1 %2: %3; format %4, refinement %5, slicer %6; slicers %7")
                               .arg(names.size())
-                              .arg(panel->selected ? QStringLiteral("selected") : QStringLiteral("visible"),
+                              .arg(panel->selected   ? QStringLiteral("selected")
+                                   : panel->isolated ? QStringLiteral("isolated")
+                                                     : QStringLiteral("visible"),
                                    names.join(QStringLiteral(", ")), settings.format, settings.refinement,
                                    current.describe(), slicers.join(QStringLiteral(" | ")));
+    // The placements Bodies starts with (mitcad#2475): "uid occurrence".
+    QStringList placements;
+    for (const SelectionItem& item : state.items(QStringLiteral("bodies"))) {
+      placements << (item.occurrence.isEmpty() ? item.owner : item.owner + QLatin1Char(' ') + item.occurrence);
+    }
+    qDebug().noquote() << QStringLiteral("3D Print placements: %1").arg(placements.join(QStringLiteral(", ")));
     // The bed face the bodies lie on (mitcad#1109), from the format chosen
     // above: planned in the background once the panel shows (mitcad#1121).
     planBed(state, {});

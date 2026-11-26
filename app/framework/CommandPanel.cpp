@@ -65,6 +65,7 @@
 #include "Icons.hpp"
 #include "InputPicks.hpp"
 #include "Language.hpp"
+#include "ListLineLayout.hpp"
 #include "ModelMessages.hpp"
 #include "NoteRow.hpp"
 #include "PanelTree.hpp"
@@ -1909,6 +1910,7 @@ void CommandPanel::rebuildList(Row& list, const CommandState& state) {
   }
   list.frames.clear();
   list.removes.clear();
+  list.valueLines.clear(); // in the frames
   for (auto it = m_rows.begin(); it != m_rows.end();) {
     if ((*it)->list == list.key) {
       m_byKey.remove((*it)->key);
@@ -1928,26 +1930,32 @@ void CommandPanel::rebuildList(Row& list, const CommandState& state) {
     auto* frameLayout = new QVBoxLayout(frame);
     frameLayout->setContentsMargins(table ? 0 : 4, table ? 0 : 2, table ? 0 : 4, table ? 0 : 2);
     frameLayout->setSpacing(1);
-    auto* header = new QHBoxLayout;
-    header->setSpacing(3);
     auto* name = new QLabel(QStringLiteral("<span style='color:%1'>%2</span>")
                                 .arg(themeColor(ColorRole::TextSecondary).name(),
                                      input.rowLabel.arg(i + 1).toHtmlEscaped()));
-    header->addWidget(name, table ? 0 : 1);
     QToolButton* remove = smallButton(QStringLiteral("✕"), tr("Remove this row"));
     remove->setObjectName(QStringLiteral("remove_%1.%2").arg(list.key).arg(i));
     remove->setEnabled(count > input.minRows);
     const QString key = list.key;
     connect(remove, &QToolButton::clicked, this, [this, key, i] { emit rowRemoved(key, i); });
     if (table) {
+      // The name, the values and ✕ on one line while every field can be
+      // read there; in a narrower panel each value on a line of its own
+      // under them (mitcad#2421, GitHub mitcad/Mitcad#671: Fillet's three
+      // Mid Radii fields were squeezed past reading in the 300 px panel).
+      auto* line = new ListLineLayout;
+      line->setLead(name);
       for (const InputDef& child : input.children) {
         Row* cell = createRow(child, CommandState::rowKey(list.key, i, child.id), nullptr, state, list.key, i);
-        header->addWidget(cell->label);
-        header->addWidget(cell->field, 1);
+        line->addCell(cell->label, cell->field, cell->edit);
       }
-      header->addWidget(remove);
-      frameLayout->addLayout(header);
+      line->setTrail(remove);
+      frameLayout->addLayout(line);
+      list.valueLines.push_back(line);
     } else {
+      auto* header = new QHBoxLayout;
+      header->setSpacing(3);
+      header->addWidget(name, 1);
       header->addWidget(remove);
       frameLayout->addLayout(header);
       auto* form = new QFormLayout;
@@ -3190,6 +3198,15 @@ QStringList CommandPanel::layoutLines() const {
                                   .arg(i)
                                   .arg(position(row->removes[i]));
       }
+      // How each row of a list of values is laid out at the panel's width
+      // (mitcad#2421): "one line", "stacked" (each value on a line of its
+      // own) or "under" (each field under its label).
+      for (std::size_t i = 0; i < row->valueLines.size(); ++i) {
+        lines << QStringLiteral("Panel %1 row %2.%3 %4")
+                     .arg(m_def.name, row->key)
+                     .arg(i)
+                     .arg(QString::fromLatin1(ListLineLayout::arrangementName(row->valueLines[i]->arrangement())));
+      }
     }
   }
   // The answer's rows (mitcad#1010), then the sections' own places
@@ -3239,6 +3256,23 @@ QStringList CommandPanel::layoutLines() const {
       }
       if (room < needed) {
         clipped << QStringLiteral("%1 choice (%2 of %3)").arg(row->key).arg(needed).arg(room);
+      }
+    }
+    if (!row->list.isEmpty() && row->form == nullptr) {
+      // A value in a list's line (mitcad#2421): its field narrower than a
+      // short value needs beside its buttons, or its note (an error, a
+      // value's hint) lower than its text.
+      if (row->edit != nullptr && row->edit->isVisibleTo(this)) {
+        const int readable = ListLineLayout::readableWidth(row->edit);
+        if (row->edit->width() < readable) {
+          clipped << QStringLiteral("%1 field (%2 of %3)").arg(row->key).arg(readable).arg(row->edit->width());
+        }
+      }
+      if (row->note != nullptr && row->note->isVisibleTo(this) && !row->note->text().isEmpty()) {
+        const int needed = row->note->heightForWidth(row->note->width());
+        if (row->note->height() < needed) {
+          clipped << QStringLiteral("%1 note (%2 of %3)").arg(row->key).arg(needed).arg(row->note->height());
+        }
       }
     }
   }

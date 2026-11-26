@@ -33,11 +33,22 @@
 //! parallel bends have no junction.
 //!
 //! A Flange whose bend meets another bend at a corner cuts the rules' corner
-//! relief there by itself, the same way (mitcad#2342,
-//! [`flange_corner_reliefs`]): its corner already leaves the crossing zone
-//! open (a flange on the next edge cuts the earlier bend back to its tangent
-//! line; a flange on several edges ends its bends at the corner's miter), so
-//! the relief adds what reaches past that zone.
+//! relief there by itself (mitcad#2342, [`flange_corner_reliefs`]). Its
+//! corner leaves the crossing zone open already: a flange on the next edge
+//! cuts the earlier bend back to its own tangent line and runs its bend to
+//! the earlier one's; a flange on several edges runs each bend of a corner
+//! to the other's tangent line where the rules' relief opens the corner
+//! (mitcad#2411, `flange_edges.rs`). So the relief there is measured from
+//! `J0`, the inner corner of the two tangent lines, outward, rather than
+//! centred at `C` inside a zone that holds no material (mitcad#2411):
+//!
+//! - `tear`: nothing more; the two bends meet at `J0`;
+//! - `rectangular`: the crossing zone grown by `width` toward the panel
+//!   (`-width <= s1 <= BA1`, `-width <= s2 <= BA2`): each bend ends `width`
+//!   short of the other's tangent line and the panel loses a `width` square
+//!   (a parallelogram at an oblique corner) at its corner;
+//! - `round`: a disc of diameter `width` centred at `J0`, which notches
+//!   the panel's corner and each bend's end beside it.
 
 use super::cut::{CutOutcome, developed_cut};
 use super::develop::{bend_record, bend_side, domain_label, planar_map, reconfigure};
@@ -104,6 +115,18 @@ fn rectangular(a: &Strip, b: &Strip, centre: V2, width: f64) -> Vec<V2> {
         ]
     };
     vec![at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)]
+}
+
+/// The rectangular relief of `width` at a flange's corner (mitcad#2411):
+/// the crossing zone grown by `width` toward the panel,
+/// `-width <= s1 <= BA1` and `-width <= s2 <= BA2`.
+fn grown_zone(a: &Strip, b: &Strip, width: f64) -> Result<Vec<V2>, String> {
+    Ok(vec![
+        junction(a, b, -width, -width)?,
+        junction(a, b, a.allowance, -width)?,
+        junction(a, b, a.allowance, b.allowance)?,
+        junction(a, b, -width, b.allowance)?,
+    ])
 }
 
 fn ccw(mut points: Vec<V2>) -> Vec<V2> {
@@ -312,7 +335,7 @@ pub(crate) fn corner_relief<K: Kernel>(
         rules.thickness,
         [first, second],
         d.panel,
-        &relief,
+        (&relief, Placement::Centre),
         0,
         "the corner relief",
     )?;
@@ -328,11 +351,21 @@ pub(crate) fn corner_relief<K: Kernel>(
     publish_pieces(ctx, outcome.state, &rules, Some("the corner relief"))
 }
 
+/// Where a relief's shape lies at a junction (see the module notes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    /// The Corner Relief feature's: centred at `C`, Tear the crossing zone.
+    Centre,
+    /// The rules' relief at a flange's corner (mitcad#2411): from `J0`
+    /// outward, the crossing zone open already.
+    Corner,
+}
+
 /// The relief `relief` cut at the junction of the bends `first` and
-/// `second` (see the module notes), `selected` the panel held while it is
-/// developed (none: the one [`stationary_panel`] finds). The relief's
-/// outline is the feature's generated curves from `slot`; `what` names the
-/// cut in errors.
+/// `second` (see the module notes), placed by `placement`, `selected` the
+/// panel held while it is developed (none: the one [`stationary_panel`]
+/// finds). The relief's outline is the feature's generated curves from
+/// `slot`; `what` names the cut in errors.
 #[allow(clippy::too_many_arguments)]
 fn relieve<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
@@ -340,7 +373,7 @@ fn relieve<K: Kernel>(
     thickness: f64,
     [first, second]: [BendId; 2],
     selected: Option<PanelId>,
-    relief: &Relief<f64>,
+    (relief, placement): (&Relief<f64>, Placement),
     slot: u32,
     what: &str,
 ) -> Result<CutOutcome, String> {
@@ -377,6 +410,48 @@ fn relieve<K: Kernel>(
     let fixed = chart(&work, panel)?.embedding.clone();
     let a = strip(&work, first, entries[0], &fixed, thickness)?;
     let b = strip(&work, second, entries[1], &fixed, thickness)?;
+    if placement == Placement::Corner {
+        let untouched = || CutOutcome {
+            state: state.clone(),
+            removed: BTreeSet::new(),
+            used_tools: false,
+        };
+        // At a reflex corner of the panel the bends run on past each
+        // other's tangent lines (their middles on the far side): no corner
+        // to relieve.
+        let middle = |bend: BendId| -> Result<V2, String> {
+            let domain = SheetDomainRef::Bend(bend);
+            let patch = work
+                .charts
+                .iter()
+                .find(|p| p.domain == domain)
+                .ok_or_else(|| format!("{} has no material chart", domain_label(domain)))?;
+            let (min, max) = bounds(patch)?;
+            Ok(planar_map(&patch.embedding, &fixed)?
+                .point([(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0]))
+        };
+        let across =
+            |s: &Strip, p: V2| (p[0] - s.origin[0]) * s.into[0] + (p[1] - s.origin[1]) * s.into[1];
+        if across(&b, middle(first)?) >= 0.0 || across(&a, middle(second)?) >= 0.0 {
+            return Ok(untouched());
+        }
+        let w = relief.width;
+        let tool = match relief.kind {
+            // The two bends meet at J0 already.
+            ReliefKind::Tear => return Ok(untouched()),
+            ReliefKind::Round => region(
+                ctx.uid,
+                slot,
+                vec![SegmentGeometry::Circle {
+                    center: junction(&a, &b, 0.0, 0.0)?,
+                    radius: w / 2.0,
+                    start: 0.0,
+                }],
+            )?,
+            ReliefKind::Rectangular => polygon(ctx.uid, slot, &ccw(grown_zone(&a, &b, w)?))?,
+        };
+        return developed_cut(ctx, state, thickness, panel, &open, &[tool], what);
+    }
     let centre = junction(&a, &b, a.allowance / 2.0, b.allowance / 2.0)?;
     let tool = match relief.kind {
         ReliefKind::Round => region(
@@ -511,22 +586,38 @@ fn own_relief<K: Kernel>(ctx: &EvalContext<'_, K>, bend: BendId) -> bool {
         })
 }
 
+/// The corners of the flange being evaluated that Corner Relief features
+/// relieve instead of the rules (each its two bends in order), recording
+/// that the flange read them ([`Read::CornerReliefs`]; they come after the
+/// flange, so it reads their definitions).
+pub(super) fn named_corners<K: Kernel>(ctx: &mut EvalContext<'_, K>) -> Vec<[BendId; 2]> {
+    let features = ctx.env.features;
+    let named = corner_relief_features(features, ctx.uid)
+        .into_iter()
+        .map(|(_, bends)| bends)
+        .collect();
+    ctx.reads.push(Read::CornerReliefs(
+        ctx.uid,
+        corner_reliefs_key(features, ctx.uid),
+    ));
+    named
+}
+
 /// The rules' corner relief cut at the corners where the bends of the
-/// flange being evaluated meet other bends (mitcad#2342; commands.md,
-/// "Corner relief at flange corners"): `corners` the pairs, a bend of the
-/// flange first. Each is cut as the Corner Relief feature cuts it, in the
-/// panel both bends leave, with the rules' relief, when
+/// flange being evaluated meet other bends (mitcad#2342, its placement
+/// mitcad#2411; commands.md, "Corner relief at flange corners"): `corners`
+/// the pairs, a bend of the flange first. Each is cut in the panel both
+/// bends leave, with the rules' relief measured from the inner corner of
+/// their tangent lines ([`Placement::Corner`]), when
 ///
 /// - the rules relieve flange corners ([`SheetRulesDef::relieves_flange_corners`]);
 /// - no Corner Relief feature names the two bends (it relieves the corner
-///   instead; the flange reads those features' definitions,
-///   [`Read::CornerReliefs`]);
+///   instead, [`named_corners`]);
 /// - neither bend's feature has a relief of its own (the flange being
 ///   evaluated is checked by its caller);
 /// - the two bends leave one common panel;
-/// - the relief reaches past the bends' crossing zone, which a flange's
-///   corner leaves open already: never a Tear, a Rectangular or Round
-///   relief only wider than the narrower bend's allowance.
+/// - the relief is Rectangular or Round: a Tear adds nothing to a corner
+///   whose bends meet at that inner corner.
 pub(super) fn flange_corner_reliefs<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     mut state: SheetState,
@@ -536,16 +627,11 @@ pub(super) fn flange_corner_reliefs<K: Kernel>(
     if corners.is_empty() || !rules.relieves_flange_corners() {
         return Ok(state);
     }
-    let features = ctx.env.features;
-    let named: Vec<[BendId; 2]> = corner_relief_features(features, ctx.uid)
-        .into_iter()
-        .map(|(_, bends)| bends)
-        .collect();
-    ctx.reads.push(Read::CornerReliefs(
-        ctx.uid,
-        corner_reliefs_key(features, ctx.uid),
-    ));
+    let named = named_corners(ctx);
     let relief = &rules.corner_relief;
+    if relief.kind == ReliefKind::Tear {
+        return Ok(state);
+    }
     let thickness = rules.thickness;
     for (n, &[own, other]) in corners.iter().enumerate() {
         if named.contains(&[own.min(other), own.max(other)]) || own_relief(ctx, other) {
@@ -560,14 +646,9 @@ pub(super) fn flange_corner_reliefs<K: Kernel>(
         };
         // (A bend whose development is stale is left as it is; a later
         // feature that develops it says so.)
-        let (Ok(a), Ok(b)) = (
-            bend_record(&state, own, thickness),
-            bend_record(&state, other, thickness),
-        ) else {
-            continue;
-        };
-        let narrower = a.allowance.min(b.allowance);
-        if relief.kind == ReliefKind::Tear || relief.width <= narrower + TOLERANCE {
+        if bend_record(&state, own, thickness).is_err()
+            || bend_record(&state, other, thickness).is_err()
+        {
             continue;
         }
         let outcome = relieve(
@@ -576,7 +657,7 @@ pub(super) fn flange_corner_reliefs<K: Kernel>(
             thickness,
             [own, other],
             Some(panel),
-            relief,
+            (relief, Placement::Corner),
             CORNER_SLOT + 100 * n as u32,
             "the rules' corner relief",
         )
@@ -723,6 +804,49 @@ mod tests {
             assert!(((s1 - 2.0).abs() - 1.0).abs() < 1e-12, "{p:?}");
             assert!(((s2 - 2.0).abs() - 1.0).abs() < 1e-12, "{p:?}");
         }
+    }
+
+    #[test]
+    fn a_flange_corner_relief_grows_the_crossing_zone_toward_the_panel() {
+        // The adjacent flanges' corner (mitcad#2411): bend 2 leaves the panel
+        // at y = 28 towards +y, bend 1 at x = 38 towards +x, BA = 0.72 pi;
+        // the panel lies at x <= 38, y <= 28.
+        let ba = 0.72 * std::f64::consts::PI;
+        let a = Strip {
+            origin: [0.0, 28.0],
+            into: [0.0, 1.0],
+            allowance: ba,
+        };
+        let b = Strip {
+            origin: [38.0, 0.0],
+            into: [1.0, 0.0],
+            allowance: ba,
+        };
+        // Rectangular, width 1: from 1 mm inside the panel's corner J0 to
+        // both bends' far tangent lines, (BA + 1)^2.
+        let zone = ccw(grown_zone(&a, &b, 1.0).unwrap());
+        let mut sorted = zone.clone();
+        sorted.sort_by(|p, q| p[0].total_cmp(&q[0]).then(p[1].total_cmp(&q[1])));
+        let expected = [
+            [37.0, 27.0],
+            [37.0, 28.0 + ba],
+            [38.0 + ba, 27.0],
+            [38.0 + ba, 28.0 + ba],
+        ];
+        for (p, q) in sorted.iter().zip(expected) {
+            assert!(
+                (p[0] - q[0]).abs() < 1e-12 && (p[1] - q[1]).abs() < 1e-12,
+                "{p:?}"
+            );
+        }
+        let area: f64 = zone
+            .iter()
+            .zip(zone.iter().cycle().skip(1))
+            .map(|(p, q)| (p[0] * q[1] - q[0] * p[1]) / 2.0)
+            .sum();
+        assert!((area - (ba + 1.0) * (ba + 1.0)).abs() < 1e-9, "{area}");
+        // The round relief's centre: J0 itself.
+        assert!(near(junction(&a, &b, 0.0, 0.0).unwrap(), [38.0, 28.0]));
     }
 
     fn port(token: u32, a: SheetDomainRef, b: SheetDomainRef) -> ShapePort {

@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #667's design (mitcad#2419; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): a shelled pipe (Body1, F2.b0) with a handle (Extrude2, F7, 10 mm deep, symmetric) whose side is replaced onto the pipe and joined to it. The handle's hole is its outline offset 3 mm inside: its straight side c26 meets its round end c24 (radius 9) through a straight stretch c25 only 0.103861 wide, tangent to c24, at right angles to c26, c26 passing 0.103861 from c24's axis. The design has no fillet; Fillet1 (F10, the next uid) rounds the hole's corner between c25 and c26 with 3, Tangent Chain off. The ball takes the stretch away and rolls on over the round end, tangent to c26 and to c24 from inside (its centre 3 from c26 and 6 from c24's axis); it adds the section between c26, c25, c24 and the ball's arc, 3.845205, along the depth: 38.452050 on 31585.692523. Before, it failed: the fillet is wider than the face beside its edge and would take that face away, but cannot meet the face beyond it."},
+  {"expect": {"body": "F2.b0", "volume": 31585.692523, "tolerance": 1e-6}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F7:side(c25[c24,c26])|F7:side(c26[c25,c27])}"], "radius": 3}},
+  {"expect": {"feature": "F10", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F10"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"body": "F2.b0", "volume": 31624.144573, "tolerance": 1e-6}},
+  {"expect": {"body": "F2.b0", "min_face_area": 0.0001}},
+  {"expect": {"body": "F2.b0", "bbox": {"min": [-26, -64.157, -3.804], "max": [26, 23.564, 79.867]}, "tolerance": 0.01}}
+]

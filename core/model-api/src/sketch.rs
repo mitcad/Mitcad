@@ -1882,7 +1882,7 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                 };
                 let depth = self.undo_depth();
                 let face = match (&def.plane, project_face) {
-                    (SketchPlane::Face { face, body }, true) => Some((face.clone(), *body)),
+                    (SketchPlane::Face { face, body, .. }, true) => Some((face.clone(), *body)),
                     _ => None,
                 };
                 let added = self.add_feature(&FeatureDef::Sketch(def.clone()), name.as_deref())?;

@@ -418,6 +418,12 @@ fn turn_fields(
     };
     match out {
         FeatureDef::Sketch(sketch) => turn_sketch_plane(sketch, turn),
+        // A 3D sketch's support keeps its placed frame the same way
+        // (mitcad#2465): turned, it is carried onto the turned face as the
+        // turned frame.
+        FeatureDef::SpatialSketch(sketch) => {
+            turn_placed_frame(&mut sketch.support, turn);
+        }
         FeatureDef::Move(m) => turn_move(&mut m.transform, turn, negated),
         FeatureDef::MoveOccurrence(m) => turn_move(&mut m.transform, turn, negated),
         // A Move Face's motion turns as a Move's (mitcad#1937).
@@ -660,8 +666,19 @@ fn turn_move(spec: &mut MoveSpec, turn: Turn, negated: &mut Vec<ParamId>) {
 /// A sketch on an origin plane (of its own component): the origin plane
 /// the turn takes its plane onto, and the own frame that keeps its
 /// geometry turned with the design (in-plane orientation and side). Other
-/// planes give their frames when evaluated (the command corrects them).
+/// planes give their frames when evaluated (the command corrects them); a
+/// face sketch's placed frame turns with the design.
 fn turn_sketch_plane(sketch: &mut SketchDef, turn: Turn) {
+    // The frame a face sketch had when it was placed (mitcad#2409) turns
+    // with the design, so that it is carried onto the turned face as the
+    // turned frame. Also on another component's face: the frame is in the
+    // sketch's coordinates, where that face turns with the design too (its
+    // component turned in its own coordinates and the occurrences R·T·R⁻¹,
+    // or a linked one placed R·T); left as it was, it would be carried
+    // about the line where the old and turned planes meet, off its place.
+    if turn_placed_frame(&mut sketch.plane, turn) {
+        return;
+    }
     if sketch.plane_link.is_some() {
         return;
     }
@@ -715,6 +732,22 @@ fn turn_sketch_plane(sketch: &mut SketchDef, turn: Turn) {
         _ => SketchPlane::Xy,
     };
     sketch.frame = (!identity).then(|| Box::new(frame));
+}
+
+/// A face plane's placed frame (mitcad#2409) turned with the design;
+/// whether the plane had one.
+fn turn_placed_frame(plane: &mut SketchPlane, turn: Turn) -> bool {
+    let SketchPlane::Face {
+        placed: Some(placed),
+        ..
+    } = plane
+    else {
+        return false;
+    };
+    for p in [&mut placed.origin, &mut placed.x_axis, &mut placed.y_axis] {
+        *p = turn.vector(*p);
+    }
+    true
 }
 
 /// The joint origins a definition names, in [`joint_origins_mut`]'s order.

@@ -65,4 +65,9 @@ bool shell_tracing();
 // Writes "shell trace: <line>" to stderr when shell_tracing().
 void shell_trace(const std::string& line);
 
+// Writes the shape as <MITCAD_SHELL_DUMP>/shell-<stamp>-<n>-<what>.brep when that
+// variable names a folder (mitcad#2462): the geometry kernel's input and
+// result of a shell, to take a failure apart outside MitCad.
+void shell_dump(const std::string& what, const TopoDS_Shape& shape);
+
 } // namespace mitcad::geometry::detail

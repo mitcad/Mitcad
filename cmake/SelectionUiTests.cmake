@@ -460,7 +460,9 @@ endif()
 
 # The tutorials' hints (mitcad#2366, docs/tutorials.md "Demonstrations"): a
 # tutorial of the test's own reads the learner's keys and navigation gestures
-# (the run's settings choose Alt + left to orbit); on a Browser-row step its
+# (the run's settings choose Alt + left to orbit), the mouse's and the
+# trackpad's each on its own, and again after the scheme and View Front's
+# key changed while it runs (mitcad#2439); on a Browser-row step its
 # page plays its demonstration (its own pictures of a mouse) over the row
 # after a delay of its own, a click held back on the timeline reaches the
 # page as `held` and starts the hint at once, the page stops it, and only

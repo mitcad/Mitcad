@@ -18,7 +18,8 @@
 //! moving with it, where it waits, and a control that mirrors only Z on it
 //! ([`MillTurn::sub_mirror_z_only`], mitcad#2392); a revolved profile of
 //! its body and the turret's body round the tool ([`TurretBody`],
-//! mitcad#2405).
+//! mitcad#2405); a body per station, checked against the main chuck and
+//! the machine's fixed zones too ([`StationBody`], mitcad#2412).
 
 use serde::{Deserialize, Serialize};
 
@@ -315,8 +316,9 @@ impl MillTurn {
 /// `housing_length` long (zero: without end); `zones` are boxes that move
 /// with it, their Z measured from its jaws' face (positive away from the
 /// main spindle), X the machine's (a radius; checked in X and Z as a
-/// lathe's zones are entered, their Y kept). While the main
-/// spindle cuts alone its jaws' face waits at `park` (machine Z), else at
+/// lathe's zones are entered, their Y kept; on a lathe with a Y axis Y is
+/// the machine's and checked, turning at its Y 0, mitcad#2412). While the
+/// main spindle cuts alone its jaws' face waits at `park` (machine Z), else at
 /// the far end of its travel; with neither its body is checked only where
 /// it holds the part.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -392,8 +394,9 @@ const ENDLESS_DRAWN: f64 = 20.0;
 /// controlled point, `x` along the machine's X (a radius, positive away
 /// from the spindle axis) and `z` along its Z (positive away from the main
 /// spindle), each from its lowest to its highest; like a lathe's zones in X
-/// and Z only. Checked against the sub-spindle's body and the zones moving
-/// with it.
+/// and Z only, at the tool's Y. Checked against the sub-spindle's body and
+/// the zones moving with it, and against the main chuck and the machine's
+/// fixed zones (mitcad#2412).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TurretBody {
     pub x: [f64; 2],
@@ -419,6 +422,25 @@ impl TurretBody {
             [x + self.x[0], x + self.x[1]],
             [z + self.z[0], z + self.z[1]],
         )
+    }
+}
+
+/// The turret's body round the tools at one station (mitcad#2412), as
+/// [`TurretBody`]: X and Z from the tool's controlled point.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StationBody {
+    pub station: u32,
+    pub x: [f64; 2],
+    pub z: [f64; 2],
+}
+
+impl StationBody {
+    /// Its box round the tool.
+    pub fn body(&self) -> TurretBody {
+        TurretBody {
+            x: self.x,
+            z: self.z,
+        }
     }
 }
 
@@ -691,6 +713,10 @@ pub struct Lathe {
     /// tool's controlled point is checked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turret_body: Option<TurretBody>,
+    /// The turret's body of single stations (mitcad#2412), each in place
+    /// of `turret_body` for the tools at its station.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_bodies: Vec<StationBody>,
 }
 
 impl Default for Lathe {
@@ -703,6 +729,7 @@ impl Default for Lathe {
             mill_turn: MillTurn::default(),
             sub_spindle: SubSpindle::default(),
             turret_body: None,
+            station_bodies: Vec::new(),
         }
     }
 }
@@ -729,6 +756,20 @@ impl Lathe {
         if let Some(body) = &self.turret_body {
             body.validate()?;
         }
+        // The bodies of single stations (mitcad#2412): each on the turret,
+        // once.
+        for (k, body) in self.station_bodies.iter().enumerate() {
+            let taken = self.station_bodies[..k]
+                .iter()
+                .any(|b| b.station == body.station);
+            if !(1..=self.turret_stations).contains(&body.station) || taken {
+                return Err(
+                    "A station's turret body needs a station on the turret, each station once."
+                        .to_owned(),
+                );
+            }
+            body.body().validate()?;
+        }
         // A B head and a sub-spindle each need a letter of their own
         // (mitcad#2319).
         if self.axes.b && self.axes.sub_spindle && self.mill_turn.sub_letter() == 'B' {
@@ -750,5 +791,16 @@ impl Lathe {
     /// Whether its milling head tilts (a B axis, mitcad#2319).
     pub fn has_b(&self) -> bool {
         self.mills() && self.axes.b
+    }
+
+    /// The turret's body round a tool at `station` (mitcad#2412): the
+    /// station's own, else the one of every station; none: only the tool's
+    /// controlled point is checked.
+    pub fn turret_body_at(&self, station: u32) -> Option<TurretBody> {
+        self.station_bodies
+            .iter()
+            .find(|b| b.station == station)
+            .map(StationBody::body)
+            .or(self.turret_body)
     }
 }

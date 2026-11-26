@@ -33,7 +33,8 @@ wait-log '^CAM machine controllers: router: grbl, grblhal, reprapfirmware, mille
 key Escape
 focus-dialog '^Machines and Tools$'
 
-# 3. The lathe's controllers: the lathe dialects only.
+# 3. The lathe's controllers: the lathe dialects only, Fanuc first (the
+# new lathe's default), then LinuxCNC (mitcad#2425).
 mark
 focus-widget camMachineList
 key Down
@@ -41,7 +42,7 @@ wait-log '^CAM machine shown: lathe: no tools$'
 mark
 button '.*' camEditMachine
 focus-dialog '^Edit Machine$'
-wait-log '^CAM machine controllers: lathe: fanuc_turning$'
+wait-log '^CAM machine controllers: lathe: fanuc_turning, linuxcnc_turning$'
 key Escape
 focus-dialog '^Machines and Tools$'
 key Escape

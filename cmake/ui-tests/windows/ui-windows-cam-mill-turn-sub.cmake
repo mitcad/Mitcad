@@ -6,7 +6,9 @@
 # Simulate, Post Process... to the Fanuc turning dialect and the lathe
 # check's finding. The Linux test's shared input script
 # (tools/ui-cam-mill-turn-sub-test.sh). A second Simulate draws the
-# sub-spindle where it waits (mitcad#2405): a longer timeout.
+# sub-spindle where it waits (mitcad#2405): a longer timeout. A fixed zone
+# and the Turret page in Edit Machine..., the zones and the turret drawn
+# (mitcad#2412).
 add_test(NAME app.ui-windows-cam-mill-turn-sub
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass
           -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-cam-mill-turn-sub-test.ps1"

@@ -712,6 +712,34 @@ impl System {
         }
     }
 
+    /// Puts an elliptical arc's end parameters where its end points lie on
+    /// its ellipse now, after its points or its minor radius were moved
+    /// (to start from where a linked curve is now, mitcad#2408). They were
+    /// taken where the arc was added, and a fixed arc holds them: left
+    /// there, they would put its ends where it was and contradict its moved
+    /// fixed end points. Each turns by at most half a turn, so the arc
+    /// keeps its sweep. Other entities have no such parameters: nothing
+    /// changes.
+    pub fn seat_elliptical_arc_ends(&mut self, e: EntityId) -> Result<(), Error> {
+        if let EntityData::EllipticalArc {
+            c,
+            a,
+            b,
+            s,
+            e: end,
+            ts,
+            te,
+        } = *self.ent(e)?
+        {
+            for (p, t) in [(s, ts), (end, te)] {
+                let now = self.ellipse_angle(c, a, b, p);
+                let was = self.params[t];
+                self.params[t] = was + wrap_angle(now - was);
+            }
+        }
+        Ok(())
+    }
+
     pub fn entity_kind(&self, e: EntityId) -> Option<EntityKind> {
         self.ent(e).ok().map(|d| d.kind())
     }
@@ -1669,32 +1697,56 @@ impl System {
                 rec.side * self.signed_dist(mid, a1, a2)
             }
             TangentDistance {
-                circle, line: l, ..
+                circle,
+                line: l,
+                far,
+                ..
             } => {
                 let (a, b) = line(l)?;
                 let (c, radius) = self.round(circle).ok()?;
-                rec.side * self.signed_dist(self.xy(c), a, b) - radius
+                let centre = rec.side * self.signed_dist(self.xy(c), a, b);
+                // To the far side (mitcad#2451).
+                if far {
+                    centre + radius
+                } else {
+                    centre - radius
+                }
             }
             RadiusGap { a, b, .. } => rec.side * (self.round(b).ok()?.1 - self.round(a).ok()?.1),
-            TangentCircleDistance { a, b, inside, .. } => {
+            TangentCircleDistance {
+                a,
+                b,
+                inside,
+                far_a,
+                far_b,
+                ..
+            } => {
                 let (ca, ra) = self.round(a).ok()?;
                 let (cb, rb) = self.round(b).ok()?;
                 let d = self.xy(cb).sub(self.xy(ca)).norm();
+                let side = |far: bool, r: f64| if far { r } else { -r };
                 if inside {
                     rec.side * (ra - rb) - d
                 } else {
-                    d - ra - rb
+                    d + side(far_a, ra) + side(far_b, rb)
                 }
             }
             TangentPointDistance {
                 circle,
                 point,
                 inside,
+                far,
                 ..
             } => {
                 let (c, r) = self.round(circle).ok()?;
                 let d = pt(point).sub(self.xy(c)).norm();
-                if inside { r - d } else { d - r }
+                if far {
+                    d + r
+                } else if inside {
+                    r - d
+                } else {
+                    d - r
+                }
             }
             HorizontalDistance { a, b, .. } => rec.side * (pt(b).x - pt(a).x),
             VerticalDistance { a, b, .. } => rec.side * (pt(b).y - pt(a).y),

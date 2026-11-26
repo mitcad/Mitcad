@@ -2212,6 +2212,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let mut def = json!({"type": "mirror", "objects": objects, "plane": plane});
         if objects["type"] == "bodies" {
             combine_whole(&mut def, objects);
+        } else if objects["type"] == "features" {
+            // FreeCAD reflects the features' finished shapes, as its
+            // patterns move them: Identical, as the patterns here are, not
+            // a mirror's default Adjust, which builds an extrusion up to an
+            // object again at the image (mitcad#2430).
+            def["compute"] = json!("identical");
         }
         Ok(def)
     }

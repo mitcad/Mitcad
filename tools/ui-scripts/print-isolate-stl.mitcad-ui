@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Send to Slicer with Isolate (mitcad#2475), the STL run of
+# tools/ui-print-isolate-test.sh on tools/ui-scripts/print-isolate.json
+# (Pin placed twice as Pin:1 and Pin:2, Cube in the design, one plate),
+# with STL as the last format: Pin:2 isolated and its pin selected, the
+# panel starts with that placement alone (not Pin:1, which shares the
+# body), Send the Design's Plates off, and Send writes one STL file, of
+# Pin:2. The wrapper reads it.
+wait-idle
+key F6
+
+# Pin:2 isolated: the view shows its pin alone.
+mark
+model-command '{"cmd":"set_isolation","items":[{"occurrence":"O2"}]}'
+wait-log '^Bodies shown: F1[.]b0 in O2$'
+key F6
+wait-log '^Body F1[.]b0 in O2 at '
+wait-idle
+
+# Its pin selected: the panel starts with that placement.
+mark
+click-logged '^Body F1[.]b0 in O2 at '
+wait-log '^Selected: 1 .* of F1[.]b0 in O2\]$'
+mark
+command make.print3d
+wait-log '^Command Send to Slicer started'
+wait-log '^3D Print plates: 1, off: the bodies selected$'
+wait-log '^3D Print panel: 1 selected: Pin; format stl'
+wait-log '^3D Print placements: F1[.]b0 O2$'
+
+# Send: one STL file, Pin:2's.
+mark
+key Return
+wait-log '^3D Print: 1 bodies as stl \(.*\) to .*: Pin \(Pin_2\)[.]stl$'
+wait-idle
+expect-never 'TestDriver: FAIL'

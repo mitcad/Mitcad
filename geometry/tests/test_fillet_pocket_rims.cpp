@@ -24,8 +24,12 @@
 //
 // This block does not show the reported fault: both edges round alike in
 // both layouts and at both radii, and the kernel's fillet alone builds the
-// same bodies. What in the reporter's design makes the far edge differ is
-// not known without it.
+// same bodies. In the reporter's design (counterbores through a chamfer)
+// the far edge differed because the counterbore's wall there has its seam
+// running up from its rim under the rounding, which the cut of the
+// rounding by the wall refused (OCCT port patch 2365; the port test
+// geometry.port.2365 and cli.fillet_counterbore_seam_reported); this
+// block's pockets have no seam there.
 //
 // Printed always: each result's validity, volume, notes and infos and its
 // faces by surface type. With `--probe` also each result's faces (surface,

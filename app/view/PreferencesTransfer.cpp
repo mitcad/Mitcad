@@ -410,6 +410,10 @@ void ViewController::applyImportedSettings(const SettingsBeforeImport& was, cons
                                  [](const BrowserControlPlace& place) { setBrowserActivatePlace(place); });
     through<BrowserControlPlace>(before, {QStringLiteral("browser/showEyePlace")}, [] { return browserEyePlace(); },
                                  [](const BrowserControlPlace& place) { setBrowserEyePlace(place); });
+    // The timeline as the strip or the History list (mitcad#2427).
+    through<TimelinePresentation>(before, {QStringLiteral("timeline/presentation")},
+                                  [] { return timelinePresentation(); },
+                                  [](const TimelinePresentation& shown) { setTimelinePresentation(shown); });
     const ThemeChoice themeNow = themePreference();
     if (themeNow != was.theme) {
       applyThemePreference(themeNow);

@@ -5,7 +5,8 @@
 // own colour, the current operation thicker in the selection's colour, an
 // operation out of date dotted and muted), and Simulate's tool as a
 // cylinder of lines, a lathe's sub-spindle as lines in the edges' color
-// (mitcad#2405). Nothing of it is picked.
+// (mitcad#2405), its zones and its turret too (mitcad#2412). Nothing of it
+// is picked.
 #include <cmath>
 #include <cstddef>
 #include <utility>
@@ -128,7 +129,8 @@ protected:
       addLines(presentation, toolLines(*m_scene.tool), viewColor(ColorRole::Handle, m_dark), Aspect_TOL_SOLID, 2.0);
     }
     // The machine's parts where they are as the tool cuts (a lathe's
-    // sub-spindle, mitcad#2405), in the edges' color.
+    // sub-spindle, mitcad#2405; its zones and its turret, mitcad#2412), in
+    // the edges' color.
     addLines(presentation, m_scene.machine, viewColor(ColorRole::Edge, m_dark), Aspect_TOL_SOLID, 1.0);
   }
   void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}

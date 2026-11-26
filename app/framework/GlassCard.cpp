@@ -349,6 +349,16 @@ void GlassCard::setContent(QWidget* content, const QMargins& margins) {
   updateBareMask();
 }
 
+void GlassCard::setContentMargins(const QMargins& margins) {
+  if (margins == m_contentMargins) {
+    return;
+  }
+  m_contentMargins = margins;
+  m_holderLayout->setContentsMargins(margins);
+  updateBareMask();
+  updateGeometry();
+}
+
 void GlassCard::setBare(bool bare) {
   if (bare == m_bare) {
     return;

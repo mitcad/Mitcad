@@ -469,6 +469,7 @@ fn a_sketch_on_a_face_of_a_body_that_stays_keeps_it_together() {
         .add_sketch(SketchPlane::Face {
             face: Box::new(top.parse().unwrap()),
             body: Some(a),
+            placed: None,
         })
         .unwrap()
         .uid;
@@ -876,6 +877,7 @@ fn an_unsupported_rebase_and_a_feature_created_destination_are_atomic_refusals()
         .add_sketch(SketchPlane::Face {
             face: Box::new(top.parse().unwrap()),
             body: Some(b.body),
+            placed: None,
         })
         .unwrap()
         .uid;

@@ -134,6 +134,14 @@ public:
   // flush with the view's top and sides, without the margins; the next row
   // starts kGap below it. Call it before the row's addTopRow.
   void setFlushRow(QWidget* row);
+  // A top row hidden by the user (mitcad#2426: View › Toolbar Panel hides
+  // the toolbar panel's row): not shown whatever its parts are, the rows,
+  // the cards and the view's free area below it moving up. With `overlay`
+  // it shows again at its place but over the view and the cards, which keep
+  // theirs (the panel revealed at the view's top edge); with native glass
+  // (windowed cards, which no child widget covers) it then takes its room
+  // as a shown row does. Laid out at once while shown.
+  void setRowHidden(QWidget* row, bool hidden, bool overlay = false);
 
   // The height that the content of the card holding `content` may take at
   // the card's place before it scrolls: to the card below it (the timeline)
@@ -202,6 +210,8 @@ private:
     RowCards cards;
     std::vector<QPointer<QWidget>> parts;
     bool flush = false; // setFlushRow
+    bool hidden = false;  // setRowHidden
+    bool overlay = false; // setRowHidden's overlay
   };
 
   // A top row's cards in its coordinates (the row itself without `cards`).

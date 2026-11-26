@@ -1,0 +1,209 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Intersections: a walked line of two parametric surfaces that ends short
+of a surface's boundary is put on it within a room that grows with a
+parameter range longer than a full turn, so that a surface parametrized
+by arc length is treated as one parametrized by angle or over [0, 1]
+(mitcad#2384, GitHub mitcad/Mitcad#641).
+
+The case: a loft from a circle of radius 170 at z = 315 to one of radius
+85 at z = 0 centred at x = 225 (an oblique cone, its side a B-spline of
+degree 8 x 1 parametrized by arc length, u 0 .. 1068.14, v 0 .. 387.10),
+and its mirror image about x = 0. The two sides cross in the plane x = 0
+along a curve from (0, 170, 315) down to (0, 0, 142.26) and up to
+(0, -170, 315); at both ends the sides share their tangent plane. The walk
+from (0, 170, 315) stopped at (0, -169.9989, 314.9959), 4.2 micrometres
+short of the top boundary (5e-3 in v), and PutToBoundary, whose room is a
+thousandth of a parameter (aTol), did not put it on the boundary. The top
+circle was not split there, the mirror image's side was not cut and was
+classified inside the loft as a whole, and the union was the loft alone.
+The kernel's own loft of the same circles (v over [0, 1], so a thousandth
+is 0.3 mm) was put on the boundary and joined right.
+
+- IntWalk_PWalking::PutToBoundary: an end of the line is put on a
+  boundary when it lies within aTolOf(range) of it in that parameter of
+  that surface: aTol for a range up to 2 pi (as before: analytic and
+  [0, 1] surfaces unchanged), aTol * range / (2 pi) for a longer one.
+  SeekPointOnBoundary still finds the surfaces' common point on the
+  boundary, within its own tolerance, or adds none; IsParallel keeps aTol.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2384.
+diff --git a/src/ModelingAlgorithms/TKGeomAlgo/IntWalk/IntWalk_PWalking.cxx b/src/ModelingAlgorithms/TKGeomAlgo/IntWalk/IntWalk_PWalking.cxx
+index eef4634d..f843b1c5 100644
+--- a/src/ModelingAlgorithms/TKGeomAlgo/IntWalk/IntWalk_PWalking.cxx
++++ b/src/ModelingAlgorithms/TKGeomAlgo/IntWalk/IntWalk_PWalking.cxx
+@@ -2975,6 +2975,28 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     return hasBeenAdded;
+   }
+ 
++  // Mitcad (mitcad#2384): how near its boundary an end of the line must lie
++  // to be put on it, in each parameter of each surface: aTol, and for a
++  // range longer than a full turn (2 pi) as much more as the range is
++  // longer, so that a surface parametrized by arc length (a range of
++  // hundreds) is given the room a surface of the same shape parametrized by
++  // angle or over [0, 1] is. aTol is a thousandth of a parameter, which on
++  // an arc-length parametrized loft's side was a micrometre: the section of
++  // that side with its mirror image, where the two share their tangent
++  // plane at the top boundary, stopped 4 micrometres below it (5e-3 in v
++  // over a range of 387) and was not put on it, while the same loft
++  // parametrized over [0, 1] in v (the kernel's own) was. SeekPointOnBoundary
++  // still finds the point on the boundary where the surfaces meet, within
++  // its own tolerance, or adds none.
++  const auto aTolOf = [aTol](const double theRange) {
++    constexpr double aFullTurn = 2.0 * M_PI;
++    return theRange > aFullTurn ? aTol * theRange / aFullTurn : aTol;
++  };
++  const double aTolU1 = aTolOf(aU1bLast - aU1bFirst);
++  const double aTolV1 = aTolOf(aV1bLast - aV1bFirst);
++  const double aTolU2 = aTolOf(aU2bLast - aU2bFirst);
++  const double aTolV2 = aTolOf(aV2bLast - aV2bFirst);
++
+   bool isNeedAdding = false;
+   bool isU1parallel = false, isV1parallel = false;
+   bool isU2parallel = false, isV2parallel = false;
+@@ -2988,7 +3010,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+   if (!isV1parallel)
+   {
+     aDelta = u1 - aU1bFirst;
+-    if ((aTolMin < aDelta) && (aDelta < aTol))
++    if ((aTolMin < aDelta) && (aDelta < aTolU1))
+     {
+       u1           = aU1bFirst;
+       isNeedAdding = true;
+@@ -2996,7 +3018,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     else
+     {
+       aDelta = aU1bLast - u1;
+-      if ((aTolMin < aDelta) && (aDelta < aTol))
++      if ((aTolMin < aDelta) && (aDelta < aTolU1))
+       {
+         u1           = aU1bLast;
+         isNeedAdding = true;
+@@ -3007,7 +3029,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+   if (!isV2parallel)
+   {
+     aDelta = u2 - aU2bFirst;
+-    if ((aTolMin < aDelta) && (aDelta < aTol))
++    if ((aTolMin < aDelta) && (aDelta < aTolU2))
+     {
+       u2           = aU2bFirst;
+       isNeedAdding = true;
+@@ -3015,7 +3037,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     else
+     {
+       aDelta = aU2bLast - u2;
+-      if ((aTolMin < aDelta) && (aDelta < aTol))
++      if ((aTolMin < aDelta) && (aDelta < aTolU2))
+       {
+         u2           = aU2bLast;
+         isNeedAdding = true;
+@@ -3026,7 +3048,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+   if (!isU1parallel)
+   {
+     aDelta = v1 - aV1bFirst;
+-    if ((aTolMin < aDelta) && (aDelta < aTol))
++    if ((aTolMin < aDelta) && (aDelta < aTolV1))
+     {
+       v1           = aV1bFirst;
+       isNeedAdding = true;
+@@ -3034,7 +3056,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     else
+     {
+       aDelta = aV1bLast - v1;
+-      if ((aTolMin < aDelta) && (aDelta < aTol))
++      if ((aTolMin < aDelta) && (aDelta < aTolV1))
+       {
+         v1           = aV1bLast;
+         isNeedAdding = true;
+@@ -3045,7 +3067,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+   if (!isU2parallel)
+   {
+     aDelta = v2 - aV2bFirst;
+-    if ((aTolMin < aDelta) && (aDelta < aTol))
++    if ((aTolMin < aDelta) && (aDelta < aTolV2))
+     {
+       v2           = aV2bFirst;
+       isNeedAdding = true;
+@@ -3053,7 +3075,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     else
+     {
+       aDelta = aV2bLast - v2;
+-      if ((aTolMin < aDelta) && (aDelta < aTol))
++      if ((aTolMin < aDelta) && (aDelta < aTolV2))
+       {
+         v2           = aV2bLast;
+         isNeedAdding = true;
+@@ -3073,7 +3095,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+   if (!isV1parallel)
+   {
+     aDelta = u1 - aU1bFirst;
+-    if ((aTolMin < aDelta) && (aDelta < aTol))
++    if ((aTolMin < aDelta) && (aDelta < aTolU1))
+     {
+       u1           = aU1bFirst;
+       isNeedAdding = true;
+@@ -3081,7 +3103,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     else
+     {
+       aDelta = aU1bLast - u1;
+-      if ((aTolMin < aDelta) && (aDelta < aTol))
++      if ((aTolMin < aDelta) && (aDelta < aTolU1))
+       {
+         u1           = aU1bLast;
+         isNeedAdding = true;
+@@ -3092,7 +3114,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+   if (!isV2parallel)
+   {
+     aDelta = u2 - aU2bFirst;
+-    if ((aTolMin < aDelta) && (aDelta < aTol))
++    if ((aTolMin < aDelta) && (aDelta < aTolU2))
+     {
+       u2           = aU2bFirst;
+       isNeedAdding = true;
+@@ -3100,7 +3122,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     else
+     {
+       aDelta = aU2bLast - u2;
+-      if ((aTolMin < aDelta) && (aDelta < aTol))
++      if ((aTolMin < aDelta) && (aDelta < aTolU2))
+       {
+         u2           = aU2bLast;
+         isNeedAdding = true;
+@@ -3111,7 +3133,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+   if (!isU1parallel)
+   {
+     aDelta = v1 - aV1bFirst;
+-    if ((aTolMin < aDelta) && (aDelta < aTol))
++    if ((aTolMin < aDelta) && (aDelta < aTolV1))
+     {
+       v1           = aV1bFirst;
+       isNeedAdding = true;
+@@ -3119,7 +3141,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     else
+     {
+       aDelta = aV1bLast - v1;
+-      if ((aTolMin < aDelta) && (aDelta < aTol))
++      if ((aTolMin < aDelta) && (aDelta < aTolV1))
+       {
+         v1           = aV1bLast;
+         isNeedAdding = true;
+@@ -3130,7 +3152,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+   if (!isU2parallel)
+   {
+     aDelta = v2 - aV2bFirst;
+-    if ((aTolMin < aDelta) && (aDelta < aTol))
++    if ((aTolMin < aDelta) && (aDelta < aTolV2))
+     {
+       v2           = aV2bFirst;
+       isNeedAdding = true;
+@@ -3138,7 +3160,7 @@ bool IntWalk_PWalking::PutToBoundary(const occ::handle<Adaptor3d_Surface>& theAS
+     else
+     {
+       aDelta = aV2bLast - v2;
+-      if ((aTolMin < aDelta) && (aDelta < aTol))
++      if ((aTolMin < aDelta) && (aDelta < aTolV2))
+       {
+         v2           = aV2bLast;
+         isNeedAdding = true;

@@ -688,10 +688,13 @@ bool isTrackpadScroll(const QWheelEvent* event) {
 QPointF scrollPixels(const QWheelEvent* event) {
   QPointF pixels = !event->pixelDelta().isNull() ? QPointF(event->pixelDelta())
                                                  : QPointF(event->angleDelta()) / 6.0; // a notch (120): ~20 px
-  // xcb swaps a scroll's axes while Alt is held (a wheel then scrolls
-  // sideways); a touchpad's fingers keep their own directions, so Alt +
-  // scroll orbits the way they move.
-  if (isXcbTouchpadScroll(event) && event->modifiers().testFlag(Qt::AltModifier)) {
+  // xcb and Wayland swap a scroll's axes while Alt is held (a wheel then
+  // scrolls sideways); a touchpad's fingers keep their own directions, so
+  // Alt + scroll orbits the way they move (GitHub mitcad/Mitcad#381, #662).
+  static const QString platform = QGuiApplication::platformName();
+  const QPointingDevice* device = event->pointingDevice();
+  const bool touchpad = device != nullptr && device->type() == QInputDevice::DeviceType::TouchPad;
+  if (trackpadScrollAxesSwapped(platform, event->modifiers(), touchpad, !event->pixelDelta().isNull())) {
     pixels = pixels.transposed();
   }
   return pixels;
@@ -7692,6 +7695,47 @@ bool OcctViewer::isOnOrientationCube(const QPointF& position) {
 
 void OcctViewer::cameraMoved() { m_restTimer->start(); }
 
+void OcctViewer::logViewSizes() {
+  // After a resize (mitcad#2422): the widget's size, its size in device
+  // pixels, the size OCCT draws and picks at and, in the view's own EGL
+  // context, the frame read back from it. A view whose drawn size did not
+  // follow the window shows black margins or a cut picture, and its picks
+  // miss what it shows: said in the log, for a user's report.
+  if (!m_glAttached || m_view->Window().IsNull()) {
+    return;
+  }
+  const qreal ratio = devicePixelRatioF();
+  const QSize device(std::max(1, qRound(width() * ratio)), std::max(1, qRound(height() * ratio)));
+  int drawnWidth = 0;
+  int drawnHeight = 0;
+  m_view->Window()->Size(drawnWidth, drawnHeight);
+  const QSize drawn(drawnWidth, drawnHeight);
+  QString line = QStringLiteral("View size: %1, device pixels %2x%3, drawn %4x%5")
+                     .arg(viewSizeText(*this))
+                     .arg(device.width())
+                     .arg(device.height())
+                     .arg(drawn.width())
+                     .arg(drawn.height());
+  QSize readBack = device;
+#ifdef MITCAD_OCCT_EGL
+  if (m_viewEgl != nullptr && m_viewEgl->context != nullptr && !m_viewEgl->frame.isNull()) {
+    readBack = m_viewEgl->frame.size();
+    line += QStringLiteral(", read back %1x%2").arg(readBack.width()).arg(readBack.height());
+  }
+#endif
+  qDebug().noquote() << line;
+  if (drawn != device || readBack != device) {
+    qWarning().noquote() << QStringLiteral("3D view: drawn at %1x%2 pixels (read back %3x%4), but the view is %5x%6 "
+                                           "pixels: the picture and the picks do not fit the window")
+                                .arg(drawn.width())
+                                .arg(drawn.height())
+                                .arg(readBack.width())
+                                .arg(readBack.height())
+                                .arg(device.width())
+                                .arg(device.height());
+  }
+}
+
 void OcctViewer::logCamera() {
   const bool moving = !ViewAnimation()->IsStopped() || QGuiApplication::mouseButtons() != Qt::NoButton;
   if (moving) {
@@ -7711,6 +7755,10 @@ void OcctViewer::logCamera() {
     qInfo().noquote() << QStringLiteral("View: resized to %1%2, scale %3 mm per view height")
                              .arg(viewSizeText(*this), stateText)
                              .arg(visibleHeight(), 0, 'f', 3);
+  }
+  if (m_sizesToLog) {
+    m_sizesToLog = false;
+    logViewSizes();
   }
   const QString text = QStringLiteral("Camera direction %1 up %2 (%3)")
                            .arg(vectorText(current->Direction().XYZ()), vectorText(current->Up().XYZ()),
@@ -9436,6 +9484,7 @@ void OcctViewer::resizeGL(int width, int height) {
   placeHomeButton();
   placeCubeArrows();
   m_loggedCamera.clear(); // the cube's places moved
+  m_sizesToCheck = true;  // logged after the next frame (logViewSizes)
   m_restTimer->start();
   // A window resized by dragging is resized in steps: one navigation.
   navigationStep();
@@ -9583,6 +9632,13 @@ bool OcctViewer::bindViewEglFramebuffer(const occ::handle<OpenGl_Context>& gl) {
     }
   }
   framebuffer->BindBuffer(gl);
+  // The viewport at the framebuffer's size, as Qt sets it in its own
+  // context before paintGL(): paintView() wraps the framebuffer at the
+  // viewport's size (OpenGl_FrameBuffer::InitWrapper reads GL_VIEWPORT),
+  // and that size is the view's. This context kept the size of the last
+  // frame, so a resized window kept the old picture size, with black
+  // margins or cut off, and the picks of the old size (mitcad#2422).
+  framebuffer->SetupViewport(gl);
   return true;
 }
 
@@ -9771,6 +9827,13 @@ void OcctViewer::paintView() {
     // Logged once the view rests (logCamera): a dragged frame resizes in
     // many steps.
     m_resizeToLog = true;
+    m_restTimer->start();
+  }
+  if (m_sizesToCheck) {
+    // A frame drawn since the widget was resized: its sizes are logged once
+    // the view rests (logViewSizes), also when OCCT's did not follow.
+    m_sizesToCheck = false;
+    m_sizesToLog = true;
     m_restTimer->start();
   }
 
@@ -10627,6 +10690,14 @@ QPointF OcctViewer::orbitPosition(const QMouseEvent* event) {
 }
 
 void OcctViewer::wheelEvent(QWheelEvent* event) {
+  // That the wheel reached the view, not a card over it (mitcad#2414: the
+  // wheel between the Browser's rows scrolls them), once per burst of
+  // events.
+  if (!m_wheelLogClock.isValid() || m_wheelLogClock.elapsed() > 500) {
+    m_wheelLogClock.start();
+    const QPoint at = event->position().toPoint();
+    qDebug().noquote() << QStringLiteral("View wheel at %1,%2").arg(at.x()).arg(at.y());
+  }
   // A wheel during a 3D mouse motion, or just after it, is taken for the
   // driver's emulated input (its profile's Tilt sends wheel steps by
   // default) and ignored: zooming about the cursor, it pulled a zoom in
@@ -10898,6 +10969,9 @@ void OcctViewer::handleViewRedraw(const occ::handle<AIS_InteractiveContext>& con
   // the cube's own perspective the direction (mitcad#774).
   updateGrid();
   updateCubeEye();
+  // Whether OCCT draws this frame in full, not only its immediate layers
+  // over the scene it keeps.
+  bool fullFrame = view->IsInvalidated();
   // The drawings over the view it draws itself (mitcad#2296): painted for
   // this frame's camera before OCCT draws it, so that they move with the
   // scene in the same frame.
@@ -10906,8 +10980,26 @@ void OcctViewer::handleViewRedraw(const occ::handle<AIS_InteractiveContext>& con
       layer->beforeFrame(view);
     }
   }
+  // OCCT lets the textures of the pictures they replaced go only in full
+  // frames, and a frame in which only a picture changed is an immediate one:
+  // while Sketch Dimension's value followed the pointer, every picture's
+  // texture stayed, gigabytes of graphics memory (mitcad#2437,
+  // view/ReplacedPictures.hpp). Once enough wait, this frame is a full one.
+  for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
+    if (!fullFrame && layer && layer->wantsFullFrame()) {
+      view->Invalidate();
+      fullFrame = true;
+    }
+  }
   const gp_Dir drawnFrom = m_view->Camera()->Direction();
   AIS_ViewController::handleViewRedraw(context, view);
+  if (fullFrame) {
+    for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
+      if (layer) {
+        layer->fullFrameDrawn();
+      }
+    }
+  }
   // A camera animation moved the camera as the frame was drawn: they are
   // painted for it in the next frame.
   for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {

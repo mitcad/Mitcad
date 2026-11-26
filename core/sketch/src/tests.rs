@@ -605,6 +605,7 @@ fn changed_sketches_find_the_closest_region() {
     let info = b.regions();
     let output = SketchOutput {
         frame: crate::profile::SketchFrame::XY,
+        plane: crate::profile::SketchFrame::XY,
         base: crate::profile::SketchFrame::XY,
         regions: info.iter().map(|r| r.profile.clone()).collect(),
         region_info: info,

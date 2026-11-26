@@ -41,7 +41,7 @@ wait-log '^CAM machine set: lathe \(new\)$'
 wait-log '^CAM machines dialog: 1 machine\(s\): lathe 0 tool\(s\)$'
 focus-dialog '^Edit Machine$'
 wait-log '^CAM machine form: lathe: lathe$'
-wait-log '^CAM machine controllers: lathe: fanuc_turning$'
+wait-log '^CAM machine controllers: lathe: fanuc_turning, linuxcnc_turning$'
 focus-widget camMachineTurret
 key Ctrl+a
 type '8'

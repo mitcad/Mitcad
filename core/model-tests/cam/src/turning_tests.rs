@@ -399,3 +399,79 @@ fn a_lathe_made_in_the_dialog_goes_to_the_library_and_back() {
     assert_eq!(kinds, ["turning", "parting"]);
     remove_temp(&project);
 }
+
+/// LinuxCNC on a lathe (mitcad#2425): the lathe's controller
+/// `linuxcnc_turning` posts every operation longhand (diameter mode, feeds
+/// per revolution, the spindle's limit with G96, the tool change with
+/// G43, threads as G33 with K), the canned cycles the setup asks for
+/// written as moves, read back as LinuxCNC reads it; the milling dialect
+/// `linuxcnc` still does not post a lathe setup, and the turning one is
+/// refused on a mill.
+#[test]
+fn a_lathe_on_linuxcnc_posts_longhand() {
+    let mut doc = turned();
+    let mut machine = lathe();
+    machine["machine"]["controller"] = json!("linuxcnc_turning");
+    command(
+        &mut doc,
+        json!({"cmd": "cam_machine_put", "machine": machine}),
+    );
+    let post = query(&doc, json!({"query": "cam_post", "setup": 1}));
+    assert_eq!(post["dialect"], json!("linuxcnc_turning"));
+    assert_eq!(post["label"], json!("LinuxCNC (turning)"));
+    assert_eq!(post["extension"], json!("ngc"));
+    assert_eq!(post["cycles"], json!([]));
+    let text = post["text"].as_str().unwrap();
+    assert!(text.starts_with("%\n(WARNING: "), "{text}");
+    assert!(!text.contains("O2001"), "{text}");
+    assert!(
+        text.contains("G21 G18 G7 G90 G91.1 G40 G80 G95\nG64 P0.01\nG54\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("(TURNING CYCLES ARE WRITTEN AS MOVES FOR THIS CONTROL)\n"),
+        "{text}"
+    );
+    assert!(text.contains("T1 M6 G43\nG96 D3000 S200 M3\n"), "{text}");
+    assert!(text.contains("T3 M6 G43\nG97 S796 M3\n"), "{text}");
+    assert!(text.contains("G33 Z") && text.contains(" K1.5\n"), "{text}");
+    for code in ["G71", "G70", "G76", "G50", "G99", "G32"] {
+        assert!(!text.contains(code), "{code} in {text}");
+    }
+    assert!(text.ends_with("M2\n%\n"), "{text}");
+
+    // The milling dialect of the same control does not post for a lathe.
+    let refused_post = doc
+        .query(&json!({"query": "cam_post", "setup": 1, "dialect": "linuxcnc"}).to_string())
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        refused_post,
+        "MitCad does not write lathe G-code for that controller."
+    );
+    // Both turning dialects are listed for lathes.
+    let dialects = query(&doc, json!({"query": "cam_dialects"}));
+    let lathe_ids: Vec<&str> = dialects["dialects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["lathe"] == json!(true))
+        .map(|d| d["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(lathe_ids, ["fanuc_turning", "linuxcnc_turning"]);
+    // A mill on the turning dialect says which kind it writes for.
+    assert_eq!(
+        refused(
+            &mut doc,
+            json!({"cmd": "cam_machine_put", "machine": {
+                "id": "router",
+                "machine": {"name": "Router", "controller": "linuxcnc_turning",
+                            "travel": {"min": [0, 0, -100], "max": [500, 500, 0]},
+                            "spindle": {"min_rpm": 8000, "max_rpm": 24000,
+                                        "nose_diameter": 50, "nose_length": 80},
+                            "max_feed": 5000, "rapid_feed": 6000},
+                "tools": {"tools": []}}})
+        ),
+        "The machine Router is a milling machine; LinuxCNC (turning) writes for lathes."
+    );
+}

@@ -811,3 +811,131 @@ fn an_occurrence_placed_along_paths_inside_it_takes_their_placement() {
         "{t:?}"
     );
 }
+
+#[test]
+fn a_grounded_occurrence_placed_along_paths_inside_it_takes_their_placement() {
+    // mitcad#2449: the shell of an assembly, a component of another
+    // document grounded in the design, placed only along the paths inside
+    // it, stayed at the identity of its insert (grounded occurrences were
+    // not placed), every part in it off by the shell's placement.
+    let mut part = Document::new(MockKernel::default());
+    let part_report = import(&mut part, &part_dump());
+    let mut v = serde_json::to_value(placed_inside_dump()).unwrap();
+    v["occurrences"][0]["isGrounded"] = json!(true);
+    let dump = dump(v);
+    let stored = HashMap::new();
+    let sources = HashMap::from([(
+        PART_URN.to_owned(),
+        Referenced {
+            document: &part,
+            occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
+            name: "Part".to_owned(),
+            stored_bodies: &stored,
+            entity_bodies: &NO_ENTITIES,
+        },
+    )]);
+    let placed = |sources: Option<&HashMap<String, Referenced<'_, MockKernel>>>| {
+        let mut doc = Document::new(MockKernel::default());
+        let report = crate::import_design_with(
+            &mut doc,
+            &dump,
+            &mut NoGeometry,
+            &Options::default(),
+            sources,
+        );
+        let o = report.components.occurrence_objects[&10];
+        let occurrence = doc.assembly().occurrence(o).unwrap();
+        (
+            occurrence.transform,
+            occurrence.grounded,
+            report.warnings.clone(),
+        )
+    };
+    // Where the paths inside put it, as when it is not grounded, and
+    // still grounded.
+    let (t, grounded, warnings) = placed(Some(&sources));
+    assert!(grounded, "{warnings:?}");
+    let want_linear = [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
+    for (row, want_row) in t.linear.iter().zip(want_linear.iter()) {
+        for (got, want) in row.iter().zip(want_row.iter()) {
+            assert!((got - want).abs() < 1e-9, "{t:?} {warnings:?}");
+        }
+    }
+    let want = [10.0, 20.0, 0.0];
+    assert!(
+        (0..3).all(|i| (t.translation[i] - want[i]).abs() < 1e-6),
+        "{t:?} {warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|w| w.contains("is grounded")),
+        "{warnings:?}"
+    );
+    // Without the part's file it stays where it is stored, grounded.
+    let (t, grounded, _) = placed(None);
+    assert!(grounded);
+    assert!(
+        t.translation.iter().all(|v| v.abs() < 1e-6) && (t.linear[1][1] - 1.0).abs() < 1e-9,
+        "{t:?}"
+    );
+}
+
+#[test]
+fn the_copies_of_a_document_show_its_sketches_as_its_import_does() {
+    // mitcad#2449: the copies of another document's design showed the
+    // sketches the document's own import hides (a light bulb that
+    // differs from the default was not copied). Here the part's file
+    // shows its block's sketch, which its extrusion uses (hidden by
+    // default).
+    let mut part = Document::new(MockKernel::default());
+    let part_report = import(&mut part, &part_dump());
+    let sketch = part
+        .features()
+        .find(|f| matches!(f.def, FeatureDef::Sketch(_)))
+        .map(|f| f.uid)
+        .expect("the part's sketch");
+    assert_eq!(part.feature_shown(sketch), Some(false));
+    part.set_feature_visible(sketch, true).unwrap();
+
+    let mut doc = Document::new(MockKernel::default());
+    let mut report = import(&mut doc, &assembly_dump());
+    let stored = HashMap::new();
+    let sources = HashMap::from([(
+        PART_URN.to_owned(),
+        Referenced {
+            document: &part,
+            occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
+            name: "Part".to_owned(),
+            stored_bodies: &stored,
+            entity_bodies: &NO_ENTITIES,
+        },
+    )]);
+    let outcome = link_references(&mut doc, &mut report, &sources);
+    assert!(outcome.failed.is_empty(), "{outcome:?}");
+    // Two copies of the part (the occurrences are arranged differently
+    // inside), each with the sketch shown.
+    let copies: Vec<FeatureUid> = doc
+        .features()
+        .filter(|f| f.component != ComponentUid::ROOT && matches!(f.def, FeatureDef::Sketch(_)))
+        .map(|f| f.uid)
+        .collect();
+    assert_eq!(copies.len(), 2, "{copies:?}");
+    for copy in &copies {
+        assert_eq!(doc.feature_shown(*copy), Some(true), "{copy}");
+    }
+    // The report counts them: none differs from the part's import.
+    assert!(report.light_bulbs.copied >= 2, "{:?}", report.light_bulbs);
+    assert_eq!(
+        report.light_bulbs.copies_differ, 0,
+        "{:?}",
+        report.light_bulbs
+    );
+    assert!(
+        report
+            .text()
+            .contains("shown or hidden otherwise than in their documents"),
+        "{}",
+        report.text()
+    );
+}

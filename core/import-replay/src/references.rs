@@ -143,6 +143,17 @@ impl Linker {
             }
             match doc.fill_component_copy(source.document, inserted.component, Some(&source.name)) {
                 Ok(copies) => {
+                    // Its sketches and construction features shown or
+                    // hidden as in the document's own import (mitcad#2449).
+                    for (original, copy) in &copies.features {
+                        let Some(shown) = source.document.feature_shown(*original) else {
+                            continue;
+                        };
+                        report.light_bulbs.copied += 1;
+                        if doc.feature_shown(*copy) != Some(shown) {
+                            report.light_bulbs.copies_differ += 1;
+                        }
+                    }
                     let guids: HashMap<String, Vec<OccurrenceUid>> = source
                         .occurrence_guids
                         .iter()

@@ -995,6 +995,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   createMenus();
   createRibbon();
   createPanels();
+  setUpToolbarPanelHiding(); // View › Toolbar Panel (mitcad#2426, MainWindowToolbarPanel.cpp)
   setUpSketch3d(); // 3D sketches (mitcad#1524): their palette page and Create Sketch's kind row
   setUpFlexEdit(); // a selected Flex item's handles in the view (mitcad#1713)
   setUpGravity();  // gravity's marker and a Flex item let hang (mitcad#1713)
@@ -1486,6 +1487,8 @@ void MainWindow::registerCommands() {
   // Export Timeline as Script, the macro recorder and Run Script
   // (mitcad#2245, files/MainWindowScripts.cpp).
   registerScriptCommands();
+  // View › Toolbar Panel (mitcad#2426, MainWindowToolbarPanel.cpp).
+  registerToolbarPanelCommands();
 
   CommandDef search = action("tools.search", tr("Command Search"), "search", CommandDef::Mode::Any,
                              [this] { openCommandSearch(); });
@@ -2777,6 +2780,8 @@ void MainWindow::createPanels() {
   addPanelEntry(commandDock->toggleViewAction(), 3);
   // The Render workspace's docks (mitcad#2013), hidden until its tab shows.
   addRenderPanels();
+  // The timeline as the strip or the History list (mitcad#2427).
+  followTimelinePresentation();
 }
 
 void MainWindow::createFloatingPanels() {
@@ -2809,6 +2814,7 @@ void MainWindow::createFloatingPanels() {
   timelineCard->setObjectName(QStringLiteral("timelineDock"));
   timelineCard->setCapsule(true);
   timelineCard->setContent(createTimelinePlace(), GlassCard::barMargins());
+  m_timelineCard = timelineCard; // a card of the left column as the History list (mitcad#2427)
 
   m_commandPages = new QStackedWidget;
   m_idleInfo = new QLabel;
@@ -2946,6 +2952,8 @@ void MainWindow::createFloatingPanels() {
   // The Drawing workspace's Drawings card (mitcad#1990), hidden until a
   // drawing opens.
   addDrawingsCard();
+  // The timeline as the strip or the History list (mitcad#2427).
+  followTimelinePresentation();
 }
 
 QWidget* MainWindow::createTimelinePlace() {
@@ -2980,9 +2988,12 @@ void MainWindow::sizeTimelinePlace(bool sketching) {
   if (m_floating == nullptr) {
     return;
   }
-  const auto follow = [](QWidget* page, bool sizes) {
+  // As the History list (mitcad#2427) the page in sight fills the card of
+  // the left column.
+  const bool listed = m_controller->timeline()->presentation() == TimelineWidget::Presentation::List;
+  const auto follow = [listed](QWidget* page, bool sizes) {
     QSizePolicy policy = page->sizePolicy();
-    policy.setVerticalPolicy(sizes ? QSizePolicy::Fixed : QSizePolicy::Ignored);
+    policy.setVerticalPolicy(sizes ? (listed ? QSizePolicy::Expanding : QSizePolicy::Fixed) : QSizePolicy::Ignored);
     page->setSizePolicy(policy);
   };
   follow(m_controller->timeline(), !sketching);
@@ -3549,6 +3560,9 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
     showBodies();
   }
   connect(session, &CommandSession::finished, this, &MainWindow::onCommandFinished);
+  // Started from the revealed toolbar panel: the panel stays while this
+  // command's panel is open (mitcad#2472).
+  keepToolbarPanelFor(*session);
   // A Flex item's edit session: its handles read the previewed route again
   // (mitcad#1713, owner 14.11.2026).
   connect(session, &CommandSession::previewShown, this, &MainWindow::flexSessionPreviewShown);
@@ -8261,6 +8275,11 @@ void MainWindow::createSketch(const QJsonObject& fields) {
 }
 
 void MainWindow::createSketchOnPick(SelectionItem item) {
+  // A tutorial's guide step on another plane holds the pick back
+  // (mitcad#2440): the plane can still be picked.
+  if (!guideAllowsPlane(item)) {
+    return;
+  }
   // Another component's face or plane: activate that component first?
   // (mitcad#960, MainWindowActivate.cpp)
   if (askToActivatePicked(item, sketchSupportRefusal(item), QStringLiteral("sketch"))) {
@@ -8275,6 +8294,11 @@ void MainWindow::createSketchOnPick(SelectionItem item) {
                   mitcad::sketch::developedPlane(item, [this](const QJsonObject& request) { return query(request); }));
   }
   createSketch(fields);
+  // The sketch made on it completes a guide step on that plane (mitcad#2440).
+  if (m_mode == Mode::Sketch && m_guide != nullptr && m_guide->active()) {
+    QString shown;
+    m_guide->planeMade(guidePlaneNames(item, &shown));
+  }
 }
 
 QString MainWindow::featureError(const QString& uid) const {

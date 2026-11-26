@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Shell with faces of their own thickness (mitcad#2443) for tools/ui-scripts/shell-own-thickness.mitcad-ui: a box 60 x 40 x 30 from the origin (Box1, F1, F1.b0), its front F1:side0 at y 0, its top F1:top at z 30."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 60, "width": 40, "height": 30, "operation": "new_body"}},
+  {"expect": {"body": "F1.b0", "volume": 72000}}
+]

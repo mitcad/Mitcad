@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
@@ -12,6 +13,7 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -23,6 +25,7 @@
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_RectangularTrimmedSurface.hxx>
 #include <Precision.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <gp_Ax3.hxx>
@@ -712,6 +715,41 @@ void test_offset_split_mitre() {
   }
 }
 
+// Offset Face with Tangent Chain (mitcad#2438): the front of the block,
+// whose corner to the right side is rounded (5 mm), moved out by 2 mm takes
+// the rounding and the right side along, as Replace Face takes them: the
+// section grows to 62 x 42 with a 7 mm rounding. Without the chain the
+// front moves alone and the seam to the rounding becomes a step.
+void test_offset_tangent_chain() {
+  const std::string front = side("F2", 1, 0);
+  const std::string right = side("F2", 1, 1);
+  const std::string corner = edge(front, right);
+  const std::string rounding = "F3:fillet(" + corner + ")";
+  const ShapePtr rounded = fillet("F3", *block(), {corner}, 5);
+  const double cut = 1.0 - kPi / 4.0; // a rounded corner's loss per r²
+  CHECK_NEAR(volume(*rounded), kBlock - 25.0 * cut * 20.0);
+
+  const ShapePtr chained = offset_faces("F9", *rounded, {front}, 2, true);
+  CHECK_NEAR(volume(*chained), (62.0 * 42.0 - 49.0 * cut) * 20.0);
+  CHECK(chained->face_count() == rounded->face_count());
+  for (const std::string& name : {front, right, rounding}) {
+    CHECK(faces_named(*chained, name) == 1);
+  }
+  CHECK(steps_of(*chained, front) == 0);
+  CHECK(edge_names_unique(*chained));
+  const BoundingBox grown = bounding_box(*chained);
+  CHECK(near(grown.min.Y(), -2) && near(grown.max.X(), 62) && near(grown.min.X(), 0) &&
+        near(grown.max.Y(), 40));
+
+  // Without the chain (the default, as stored offsets before mitcad#2438):
+  // the front alone, 55 mm of it up to the rounding.
+  const ShapePtr alone = offset_faces("F9", *rounded, {front}, 2);
+  CHECK_NEAR(volume(*alone), volume(*rounded) + 55.0 * 2.0 * 20.0);
+  CHECK(steps_of(*alone, front) == 1);
+  CHECK(near(bounding_box(*alone).max.X(), 60));
+  CHECK_NEAR(volume(*offset_faces("F9", *rounded, {front}, 2, false)), volume(*alone));
+}
+
 void test_delete_faces() {
   // T0 delface_fillet: deleting the rounding brings the sharp corner back.
   const ShapePtr rounded = fillet("F3", *block(), {edge(side("F2", 1, 3), side("F2", 1, 0))}, 5);
@@ -882,16 +920,24 @@ void test_replace_curved_faces() {
   const ShapePtr around =
       replace_faces("F5", *block(), {top}, Tool::of_face(cylinder_along_x(20, 35, 40), "F9:side0"));
   CHECK_NEAR(volume(*around), 60.0 * (35.0 * 40.0 + circle_area(40, -20, 20)));
-  // A target beside the body never meets it; one below the bottom at the
-  // sides passes beyond the other faces.
+  // A target beside the body never meets it.
   CHECK(throws_with([&] {
     replace_faces("F5", *block(), {top}, Tool::of_face(cylinder_along_x(200, 0, 30), "F9:side0"));
   },
                     "does not meet"));
-  CHECK(throws_with([&] {
-    replace_faces("F5", *block(), {top}, Tool::of_face(cylinder_along_x(20, -25, 30), "F9:side0"));
-  },
-                    "beyond the other faces"));
+  // One below the bottom at the sides: the region down to it is removed as
+  // far as the body goes (mitcad#2381), and what stays is the block under
+  // the target's upper side, z = sqrt(900 - (y - 20)^2) - 25, where that is
+  // above the bottom (|y - 20| < sqrt(275)).
+  const double reach = std::sqrt(275.0);
+  const ShapePtr sunk =
+      replace_faces("F5", *block(), {top}, Tool::of_face(cylinder_along_x(20, -25, 30), "F9:side0"));
+  CHECK_NEAR_TOL(volume(*sunk), 60.0 * (circle_area(30, -reach, reach) - 50.0 * reach), 1e-6);
+  CHECK(faces_named(*sunk, top) == 0);
+  CHECK(faces_named(*sunk, name) == 1);
+  CHECK(faces_named(*sunk, side("F2", 1, 0)) == 0);
+  CHECK(faces_named(*sunk, side("F2", 1, 2)) == 0);
+  CHECK(edge_names_unique(*sunk));
   // A body cannot be its own target.
   const ShapePtr own = block();
   CHECK(throws_with([&] { replace_faces("F5", *own, {top}, Tool::of_body(own)); }, "itself"));
@@ -1100,6 +1146,73 @@ void test_left_handed_face_split_order() {
   }
 }
 
+// mitcad#2381: a pocket's floor replaced onto the outside face under it,
+// or past it, removes the wall between: a through-hole with no face across
+// the opening, the pocket's wall continued down to the bottom.
+void test_replace_floor_through_the_body() {
+  // The 10 mm pocket of the delete test, 10 deep: its floor at z = 10.
+  const ShapePtr cutter = extrude("F4", {circle(5, 30, 20, 5)}, 10, 30);
+  const ShapePtr pocket = boolean(BooleanOp::Cut, {block().get()}, *cutter).pieces.at(0).shape;
+  const std::string floor = "F4:start(r{c5})";
+  const std::string wall = "F4:side(c5)";
+  const std::string name = "F5:replace(" + floor + ")";
+  CHECK_NEAR(volume(*pocket), kBlock - kPi * 25.0 * 10.0);
+  // The distance from the hole's axis to the body: the hole's radius at
+  // every height when nothing closes the opening.
+  const auto from_axis = [](const Shape& shape, double z) {
+    BRepExtrema_DistShapeShape measure(BRepBuilderAPI_MakeVertex(gp_Pnt(30, 20, z)).Vertex(),
+                                       shape.occt());
+    return measure.IsDone() ? measure.Value() : -1.0;
+  };
+  const auto closed = [](const Shape& shape) {
+    if (!BRepCheck_Analyzer(shape.occt()).IsValid()) {
+      return false;
+    }
+    int shells = 0;
+    for (TopExp_Explorer it(shape.occt(), TopAbs_SHELL); it.More(); it.Next()) {
+      ++shells;
+      if (!BRep_Tool::IsClosed(it.Current())) {
+        return false;
+      }
+    }
+    return shells > 0;
+  };
+  const struct {
+    const char* what;
+    Tool target;
+  } through[] = {
+      // Onto the bottom, a face of the body itself.
+      {"onto the bottom", Tool::of_face(pocket, start_cap("F2", 1))},
+      // Onto the bottom's plane, and onto a plane 5 mm below it.
+      {"onto the bottom's plane", Tool::of_plane(plane(0, 0, 0, 0, 0, -1))},
+      {"past the bottom", Tool::of_plane(plane(0, 0, -5, 0, 0, 1))},
+  };
+  for (const auto& sample : through) {
+    std::fprintf(stderr, "  replacing the floor %s\n", sample.what);
+    const ShapePtr open = replace_faces("F5", *pocket, {floor}, sample.target);
+    CHECK_NEAR(volume(*open), kBlock - kPi * 25.0 * 20.0);
+    CHECK(closed(*open));
+    for (const double z : {-1.0, 0.0, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0}) {
+      CHECK(std::abs(from_axis(*open, z) - (z < 0.0 ? std::hypot(5.0, z) : 5.0)) < 1e-6);
+    }
+    CHECK(faces_named(*open, floor) == 0);
+    CHECK(faces_named(*open, name) == 0);
+    CHECK(faces_named(*open, wall) >= 1);
+    CHECK(faces_named(*open, start_cap("F2", 1)) == 1);
+    CHECK(faces_named(*open, end_cap("F2", 1)) == 1);
+  }
+
+  // Short of the bottom the floor moves down as before: a pocket 16 deep.
+  const ShapePtr deeper =
+      replace_faces("F5", *pocket, {floor}, Tool::of_plane(plane(0, 0, 4, 0, 0, 1)));
+  CHECK_NEAR(volume(*deeper), kBlock - kPi * 25.0 * 16.0);
+  CHECK(faces_named(*deeper, name) == 1);
+  // The floor at z = 4: 2 below a point on the axis at z = 6 (the wall is
+  // 5 away); the bottom under it stays closed.
+  CHECK(std::abs(from_axis(*deeper, 6.0) - 2.0) < 1e-6);
+  CHECK(from_axis(*deeper, 0.0) < 1e-6);
+}
+
 // The round top of a pin onto tilted planes (mitcad#2382, GitHub #643: a
 // cylinder's top onto a slanted planar face failed with "the target removes
 // the whole body"). The top has one vertex on its circle; moved only past
@@ -1145,6 +1258,7 @@ void faceops_tests() {
   guarded("test_offset_split_corners", test_offset_split_corners);
   guarded("test_offset_split_slanted_neighbours", test_offset_split_slanted_neighbours);
   guarded("test_offset_split_mitre", test_offset_split_mitre);
+  guarded("test_offset_tangent_chain", test_offset_tangent_chain);
   guarded("test_delete_faces", test_delete_faces);
   guarded("test_replace_faces", test_replace_faces);
   guarded("test_replace_curved_faces", test_replace_curved_faces);
@@ -1155,6 +1269,7 @@ void faceops_tests() {
   guarded("test_left_handed_face_split_order", test_left_handed_face_split_order);
   guarded("test_replace_tilted_round_top", test_replace_tilted_round_top);
   guarded("test_draft_about_a_moved_plane", test_draft_about_a_moved_plane);
+  guarded("test_replace_floor_through_the_body", test_replace_floor_through_the_body);
 }
 
 } // namespace test

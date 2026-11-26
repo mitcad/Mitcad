@@ -1295,6 +1295,12 @@ impl ExtrudeDef {
         }
     }
 
+    /// Whether the extrusion works on all bodies (no participants named):
+    /// its side through all reaches past every body.
+    fn reaches_all_bodies(&self) -> bool {
+        self.participants.is_empty()
+    }
+
     /// Whether the extrusion's start or an end is found from bodies.
     fn depends_on_bodies(&self) -> bool {
         let to_object = |side: &Side| !matches!(side, Side::Distance { .. });
@@ -1334,7 +1340,17 @@ impl ExtrudeDef {
         sheet: Option<&SketchCurves>,
     ) -> Result<K::Shape, String> {
         let frame = placement.apply_frame(&sketch.frame);
-        let normal = frame.normal();
+        // The sketch normal moved with the profile. A mirror's reflection
+        // (mitcad#2430) gives a frame whose own normal (x × y) is the
+        // reverse of the reflected sketch normal: the profile, in the
+        // reflected axes, is the image of the original, and the extrusion
+        // runs along the reflected normal, against the frame's.
+        let normal = if placement.is_rigid() {
+            frame.normal()
+        } else {
+            unit_direction(placement.apply_vector(sketch.frame.normal()))?
+        };
+        let reflected = dot(normal, frame.normal()) < 0.0;
         // A point or a line object stands for the plane through it parallel
         // to the profile's (mitcad#1329).
         let across = Across {
@@ -1359,7 +1375,9 @@ impl ExtrudeDef {
             Start::ProfilePlane => (ExtrudeStart::Offset(0.0), 0.0),
             Start::Offset { offset } => {
                 let offset = ctx.param(*offset)?;
-                (ExtrudeStart::Offset(offset), offset)
+                // The kernel moves the profile along the frame's normal.
+                let along_frame = if reflected { -offset } else { offset };
+                (ExtrudeStart::Offset(along_frame), offset)
             }
             Start::Object { object, offset } => {
                 let offset = offset.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0);
@@ -1472,11 +1490,14 @@ impl ExtrudeDef {
                     })
                 }
                 SideView::ThroughAll => {
+                    let all = self.active_cut_scope().is_none()
+                        && (participants.is_empty() || self.reaches_all_bodies());
                     let bodies = if participants.is_empty() && self.active_cut_scope().is_none() {
                         ctx.bodies()
                     } else {
                         participants.to_vec()
                     };
+                    let bodies = through_bodies(ctx, bodies, all);
                     // Both ways through all: the same length each way.
                     let both = matches!(
                         self.extent,
@@ -1807,11 +1828,14 @@ impl ExtrudeDef {
                     } else {
                         way.along.map(|v| -v)
                     };
+                    let all = participants.is_empty()
+                        || (self.active_cut_scope().is_none() && self.reaches_all_bodies());
                     let bodies = if participants.is_empty() {
                         ctx.bodies()
                     } else {
                         participants.to_vec()
                     };
+                    let bodies = through_bodies(ctx, bodies, all);
                     SideEnd::Distance(through_all_length(
                         ctx.kernel, &way.from, along, &bodies, both,
                     )?)
@@ -1885,6 +1909,39 @@ struct FaceWay {
     along: [f64; 3],
     normal: [f64; 3],
     from: Vec<[f64; 3]>,
+}
+
+/// The bodies a side through all reaches past: `bodies` (all bodies when
+/// `all`), or at a pattern's copy of the extrusion (Adjust, mitcad#2380)
+/// those bodies as the pattern has made them so far, and with `all` the
+/// bodies the pattern made too. A copy of a hole through all of a flange
+/// the pattern copied before it then reaches through that copy of the
+/// flange, as the original reaches through the flange; before, it measured
+/// the bodies before the pattern, which end short of the copy, and failed
+/// with "there are no bodies in the extrude direction".
+fn through_bodies<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    bodies: Vec<(BodyUid, K::Shape)>,
+    all: bool,
+) -> Vec<(BodyUid, K::Shape)> {
+    let Some(now) = &ctx.pattern_bodies else {
+        return bodies;
+    };
+    let mut reached: Vec<(BodyUid, K::Shape)> = bodies
+        .into_iter()
+        .map(|(uid, shape)| match now.iter().find(|(u, _)| *u == uid) {
+            Some((_, copied)) => (uid, copied.clone()),
+            None => (uid, shape),
+        })
+        .collect();
+    if all {
+        for (uid, shape) in now {
+            if !reached.iter().any(|(u, _)| u == uid) {
+                reached.push((*uid, shape.clone()));
+            }
+        }
+    }
+    reached
 }
 
 /// A length along `direction` that reaches past every body from each of

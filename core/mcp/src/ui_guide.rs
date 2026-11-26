@@ -17,7 +17,7 @@ pub(crate) fn resource() -> Value {
     json!({
         "uri": UI_GUIDE_URI,
         "name": "Guide step",
-        "description": "The guide step ui_guide shows the user: active, holding (the input still held after a step with hold is done), the step, its sequence number (one per step started) and last_event ({\"event\": \"step_done\" with what was done, \"step_left\" with the reason, \"refused\" with the command, \"held\" with the input held back, or \"demonstration_ended\" with the reason}). Subscribe to hear when the user completes or leaves it.",
+        "description": "The guide step ui_guide shows the user: active, holding (the input still held after a step with hold is done), the step, its sequence number (one per step started) and last_event ({\"event\": \"step_done\" with what was done, \"step_left\" with the reason, \"refused\" with the command, \"held\" with the input held back, \"mismatch\" with the sketch input a step held back, or \"demonstration_ended\" with the reason}). Subscribe to hear when the user completes or leaves it.",
         "mimeType": "application/json"
     })
 }

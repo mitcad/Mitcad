@@ -24,6 +24,8 @@ use super::pattern::{Binding, BindingKind};
 use super::{Constraint, ConstraintKind, ConstraintUid, DimensionKind, Entity, EntityKind, Ref};
 use super::{SpacingMode, spacing};
 use crate::ids::EntityUid;
+// Tangent dimensions to a far side (mitcad#2451).
+use super::TangentSide;
 // Points held on derived offsets (mitcad#2278).
 use crate::offset_hold::{DerivedOffset, Holds, Ids};
 
@@ -599,7 +601,8 @@ impl Built {
     /// Moves the system's points, circle radii and ellipse minor radii to
     /// where `entities` have them: the solve starts there, while the
     /// orientation choices the constraints took where the system was built
-    /// stay (mitcad#1047).
+    /// stay (mitcad#1047); elliptical arcs' end parameters follow their
+    /// moved ends (mitcad#2408).
     fn start_at(&mut self, entities: &[&Entity]) -> Result<(), String> {
         for e in entities {
             let what = |error: mitcad_solver::Error| format!("{}: {error}", e.as_ref());
@@ -623,6 +626,19 @@ impl Built {
                     }
                 }
                 _ => {}
+            }
+        }
+        // An elliptical arc's end parameters where its moved ends are on
+        // its moved ellipse: a fixed one (a linked projection) holds them,
+        // and kept where the arc was built they contradicted its fixed ends
+        // (mitcad#2408: a section of a cone followed a drafted face).
+        for e in entities {
+            if let EntityKind::EllipticalArc { .. } = e.kind
+                && let Some(&id) = self.curves.get(&e.id)
+            {
+                self.system
+                    .seat_elliptical_arc_ends(id)
+                    .map_err(|error| format!("{}: {error}", e.as_ref()))?;
             }
         }
         Ok(())
@@ -1171,10 +1187,11 @@ pub(crate) fn planar_dimension(
             b: c(*b)?,
             value,
         },
-        D::TangentDistance { circle, line } => S::TangentDistance {
+        D::TangentDistance { circle, line, side } => S::TangentDistance {
             circle: c(*circle)?,
             line: c(*line)?,
             value,
+            far: side.far(),
         },
         D::ConcentricDistance { a, b } => S::RadiusGap {
             a: c(*a)?,
@@ -1239,12 +1256,17 @@ pub(crate) fn planar_dimension(
                 value,
             }
         }
-        D::TangentCircleDistance { a, b, side } => S::TangentCircleDistance {
-            a: c(*a)?,
-            b: c(*b)?,
-            value,
-            inside: side.inside(),
-        },
+        D::TangentCircleDistance { a, b, side } => {
+            let (far_a, far_b) = side.far_pair();
+            S::TangentCircleDistance {
+                a: c(*a)?,
+                b: c(*b)?,
+                value,
+                inside: side.inside(),
+                far_a,
+                far_b,
+            }
+        }
         D::TangentPointDistance {
             circle,
             point,
@@ -1254,6 +1276,7 @@ pub(crate) fn planar_dimension(
             point: p(*point)?,
             value,
             inside: side.inside(),
+            far: side.far(),
         },
     })
 }
@@ -1284,12 +1307,22 @@ pub fn measure(kind: &DimensionKind, solved: &Solved) -> Option<f64> {
             let (b0, b1) = line(b)?;
             point_line([(b0[0] + b1[0]) / 2.0, (b0[1] + b1[1]) / 2.0], line(a)?)
         }
-        D::TangentDistance { circle, line: l } => {
+        D::TangentDistance {
+            circle,
+            line: l,
+            side,
+        } => {
             let centre = match solved.curves.get(circle)? {
                 Curve2::Circle { center, .. } | Curve2::Arc { center, .. } => *center,
                 _ => return None,
             };
-            point_line(centre, line(l)?) - radius(circle)?
+            let to_centre = point_line(centre, line(l)?);
+            // To the far side (mitcad#2451).
+            if side.far() {
+                to_centre + radius(circle)?
+            } else {
+                to_centre - radius(circle)?
+            }
         }
         D::ConcentricDistance { a, b } => (radius(b)? - radius(a)?).abs(),
         D::Length { line: l } => {
@@ -1332,10 +1365,13 @@ pub fn measure(kind: &DimensionKind, solved: &Solved) -> Option<f64> {
         D::TangentCircleDistance { a, b, side } => {
             let gap = dist(centre(a)?, centre(b)?);
             let (ra, rb) = (radius(a)?, radius(b)?);
+            // Far sides add the radius (mitcad#2451).
+            let (far_a, far_b) = side.far_pair();
+            let from = |far: bool, r: f64| if far { r } else { -r };
             if side.inside() {
                 (ra - rb).abs() - gap
             } else {
-                gap - ra - rb
+                gap + from(far_a, ra) + from(far_b, rb)
             }
         }
         D::TangentPointDistance {
@@ -1343,8 +1379,12 @@ pub fn measure(kind: &DimensionKind, solved: &Solved) -> Option<f64> {
             point,
             side,
         } => {
-            let gap = dist(centre(circle)?, p(point)?) - radius(circle)?;
-            if side.inside() { -gap } else { gap }
+            let to_centre = dist(centre(circle)?, p(point)?);
+            match side {
+                TangentSide::Far => to_centre + radius(circle)?,
+                TangentSide::Inside => radius(circle)? - to_centre,
+                TangentSide::Outside | TangentSide::NearFar => to_centre - radius(circle)?,
+            }
         }
     })
 }

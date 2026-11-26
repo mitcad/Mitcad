@@ -987,3 +987,70 @@ The bodies are still built ahead as before: when the replay asks for a
 state, the next four states it asks for by the timeline are built ahead,
 so the healing of an item's own state is under way when the item begins
 (on the bin since the file was read, mitcad#676).
+
+## Documents of an assembly imported side by side (mitcad#2449)
+
+A reported assembly package (an `.f3z` of 83 designs: the top design and
+its documents, several levels deep, 59 documents referred to) took 438 s
+(Linux, release build, `--threads 4`), nearly all of it in the documents'
+own imports, one after another. Each document is imported once per
+import (mitcad#229): of the documents placed several times (the gears
+five times, the standoffs four), the trace has one import each and
+"again, imported before" for the others. The import's own times
+(`MITCAD_IMPORT_TRACE`, the report's `references[].seconds`): the shell
+document 220.6 s, of which its base 181.2 s (Fillet8 91.7 s of the wall
+clock before it falls back, Chamfer3 31.3 s, R-Pattern2 14.0 s), the
+motor 68.3 s (its planetary gear set 55.3 s, of which a ring gear
+34.8 s), the blade assembly 30.9 s, a sensor board 18.3 s, the lower
+blade 15.9 s; the top design's own replay a few seconds.
+
+**What keeps it serial.** The documents a design refers to are imported
+before the design is replayed (`Document::load_references`,
+`core/ffi/src/f3d_references.rs`), outside the import's watched tries,
+and each in a document of its own (`import_reference`: a new model
+document with its own kernel calls on its own shapes, its own import
+thread and watchdog, its own progress). They share only:
+
+- the resolver, which learns the reference folders as it finds
+  documents: kept serial, in the design's order (it is fast);
+- the cache of the documents imported (`ReferenceCache`): a document two
+  others refer to is imported once and waited for by the other;
+- the design's stop request (the monitor), which is only read.
+
+What must stay serial: the filling of the design's components from the
+imported documents and the design's own replay (they change the one
+model document, in the design's order, and give its ids and names), and
+a document's own timeline. The order the occurrences are read in does
+not matter: the entries and the fills are made in the design's order
+whatever import ends first.
+
+**Now** the documents the opened design refers to are imported side by
+side, as many at once as the import's `--threads` (`threads`; one: one
+after another, as before), each document's own references in its thread
+one after another, so that no more imports run at once. A document
+another thread is importing is waited for; designs that refer to each
+other, imported from two sides at once, would wait for ever, so the
+cache keeps what each import waits for and refuses the reference that
+would close the circle as one that refers back to a design being
+imported, as a document on the import's own stack is refused. The
+resulting design is the serial one: the test
+`cli.f3d_reported_package` imports the package with four threads and
+again with one and compares the designs (components, occurrences and
+their placements, features with their ids, names and light bulbs) and
+every document's outcome.
+
+On the package, in one run of the test (Linux, release build, a loaded
+machine): 325 s with four threads, 508 s with one (the serial import of
+an earlier run, less loaded: 438 s); the shell document, whose own
+documents come one after another in its thread, is the longest at
+250.8 s (its base 209.1 s). The two imports gave the same design
+(components, occurrences, placements, features, ids, names, light
+bulbs) and the same items in every document; one item fell back in both
+for another reason (its time ran out in the serial one, which the
+comparison leaves out: the reasons of an item whose time runs out
+follow the machine's load in either import).
+
+Not run side by side: the deeper levels (a document's documents), and
+the import's memory guard measures the whole process, so documents
+imported together leave less memory to each (an item that would run low
+takes the file's bodies, as before, and says so).

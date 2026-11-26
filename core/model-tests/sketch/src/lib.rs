@@ -160,3 +160,9 @@ mod sketch_offset_points_2278_tests;
 // Remove Point on a spline, the pair of Insert Point: the spline stays
 // with one point fewer (mitcad#2326).
 mod sketch_spline_point_remove_2326_tests;
+// Sketch Dimension refused by the memory guard before it started: the
+// sketch stays as it was; with enough memory both arcs take a radius
+// (mitcad#2437).
+mod sketch_memory_refusal_2437_tests;
+// Tangent dimensions to a circle's or arc's far side (mitcad#2451).
+mod sketch_tangent_far_2451_tests;

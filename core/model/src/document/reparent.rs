@@ -194,6 +194,12 @@ struct Rewrite<'a> {
     new: Vec<OccurrenceUid>,
     /// Why references across it cannot follow it, when they cannot.
     varying: Option<String>,
+    /// It goes one level down where it is, into a component placed in its
+    /// parent, staying where it was (`follow_moved_down`, mitcad#2466):
+    /// nothing leaves its component, so Pattern at Points' paths and the
+    /// occurrences it made, moves' picked points and axes and motion
+    /// links' origins follow it too.
+    down: bool,
 }
 
 impl Rewrite<'_> {
@@ -452,6 +458,46 @@ impl Rewrite<'_> {
             }
             FeatureDef::CapturePosition(c) if c.positions.iter().any(|p| p.occurrence == o) => {
                 return Err(format!("it captures the position of {}", self.name()));
+            }
+            // One level down (mitcad#2466): Pattern at Points' paths are
+            // from the root, so they take the new way as a section's do;
+            // the occurrences it made follow with them
+            // (`DocState::follow_point_pattern`).
+            FeatureDef::PatternAtPoints(p) if self.down => {
+                for path in p.paths_mut() {
+                    changed |= self.absolute(&mut path.0);
+                }
+            }
+            // A move's points and axes picked in occurrences (mitcad#699),
+            // from the root too, and the occurrence of its component a
+            // Move of occurrences was picked through (mitcad#2307).
+            moving @ (FeatureDef::Move(_)
+            | FeatureDef::MoveFace(_)
+            | FeatureDef::MoveOccurrence(_))
+                if self.down =>
+            {
+                if let FeatureDef::MoveOccurrence(m) = &mut *moving
+                    && let Some(path) = &mut m.parent_occurrence
+                {
+                    changed |= self.absolute(&mut path.0);
+                }
+                if let Some(spec) = moving.move_spec_mut() {
+                    for (_, path) in spec.placed_references_mut() {
+                        if let Some(path) = path {
+                            changed |= self.absolute(&mut path.0);
+                        }
+                    }
+                }
+            }
+            // A motion link's picked geometry (mitcad#466): joint origins,
+            // relative to its component as a joint's.
+            FeatureDef::MotionLink(link) if self.down => {
+                if link.a.occurrence == Some(o) || link.b.occurrence == Some(o) {
+                    return Err(format!("it couples the joints of {}", self.name()));
+                }
+                for origin in link.coupling.origins_mut() {
+                    changed |= self.unit(&mut origin.occurrence.0)?;
+                }
             }
             FeatureDef::PatternAtPoints(p) if p.paths().iter().any(|path| path.0.contains(&o)) => {
                 return Err(format!(
@@ -720,12 +766,13 @@ fn rewrite_references(
         }
     }
     // Occurrences made by Pattern at Points keep the paths they were made
-    // from.
+    // from; one level down, they follow with their feature's
+    // (`take_changes`, mitcad#2466).
     for made in &state.assembly.occurrences {
         let Some(pattern) = &made.pattern else {
             continue;
         };
-        for rewrite in rewrites {
+        for rewrite in rewrites.iter().filter(|r| !r.down) {
             let o = rewrite.occurrence;
             if pattern.source.0.contains(&o)
                 || pattern
@@ -1265,17 +1312,40 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
             o.folder = None;
         }
     }
-    for (i, def) in &plan.changes.features {
+    take_changes(state, &plan.changes);
+    // Print plate items and comment targets (mitcad#1318), selection set
+    // members and point clouds' occurrences (mitcad#2265).
+    for moved in &plan.moved {
+        let new = plan.path_of(moved);
+        state.follow(&Follow::Moved {
+            old: &moved.source,
+            new: &new,
+        });
+    }
+}
+
+/// The references a move rewrote ([`rewrite_references`]) put into the
+/// state (also for [`follow_moved_down`]).
+fn take_changes(state: &mut DocState, changes: &Rewritten) {
+    for (i, def) in &changes.features {
+        // The occurrences Pattern at Points made keep their keys
+        // (mitcad#2466).
+        let before = Arc::clone(&state.features[*i]);
+        if let (FeatureDef::PatternAtPoints(old), FeatureDef::PatternAtPoints(new)) =
+            (&before.def, def)
+        {
+            state.follow_point_pattern(before.uid, old, new);
+        }
         Arc::make_mut(&mut state.features[*i]).def = def.clone();
     }
-    for (i, component) in &plan.changes.components {
+    for (i, component) in &changes.components {
         Arc::make_mut(&mut state.features[*i]).component = *component;
     }
-    for (id, owner) in &plan.changes.owners {
+    for (id, owner) in &changes.owners {
         state.parameters.set_owner(*id, Some(*owner));
     }
     // From the last, so that the indices still hold.
-    for (i, entry) in plan.changes.inserted.iter().rev() {
+    for (i, entry) in changes.inserted.iter().rev() {
         let beside = state.features[*i].uid;
         state.features.insert(i + 1, Arc::new(entry.clone()));
         if *i < state.marker {
@@ -1291,7 +1361,7 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
         }
         state.next_uid = state.next_uid.max(entry.uid.0 + 1);
     }
-    for (i, axis, path) in &plan.changes.analyses {
+    for (i, axis, path) in &changes.analyses {
         match &mut state.analyses[*i].def {
             AnalysisDef::Section(section) if *axis => section.axis_occurrence = Some(path.clone()),
             AnalysisDef::Section(section) => section.occurrence = Some(path.clone()),
@@ -1300,13 +1370,13 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
             AnalysisDef::PointCloudDeviation(_) => {}
         }
     }
-    for (i, text) in &plan.changes.isolated {
+    for (i, text) in &changes.isolated {
         state.display.isolated[*i].occurrence.clone_from(text);
     }
-    for (i, paths) in &plan.changes.contact_sets {
+    for (i, paths) in &changes.contact_sets {
         state.contact_sets[*i].occurrences.clone_from(paths);
     }
-    for (i, pick, path) in &plan.changes.measurements {
+    for (i, pick, path) in &changes.measurements {
         let measurement = &mut state.annotations[*i];
         let pick = match *pick {
             0 => Some(&mut measurement.a),
@@ -1320,18 +1390,57 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
             pick.occurrence = Some(path.clone());
         }
     }
-    for (i, drawing) in &plan.changes.drawings {
+    for (i, drawing) in &changes.drawings {
         state.drawings[*i].clone_from(drawing);
     }
-    // Print plate items and comment targets (mitcad#1318), selection set
-    // members and point clouds' occurrences (mitcad#2265).
-    for moved in &plan.moved {
-        let new = plan.path_of(moved);
-        state.follow(&Follow::Moved {
-            old: &moved.source,
-            new: &new,
-        });
+}
+
+/// Occurrences that went one level down where they were, into a component
+/// placed in their parent (mitcad#2441: a linked design that came in as
+/// its one component read again with its root, that component now one of
+/// its own). For each pair of paths from the root, `old` before and `new`
+/// after, the references through `old` follow `new` as they follow a
+/// moved occurrence in Reparent Occurrence: those of the features other
+/// than `skip` (which go their own way), section and draft analyses,
+/// Isolate, contact sets, annotations, drawings and what
+/// [`DocState::follow`] keeps. As nothing leaves its component, also what
+/// Reparent Occurrence refuses (mitcad#2466): Pattern at Points' sources,
+/// points and context with the occurrences it made, moves' picked points
+/// and axes, and motion links' origins. The occurrences themselves are
+/// placed by the caller. Returns what cannot follow, each as `name: why`.
+pub(super) fn follow_moved_down(
+    state: &mut DocState,
+    moves: &[(Vec<OccurrenceUid>, Vec<OccurrenceUid>)],
+    skip: &BTreeSet<FeatureUid>,
+) -> Vec<String> {
+    let carriers: BTreeSet<usize> = state
+        .features
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| skip.contains(&f.uid))
+        .map(|(i, _)| i)
+        .collect();
+    let assembly = state.assembly.clone();
+    let rewrites: Vec<Rewrite<'_>> = moves
+        .iter()
+        .filter_map(|(old, new)| {
+            Some(Rewrite {
+                assembly: &assembly,
+                occurrence: *old.last()?,
+                old: old.as_slice(),
+                new: new.clone(),
+                varying: None,
+                down: true,
+            })
+        })
+        .collect();
+    let (changes, _, blockers) = rewrite_references(state, &rewrites, &carriers);
+    drop(rewrites);
+    take_changes(state, &changes);
+    for (old, new) in moves {
+        state.follow(&Follow::Moved { old, new });
     }
+    blockers
 }
 
 /// The occurrences' names, for messages.
@@ -1584,6 +1693,7 @@ impl<K: Kernel> Document<K> {
                     old: &m.source,
                     new,
                     varying: varying.clone(),
+                    down: false,
                 }
             })
             .collect();

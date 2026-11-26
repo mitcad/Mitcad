@@ -6,6 +6,15 @@ cmake_minimum_required(VERSION 3.24)
 # inside with Sharp corners and Tangent Chain on, the boss top and the foot
 # removed, as the report's picture has it; before, the shell failed ("the
 # offset faces do not close up") at any thickness (OCCT port patch 2383).
+# The same report's second design (mitcad#2415): a disk with an arm whose
+# flat sides are tangent to it, the disk's seam on one tangent line, a boss
+# on the arm's end, shelled 2, 1 and 5 mm inside with Sharp corners and the
+# boss top removed; it failed the same way (OCCT port patch 2415). GitHub
+# #645 (mitcad#2415): a loft cut to a slot, its top rounded, shelled closed
+# 2 mm inside, which failed at any thickness (patch 2415), and the report's
+# shell with the top removed, 2 and 1 mm (mitcad#2462, patch 2462). GitHub
+# #642's second request (mitcad#2443): the first design shelled the same way
+# with the step's top at a wall of its own, 3 mm.
 # Each report's archive is found in its folder under MITCAD_MITCAD_REPORTED
 # by its content id (the first 8 hex digits of the SHA-256), the design in it
 # by its own, unpacked into WORK so that nothing is written beside the
@@ -24,7 +33,10 @@ endforeach()
 # Each case: the report's folder, the reporter's archive, the design in it
 # (content ids) and the script that opens it.
 set(cases
-  "github-642:40910cf1:980e559a:shell_sharp_reported642.json") # 2 mm inside, Sharp, top and foot open
+  "github-642:40910cf1:980e559a:shell_sharp_reported642.json"   # 2 mm inside, Sharp, top and foot open
+  "github-642:1bd3c43c:907e7160:shell_sharp_reported642b.json"  # 2, 1 and 5 mm inside, Sharp, boss top open
+  "github-645:4b355bd0:18e67ffd:shell_sharp_reported645.json"   # closed 2 mm; top open 2 and 1 mm, Sharp and Rounded
+  "github-642:40910cf1:980e559a:shell_own_thickness_reported642.json")  # the step's top at 3 mm (mitcad#2443)
 
 set(reported "$ENV{MITCAD_MITCAD_REPORTED}")
 if(reported STREQUAL "" OR NOT IS_DIRECTORY "${reported}")

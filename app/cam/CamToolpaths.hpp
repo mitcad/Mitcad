@@ -80,11 +80,13 @@ PathLines pathLines(const QJsonArray& moves, const WorkFrame& frame, std::option
 
 // A place of the tool tip along a setup's toolpaths, for Simulate: where
 // (design coordinates), in which operation (its index in the playback's
-// operations) and at which of its moves.
+// operations) and at which of its moves; where in the work coordinates
+// too (the turret drawn round it, mitcad#2412).
 struct PlaybackPoint {
   Point3 at{0.0, 0.0, 0.0};
   int operation = 0;
   int move = 0;
+  Point3 work{0.0, 0.0, 0.0};
 };
 
 // The tool tip's places along the moves (arcs at most 5 degrees apart),
@@ -118,8 +120,9 @@ struct ToolpathScene {
   std::vector<Group> groups;
   std::optional<Tool> tool;
   // The machine's parts Simulate draws where they are as the tool cuts
-  // (mitcad#2405: a lathe's sub-spindle), as segments (six numbers each,
-  // design coordinates); not counted in the log line.
+  // (mitcad#2405: a lathe's sub-spindle; mitcad#2412: its zones, its
+  // turret), as segments (six numbers each, design coordinates); not
+  // counted in the log line.
   std::vector<float> machine;
 
   bool empty() const;
@@ -156,5 +159,25 @@ std::vector<float> subSpindleLines(const QJsonObject& subSpindle, double face, c
 // part where the view draws it) while the operation `operation` (its id)
 // cuts; none where that is not known or the operation is not listed.
 std::optional<double> subSpindleFace(const QJsonObject& subSpindle, int operation);
+
+// The entry of the operation `operation` (its `id`) in a list of
+// `cam_simulate`'s per operation (`zones`, `turret`, mitcad#2412); empty
+// when it is not listed.
+QJsonObject operationEntry(const QJsonArray& list, int operation);
+
+// A lathe's zones as Simulate draws them (mitcad#2412): `cam_simulate`'s
+// `zones` of one operation (each `{name, moving, min, max}`, work
+// coordinates where the view draws the operation) as boxes of twelve
+// edges, a zone without depth in Y as the rectangle of its four, in the
+// design's coordinates.
+std::vector<float> zoneLines(const QJsonArray& zones, const WorkFrame& frame);
+
+// The turret's body round the tool as Simulate draws it (mitcad#2412):
+// `cam_simulate`'s `turret` entry of one operation (`x` and `z` from the
+// tool's point, X along `x_axis` in the work X and Y, or away from the
+// spindle axis through the tool where it is null; Z along the work Z) as
+// the rectangle of its four edges round the tool at `tip` (work
+// coordinates), in the design's coordinates. Empty without `x` and `z`.
+std::vector<float> turretLines(const QJsonObject& turret, const Point3& tip, const WorkFrame& frame);
 
 } // namespace mitcad::cam

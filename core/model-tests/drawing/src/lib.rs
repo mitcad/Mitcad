@@ -35,3 +35,6 @@ mod hole_callout_export_tests;
 mod explode_view_tests;
 // Sheets without a frame or a title block: the Blank template (mitcad#2325).
 mod blank_template_tests;
+// The drawing book: drawings of the design and of its linked designs
+// printed as one job (mitcad#2448).
+mod drawing_book_tests;

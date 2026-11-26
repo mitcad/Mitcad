@@ -499,6 +499,48 @@ QString axesAt(const SketchModel& model, const Snap& snap) {
   }
 }
 
+QStringList snapPlaces(const SketchModel& model, const Snap& snap) {
+  QStringList places;
+  const QString axes = axesAt(model, snap);
+  if (axes == QLatin1String("xy")) {
+    places << QStringLiteral("origin");
+  }
+  if (axes.contains(QLatin1Char('x'))) {
+    places << QStringLiteral("x_axis");
+  }
+  if (axes.contains(QLatin1Char('y'))) {
+    places << QStringLiteral("y_axis");
+  }
+  switch (snap.kind) {
+  case Snap::Kind::None: places << QStringLiteral("free"); break;
+  case Snap::Kind::Grid: places << QStringLiteral("grid"); break;
+  case Snap::Kind::Center: places << QStringLiteral("center") << QStringLiteral("point"); break;
+  case Snap::Kind::Point:
+  case Snap::Kind::Origin: places << QStringLiteral("point"); break;
+  case Snap::Kind::Midpoint: places << QStringLiteral("midpoint"); break;
+  case Snap::Kind::Quadrant: places << QStringLiteral("quadrant"); break;
+  case Snap::Kind::Intersection:
+    places << (snap.onExtension() ? QStringLiteral("extension") : QStringLiteral("intersection"));
+    break;
+  case Snap::Kind::OnCurve:
+    // Onto an axis: its name above.
+    if (snap.extended) {
+      places << QStringLiteral("extension");
+    } else if (snap.axis.isEmpty()) {
+      places << QStringLiteral("curve");
+    }
+    break;
+  case Snap::Kind::BodyVertex: places << QStringLiteral("body_vertex"); break;
+  case Snap::Kind::BodyMidpoint: places << QStringLiteral("body_midpoint"); break;
+  case Snap::Kind::BodyOnEdge: places << QStringLiteral("body_edge"); break;
+  case Snap::Kind::BodyEdgeCenter:
+  case Snap::Kind::BodySectionCenter: places << QStringLiteral("body_center"); break;
+  case Snap::Kind::BodySection:
+  case Snap::Kind::BodySectionVertex: places << QStringLiteral("body_section"); break;
+  }
+  return places;
+}
+
 std::optional<QJsonObject> axisHold(const QString& point, const Snap& snap,
                                     const std::function<QString(const QString&)>& entity) {
   if (snap.kind != Snap::Kind::OnCurve || snap.axis.isEmpty() || point.isEmpty()) {

@@ -391,6 +391,8 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
   // computes the model.
   follow(m_browser, &BrowserPanel::bindingsRequested, &BrowserController::browserBindings, true);
   follow(m_timeline, &TimelineWidget::bindingsRequested, &BrowserController::timelineBindings, true);
+  // The History list's light bulbs (mitcad#2427).
+  follow(m_timeline, &TimelineWidget::eyeClicked, &BrowserController::timelineEye);
 
   // A click on a badge goes to its feature, or lists them to go to.
   connect(m_failures, &QToolButton::clicked, this, [this] {
@@ -2921,6 +2923,9 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       if (sheet.value(QStringLiteral("flat_pattern")).isObject()) {
         menu.add(QStringLiteral("export-dxf"), tr("Export Flat Pattern…"),
                  [this, node] { m_host.exportFlatPattern(node.uid); });
+        // mitcad#2446.
+        menu.add(QStringLiteral("drawing"), tr("Create Drawing of Flat Pattern…"),
+                 [this, node] { m_host.createFlatPatternDrawing(node.uid); });
       } else {
         menu.add(QStringLiteral("flat-pattern"), tr("Create Flat Pattern"), [this, node] { editFlatPattern(node.uid); });
       }
@@ -3237,6 +3242,9 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(node.visible ? QStringLiteral("eye-off") : QStringLiteral("eye"),
              node.visible ? tr("Show Folded") : tr("Show Flat"), [this, node] { toggleVisibility(node); });
     menu.add(QStringLiteral("export-dxf"), tr("Export DXF…"), [this, node] { m_host.exportFlatPattern(node.uid); });
+    // A drawing with this Flat Pattern placed on it (mitcad#2446).
+    menu.add(QStringLiteral("drawing"), tr("Create Drawing of Flat Pattern…"),
+             [this, node] { m_host.createFlatPatternDrawing(node.uid); });
     menu.separator();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
@@ -5694,6 +5702,50 @@ void BrowserController::showInFull(const QString& occurrence, const QString& nam
                               .arg(result.value(QStringLiteral("bodies")).toArray().size());
   } else {
     qDebug().noquote() << QStringLiteral("Show in Full of %1 refused: %2").arg(name, m_host.lastError());
+  }
+}
+
+void BrowserController::timelineEye(const QString& uid) {
+  const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+  if (feature == nullptr) {
+    return;
+  }
+  if (feature->isAnySketch() || feature->isConstruction()) {
+    // Its own light bulb, as its Browser row's.
+    BrowserNode node;
+    node.type = feature->isAnySketch() ? BrowserNode::Type::Sketch : BrowserNode::Type::Datum;
+    node.uid = uid;
+    node.component = feature->component;
+    node.featureType = feature->type;
+    node.name = feature->name;
+    node.path = QStringLiteral("History/%1").arg(feature->name);
+    node.visible = m_snapshot.isShown(uid);
+    node.hasEye = true;
+    toggleVisibility(node);
+    return;
+  }
+  // The bodies it made or last changed: hidden while any is shown.
+  const QStringList bodies = m_snapshot.bodiesByFeature().value(uid);
+  bool shown = false;
+  for (const QString& body : bodies) {
+    shown = shown || m_snapshot.bodies.value(body).visible;
+  }
+  const bool show = !shown;
+  QJsonArray commands;
+  for (const QString& body : bodies) {
+    const DocumentSnapshot::Body state = m_snapshot.bodies.value(body);
+    // One that follows Show When is left as it is (mitcad#863).
+    if (state.visible != show && state.visibleWhen.isEmpty()) {
+      commands.append(cmd("set_body_visible", {{QStringLiteral("uid"), body}, {QStringLiteral("visible"), show}}));
+    }
+  }
+  if (commands.isEmpty()) {
+    return;
+  }
+  const QString label = (show ? tr("Show %1") : tr("Hide %1")).arg(feature->name);
+  if (m_host.runVisibilityCommands(commands, label)) {
+    qDebug().noquote() << QStringLiteral("Visibility History/%1: %2")
+                              .arg(feature->name, show ? QStringLiteral("shown") : QStringLiteral("hidden"));
   }
 }
 

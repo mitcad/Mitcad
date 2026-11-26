@@ -765,6 +765,37 @@ function Ui-MenuSkipped([int]$Index) {
   return 0
 }
 
+# Ui-RibbonMenuSkipped path row: how many of the first `row` rows (separators
+# left out) of the toolbar group menu `path` logged last ("Ribbon menu
+# DRAWING/CREATE: a | b | c") cannot be chosen, as the ribbon logs them just
+# before it ("Ribbon menu disabled DRAWING/CREATE: b", mitcad#2446). The
+# arrow keys pass over them, so a test that chooses a row by its place
+# presses Down that many times fewer.
+function Ui-RibbonMenuSkipped([string]$Path, [int]$Row) {
+  $lines = @(Ui-LogLines)
+  $menuTag = "Ribbon menu ${Path}: "
+  $disabledTag = "Ribbon menu disabled ${Path}: "
+  for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+    $at = $lines[$i].IndexOf($menuTag)
+    if ($at -lt 0) { continue }
+    $rows = @($lines[$i].Substring($at + $menuTag.Length) -split ' \| ' | Where-Object { $_ -ne '-' })
+    $disabled = @()
+    if ($i -gt 0) {
+      $off = $lines[$i - 1].IndexOf($disabledTag)
+      if ($off -ge 0) { $disabled = @($lines[$i - 1].Substring($off + $disabledTag.Length) -split ' \| ') }
+    }
+    $skipped = 0
+    for ($k = 0; $k -lt [Math]::Min($Row, $rows.Count); $k++) {
+      $name = $rows[$k]
+      $sub = $name.IndexOf(' > [')
+      if ($sub -ge 0) { $name = $name.Substring(0, $sub) }
+      if ($disabled -contains $name) { $skipped++ }
+    }
+    return $skipped
+  }
+  return 0
+}
+
 # Keys by name, as xdotool names them in the Linux tests.
 $script:UiKeys = @{
   'Return' = 0x0D; 'Escape' = 0x1B; 'Tab' = 0x09; 'BackSpace' = 0x08; 'Delete' = 0x2E; 'space' = 0x20

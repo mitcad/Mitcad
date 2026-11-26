@@ -763,10 +763,15 @@ pub trait Evaluate<K: Kernel> {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String>;
 
     /// The tool of feature `feature` (this definition) rebuilt with its own
-    /// placement (sketch frame, plane) moved by the rigid `placement`, faces
-    /// named after `feature`; extents that depend on bodies are found again
+    /// placement (sketch frame, plane) moved by `placement`, faces named
+    /// after `feature`; extents that depend on bodies are found again
     /// against the bodies `ctx` sees. Patterns use it for the Adjust
-    /// option. None: patterns move the tool the feature left instead.
+    /// option. `placement` is rigid, or for a mirror (mitcad#2430) and a
+    /// pattern's copy of a mirror's image (mitcad#2432) a reflection,
+    /// possibly followed by a rigid motion (orthogonal, determinant -1):
+    /// a definition that cannot
+    /// rebuild its tool reflected returns None for it. None: patterns
+    /// move (or reflect) the tool the feature left instead.
     fn placed_tool(
         &self,
         _ctx: &mut EvalContext<'_, K>,
@@ -1110,6 +1115,11 @@ pub struct EvalContext<'a, K: Kernel> {
     /// object that is no longer in its body is found in the body as it was
     /// before this feature, as the original found it.
     pub(crate) objects_before: Option<FeatureUid>,
+    /// A pattern's copy of this feature (Adjust, mitcad#2380): the bodies
+    /// as the pattern has made them so far, its copies of the features
+    /// before this one in them. A side through all reaches past these at
+    /// the copy, as the original's reaches past the bodies before it.
+    pub(crate) pattern_bodies: Option<Vec<(BodyUid, K::Shape)>>,
     /// What a 3D sketch's evaluation gave (mitcad#1521): kept with its
     /// result also when it failed (its frame and failure, no geometry).
     pub(crate) spatial: Option<spatial_sketch::SpatialSketchOutput>,
@@ -1153,6 +1163,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             sweep_place: None,
             move_basis: None,
             objects_before: None,
+            pattern_bodies: None,
             spatial: None,
             flex: None,
             geom_links: std::collections::BTreeMap::new(),

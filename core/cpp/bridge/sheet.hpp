@@ -22,6 +22,8 @@ struct SheetRegion;
 struct SheetTrimOutput;
 struct SheetFootprintCylinder;
 struct SheetFootprintFace;
+struct SheetDevelopedFace;
+struct SheetFaceBending;
 
 class SheetShapeResult {
 public:
@@ -47,5 +49,11 @@ SheetTrimOutput sheet_trim(rust::Slice<const SheetTrimDomain> domains, rust::Sli
 // the chart (mitcad#1628).
 rust::Vec<SheetFootprintFace> sheet_cylinder_footprint(const geometry::Shape& shape,
                                                       const SheetFootprintCylinder& cylinder, double tolerance);
+
+// A cylindrical or conical face developed at the surface `offset` from it
+// away from its axis, and how a face bends (mitcad#2435).
+SheetDevelopedFace sheet_face_development(const geometry::Shape& shape, rust::Slice<const rust::String> faces,
+                                          double neutral_depth, double thickness);
+SheetFaceBending sheet_face_bending(const geometry::Shape& shape, rust::Str face);
 
 } // namespace mitcad::bridge

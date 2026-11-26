@@ -446,23 +446,29 @@ fn a_joint_to_the_origin_turns_with_the_design() {
     assert!(matches!(def.a.geometry, GeomRef::FixedPlane { .. }));
 }
 
-#[test]
-fn a_sketch_on_a_face_keeps_its_place_on_the_face() {
-    // A face's plane takes its in-plane x axis from the model's X: turned
-    // about Z the top face faces +Z as before, so its frame alone would
-    // turn the sketch back by the quarter turn. The sketch's own frame
-    // keeps it turned with the design.
+/// The design with Sketch3 (F9) on Extrude1's top face, a rectangle on it,
+/// and its frame.
+fn sketch_on_the_top() -> (Document<MockKernel>, mitcad_model::SketchFrame) {
     let mut doc = design();
     run(
         &mut doc,
         json!({"cmd": "sketch.create", "plane": {"face": format!("F2:end({RECT})"), "body": "F2.b0"}}),
     );
-    let sketch = "F9";
     run(
         &mut doc,
-        json!({"cmd": "sketch.add_rectangle", "sketch": sketch, "corner": [40, 25], "width": 10, "height": 8}),
+        json!({"cmd": "sketch.add_rectangle", "sketch": "F9", "corner": [40, 25], "width": 10, "height": 8}),
     );
-    let frame = sketch_frame(&doc, sketch);
+    let frame = sketch_frame(&doc, "F9");
+    (doc, frame)
+}
+
+#[test]
+fn a_sketch_on_a_face_keeps_its_place_on_the_face() {
+    // The frame the sketch was placed with (mitcad#2409) turns with the
+    // design: turned about Z the top face faces +Z as before, and the
+    // sketch's frame on it is its old one turned, no own frame needed.
+    let (mut doc, frame) = sketch_on_the_top();
+    let sketch = "F9";
     run(
         &mut doc,
         json!({"cmd": "reorient_design", "axis": "z", "degrees": 90}),
@@ -473,12 +479,43 @@ fn a_sketch_on_a_face_keeps_its_place_on_the_face() {
         panic!("a sketch");
     };
     assert!(matches!(def.plane, SketchPlane::Face { .. }));
+    let placed = def.plane.placed().expect("the frame it was placed with");
+    assert!(same_frame(placed, &turn.frame(&frame)));
+    assert!(def.frame.is_none(), "the placed frame turned, no own frame");
+    let features: Vec<String> = doc.features().map(|f| f.name.clone()).collect();
+    assert!(features.contains(&"Sketch3".to_owned()));
+}
+
+#[test]
+fn a_sketch_on_a_face_of_a_design_saved_before_keeps_its_place() {
+    // A design saved before mitcad#2409 (no placed frame): a face's plane
+    // takes its in-plane x axis from the model's X, so turned about Z the
+    // top face's frame alone would turn the sketch back by the quarter
+    // turn. The sketch's own frame keeps it turned with the design.
+    let (doc, frame) = sketch_on_the_top();
+    let sketch = "F9";
+    let mut saved: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    let features = saved["features"].as_array_mut().unwrap();
+    let def = features.iter_mut().find(|f| f["uid"] == sketch).unwrap();
+    assert!(def["plane"]["placed"].is_object(), "{def}");
+    def["plane"].as_object_mut().unwrap().remove("placed");
+    let mut doc = Document::from_json(&saved.to_string(), MockKernel::default()).unwrap();
+    doc.recompute();
+    assert!(same_frame(&sketch_frame(&doc, sketch), &frame));
+    run(
+        &mut doc,
+        json!({"cmd": "reorient_design", "axis": "z", "degrees": 90}),
+    );
+    let turn = Turn::about(TurnAxis::Z, 1);
+    assert!(same_frame(&sketch_frame(&doc, sketch), &turn.frame(&frame)));
+    let FeatureDef::Sketch(def) = &entry(&doc, sketch).def else {
+        panic!("a sketch");
+    };
+    assert_eq!(def.plane.placed(), None, "the turn stores no placed frame");
     assert!(
         def.frame.is_some(),
         "an own frame turns it back onto the design"
     );
-    let features: Vec<String> = doc.features().map(|f| f.name.clone()).collect();
-    assert!(features.contains(&"Sketch3".to_owned()));
 }
 
 #[test]

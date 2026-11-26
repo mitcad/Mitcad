@@ -403,6 +403,12 @@ struct DocumentSnapshot {
   // object.
   QJsonObject motionStudy(const QString& name) const;
   QJsonObject contactSet(const QString& name) const;
+  // The bodies at the marker each feature made or was the last to change
+  // (mitcad#2427: the History list's eye of a feature row), by feature
+  // uid: a body under the feature its uid names (`F4` of `F4.b0`, the one
+  // that made it) and under its `lastFeature` when that is another one;
+  // each list in the bodies' uid order.
+  QHash<QString, QStringList> bodiesByFeature() const;
 };
 
 // The icon (app/icons) of a feature type in the timeline and the browser.

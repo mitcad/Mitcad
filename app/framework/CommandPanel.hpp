@@ -36,6 +36,7 @@ namespace mitcad {
 class BusyMark;
 class CommandMessage;
 class CutTargetsPanel;
+class ListLineLayout;
 class NoteRow;
 class PickHoverWatch;
 class ResultRows;
@@ -192,6 +193,8 @@ private:
     QPushButton* add = nullptr;
     std::vector<QWidget*> frames;
     std::vector<QToolButton*> removes;
+    // A list of values only: each row's line (ListLineLayout, mitcad#2421).
+    std::vector<ListLineLayout*> valueLines;
     int built = -1;
   };
 

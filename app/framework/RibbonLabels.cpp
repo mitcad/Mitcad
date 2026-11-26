@@ -56,6 +56,7 @@ const std::pair<const char*, const char*> kShortLabels[] = {
     {"sketch.cancel", QT_TRANSLATE_NOOP("RibbonLabel", "Cancel")},
     // Drawing and Cut Sheet
     {"drawing.close", QT_TRANSLATE_NOOP("RibbonLabel", "Close")},
+    {"drawing.flat_pattern_view", QT_TRANSLATE_NOOP("RibbonLabel", "Flat View")},
     {"drawing.projected_view", QT_TRANSLATE_NOOP("RibbonLabel", "Projected")},
     {"drawing.section_view", QT_TRANSLATE_NOOP("RibbonLabel", "Section")},
     {"drawing.detail_view", QT_TRANSLATE_NOOP("RibbonLabel", "Detail")},

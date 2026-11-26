@@ -409,6 +409,9 @@ struct InputDef {
   // take with the pick. Picks stay the item clicked.
   SelectFilter chainKinds;
   QString chainCheck;
+  // Set: the chain is shown only while it says so as well (mitcad#2438:
+  // Press Pull's faces continued Straight or Along the Walls take no chain).
+  std::function<bool(const CommandState&)> chainWhen;
   // What it takes now, following the other inputs (mitcad#394: BUILD's
   // planes and other faces only in a ground placement, a profile's faces
   // otherwise): the kinds (within `filter`) and a test with the state,
@@ -886,9 +889,11 @@ struct InputDef {
     ghosts = std::move(named);
     return *this;
   }
-  InputDef& withHoverChain(SelectFilter kinds, const QString& check) {
+  InputDef& withHoverChain(SelectFilter kinds, const QString& check,
+                           std::function<bool(const CommandState&)> when = {}) {
     chainKinds = kinds;
     chainCheck = check;
+    chainWhen = std::move(when);
     return *this;
   }
   InputDef& withChoices(std::function<QVector<QPair<QString, QString>>(const CommandState&)> options) {

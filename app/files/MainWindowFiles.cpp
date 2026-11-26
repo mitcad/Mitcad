@@ -26,6 +26,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QDockWidget>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -58,6 +59,7 @@
 #include "../browser/DocumentSnapshot.hpp"
 #include "../framework/AppSettings.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/GlassCard.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/IdleCall.hpp"
 #include "../framework/Json.hpp"
@@ -406,6 +408,9 @@ void MainWindow::registerFileCommands() {
   // Print… (mitcad#1089, printing/MainWindowPaperPrint.cpp): the drawing,
   // the BUILD lists or the open sketch on paper.
   m_registry->add(paperPrintCommand());
+  // Drawing Book… (mitcad#2448, printing/MainWindowDrawingBook.cpp): drawings
+  // of the design and of its linked designs printed as one job.
+  m_registry->add(drawingBookCommand());
   // A drawing kept in the design (mitcad#707, drawings/MainWindowDrawings.cpp):
   // in the root's Drawings folder, opened at once; with bodies or
   // occurrences selected, a drawing of them (mitcad#2399).
@@ -538,6 +543,7 @@ void MainWindow::prepareFileMenuActions() {
       {"file.create_drawing", tr("Create Dra&wing…")},
       {"file.export_drawing", tr("Export &Drawing…")},
       {"file.print", tr("Prin&t…")},
+      {"file.drawing_book", tr("Drawing &Book…")},
       {"file.recover", tr("Recover Desi&gns…")},
       {"file.exit", tr("E&xit")}};
   for (const auto& [id, text] : texts) {
@@ -929,24 +935,125 @@ void MainWindow::openDroppedNow(const QStringList& paths, std::optional<QPointF>
     }
     if (!designs.isEmpty()) {
       // The first at the point of the face under the drop, its Z along the
-      // face's normal; at the origin over empty space. The view's point is
-      // the design's; the component goes into the active component, placed
-      // in its coordinates.
-      QJsonValue at;
-      if (const std::optional<std::pair<gp_Pnt, gp_Dir>> hit = render::surfaceAt(*m_viewer, *onView)) {
-        gp_Trsf active;
-        try {
-          active = activePlacement(queryObject({{QStringLiteral("query"), QStringLiteral("components")}}));
-        } catch (const std::exception& e) {
-          qWarning().noquote() << QStringLiteral("Import into this design: the active component's placement not "
-                                                 "known: %1")
-                                      .arg(errorText(e));
-        }
-        at = dropPlacement(hit->first, hit->second, active);
-      }
-      importDesignsIntoDesign(designs, false, at);
+      // face's normal; at the origin over empty space.
+      importDesignsIntoDesign(designs, false, dropTransform(*onView));
     }
   }
+}
+
+QJsonValue MainWindow::dropTransform(const QPointF& onView) {
+  // The view's point is the design's; the component goes into the active
+  // component, placed in its coordinates.
+  const std::optional<std::pair<gp_Pnt, gp_Dir>> hit = render::surfaceAt(*m_viewer, onView);
+  if (!hit) {
+    return QJsonValue();
+  }
+  gp_Trsf active;
+  try {
+    active = activePlacement(queryObject({{QStringLiteral("query"), QStringLiteral("components")}}));
+  } catch (const std::exception& e) {
+    qWarning().noquote() << QStringLiteral("Drop on the 3D view: the active component's placement not known: %1")
+                                .arg(errorText(e));
+  }
+  return dropPlacement(hit->first, hit->second, active);
+}
+
+// ---------------------------------------------------------------------------
+// A design of the Projects panel dragged onto the 3D view (mitcad#2428)
+
+bool MainWindow::viewTakesProjectDesign(const QPoint& global) const {
+  if (m_viewer == nullptr || !m_viewer->isVisible() || startPageShown()) {
+    return false;
+  }
+  if (!QRectF(m_viewer->rect()).contains(QPointF(m_viewer->mapFromGlobal(global)))) {
+    return false;
+  }
+  // Not where a card of the Floating layout (the Projects card itself, the
+  // Browser, a command's panel; a window of its own or a widget over the
+  // view) or a floating dock is over the view.
+  const auto covers = [&global](const QWidget* over) {
+    return over->isVisible() && !over->testAttribute(Qt::WA_TransparentForMouseEvents) &&
+           QRect(over->mapToGlobal(QPoint(0, 0)), over->size()).contains(global);
+  };
+  const QList<GlassCard*> cards = findChildren<GlassCard*>();
+  const QList<QDockWidget*> docks = findChildren<QDockWidget*>();
+  return std::none_of(cards.cbegin(), cards.cend(), covers) &&
+         std::none_of(docks.cbegin(), docks.cend(),
+                      [&covers](const QDockWidget* dock) { return dock->isFloating() && covers(dock); });
+}
+
+void MainWindow::dropProjectDesign(const QString& path, const QPoint& global) {
+  const QString file = QFileInfo(path).fileName();
+  const QPointF at = m_viewer->mapFromGlobal(QPointF(global));
+  qInfo().noquote() << QStringLiteral("Projects panel: %1 dropped on the 3D view at %2,%3")
+                           .arg(file)
+                           .arg(qRound(at.x()))
+                           .arg(qRound(at.y()));
+  // Refused at once, whatever is open: waiting would not change it.
+  const QString refusal = insertRefusal(path);
+  if (!refusal.isEmpty()) {
+    showStatus(refusal, NoticeLevel::Warning);
+    return;
+  }
+  Arrival arrival;
+  arrival.paths = {path};
+  arrival.onView = at;
+  arrival.project = true;
+  // Later, so that the drag ends first (the panel still has the mouse).
+  afterEventWhenIdle(*this, this, [this, arrival] { arriveProjectDesign(arrival); });
+}
+
+void MainWindow::insertDroppedDesign(const QString& path, std::optional<QPointF> onView) {
+  leaveStartPage();
+  const QJsonValue at = onView && m_viewer != nullptr ? dropTransform(*onView) : QJsonValue();
+  if (at.isObject()) {
+    const QJsonArray point = at.toObject().value(QStringLiteral("translation")).toArray();
+    qInfo().noquote() << QStringLiteral("Projects panel: %1 goes in at the face under the drop, at %2, %3, %4 mm")
+                             .arg(QFileInfo(path).fileName())
+                             .arg(point.at(0).toDouble(), 0, 'f', 3)
+                             .arg(point.at(1).toDouble(), 0, 'f', 3)
+                             .arg(point.at(2).toDouble(), 0, 'f', 3);
+  } else {
+    qInfo().noquote() << QStringLiteral("Projects panel: %1 goes in at the origin (no face under the drop)")
+                             .arg(QFileInfo(path).fileName());
+  }
+  insertComponent(path, at);
+}
+
+QString MainWindow::insertRefusal(const QString& path) {
+  const QString absolute = QFileInfo(path).absoluteFilePath();
+  const QString file = QFileInfo(path).fileName();
+  if (m_filePath.isEmpty()) {
+    return QString(); // a design never saved has no file to link back to
+  }
+  QJsonObject check;
+  try {
+    check = queryObject({{QStringLiteral("query"), QStringLiteral("link_check")},
+                         {QStringLiteral("path"), absolute},
+                         {QStringLiteral("base"), QFileInfo(m_filePath).absolutePath()},
+                         {QStringLiteral("design"), QFileInfo(m_filePath).absoluteFilePath()}});
+  } catch (const std::exception& e) {
+    qWarning().noquote() << QStringLiteral("Insert Component: the links back not checked: %1").arg(errorText(e));
+    return QString();
+  }
+  const QJsonArray back = check.value(QStringLiteral("back")).toArray();
+  if (back.isEmpty()) {
+    return QString();
+  }
+  QStringList chain;
+  for (const QJsonValue& value : back) {
+    chain << QFileInfo(value.toString()).fileName();
+  }
+  qInfo().noquote() << QStringLiteral("Insert Component refused: %1 links back to the open design: %2")
+                           .arg(file, chain.join(QStringLiteral(" > ")));
+  if (back.size() == 1) {
+    return tr("%1 is this design: a design cannot be a component of itself.").arg(file);
+  }
+  if (back.size() == 2) {
+    return tr("%1 links this design, so this design would become a component of itself.").arg(file);
+  }
+  return tr("%1 links this design through %2, so this design would become a component of itself.")
+      .arg(file, chain.mid(1, chain.size() - 2).join(QStringLiteral(", ")));
 }
 
 // ---------------------------------------------------------------------------
@@ -1598,7 +1705,7 @@ void MainWindow::insertDxf() {
   }
 }
 
-void MainWindow::insertComponent(const QString& given) {
+void MainWindow::insertComponent(const QString& given, const QJsonValue& at) {
   if (!canChangeModel()) {
     return;
   }
@@ -1629,6 +1736,12 @@ void MainWindow::insertComponent(const QString& given) {
       return;
     }
     rememberDialogFolder(DialogGroup::Import, path);
+  }
+  // This design itself, or a design that links it, would make the design
+  // a component of itself (mitcad#2428): refused in words, nothing asked.
+  if (const QString refusal = insertRefusal(path); !refusal.isEmpty()) {
+    showStatus(refusal, NoticeLevel::Warning);
+    return;
   }
   const QString absolute = QFileInfo(path).absoluteFilePath();
   const QString base = m_filePath.isEmpty() ? QString() : QFileInfo(m_filePath).absolutePath();
@@ -1680,6 +1793,10 @@ void MainWindow::insertComponent(const QString& given) {
   if (copyIntoProject) {
     command.insert(QStringLiteral("copy_into_project"), true);
   }
+  // Where it was dropped (mitcad#2428).
+  if (at.isObject()) {
+    command.insert(QStringLiteral("transform"), at);
+  }
   if (chooseParts) {
     // Listed from the file asked for, before anything is copied: the copy
     // into the project (made by insert_component) is that file's text, with
@@ -1729,7 +1846,10 @@ void MainWindow::insertComponent(const QString& given) {
                      .arg(QFileInfo(path).fileName()),
                  NoticeLevel::Information);
     }
-    m_viewer->fitAll();
+    // A drop on a face stays where the user looked (mitcad#2428).
+    if (!at.isObject()) {
+      m_viewer->fitAll();
+    }
   }
 }
 

@@ -13,6 +13,8 @@ far edge (mitcad#121). Later work on the same blends is in
   failed on (mitcad#121).
 - **0050 to 0077** continue them: roundings whose contacts leave their faces
   near the ends of the spine or part of the way along it.
+- **2365** cuts 0055's blend over a hole also where the hole's wall has its
+  seam under the blend.
 
 ## 0010 to 0019: edge overflow
 
@@ -243,8 +245,8 @@ rim near the part's side) runs on over it, and the face beyond cuts it: a
 piece of the blend whose side on that face is its intersection with the face
 beyond fills the gap between the pieces of `SplitKPart`
 (`PerformSetOfKPart`). Gaps where the face beyond reaches over the
-neighbouring pieces too, or where one of its edges (a seam) ends under the
-blend, keep OCCT's handling. Before, the blend failed, or rolled on the
+neighbouring pieces too, or where one of its edges ends under the blend,
+keep OCCT's handling (a seam that does: 2365, below). Before, the blend failed, or rolled on the
 hole's edge. A rounding whose contact runs into a face that rises from its
 face (their edge concave: a boss or a lug standing on it, not a hole or a
 cut-out) keeps OCCT's handling too (`ChFi3d_RisesFromFace`, mitcad#1900): the
@@ -407,9 +409,33 @@ of the faces at the end and came out invalid. A chamfer whose walk ran on
 (18 when cut), and a rounding along its edges failed (a design of the corpus,
 5ef2dbd5's Fillet28).
 
+### 2365-chfi3d-kpart-cut-across-the-seam-of-a-holes-wall-under-the-blend
+
+0055's cut also where the wall of the hole the contact passes over has its
+seam running up from its rim under the blend (mitcad#2365, GitHub
+mitcad/Mitcad#635: a block's end edges rounded with 2 along a chamfer
+through which a counterbore comes 1 mm from each end face, the two
+counterbores' seams on the same side). 0055 refuses a piece with a vertex
+of the face beyond under the blend, so at one end the gap was walked from
+the end face over to the counterbore's wall (1.22 mm3 more material, the
+end face's edge with the rounding bent down beside the hole, two more
+faces), while at the other end the wall cut the blend. The last resort of
+`ChFi3d_FillKPartGaps` for a gap whose two ends lie on one face beyond, the
+chain round from that face back to it (`ChFi3d_KPartCutChain`, Round), now
+takes the face's own seam as the edge back to it: the face twice, the seam
+crossed between them and cut there, and the vertex check no longer refuses
+it (the seam is a cut edge). `ChFi3d_KPartChainPieces` takes such a
+crossing for the piece before it on the seam's side nearest that piece's
+start (its p-curve and orientation in the face), for the piece after it on
+the side nearest that piece's end. Both ends then round alike.
+
 ## Reports and tests
 
 - 0010 to 0019 and 0050 to 0077: mitcad#121 and the tests in
   `geometry/tests/test_fillet_overflow.cpp` (for 0075 to 0077 also
   `geometry/tests/test_fillet_rolling_ball.cpp`), which use OCCT's fillet
   alone where they can.
+- 2365: mitcad#2365 (GitHub mitcad/Mitcad#635),
+  `geometry/tests/port/p2365-counterbore-seam-under-rounding.cpp` (OCCT's
+  fillet alone) and, on the reported design, the ctest
+  `cli.fillet_counterbore_seam_reported`.

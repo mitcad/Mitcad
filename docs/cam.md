@@ -153,8 +153,10 @@ are listed again under [Open questions](#open-questions).
    lathes: the lathe machine model, facing, roughing and finishing of
    outside diameters and bores, grooving, parting off and threading from
    the bodies' revolved profile, constant surface speed under a spindle
-   limit, the Fanuc turning dialect with G71, G70 and G76, the program
-   check and the simulation of the turned section ([Turning](#turning)).
+   limit, the Fanuc turning dialect with G71, G70 and G76 and the
+   LinuxCNC one longhand (mitcad#2425, GitHub mitcad/Mitcad#669), the
+   program check and the simulation of the turned section
+   ([Turning](#turning)).
    Then live tools on the C axis (mitcad#2067: milling and drilling on
    the face and the diameter, the C axis indexed and clamped, G12.1
    polar and G7.1 cylindrical interpolation, the C-axis mode and brake
@@ -710,7 +712,9 @@ shared two-operation program in `post/tests.rs`.
   commands, which the test lists (`T M6`, `G43 H`, `G64 P`, `%`, `M291`,
   MillenniumOS's `M4000`, `M3.9`, `M5.9`, `G27`). The simulators are GPL
   programs run apart, never linked, and the tests are skipped without
-  them.
+  them. The LinuxCNC turning dialect's programs run through LinuxCNC's
+  own interpreter the same way (ctest `core.cam_linuxcnc_sim`,
+  `MITCAD_LINUXCNC_SIM`, mitcad#2425; [Turning](#turning)).
 - **Stock removal** on a height map (phase 3, [Stock
   simulation](#stock-simulation)): what is left against the part (left
   material, gouges into the part beyond a tolerance), shown in the view
@@ -847,7 +851,10 @@ lathe".
 - **The profile** (`TurnPart`): the setup's bodies cut by the plane
   through the axis, its half on the work X side: the outside from the
   face to the back and the bore from its mouth, chains of lines and arcs.
-  A tool cutting towards the chuck follows the **envelope**: grooves are
+  The section is read with the radius right and Z up, the profile drawn
+  with Z right and X up, so every arc's bulge changes sign on the way:
+  a concave fillet stays concave, a convex round convex (GitHub
+  mitcad/Mitcad#668). A tool cutting towards the chuck follows the **envelope**: grooves are
   bridged at their higher side (grooving cuts them), a wall that leans
   back towards the face becomes a shoulder. The tool's path is the
   envelope offset by the nose radius (cavalier_contours, arcs kept), moved
@@ -878,16 +885,29 @@ lathe".
   and threading as the two-block G76 (when the insert's angle is one the
   control takes); otherwise the moves (G32 for threads).
 
-| | Fanuc (turning) |
-|---|---|
-| Id | `fanuc_turning` (Series 0i-TF, 31i-B, G-code system A) |
-| Header | `%`, `O1000 (NAME)`, `G21 G18 G40 G99`, `G54` |
-| Tool change | `G0 X Z` (the change position), `T0101` (station and offset) |
-| Spindle | `G50 S` limit, `G96 S M3` (m/min) or `G97 S M3` (rpm) |
-| Coolant | `M8`, `M9` |
-| Cycles | `G71 U R` / `G71 P Q U W F`, `G70 P Q`, `G76 P(m)(r)(a) Q R` / `G76 X Z P Q F` |
-| End | `M9`, the change position, `M5`, `M30`, `%` |
-| File | `.nc` |
+| | Fanuc (turning) | LinuxCNC (turning) |
+|---|---|---|
+| Id | `fanuc_turning` (Series 0i-TF, 31i-B, G-code system A) | `linuxcnc_turning` (its interpreter as in 2.9, mitcad#2425) |
+| Header | `%`, `O1000 (NAME)`, `G21 G18 G40 G99`, `G54` | `%` (no program number: an O word calls a subroutine there), `G21 G18 G7 G90 G91.1 G40 G80 G95`, `G64 P` (the arc tolerance), `G54` |
+| X | a diameter | a diameter in diameter mode (G7); I stays a radius |
+| Tool change | `G0 X Z` (the change position), `T0101` (station and offset) | `G0 X Z`, `T1 M6 G43` (the tool table's X and Z offsets of the station's tool), `T1 M6 G43 H11` for a tool with an offset number of its own, `T1 M6` alone without the tool length offset in the settings (an M6 remapped to apply the offset itself); M6 stops the spindle there, so it starts again after each change |
+| Spindle | `G50 S` limit, `G96 S M3` (m/min) or `G97 S M3` (rpm) | `G96 D S M3` (the limit in its block, m/min or ft/min) or `G97 S M3` |
+| Feeds | per revolution `G99` (per minute `G98` for live tools) | per revolution `G95` |
+| Coolant | `M8`, `M9` | `M8`, mist `M7`, `M9` |
+| Cycles | `G71 U R` / `G71 P Q U W F`, `G70 P Q`, `G76 P(m)(r)(a) Q R` / `G76 X Z P Q F` | none: every operation longhand, also with `canned_cycles` (the program says so in a comment) |
+| Threads | `G32 Z F` (or G76) | `G33 Z K` passes, K the lead along the move in every block, no F |
+| End | `M9`, the change position, `M5`, `M30`, `%` | `M9`, the change position, `M5`, `M2`, `%` |
+| File | `.nc` | `.ngc` |
+| Not written | | live tools on a C axis, the sub-spindle's hand-over, air blast, probing the work zero: refused in words |
+
+The LinuxCNC dialect writes longhand on purpose: its controls read
+programs of any length, and a program of moves is what LinuxCNC lathe
+users asked for (GitHub mitcad/Mitcad#669); its own G71, G70 and G76
+take other words than a Fanuc control's and are not written. The work
+zero's X is on the spindle axis (the constant surface speed counts from
+it), and the change position is reached with the tool's offset still
+active from the program before: the program does not cancel it (G49) at
+its start.
 
 - **The program check** (`check_program`): the written program read back
   as a Fanuc lathe control reads it: every length with its decimal point
@@ -896,7 +916,13 @@ lathe".
   speed, the cycles' blocks there and (for G71) running one way in X with
   the first in X alone, no word it does not know; the moves read back (X
   halved) and the cycles with their lines. `cam_post` refuses a program
-  it does not pass.
+  it does not pass. A LinuxCNC program is read as LinuxCNC reads it
+  (`check_program_as` with `Control::LinuxCnc`, mitcad#2425): X a
+  diameter only after G7 (G8 refused), G95 before a feed (G98 and G99,
+  its cycles' return levels, refused), D with G96, G33 with K and no F
+  and only with the spindle turning, M6 stopping the spindle, G43, G49,
+  G61, G64 and G91.1 taken, and no G32, G50, G70, G71, G76, G28, G83,
+  G87, O word, C, Y or other axis.
 - **The lathe check** (`check_lathe`): the station on the turret, the
   spindle's speed or limit within the spindle's, a feed (per revolution
   times the speed where the tool is) within the machine's, the travel, the
@@ -918,7 +944,31 @@ lathe".
   cycles and with line numbers, the program check (and the moves read
   back within the program's digits), the lathe check (a chuck the
   parting blade runs into) and the simulation (no rapid into the stock,
-  no cut into the part).
+  no cut into the part). The LinuxCNC dialect (`linuxcnc_tests.rs`): the
+  exact program of a reference part (facing, a roughing pass, finishing
+  with a corner radius, a thread in two G33 passes, a tool on an offset
+  number of its own) read back move for move, inches with line numbers
+  and a remapped M6, canned cycles asked for and written as moves, a
+  tapered thread's K, the refusals, and the reading refusing a Fanuc
+  control's codes.
+- **LinuxCNC's own interpreter** (`core/cam/tests/linuxcnc_lathe_sim.rs`,
+  ctest `core.cam_linuxcnc_sim`, `MITCAD_LINUXCNC_SIM`, mitcad#2425):
+  LinuxCNC's stand-alone interpreter `rs274` (its rs274ngc interpreter
+  with the canon layer of `src/emc/sai`: `bin/rs274` of a `uspace` build
+  of LinuxCNC's source, or `rs274` of its `linuxcnc-uspace` package; a
+  GPL program run apart, never linked) runs the shaft above posted in
+  millimetres, and in inches with line numbers, canned cycles asked for
+  and a remapped M6, with a tool table whose tools have X and Z offsets
+  of their own. Every block must be taken, and its canonical calls must
+  match the program: each motion (rapid, feed, arc with its centre and
+  sense, spindle-synchronised feed with its K) in order, X a radius and
+  Z within the G-code's digits, at each cut feeds per revolution with
+  the operation's feed, the spindle turning in its sense at its surface
+  speed and limit or its speed, the coolant, the ZX plane and path
+  blending within the arc tolerance; each tool change's tool and G43's
+  offsets of that tool or of its offset number; the end at the change
+  position. A program the interpreter refuses fails the test. Skipped
+  without the variable.
 
 ### Live tools on the C axis
 
@@ -1199,7 +1249,8 @@ body, its moving zones and a Z-only control".
 - **The zones moving with it** (`SubSpindle::zones`): boxes as the
   machine's zones, X the machine's (a radius), Z measured from its jaws'
   face (positive away from the main spindle); like a lathe's zones they
-  are entered and checked in X and Z, their Y kept.
+  are entered and checked in X and Z, their Y kept (on a lathe with a Y
+  axis their Y too since mitcad#2412).
 - **Where it is as each operation cuts** (`check::sub_face_at`): for its
   own operations where the hand-over left it (its jaws' face at the grip
   plus the withdrawal), for the parting off it holds the part through
@@ -1288,12 +1339,70 @@ drawn in Simulate, the turret's body against it, its own profile".
   `core/model-tests/cam/src/sub_turret_tests.rs`,
   `app/tests/cam_sub_drawn.cpp` and the UI test
   `tools/ui-cam-mill-turn-sub-test.sh` with its Windows and macOS twins.
-- **Not yet:** the zones moving with it are entered and checked in X and
-  Z only (their Y kept, not checked, also on a lathe with a Y axis); the
-  turret's body is one box for every station and is checked against the
-  sub-spindle only, not against the main chuck or the machine's fixed
-  zones (the tool's controlled point is checked there); *Simulate* draws
-  neither the fixed zones nor the moving ones, nor the turret.
+- **Done since** (mitcad#2412): the zones and the turret drawn in
+  *Simulate*, the turret's body against the main chuck and the fixed
+  zones, a body per station, the zones' Y on a lathe with a Y axis
+  ([The zones and the turret drawn, the turret against the main chuck and
+  the fixed zones](#the-zones-and-the-turret-drawn-the-turret-against-the-main-chuck-and-the-fixed-zones)).
+
+### The zones and the turret drawn, the turret against the main chuck and the fixed zones
+
+What mitcad#2405 left out (mitcad#2412). The API in
+[commands.md](../core/model-api/src/commands.md), "CAM: the zones and the
+turret drawn in Simulate, the turret against the main chuck and the fixed
+zones".
+
+- **The turret's body against the main chuck and the fixed zones**
+  (`turning::turret_hits`, in `check_lathe`): at each of the tool's points
+  along its moves (half a millimetre apart; the sub-spindle's operations
+  where it holds the part, pulled back), the box round the tool against
+  the main chuck (no part of it behind the chuck's jaws' face, the
+  setup's `chuck_gap`, within the chuck's diameter: its least distance
+  from the spindle axis, with the machine's Y of a live tool off the
+  axis) and against the machine's fixed zones (the box's X and Z
+  overlapping the zone's, the machine's Z the work zero's machine place
+  on); one finding per operation and part in words, after the tool's
+  ("Turn Facing 1: the turret runs into the chuck.", "Turn Facing 1: the
+  turret runs into Tailstock."), its place the tool's where the view draws
+  it. `cam_simulate` gives the same as `turret_hits` (with the setup's
+  work zero on the machine), which *Simulate* counts in its summary and
+  shows as its warning when nothing else is found first.
+- **A body per station** (`Lathe::station_bodies`, `StationBody`): a
+  station's own box in place of `turret_body` for the tools at it
+  (`Lathe::turret_body_at`), each station on the turret and once; checked
+  against everything the turret's body is.
+- **The zones' Y on a lathe with a Y axis**: the fixed zones and those
+  moving with the sub-spindle are checked in Y too, by the tool's point
+  and by the turret's body, at the machine's Y (the live tools' Y axis,
+  turned round where the sub-spindle holds the part; turning at Y 0). A
+  zone whose Y bounds are equal is not limited in Y: that is how a lathe's
+  zones were entered before they had a Y, and how the zone dialog keeps
+  one whose Y is left empty. On a lathe without a Y axis Y is not checked,
+  as before.
+- **Drawn in Simulate:** `cam_simulate` gives per operation the zones as
+  the view draws them (`turning::zones_shown`: the fixed ones in the main
+  spindle's work coordinates with the work zero's machine place, none
+  without it; those moving with the sub-spindle at its jaws' face as
+  `sub_face_shown` has it; for the sub-spindle's operations, which the
+  view draws on the part where it was, both as far nearer the main spindle
+  as the hand-over pulled the part back; Y on a lathe with a Y axis, else
+  0) and the turret's body (`turning::turret_shown`: the tool's station's
+  box, X along the machine's X in the view, Z along the spindle axis).
+  *Simulate* draws them with the sub-spindle in the edges' color at the
+  slider's operation: a zone as a box (a rectangle in the turret's plane
+  when it has no depth in Y), the turret's body as a rectangle round the
+  tool's point, along the view's X for turning, along the plane's C for a
+  live tool on a plane, away from the spindle axis through the tool for
+  one on the face or the diameter.
+- **Tests:** `core/cam/src/turning/turret_tests.rs`,
+  `core/model-tests/cam/src/turret_tests.rs`,
+  `app/tests/cam_machine_drawn.cpp` and the UI test
+  `tools/ui-cam-mill-turn-sub-test.sh` with its Windows and macOS twins.
+- **Not yet:** the turret's body is a box in X and Z at the tool's Y (no
+  depth in Y, not the turret's real shape); *Simulate* draws the zones
+  where they are with the C axis at 0: for a live tool at another C the
+  view, which keeps the part still, does not turn them round the spindle
+  axis (the turret's body round the tool is turned).
 
 ## API
 

@@ -24,9 +24,14 @@
 //! and its own C axis on. On a control that mirrors only Z there
 //! (`MillTurn::sub_mirror_z_only`, mitcad#2392) the live tools' Y and C are
 //! written turned round, their arcs across Y the other way.
+//!
+//! Two dialects (mitcad#2425): Fanuc lathe controls ([`FanucTurning`]) and
+//! LinuxCNC on a lathe ([`LinuxCncTurning`]), which writes every operation
+//! longhand, its threads as G33 moves.
 
 use serde::Serialize;
 
+use super::check::Control;
 use super::tool::TurningTool;
 use super::{HandOver, PXZ, TurnCycle, TurnMove, TurnSpindle, TurningProgram};
 use crate::CamError;
@@ -54,6 +59,14 @@ pub struct TurnOutput {
     z: Option<String>,
     feed: Option<String>,
     at: Option<PXZ>,
+    // The dialect's threading move and the word of its lead (mitcad#2425):
+    // G32 with a modal F (Fanuc), or G33 with K in every block (LinuxCNC).
+    thread_code: &'static str,
+    lead_word: char,
+    /// The settings' tool length offset after a tool change (`None`: the
+    /// dialect's default) and how far the control may blend corners (mm).
+    pub tool_length_offset: Option<bool>,
+    pub arc_tolerance: f64,
 }
 
 impl TurnOutput {
@@ -70,7 +83,19 @@ impl TurnOutput {
             z: None,
             feed: None,
             at: None,
+            thread_code: "G32",
+            lead_word: 'F',
+            tool_length_offset: settings.tool_length_offset,
+            arc_tolerance: settings.arc_tolerance,
         }
+    }
+
+    /// Writes threading moves as `code` with their lead in `word`: `F`
+    /// modal as other feeds, any other letter in every block, as the
+    /// distance along the move per revolution (mitcad#2425).
+    pub fn set_thread_words(&mut self, code: &'static str, word: char) {
+        self.thread_code = code;
+        self.lead_word = word;
     }
 
     /// A line of code (numbered when asked).
@@ -207,7 +232,10 @@ impl TurnOutput {
             TurnMove::Arc { cw, feed, .. } => {
                 (if cw { "G2" } else { "G3" }, Some(self.per_rev(feed)))
             }
-            TurnMove::Thread { lead, .. } => ("G32", Some(self.per_rev(lead))),
+            TurnMove::Thread { lead, .. } if self.lead_word == 'F' => {
+                (self.thread_code, Some(self.per_rev(lead)))
+            }
+            TurnMove::Thread { .. } => (self.thread_code, None),
         };
         let moved_x = self.x.as_deref() != Some(x.as_str());
         let moved_z = self.z.as_deref() != Some(z.as_str());
@@ -232,6 +260,22 @@ impl TurnOutput {
             if moved_z {
                 words.push(format!("Z{z}"));
             }
+        }
+        // A lead in every block (LinuxCNC's G33 K, mitcad#2425): the
+        // distance along the move per revolution, the lead being along the
+        // longer axis.
+        if let TurnMove::Thread { lead, .. } = *m
+            && self.lead_word != 'F'
+        {
+            let from = self.at.unwrap_or(to);
+            let (dx, dz) = (to[0] - from[0], to[1] - from[1]);
+            let major = dx.abs().max(dz.abs());
+            let along = if major > 1e-12 {
+                lead * dx.hypot(dz) / major
+            } else {
+                lead
+            };
+            words.push(format!("{}{}", self.lead_word, self.per_rev(along)));
         }
         if let Some(f) = feed
             && self.feed.as_deref() != Some(f.as_str())
@@ -369,6 +413,26 @@ pub trait TurningPost {
     /// when it has none (the moves are written).
     fn drill_cycle_code(&self, _diameter: bool) -> Option<&'static str> {
         None
+    }
+    // Other controls than Fanuc's (mitcad#2425).
+    /// The threading move's code and the word of its lead: `F`, modal as
+    /// the feeds (G32 F), or another letter written in every block.
+    fn thread_words(&self) -> (&'static str, char) {
+        ("G32", 'F')
+    }
+    /// How the program is read back to check it.
+    fn control(&self) -> Control {
+        Control::Fanuc
+    }
+    /// Whether it writes the sub-spindle's hand-over and the operations
+    /// on the part's back.
+    fn hands_over(&self) -> bool {
+        true
+    }
+    /// How the program's list of tools names a tool: its station and
+    /// offset as the tool change writes them.
+    fn tool_words(&self, tool: &TurningTool) -> String {
+        format!("T{:02}{:02}", tool.number, tool.offset_number())
     }
 }
 
@@ -546,9 +610,150 @@ impl TurningPost for FanucTurning {
     }
 }
 
+/// LinuxCNC on a lathe (mitcad#2425; its interpreter as in 2.9), every
+/// operation written longhand:
+///
+/// - Between `%` lines, without a program number (an O word calls a
+///   subroutine there). The header sets the units, the ZX plane (G18),
+///   diameter mode (G7: X is a diameter, I stays a radius), absolute
+///   coordinates with incremental arc centres (G90 G91.1), no nose radius
+///   compensation (G40, the toolpaths compensate it), no cycle (G80),
+///   feeds per revolution (G95), corners blended within the arc tolerance
+///   (G64 P) and the work offset. It ends with M2.
+/// - Facing, roughing, finishing, grooving and parting off are their
+///   moves (G0 to G3): no stock removal or finishing cycle, even when the
+///   settings ask for canned cycles (the program says so in a comment).
+///   Threads are G33 moves, the lead as K in every block (along the move,
+///   as LinuxCNC takes it), each pass from a rapid.
+/// - The tool change: `T<station> M6`, then `G43` (the tool table's X and
+///   Z offsets of that tool) or `G43 H<offset>` for a tool with an offset
+///   number of its own; without the tool length offset in the settings
+///   only `T<station> M6`, for a lathe whose M6 is remapped to apply the
+///   offset itself. M6 stops the spindle there, so it is started again
+///   after each change. The tool table holds a tool per turret station.
+/// - The spindle: a constant surface speed with its limit in one block
+///   (`G96 D<rpm> S<m/min> M3`, ft/min in inches) or a constant speed
+///   (`G97 S<rpm> M3`); coolant flood M8, mist M7, off M9.
+/// - What it does not write is refused in words: live tools on a C axis,
+///   the sub-spindle's hand-over, air blast, probing the work zero.
+pub struct LinuxCncTurning;
+
+impl TurningPost for LinuxCncTurning {
+    fn id(&self) -> &'static str {
+        "linuxcnc_turning"
+    }
+
+    fn label(&self) -> &'static str {
+        "LinuxCNC (turning)"
+    }
+
+    fn extension(&self) -> &'static str {
+        "ngc"
+    }
+
+    fn start(&self, out: &mut TurnOutput, _program: &TurningProgram) {
+        out.raw("%");
+    }
+
+    fn header(&self, out: &mut TurnOutput, program: &TurningProgram) {
+        out.line(format!("{} G18 G7 G90 G91.1 G40 G80 G95", out.units_code()));
+        out.line(format!("G64 P{}", out.len(out.arc_tolerance)));
+        out.line(format!("G{}", 53 + u32::from(program.work_offset)));
+    }
+
+    fn footer(&self, out: &mut TurnOutput, _program: &TurningProgram) {
+        out.line("M2");
+        out.raw("%");
+    }
+
+    fn tool_change(&self, out: &mut TurnOutput, tool: &TurningTool) {
+        let change = format!("T{} M6", tool.number);
+        if !out.tool_length_offset.unwrap_or(true) {
+            out.line(change);
+        } else if tool.offset_number() != tool.number {
+            out.line(format!("{change} G43 H{}", tool.offset_number()));
+        } else {
+            out.line(format!("{change} G43"));
+        }
+    }
+
+    // The limit goes with G96 in its block.
+    fn spindle_limit(&self, _out: &mut TurnOutput, _rpm: f64) {}
+
+    fn spindle_on(&self, out: &mut TurnOutput, spindle: &TurnSpindle, direction: SpindleDirection) {
+        let m = match direction {
+            SpindleDirection::Cw => "M3",
+            SpindleDirection::Ccw => "M4",
+        };
+        self.spindle_on_with(out, spindle, m);
+    }
+
+    fn spindle_on_with(&self, out: &mut TurnOutput, spindle: &TurnSpindle, code: &str) {
+        match *spindle {
+            TurnSpindle::Css {
+                surface_speed,
+                max_rpm,
+            } => {
+                out.line(format!(
+                    "G96 D{} S{} {code}",
+                    number(max_rpm.round(), 0),
+                    out.surface_speed(surface_speed)
+                ));
+            }
+            TurnSpindle::Rpm { rpm } => {
+                out.line(format!("G97 S{} {code}", number(rpm.round(), 0)));
+            }
+        }
+    }
+
+    fn coolant(&self, out: &mut TurnOutput, coolant: Coolant) -> Result<(), CamError> {
+        let code = match coolant {
+            Coolant::Off => "M9",
+            Coolant::Flood => "M8",
+            Coolant::Mist => "M7",
+            Coolant::Air => {
+                return Err(CamError::new(format!(
+                    "{} has flood and mist coolant here, no air blast.",
+                    self.label()
+                )));
+            }
+        };
+        out.line(code);
+        Ok(())
+    }
+
+    fn feed_per_minute(&self, out: &mut TurnOutput) {
+        out.line("G94");
+    }
+
+    fn feed_per_rev(&self, out: &mut TurnOutput) {
+        out.line("G95");
+    }
+
+    fn thread_words(&self) -> (&'static str, char) {
+        ("G33", 'K')
+    }
+
+    fn control(&self) -> Control {
+        Control::LinuxCnc
+    }
+
+    fn hands_over(&self) -> bool {
+        false
+    }
+
+    fn tool_words(&self, tool: &TurningTool) -> String {
+        if tool.offset_number() == tool.number {
+            format!("T{}", tool.number)
+        } else {
+            format!("T{} H{}", tool.number, tool.offset_number())
+        }
+    }
+}
+
 /// Every turning dialect.
 pub fn turning_dialects() -> Vec<Box<dyn TurningPost>> {
-    vec![Box::new(FanucTurning)]
+    vec![Box::new(FanucTurning), Box::new(LinuxCncTurning)]
 }
 
 /// The turning dialect with the id.
@@ -698,6 +903,16 @@ pub fn turning_post(
             dialect.label()
         )));
     }
+    // A control without the sub-spindle's codes here (mitcad#2425).
+    if let Some(first) = program.first_sub()
+        && !dialect.hands_over()
+    {
+        return Err(CamError::new(format!(
+            "{}: {} has no sub-spindle here.",
+            program.operations[first].name,
+            dialect.label()
+        )));
+    }
     let cycles = settings.canned_cycles && dialect.has_cycles();
     // Which roughing cycle each finishing cycle runs again, and the feed
     // its blocks carry (the finishing's, which only G70 uses).
@@ -721,19 +936,25 @@ pub fn turning_post(
         }
     }
     let mut out = TurnOutput::new(settings);
+    let (thread_code, lead_word) = dialect.thread_words();
+    out.set_thread_words(thread_code, lead_word);
     dialect.start(&mut out, program);
     for line in EXPERIMENTAL_NOTICE {
         out.notice(line);
     }
     out.comment(&program.name);
+    // Canned cycles asked of a control the post writes none for
+    // (mitcad#2425): the moves, and the program says so.
+    if settings.canned_cycles && !dialect.has_cycles() {
+        out.comment("Turning cycles are written as moves for this control");
+    }
     let mut seen: Vec<u32> = Vec::new();
     for op in &program.operations {
         if !seen.contains(&op.tool.number) {
             seen.push(op.tool.number);
             out.comment(&format!(
-                "T{:02}{:02} {}",
-                op.tool.number,
-                op.tool.offset_number(),
+                "{} {}",
+                dialect.tool_words(&op.tool),
                 op.tool.name
             ));
         }

@@ -1200,13 +1200,17 @@ impl Document {
             .and_then(|c| c.as_str())
             .is_some_and(|c| matches!(c, "undo" | "redo"));
         // A file's import says so when the memory guard stops it
-        // (mitcad#2032).
+        // (mitcad#2032); a sketch edit's error advises freeing memory
+        // (mitcad#2437).
         let work = match value
             .as_ref()
             .and_then(|v| v.get("cmd"))
             .and_then(|c| c.as_str())
         {
             Some("import_file") => GuardedWork::Import,
+            Some(c) if c.starts_with("sketch.") || c.starts_with("sketch3d.") => {
+                GuardedWork::Sketch
+            }
             _ => GuardedWork::Command,
         };
         // The user's preference whether a sketch hides when a feature

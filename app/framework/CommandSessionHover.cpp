@@ -327,8 +327,9 @@ void CommandSession::updateHoverChain() {
   QStringList chain;
   if (input != nullptr && item.isValid() && !item.owner.isEmpty() && !item.name.isEmpty() &&
       (item.kind == SelectKind::Edge || item.kind == SelectKind::Face) && input->chainKinds.testFlag(item.kind)) {
-    chain = !input->chainCheck.isEmpty() && m_state.checked(input->chainCheck) ? hoverChain(item)
-                                                                               : QStringList{item.name};
+    const bool chained = !input->chainCheck.isEmpty() && m_state.checked(input->chainCheck) &&
+                         (!input->chainWhen || input->chainWhen(m_state));
+    chain = chained ? hoverChain(item) : QStringList{item.name};
   }
   // The rest of the chain, the item under the mouse left to the view's own
   // hover.

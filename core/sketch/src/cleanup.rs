@@ -423,7 +423,7 @@ pub(super) fn remap_dimension(kind: &mut DimensionKind, map: &BTreeMap<EntityUid
             m(point);
             m(line);
         }
-        D::TangentDistance { circle, line } => {
+        D::TangentDistance { circle, line, .. } => {
             m(circle);
             m(line);
         }

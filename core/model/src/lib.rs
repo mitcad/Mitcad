@@ -98,7 +98,7 @@ pub use topo::{EdgeName, FaceName, RegionKey, SegmentEnd, SegmentKey, TopoName, 
 pub use transform::{Instance, PrimitiveShape, PrimitiveSpec, Transform};
 
 // Face operations (F2).
-pub use kernel::{DraftSpec, FilletSet, FilletSize, ShellSpec, ToolInput};
+pub use kernel::{DraftSpec, FilletSet, FilletSize, ShellFace, ShellSpec, ToolInput};
 // Construction geometry, analysis and body attributes (F5).
 pub use datum::{Datum, DatumAxis, DatumKind, DatumPlane, DatumPoint, OriginDatum};
 pub use document::{BodyAttributes, DatumView, DeletedAppearance, FaceAppearance};
@@ -428,7 +428,9 @@ pub use document::{
 pub mod cam;
 // Linked designs from outside the project: whether a link would be
 // followed, and the file copied into the project to link (mitcad#1719).
-pub use document::{LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project};
+pub use document::{
+    LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project, link_back,
+};
 // Form: control cages, their edits and Catmull-Clark subdivision to the
 // limit surface's patches, the crate mitcad-subdiv (mitcad#1757).
 pub use mitcad_subdiv as subdiv;
@@ -491,3 +493,6 @@ pub use document::{ExplodePart, ExplodePlacements, ExplodeState, ExplodeTrail, R
 // Edit in Place: a linked component edited inside the assembly that holds
 // it (mitcad#2321).
 pub use document::{InPlaceContext, InPlaceMode};
+// The drawing book: drawings of the design and of its linked designs
+// printed as one job (mitcad#2448).
+pub use document::{BookDrawing, BookEntry, BookSource, DrawingBook, SourceDrawing};

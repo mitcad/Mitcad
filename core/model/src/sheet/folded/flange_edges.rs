@@ -25,6 +25,14 @@
 //! (as the input sheet has them) and the corner, painted on hover
 //! (`docs/ui-conventions.md`, "What a message says").
 //!
+//! Where the rules relieve flange corners (mitcad#2342) a touching corner
+//! of two edges of one panel is opened instead (mitcad#2411, [`Opened`]):
+//! each bend runs on to the other bend's tangent line, as far as its wall's
+//! root covers it, rather than ending where it clears the bisecting plane;
+//! the two bends meet at the inner corner of their tangent lines (a Tear),
+//! and the rules' Rectangular or Round relief is cut from there
+//! (`relief::flange_corner_reliefs`). The walls are mitred as before.
+//!
 //! Two edge ends that face each other across a corner gap the sheet
 //! records ([`crate::sheet::SheetGap`]: a rip of Convert to Sheet Metal,
 //! or the gap between two walls of an earlier flange on several edges) are
@@ -88,9 +96,27 @@ struct EndRule {
     mitred: bool,
     bend: Vec<Keep>,
     wall: Vec<Keep>,
+    /// At a corner the rules' corner relief opens (mitcad#2411): the
+    /// bend's keep of the bisecting plane, which it keeps to unless it may
+    /// run further to the other bend's tangent line ([`Opened`]).
+    opened: Option<Opened>,
     /// Where a refusal about this end paints: the walls that meet there
     /// and the corner (mitcad#1877).
     places: Vec<NoticePlace>,
+}
+
+/// The bend's end at a corner that the rules' corner relief opens
+/// (mitcad#2411; commands.md, "Corner relief at flange corners"): the bend
+/// runs on to the other bend's tangent line, as a flange on the next edge's
+/// bend does, rather than ending where all its material clears the
+/// bisecting plane; the relief is then cut from there.
+#[derive(Debug, Clone, Copy)]
+struct Opened {
+    /// The bisecting plane's keep, half the corner gap off it.
+    mitre: Keep,
+    /// The other bend's side of its tangent line, which this bend keeps
+    /// out of: the plane through that line square to the panel.
+    tangent: Keep,
 }
 
 /// The wall of a flange's edge in the input sheet (the side face the edge
@@ -141,6 +167,15 @@ struct EdgeGeometry {
     /// Along the wall away from its root (its chart's `x`).
     wall_x: V3,
     thickness: f64,
+    /// A point of the bend's tangent line on the panel (front surface) and
+    /// the direction across it into the bend, in the panel's plane
+    /// (mitcad#2411).
+    tangent_line: V3,
+    into_bend: V3,
+    /// The flange's bend where it starts at the edge's start (none for an
+    /// existing wall, [`flat_wall`]): with the wall, the section
+    /// [`walls_beside`] carries along the edge (mitcad#2445).
+    bend: Option<CylinderEmbedding>,
 }
 
 impl EdgeGeometry {
@@ -152,6 +187,7 @@ impl EdgeGeometry {
     ) -> Result<Self, String> {
         let frame = port_frame(state, edge)?;
         let built = construction(&frame, tangent, 0.0, metrics);
+        let bend = built.cylinder.clone();
         let SheetEmbedding::Plane { front_frame, .. } = built.moving else {
             return Err("a flange's wall is not planar".into());
         };
@@ -163,7 +199,53 @@ impl EdgeGeometry {
             wall_normal: cross(front_frame.x_axis, front_frame.y_axis),
             wall_x: front_frame.x_axis,
             thickness: metrics.thickness,
+            tangent_line: add(frame.origin, scale(frame.m, tangent)),
+            into_bend: frame.m,
+            bend: Some(bend),
         })
+    }
+    /// Points of the flange's cross-section at the edge's end `end`, on
+    /// both surfaces and in the middle of the thickness: across its bend,
+    /// and along its wall of `length` (mitcad#2445).
+    fn section(&self, end: End, length: f64) -> Vec<V3> {
+        let shift = match end {
+            End::Start => [0.0; 3],
+            End::End => scale(self.e, self.width),
+        };
+        let t = self.thickness;
+        let mut points = Vec::new();
+        if let Some(c) = &self.bend {
+            for i in 0..=8 {
+                let theta = c.angle_extent * f64::from(i) / 8.0;
+                let radial = add(
+                    scale(c.radial_start, theta.cos()),
+                    scale(c.angular_direction, theta.sin()),
+                );
+                for depth in [0.0, 0.5, 1.0] {
+                    points.push(add(c.centre, scale(radial, c.inside_radius + depth * t)));
+                }
+            }
+        }
+        for i in 0..=4 {
+            let along = add(
+                self.wall_origin,
+                scale(self.wall_x, length * f64::from(i) / 4.0),
+            );
+            for depth in [0.0, 0.5, 1.0] {
+                points.push(sub(along, scale(self.wall_normal, depth * t)));
+            }
+        }
+        points.into_iter().map(|p| add(p, shift)).collect()
+    }
+    /// The keep of another edge's bend that stays out of this one's: on
+    /// the panel's side of the plane through this bend's tangent line,
+    /// square to the panel (mitcad#2411). A bend of up to a half turn
+    /// lies wholly on the other side.
+    fn tangent_keep(&self) -> Keep {
+        Keep {
+            normal: scale(self.into_bend, -1.0),
+            offset: -dot(self.into_bend, self.tangent_line),
+        }
     }
     fn point(&self, end: End) -> V3 {
         match end {
@@ -505,7 +587,8 @@ fn corner_gap(
 }
 
 /// The keeps of each edge's two ends from the corners between the edges
-/// (`edges` the flange's edges, for the places of a refusal).
+/// (`edges` the flange's edges, for the places of a refusal); `opened` says
+/// of each corner whether the rules' corner relief opens it (mitcad#2411).
 #[allow(clippy::too_many_arguments)]
 fn corner_rules(
     d: &SheetFlangeDef<f64>,
@@ -513,10 +596,11 @@ fn corner_rules(
     geometry: &[EdgeGeometry],
     ends: &[EdgeEnds],
     corners: &[Corner],
+    opened: &[bool],
     gap: f64,
     rules: &mut [[EndRule; 2]],
 ) -> Result<(), String> {
-    for c in corners {
+    for (c, &open) in corners.iter().zip(opened) {
         let [i, j] = c.edges;
         let (gi, gj) = (&geometry[i], &geometry[j]);
         let (ui, uj) = (gi.away(c.ends[0]), gj.away(c.ends[1]));
@@ -546,9 +630,22 @@ fn corner_rules(
         rules[j][rj].mitred = true;
         rules[i][ri].places.extend(places.iter().cloned());
         rules[j][rj].places.extend(places.iter().cloned());
-        // The bends always clear the bisecting plane.
-        rules[i][ri].bend.push(keep_i);
-        rules[j][rj].bend.push(keep_j);
+        // The bends clear the bisecting plane; where the rules' corner
+        // relief opens the corner, each may run on to the other's tangent
+        // line instead (mitcad#2411).
+        if open {
+            rules[i][ri].opened = Some(Opened {
+                mitre: keep_i,
+                tangent: gj.tangent_keep(),
+            });
+            rules[j][rj].opened = Some(Opened {
+                mitre: keep_j,
+                tangent: gi.tangent_keep(),
+            });
+        } else {
+            rules[i][ri].bend.push(keep_i);
+            rules[j][rj].bend.push(keep_j);
+        }
         let miter = miter_of(d, i, j);
         if miter == SheetMiter::Bisect {
             if flat && gap <= TOLERANCE {
@@ -626,8 +723,161 @@ fn flat_wall(
         wall_normal: scale(normal, -parity.sign()),
         wall_x: frame.y_axis,
         thickness,
+        // (No bend of this flange: never asked.)
+        tangent_line: frame.origin,
+        into_bend: [0.0; 3],
+        bend: None,
     };
     Some((geometry, patch))
+}
+
+/// The keeps of the free end `end` of the flange's edge `edge` (on the
+/// panel `panel`) where the flange would pass into a flat wall of the sheet
+/// that stands across the edge's line beside the end, no bend between
+/// them (mitcad#2445): a lip on the top edge of a tray's wall, folded in
+/// over the tray, meets the walls at the tray's ends. The flange's
+/// cross-section at the end ([`EdgeGeometry::section`]), carried along the
+/// edge towards the end, comes to the other wall's near surface inside its
+/// material (not on its outline) before it has gone on past the end, or
+/// already lies past that surface by no more than the bend and two
+/// thicknesses: the flange then ends `gap` short of that surface, as an end
+/// that meets an existing flange across a bend does ([`existing_walls`]).
+/// Walls the flange stays clear of, by however little, are left as they
+/// are; the other wall is never cut. Walls of the flange itself and the
+/// edge's own panel are not asked.
+#[allow(clippy::too_many_arguments)]
+fn walls_beside(
+    state: &SheetState,
+    feature: FeatureUid,
+    panel: PanelId,
+    thickness: f64,
+    edge: &EdgeGeometry,
+    end: End,
+    gap: f64,
+    length: f64,
+) -> Vec<(Keep, NoticePlace, bool)> {
+    let toward = scale(edge.away(end), -1.0);
+    let section = edge.section(end, length);
+    let behind = edge.bend.as_ref().map_or(0.0, |c| c.inside_radius) + 2.0 * thickness + gap;
+    let mut found = Vec::new();
+    for patch in &state.charts {
+        let SheetDomainRef::Panel(wall) = patch.domain else {
+            continue;
+        };
+        if wall == panel || wall.feature == feature {
+            continue;
+        }
+        let Some((other, _)) = flat_wall(state, wall, thickness) else {
+            continue;
+        };
+        let across = dot(other.wall_normal, toward);
+        if across.abs() < 1e-6 {
+            continue;
+        }
+        let s = if across > 0.0 {
+            other.wall_normal
+        } else {
+            scale(other.wall_normal, -1.0)
+        };
+        let near = other.slab(s)[0];
+        let Ok((frame, _)) = plane(patch) else {
+            continue;
+        };
+        // Inside the wall's material by more than `MEET` (a wall the
+        // flange only touches along a line is no wall in its way).
+        let inside = |x: V3| {
+            let d = sub(x, frame.origin);
+            let (u, v) = (dot(d, frame.x_axis), dot(d, frame.y_axis));
+            [
+                [0.0, 0.0],
+                [MEET, 0.0],
+                [-MEET, 0.0],
+                [0.0, MEET],
+                [0.0, -MEET],
+            ]
+            .iter()
+            .all(|o| {
+                let uv = [u + o[0], v + o[1]];
+                patch
+                    .regions
+                    .iter()
+                    .any(|region| crate::sheet::flat::contains(region, uv))
+            })
+        };
+        let enters = section.iter().any(|q| {
+            let lambda = (near - dot(s, *q)) / across.abs();
+            lambda < MEET && lambda > -behind && inside(add(*q, scale(toward, lambda)))
+        });
+        if enters && let Some(keep) = short_of(&other, toward, gap) {
+            found.push((keep, domain_place(patch.domain), false));
+        }
+    }
+    found
+}
+
+/// Whether the plain flange `d` on one edge would pass into a wall of the
+/// sheet beside an end of its edge that meets no existing flange across a
+/// bend ([`walls_beside`], mitcad#2445): such a flange is built as a
+/// flange with a corner gap is ([`flange_edges`]), its end the gap short
+/// of that wall. A flange that does not (or that the gap's way does not
+/// build: a hem, a profile, offsets or a width, a half open corner joint,
+/// a run, At Edge) is built as before, and so is one this cannot place
+/// (the single flange's own refusal then says why).
+pub(super) fn meets_wall_beside<K: Kernel>(
+    d: &SheetFlangeDef<f64>,
+    ctx: &EvalContext<'_, K>,
+    state: &SheetState,
+    rules: &SheetRulesDef<f64>,
+) -> bool {
+    wall_beside(d, ctx, state, rules).unwrap_or(false)
+}
+
+fn wall_beside<K: Kernel>(
+    d: &SheetFlangeDef<f64>,
+    ctx: &EvalContext<'_, K>,
+    state: &SheetState,
+    rules: &SheetRulesDef<f64>,
+) -> Result<bool, String> {
+    let plain = d.boundaries.is_empty()
+        && d.corner_gap.is_none()
+        && d.profile.is_none()
+        && d.hem.is_none()
+        && d.offsets.is_none()
+        && d.width.is_none()
+        && !d.run
+        && !d.relieve_ends
+        && d.position != SheetPosition::Edge
+        && matches!(d.corner, None | Some(SheetFlangeCorner::Open));
+    if !plain {
+        return Ok(false);
+    }
+    let metrics = BendMetrics::past_half_turn(d.angle, d.radius, rules)?;
+    let steps = flange_steps(d, rules)?;
+    if steps.len() != 1 || steps[0].wall <= 0.0 {
+        return Ok(false);
+    }
+    let tangent = metrics.offset(d.position)?;
+    let thickness = rules.thickness;
+    let gap = thickness;
+    let edge = EdgeGeometry::new(state, &d.boundary, tangent, &metrics)?;
+    let is_flange = |uid: FeatureUid| {
+        ctx.feature_entry(uid)
+            .is_ok_and(|entry| matches!(entry.def, crate::features::FeatureDef::SheetFlange(_)))
+    };
+    Ok([End::Start, End::End].into_iter().any(|end| {
+        existing_walls(state, ctx.uid, &is_flange, thickness, &edge, end, gap).is_empty()
+            && !walls_beside(
+                state,
+                ctx.uid,
+                d.boundary.panel,
+                thickness,
+                &edge,
+                end,
+                gap,
+                steps[0].wall,
+            )
+            .is_empty()
+    }))
 }
 
 /// The keeps of the free end `end` of the flange's edge `edge` that meets
@@ -799,6 +1049,66 @@ pub(super) fn bend_limit(c: &CylinderEmbedding, thickness: f64, keep: &Keep) -> 
     if lowest <= c.angle_extent {
         least = least.min(-a.hypot(b));
     }
+    axial_limit(c, thickness, keep, least)
+}
+
+/// The axial limit of a bend on `c` whose moving tangent line, where its
+/// wall's root lies, keeps to `keep` (mitcad#2411): the wall keeps `keep`,
+/// so its root covers the bend only so far.
+fn root_limit(c: &CylinderEmbedding, thickness: f64, keep: &Keep) -> Limit {
+    let n = keep.normal;
+    let least = dot(n, c.radial_start) * c.angle_extent.cos()
+        + dot(n, c.angular_direction) * c.angle_extent.sin();
+    axial_limit(c, thickness, keep, least)
+}
+
+/// The limit of a bend end at a corner the rules' corner relief opens
+/// (mitcad#2411, [`Opened`]): on to the other bend's tangent line where
+/// that lies further along the bend than the bisecting plane's limit, but
+/// no further than the wall's root reaches (the wall keeps `walls`); a bend
+/// past a half turn, or a corner where the tangent line gives no further
+/// limit (a reflex corner, a cap of another kind), keeps the bisecting
+/// plane's.
+fn opened_limit(c: &CylinderEmbedding, thickness: f64, open: &Opened, walls: &[Keep]) -> Limit {
+    let mitre = bend_limit(c, thickness, &open.mitre);
+    if c.angle_extent > PI + 1e-9 {
+        return mitre;
+    }
+    let roots: Vec<Limit> = walls
+        .iter()
+        .map(|keep| root_limit(c, thickness, keep))
+        .collect();
+    match (mitre, bend_limit(c, thickness, &open.tangent)) {
+        (Limit::Upper(m), Limit::Upper(t)) if t > m => {
+            let mut v = t;
+            for root in roots {
+                match root {
+                    Limit::Upper(r) => v = v.min(r),
+                    Limit::Free => {}
+                    _ => return Limit::Upper(m),
+                }
+            }
+            Limit::Upper(v.max(m))
+        }
+        (Limit::Lower(m), Limit::Lower(t)) if t < m => {
+            let mut v = t;
+            for root in roots {
+                match root {
+                    Limit::Lower(r) => v = v.max(r),
+                    Limit::Free => {}
+                    _ => return Limit::Lower(m),
+                }
+            }
+            Limit::Lower(v.min(m))
+        }
+        (mitre, _) => mitre,
+    }
+}
+
+/// The axial limit where `keep` holds for a bend on `c` whose material
+/// reaches least along `keep`'s normal at `least` (per unit radius).
+fn axial_limit(c: &CylinderEmbedding, thickness: f64, keep: &Keep, least: f64) -> Limit {
+    let n = keep.normal;
     let reach = if least < 0.0 {
         (c.inside_radius + thickness) * least
     } else {
@@ -979,8 +1289,16 @@ fn edge_flange<K: Kernel>(
     let at_start = construction(&frame, tangent, 0.0, metrics);
     let (mut lo, mut hi) = (0.0_f64, w);
     for rule in [first, last] {
-        for keep in &rule.bend {
-            match bend_limit(&at_start.cylinder, thickness, keep) {
+        let opened = rule
+            .opened
+            .map(|open| opened_limit(&at_start.cylinder, thickness, &open, &rule.wall));
+        let limits = rule
+            .bend
+            .iter()
+            .map(|keep| bend_limit(&at_start.cylinder, thickness, keep))
+            .chain(opened);
+        for limit in limits {
+            match limit {
                 Limit::Lower(v) => lo = lo.max(v),
                 Limit::Upper(v) => hi = hi.min(v),
                 Limit::Free => {}
@@ -1154,9 +1472,13 @@ fn mitred<K: Kernel>(
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
     let rules = rules.with_fold_allowance(d.allowance.as_ref());
+    // (An open corner joint on one edge is its Inner Length alone, as a
+    // lip that keeps short of a wall beside its end may have it,
+    // mitcad#2445.)
+    let open_corner = d.boundaries.is_empty() && d.corner == Some(SheetFlangeCorner::Open);
     if d.profile.is_some()
         || d.hem.is_some()
-        || d.corner.is_some()
+        || (d.corner.is_some() && !open_corner)
         || d.offsets.is_some()
         || d.width.is_some()
     {
@@ -1230,7 +1552,40 @@ fn mitred<K: Kernel>(
             })
         })
         .collect();
-    corner_rules(d, &edges, &geometry, &ends_of, &found, gap, &mut ends)?;
+    // The corners the rules' corner relief opens (mitcad#2411): touching
+    // corners of two edges of one panel that turn the panel's outline
+    // outward (the bends leave it on either side of the corner), unless a
+    // Corner Relief feature relieves the corner instead. A flange with a
+    // relief of its own keeps its corners as they are.
+    let relieving = d.relief.is_none() && rules.relieves_flange_corners();
+    let named = if relieving {
+        super::relief::named_corners(ctx)
+    } else {
+        Vec::new()
+    };
+    let flange = ctx.uid;
+    let own = |k: usize| BendId {
+        feature: flange,
+        slot: k as u32,
+    };
+    let opened: Vec<bool> = found
+        .iter()
+        .map(|c| {
+            let [i, j] = c.edges;
+            let (gi, gj) = (&geometry[i], &geometry[j]);
+            let toward = |g: &EdgeGeometry, end: End| scale(g.away(end), -1.0);
+            let (a, b) = (own(i), own(j));
+            relieving
+                && !c.gap
+                && ends_of[i].panel == ends_of[j].panel
+                && dot(gj.into_bend, toward(gi, c.ends[0])) > 1e-6
+                && dot(gi.into_bend, toward(gj, c.ends[1])) > 1e-6
+                && !named.contains(&[a.min(b), a.max(b)])
+        })
+        .collect();
+    corner_rules(
+        d, &edges, &geometry, &ends_of, &found, &opened, gap, &mut ends,
+    )?;
     // A free end that meets an existing flange of the sheet across a bend
     // (mitcad#1877).
     let is_flange = |uid: FeatureUid| {
@@ -1242,7 +1597,21 @@ fn mitred<K: Kernel>(
             if ends[k][end.index()].mitred {
                 continue;
             }
-            let met = existing_walls(&state, ctx.uid, &is_flange, thickness, g, end, gap);
+            let mut met = existing_walls(&state, ctx.uid, &is_flange, thickness, g, end, gap);
+            // Else a wall beside the end that the flange would pass into
+            // (mitcad#2445: a lip on the top edge of a tray's wall).
+            if met.is_empty() {
+                met = walls_beside(
+                    &state,
+                    ctx.uid,
+                    edges[k].panel,
+                    thickness,
+                    g,
+                    end,
+                    gap,
+                    length,
+                );
+            }
             let rule = &mut ends[k][end.index()];
             let mut flat = false;
             for (keep, place, coplanar) in met {
@@ -1280,19 +1649,20 @@ fn mitred<K: Kernel>(
             .filter_map(|c| corner_gap(uid, &geometry, &ends_of, c, (gap, reach))),
     );
     // The rules' corner relief at the corners between the flange's edges
-    // and where its bends meet other bends at a corner of their panel
-    // (mitcad#2342); a corner across a recorded gap has no junction of
-    // the two bends to relieve. A flange with a relief of its own keeps its
-    // corners as they are.
-    if d.relief.is_none() && rules.relieves_flange_corners() {
+    // that it opens (mitcad#2411; a corner across a recorded gap has no
+    // junction of the two bends to relieve) and where its bends meet other
+    // bends at a corner of their panel (mitcad#2342). A flange with a relief
+    // of its own keeps its corners as they are.
+    if relieving {
         let bend = |k: usize| BendId {
             feature: uid,
             slot: k as u32,
         };
         let mut pairs: Vec<[BendId; 2]> = found
             .iter()
-            .filter(|c| !c.gap)
-            .map(|c| [bend(c.edges[0]), bend(c.edges[1])])
+            .zip(&opened)
+            .filter(|(_, open)| **open)
+            .map(|(c, _)| [bend(c.edges[0]), bend(c.edges[1])])
             .collect();
         for (k, edge) in edges.iter().enumerate() {
             for other in super::relief::corner_bends(&state, edge.panel, bend(k)) {
@@ -1332,18 +1702,32 @@ fn mitred<K: Kernel>(
         }
         places
     };
-    publish_placed(ctx, state, &rules, None, &meeting).map_err(|e| {
-        if e.contains("pass through each other") || e.contains("touch over a face") {
-            FeatureError::from_text(&e)
-                .suffixed(
-                    ". Make the Corner Gap larger, or change the flange's angle, length or \
-                     position so that its walls clear each other at the corners.",
-                )
-                .text()
-        } else {
-            e
-        }
-    })
+    // A flange on one edge without a Corner Gap of its own came here for a
+    // wall beside its end (mitcad#2445): the Flange panel shows it no
+    // Corner Gap, so its refusal says what it does show.
+    let advice = if d.boundaries.is_empty() && d.corner_gap.is_none() {
+        WALL_CLEARS
+    } else {
+        ". Make the Corner Gap larger, or change the flange's angle, length or position so that \
+         its walls clear each other at the corners."
+    };
+    publish_placed(ctx, state, &rules, None, &meeting).map_err(|e| advised(e, advice))
+}
+
+/// What a flange on one edge whose wall passes into another wall of the
+/// sheet changes (mitcad#2445).
+pub(super) const WALL_CLEARS: &str = ". Flip the flange, or make it shorter or narrower (its \
+     Length or Width), so that its wall clears the sheet's other walls.";
+
+/// A refusal of walls that meet (the kernel's `pass through each other`
+/// or `touch over a face`) with `advice` after it; other refusals as they
+/// are.
+pub(super) fn advised(e: String, advice: &str) -> String {
+    if e.contains("pass through each other") || e.contains("touch over a face") {
+        FeatureError::from_text(&e).suffixed(advice).text()
+    } else {
+        e
+    }
 }
 
 #[cfg(test)]

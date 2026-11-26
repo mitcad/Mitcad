@@ -1086,7 +1086,6 @@ fn credentials_never_reach_what_is_shown() {
 #[cfg(unix)]
 #[test]
 fn a_cancelled_git_and_its_children_end_on_sigterm_first() {
-    use std::os::unix::fs::PermissionsExt;
     let scratch = Scratch::new("cancel-term");
     let child = scratch.join("child.sh");
     fs::write(
@@ -1097,8 +1096,7 @@ fn a_cancelled_git_and_its_children_end_on_sigterm_first() {
     )
     .unwrap();
     let program = scratch.join("fake-git");
-    fs::write(&program, "#!/bin/sh\nsh \"$FAKE_CHILD\" &\nwait\n").unwrap();
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&program, "#!/bin/sh\nsh \"$FAKE_CHILD\" &\nwait\n");
     let ready = scratch.join("ready");
     let tidied = scratch.join("tidied");
     let cli = GitCli::at(&program)

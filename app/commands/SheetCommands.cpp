@@ -1687,7 +1687,7 @@ CommandDef sheetConvertCommand(const CommandContext& context) {
   def.inputs = {
       selectionInput(QStringLiteral("face"), QObject::tr("Face"), SelectKind::Face, 1, 1)
           .withoutMeshes()
-          .withTooltip(QObject::tr("The flat face that stays where it is; the material lies behind it")),
+          .withTooltip(QObject::tr("The face that stays where it is: flat, a cylinder or a cone; the material lies behind it")),
       selectionInput(QStringLiteral("bends"), QObject::tr("Bend Edges"), SelectKind::Edge, 0, 0)
           .withoutMeshes()
           .withTooltip(QObject::tr("Straight edges between flat faces where the sheet bends; none: a plate")),
@@ -1701,7 +1701,7 @@ CommandDef sheetConvertCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("Off: the gap between the faces at a rip is the sheet's thickness")),
       valueInput(QStringLiteral("corner_gap"), QObject::tr("Corner Gap"), ValueKind::Length, QStringLiteral("1 mm"))
           .withStepMinimum(0.0)
-          .withTooltip(QObject::tr("The gap between two faces at a rip"))
+          .withTooltip(QObject::tr("The gap between two faces at a rip, or at the seam of a closed curved face"))
           .withVisible(ownGap),
       choiceInput(QStringLiteral("rules"), QObject::tr("Rules"), {{QStringLiteral("new"), QStringLiteral("New Rules")}},
                   QStringLiteral("new"))
@@ -1729,7 +1729,7 @@ CommandDef sheetConvertCommand(const CommandContext& context) {
     Built result;
     const Selection& faces = state.items(QStringLiteral("face"));
     if (faces.isEmpty()) {
-      return Built::failure(QObject::tr("Select the flat face that stays where it is."), QStringLiteral("face"));
+      return Built::failure(QObject::tr("Select the face that stays where it is."), QStringLiteral("face"));
     }
     const SelectionItem fixed = faces.first();
     QJsonArray bends;

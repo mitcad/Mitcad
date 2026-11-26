@@ -245,6 +245,79 @@ protected:
 constexpr int kShowsBody = Qt::UserRole;
 constexpr int kShowsPath = Qt::UserRole + 1;
 
+// The properties of a base view's Shows tree with its drawing and view
+// ("D1/3", the key of its kept place) and its view's id (mitcad#2434).
+const char* const kShowsPlaceKey = "mitcadShowsPlace";
+const char* const kShowsView = "mitcadShowsView";
+
+// A Shows row by its occurrence path and body uid (mitcad#2434): the same
+// row in the tree the panel builds again.
+QString showsRowKey(const QTreeWidgetItem* item) {
+  return item->data(0, kShowsPath).toString() + QLatin1Char('|') + item->data(0, kShowsBody).toString();
+}
+
+// The row a Shows tree has at its top (none when empty).
+QTreeWidgetItem* showsTopRow(const QTreeWidget* tree) { return tree->itemAt(QPoint(1, 1)); }
+
+// A Shows tree's place as the log says it (mitcad#2434): how many of its
+// occurrences are unfolded, its row at the top and its current row.
+QString showsPlaceText(QTreeWidget* tree) {
+  int open = 0;
+  for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
+    open += (*it)->childCount() > 0 && (*it)->isExpanded() ? 1 : 0;
+  }
+  const QTreeWidgetItem* top = showsTopRow(tree);
+  const QTreeWidgetItem* current = tree->currentItem();
+  return QStringLiteral("%1 unfolded, top row %2, current row %3")
+      .arg(open)
+      .arg(top != nullptr ? top->text(0) : QStringLiteral("none"),
+           current != nullptr ? current->text(0) : QStringLiteral("none"));
+}
+
+// Puts a Shows tree built again back at the place of the one before it
+// (mitcad#2434) once it is shown: its scroll range is known only when it
+// is laid out. Its current row first (setting it scrolls to it), then its
+// row at the top. The unfolded occurrences were unfolded as it was built.
+// Owned by the tree; gone after it.
+class ShowsPlaceKeeper : public QObject {
+public:
+  ShowsPlaceKeeper(QTreeWidget* tree, QString top, QString current, std::function<void()> done)
+      : QObject(tree), m_tree(tree), m_top(std::move(top)), m_current(std::move(current)), m_done(std::move(done)) {
+    tree->installEventFilter(this);
+  }
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == m_tree && event->type() == QEvent::Show) {
+      m_tree->removeEventFilter(this);
+      QTreeWidgetItem* top = nullptr;
+      for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+        const QString key = showsRowKey(*it);
+        if (key == m_current) {
+          m_tree->setCurrentItem(*it);
+        }
+        if (key == m_top) {
+          top = *it;
+        }
+      }
+      if (top != nullptr) {
+        m_tree->scrollToItem(top, QAbstractItemView::PositionAtTop);
+      }
+      if (m_done) {
+        m_done();
+      }
+      deleteLater();
+    }
+    return false;
+  }
+
+private:
+  QTreeWidget* m_tree;
+  QString m_top;
+  QString m_current;
+  std::function<void()> m_done;
+};
+
 QString compact(const QJsonObject& object) {
   return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
@@ -1194,7 +1267,38 @@ void DrawingWorkspace::startTool(const QString& id) {
     setStatus(tr("The title block is being edited: Done or Cancel first."), true);
     return;
   }
+  // Flat Pattern View (mitcad#2446) needs a sheet-metal body of the
+  // drawing's component (its command is disabled without one; the bar's
+  // own button says so here).
+  if (id == QStringLiteral("drawing.flat_pattern_view") && m_tool != tool && flatSubjects().isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Drawing tool Flat Pattern View refused: no sheet-metal body");
+    setStatus(tr("Flat Pattern View: the design has no sheet-metal body."), true);
+    return;
+  }
   setTool(m_tool == tool ? nullptr : tool);
+}
+
+QString DrawingWorkspace::component() const {
+  const QString component = m_answer.value(QStringLiteral("component")).toString();
+  return component.isEmpty() ? QStringLiteral("C0") : component;
+}
+
+bool DrawingWorkspace::placeFlatPattern(const QString& body) {
+  if (!isOpen() || m_cutSheet || body.isEmpty()) {
+    return false;
+  }
+  const QJsonObject command =
+      flatPatternView(m_drawing, m_sheet, QStringLiteral("flat:") + body, QStringLiteral("fit"), true, nullptr);
+  QJsonObject result;
+  if (!run(command, &result)) {
+    return false;
+  }
+  const int added = result.value(QStringLiteral("view")).toInt();
+  qDebug().noquote() << QStringLiteral("Drawing Flat Pattern placed: view %1 of %2").arg(added).arg(body);
+  if (added != 0) {
+    m_sheetView->selectView(added);
+  }
+  return true;
 }
 
 void DrawingWorkspace::setSelectionSubject(const QString& choice, const QString& label) {
@@ -1328,6 +1432,9 @@ void DrawingWorkspace::fillPanel() {
     const QSignalBlocker block(focus);
     m_sheetView->setFocus(Qt::OtherFocusReason);
   }
+  // A base view's Shows tree goes with its row: its place is kept for the
+  // one built next (mitcad#2434).
+  keepShowsPlace();
   while (m_form->rowCount() > 0) {
     m_form->removeRow(0);
   }
@@ -1485,6 +1592,20 @@ void DrawingWorkspace::fillToolPanel(const DrawingToolDef& tool) {
           m_options[toolId].insert(id, chosen);
         }
       }
+      // Flat Pattern View's Shows (mitcad#2446): the Flat Patterns alone,
+      // the first chosen unless another one is.
+      if (toolId == QStringLiteral("drawing.flat_pattern_view") && id == QStringLiteral("subject")) {
+        choices = flatSubjects();
+        const bool listed = std::any_of(choices.cbegin(), choices.cend(),
+                                        [&chosen](const QPair<QString, QString>& c) { return c.first == chosen; });
+        if (!listed) {
+          chosen = choices.isEmpty() ? QString() : choices.first().first;
+          m_options[toolId].insert(id, chosen);
+        }
+        qDebug().noquote() << QStringLiteral("Drawing Flat Pattern View shows: %1 of %2")
+                                  .arg(chosen.isEmpty() ? QStringLiteral("none") : chosen)
+                                  .arg(choices.size());
+      }
       // Its Exploded View: the component's explode views (mitcad#2113); one
       // no longer there, assembled.
       if (toolId == QStringLiteral("drawing.base_view") && id == QStringLiteral("explode")) {
@@ -1497,6 +1618,15 @@ void DrawingWorkspace::fillToolPanel(const DrawingToolDef& tool) {
         }
       }
       QComboBox* combo = comboOf(choices, chosen);
+      // Base View's Flat Patterns after a separator of their own
+      // (mitcad#2446): another kind of view than the design's.
+      if (toolId == QStringLiteral("drawing.base_view") && id == QStringLiteral("subject")) {
+        if (const int flat = firstFlatPattern(choices); flat > 0) {
+          combo->insertSeparator(flat);
+          qDebug().noquote() << QStringLiteral("Drawing Base View Shows: %1 Flat Pattern(s) after a separator")
+                                    .arg(choices.size() - flat);
+        }
+      }
       if (id == QStringLiteral("scale")) {
         // Any ratio typed too (mitcad#1169).
         watchScale(combo, [this, toolId, id](const QString& scale) {
@@ -2019,6 +2149,21 @@ QList<QPair<QString, QString>> DrawingWorkspace::subjects() const {
   return choices;
 }
 
+QList<QPair<QString, QString>> DrawingWorkspace::flatSubjects() const {
+  QJsonArray bodies;
+  QJsonArray sheets;
+  try {
+    sheets = m_host.model().queryArray(QStringLiteral("sheet_bodies"));
+    // No sheet-metal body: no need for the bodies.
+    if (!sheets.isEmpty()) {
+      bodies = m_host.model().queryArray(QStringLiteral("bodies"));
+    }
+  } catch (const std::exception& e) {
+    qDebug().noquote() << QStringLiteral("Drawing Flat Patterns not listed: %1").arg(QString::fromUtf8(e.what()));
+  }
+  return flatPatternChoices(component(), bodies, sheets);
+}
+
 QList<QPair<QString, QString>> DrawingWorkspace::explodeChoices() const {
   QString component = m_answer.value(QStringLiteral("component")).toString();
   if (component.isEmpty()) {
@@ -2087,6 +2232,27 @@ QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
     }
   }
   qDebug().noquote() << QStringLiteral("Drawing view %1 shows %2 of %3 bodies").arg(view).arg(bodiesShown).arg(bodiesListed);
+  // At the place of the view's tree before it (mitcad#2434): a visibility
+  // edit redraws the drawing and builds the panel again, and the list stays
+  // unfolded and scrolled as it was. The occurrences are unfolded now,
+  // before its height is fitted and its signals connected; its row at the
+  // top and its current row once it is shown.
+  const QString placeKey = QStringLiteral("%1/%2").arg(m_drawing).arg(view);
+  tree->setProperty(kShowsPlaceKey, placeKey);
+  tree->setProperty(kShowsView, view);
+  const auto kept = m_showsPlaces.constFind(placeKey);
+  if (kept != m_showsPlaces.constEnd()) {
+    const ShowsPlace& place = kept.value();
+    for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
+      if ((*it)->childCount() > 0 && place.open.contains(showsRowKey(*it))) {
+        (*it)->setExpanded(true);
+      }
+    }
+    new ShowsPlaceKeeper(tree, place.top, place.current, [tree, view] {
+      qDebug().noquote()
+          << QStringLiteral("Drawing view %1 Shows place after the rebuild: %2").arg(view).arg(showsPlaceText(tree));
+    });
+  }
   // Its height follows the rows in sight (those under a folded occurrence
   // not counted), up to kShowsMaxRows; more scroll (mitcad#1692). Again
   // when an occurrence is unfolded or folded.
@@ -2134,6 +2300,35 @@ QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
     });
   });
   return tree;
+}
+
+void DrawingWorkspace::keepShowsPlace() {
+  auto* tree = m_panel->findChild<QTreeWidget*>(QStringLiteral("drawingViewShows"));
+  // A tree not shown yet (a rebuild right after another, before it was
+  // laid out) has no place of its own: the one kept before it stays.
+  if (tree == nullptr || !tree->isVisible()) {
+    return;
+  }
+  const QString key = tree->property(kShowsPlaceKey).toString();
+  if (key.isEmpty()) {
+    return;
+  }
+  ShowsPlace place;
+  for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
+    if ((*it)->childCount() > 0 && (*it)->isExpanded()) {
+      place.open.insert(showsRowKey(*it));
+    }
+  }
+  if (const QTreeWidgetItem* top = showsTopRow(tree)) {
+    place.top = showsRowKey(top);
+  }
+  if (const QTreeWidgetItem* current = tree->currentItem()) {
+    place.current = showsRowKey(current);
+  }
+  m_showsPlaces.insert(key, place);
+  qDebug().noquote() << QStringLiteral("Drawing view %1 Shows place before the rebuild: %2")
+                            .arg(tree->property(kShowsView).toInt())
+                            .arg(showsPlaceText(tree));
 }
 
 QJsonObject DrawingWorkspace::cameraDirection() {
@@ -3715,6 +3910,31 @@ void DrawingWorkspace::logLines(const QJsonObject& sheet) {
   if (text != m_loggedLines) {
     m_loggedLines = text;
     qDebug().noquote() << text;
+  }
+  // The Flat Pattern views drawn (mitcad#2280, mitcad#2446): each blank's
+  // size and its bend lines, once when they change.
+  QStringList flats;
+  for (const QJsonValue& value : sheet.value(QStringLiteral("views")).toArray()) {
+    const QJsonObject view = value.toObject();
+    const QJsonObject pattern = view.value(QStringLiteral("flat_pattern")).toObject();
+    if (pattern.isEmpty()) {
+      continue;
+    }
+    const QJsonArray size = pattern.value(QStringLiteral("size")).toArray();
+    flats << QStringLiteral("view %1: %2, %3 x %4, %5 bend line(s) (%6 up, %7 down)")
+                 .arg(view.value(QStringLiteral("id")).toInt())
+                 .arg(pattern.value(QStringLiteral("name")).toString())
+                 .arg(size.at(0).toDouble(), 0, 'f', 2)
+                 .arg(size.at(1).toDouble(), 0, 'f', 2)
+                 .arg(pattern.value(QStringLiteral("bend_lines")).toArray().size())
+                 .arg(pattern.value(QStringLiteral("up")).toInt())
+                 .arg(pattern.value(QStringLiteral("down")).toInt());
+  }
+  const QString flatText = QStringLiteral("Drawing Flat Pattern views: %1")
+                               .arg(flats.isEmpty() ? QStringLiteral("none") : flats.join(QStringLiteral(" | ")));
+  if (flatText != m_loggedFlats) {
+    m_loggedFlats = flatText;
+    qDebug().noquote() << flatText;
   }
   // The pens the views' lines are drawn with.
   QStringList pens;

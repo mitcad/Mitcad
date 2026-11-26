@@ -78,6 +78,9 @@ std::shared_ptr<geometry::Shape> shell(rust::Str feature, const geometry::Shape&
   spec.outside = params.outside;
   spec.tangent_chain = params.tangent_chain;
   spec.rounded = params.rounded;
+  for (std::size_t i = 0; i < params.own_faces.size(); ++i) {
+    spec.own.push_back({std::string(params.own_faces[i]), params.own_inside[i], params.own_outside[i]});
+  }
   return geometry::shell(std::string(feature), body, spec);
 }
 
@@ -98,8 +101,8 @@ std::shared_ptr<geometry::Shape> draft(rust::Str feature, const geometry::Shape&
 
 std::shared_ptr<geometry::Shape> offset_faces(rust::Str feature, const geometry::Shape& body,
                                               rust::Slice<const rust::String> faces,
-                                              double distance) {
-  return geometry::offset_faces(std::string(feature), body, names(faces), distance);
+                                              double distance, bool tangent_chain) {
+  return geometry::offset_faces(std::string(feature), body, names(faces), distance, tangent_chain);
 }
 
 std::shared_ptr<geometry::Shape> delete_faces(rust::Str feature, const geometry::Shape& body,

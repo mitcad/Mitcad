@@ -1,0 +1,23 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A mirror of features rebuilt at the image (mitcad#2430, GitHub #640) on a reported design (opened with --open, never committed; tools/cli/mirror-to-next-reported-test.cmake): a shelled housing with a rectangular pattern of three bosses (Extrude7 F16, its second side up to the inside wall, and a hole Extrude8 F17), mirrored across XZ by Mirror1 (F19), saved before mitcad#2430 without a compute option."},
+  {"comment": "As saved: the mirror reflects the finished bosses, and the image of the middle one ends short of the wall on its side (its end cap is still there); the body is not symmetric (centre of mass y = -0.092)."},
+  {"expect": {"feature": "Mirror1", "status": "ok", "bodies": 1}},
+  {"expect": {"body": "Body1", "volume": 35411.685, "faces": 86,
+    "has_face": "F19:inst1(F18:inst1(F16:end(r{c23[c29,c27],c27[c23,c28],c28[c27,c29],c29[c28,c23]})#1))"}},
+
+  {"comment": "Edited so that it stores Adjust: the bosses are built again at the image, the middle one up to the wall on its side as its original does (its sides as large as the original's, no end cap left), and the body is symmetric about the mirror plane."},
+  {"cmd": "edit_feature", "uid": "F19", "def": {"type": "mirror", "objects": {"type": "features", "features": ["F18"]},
+    "plane": "xz", "compute": "adjust"}},
+  {"expect": {"feature": "Mirror1", "status": "ok", "bodies": 1}},
+  {"expect": {"body": "Body1", "volume": 35522.473, "faces": 85,
+    "no_face": "F19:inst1(F18:inst1(F16:end(r{c23[c29,c27],c27[c23,c28],c28[c27,c29],c29[c28,c23]})#1))",
+    "has_face": "F19:inst1(F18:inst1(F16:side(c28[c27,c29])))"}},
+  {"expect": {"body": "Body1", "center": [88.177, 0.0, -24.993], "tolerance": 0.002}},
+
+  {"comment": "Identical reflects the finished bosses again: the result as saved."},
+  {"cmd": "edit_feature", "uid": "F19", "def": {"type": "mirror", "objects": {"type": "features", "features": ["F18"]},
+    "plane": "xz", "compute": "identical"}},
+  {"expect": {"feature": "Mirror1", "status": "ok", "bodies": 1}},
+  {"expect": {"body": "Body1", "volume": 35411.685, "faces": 86,
+    "has_face": "F19:inst1(F18:inst1(F16:end(r{c23[c29,c27],c27[c23,c28],c28[c27,c29],c29[c28,c23]})#1))"}}
+]

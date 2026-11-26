@@ -2,8 +2,9 @@
 //! Turning on a 2-axis lathe (mitcad#1869, docs/cam.md, "Turning"): the
 //! lathe's own machine data, the turning tools, the part's revolved
 //! profile, the operations (facing, roughing and finishing of outside and
-//! inside diameters, grooving, parting off, threading), the Fanuc turning
-//! dialect, the program check and the simulation of the turned stock.
+//! inside diameters, grooving, parting off, threading), the Fanuc and
+//! LinuxCNC turning dialects (mitcad#2425), the program check and the
+//! simulation of the turned stock.
 //!
 //! **Coordinates.** Everything is in the plane through the spindle axis:
 //! `z` along the spindle (positive away from the chuck, zero on the part's
@@ -48,6 +49,10 @@ pub mod tool;
 pub mod live;
 // The mill-turn's stock in 3D (mitcad#2319).
 pub mod solid;
+// The turret's body against the main chuck and the fixed zones, the
+// machine's parts as Simulate draws them (mitcad#2412).
+pub mod drawn;
+pub mod turret;
 
 #[cfg(test)]
 mod axes_tests;
@@ -66,23 +71,36 @@ mod sub_body_tests;
 // profile (mitcad#2405).
 #[cfg(test)]
 mod sub_turret_tests;
+// The fixed and moving zones and the turret drawn in Simulate, the
+// turret's body against the main chuck and the fixed zones, a body per
+// station, the zones' Y on a lathe with a Y axis (mitcad#2412).
+#[cfg(test)]
+mod turret_tests;
+// LinuxCNC on a lathe (mitcad#2425).
+#[cfg(test)]
+mod linuxcnc_tests;
 
 pub use check::{
     ProgramCheck, ReadMove, TurnPlacement, check_lathe, check_program, check_program_with,
     sub_face_at, sub_face_shown, sub_spindle_hits,
 };
-pub use lathe::{Lathe, LatheAxes, MillTurn, SubBody, SubSpindle, TurretBody};
+// LinuxCNC on a lathe (mitcad#2425).
+pub use check::{Control, check_program_as};
+pub use drawn::{TurretShown, ZoneShown, turret_shown, zones_shown};
+pub use lathe::{Lathe, LatheAxes, MillTurn, StationBody, SubBody, SubSpindle, TurretBody};
 pub use live::{LiveOp, LiveSide, LiveSim, simulate_live};
 pub use ops::{
     FaceOp, FinishOp, GrooveOp, PartOp, RoughOp, ThreadOp, TurnSide, face, finish, groove,
     part_off, rough, thread,
 };
+pub use post::LinuxCncTurning;
 pub use post::{DialectInfo, TurnOutput, decimal};
 pub use post::{FanucTurning, TurningPost, turning_dialect, turning_dialects, turning_post};
 pub use profile::{PV, TurnPart};
 pub use solid::{SolidSim, Voxels, simulate_solid};
 pub use stock::{TurnStock, TurnedStock, simulate_turning};
 pub use tool::{TurningTool, TurningToolKind};
+pub use turret::turret_hits;
 
 /// A point in the lathe's plane: `[x, z]`, x a radius (mm).
 pub type PXZ = [f64; 2];

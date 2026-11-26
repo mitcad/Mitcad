@@ -60,3 +60,7 @@ mod usdz_explode_2328_tests;
 // Faces coloured on their own written on their triangles in 3MF files
 // (mitcad#2385).
 mod threemf_face_colors_2385_tests;
+// Bodies coloured as a whole in STEP files as the bodies' appearances, in the
+// colouring pattern of the reporter's circuit board of GitHub
+// mitcad/Mitcad#677 (mitcad#2423).
+mod body_colors_2423_tests;

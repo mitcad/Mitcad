@@ -18,15 +18,18 @@
 
 #include "DocumentSnapshot.hpp"
 
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QScrollArea;
 class QToolButton;
 class QTreeWidget;
+class QVBoxLayout;
 class QWheelEvent;
 
 namespace mitcad {
 
+class TimelineHistoryList;
 class TimelineStrip;
 
 // The timeline, docked at the bottom: the features as icons in
@@ -48,11 +51,28 @@ class TimelineStrip;
 // with their components over it, stepped through with Enter and the arrow
 // keys. The mouse wheel over the strip scrolls it sideways (mitcad#826).
 // What the actions do is the BrowserController's.
+//
+// The History list (mitcad#2427, Preferences › Display › Timeline): the
+// same timeline as a vertical list, a row per item with its icon and name
+// (TimelineHistoryList), the playback, filter and search buttons above it,
+// the search's field on a row of its own under them. It is a presentation
+// of the strip's state: its rows are the strip's items, its marker and
+// groups the strip's, and its clicks, drags and menus go to the strip's
+// own code and this widget's signals.
 class TimelineWidget : public QWidget {
   Q_OBJECT
 
 public:
   explicit TimelineWidget(const CommandContext& model, QWidget* parent = nullptr);
+
+  // The strip (the default) or the History list (mitcad#2427); the window
+  // places the widget for it (the bottom bar, or under the Browser).
+  enum class Presentation { Strip, List };
+  void setPresentation(Presentation presentation);
+  Presentation presentation() const { return m_presentation; }
+  // The History list's height for its buttons and all its rows (a Floating
+  // card's content height); the strip's height otherwise.
+  int listContentHeight() const;
 
   void rebuild(const DocumentSnapshot& snapshot);
   void setFeatureDetailsProvider(std::function<QString(const QString&)> provider) { m_featureDetails = std::move(provider); }
@@ -193,6 +213,13 @@ signals:
   // selected since: the timeline shows its selection from before again;
   // the rest of the window is to follow.
   void searchRestored();
+  // A row's light bulb in the History list (mitcad#2427): a sketch's or a
+  // construction feature's own, or the bodies a feature made or last
+  // changed (DocumentSnapshot::bodiesByFeature).
+  void eyeClicked(const QString& uid);
+  // The History list's rows changed in number or folding: its height for
+  // them changed (listContentHeight).
+  void listHeightChanged();
 
 protected:
   void changeEvent(QEvent* event) override;
@@ -201,6 +228,39 @@ protected:
 
 private:
   friend class TimelineStrip;
+  friend class TimelineHistoryList;
+
+  // The strip's state as the History list reads it (mitcad#2427), and its
+  // gestures given to the strip's own code: the items in timeline order,
+  // whether the filter hides one, its component colour (-1: the root), the
+  // groups as the strip shows them (their first and last item), the
+  // marker, the boundaries the marker and a dragged feature can take, the
+  // search's matches and the owners' marks.
+  struct GroupRange {
+    QString name;
+    int first = 0;
+    int last = 0;
+    bool collapsed = false;
+  };
+  int itemCount() const;
+  const DocumentSnapshot::Feature& itemFeature(int i) const;
+  bool itemFiltered(int i) const;
+  int itemColour(int i) const;
+  QVector<GroupRange> groupRanges() const;
+  int markerPosition() const;
+  bool boundaryAllowed(int g) const;
+  bool itemFound(const QString& uid) const;
+  bool itemMarked(const QString& uid) const;
+  QString itemToolTip(int i);
+  void clickItem(int i, bool shift, bool toggle);
+  void contextItem(int i, const QPoint& globalPosition);
+  bool canMoveItem(int item, int index, QString* reason);
+  const DocumentSnapshot& snapshot() const { return m_snapshot; }
+  // The marker's bar and its handle in the strip's colours.
+  QColor listMarkerColor() const;
+  QColor listMarkerHandleColor() const;
+  // The History list follows the strip's selection, marks and matches.
+  void followList();
 
   // The playback buttons' icons and the marker in the colours of the
   // palette, light or dark (mitcad#14); logs them when they change.
@@ -287,6 +347,12 @@ private:
   QString m_searchSelected;  // the match last selected by a step
   QString m_loggedSearch;
   QString m_loggedResults;
+  // The History list (mitcad#2427): the presentation, the layouts the
+  // widget's parts move between, the list.
+  Presentation m_presentation = Presentation::Strip;
+  QVBoxLayout* m_outer = nullptr;   // the bar's row, the search's row (List), the list
+  QHBoxLayout* m_barRow = nullptr;  // the buttons, the search (Strip) and the strip
+  TimelineHistoryList* m_list = nullptr;
 };
 
 } // namespace mitcad

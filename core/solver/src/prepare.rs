@@ -1277,7 +1277,9 @@ fn constraint_equations(
                 side: rec.side,
             }
         }),
-        TangentDistance { circle, line, .. } => b.push(dim, |v, x| {
+        TangentDistance {
+            circle, line, far, ..
+        } => b.push(dim, |v, x| {
             let (a1, a2) = x.line(line.index());
             EqKind::CircleLine {
                 c: x.p(v, x.centre(circle.index())),
@@ -1285,6 +1287,7 @@ fn constraint_equations(
                 a: x.p(v, a1),
                 b: x.p(v, a2),
                 side: rec.side,
+                near: if far { -1.0 } else { 1.0 },
             }
         }),
         RadiusGap { a, b: q, .. } => b.push(dim, |v, x| EqKind::RadGap {
@@ -1293,24 +1296,37 @@ fn constraint_equations(
             side: rec.side,
         }),
         TangentCircleDistance {
-            a, b: q, inside, ..
+            a,
+            b: q,
+            inside,
+            far_a,
+            far_b,
+            ..
         } => b.push(dim, |v, x| EqKind::CircleGap {
             c1: x.p(v, x.centre(a.index())),
             r1: x.rad(v, a.index()),
             c2: x.p(v, x.centre(q.index())),
             r2: x.rad(v, q.index()),
             inside: if inside { rec.side } else { 0.0 },
+            f1: if far_a { 1.0 } else { -1.0 },
+            f2: if far_b { 1.0 } else { -1.0 },
         }),
         TangentPointDistance {
             circle,
             point,
             inside,
+            far,
             ..
-        } => b.push(dim, |v, x| EqKind::CirclePointGap {
-            c: x.p(v, x.centre(circle.index())),
-            r: x.rad(v, circle.index()),
-            p: x.p(v, point.index()),
-            side: if inside { -1.0 } else { 1.0 },
+        } => b.push(dim, |v, x| {
+            // Far (mitcad#2451): |p - c| + r, whichever side the point is.
+            let side = if inside && !far { -1.0 } else { 1.0 };
+            EqKind::CirclePointGap {
+                c: x.p(v, x.centre(circle.index())),
+                r: x.rad(v, circle.index()),
+                p: x.p(v, point.index()),
+                side,
+                near: if far { -1.0 } else { side },
+            }
         }),
         LineDistance { a, b: l2, .. } => b.push(dim, |v, x| {
             let (a1, a2) = x.line(a.index());

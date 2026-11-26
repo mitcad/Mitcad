@@ -124,7 +124,9 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> surfaceAt(OcctViewer& viewer, const QPo
         const gp_XYZ p0 = mesh->Node(a).Transformed(trsf).XYZ();
         const gp_XYZ e1 = mesh->Node(b).Transformed(trsf).XYZ() - p0;
         const gp_XYZ e2 = mesh->Node(c).Transformed(trsf).XYZ() - p0;
-        // Moeller-Trumbore.
+        // Moeller-Trumbore. Roundoff on a shared triangle edge must not
+        // let the ray pass through the visible face to the one behind it.
+        constexpr double barycentricTolerance = 1e-12;
         const gp_XYZ p = ray.Crossed(e2);
         const double det = e1.Dot(p);
         if (std::abs(det) < 1e-18) {
@@ -132,12 +134,12 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> surfaceAt(OcctViewer& viewer, const QPo
         }
         const gp_XYZ s = from - p0;
         const double u = s.Dot(p) / det;
-        if (u < 0.0 || u > 1.0) {
+        if (u < -barycentricTolerance || u > 1.0 + barycentricTolerance) {
           continue;
         }
         const gp_XYZ q = s.Crossed(e1);
         const double v = ray.Dot(q) / det;
-        if (v < 0.0 || u + v > 1.0) {
+        if (v < -barycentricTolerance || u + v > 1.0 + barycentricTolerance) {
           continue;
         }
         const double along = e2.Dot(q) / det;

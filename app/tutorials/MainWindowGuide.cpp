@@ -13,6 +13,7 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QMenu>
+#include <QPointF>
 #include <QTreeWidget>
 #include <QtLogging>
 
@@ -102,7 +103,35 @@ TutorialGuide* MainWindow::guide() {
   host.navigationPress = [this](const QPoint& position, Qt::MouseButton button, Qt::KeyboardModifiers keys) {
     return m_viewer != nullptr && m_viewer->navigationPress(position, button, keys);
   };
+  // A 2D sketch's drawing tool's value box (mitcad#2440): shown now, and
+  // its text when the user typed it.
+  host.toolField = [this](const QString& key, QString* typed) {
+    if (m_mode != Mode::Sketch || m_sketch == nullptr || !m_sketch->isActive() || m_sketch->tool() == nullptr ||
+        !m_sketch->hasField(key)) {
+      return false;
+    }
+    *typed = m_sketch->typed(key) ? m_sketch->fieldText(key).trimmed() : QString();
+    return true;
+  };
+  // A job computing the model holds back what completes a step (mitcad#2440).
+  host.busy = [this] { return modelBusy(); };
   m_guide = new TutorialGuide(std::move(host), this);
+  // A drawing tool's clicks and Enter in a 2D sketch, checked by the step
+  // (mitcad#2440): its point where it snapped, its value box's value.
+  if (m_sketch != nullptr) {
+    m_sketch->setGuideCheck([this](const sketch::Snap* snap) {
+      if (m_guide == nullptr || !m_guide->active()) {
+        return true;
+      }
+      if (snap == nullptr) {
+        return m_guide->drawingInput(nullptr);
+      }
+      GuidePoint point;
+      point.places = sketch::snapPlaces(m_sketch->model(), *snap);
+      point.at = QPointF(snap->at.x, snap->at.y);
+      return m_guide->drawingInput(&point);
+    });
+  }
   // The user's orbit, pan or zoom of the view (mitcad#2369): emitted while
   // the view paints, so queued.
   if (m_viewer != nullptr) {
@@ -178,8 +207,52 @@ bool MainWindow::startGuideStep(const QJsonObject& json, QString* error) {
       (step.done == GuideStep::Done::Activated && !tabKey(&step.doneName))) {
     return false;
   }
+  // A plane (mitcad#2440): an origin plane, any face, a construction plane
+  // of the design by its name or uid, or a face by its reference
+  // ("F2:top", which has a colon).
+  if (const QString plane = step.plane(); !plane.isEmpty()) {
+    bool known = guideOriginPlanes().contains(plane.toLower()) || plane.contains(QLatin1Char(':'));
+    for (const DocumentSnapshot::Feature& feature : m_snapshot.features) {
+      if (feature.type == QLatin1String("construction_plane") &&
+          (feature.uid == plane || feature.name.compare(plane, Qt::CaseInsensitive) == 0)) {
+        known = true;
+      }
+    }
+    if (!known) {
+      *error = QStringLiteral("The design has no plane %1; a step's plane is XY, XZ, YZ, face, a construction "
+                              "plane's name or a face's reference")
+                   .arg(plane);
+      return false;
+    }
+  }
   guide()->start(step);
   return true;
+}
+
+QStringList MainWindow::guidePlaneNames(const SelectionItem& item, QString* shown) const {
+  QStringList names;
+  if (item.kind == SelectKind::Plane) {
+    names << item.owner;
+    *shown = item.owner;
+    if (const DocumentSnapshot::Feature* feature = m_snapshot.feature(item.owner); feature != nullptr) {
+      names << feature->name;
+      *shown = feature->name;
+    }
+    return names;
+  }
+  // A face (planar, or cylindrical or conical for a developed sketch).
+  names << QStringLiteral("face") << item.name;
+  *shown = item.name;
+  return names;
+}
+
+bool MainWindow::guideAllowsPlane(const SelectionItem& item) {
+  if (m_guide == nullptr || !m_guide->active()) {
+    return true;
+  }
+  QString shown;
+  const QStringList names = guidePlaneNames(item, &shown);
+  return m_guide->planeAllowed(names, shown);
 }
 
 void MainWindow::leaveTutorial() {
@@ -242,7 +315,17 @@ QRect MainWindow::guideTargetRect(const GuideStep& step) const {
     return QRect();
   }
   case GuideStep::Target::View:
+  case GuideStep::Target::Plane: // where the plane is picked (mitcad#2440)
     return m_viewer != nullptr && m_viewer->isVisible() ? rectIn(m_viewer, host, m_viewer->rect()) : QRect();
+  case GuideStep::Target::Field: {
+    // A drawing tool's value box over the view while the tool shows it
+    // (mitcad#2440; SketchController::setFields names it).
+    if (m_viewer == nullptr) {
+      return QRect();
+    }
+    const auto* field = m_viewer->findChild<QWidget*>(QStringLiteral("sketchField_") + step.targetName);
+    return field != nullptr && field->isVisible() ? rectIn(field, host, field->rect()) : QRect();
+  }
   case GuideStep::Target::WorkspaceSelector:
   case GuideStep::Target::Workspace:
   case GuideStep::Target::Tab: {

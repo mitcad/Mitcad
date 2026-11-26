@@ -354,6 +354,15 @@ public:
   // itself), which the tool's cursor shows (mitcad#3).
   void setToolIcon(const QString& toolName, const QString& icon) { m_toolIcons.insert(toolName, icon); }
   SketchTool* tool() const { return m_tool.get(); }
+  // A tutorial's guide step's say over a drawing tool's input (mitcad#2440,
+  // TutorialGuide::drawingInput): before a tool that snaps takes a click
+  // (`snap`: where it snapped) or Enter (`snap` null), the check may hold
+  // it back (false); the tool then keeps its state, and the click's release
+  // and double-click are held back with it. Unset: all input goes through.
+  using GuideCheck = std::function<bool(const Snap* snap)>;
+  void setGuideCheck(GuideCheck check) { m_guideCheck = std::move(check); }
+  // Whether the running tool shows the value box `id` now (mitcad#2440).
+  bool hasField(const QString& id) const { return fieldIndex(id) >= 0; }
   // Enter and Esc; false when sketch mode had nothing to do with them.
   bool confirm();
   bool cancel();
@@ -1011,6 +1020,10 @@ private:
   SketchOverlay* m_overlay = nullptr;
   std::unique_ptr<SketchTool> m_tool;
   QHash<QString, QString> m_toolIcons; // by tool name
+  // A guide step's check of the tool's input (mitcad#2440), and whether it
+  // held back the last press (its release goes with it).
+  GuideCheck m_guideCheck;
+  bool m_guideHeldPress = false;
 
   bool m_paused = false;
   // A command input's snaps and handle (mitcad#1563): whether m_snap is a

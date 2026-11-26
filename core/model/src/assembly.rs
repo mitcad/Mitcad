@@ -119,7 +119,7 @@ pub struct ExternalLink {
 /// by the design's uids, so that reading the file again updates them in
 /// place. The base feature of the design's root's own bodies is
 /// [`ExternalLink::feature`].
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LinkTree {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -129,6 +129,27 @@ pub struct LinkTree {
     /// The design's joints, as-built joints and rigid groups.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<LinkedFeature>,
+    /// The design's root holds nothing of its own and one component
+    /// (mitcad#2429): the linked component stands for that component, not
+    /// for the root. None: it stands for the design's root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<LinkTop>,
+}
+
+/// The one component of a design whose root holds nothing of its own (no
+/// bodies, sketches, features or construction) and that component placed
+/// once (a new design's shape: the root and Component1, mitcad#2429). An
+/// insert of the design, copied or linked, places that component directly.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkTop {
+    /// The component, by its uid in the design.
+    pub component: ComponentUid,
+    /// Its occurrence in the design's root.
+    pub occurrence: OccurrenceUid,
+    /// Where the design's root places it: the inserted occurrence's
+    /// placement is the insert's composed with it.
+    pub placement: Transform,
 }
 
 /// A component of a linked design (mitcad#2209) and the read-only

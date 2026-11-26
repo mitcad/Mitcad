@@ -17,7 +17,9 @@
 #      280, a control that mirrors only Z on it, and on the Sub-Spindle
 #      Zones page a guard moving with it (mitcad#2392); its own profile, a
 #      step behind the housing, and the turret's body round the tool
-#      (mitcad#2405);
+#      (mitcad#2405); on the Keep-Out Zones page a fixed zone with its Y,
+#      on the Turret page the turret's body and the flat mill's station's
+#      own (mitcad#2412);
 #   2. New Setup on the lathe, the hand-over to the sub-spindle;
 #   3. through the model's commands Turn Facing, the part-off and the back
 #      faced on the sub-spindle; Drill from its panel on the sub-spindle,
@@ -27,7 +29,7 @@
 #   5. Simulate: the sub-spindle's live cuts in words, the back's facing
 #      running into the guard moving with the sub-spindle, the turret
 #      into its chuck; the sub-spindle drawn at the grip at the end
-#      (mitcad#2405);
+#      (mitcad#2405); the zones and the turret drawn (mitcad#2412);
 #   6. Post Process… to the Fanuc turning dialect (the wrappers read the
 #      file: the sub-spindle stopped with M206, its C axis on with M264,
 #      clamped, G19 for the flat, its C axis off, the sub-spindle's axis E);
@@ -35,6 +37,9 @@
 #      cannot reach the part, which the lathe check says in words, and the
 #      guard moving with it; Simulate drawing the sub-spindle where it
 #      waits for the main spindle's facing, then at the grip (mitcad#2405);
+#      the turret running into the fixed zone in the lathe check and in
+#      Simulate, the fixed zone and the guard drawn where they are
+#      (mitcad#2412);
 #   8. Turn Facing added on the main spindle after the sub-spindle's
 #      operations: its panel's warning, the browser's row, Generate's
 #      refusal in words.
@@ -62,9 +67,30 @@ type 'M110'
 focus-widget camMachineBUnclamp
 key Ctrl+a
 type 'M111'
-# The pages: Machine, Keep-Out Zones, Sub-Spindle.
+# The pages: Machine, Keep-Out Zones, Sub-Spindle, Sub-Spindle Zones,
+# Turret. A fixed zone 100 to 120 mm from the spindle axis along the whole
+# Z, its Y asked on a lathe with a Y axis (mitcad#2412).
 focus-widget camMachineTabs
 key Right
+button '.*' camMachineZoneAdd
+focus-dialog '^Add Zone$'
+focus-widget camMachineZoneName
+type 'Tailstock'
+focus-widget camMachineZoneMinX
+type '100 mm'
+focus-widget camMachineZoneMaxX
+type '120 mm'
+focus-widget camMachineZoneMinY
+type '-10 mm'
+focus-widget camMachineZoneMaxY
+type '10 mm'
+focus-widget camMachineZoneMinZ
+type '-1000 mm'
+focus-widget camMachineZoneMaxZ
+type '1000 mm'
+button '^OK$'
+focus-dialog '^Edit Machine$'
+focus-widget camMachineTabs
 key Right
 focus-widget camMachineSubMaxRpm
 key Ctrl+a
@@ -101,25 +127,12 @@ key Ctrl+a
 type '280 mm'
 focus-widget camMachineSubMirrorZ
 key Space
-# Its own profile, a step 100 mm across behind the housing, and the
-# turret's body round the tool: 100 mm out from the tool's point, 20 mm
-# along Z each way (mitcad#2405).
+# Its own profile, a step 100 mm across behind the housing (mitcad#2405).
 focus-widget camMachineSubProfile
 key Ctrl+a
 type '210 mm, 100 mm; 260 mm, 100 mm'
-focus-widget camMachineTurretXMin
-key Ctrl+a
-type '0 mm'
-focus-widget camMachineTurretXMax
-key Ctrl+a
-type '100 mm'
-focus-widget camMachineTurretZMin
-key Ctrl+a
-type '-20 mm'
-focus-widget camMachineTurretZMax
-key Ctrl+a
-type '20 mm'
-# The zones moving with it: a guard up to 60 mm in front of its jaws' face.
+# The zones moving with it: a guard up to 60 mm in front of its jaws' face,
+# not limited in Y (both Y left empty).
 focus-widget camMachineTabs
 key Right
 button '.*' camMachineSubZoneAdd
@@ -136,12 +149,34 @@ focus-widget camMachineZoneMaxZ
 type '0 mm'
 button '^OK$'
 focus-dialog '^Edit Machine$'
+# The Turret page: the turret's body round the tool, 100 mm out from the
+# tool's point, 20 mm along Z each way (mitcad#2405), and the flat mill's
+# station 8 its own, 60 mm out and 15 mm each way (mitcad#2412).
+focus-widget camMachineTabs
+key Right
+focus-widget camMachineTurretXMin
+key Ctrl+a
+type '0 mm'
+focus-widget camMachineTurretXMax
+key Ctrl+a
+type '100 mm'
+focus-widget camMachineTurretZMin
+key Ctrl+a
+type '-20 mm'
+focus-widget camMachineTurretZMax
+key Ctrl+a
+type '20 mm'
+focus-widget camMachineTurretStations
+key Ctrl+a
+type '8: 0 mm, 60 mm, -15 mm, 15 mm'
 mark
 button '^OK$'
 wait-log '^CAM machine set: mill-turn$' 30
 wait-log '^CAM machine mill-turn codes: mill-turn: (?=.*"b_clamp":"M110")(?=.*"b_unclamp":"M111")(?=.*"sub_axis":"E")(?=.*"sub_stop":"M206")(?=.*"sub_c_axis_on":\["M264","G28 H0[.]"\])(?=.*"max_rpm":2500)(?=.*"travel":\[-260,300\])(?=.*"chuck_diameter":120).*$'
 wait-log '^CAM machine mill-turn codes: mill-turn: (?=.*"sub_mirror_z_only":true)(?=.*"chuck_length":10)(?=.*"housing_diameter":180)(?=.*"housing_length":200)(?=.*"park":280)(?=.*"name":"Sub guard")(?=.*"min":\[0,0,-60\])(?=.*"max":\[1000,0,0\]).*$'
 wait-log '^CAM machine mill-turn codes: mill-turn: (?=.*"profile":\[\[210,100\],\[260,100\]\])(?=.*"turret_body":\{"x":\[0,100\],"z":\[-20,20\]\}).*$'
+wait-log '^CAM machine mill-turn codes: mill-turn: (?=.*"station_bodies":\[\{"station":8,"x":\[0,60\],"z":\[-15,15\]\}\]).*$'
+wait-log '^CAM machine zones: mill-turn: \[\{"bounds":\{"max":\[120,10,1000\],"min":\[100,-10,-1000\]\},"name":"Tailstock"\}\]$'
 focus-dialog '^Machines and Tools$'
 key Escape
 wait-log '^CAM machines dialog closed$'
@@ -213,10 +248,21 @@ wait-log '^CAM sub-spindle hit Setup 1: Turn Facing 2: the tool runs into Sub gu
 wait-log '^CAM sub-spindle hit Setup 1: Turn Facing 2: the turret runs into the sub-spindle.s chuck[.]$' 30
 wait-log '^CAM sub-spindle outline: Setup 1: 3 part\(s\)$' 30
 wait-log '^CAM sub-spindle drawn: Setup 1: Turn Facing 1 where it waits is not known$' 30
+# The zones and the turret (mitcad#2412): without the work zero's machine
+# place neither the fixed zone nor the guard waiting with the sub-spindle
+# is drawn for the main spindle's facing, nor is the turret's hit on the
+# fixed zone found; the turret's body round the facing's tool; at the end
+# the guard at the grip, the flat mill's station's own body.
+wait-log '^CAM turret hits: Setup 1: 0$' 30
+wait-log '^CAM zones drawn: Setup 1: Turn Facing 1: 0 zone\(s\), 0 moving, 0 segments$' 30
+wait-log '^CAM turret drawn: Setup 1: Turn Facing 1: X 0 to 100, Z -20 to 20 from the tool$' 30
 focus-dialog '^Simulate$'
 focus-widget camSimulateSlider
 key End
 wait-log '^CAM sub-spindle drawn: Setup 1: Facing 1 at Z -5, [1-9][0-9]* segments$' 30
+wait-log '^CAM zones drawn: Setup 1: Facing 1: 1 zone\(s\), 1 moving, 4 segments$' 30
+wait-log '^CAM zone drawn: Setup 1: Facing 1: Sub guard at Z -65 to -5$' 30
+wait-log '^CAM turret drawn: Setup 1: Facing 1: X 0 to 60, Z -15 to 15 from the tool$' 30
 key Escape
 wait-log '^CAM simulate closed$'
 wait-log '^CAM stock overlay: none$'
@@ -244,17 +290,30 @@ command make.cam_generate
 wait-log '^CAM finding Setup 1: The hand-over before Parting Off 1: the sub-spindle goes beyond its travel[.]$' 90
 wait-log '^CAM finding Setup 1: Turn Facing 2: the tool runs into Sub guard, which moves with the sub-spindle[.]$' 30
 wait-log '^CAM finding Setup 1: Turn Facing 2: the turret runs into the sub-spindle.s chuck[.]$' 30
+# The turret's body 100 mm out from the facing's tool runs into the fixed
+# zone 100 mm from the spindle axis, which the tool never reaches
+# (mitcad#2412).
+wait-log '^CAM finding Setup 1: Turn Facing 1: the turret runs into Tailstock[.]$' 30
 # Simulate draws the sub-spindle waiting at machine Z 280, 580 from the work
 # zero, while the main spindle faces, and at the grip for the back's
-# operations (mitcad#2405).
+# operations (mitcad#2405); the fixed zone where the machine has it (its Z
+# -1000 to 1000 300 mm on), the guard with the sub-spindle, and both 40 mm
+# nearer the main spindle for the back's operations, the view keeping the
+# part where it was; the turret's hit in words (mitcad#2412).
 mark
 command make.cam_simulate
 wait-log '^CAM simulate: Setup 1, 5 operations, [1-9][0-9]* points$' 60
+wait-log '^CAM turret hit Setup 1: Turn Facing 1: the turret runs into Tailstock[.]$' 120
 wait-log '^CAM sub-spindle drawn: Setup 1: Turn Facing 1 at Z 580, [1-9][0-9]* segments$' 120
+wait-log '^CAM zones drawn: Setup 1: Turn Facing 1: 2 zone\(s\), 1 moving, 16 segments$' 30
+wait-log '^CAM zone drawn: Setup 1: Turn Facing 1: Tailstock at Z -700 to 1300$' 30
+wait-log '^CAM zone drawn: Setup 1: Turn Facing 1: Sub guard at Z 520 to 580$' 30
 focus-dialog '^Simulate$'
 focus-widget camSimulateSlider
 key End
 wait-log '^CAM sub-spindle drawn: Setup 1: Facing 1 at Z -5, [1-9][0-9]* segments$' 30
+wait-log '^CAM zone drawn: Setup 1: Facing 1: Tailstock at Z -740 to 1260$' 30
+wait-log '^CAM zone drawn: Setup 1: Facing 1: Sub guard at Z -65 to -5$' 30
 key Escape
 wait-log '^CAM simulate closed$'
 

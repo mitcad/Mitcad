@@ -5,7 +5,8 @@
 // Simulate's playback; the stock as cut drawn at the slider's place, and
 // at the end shaded by the material it leaves over the part, with the
 // material left in words and the legend under the slider; a lathe's
-// sub-spindle drawn where it is as each operation cuts (mitcad#2405).
+// sub-spindle drawn where it is as each operation cuts (mitcad#2405), the
+// fixed and moving zones and the turret round the tool (mitcad#2412).
 //
 // Messages a person sees say what is wrong in words; the log lines carry
 // the numbers UI tests read.
@@ -116,6 +117,14 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
                                .arg(name)
                                .arg(subSpindle.value(QStringLiteral("outline")).toArray().size());
     }
+    // The fixed and moving zones and the turret's body where they are as
+    // each operation cuts (mitcad#2412): drawn at the slider's place
+    // (showCamMachineParts).
+    const QJsonArray zonesDrawn = answer.value(QStringLiteral("zones")).toArray();
+    const QJsonArray turretDrawn = answer.value(QStringLiteral("turret")).toArray();
+    if (!zonesDrawn.isEmpty() || !turretDrawn.isEmpty()) {
+      m_camMachineDrawn = CamMachineDrawn{name, zonesDrawn, turretDrawn, frame};
+    }
     const double left = answer.value(QStringLiteral("left")).toDouble();
     const int gouges = static_cast<int>(answer.value(QStringLiteral("gouges")).toArray().size());
     QJsonArray cuts = answer.value(QStringLiteral("rapid_cuts")).toArray();
@@ -163,6 +172,13 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
     for (const QJsonValue& hit : subHits) {
       qInfo().noquote() << QStringLiteral("CAM sub-spindle hit %1: %2").arg(name, str(hit.toObject(), "message"));
     }
+    // The turret's body running into the main chuck or a fixed zone
+    // (mitcad#2412), in words as the sub-spindle's.
+    const QJsonArray turretHits = answer.value(QStringLiteral("turret_hits")).toArray();
+    qInfo().noquote() << QStringLiteral("CAM turret hits: %1: %2").arg(name).arg(turretHits.size());
+    for (const QJsonValue& hit : turretHits) {
+      qInfo().noquote() << QStringLiteral("CAM turret hit %1: %2").arg(name, str(hit.toObject(), "message"));
+    }
     if (m_camSimulate != nullptr) {
       const QString cut = gouges > 0 ? tr("The tools cut into the part.") : tr("No tool cuts into the part.");
       QString summary = tr("The turned part: at most %1 mm of material left over it. %2").arg(cam::shortNumber(left), cut);
@@ -172,6 +188,10 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
       if (!subHits.isEmpty()) {
         summary += QLatin1Char(' ') + tr("%n move(s) run into the sub-spindle or a zone moving with it.", nullptr,
                                          static_cast<int>(subHits.size()));
+      }
+      if (!turretHits.isEmpty()) {
+        summary += QLatin1Char(' ') + tr("%n move(s) bring the turret into the chuck or a fixed zone.", nullptr,
+                                         static_cast<int>(turretHits.size()));
       }
       if (!cubes.empty()) {
         summary += QLatin1Char(' ') + tr("In 3D: %1 mm³ left over the part, %2 mm³ of it cut away.")
@@ -186,6 +206,9 @@ void MainWindow::loadCamStock(int setup, const QString& name, const cam::WorkFra
     } else if (!subHits.isEmpty()) {
       showWarning(tr("The simulation found a problem. %1")
                       .arg(modelMessage(userText(str(subHits.first().toObject(), "message")))));
+    } else if (!turretHits.isEmpty()) {
+      showWarning(tr("The simulation found a problem. %1")
+                      .arg(modelMessage(userText(str(turretHits.first().toObject(), "message")))));
     }
     return;
   }
@@ -294,14 +317,70 @@ void MainWindow::showCamSubSpindle(int operation, const QString& name) {
   }
 }
 
+void MainWindow::showCamMachineParts(int operation, const QString& name, const cam::Point3& tip) {
+  if (!m_camMachineDrawn) {
+    return;
+  }
+  // The zones where they are as the operation cuts, after the
+  // sub-spindle's lines; the turret's body round the tool's point.
+  const QJsonArray zones =
+      cam::operationEntry(m_camMachineDrawn->zones, operation).value(QStringLiteral("zones")).toArray();
+  const std::vector<float> zoneSegments = cam::zoneLines(zones, m_camMachineDrawn->frame);
+  m_camMachineLines.insert(m_camMachineLines.end(), zoneSegments.begin(), zoneSegments.end());
+  int moving = 0;
+  for (const QJsonValue& value : zones) {
+    moving += value.toObject().value(QStringLiteral("moving")).toBool() ? 1 : 0;
+  }
+  const QString zonesLogged = QStringLiteral("CAM zones drawn: %1: %2: %3 zone(s), %4 moving, %5 segments")
+                                  .arg(m_camMachineDrawn->setup, name)
+                                  .arg(zones.size())
+                                  .arg(moving)
+                                  .arg(static_cast<int>(zoneSegments.size() / 6));
+  if (zonesLogged != m_loggedCamZones) {
+    m_loggedCamZones = zonesLogged;
+    qInfo().noquote() << zonesLogged;
+    // Each zone with its Z where it is drawn, for the UI tests.
+    for (const QJsonValue& value : zones) {
+      const QJsonObject zone = value.toObject();
+      qInfo().noquote() << QStringLiteral("CAM zone drawn: %1: %2: %3 at Z %4 to %5")
+                               .arg(m_camMachineDrawn->setup, name, str(zone, "name"))
+                               .arg(cam::shortNumber(zone.value(QStringLiteral("min")).toArray().at(2).toDouble()),
+                                    cam::shortNumber(zone.value(QStringLiteral("max")).toArray().at(2).toDouble()));
+    }
+  }
+  const QJsonObject turret = cam::operationEntry(m_camMachineDrawn->turret, operation);
+  const std::vector<float> turretSegments = cam::turretLines(turret, tip, m_camMachineDrawn->frame);
+  m_camMachineLines.insert(m_camMachineLines.end(), turretSegments.begin(), turretSegments.end());
+  // Logged per operation, not per place of the tool.
+  QString turretLogged;
+  if (turretSegments.empty()) {
+    turretLogged = QStringLiteral("CAM turret drawn: %1: %2: none").arg(m_camMachineDrawn->setup, name);
+  } else {
+    const QJsonArray xs = turret.value(QStringLiteral("x")).toArray();
+    const QJsonArray zs = turret.value(QStringLiteral("z")).toArray();
+    turretLogged = QStringLiteral("CAM turret drawn: %1: %2: X %3 to %4, Z %5 to %6 from the tool")
+                       .arg(m_camMachineDrawn->setup, name, cam::shortNumber(xs.at(0).toDouble()),
+                            cam::shortNumber(xs.at(1).toDouble()), cam::shortNumber(zs.at(0).toDouble()),
+                            cam::shortNumber(zs.at(1).toDouble()));
+  }
+  if (turretLogged != m_loggedCamTurret) {
+    m_loggedCamTurret = turretLogged;
+    qInfo().noquote() << turretLogged;
+  }
+}
+
 void MainWindow::clearCamStock() {
   const bool shown = m_camStock.has_value() || m_camTurnedStock;
   m_camStock.reset();
   m_camTurnedStock = false;
-  // The sub-spindle drawn with it (mitcad#2405).
+  // The sub-spindle drawn with it (mitcad#2405), the zones and the turret
+  // (mitcad#2412).
   m_camSubSpindle.reset();
   m_camMachineLines.clear();
   m_loggedCamSubSpindle.clear();
+  m_camMachineDrawn.reset();
+  m_loggedCamZones.clear();
+  m_loggedCamTurret.clear();
   if (m_camSimulate != nullptr) {
     m_camSimulate->setRemaining(QString(), {});
   }

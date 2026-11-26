@@ -179,7 +179,7 @@ void appendPlayback(const QJsonArray& moves, const WorkFrame& frame, int operati
     const Point3 to = pointOf(move.value(QStringLiteral("to")), at.value_or(Point3{0.0, 0.0, 0.0}));
     const std::vector<Point3> way = at ? movePoints(move, *at, to) : std::vector<Point3>{to};
     for (const Point3& point : way) {
-      points.push_back({frame.toModel(point), operation, index});
+      points.push_back({frame.toModel(point), operation, index, point});
     }
     at = to;
     ++index;
@@ -327,6 +327,79 @@ std::optional<double> subSpindleFace(const QJsonObject& subSpindle, int operatio
     }
   }
   return std::nullopt;
+}
+
+QJsonObject operationEntry(const QJsonArray& list, int operation) {
+  for (const QJsonValue& value : list) {
+    const QJsonObject entry = value.toObject();
+    if (entry.value(QStringLiteral("id")).toInt() == operation) {
+      return entry;
+    }
+  }
+  return {};
+}
+
+std::vector<float> zoneLines(const QJsonArray& zones, const WorkFrame& frame) {
+  std::vector<float> out;
+  for (const QJsonValue& value : zones) {
+    const QJsonObject zone = value.toObject();
+    const QJsonArray lo = zone.value(QStringLiteral("min")).toArray();
+    const QJsonArray hi = zone.value(QStringLiteral("max")).toArray();
+    if (lo.size() != 3 || hi.size() != 3) {
+      continue;
+    }
+    const double x[2] = {lo.at(0).toDouble(), hi.at(0).toDouble()};
+    const double y[2] = {lo.at(1).toDouble(), hi.at(1).toDouble()};
+    const double z[2] = {lo.at(2).toDouble(), hi.at(2).toDouble()};
+    const auto corner = [&frame, &x, &y, &z](int i, int j, int k) { return frame.toModel({x[i], y[j], z[k]}); };
+    // Without depth in Y one rectangle, else the two faces at either Y
+    // and the four edges between them.
+    const int faces = y[1] - y[0] > 1e-9 ? 2 : 1;
+    for (int j = 0; j < faces; ++j) {
+      addSegment(out, corner(0, j, 0), corner(1, j, 0));
+      addSegment(out, corner(1, j, 0), corner(1, j, 1));
+      addSegment(out, corner(1, j, 1), corner(0, j, 1));
+      addSegment(out, corner(0, j, 1), corner(0, j, 0));
+    }
+    if (faces == 2) {
+      for (int i = 0; i < 2; ++i) {
+        for (int k = 0; k < 2; ++k) {
+          addSegment(out, corner(i, 0, k), corner(i, 1, k));
+        }
+      }
+    }
+  }
+  return out;
+}
+
+std::vector<float> turretLines(const QJsonObject& turret, const Point3& tip, const WorkFrame& frame) {
+  const QJsonArray xs = turret.value(QStringLiteral("x")).toArray();
+  const QJsonArray zs = turret.value(QStringLiteral("z")).toArray();
+  if (xs.size() != 2 || zs.size() != 2) {
+    return {};
+  }
+  // The machine's X in the work X and Y: given, else away from the axis
+  // through the tool (along X on the axis).
+  double ux = 1.0;
+  double uy = 0.0;
+  const QJsonArray axis = turret.value(QStringLiteral("x_axis")).toArray();
+  if (axis.size() == 2) {
+    ux = axis.at(0).toDouble();
+    uy = axis.at(1).toDouble();
+  } else if (const double r = std::hypot(tip[0], tip[1]); r > 1e-9) {
+    ux = tip[0] / r;
+    uy = tip[1] / r;
+  }
+  const auto corner = [&](int i, int k) {
+    const double along = xs.at(i).toDouble();
+    return frame.toModel({tip[0] + ux * along, tip[1] + uy * along, tip[2] + zs.at(k).toDouble()});
+  };
+  std::vector<float> out;
+  addSegment(out, corner(0, 0), corner(1, 0));
+  addSegment(out, corner(1, 0), corner(1, 1));
+  addSegment(out, corner(1, 1), corner(0, 1));
+  addSegment(out, corner(0, 1), corner(0, 0));
+  return out;
 }
 
 } // namespace mitcad::cam

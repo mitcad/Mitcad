@@ -270,7 +270,9 @@ fn crosses_axis(seg: &Seg) -> bool {
 /// The outside and the bore of a half section: from the face (the
 /// highest Z) the outside runs along the face outwards and on to the
 /// back's outer corner, the bore the other way from the face's innermost
-/// point.
+/// point. The section is drawn with the radius right and Z up, the
+/// profiles with Z right and X up: each arc's bulge changes sign, so that
+/// a concave fillet stays concave.
 fn split_profile(contour: &engine::Contour) -> Result<(Vec<turn::PV>, Vec<turn::PV>), String> {
     let v = &contour.vertices;
     let n = v.len();
@@ -317,7 +319,13 @@ fn split_profile(contour: &engine::Contour) -> Result<(Vec<turn::PV>, Vec<turn::
                 break;
             };
             if let Some(last) = out.last_mut() {
-                last.bulge = bulge;
+                // The section's bulges turn counter-clockwise with the
+                // radius right and Z up, a profile's with Z right and X
+                // up (`turn::profile`): swapping the axes mirrors the
+                // plane, so an arc's sense turns too (GitHub
+                // mitcad/Mitcad#668). This is apart from the walk's own
+                // reversal in `step`; both are needed.
+                last.bulge = -bulge;
             }
             out.push(turn::PV::new(v[next].x, v[next].y));
             i = next;
@@ -1014,8 +1022,21 @@ impl<K: Kernel> Document<K> {
         run: &TurnRun<'_>,
         program: &TurningProgram,
     ) -> Value {
-        let (Some(origin), Ok(tf)) = (setup.placement, &run.frame) else {
+        let Some(placement) = self.turn_placement(setup, run) else {
             return json!([]);
+        };
+        json!(turn::check_lathe(&run.machine.machine, program, &placement))
+    }
+
+    /// Where a lathe setup's work zero and its chuck's jaws' face are on
+    /// the machine, when the setup has the work zero's machine position.
+    fn turn_placement(
+        &self,
+        setup: &CamSetup,
+        run: &TurnRun<'_>,
+    ) -> Option<turn::check::TurnPlacement> {
+        let (Some(origin), Ok(tf)) = (setup.placement, &run.frame) else {
+            return None;
         };
         let chuck_z = setup
             .lathe
@@ -1023,11 +1044,10 @@ impl<K: Kernel> Document<K> {
             .and_then(|l| l.chuck_gap.as_ref())
             .and_then(|v| v.evaluate(self.parameters(), ValueKind::Length).ok())
             .map(|gap| tf.stock_back - gap);
-        let placement = turn::check::TurnPlacement {
+        Some(turn::check::TurnPlacement {
             work_z: origin[2],
             chuck_z,
-        };
-        json!(turn::check_lathe(&run.machine.machine, program, &placement))
+        })
     }
 
     /// A turning toolpath for the view: its moves in work coordinates in
@@ -1258,13 +1278,14 @@ impl<K: Kernel> Document<K> {
         let text = engine::turning_post(&program, post.as_ref(), &settings)
             .map_err(|e| invalid(e.message))?;
         // Read back with the lathe's own codes (the sub-spindle's stop,
-        // mitcad#2375).
-        let check = turn::check_program_with(&text, &program.mill_turn).map_err(|e| {
-            invalid(format!(
-                "The written program does not read back as meant: {}",
-                e.message
-            ))
-        })?;
+        // mitcad#2375) as the dialect's control reads it (mitcad#2425).
+        let check =
+            turn::check_program_as(&text, &program.mill_turn, post.control()).map_err(|e| {
+                invalid(format!(
+                    "The written program does not read back as meant: {}",
+                    e.message
+                ))
+            })?;
         Ok(json!({
             "text": text,
             "extension": post.extension(),
@@ -1344,6 +1365,34 @@ impl<K: Kernel> Document<K> {
                     .collect();
                 json!({"outline": outline, "operations": faces})
             });
+        // The fixed zones, the zones moving with the sub-spindle and the
+        // turret's body as Simulate draws them per operation (its id), and
+        // the turret's body against the main chuck and the fixed zones
+        // (mitcad#2412); the fixed zones and those hits only with the work
+        // zero's machine place.
+        let machine = &run.machine.machine;
+        let work_z = setup.placement.map(|p| p[2]);
+        let zones: Vec<Value> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                json!({"id": id, "zones": turn::zones_shown(machine, &program, i, work_z)})
+            })
+            .collect();
+        let turret: Vec<Value> = machine.lathe.as_ref().map_or_else(Vec::new, |lathe| {
+            ids.iter()
+                .enumerate()
+                .filter_map(|(i, id)| {
+                    let shown = turn::turret_shown(lathe, &program, i)?;
+                    Some(json!({"id": id, "x": shown.x, "z": shown.z, "x_axis": shown.x_axis}))
+                })
+                .collect()
+        });
+        let turret_hits = self
+            .turn_placement(setup, &run)
+            .map_or_else(Vec::new, |placement| {
+                turn::turret_hits(machine, &program, &placement)
+            });
         Ok(json!({
             "setup": setup.id,
             "turning": true,
@@ -1357,6 +1406,9 @@ impl<K: Kernel> Document<K> {
             "solid": solid,
             "sub_spindle_hits": sub_hits,
             "sub_spindle": sub_spindle,
+            "zones": zones,
+            "turret": turret,
+            "turret_hits": turret_hits,
         }))
     }
 }
@@ -1416,5 +1468,215 @@ mod tests {
         let (outside, inside) = split_profile(&contour).unwrap();
         assert_eq!(pts(&outside), vec![[0.0, 0.0], [10.0, 0.0], [10.0, -30.0]]);
         assert!(inside.is_empty());
+    }
+
+    /// The middle of a profile's arc from `a` to `b`, as `[x, z]`, read in
+    /// the profile's own convention (Z right, X up, a positive bulge
+    /// counter-clockwise: the arc bulges to the right of its chord).
+    fn profile_arc_middle(a: turn::PV, b: turn::PV) -> [f64; 2] {
+        let (du, dv) = (b.z - a.z, b.x - a.x);
+        let d = du.hypot(dv);
+        let s = a.bulge * d / 2.0;
+        let z = (a.z + b.z) / 2.0 + dv / d * s;
+        let x = (a.x + b.x) / 2.0 - du / d * s;
+        [x, z]
+    }
+
+    /// A shaft of radius 50 stepping up to 65 at Z -40 through an R15
+    /// shoulder fillet about (65, -25), 80 long. In the section (radius
+    /// right, Z up) the fillet turns counter-clockwise from (50, -25) to
+    /// (65, -40).
+    fn filleted_shaft() -> Contour {
+        Contour::closed(vec![
+            Vertex::line(0.0, 0.0),
+            Vertex::line(50.0, 0.0),
+            Vertex::new(50.0, -25.0, (PI / 8.0).tan()),
+            Vertex::line(65.0, -40.0),
+            Vertex::line(65.0, -80.0),
+            Vertex::line(0.0, -80.0),
+        ])
+    }
+
+    /// The outside's R15 fillet (GitHub mitcad/Mitcad#668): the profile's
+    /// arc lies on the section's fillet, in the corner, not mirrored out
+    /// of it.
+    #[test]
+    fn a_shoulder_fillet_keeps_its_sense_in_the_profile() {
+        let (outside, inside) = split_profile(&filleted_shaft()).unwrap();
+        assert!(inside.is_empty());
+        let i = outside
+            .iter()
+            .position(|v| v.bulge != 0.0)
+            .expect("the fillet is an arc");
+        let (a, b) = (outside[i], outside[i + 1]);
+        assert_eq!([a.x, a.z, b.x, b.z], [50.0, -25.0, 65.0, -40.0]);
+        // Clockwise as the profile draws it (G2).
+        assert!(a.bulge < 0.0, "{outside:?}");
+        let [x, z] = profile_arc_middle(a, b);
+        // On the fillet, 15 from (65, -25), and in the corner (the
+        // mirrored arc's middle is at x 60.6, z -29.4).
+        let r = (x - 65.0).hypot(z + 25.0);
+        assert!((r - 15.0).abs() < 1e-9, "middle at x {x}, z {z}");
+        assert!(x < 57.5 && z < -32.5, "middle at x {x}, z {z}");
+    }
+
+    /// The bore's fillet: a bore of radius 20 from the face to Z -30
+    /// narrowing to 10 at Z -40 through an R10 fillet about (10, -30),
+    /// counter-clockwise from (10, -40) to (20, -30) in the section.
+    #[test]
+    fn a_bore_fillet_keeps_its_sense_in_the_profile() {
+        let contour = Contour::closed(vec![
+            Vertex::line(20.0, 0.0),
+            Vertex::line(40.0, 0.0),
+            Vertex::line(40.0, -60.0),
+            Vertex::line(10.0, -60.0),
+            Vertex::new(10.0, -40.0, (PI / 8.0).tan()),
+            Vertex::line(20.0, -30.0),
+        ]);
+        let (outside, inside) = split_profile(&contour).unwrap();
+        let pts = |c: &[turn::PV]| c.iter().map(|v| [v.x, v.z]).collect::<Vec<_>>();
+        assert_eq!(pts(&outside), vec![[20.0, 0.0], [40.0, 0.0], [40.0, -60.0]]);
+        assert!(outside.iter().all(|v| v.bulge == 0.0), "{outside:?}");
+        assert_eq!(
+            pts(&inside),
+            vec![[20.0, 0.0], [20.0, -30.0], [10.0, -40.0], [10.0, -60.0]]
+        );
+        // Walked from the face into the bore: from (20, -30) to (10, -40),
+        // counter-clockwise as the profile draws it (G3).
+        let (a, b) = (inside[1], inside[2]);
+        assert!(a.bulge > 0.0, "{inside:?}");
+        let [x, z] = profile_arc_middle(a, b);
+        // On the fillet, 10 from (10, -30), in the material's corner at
+        // (20, -40) (the mirrored arc's middle is at x 12.9, z -32.9).
+        let r = (x - 10.0).hypot(z + 30.0);
+        assert!((r - 10.0).abs() < 1e-9, "middle at x {x}, z {z}");
+        assert!(x > 15.0 && z < -35.0, "middle at x {x}, z {z}");
+    }
+
+    /// The R15 fillet from the section through roughing and finishing to
+    /// the program and the simulation (GitHub mitcad/Mitcad#668): the
+    /// finishing nose's centre runs 0.8 from the fillet (its tip's arc
+    /// about the fillet's centre moved by the nose radius, 14.2 round), the
+    /// program writes it as G2, and the turned stock lies on the true
+    /// fillet, checked against the circle itself rather than the profile.
+    #[test]
+    fn a_shoulder_fillet_is_turned_posted_and_simulated_as_drawn() {
+        let (outside, inside) = split_profile(&filleted_shaft()).unwrap();
+        let part = TurnPart {
+            outside,
+            inside,
+            stock_radius: 67.0,
+            stock_inner_radius: 0.0,
+            stock_face: 0.0,
+        };
+        let tool = TurningTool {
+            number: 1,
+            offset: 0,
+            name: "Turning tool".into(),
+            kind: turn::TurningToolKind::Turning,
+            nose_radius: 0.8,
+            max_depth: 4.0,
+        };
+        let roughing = turn::rough(
+            &part,
+            &RoughOp {
+                side: TurnSide::Outside,
+                depth: 2.5,
+                retract: 0.5,
+                allowance_x: 0.2,
+                allowance_z: 0.1,
+                clearance: 2.0,
+                feed: 0.25,
+            },
+            &tool,
+        )
+        .unwrap();
+        let finishing = turn::finish(
+            &part,
+            &FinishOp {
+                side: TurnSide::Outside,
+                clearance: 2.0,
+                feed: 0.1,
+            },
+            &tool,
+        )
+        .unwrap();
+        // The finishing arc on the fillet: about (64.2, -25.8), 14.2
+        // round, clockwise, from (50, -25.8) to (64.2, -40).
+        let mut at = [0.0; 2];
+        let mut arc = None;
+        for m in &finishing.moves {
+            if let TurnMove::Arc { to, center, cw, .. } = *m
+                && (center[0] - 64.2).abs() < 1e-6
+                && (center[1] + 25.8).abs() < 1e-6
+            {
+                arc = Some((at, to, cw));
+            }
+            at = m.to();
+        }
+        let (from, to, cw) = arc.unwrap_or_else(|| panic!("{:?}", finishing.moves));
+        assert!(cw, "{:?}", finishing.moves);
+        for p in [from, to] {
+            let r = (p[0] - 64.2).hypot(p[1] + 25.8);
+            assert!((r - 14.2).abs() < 1e-6, "{p:?}");
+        }
+        assert!((from[0] - 50.0).abs() < 1e-6 && (from[1] + 25.8).abs() < 1e-6);
+        assert!((to[0] - 64.2).abs() < 1e-6 && (to[1] + 40.0).abs() < 1e-6);
+
+        let spindle = TurnSpindle::Css {
+            surface_speed: 200.0,
+            max_rpm: 3000.0,
+        };
+        let op = |name: &str, path: TurnPath| TurningProgramOp {
+            name: name.into(),
+            tool: tool.clone(),
+            spindle,
+            direction: Default::default(),
+            coolant: Default::default(),
+            path,
+            live: None,
+            sub: false,
+        };
+        let mut program = TurningProgram::new("Shaft", [80.0, 50.0]);
+        program.operations = vec![op("Rough", roughing), op("Finish", finishing)];
+
+        // The program: the arc as G2 (X a diameter, I a radius from its
+        // start to its centre).
+        let text = engine::turning_post(
+            &program,
+            &turn::FanucTurning,
+            &engine::PostSettings::default(),
+        )
+        .unwrap();
+        assert!(
+            text.lines()
+                .any(|l| l.starts_with("G2 X128.4 Z-40. I14.2 K0.")),
+            "{text}"
+        );
+        for line in text.lines().filter(|l| l.contains(" I14.2 ")) {
+            assert!(line.starts_with("G2 "), "{line}\n{text}");
+        }
+
+        // The turned stock on the fillet: the circle's radius at each node
+        // (the mirrored arc stood up to 11 mm off it), where the fillet is
+        // not yet steep enough for the nodes' spacing to show.
+        let sim = turn::simulate_turning(&part, &program, -90.0, 0.05, 0.01);
+        assert!(sim.gouges.is_empty(), "{:?}", sim.gouges);
+        assert!(sim.rapid_cuts.is_empty(), "{:?}", sim.rapid_cuts);
+        assert!(sim.left < 0.1, "{} at {:?}", sim.left, sim.left_at);
+        let mut checked = 0;
+        for (i, &z) in sim.stock.z.iter().enumerate() {
+            if !(z > -38.0 && z < -25.5) {
+                continue;
+            }
+            let fillet = 65.0 - (225.0 - (z + 25.0).powi(2)).sqrt();
+            let outer = sim.stock.outer[i];
+            assert!(
+                (outer - fillet).abs() < 0.05,
+                "at z {z}: turned to {outer}, the fillet at {fillet}"
+            );
+            checked += 1;
+        }
+        assert!(checked > 100, "{checked} nodes on the fillet");
     }
 }

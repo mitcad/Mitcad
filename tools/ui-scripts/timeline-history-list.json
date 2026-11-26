@@ -1,0 +1,22 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The timeline's History list (mitcad#2427), tools/ui-timeline-history-list-test.sh: Sketch1 (F1), a 30 x 20 rectangle on XY that no feature uses; Base (F2), a 40 x 40 x 5 box; Plane1 (F3), a plane 20 above XY; Post (F4), a 10 x 10 x 10 box, and Cap (F5), a 10 x 10 x 4 box, in the timeline group Posts. The marker at the end. All geometry is synthetic."},
+  {"cmd": "add_feature", "name": "Sketch1", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [60, 0]},
+    {"id": "p2", "type": "point", "at": [90, 0]},
+    {"id": "p3", "type": "point", "at": [90, 20]},
+    {"id": "p4", "type": "point", "at": [60, 20]},
+    {"id": "c5", "type": "line", "start": "p1", "end": "p2"},
+    {"id": "c6", "type": "line", "start": "p2", "end": "p3"},
+    {"id": "c7", "type": "line", "start": "p3", "end": "p4"},
+    {"id": "c8", "type": "line", "start": "p4", "end": "p1"}]}},
+  {"cmd": "add_feature", "name": "Base", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 40, "width": 40, "height": 5, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Plane1", "def": {"type": "construction_plane",
+    "definition": {"type": "offset", "plane": "xy", "distance": 20}}},
+  {"cmd": "add_feature", "name": "Post", "def": {"type": "box", "plane": "xy", "corner": [-30, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Cap", "def": {"type": "box", "plane": "xy", "corner": [-30, 20],
+    "length": 10, "width": 10, "height": 4, "operation": "new_body"}},
+  {"cmd": "group_features", "features": ["F4", "F5"], "name": "Posts"}
+]

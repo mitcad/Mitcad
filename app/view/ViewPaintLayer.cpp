@@ -174,6 +174,7 @@ void ViewPaintLayer::setShown(bool shown) {
   // with the new picture's texture.
   if (m_context->IsDisplayed(m_picture)) {
     m_context->Remove(m_picture, false);
+    m_replaced.replaced(); // its texture waits for a full frame (mitcad#2437)
   }
   // The picture's pixels are not kept while it is not drawn.
   static_cast<PaintedPicture*>(m_picture.get())->clear();
@@ -242,7 +243,8 @@ void ViewPaintLayer::paint(const QSize& pixels) {
   ScopedTiming timing("view paint layer");
   timing.setDetail(m_name);
   // A new picture each time: the one OCCT drew last stays with its texture
-  // until the new one replaces it.
+  // until the new one replaces it, and the replaced one's texture until
+  // OCCT's full frames let it go (mitcad#2437).
   QImage image(pixels, QImage::Format_ARGB32_Premultiplied);
   image.setDevicePixelRatio(m_ratio);
   image.fill(Qt::transparent);
@@ -262,6 +264,10 @@ void ViewPaintLayer::paint(const QSize& pixels) {
   ++m_paints;
   if (m_context->IsDisplayed(m_picture)) {
     m_context->Redisplay(m_picture, false);
+    // The picture it replaced keeps its texture until OCCT draws full
+    // frames (mitcad#2437, ReplacedPictures.hpp): the view draws one when
+    // enough wait.
+    m_replaced.replaced();
     return;
   }
   m_context->Display(m_picture, 0, -1, false);

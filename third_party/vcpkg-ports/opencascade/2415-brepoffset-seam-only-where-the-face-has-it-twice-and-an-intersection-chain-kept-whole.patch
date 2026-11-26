@@ -1,0 +1,229 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: an edge is a seam of a face only where the face has it twice, and
+the intersection of two offsets along an edge of a closed face keeps the
+pieces it runs on into (mitcad#2415).
+
+1. A cylinder whose seam lies on the line where a flat side meets it
+   tangentially (an arm tangent to a disk, the disk's seam on the tangent
+   line: the fuse split the seam there and the piece between the arm's top
+   and bottom became the edge between the cylinder and the arm's side),
+   shelled with Sharp corners: the thick solid failed ("the offset faces
+   do not close up") or, without the disk's rims rounded, built a valid
+   solid four times too heavy, at any thickness. That edge keeps both
+   curves of the seam on the cylinder though the cylinder's face has it
+   once. BRepOffset_Inter2d's SeamRunsOnFromTangentEdge (mitcad#2050) took
+   it for a seam (BRep_Tool::IsClosed), found two seams meeting at the
+   vertex, and the offset of that vertex was put on the extended offset of
+   the tangential edge as an end of it: the edge's offset was not trimmed
+   at the offsets of the arm's top and bottom, and the offset of the arm's
+   side got no face. A seam is now an edge the face has twice
+   (BRepTools::IsReallyClosed).
+
+2. A loft cut to a slot (GitHub #645's design): the offset of the slot's
+   round end and of the loft's face below it intersect in three pieces
+   meeting at vertices of their own (the enlarged offset of the cylinder
+   past the slot's end). BRepOffset_Tool::Inter3D, for a closed reference
+   face and a non-elementary offset, kept only the piece nearest the
+   edge's middle ("remove excess edges that are out of range"), which
+   stopped 4.7 mm before the slot's flat side: the edge's image was never
+   cut at that corner, and the offsets of the slot's end and of the loft's
+   face got no face (the closed offset failed at any thickness). Where
+   that piece does not reach past both ends of the edge (the nearest point
+   of its curve to an end of the edge is one of its own ends), it is now
+   kept with the pieces it runs on into through their common vertices, if
+   they make one simple run (two free ends, no branch) along a curve that
+   is not periodic, and only that run is assembled; else the nearest piece
+   stays alone as before (a notch's wall cutting a cone's offset along a
+   line split by the cone's seam plane, whose nearest piece covers the
+   edge: keeping both pieces hung the offset; a foot circle, trimmed by
+   patches 2050 and 2383).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2415.
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+index caf5b9c9..d5ec035a 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+@@ -2084,8 +2084,16 @@ static bool SeamRunsOnFromTangentEdge(
+   {
+     return false;
+   }
+-  const bool bSeam1 = BRep_Tool::IsClosed(theE1, theF);
+-  const bool bSeam2 = BRep_Tool::IsClosed(theE2, theF);
++  // (mitcad#2415) A seam is an edge the face has twice, once each way. An
++  // edge where the face meets a tangent face along the line of its seam (a
++  // flat side tangent to a cylinder where the cylinder's seam lies, the
++  // seam split there by a fuse) may keep both curves of the seam on the
++  // surface though the face has it once: taken for a seam, it made two
++  // seams here, and the offset of theV was put on the offset of the
++  // tangential edge, which then ran on past the faces cutting it (the
++  // offset of the flat side was not built).
++  const bool bSeam1 = BRepTools::IsReallyClosed(theE1, theF);
++  const bool bSeam2 = BRepTools::IsReallyClosed(theE2, theF);
+   if (bSeam1 == bSeam2)
+   {
+     return false;
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+index a477b63d..6894f41d 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -2658,13 +2658,156 @@ void BRepOffset_Tool::Inter3D(const TopoDS_Face&              F1,
+ 
+         if (!MinAngleEdge.IsNull())
+         {
++          // (mitcad#2415) The edge kept and the edges of L1 it runs on
++          // into, through their common vertices: the intersection along
++          // RefEdge may come in a chain of pieces (the offset of a slot's
++          // round end cut by the offset of a loft's face, in three pieces
++          // meeting at vertices of their own), and the edge alone left
++          // the pieces at the ends of RefEdge out; the offsets of the
++          // edge's faces then had no image.
++          // Only where that edge does not reach past both ends of RefEdge:
++          // the nearest point of its curve to an end of RefEdge is one of
++          // its own ends, not a foot of the perpendicular inside it (the
++          // line where a notch's wall cuts a cone's offset, in two pieces
++          // split by the cone's seam plane, has the edge's whole run in
++          // the nearest piece, which stays alone as before).
++          bool bShort = false;
++          {
++            const BRepAdaptor_Curve aMinCurve(TopoDS::Edge(MinAngleEdge));
++            const double            aF   = aMinCurve.FirstParameter();
++            const double            aL   = aMinCurve.LastParameter();
++            const gp_Pnt            aEnd1 = aMinCurve.Value(aF);
++            const gp_Pnt            aEnd2 = aMinCurve.Value(aL);
++            TopoDS_Vertex           aRefV[2];
++            TopExp::Vertices(RefEdge, aRefV[0], aRefV[1]);
++            for (int k = 0; k < 2 && !bShort; ++k)
++            {
++              if (aRefV[k].IsNull())
++              {
++                continue;
++              }
++              const gp_Pnt  aP     = BRep_Tool::Pnt(aRefV[k]);
++              const double  aToEnd = std::min(aP.Distance(aEnd1), aP.Distance(aEnd2));
++              Extrema_ExtPC aFoot(aP, aMinCurve);
++              bool          bInside = false;
++              for (int i = 1; aFoot.IsDone() && i <= aFoot.NbExt() && !bInside; ++i)
++              {
++                const double aU = aFoot.Point(i).Parameter();
++                bInside         = aFoot.IsMin(i) && aU > aF + Precision::PConfusion()
++                          && aU < aL - Precision::PConfusion()
++                          && std::sqrt(aFoot.SquareDistance(i)) < aToEnd - Precision::Confusion();
++              }
++              bShort = !bInside;
++            }
++          }
++          NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aChain;
++          aChain.Add(MinAngleEdge);
++          for (bool bGrown = bShort; bGrown;)
++          {
++            bGrown = false;
++            for (NCollection_List<TopoDS_Shape>::Iterator itC(L1); itC.More(); itC.Next())
++            {
++              if (aChain.Contains(itC.Value()))
++              {
++                continue;
++              }
++              bool bTouches = false;
++              for (TopExp_Explorer aExpV(itC.Value(), TopAbs_VERTEX); aExpV.More() && !bTouches; aExpV.Next())
++              {
++                for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator itK(aChain);
++                     itK.More() && !bTouches;
++                     itK.Next())
++                {
++                  for (TopExp_Explorer aExpK(itK.Value(), TopAbs_VERTEX); aExpK.More() && !bTouches;
++                       aExpK.Next())
++                  {
++                    bTouches = aExpK.Current().IsSame(aExpV.Current());
++                  }
++                }
++              }
++              if (bTouches)
++              {
++                aChain.Add(itC.Value());
++                bGrown = true;
++              }
++            }
++          }
++          // Only a simple run of pieces, two free ends and no vertex shared
++          // by more than two of them, is kept so: a chain closed on itself
++          // or branching (the pieces of a whole circle, as the offsets of
++          // a cone and of the face it stands on give, with a spur) is no
++          // run along RefEdge past its ends, and the edge nearest stays
++          // alone, as before.
++          if (aChain.Extent() > 1)
++          {
++            NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher> aUses;
++            for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator itK(aChain); itK.More();
++                 itK.Next())
++            {
++              TopoDS_Vertex aVF, aVL;
++              TopExp::Vertices(TopoDS::Edge(itK.Value()), aVF, aVL);
++              for (const TopoDS_Vertex& aV : {aVF, aVL})
++              {
++                if (aV.IsNull())
++                {
++                  continue;
++                }
++                if (int* pUses = aUses.ChangeSeek(aV))
++                {
++                  ++*pUses;
++                }
++                else
++                {
++                  aUses.Bind(aV, 1);
++                }
++              }
++            }
++            int  aNbFreeEnds = 0;
++            bool bBranch     = false;
++            for (NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher>::Iterator itU(aUses); itU.More();
++                 itU.Next())
++            {
++              aNbFreeEnds += itU.Value() == 1 ? 1 : 0;
++              bBranch = bBranch || itU.Value() > 2;
++            }
++            // (Pieces of a periodic curve, a circle round a cone's foot,
++            // are trimmed over the edges they are the image of later,
++            // mitcad#2050 and mitcad#2383.)
++            bool bPeriodic = false;
++            for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator itK(aChain);
++                 itK.More() && !bPeriodic;
++                 itK.Next())
++            {
++              double                        aCF = 0., aCL = 0.;
++              const occ::handle<Geom_Curve> aCC = BRep_Tool::Curve(TopoDS::Edge(itK.Value()), aCF, aCL);
++              bPeriodic = !aCC.IsNull() && aCC->IsPeriodic();
++            }
++            if (aNbFreeEnds != 2 || bBranch || bPeriodic)
++            {
++              aChain.Clear();
++              aChain.Add(MinAngleEdge);
++            }
++          }
++          // The edges assembled below are those of the run kept.
++          if (aChain.Extent() > 1 && !TrueEdges.IsEmpty())
++          {
++            NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aRun;
++            for (int iT = 1; iT <= TrueEdges.Extent(); ++iT)
++            {
++              if (aChain.Contains(TrueEdges(iT)))
++              {
++                aRun.Add(TrueEdges(iT));
++              }
++            }
++            TrueEdges = aRun;
++          }
+           NCollection_List<TopoDS_Shape>::Iterator itlist1(L1);
+           NCollection_List<TopoDS_Shape>::Iterator itlist2(L2);
+ 
+           while (itlist1.More())
+           {
+             const TopoDS_Shape& anEdge = itlist1.Value();
+-            if (anEdge.IsSame(MinAngleEdge))
++            if (aChain.Contains(anEdge))
+             {
+               itlist1.Next();
+               itlist2.Next();

@@ -447,6 +447,12 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/vanishing_split.cpp
   src/vanishing_split.hpp)
+
+# Curved sheet faces developed: cylindrical and conical faces converted to
+# sheet panels, and how a face bends two ways (mitcad#2435).
+target_sources(mitcad_geometry PRIVATE
+  src/sheet_develop.cpp
+  include/mitcad/geometry/sheet_develop.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1888,4 +1894,61 @@ if(BUILD_TESTING)
   target_link_libraries(test_shell_notched_cone PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.shell_notched_cone COMMAND test_shell_notched_cone)
   set_tests_properties(geometry.shell_notched_cone PROPERTIES TIMEOUT 300)
+
+  # A loft joined to its mirror image (mitcad#2384, GitHub mitcad/Mitcad#641):
+  # the reporter's oblique loft from a circle to a smaller one beside it,
+  # alone and with its two end extrusions, mirrored about YZ and joined; one
+  # valid solid holding both arms with the union's volume. `--probe` prints
+  # the side surfaces, their section and the kernel's own fuse.
+  add_executable(test_mirror_loft_join tests/test_mirror_loft_join.cpp)
+  target_link_libraries(test_mirror_loft_join PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.mirror_loft_join COMMAND test_mirror_loft_join)
+  set_tests_properties(geometry.mirror_loft_join PROPERTIES TIMEOUT 300)
+
+  # A disk with an arm whose flat sides are tangent to it, the disk's seam
+  # on one tangent line (GitHub #642's second design, mitcad#2415), a boss
+  # on the arm's end and the disk's rims rounded, shelled 2 and 1 mm inside
+  # with Sharp corners by MitCad's shell: it builds with the inside of every
+  # face's wall, the volume that of the same body with its seam at +x,
+  # and at 5 mm, thicker than the rims' rounding (mitcad#2464)
+  # (OCCT port patch 2415).
+  add_executable(test_shell_seam_on_tangent_edge tests/test_shell_seam_on_tangent_edge.cpp)
+  target_link_libraries(test_shell_seam_on_tangent_edge PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.shell_seam_on_tangent_edge COMMAND test_shell_seam_on_tangent_edge)
+  set_tests_properties(geometry.shell_seam_on_tangent_edge PROPERTIES TIMEOUT 300)
+
+  # A concave edge of a hole rounded wider than the straight stretch beside
+  # it, whose far edge goes on tangentially into the hole's round wall
+  # (GitHub #667, mitcad#2419): the ball takes the stretch away and rolls on
+  # over the wall, the space between the stretch and the wall continued
+  # filled first; strips 0.104 (the report's), 0.5 and 1.5 wide, the
+  # rounding 3 and the wall's radius 9, the volume exact.
+  add_executable(test_fillet_narrow_face_hole_wall tests/test_fillet_narrow_face_hole_wall.cpp)
+  target_link_libraries(test_fillet_narrow_face_hole_wall PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_narrow_face_hole_wall COMMAND test_fillet_narrow_face_hole_wall)
+  set_tests_properties(geometry.fillet_narrow_face_hole_wall PROPERTIES TIMEOUT 300)
+
+  # Shell with faces of their own wall thickness (mitcad#2443, GitHub
+  # mitcad/Mitcad#642): a box's bottom at its own thickness Inside, Outside,
+  # Both, closed and Rounded inside, a cylinder's side, a rounded edge's
+  # tangent chain taking the thickness, exact volumes and wall planes; the
+  # refusals (a rounding between walls of different thicknesses, without
+  # the tangent chain, a removed face, a wall the others cannot meet).
+  add_executable(test_shell_own_thickness tests/test_shell_own_thickness.cpp)
+  target_link_libraries(test_shell_own_thickness PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.shell_own_thickness COMMAND test_shell_own_thickness)
+  set_tests_properties(geometry.shell_own_thickness PROPERTIES TIMEOUT 300)
+endif()
+
+if(BUILD_TESTING)
+  # Curved sheet panels (mitcad#2435): conical panels of a developed annular
+  # sector (K 0.5 and 0.3, either side the front, either turn) and a
+  # cylindrical panel built as valid solids of the analytic volumes; a
+  # cone's and a cylinder's face developed (arcs about the apex and lines,
+  # at a moved neutral surface); a sphere refused; the Gaussian curvature of
+  # a sphere's, a cylinder's and a cone's face.
+  add_executable(test_sheet_curved tests/test_sheet_curved.cpp)
+  target_link_libraries(test_sheet_curved PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.sheet_curved COMMAND test_sheet_curved)
+  set_tests_properties(geometry.sheet_curved PROPERTIES TIMEOUT 300)
 endif()

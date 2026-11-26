@@ -5,7 +5,9 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
+#include "mitcad/geometry/sheet_develop.hpp"
 #include "mitcad/geometry/sheet_footprint.hpp"
 #include "mitcad/geometry/sheet_trim.hpp"
 #include "mitcad_bridge/kernel/sheet.h"
@@ -80,7 +82,19 @@ std::unique_ptr<SheetShapeResult> sheet_shape(rust::Slice<const SheetPatchInput>
   for (const auto& p : patches) {
     unit_axis(p.x_axis); unit_axis(p.y_axis);
     geometry::SheetPatch patch{input(p.domain), regions(p.regions), {}};
-    if (p.cylinder) {
+    if (p.cone) {
+      unit_axis(p.axis);
+      geometry::ConeEmbedding cone;
+      cone.apex = gp_Pnt(p.origin[0], p.origin[1], p.origin[2]);
+      cone.axis = gp_Dir(p.axis[0], p.axis[1], p.axis[2]);
+      cone.radial_start = gp_Dir(p.x_axis[0], p.x_axis[1], p.x_axis[2]);
+      cone.angular_direction = gp_Dir(p.y_axis[0], p.y_axis[1], p.y_axis[2]);
+      cone.half_angle = p.half_angle;
+      cone.neutral_depth = p.neutral_depth;
+      cone.angle_extent = p.angle_extent;
+      cone.inner_is_front = p.inner_is_front;
+      patch.embedding = cone;
+    } else if (p.cylinder) {
       unit_axis(p.axis);
       patch.embedding = geometry::CylinderEmbedding{
           {p.origin[0], p.origin[1], p.origin[2]}, {p.axis[0], p.axis[1], p.axis[2]},
@@ -169,6 +183,36 @@ rust::Vec<SheetFootprintFace> sheet_cylinder_footprint(const geometry::Shape& sh
     result.push_back(std::move(out));
   }
   return result;
+}
+
+SheetDevelopedFace sheet_face_development(const geometry::Shape& shape, rust::Slice<const rust::String> faces,
+                                          double neutral_depth, double thickness) {
+  std::vector<std::string> names;
+  for (const auto& face : faces) names.emplace_back(face);
+  const auto developed = geometry::sheet_face_development(shape, names, neutral_depth, thickness);
+  const auto point = [](const gp_XYZ& p) { return std::array<double, 3>{p.X(), p.Y(), p.Z()}; };
+  SheetDevelopedFace result;
+  result.cone = developed.cone;
+  result.origin = point(developed.origin.XYZ());
+  result.axis = point(developed.axis.XYZ());
+  result.radial_start = point(developed.radial_start.XYZ());
+  result.angular_direction = point(developed.angular_direction.XYZ());
+  result.neutral_radius = developed.neutral_radius;
+  result.half_angle = developed.half_angle;
+  result.turn = developed.turn;
+  result.closed = developed.closed;
+  result.inner_is_front = developed.inner_is_front;
+  for (const auto& face : developed.faces) {
+    SheetFootprintFace out;
+    for (const auto& edge : face) out.edges.push_back(output(edge));
+    result.faces.push_back(std::move(out));
+  }
+  return result;
+}
+
+SheetFaceBending sheet_face_bending(const geometry::Shape& shape, rust::Str face) {
+  const auto bending = geometry::face_bending(shape, std::string(face));
+  return {bending.gaussian, bending.size};
 }
 
 } // namespace mitcad::bridge

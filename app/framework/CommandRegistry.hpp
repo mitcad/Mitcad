@@ -104,7 +104,11 @@ public:
   // mitcad#1889); logs "Shortcuts reloaded from the settings: N saved".
   void reloadShortcuts();
 
-  // Enables the actions of the commands `available` accepts.
+  // Enables the actions of the commands `available` accepts. A command
+  // with its own `disabledReason` that its own `enabled` turns off has the
+  // reason as its action's tooltip meanwhile ("Flat Pattern View: the
+  // design has no sheet-metal body", mitcad#2446): the ribbon's buttons and
+  // the menus say why.
   void updateEnabled(const std::function<bool(const CommandDef&)>& available);
 
 private:
@@ -125,6 +129,9 @@ private:
   QHash<QString, QAction*> m_actions;
   QHash<QString, QString> m_aliases; // former id -> id
   QSet<QString> m_disabledShortcuts;
+  // Each action's tooltip as applyShortcut wrote it (its name, description
+  // and key), which updateEnabled puts back when a reason goes.
+  QHash<QString, QString> m_tips;
   QStringList m_shortcutWarnings;
   unsigned m_context = ModelShortcutContext;
   unsigned m_overlay = 0;              // mitcad#1661

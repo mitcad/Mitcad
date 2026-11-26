@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
-# Sketch Dimension's right-click menu (mitcad#1540, GitHub #203): Center or
-# Tangent for each circle or arc picked, and Driving or Driven, on
-# sketch-tangent-dimension.json (Sketch1: a circle of diameter 20 about the
-# fixed origin, a free circle of radius 5 about (30, 0)):
-#   1. A right-click on the first circle's rim, Tangent: it is picked by its
-#      tangent side; a click on the second circle picks it by its centre;
+# Sketch Dimension's right-click menu (mitcad#1540, GitHub #203): Center,
+# Tangent Near or Tangent Far (mitcad#2451) for each circle or arc picked,
+# and Driving or Driven, on sketch-tangent-dimension.json (Sketch1: a circle
+# of diameter 20 about the fixed origin, a free circle of radius 5 about
+# (30, 0), a line from (-20, -25) to (40, -25) below them):
+#   1. A right-click on the first circle's rim, Tangent Near: it is picked by
+#      its tangent side; a click on the second circle picks it by its centre;
 #      the menu's Driving shows the preview, a tangent_point_distance of
 #      30 - 10 = 20; 18 typed adds it and moves the free centre to 28.
 #   2. Both circles by their tangent sides from the menu, then Driven: the
@@ -19,6 +20,9 @@
 #   4. The driven 13 dimension's context menu offers Make Driving: it drives
 #      at its measured 13, and one Undo ("Make Driving in Sketch1") takes it
 #      back.
+#   5. Sketch Dimension again: Tangent Far on the second circle, then the
+#      line: the preview is the tangent_distance far 25 + 5 = 30, from the
+#      line to the circle's top; 32 typed adds it (mitcad#2451).
 # Run by tools/ui-sketch-tangent-dimension-test.sh (Linux) and
 # tools/ui-windows-sketch-tangent-dimension-test.ps1 (Windows).
 expect-ever 'View area'
@@ -29,6 +33,9 @@ dblclick-logged '^Timeline Sketch1 at '
 wait-log '^Editing sketch F1 \(Sketch1\)'
 key F6
 wait-idle
+# Keep the second pick and the dimension placement clear of the view cube.
+wheel 50 50 -3
+wait-idle
 
 # 1. Tangent to center.
 mark
@@ -37,14 +44,14 @@ wait-log '^Sketch tool Sketch Dimension$'
 wait-log '^Sketch Dimension prompt: pick .*, then right-click for Driven[.]$'
 sketch-click -10 0 right
 wait-log '^Sketch Dimension menu for c[0-9]+ \(to pick\)$'
-wait-log '^Context menu: Center [|] Tangent [|] Driving \(current\) [|] Driven [|] Cancel$'
-popup 'Tangent'
+wait-log '^Context menu: Center [|] Tangent Near [|] Tangent Far [|] Driving \(current\) [|] Driven [|] Cancel$'
+popup 'Tangent Near'
 wait-log '^Sketch Dimension: c[0-9]+ by its tangent side$'
 sketch-click 35 0
 wait-log '^Sketch Dimension prompt: click where the value goes .*[.] Right-click: Driven[.]$'
 sketch-click 15 15 right
 wait-log '^Sketch Dimension menu for c[0-9]+ \(picked\)$'
-wait-log '^Context menu: Center \(current\) [|] Tangent [|] Driving \(current\) [|] Driven [|] Cancel$'
+wait-log '^Context menu: Center \(current\) [|] Tangent Near [|] Tangent Far [|] Driving \(current\) [|] Driven [|] Cancel$'
 popup 'Driving'
 wait-log '^Sketch Dimension preview: tangent_point_distance 20[.]00$'
 sketch-click 15 15
@@ -59,12 +66,12 @@ expect-never 'Sketch right-click: Esc of the tool'
 mark
 sketch-click -10 0 right
 wait-log '^Sketch Dimension menu for c[0-9]+ \(to pick\)$'
-popup 'Tangent'
+popup 'Tangent Near'
 wait-log '^Sketch Dimension: c[0-9]+ by its tangent side$'
 mark
 sketch-click 33 0 right
 wait-log '^Sketch Dimension menu for c[0-9]+ \(to pick\)$'
-popup 'Tangent'
+popup 'Tangent Near'
 wait-log '^Sketch Dimension preview: tangent_circle_distance 13[.]00$'
 mark
 sketch-click 15 -15 right
@@ -107,6 +114,36 @@ command edit.undo
 wait-log '^Undo: Make Driving in Sketch1$'
 wait-idle
 expect-never 'not made driv'
+
+# 5. Tangent Far: from the line to the second circle's far side
+# (mitcad#2451).
+mark
+command sketch.dimension
+wait-log '^Sketch tool Sketch Dimension$'
+sketch-click 33 0 right
+wait-log '^Sketch Dimension menu for c[0-9]+ \(to pick\)$'
+wait-log '^Context menu: Center [|] Tangent Near [|] Tangent Far [|] Driving \(current\) [|] Driven [|] Cancel$'
+popup 'Tangent Far'
+wait-log '^Sketch Dimension: c[0-9]+ by its far tangent side$'
+sketch-click -10 -25
+wait-log '^Sketch Dimension prompt: click where the value goes .*[.] Right-click: Driven[.]$'
+# The value right of the dimension line, inside the view (the fit ends
+# near the line's end at x 40), clear of the circle and the line.
+mark
+sketch-click 36 -12 right
+wait-log '^Sketch Dimension menu for c[0-9]+ \(picked\)$'
+wait-log '^Context menu: Center [|] Tangent Near [|] Tangent Far \(current\) [|] Driving \(current\) [|] Driven [|] Cancel$'
+popup 'Driving'
+wait-log '^Sketch Dimension preview: tangent_distance far 30[.]00$'
+sketch-click 36 -12
+wait-log '^Sketch value editor at .* with 30[.]00'
+key ctrl+a
+type 32
+key Return
+wait-log '^Added dimension k[0-9]+ tangent_distance far d[0-9]+ = 32 mm$'
+key Escape
+wait-log '^Sketch tool ended: Sketch Dimension$'
+wait-idle
 
 command sketch.finish
 wait-log '^Sketch finished'

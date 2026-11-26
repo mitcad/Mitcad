@@ -283,13 +283,21 @@ impl<K: Kernel> Document<K> {
         } = read;
         let name = self.state.assembly.name(component);
         // With its components (mitcad#2209): read with them.
-        if link.tree.is_some() {
+        if let Some(tree) = &link.tree {
             let read = match source {
-                Ok(source) => self.design_tree(
-                    &source,
-                    &link.path,
-                    &CopySource::Document(resolved.parent()),
-                ),
+                Ok(source) => {
+                    // Linked as its one component (mitcad#2429): so again
+                    // while the design keeps that shape, else with its root.
+                    let top = tree
+                        .top
+                        .and_then(|_| super::link_tree::single_component(&source));
+                    self.design_tree(
+                        &source,
+                        &link.path,
+                        &CopySource::Document(resolved.parent()),
+                        top.as_ref(),
+                    )
+                }
                 Err(e) => Err(e),
             };
             match read {

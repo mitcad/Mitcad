@@ -724,6 +724,7 @@ fn a_sketch_on_a_face_unpacks_only_the_face_s_body() {
         .add_sketch(SketchPlane::Face {
             face: Box::new(top),
             body: Some(b.body),
+            placed: None,
         })
         .unwrap()
         .uid;

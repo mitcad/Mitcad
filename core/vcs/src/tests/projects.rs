@@ -1190,12 +1190,7 @@ fn fake_keyscan(scratch: &Scratch, name: &str, output: &str) -> Option<PathBuf> 
     let text = scratch.join(&format!("{name}.txt"));
     fs::write(&text, output).unwrap();
     let script = scratch.join(&format!("{name}-keyscan"));
-    fs::write(&script, format!("#!/bin/sh\ncat '{}'\n", text.display())).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    write_executable(&script, &format!("#!/bin/sh\ncat '{}'\n", text.display()));
     Some(script)
 }
 

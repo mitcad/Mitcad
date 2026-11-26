@@ -207,6 +207,8 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     // The Browser rows' controls where they always were (mitcad#2223).
     setBrowserActivatePlace(BrowserControlPlace::Classic);
     setBrowserEyePlace(BrowserControlPlace::Classic);
+    // The timeline as the strip at the bottom (mitcad#2427).
+    setTimelinePresentation(TimelinePresentation::Strip);
     drawings::saveCornerDots(drawings::CornerDots());
     saveSmallCircles(SmallCircles::Adaptive);
     saveOriginDisplay(OriginDisplay());

@@ -432,8 +432,9 @@ public:
   };
   RowPlaces rowPlaces(const QString& path) const;
   // With the Rows background, where the panel takes the mouse, in its own
-  // coordinates: the rows' boxes in sight, the scroll bars shown and an
-  // open rename editor.
+  // coordinates: the rows' boxes in sight and the gaps between adjacent
+  // boxes (mitcad#2414: the wheel there scrolls the rows, not the camera),
+  // the scroll bars shown and an open rename editor.
   QRegion rowsRegion() const;
   // The panel's width at which every row in sight shows its whole name on
   // its box (mitcad#1932: the bare card widens to it, up to a limit); 0

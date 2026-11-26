@@ -35,3 +35,8 @@ mod sub_body_tests;
 // The sub-spindle drawn in Simulate, the turret's body against it, its own
 // profile (mitcad#2405).
 mod sub_turret_tests;
+
+// The fixed and moving zones and the turret drawn in Simulate, the
+// turret's body against the main chuck and the fixed zones, a body per
+// station (mitcad#2412).
+mod turret_tests;

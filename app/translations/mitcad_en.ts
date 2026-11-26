@@ -928,6 +928,27 @@ What is not sent within %n seconds is sent the next time the project opens.</num
             <numerusform>%n moves run into the sub-spindle or a zone moving with it.</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>%n move(s) bring the turret into the chuck or a fixed zone.</source>
+        <translation>
+            <numerusform>%n move brings the turret into the chuck or a fixed zone.</numerusform>
+            <numerusform>%n moves bring the turret into the chuck or a fixed zone.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%1 of %2, %n sheet(s)</source>
+        <translation>
+            <numerusform>%1 of %2, %n sheet</numerusform>
+            <numerusform>%1 of %2, %n sheets</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Printed the drawing book %1 on %n page(s).</source>
+        <translation>
+            <numerusform>Printed the drawing book %1 on %n page.</numerusform>
+            <numerusform>Printed the drawing book %1 on %n pages.</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>mitcad::MaterialsPanel</name>
@@ -1086,6 +1107,37 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>%n texture.</numerusform>
             <numerusform>%n textures.</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::TimelineHistoryList</name>
+    <message numerus="yes">
+        <source>Hide its bodies (%n)</source>
+        <translation>
+            <numerusform>Hide its body (%n)</numerusform>
+            <numerusform>Hide its bodies (%n)</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Show its bodies (%n)</source>
+        <translation>
+            <numerusform>Show its body (%n)</numerusform>
+            <numerusform>Show its bodies (%n)</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n feature(s) hidden by the filter</source>
+        <translation>
+            <numerusform>%n feature hidden by the filter</numerusform>
+            <numerusform>%n features hidden by the filter</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;%n feature(s)</source>
+        <translation>
+            <numerusform>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;%n feature</numerusform>
+            <numerusform>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;%n features</numerusform>
         </translation>
     </message>
 </context>

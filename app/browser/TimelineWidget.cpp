@@ -2,6 +2,7 @@
 #include "TimelineWidget.hpp"
 #include "framework/ModelMessages.hpp"
 #include "Bindings.hpp"
+#include "TimelineHistoryList.hpp"
 #include "TimelinePresentation.hpp"
 
 #include <algorithm>
@@ -42,6 +43,7 @@
 #include <QToolButton>
 #include <QToolTip>
 #include <QTreeWidget>
+#include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtLogging>
 
@@ -506,6 +508,89 @@ public:
   // Where a group is shown: its folded cell or its band.
   QRect groupRect(const Group& group) const { return group.collapsed ? cell(group.first) : bandRect(group); }
 
+  // A boundary the marker and a dragged feature can take (g = count():
+  // after the last): not inside a folded group, not between two features
+  // the filter hides. The History list (mitcad#2427) asks the same.
+  bool allowedBoundary(int g) const { return g >= 0 && g <= count() && open(g) && shownBoundary(g); }
+  // A match of the search (mitcad#179).
+  bool isFound(const QString& uid) const { return m_found.contains(uid); }
+
+  // A click on item i: it alone selected, Ctrl toggling it in the
+  // selection, Shift a run from the one selected; logged and told
+  // (featuresClicked). The strip's and the History list's clicks
+  // (mitcad#2427).
+  void clickItem(int i, bool shift, bool toggle) {
+    if (i < 0 || i >= count()) {
+      return;
+    }
+    const QString uid = m_items[i].feature.uid;
+    if (toggle && !shift) {
+      const QStringList before = selectedRun();
+      m_externalSelected = QSet<QString>(before.begin(), before.end());
+      if (m_externalSelected.contains(uid)) m_externalSelected.remove(uid);
+      else m_externalSelected.insert(uid);
+      m_hasExternalSelection = true;
+      m_selected = uid;
+      m_selectedTo = uid;
+      update();
+      const QStringList run = selectedRun();
+      qDebug().noquote() << QStringLiteral("Timeline selected: %1").arg(run.join(QStringLiteral(", ")));
+      emit m_owner.featuresClicked(run);
+      return;
+    }
+    if (shift && !m_selected.isEmpty()) {
+      // Shift+click: a run of features from the one selected.
+      m_hasExternalSelection = false;
+      m_externalSelected.clear();
+      m_selectedTo = uid;
+      update();
+      const QStringList run = selectedRun();
+      qDebug().noquote() << QStringLiteral("Timeline selected: %1").arg(run.join(QStringLiteral(", ")));
+      emit m_owner.featuresClicked(run);
+      return;
+    }
+    select(uid);
+    emit m_owner.featuresClicked({uid});
+  }
+
+  // The context menu of item i: in the selected run the run stays;
+  // elsewhere the feature is selected.
+  void contextItem(int i, const QPoint& globalPosition) {
+    if (i < 0 || i >= count()) {
+      return;
+    }
+    if (!selectedRun().contains(m_items[i].feature.uid)) {
+      select(m_items[i].feature.uid);
+    }
+    emit m_owner.contextMenuRequested(m_items[i].feature.uid, globalPosition);
+  }
+
+  // Whether item `item` dragged can go to an index; the model's reason when
+  // not (asked once per item and index while dragging).
+  bool canMove(int item, int index, QString* reason) {
+    const qint64 key = (static_cast<qint64>(item) << 32) | static_cast<quint32>(index);
+    auto cached = m_reorder.constFind(key);
+    if (cached == m_reorder.cend()) {
+      QString error;
+      try {
+        const QJsonObject answer = m_owner.m_model.queryObject(
+            {{QStringLiteral("query"), QStringLiteral("can_reorder")},
+             {QStringLiteral("uid"), m_items[item].feature.uid},
+             {QStringLiteral("index"), index}});
+        if (!answer.value(QStringLiteral("ok")).toBool()) {
+          error = answer.value(QStringLiteral("error")).toString(tr("It cannot go there."));
+        }
+      } catch (const std::exception& e) {
+        error = mitcad::modelMessage(e.what());
+      }
+      cached = m_reorder.insert(key, error);
+    }
+    if (reason != nullptr) {
+      *reason = cached.value();
+    }
+    return cached.value().isEmpty();
+  }
+
 private:
   void pruneExternalSelection() {
     QSet<QString> retained;
@@ -576,31 +661,6 @@ private:
   int dropIndex(double x) const {
     const int gap = nearestBoundary(x);
     return gap <= m_press ? gap : gap - 1;
-  }
-
-  // Whether the dragged feature can go to an index; the model's reason when
-  // not (asked once per index while dragging).
-  bool canMove(int index, QString* reason) {
-    auto cached = m_reorder.constFind(index);
-    if (cached == m_reorder.cend()) {
-      QString error;
-      try {
-        const QJsonObject answer = m_owner.m_model.queryObject(
-            {{QStringLiteral("query"), QStringLiteral("can_reorder")},
-             {QStringLiteral("uid"), m_items[m_press].feature.uid},
-             {QStringLiteral("index"), index}});
-        if (!answer.value(QStringLiteral("ok")).toBool()) {
-          error = answer.value(QStringLiteral("error")).toString(tr("It cannot go there."));
-        }
-      } catch (const std::exception& e) {
-        error = mitcad::modelMessage(e.what());
-      }
-      cached = m_reorder.insert(index, error);
-    }
-    if (reason != nullptr) {
-      *reason = cached.value();
-    }
-    return cached.value().isEmpty();
   }
 
 protected:
@@ -776,7 +836,7 @@ protected:
       if (m_dragItem) {
         m_dropIndex = dropIndex(at.x());
         QString reason;
-        m_dropAllowed = m_dropIndex == m_press || canMove(m_dropIndex, &reason);
+        m_dropAllowed = m_dropIndex == m_press || canMove(m_press, m_dropIndex, &reason);
         if (!m_dropAllowed) {
           QToolTip::showText(event->globalPosition().toPoint(), reason, this);
         } else {
@@ -844,33 +904,7 @@ protected:
       return;
     }
     if (itemAt(event->position().toPoint()) == pressed) {
-      if (m_toggle && !m_shift) {
-        const QStringList before = selectedRun();
-        m_externalSelected = QSet<QString>(before.begin(), before.end());
-        if (m_externalSelected.contains(uid)) m_externalSelected.remove(uid);
-        else m_externalSelected.insert(uid);
-        m_hasExternalSelection = true;
-        m_selected = uid;
-        m_selectedTo = uid;
-        update();
-        const QStringList run = selectedRun();
-        qDebug().noquote() << QStringLiteral("Timeline selected: %1").arg(run.join(QStringLiteral(", ")));
-        emit m_owner.featuresClicked(run);
-        return;
-      }
-      if (m_shift && !m_selected.isEmpty()) {
-        // Shift+click: a run of features from the one selected.
-        m_hasExternalSelection = false;
-        m_externalSelected.clear();
-        m_selectedTo = uid;
-        update();
-        const QStringList run = selectedRun();
-        qDebug().noquote() << QStringLiteral("Timeline selected: %1").arg(run.join(QStringLiteral(", ")));
-        emit m_owner.featuresClicked(run);
-        return;
-      }
-      select(uid);
-      emit m_owner.featuresClicked({uid});
+      clickItem(pressed, m_shift, m_toggle);
     }
   }
 
@@ -906,11 +940,7 @@ protected:
     if (i < 0) {
       return;
     }
-    // In the selected run the run stays; elsewhere the feature is selected.
-    if (!selectedRun().contains(m_items[i].feature.uid)) {
-      select(m_items[i].feature.uid);
-    }
-    emit m_owner.contextMenuRequested(m_items[i].feature.uid, event->globalPos());
+    contextItem(i, event->globalPos());
   }
 
   void keyPressEvent(QKeyEvent* event) override {
@@ -1031,16 +1061,23 @@ private:
   bool m_dragItem = false;
   int m_dropIndex = -1;
   bool m_dropAllowed = true;
-  QHash<int, QString> m_reorder; // index: why not (empty: allowed)
+  QHash<qint64, QString> m_reorder; // item and index (canMove): why not (empty: allowed)
   QString m_loggedTip;
   QHash<QString, QString> m_loggedCells; // name: the painted state last logged (mitcad#961)
 };
 
 TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)
     : QWidget(parent), m_model(model) {
-  auto* layout = new QHBoxLayout(this);
+  // The bar's row in a column (mitcad#2427): the History list puts the
+  // search's field and the list under it.
+  m_outer = new QVBoxLayout(this);
+  m_outer->setContentsMargins(0, 0, 0, 0);
+  m_outer->setSpacing(2);
+  auto* layout = new QHBoxLayout;
   layout->setContentsMargins(2, 0, 2, 0);
   layout->setSpacing(1);
+  m_outer->addLayout(layout);
+  m_barRow = layout;
   const bool floating = chromeStyle() == ChromeStyle::Floating;
   const auto button = [this, layout, floating](const char* id, QStyle::StandardPixmap icon, const char* symbol,
                                                const QString& tip, std::function<int()> position) {
@@ -1182,6 +1219,10 @@ TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)
   m_scroll->setFixedHeight(stripHeight());
   setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
   layout->addWidget(m_scroll, 1);
+  // The buttons at the left of the History list's bar (mitcad#2427), where
+  // the hidden strip leaves the room: the strip's stretch keeps this one
+  // empty beside it.
+  layout->addStretch(0);
   QScrollBar* scrollBar = m_scroll->horizontalScrollBar();
   connect(scrollBar, &QScrollBar::rangeChanged, this, [this, scrollBar](int, int maximum) {
     m_scroll->setFixedHeight(stripHeight() + (maximum > 0 ? scrollBar->sizeHint().height() : 0));
@@ -1220,7 +1261,113 @@ TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)
       m_editor->hide();
     }
   });
+  // The History list (mitcad#2427), shown with that presentation.
+  m_list = new TimelineHistoryList(*this);
+  m_list->hide();
+  m_outer->addWidget(m_list, 1);
   applyPalette();
+}
+
+// ---------------------------------------------------------------------------
+// The History list (mitcad#2427)
+
+void TimelineWidget::setPresentation(Presentation presentation) {
+  if (presentation == m_presentation) {
+    return;
+  }
+  m_presentation = presentation;
+  const bool list = presentation == Presentation::List;
+  cancelEditing();
+  m_list->cancelRename();
+  // The search's field: in the bar's row beside its button (Strip), on a
+  // row of its own under the buttons, as wide as the panel (List).
+  if (list) {
+    m_barRow->removeWidget(m_searchBar);
+    m_outer->insertWidget(1, m_searchBar);
+    m_searchField->setMinimumWidth(80);
+    m_searchField->setMaximumWidth(QWIDGETSIZE_MAX);
+  } else {
+    m_outer->removeWidget(m_searchBar);
+    m_barRow->insertWidget(m_barRow->indexOf(m_searchButton) + 1, m_searchBar);
+    m_searchField->setFixedWidth(240);
+  }
+  m_scroll->setVisible(!list);
+  m_list->setVisible(list);
+  setSizePolicy(QSizePolicy::Preferred, list ? QSizePolicy::Expanding : QSizePolicy::Fixed);
+  if (list) {
+    m_list->rebuild();
+  }
+  updateGeometry();
+  qDebug().noquote() << QStringLiteral("Timeline presentation: %1")
+                            .arg(list ? QStringLiteral("history list") : QStringLiteral("strip"));
+  QTimer::singleShot(0, this, &TimelineWidget::logLayout);
+  emit listHeightChanged();
+}
+
+int TimelineWidget::listContentHeight() const {
+  if (m_presentation != Presentation::List) {
+    return sizeHint().height();
+  }
+  int height = 0;
+  for (int i = 0; i < m_barRow->count(); ++i) {
+    if (QWidget* part = m_barRow->itemAt(i)->widget(); part != nullptr && !part->isHidden()) {
+      height = std::max(height, part->sizeHint().height());
+    }
+  }
+  if (!m_searchBar->isHidden()) {
+    height += m_outer->spacing() + m_searchBar->sizeHint().height();
+  }
+  return height + m_outer->spacing() + m_list->contentHeight();
+}
+
+int TimelineWidget::itemCount() const { return m_strip->count(); }
+
+const DocumentSnapshot::Feature& TimelineWidget::itemFeature(int i) const { return m_strip->item(i)->feature; }
+
+bool TimelineWidget::itemFiltered(int i) const { return m_strip->filtered(i); }
+
+int TimelineWidget::itemColour(int i) const { return m_strip->item(i)->colour; }
+
+QVector<TimelineWidget::GroupRange> TimelineWidget::groupRanges() const {
+  QVector<GroupRange> ranges;
+  for (const TimelineStrip::Group& group : m_strip->groups()) {
+    ranges.append(GroupRange{group.name, group.first, group.last, group.collapsed});
+  }
+  return ranges;
+}
+
+int TimelineWidget::markerPosition() const { return m_strip->marker(); }
+
+bool TimelineWidget::boundaryAllowed(int g) const { return m_strip->allowedBoundary(g); }
+
+bool TimelineWidget::itemFound(const QString& uid) const { return m_strip->isFound(uid); }
+
+bool TimelineWidget::itemMarked(const QString& uid) const { return m_strip->isMarked(uid); }
+
+QString TimelineWidget::itemToolTip(int i) { return m_strip->cellToolTip(i); }
+
+void TimelineWidget::clickItem(int i, bool shift, bool toggle) {
+  m_strip->clickItem(i, shift, toggle);
+  followList();
+}
+
+void TimelineWidget::contextItem(int i, const QPoint& globalPosition) {
+  m_strip->contextItem(i, globalPosition);
+  followList();
+}
+
+bool TimelineWidget::canMoveItem(int item, int index, QString* reason) {
+  return m_strip->canMove(item, index, reason);
+}
+
+QColor TimelineWidget::listMarkerColor() const { return stripColors(palette()).marker; }
+
+QColor TimelineWidget::listMarkerHandleColor() const { return stripColors(palette()).handle; }
+
+void TimelineWidget::followList() {
+  if (m_presentation == Presentation::List) {
+    m_list->updateMarks();
+  }
 }
 
 void TimelineWidget::changeEvent(QEvent* event) {
@@ -1259,6 +1406,9 @@ void TimelineWidget::applyPalette() {
     }
   }
   m_strip->update();
+  if (m_list != nullptr) {
+    m_list->viewport()->update(); // its marker in the new colours (mitcad#2427)
+  }
   const QString colours = QStringLiteral("Timeline colours: %1, marker %2, buttons %3, window %4, handle %5")
                               .arg(darkPalette(palette()) ? QStringLiteral("dark") : QStringLiteral("light"),
                                    markerColor(palette()).name(),
@@ -1370,6 +1520,10 @@ void TimelineWidget::rebuild(const DocumentSnapshot& snapshot) {
   if (logged != m_loggedFilter) {
     m_loggedFilter = logged;
     qDebug().noquote() << QStringLiteral("Timeline filter: %1").arg(logged);
+  }
+  // The History list's rows from the strip's items (mitcad#2427).
+  if (m_presentation == Presentation::List) {
+    m_list->rebuild();
   }
   QTimer::singleShot(0, this, &TimelineWidget::logLayout);
 }
@@ -1591,6 +1745,10 @@ void TimelineWidget::setSelectedFeatures(const QStringList& uids) {
       m_scroll->ensureVisible(cell.center().x(), cell.center().y(), itemSide() * 2, 0);
     }
   }
+  followList();
+  if (after != before && !after.isEmpty() && m_presentation == Presentation::List) {
+    m_list->scrollToFeature(after.first());
+  }
 }
 
 void TimelineWidget::setMarkedFeatures(const QStringList& uids) {
@@ -1624,6 +1782,13 @@ void TimelineWidget::setMarkedFeatures(const QStringList& uids) {
   }
   qDebug().noquote() << QStringLiteral("Timeline owner marks: %1")
                             .arg(logged.isEmpty() ? QStringLiteral("none") : logged.join(QStringLiteral(", ")));
+  if (m_presentation == Presentation::List) {
+    // The History list's rows marked, the last one scrolled to when none
+    // is in sight (mitcad#2427).
+    m_list->updateMarks();
+    m_list->showMarked();
+    return;
+  }
   // None in sight: the last one scrolled to.
   if (!inSight && last >= 0) {
     const QRect cell = m_strip->cell(last);
@@ -1648,6 +1813,10 @@ void TimelineWidget::selectFeature(const QString& uid) {
     const QRect cell = m_strip->cell(i);
     m_scroll->ensureVisible(cell.center().x(), cell.center().y(), itemSide() * 2, 0);
   }
+  followList();
+  if (i >= 0 && m_presentation == Presentation::List) {
+    m_list->scrollToFeature(uid);
+  }
 }
 
 QString TimelineWidget::selectedFeature() const { return m_strip->selected(); }
@@ -1659,6 +1828,12 @@ void TimelineWidget::startRename(const QString& uid) {
   }
   const int i = m_strip->indexOf(uid);
   if (i < 0) {
+    return;
+  }
+  // In its row of the History list (mitcad#2427).
+  if (m_presentation == Presentation::List) {
+    selectFeature(uid);
+    m_list->startRename(uid);
     return;
   }
   selectFeature(uid);
@@ -1729,6 +1904,9 @@ void TimelineWidget::placeEditor() {
 }
 
 bool TimelineWidget::cancelEditing() {
+  if (m_list != nullptr && m_list->cancelRename()) {
+    return true; // the History list's editor (mitcad#2427)
+  }
   if (m_editing.isEmpty()) {
     return false;
   }
@@ -1742,7 +1920,12 @@ void TimelineWidget::logLayout() {
     return;
   }
   QStringList lines;
-  for (int i = 0; i < m_strip->count(); ++i) {
+  // The History list's rows, marker and eyes instead of the strip's cells
+  // (mitcad#2427): "History row …", "History marker at …".
+  if (m_presentation == Presentation::List) {
+    lines = m_list->layoutLines();
+  }
+  for (int i = 0; i < m_strip->count() && m_presentation == Presentation::Strip; ++i) {
     if (m_strip->hidden(i) || m_strip->isHead(i)) {
       continue; // in a folded group
     }
@@ -1754,12 +1937,14 @@ void TimelineWidget::logLayout() {
       lines << QStringLiteral("Timeline fx %1 at %2,%3").arg(m_strip->item(i)->feature.name).arg(fx.x()).arg(fx.y());
     }
   }
-  for (const TimelineStrip::Group& group : m_strip->groups()) {
-    const QPoint at = GlassCard::mapToHost(m_strip, m_strip->groupRect(group).center());
-    lines << QStringLiteral("Timeline group %1 at %2,%3").arg(group.name).arg(at.x()).arg(at.y());
+  if (m_presentation == Presentation::Strip) {
+    for (const TimelineStrip::Group& group : m_strip->groups()) {
+      const QPoint at = GlassCard::mapToHost(m_strip, m_strip->groupRect(group).center());
+      lines << QStringLiteral("Timeline group %1 at %2,%3").arg(group.name).arg(at.x()).arg(at.y());
+    }
+    const QPoint marker = GlassCard::mapToHost(m_strip, m_strip->markerRect().center());
+    lines << QStringLiteral("Timeline marker at %1,%2").arg(marker.x()).arg(marker.y());
   }
-  const QPoint marker = GlassCard::mapToHost(m_strip, m_strip->markerRect().center());
-  lines << QStringLiteral("Timeline marker at %1,%2").arg(marker.x()).arg(marker.y());
   for (const auto& [id, button] : std::as_const(m_buttons)) {
     const QPoint at = GlassCard::mapToHost(button, button->rect().center());
     lines << QStringLiteral("Timeline button %1 at %2,%3").arg(id).arg(at.x()).arg(at.y());
@@ -1819,6 +2004,9 @@ void TimelineWidget::openSearch() {
   if (m_searching) {
     showSearchList();
   }
+  if (m_presentation == Presentation::List) {
+    emit listHeightChanged(); // the search's row under the buttons (mitcad#2427)
+  }
   QTimer::singleShot(0, this, &TimelineWidget::logLayout);
 }
 
@@ -1836,6 +2024,9 @@ void TimelineWidget::closeSearch() {
     m_strip->setFocus(Qt::OtherFocusReason);
   }
   qDebug().noquote() << QStringLiteral("Timeline search closed");
+  if (m_presentation == Presentation::List) {
+    emit listHeightChanged();
+  }
   QTimer::singleShot(0, this, &TimelineWidget::logLayout);
 }
 
@@ -1878,6 +2069,7 @@ void TimelineWidget::endSearch() {
     m_strip->select(m_strip->indexOf(uid) >= 0 ? uid : QString());
   }
   m_scroll->horizontalScrollBar()->setValue(m_savedScroll);
+  followList();
   QStringList names;
   for (const QString& uid : m_strip->selectedRun()) {
     names << m_strip->item(m_strip->indexOf(uid))->feature.name;
@@ -1893,6 +2085,7 @@ void TimelineWidget::updateMatches() {
     m_matches.clear();
     m_match = -1;
     m_strip->setFound({});
+    followList();
     m_loggedSearch.clear();
     updateSearchCount();
     fillSearchList();
@@ -1929,6 +2122,7 @@ void TimelineWidget::updateMatches() {
   m_matches = matches;
   m_match = current.isEmpty() ? -1 : static_cast<int>(matches.indexOf(current));
   m_strip->setFound(QSet<QString>(matches.begin(), matches.end()));
+  followList(); // the History list's matches (mitcad#2427)
   updateSearchCount();
   fillSearchList();
   constexpr int kLoggedMatches = 30;

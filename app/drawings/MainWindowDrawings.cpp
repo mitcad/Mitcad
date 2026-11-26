@@ -382,8 +382,8 @@ void MainWindow::registerDrawingCommands() {
   // shown only while a drawing is open; a command of the drawing's tabs
   // does not lead back to the 3D view (trigger, isDrawingCommand).
   // `when`: for a drawing ("drawing"), a cut sheet ("cut") or either ("").
-  const auto add = [this](const QString& id, const QString& name, const QString& icon, const QString& tooltip,
-                          const QString& when, std::function<void()> run) {
+  const auto make = [this](const QString& id, const QString& name, const QString& icon, const QString& tooltip,
+                           const QString& when, std::function<void()> run) {
     CommandDef def;
     def.id = id;
     def.name = name;
@@ -400,7 +400,11 @@ void MainWindow::registerDrawingCommands() {
       }
       return when.isEmpty() || m_drawingWorkspace->isCutSheet() == (when == QStringLiteral("cut"));
     };
-    m_registry->add(def);
+    return def;
+  };
+  const auto add = [this, &make](const QString& id, const QString& name, const QString& icon, const QString& tooltip,
+                                 const QString& when, std::function<void()> run) {
+    m_registry->add(make(id, name, icon, tooltip, when, std::move(run)));
   };
   add(QStringLiteral("drawing.close"), tr("Close Drawing"), QStringLiteral("view-arrow-left"),
       tr("Shows the 3D view again"), QString(), [this] { leaveDrawing(); });
@@ -409,11 +413,26 @@ void MainWindow::registerDrawingCommands() {
     // The drawing's Bill of Materials is told apart from the Build tab's in the
     // command search (mitcad#718).
     const QString name = id == QStringLiteral("drawing.parts_list") ? tr("Bill of Materials (Drawing)") : tool.name;
-    add(id, name, tool.icon, tool.tooltip, QStringLiteral("drawing"), [this, id] {
-          if (drawingOpen()) {
-            m_drawingWorkspace->startTool(id);
-          }
-        });
+    CommandDef def = make(id, name, tool.icon, tool.tooltip, QStringLiteral("drawing"), [this, id] {
+      if (drawingOpen()) {
+        m_drawingWorkspace->startTool(id);
+      }
+    });
+    // Flat Pattern View (mitcad#2446): only with a sheet-metal body of the
+    // drawing's component; its tooltip says so while it is disabled.
+    if (id == QStringLiteral("drawing.flat_pattern_view")) {
+      const std::function<bool()> open = def.enabled;
+      def.enabled = [this, open] { return open() && !drawingFlatPatterns().isEmpty(); };
+      def.disabledReason = [this] {
+        if (!drawingOpen() || m_drawingWorkspace->isCutSheet()) {
+          return QString();
+        }
+        return m_drawingWorkspace->component() == QStringLiteral("C0")
+                   ? tr("the design has no sheet-metal body")
+                   : tr("the drawing's component has no sheet-metal body of its own");
+      };
+    }
+    m_registry->add(def);
   }
   // Export: the menu of the group's caption, as the bar's Export… had it;
   // DXF and SVG also a cut sheet's (its tab's extras, addDrawingRibbonExtras).
@@ -478,6 +497,31 @@ void MainWindow::openDrawing(const QString& uid) {
 
 void MainWindow::createDrawing(const QString& component) { createDrawingOf(component, false); }
 
+QList<QPair<QString, QString>> MainWindow::drawingFlatPatterns() const {
+  if (!drawingOpen()) {
+    return {};
+  }
+  try {
+    // While the actions are updated these are read once (updateActions).
+    const QJsonArray sheets = queryArray(QStringLiteral("sheet_bodies"));
+    if (sheets.isEmpty()) {
+      return {};
+    }
+    return drawings::flatPatternChoices(m_drawingWorkspace->component(), queryArray(QStringLiteral("bodies")),
+                                        sheets);
+  } catch (const std::exception&) {
+  }
+  return {};
+}
+
+void MainWindow::createFlatPatternDrawing(const QString& body) {
+  if (body.isEmpty()) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Create Drawing of Flat Pattern: %1").arg(body);
+  createDrawingOf(QStringLiteral("C0"), false, body);
+}
+
 drawings::SelectionSubject MainWindow::selectionDrawingSubject() const {
   // The bodies and occurrences selected, in the view or the browser, in
   // their order: (body, occurrence path) pairs, an occurrence's body empty.
@@ -502,7 +546,7 @@ drawings::SelectionSubject MainWindow::selectionDrawingSubject() const {
   return {};
 }
 
-void MainWindow::createDrawingOf(const QString& component, bool fromSelection) {
+void MainWindow::createDrawingOf(const QString& component, bool fromSelection, const QString& flatBody) {
   if (!canChangeModel()) {
     showStatus(changeBlockedReason(), NoticeLevel::Error);
     return;
@@ -511,8 +555,12 @@ void MainWindow::createDrawingOf(const QString& component, bool fromSelection) {
   // (mitcad#2399): the root's drawing of them, named for them, its first
   // Base View showing them.
   const drawings::SelectionSubject selected =
-      fromSelection && (component.isEmpty() || component == QStringLiteral("C0")) ? selectionDrawingSubject()
-                                                                                 : drawings::SelectionSubject();
+      fromSelection && flatBody.isEmpty() && (component.isEmpty() || component == QStringLiteral("C0"))
+          ? selectionDrawingSubject()
+          : drawings::SelectionSubject();
+  // Create Drawing of Flat Pattern (mitcad#2446): named for the Flat
+  // Pattern ("Plate Flat Pattern Drawing"), which it shows at once.
+  const QString flatShows = flatBody.isEmpty() ? QString() : drawings::flatPatternLabel(bodyName(flatBody));
   if (!selected.isEmpty()) {
     qDebug().noquote() << QStringLiteral("Create Drawing from the selection: %1 (%2)")
                               .arg(selected.bodies == 1  ? QStringLiteral("1 body")
@@ -535,7 +583,8 @@ void MainWindow::createDrawingOf(const QString& component, bool fromSelection) {
   const bool cut = command.take(QStringLiteral("kind")).toString() == QStringLiteral("cut_sheet");
   command.insert(QStringLiteral("cmd"), cut ? QStringLiteral("add_cut_sheet") : QStringLiteral("add_drawing"));
   if (cut) {
-    const QJsonArray bodies = selectedModelBodies();
+    // Of the Flat Pattern's body (mitcad#2446), else of the selection.
+    const QJsonArray bodies = flatBody.isEmpty() ? selectedModelBodies() : QJsonArray{flatBody};
     if (!bodies.isEmpty()) {
       command.insert(QStringLiteral("bodies"), bodies);
     }
@@ -545,7 +594,7 @@ void MainWindow::createDrawingOf(const QString& component, bool fromSelection) {
   }
   // Named for what it shows ("Bracket:3 Drawing"), a name of the root's
   // drawings not taken.
-  if (!cut && !selected.isEmpty()) {
+  if (!cut && (!selected.isEmpty() || !flatShows.isEmpty())) {
     QStringList taken;
     try {
       for (const QJsonValue& value : queryArray(QStringLiteral("drawings"))) {
@@ -557,7 +606,8 @@ void MainWindow::createDrawingOf(const QString& component, bool fromSelection) {
       }
     } catch (const std::exception&) {
     }
-    command.insert(QStringLiteral("name"), drawings::drawingNameFor(selected.shows, taken));
+    command.insert(QStringLiteral("name"),
+                   drawings::drawingNameFor(flatShows.isEmpty() ? selected.shows : flatShows, taken));
   }
   QJsonObject result;
   if (!runModelCommand(command, &result)) {
@@ -583,6 +633,13 @@ void MainWindow::createDrawingOf(const QString& component, bool fromSelection) {
   openDrawing(uid);
   // A new drawing's first view comes next (mitcad#725): Base View is on.
   // A cut sheet takes its parts from Add Parts.
+  if (drawingOpen() && !cut && !flatBody.isEmpty()) {
+    // The Flat Pattern placed at once, fitted to the sheet (mitcad#2446);
+    // refused, Base View is on as for any new drawing.
+    if (m_drawingWorkspace->placeFlatPattern(flatBody)) {
+      return;
+    }
+  }
   if (drawingOpen() && !cut) {
     // Showing the selection the drawing was made from (mitcad#2399).
     if (!selected.isEmpty()) {

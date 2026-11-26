@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: MIT
+# The Flat Pattern's drawing commands (mitcad#2446) on
+# drawing-flat-pattern-commands.json: Plate, an L bent once with its Flat
+# Pattern row in the browser, and an empty Drawing1.
+#   1. Drawing1 opened: Base View's Shows list has the Flat Pattern after a
+#      separator of its own.
+#   2. Flat Pattern View from the DRAWING tab's Create menu, after Base
+#      View: its Shows lists the one Flat Pattern, chosen at once; a click
+#      at 1:1 places the blank with its down bend line (the phantom pen),
+#      and the view is selected.
+#   3. Create Drawing of Flat Pattern… in the Flat Pattern row's menu: the
+#      Create Drawing dialog, OK; the new drawing, named for the Flat
+#      Pattern, has the blank with its bend line placed at Fit the Sheet.
+# Run by tools/ui-drawing-flat-pattern-commands-test.sh (Linux),
+# tools/ui-windows-drawing-flat-pattern-commands-test.ps1 (Windows) and
+# tools/ui-macos-drawing-flat-pattern-commands-test.sh (macOS).
+wait-idle
+expect-ever '^Browser Root/Drawings/Drawing1 at ' 30
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Ribbon DRAWING/CREATE at '
+wait-idle
+
+# 1. Base View's Shows: the Flat Pattern after a separator.
+mark
+command drawing.base_view
+wait-log '^Drawing tool: Base View'
+wait-log '^Drawing Base View Shows: 1 Flat Pattern[(]s[)] after a separator$'
+wait-idle
+key Escape
+wait-log '^Drawing tool: selection'
+wait-idle
+
+# 2. Flat Pattern View from the Create menu.
+mark
+click-logged '^Ribbon DRAWING/CREATE at '
+wait-log '^Ribbon menu DRAWING/CREATE: Base View [|] Flat Pattern View [|] Projected View'
+popup 'Flat Pattern View'
+wait-log '^Drawing tool: Flat Pattern View'
+wait-log '^Drawing Flat Pattern View shows: flat:F3[.]b0 of 1$'
+wait-idle
+expect-widget-property drawingOption_subject currentText 'Plate Flat Pattern'
+qt-choice drawingOption_scale '1:1'
+wait-log '^Drawing option scale: 1:1$'
+wait-idle
+mark
+drawing-sheet-click 150 150
+wait-log '^Drawing command: (?=.*"cmd":"add_drawing_view")(?=.*"type":"flat_pattern")(?=.*"body":"F3[.]b0")(?=.*"scale":"1:1")'
+wait-log '^Drawing view 1 at '
+wait-log '^Drawing Flat Pattern views: view 1: Plate, 50[.]65 x 20[.]00, 1 bend line[(]s[)] [(]0 up, 1 down[)]$'
+wait-log '^Drawing view pens: .*phantom'
+wait-log '^Drawing view 1 selected'
+expect-no-log '^Drawing command refused'
+wait-idle
+
+# 3. Create Drawing of Flat Pattern… from the Flat Pattern row.
+mark
+command drawing.close
+wait-log '^Drawing closed'
+wait-idle
+expect-ever '^Browser Root/Bodies/Plate/Flat Pattern at ' 30
+wait-idle
+mark
+context-menu-logged '^Browser Root/Bodies/Plate/Flat Pattern at ' 'Create Drawing of Flat Pattern…'
+focus-dialog '^Create Drawing$'
+wait-log '^Create Drawing dialog opened'
+button '^OK$'
+focus-main
+wait-log '^Create Drawing of Flat Pattern: F3[.]b0$'
+wait-log '^Drawing created: D[0-9]+ Plate Flat Pattern Drawing'
+wait-log '^Drawing opened: D[0-9]+ '
+wait-log '^Drawing command: (?=.*"cmd":"add_drawing_view")(?=.*"type":"flat_pattern")(?=.*"body":"F3[.]b0")'
+wait-log '^Drawing Flat Pattern placed: view 1 of F3[.]b0$'
+wait-log '^Drawing Flat Pattern views: view 1: Plate, 50[.]65 x 20[.]00, 1 bend line[(]s[)] [(]0 up, 1 down[)]$'
+expect-no-log '^Drawing command refused'
+wait-idle
+expect-never 'TestDriver: FAIL'

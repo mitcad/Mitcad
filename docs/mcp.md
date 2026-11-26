@@ -1306,7 +1306,8 @@ application, through the same engine as a MitCad tutorial's pages
 names it: a command id at its button, an input of the open panel by its
 key (as `ui_state`'s `command.inputs` lists them), a Browser row by its
 name, the view with the kinds of picks it takes, the toolbar's workspace
-selector, a workspace or a tab by its name, or the timeline (mitcad#2370);
+selector, a workspace or a tab by its name, or the timeline (mitcad#2370),
+the plane to sketch on or a drawing tool's value box (mitcad#2440);
 never pixels. MitCad
 outlines the target and shows the step's text beside it. Until the step
 is done, the commands it does not allow are refused (from the user's
@@ -1341,8 +1342,14 @@ it.
   <mode>}`, `{"navigate": <action>}`: the user orbited, panned or zoomed
   the view as the navigation scheme binds it, mitcad#2369;
   `{"opened": "workspace_selector"}`, `{"chosen": <workspace>}`,
-  `{"activated": <tab>}`; a step without `done` is shown until it is
-  ended), `{"event":
+  `{"activated": <tab>}`; `{"plane": <plane>}`, `{"point": <place>,
+  "at": [x, y]}`, `{"field": <key>, "value": <text>}`: a sketch made on
+  the step's plane, a drawing tool's point placed where it snapped, a
+  value typed into a drawing tool's value box, mitcad#2440; a step without
+  `done` is shown until it is ended), `{"event": "mismatch", "got": …}`
+  (sketch input such a step held back: another plane, another place,
+  another value; [Sketch input steps](tutorials.md#sketch-input-steps)),
+  `{"event":
   "step_left", "reason": …}` (`escape`, `leave`, `ended`, `replaced`,
   `closed`), `{"event": "refused", "command": <id>}`, `{"event": "held",
   "place": …, "input": …}` (a click or the wheel the step held back,
@@ -2368,7 +2375,13 @@ in the geometry kernel failed)` before `at` when that was the reason);
 the document stays as it was before the command (an array's
 earlier entries are undone), and the server answers the next call. Do
 the work in smaller steps: for example, join the bodies in smaller
-groups. `import_file` is stopped the same way, during the file's
+groups. A command that comes when the memory is at 85 % already is not
+run at all; its error goes on `before it started and was not run` after
+the memory and says that the memory was in use before the command: close
+designs or other applications, or save and restart, then try again. A
+sketch edit (`sketch.` and `sketch3d.` commands) stopped while it computes
+gets the same advice instead of the advice to join bodies (mitcad#2437).
+`import_file` is stopped the same way, during the file's
 transfer (STEP, IGES; the parsing before it cannot be stopped), with an
 error that starts with `the file could not be imported because it needs
 more memory than the system has left` and names the memory (mitcad#2032);

@@ -2,7 +2,8 @@
 // Sheet metal in the main window (mitcad#210): Edit Sheet Rules and Show
 // Flat Pattern, the actions of the SHEET METAL group besides its feature
 // commands (commands/SheetCommands.cpp, which registers them in their
-// sections), and Export Flat Pattern (the Make tab).
+// sections), Export Flat Pattern (the Make tab) and Create Drawing of Flat
+// Pattern (mitcad#2446).
 #include "MainWindow.hpp"
 
 #include <QDir>
@@ -16,6 +17,7 @@
 
 #include "commands/Commands.hpp"
 #include "commands/SheetProcess.hpp"
+#include "drawings/DrawingTools.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/CommandSession.hpp"
 #include "framework/Dialogs.hpp"
@@ -110,6 +112,34 @@ void MainWindow::registerSheetActions() {
   exporting.keywords = {QStringLiteral("sheet metal"), QStringLiteral("dxf"), QStringLiteral("laser"),
                         QStringLiteral("drawing")};
   m_registry->add(exporting);
+
+  // A drawing with the sheet's Flat Pattern placed on it (mitcad#2446),
+  // beside Export Flat Pattern… on the Sheet Metal tab.
+  CommandDef flatDrawing =
+      action("sheet.flat_pattern_drawing", tr("Create Drawing of Flat Pattern…"), "drawing", [this] {
+        QJsonObject sheet = sheetBody(true);
+        if (sheet.isEmpty()) {
+          sheet = sheetBody(false);
+        }
+        if (sheet.isEmpty()) {
+          showHint(tr("Create Drawing of Flat Pattern: select a sheet-metal body first."));
+          return;
+        }
+        createFlatPatternDrawing(sheet.value(QStringLiteral("body")).toString());
+      });
+  flatDrawing.tooltip = tr("Adds a drawing of the selected sheet's Flat Pattern and opens its sheet");
+  flatDrawing.keywords = drawings::flatPatternKeywords();
+  flatDrawing.keywords << QStringLiteral("drawing") << QStringLiteral("blueprint");
+  flatDrawing.disabledReason = [this] {
+    try {
+      if (queryArray(QStringLiteral("sheet_bodies")).isEmpty()) {
+        return tr("the design has no sheet-metal body");
+      }
+    } catch (const std::exception&) {
+    }
+    return tr("select a sheet-metal body first");
+  };
+  m_registry->add(flatDrawing);
 
   CommandDef bendTable = action("sheet.export_bend_table", tr("Export Bend Table…"), "bend-table", [this] {
     QJsonObject sheet = sheetBody(true);

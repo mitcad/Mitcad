@@ -100,6 +100,9 @@ public:
   // see-through by its owner, after QScrollArea::setWidget).
   void setContent(QWidget* content, const QMargins& margins = QMargins(8, 4, 8, 8));
   QWidget* content() const { return m_content; }
+  // The room around the content changed, the content kept (mitcad#2427: the
+  // timeline's card as a bar or as a card of the left column).
+  void setContentMargins(const QMargins& margins);
 
   // A capsule (the timeline, the status pill): a one-row bar. Its corners
   // are every card's (kRadius, at most half its height, mitcad#1990: one

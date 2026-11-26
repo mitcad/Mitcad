@@ -341,8 +341,25 @@ pub(crate) fn evaluate<K: Kernel>(
             ))
         })?;
     let mut developed = state.clone();
-    let all: BTreeMap<BendId, bool> = state.bends.iter().map(|b| (b.id, true)).collect();
-    reconfigure(&mut developed, thickness, def.stationary, &all).map_err(invalid)?;
+    // A curved panel's chart is its development already: laid in the
+    // plane touching it (mitcad#2435).
+    let fixed_embedding = match super::folded::curved::developed(&state, def.stationary, thickness)
+    {
+        Some(result) => {
+            developed = result.map_err(invalid)?;
+            developed
+                .charts
+                .iter()
+                .find(|p| p.domain == fixed)
+                .map(|p| p.embedding.clone())
+                .ok_or_else(|| invalid("the curved panel was not developed".into()))?
+        }
+        None => {
+            let all: BTreeMap<BendId, bool> = state.bends.iter().map(|b| (b.id, true)).collect();
+            reconfigure(&mut developed, thickness, def.stationary, &all).map_err(invalid)?;
+            fixed_embedding
+        }
+    };
     let mirror = Isometry2 {
         origin: [0.0, 0.0],
         x_axis: [-1.0, 0.0],

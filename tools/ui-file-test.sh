@@ -101,12 +101,13 @@ expect_title "Untitled - MitCad"
 # New and New Design are one entry; 3D Print, Insert Component and Render
 # Image are on the ribbon only; the project commands in a submenu. Print
 # only while there is something to print: the top bar's File menu, in
-# Docked too since mitcad#2082 (mitcad#1990).
+# Docked too since mitcad#2082 (mitcad#1990). Drawing Book always
+# (mitcad#2448).
 project_menu="New Project | Open Project | Open from Cloud | - | Sync | Check for Newer Versions | Open in Browser"
 project_menu="$project_menu | - | Project Settings | - | Web Viewer | Update Web Viewer"
 file_menu="New Design | Open | Open from Project | Open Recent > | Open Read-Only | Close | - | Save | Save As"
 file_menu="$file_menu | Save to Project | Save with Description"
-file_menu="$file_menu | Version History | Design Properties | - | Project > [$project_menu] | - | Import | Export | Export Timeline as Script | Export Snapshot | Create Drawing | Export Drawing | - | Recover Designs"
+file_menu="$file_menu | Version History | Design Properties | - | Project > [$project_menu] | - | Import | Export | Export Timeline as Script | Export Snapshot | Create Drawing | Export Drawing | - | Drawing Book | - | Recover Designs"
 file_menu="$file_menu | - | Exit"
 ui_mark
 ui_step "file menu (Alt+F)"              ui_key alt+f

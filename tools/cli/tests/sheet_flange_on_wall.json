@@ -1,6 +1,7 @@
 [
   {"comment":"SPDX-License-Identifier: MIT. A flange on the side edge of a flange's wall (mitcad#211). Its inside trim (5 mm) reaches the seam between the wall and its bend: the trim goes on through that bend. Volume: panel 35 x 80 x 2, wall 15 x 2 x 80 less 5 x 15 x 2, the first bend over 75 mm, the new bend over 15 mm and its 5 mm wall = 8000 + 360*pi."},
-  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":2,"bend_radius":3,"allowance":{"type":"k_factor","k":0.3},"reference_side":"front","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","flange_corner_relief":false,"thickness":2,"bend_radius":3,"allowance":{"type":"k_factor","k":0.3},"reference_side":"front","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"comment":"The rules keep flange corners as designs made before their corner relief at flange corners did (flange_corner_relief false, mitcad#2342, mitcad#2411): this script checks the corners themselves; the rules' relief there is checked by cli.sheet_flange_corner_relief, cli.sheet_flange_edges_corner_relief and cli.sheet_flange_corner_relief_types."},
   {"cmd":"sketch.create"},
   {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[0,0],"width":40,"height":80},
   {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},

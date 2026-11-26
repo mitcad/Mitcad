@@ -34,7 +34,7 @@ impl FeatureInfo for SketchDef {
     fn references(&self) -> References {
         let mut references = References::default();
         match &self.plane {
-            SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
+            SketchPlane::Face { face, body, .. } | SketchPlane::Developed { face, body, .. } => {
                 references.features.extend(face.features());
                 if let Some(body) = body {
                     references.body(*body);
@@ -61,7 +61,7 @@ impl FeatureInfo for SketchDef {
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         self.check_definition()?;
         match &self.plane {
-            SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
+            SketchPlane::Face { face, body, .. } | SketchPlane::Developed { face, body, .. } => {
                 for feature in face.features() {
                     ctx.feature(feature)
                         .map_err(|e| format!("plane {face}: {e}"))?;
@@ -145,7 +145,8 @@ impl LinkedReferences for SketchDef {
         if let Some(link) = &self.plane_link {
             let mut references = References::default();
             match &self.plane {
-                SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
+                SketchPlane::Face { face, body, .. }
+                | SketchPlane::Developed { face, body, .. } => {
                     references.features.extend(face.features());
                     if let Some(body) = body {
                         references.body(*body);
@@ -582,6 +583,7 @@ impl<K: Kernel> EvaluatePlaced<K> for SketchDef {
         Ok(FeatureOutput {
             sketch: Some(SketchOutput {
                 frame,
+                plane,
                 base,
                 regions: region_info.iter().map(|r| r.profile.clone()).collect(),
                 region_info,
@@ -632,7 +634,7 @@ pub(crate) fn face_boundary<K: Kernel>(
     frame: &SketchFrame,
     ctx: &mut super::EvalContext<'_, K>,
 ) -> Result<Vec<crate::sketch::regions::RegionCurve>, String> {
-    let SketchPlane::Face { face, body } = &def.plane else {
+    let SketchPlane::Face { face, body, .. } = &def.plane else {
         return Ok(Vec::new());
     };
     let normal = plane.normal();
@@ -992,7 +994,7 @@ pub(crate) fn face_frame<K: Kernel>(
     plane: &SketchPlane,
     ctx: &mut super::EvalContext<'_, K>,
 ) -> Result<SketchFrame, String> {
-    let SketchPlane::Face { face, body } = plane else {
+    let SketchPlane::Face { face, body, placed } = plane else {
         // A curved face's sketch has its development (mitcad#1768), a 3D
         // sketch's support is a plane.
         return Err("the sketch plane must be a plane or a planar face".to_owned());
@@ -1013,10 +1015,15 @@ pub(crate) fn face_frame<K: Kernel>(
         body,
         face: found.unwrap_or_else(|| (**face).clone()),
     };
-    Ok(ctx
+    let plane = ctx
         .plane(&face)
-        .map_err(|e| format!("the sketch plane: {e}"))?
-        .frame())
+        .map_err(|e| format!("the sketch plane: {e}"))?;
+    // The frame it had when the sketch was placed, carried onto the face as
+    // it is now (mitcad#2409).
+    Ok(match placed {
+        Some(placed) => plane.carry(placed),
+        None => plane.frame(),
+    })
 }
 
 /// The body among `shapes` that has the face: exactly one must. A face a
@@ -1194,7 +1201,8 @@ fn largest_piece(faces: &[crate::kernel::FaceInfo], name: &FaceName) -> Option<(
 /// The frame of a plane of another component (mitcad#100): found there and
 /// moved into the sketch's coordinates. An origin or construction plane
 /// keeps its own axes; a face gets the frame every planar face gets
-/// ([`SketchPlane::face_frame`]), in the sketch's coordinates.
+/// ([`SketchPlane::face_frame`]), in the sketch's coordinates; the frame it
+/// had when the sketch was placed (mitcad#2409) is in them too.
 pub(crate) fn linked_frame<K: Kernel>(
     plane: &SketchPlane,
     link: &OccurrenceLink,
@@ -1210,7 +1218,7 @@ pub(crate) fn linked_frame<K: Kernel>(
         SketchPlane::Construction(uid) => {
             Ok(to_sketch.apply_frame(&ctx.datum_plane(*uid)?.frame()))
         }
-        SketchPlane::Face { face, body } => {
+        SketchPlane::Face { face, body, placed } => {
             let shapes = match body {
                 Some(body) => vec![(*body, ctx.body_in(component, *body)?)],
                 None => ctx.bodies_in(component),
@@ -1239,9 +1247,10 @@ pub(crate) fn linked_frame<K: Kernel>(
                     )
                 })? {
                 crate::datum::SurfaceGeometry::Plane { origin, normal } => {
-                    Ok(SketchPlane::face_frame(
+                    Ok(SketchPlane::face_frame_placed(
                         to_sketch.apply_point(origin),
                         to_sketch.apply_vector(normal),
+                        placed.as_deref(),
                     ))
                 }
                 other => Err(format!(

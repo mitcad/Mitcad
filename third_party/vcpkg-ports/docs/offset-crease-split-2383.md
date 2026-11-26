@@ -98,4 +98,5 @@ synthetic bodies and the reporter's (mitcad#2383's comments):
 - Not covered by this patch (Sharp still fails, mitcad#2383's report): the
   same report's second design (a cylinder whose arm's sides are tangent to
   it, the arm's faces' offsets left untrimmed) and GitHub #645's loft cut
-  to a slot and rounded as wide as the wall.
+  to a slot and rounded as wide as the wall; see
+  [patch 2415](offset-seam-and-intersection-chain-2415.md).

@@ -13,6 +13,8 @@
 #include <V3d_View.hxx>
 #include <gp_XYZ.hxx>
 
+#include "ReplacedPictures.hpp"
+
 class QPainter;
 class QWidget;
 
@@ -76,6 +78,12 @@ public:
   // what OCCT draws (true when it was drawn), and puts it back.
   bool takeOutPicture();
   void putBackPicture();
+  // For OcctViewer::handleViewRedraw (mitcad#2437): whether enough of its
+  // pictures were replaced since the view last drew a full frame that the
+  // next frame must be one (OCCT lets the replaced pictures' textures go
+  // only in full frames), and that the view drew one.
+  bool wantsFullFrame() const { return m_replaced.wantsFullFrame(); }
+  void fullFrameDrawn() { m_replaced.fullFrameDrawn(); }
 
 private:
   // What the picture depends on of the camera: where it looks from and
@@ -102,6 +110,8 @@ private:
   bool m_shown = false;
   bool m_dirty = true;
   int m_paints = 0;
+  // The replaced pictures whose textures OCCT still holds.
+  ReplacedPictures m_replaced;
   // What it was painted for.
   QSize m_pixels;
   qreal m_ratio = 0.0;

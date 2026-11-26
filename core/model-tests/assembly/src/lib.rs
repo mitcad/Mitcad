@@ -52,3 +52,5 @@ mod selection_set_tests;
 // An extrude whose operation an edit changes takes the features on its
 // geometry along (mitcad#2185).
 mod operation_follow_tests;
+// Copies keep the light bulbs of their sketches (mitcad#2449).
+mod copy_light_bulbs_tests;

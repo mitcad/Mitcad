@@ -401,6 +401,8 @@ void CommandRegistry::applyShortcut(const CommandDef& def, const QSettings& sett
   } else if (m_disabledShortcuts.contains(def.id)) {
     tip += tr(" (conflicting shortcut disabled; change it in Keyboard Shortcuts)");
   }
+  // (A disabled command's reason comes back with the next updateEnabled.)
+  m_tips.insert(def.id, tip);
   action->setToolTip(tip);
 }
 
@@ -425,7 +427,32 @@ void CommandRegistry::updateOverlayKeys(const QSettings& settings) {
 void CommandRegistry::updateEnabled(const std::function<bool(const CommandDef&)>& available) {
   for (const auto& def : m_commands) {
     if (QAction* action = m_actions.value(def->id)) {
-      action->setEnabled(available(*def));
+      const bool on = available(*def);
+      action->setEnabled(on);
+      if (!def->disabledReason) {
+        continue;
+      }
+      // Its own reason while its own condition holds it back (mitcad#2446);
+      // the plain tooltip otherwise (the mode's reasons are said elsewhere).
+      const auto tip = m_tips.constFind(def->id);
+      if (tip == m_tips.cend()) {
+        continue;
+      }
+      QString reason;
+      if (!on && def->enabled && !def->enabled()) {
+        reason = def->disabledReason();
+      }
+      QString shown = tip.value();
+      if (!reason.isEmpty()) {
+        QString name = def->name;
+        while (name.endsWith(QChar(0x2026)) || name.endsWith(QLatin1Char('.'))) {
+          name.chop(1);
+        }
+        shown = QStringLiteral("%1: %2").arg(name, reason);
+      }
+      if (action->toolTip() != shown) {
+        action->setToolTip(shown);
+      }
     }
   }
 }

@@ -690,12 +690,14 @@ impl Kernel for TestKernel {
         body: &MockShape,
         faces: &[mitcad_model::FaceName],
         distance: f64,
+        tangent_chain: bool,
     ) -> Result<MockShape, KernelError> {
         self.hook("offset_faces");
         if !self.face_listing {
             return Err(KernelError::Unsupported("offset faces"));
         }
-        self.mock.offset_faces(feature, body, faces, distance)
+        self.mock
+            .offset_faces(feature, body, faces, distance, tangent_chain)
     }
 
     fn move_faces(

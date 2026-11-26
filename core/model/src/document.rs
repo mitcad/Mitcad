@@ -445,6 +445,9 @@ pub struct DocState {
     /// Explode views of assemblies (mitcad#2113), in the order they were
     /// added.
     pub(crate) explode_views: Vec<crate::explode::ExplodeView>,
+    /// The drawing book (mitcad#2448): drawings of the design and of the
+    /// designs it links, to print as one job.
+    pub(crate) drawing_book: DrawingBook,
 }
 
 impl Default for DocState {
@@ -502,6 +505,7 @@ impl Default for DocState {
             point_clouds: Vec::new(),
             decals: Vec::new(),
             explode_views: Vec::new(),
+            drawing_book: DrawingBook::default(),
         }
     }
 }
@@ -725,6 +729,13 @@ impl DocState {
         // until they are edited. An explicit `false` stays.
         if let FeatureDef::SheetRules(rules) = &mut resolved {
             rules.flange_corner_relief.get_or_insert(true);
+        }
+        // A mirror of features added or edited without a compute option
+        // adjusts, rebuilding the tools it reflects where they end on
+        // bodies (mitcad#2430); mirrors saved before keep reflecting the
+        // finished tools until they are edited.
+        if let FeatureDef::Mirror(mirror) = &mut resolved {
+            mirror.settle_compute();
         }
         // A Flex item's length is a reference parameter of its own
         // (mitcad#1713).
@@ -3216,6 +3227,9 @@ impl<K: Kernel> Document<K> {
             check(&next, result)?;
             next.follow_set_body_transfers(Some((&self.state, &self.result)), result);
             next.take_measured(&result.measured);
+            // A sketch the edit placed on a planar face keeps the frame it
+            // has now (mitcad#2409).
+            next.keep_face_sketch_frames(&self.state, result);
             // Where the attached nodes of Flex items are now (mitcad#1713).
             next.take_flex_places(result);
             // A BUILD part's automatic name follows its designation, in
@@ -5834,7 +5848,9 @@ mod cam;
 // Linked designs from outside the project: whether a link would be
 // followed, and the file copied into the project to link (mitcad#1719).
 mod link_copies;
-pub use link_copies::{LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project};
+pub use link_copies::{
+    LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project, link_back,
+};
 // Forms: a Form's cage read and edited in one step, and the outline of a
 // face it starts from (mitcad#1757).
 mod forms;
@@ -5938,6 +5954,10 @@ pub use explode::{ExplodePart, ExplodePlacements, ExplodeState, ExplodeTrail, Re
 // it, saved to its design's file (mitcad#2321).
 mod edit_in_place;
 pub use edit_in_place::{InPlaceContext, InPlaceMode};
+// The drawing book: drawings of the design and of its linked designs
+// printed as one job (mitcad#2448).
+mod drawing_book;
+pub use drawing_book::{BookDrawing, BookEntry, BookSource, DrawingBook, SourceDrawing};
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

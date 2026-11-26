@@ -1,0 +1,1297 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset, Sharp (intersection join): a crease that turns from concave to
+convex inside its edge, a crease tangent at both its ends, and a face
+vanishing to a point where a further face touches it (mitcad#2418, GitHub
+mitcad/Mitcad#641).
+
+The case: a loft from a circle of radius 170 at z = 315 to one of 85 at
+z = 0 centred at x = 225, a cylinder on each end, mirrored about x = 0 and
+joined, the crotch rounded 20; shelled 5 mm inside with the three ends open.
+The rims where the loft meets the cylinders are concave on one side and
+convex on the other, the faces tangent at 67.8 degrees round them. The
+thick solid was not done at any thickness ("the offset faces do not close
+up" in MitCad); without the rounding the same.
+
+1. BRepOffset_Tool::Inter3D, JoinCreaseAcrossInnerTangency (new, before
+   DropCrossingsPastTangentEnd): the enlarged offsets of a crease's faces
+   are tangent at the offset of the point where the crease turns, and
+   there their intersection is an X: the branch along the crease on both
+   sides and a branch crossing it, joined by pieces of a few microns, the
+   branch along the crease not always connected across (5 micrometres
+   apart), or running on from the crossing branch into it. CheckIntersFF
+   and the removal of excess edges kept the crossing branch alone, or the
+   crease's piece on one side. The turns are found on the pair's crease
+   edges (the faces' normals' cross product along the edge changes sign;
+   where they fold back, nothing); a piece passing a tangency inside it is
+   split there; at each tangency, within a neighbourhood of a tenth of a
+   millimetre (a tenth of the offset at most), pieces of the knot and
+   pieces leaving across the crease (their chord over half a millimetre)
+   are dropped, the two along it share one vertex there, and the pieces
+   connected to them are the intersection. Where the crease is one edge
+   tangent at both ends (two lofts' sides meeting along a curve that fades
+   out at both ends), the offsets of its ends are taken alike, and only the
+   branch into the edge is kept there (before, a piece of 2 micrometres).
+   Rebuilt pieces get a curve of their own (a trimmed copy, the same
+   parameter) and their vertices' parameters on them: a vertex on two
+   pieces of one closed curve of intersection got the parameter of the one
+   it was put on last, and TrimEdge ran a piece back over the crossing
+   branch. Past a turn the crease is of the other kind than at the edge's
+   middle (whose kind the analysis gives the edge): those pieces are
+   oriented in the offset faces the other way. Where no turn is found, or
+   the pieces at it are not one branch along the crease on each side and
+   crossing ones, nothing changes.
+2. BRepOffset_Inter3d::ConnexIntByInt, the distribution of a face pair's
+   pieces among its edges (patch 2140): an edge keeps too the pieces
+   nearest to its own points, as a copy of its own where another edge is
+   the one nearest the piece's middle (the convex part of the crease runs
+   round the far side of the loft's periodic face from one edge's end to
+   the other's: one piece, trimmed once at both ends' neighbours, kept the
+   run between them).
+3. BRepOffset_Inter3d::ConnexIntByInt: a face vanishing to a point at a
+   vertex (a degenerated edge there), its other edges at the vertex
+   tangential, where a further face meets the vertex it shares no edge
+   with (the rounding's tip at the top circle, the cylinder): the tip of
+   its offset lies 0.64 mm past the further face's offset. Their offsets
+   are intersected, and the piece nearest the tip is the image of the
+   degenerated edge, stored for both faces, oriented in the further face
+   to run on from its edge's image at the vertex.
+   BRepOffset_Inter2d::ConnexIntByInt: in the further face's offset, the
+   images of the two edges meeting at that vertex meet that image each,
+   not each other.
+4. TrimEdges (BRepOffset_MakeOffset.cxx), InsideChainOfPieces: a piece of an
+   edge's image joined at both ends to other pieces of it, and through them
+   to a piece its neighbours meet, is not removed as one without
+   intersections: its joints are its ends (the convex part between the
+   joints at the turns).
+With MITCAD_TRACE_OFFSET_CREASE set, JoinCreaseAcrossInnerTangency says on
+the standard error the tangencies, the pieces at them and what it keeps.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2418.
+
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+index d5ec035a..613ce85b 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+@@ -2404,7 +2404,38 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+       {
+         DoInter = false;
+       }
+-      if (DoInter && aChoice == 1 && !NE1seq.IsEmpty() && !NE2seq.IsEmpty()
++      // (mitcad#2418) Where a face vanishing to a point at Vref (a rounding
++      // whose crease fades out there) is cut by this face's offset, the
++      // image of its degenerated edge there (BRepOffset_Inter3d::
++      // ConnexIntByInt) is an edge of this face's offset too: the images of
++      // CurE and NextE meet it, each where it crosses the offset of a face
++      // beside the vanishing one, and not each other.
++      TopoDS_Edge aTipImage;
++      if (DoInter && aChoice == 1 && Analyse.HasAncestor(Vref))
++      {
++        for (NCollection_List<TopoDS_Shape>::Iterator itEV(Analyse.Ancestors(Vref));
++             itEV.More() && aTipImage.IsNull();
++             itEV.Next())
++        {
++          const TopoDS_Edge& aEV = TopoDS::Edge(itEV.Value());
++          if (!BRep_Tool::Degenerated(aEV) || !Build.IsBound(aEV) || !theAsDes->HasDescendant(FIO))
++          {
++            continue;
++          }
++          for (TopExp_Explorer aX(Build(aEV), TopAbs_EDGE); aX.More() && aTipImage.IsNull(); aX.Next())
++          {
++            for (NCollection_List<TopoDS_Shape>::Iterator itD(theAsDes->Descendant(FIO)); itD.More(); itD.Next())
++            {
++              if (itD.Value().IsSame(aX.Current()))
++              {
++                aTipImage = TopoDS::Edge(itD.Value());
++                break;
++              }
++            }
++          }
++        }
++      }
++      if (DoInter && aChoice == 1 && !NE1seq.IsEmpty() && !NE2seq.IsEmpty() && aTipImage.IsNull()
+           && MeetAlongTangentEdge(FI, CurE, NextE, Vref, Analyse)
+           && (!(IsAnalyticOn(TopoDS::Edge(NE1seq.Last()), FIO)
+                 && IsAnalyticOn(TopoDS::Edge(NE2seq.First()), FIO))
+@@ -2477,6 +2508,30 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+         // part, the curves are those of the face oriented forwards.)
+         const bool aSeamInter = BRep_Tool::IsClosed(aE1, FIO) || BRep_Tool::IsClosed(aE2, FIO);
+         const TopoDS_Face aFIOInter = aSeamInter ? TopoDS::Face(FIO.Oriented(TopAbs_FORWARD)) : FIO;
++        if (!aTipImage.IsNull())
++        {
++          bool bCoincideTip = false;
++          RefEdgeInter(aFIOInter, BAsurf, aE1, aTipImage, anOr1, TopAbs_EXTERNAL, AsDes2d, Tol, true, Vref,
++                       theImageVV, theDMVV, bCoincideTip);
++          RefEdgeInter(aFIOInter, BAsurf, aTipImage, aE2, TopAbs_EXTERNAL, anOr2, AsDes2d, Tol, true, Vref,
++                       theImageVV, theDMVV, bCoincideTip);
++          for (int k = 0; k < 2; ++k)
++          {
++            const TopoDS_Shape& aEA = k == 0 ? aE1 : aE2;
++            if (!theEdgeIntEdges.IsBound(aEA))
++            {
++              theEdgeIntEdges.Bind(aEA, NCollection_List<TopoDS_Shape>());
++            }
++            theEdgeIntEdges(aEA).Append(aTipImage);
++            if (!theEdgeIntEdges.IsBound(aTipImage))
++            {
++              theEdgeIntEdges.Bind(aTipImage, NCollection_List<TopoDS_Shape>());
++            }
++            theEdgeIntEdges(aTipImage).Append(aEA);
++          }
++          CurE = anIdx <= aSeq.Length() ? aSeq(anIdx) : TopoDS_Edge();
++          continue;
++        }
+         RefEdgeInter(aFIOInter,
+                      BAsurf,
+                      aE1,
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+index e72b85e2..eec87ee2 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+@@ -1044,6 +1044,50 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+         aOwners.Add(itS.Value());
+       }
+     }
++    // (mitcad#2418) An edge keeps too the pieces nearest to its own points
++    // (inside it): a piece running along the ends of several edges (the
++    // convex part of a crease that turns, round the far side of a
++    // periodic face from one edge's end to another's) has its middle as
++    // far from each, and went to one of them alone; the other edge's image
++    // then stopped where the crease turns.
++    NCollection_DataMap<TopoDS_Shape, NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>, TopTools_ShapeMapHasher>
++      aAlong;
++    for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator itO(aOwners); itO.More(); itO.Next())
++    {
++      const TopoDS_Shape& aS = itO.Value();
++      if (aS.ShapeType() != TopAbs_EDGE || !Build.IsBound(aS) || BRep_Tool::Degenerated(TopoDS::Edge(aS)))
++      {
++        continue;
++      }
++      NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>& aNearOwn =
++        *aAlong.Bound(aS, NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>());
++      const BRepAdaptor_Curve aOC(TopoDS::Edge(aS));
++      const int               aNbSamples = 16;
++      for (int k = 1; k < aNbSamples; ++k)
++      {
++        const double aT = aOC.FirstParameter() + (aOC.LastParameter() - aOC.FirstParameter()) * k / aNbSamples;
++        const TopoDS_Vertex aV = BRepLib_MakeVertex(aOC.Value(aT)).Vertex();
++        double              aBestDist = RealLast();
++        TopoDS_Shape        aBest;
++        for (TopoDS_Iterator itE(Build(aS)); itE.More(); itE.Next())
++        {
++          if (!aNearest.IsBound(itE.Value()))
++          {
++            continue;
++          }
++          BRepExtrema_DistShapeShape aDist(aV, itE.Value());
++          if (aDist.IsDone() && aDist.NbSolution() > 0 && aDist.Value() < aBestDist)
++          {
++            aBestDist = aDist.Value();
++            aBest     = itE.Value();
++          }
++        }
++        if (!aBest.IsNull())
++        {
++          aNearOwn.Add(aBest);
++        }
++      }
++    }
+     for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator itO(aOwners); itO.More(); itO.Next())
+     {
+       const TopoDS_Shape& aS = itO.Value();
+@@ -1054,12 +1098,39 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+       TopoDS_Compound aKept;
+       B.MakeCompound(aKept);
+       int aNbKept = 0, aNbDropped = 0;
++      // (A piece kept too by an edge it runs along the end of, besides the
++      // edge nearest to its middle, goes to it as a copy of its own: the
++      // copies are trimmed apart, each at its own edge's neighbours. The
++      // piece itself, trimmed once at both, kept the run between them.)
+       for (TopoDS_Iterator itE(Build(aS)); itE.More(); itE.Next())
+       {
+         const TopoDS_Shape& aNE = itE.Value();
+         if (aNearest.IsBound(aNE) && !aNearest(aNE).IsSame(aS))
+         {
+           ++aNbDropped;
++          const NCollection_List<TopoDS_Shape>* pLFF = aDMIntFF.Seek(aNE);
++          const TopoDS_Shape* pNF1 = pLFF ? MES.Seek(MapSF(pLFF->First()).Face()) : nullptr;
++          const TopoDS_Shape* pNF2 = pLFF ? MES.Seek(MapSF(pLFF->Last()).Face()) : nullptr;
++          if (aAlong.IsBound(aS) && aAlong(aS).Contains(aNE) && pNF1 && pNF2)
++          {
++            const TopoDS_Edge& aEN = TopoDS::Edge(aNE);
++            TopoDS_Vertex      aV1, aV2;
++            double             aT1, aT2;
++            TopExp::Vertices(aEN, aV1, aV2);
++            BRep_Tool::Range(aEN, aT1, aT2);
++            TopoDS_Edge aCopy;
++            BOPTools_AlgoTools::MakeSplitEdge(aEN, aV1, aT1, aV2, aT2, aCopy);
++            aCopy.Orientation(aEN.Orientation());
++            myAsDes->Add(*pNF1, aCopy.Oriented(OrientationIn(myAsDes, *pNF1, aEN, aCopy.Orientation())));
++            myAsDes->Add(*pNF2, aCopy.Oriented(OrientationIn(myAsDes, *pNF2, aEN, aCopy.Orientation())));
++            NCollection_List<TopoDS_Shape> aLFFCopy = *pLFF;
++            aDMIntFF.Bind(aCopy, aLFFCopy);
++            NCollection_List<TopoDS_Shape> aLSCopy;
++            aLSCopy.Append(aS);
++            aDMIntE.Add(aCopy, aLSCopy);
++            B.Add(aKept, aCopy);
++            ++aNbKept;
++          }
+           continue;
+         }
+         B.Add(aKept, aNE);
+@@ -1287,6 +1358,246 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+       }
+     }
+   }
++  //
++  // (mitcad#2418) A face that vanishes to a point at a vertex, running on
++  // smoothly into the faces beside it there (a rounding whose crease fades
++  // out at the vertex), where a further face meets the vertex, one it shares
++  // no edge with (the cylinder at the top of a crotch's rounding): the
++  // offsets of the faces beside it meet the further face's offset away
++  // from the offset of the vertex, which is the tip of the vanishing face's
++  // offset, and that tip lies past the further face's offset. The vanishing
++  // face's offset is cut there by the further face's offset: their
++  // intersection near the tip is the image of the face's degenerated edge
++  // at the vertex, for both faces. (The intersection of the further face
++  // with the faces beside meets it at the edges these share with the
++  // vanishing face; Inter2d, BRepOffset_Inter2d::ConnexIntByInt, meets
++  // them there through it.)
++  {
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aFaces;
++    TopExp::MapShapes(SI, TopAbs_FACE, aFaces);
++    for (int iF = 1; iF <= aFaces.Extent(); ++iF)
++    {
++      const TopoDS_Face& aFD = TopoDS::Face(aFaces(iF));
++      if ((theVanished && theVanished->Contains(aFD)) || !MapSF.IsBound(aFD))
++      {
++        continue;
++      }
++      // further face's offset -> its intersection with this face's offset
++      NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> aTipPieces;
++      for (TopExp_Explorer aExpE(aFD, TopAbs_EDGE); aExpE.More(); aExpE.Next())
++      {
++        const TopoDS_Edge& aED = TopoDS::Edge(aExpE.Current());
++        if (!BRep_Tool::Degenerated(aED) || Build.IsBound(aED))
++        {
++          continue;
++        }
++        const TopoDS_Vertex aV = TopExp::FirstVertex(aED);
++        if (aV.IsNull() || !Analyse.HasAncestor(aV))
++        {
++          continue;
++        }
++        // The face's other edges at the vertex, all tangential, and the
++        // faces beside it beyond them.
++        NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aBeside;
++        bool                                                   bSmooth = true;
++        int                                                    aNbSide = 0;
++        for (NCollection_List<TopoDS_Shape>::Iterator itEV(Analyse.Ancestors(aV)); itEV.More(); itEV.Next())
++        {
++          const TopoDS_Edge& aEV = TopoDS::Edge(itEV.Value());
++          if (aEV.IsSame(aED) || BRep_Tool::Degenerated(aEV) || !Analyse.HasAncestor(aEV))
++          {
++            continue;
++          }
++          bool bOfFD = false;
++          for (NCollection_List<TopoDS_Shape>::Iterator itF(Analyse.Ancestors(aEV)); itF.More(); itF.Next())
++          {
++            bOfFD = bOfFD || itF.Value().IsSame(aFD);
++          }
++          if (!bOfFD)
++          {
++            continue;
++          }
++          ++aNbSide;
++          const NCollection_List<BRepOffset_Interval>& aLI = Analyse.Type(aEV);
++          bSmooth = bSmooth && !aLI.IsEmpty() && aLI.First().Type() == ChFiDS_Tangential;
++          for (NCollection_List<TopoDS_Shape>::Iterator itF(Analyse.Ancestors(aEV)); itF.More(); itF.Next())
++          {
++            if (!itF.Value().IsSame(aFD))
++            {
++              aBeside.Add(itF.Value());
++            }
++          }
++        }
++        if (!bSmooth || aNbSide < 2 || aBeside.IsEmpty())
++        {
++          continue;
++        }
++        // The tip of the vanishing face's offset.
++        const BRepOffset_Offset& aOFD = MapSF(aFD);
++        gp_Pnt                   aTip;
++        {
++          const TopoDS_Shape aGen = aOFD.Generated(aED);
++          TopoDS_Vertex      aGV1, aGV2;
++          if (!aGen.IsNull() && aGen.ShapeType() == TopAbs_EDGE)
++          {
++            TopExp::Vertices(TopoDS::Edge(aGen), aGV1, aGV2);
++          }
++          if (aGV1.IsNull())
++          {
++            continue;
++          }
++          aTip = BRep_Tool::Pnt(aGV1);
++        }
++        const double aOffsetDist = aTip.Distance(BRep_Tool::Pnt(aV));
++        // The further faces at the vertex, with an edge there whose image
++        // is built (their intersection with the faces beside).
++        NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aDoneG;
++        for (NCollection_List<TopoDS_Shape>::Iterator itEV(Analyse.Ancestors(aV)); itEV.More(); itEV.Next())
++        {
++          const TopoDS_Edge& aEG = TopoDS::Edge(itEV.Value());
++          if (!Build.IsBound(aEG) || !Analyse.HasAncestor(aEG))
++          {
++            continue;
++          }
++          for (NCollection_List<TopoDS_Shape>::Iterator itF(Analyse.Ancestors(aEG)); itF.More(); itF.Next())
++          {
++            const TopoDS_Face& aFG = TopoDS::Face(itF.Value());
++            if (aFG.IsSame(aFD) || aBeside.Contains(aFG) || !aDoneG.Add(aFG) || !MapSF.IsBound(aFG)
++                || !MES.IsBound(MapSF(aFG).Face()))
++            {
++              continue;
++            }
++            const TopoDS_Face aNG = TopoDS::Face(MES(MapSF(aFG).Face()));
++            // The vanishing face's offset, enlarged as the others.
++            const TopoDS_Shape& aOF = aOFD.Face();
++            if (!MES.IsBound(aOF))
++            {
++              bool enlargeU = true, enlargeVfirst = true, enlargeVlast = true;
++              BRepOffset_Tool::CheckBounds(aFD, Analyse, enlargeU, enlargeVfirst, enlargeVlast);
++              int aContUfirst, aContUlast;
++              ContinuityAcrossTangentialSides(aFD, Analyse, aContUfirst, aContUlast);
++              TopoDS_Face aNewFace;
++              BRepOffset_Tool::EnLargeFace(TopoDS::Face(aOF), aNewFace, true, true, enlargeU, enlargeVfirst,
++                                           enlargeVlast, 1, -1., -1., -1., -1., aContUfirst, aContUlast);
++              MES.Bind(aOF, aNewFace);
++            }
++            const TopoDS_Face aNFD = TopoDS::Face(MES(aOF));
++            // (the pair intersected once, for its tips at all vertices)
++            if (!aTipPieces.IsBound(aNG))
++            {
++              if (IsDone(aNFD, aNG))
++              {
++                continue;
++              }
++              NCollection_List<TopoDS_Shape> LInt2;
++              TopoDS_Edge                    aNullEdge;
++              TopoDS_Face                    aNullFace;
++              BRepOffset_Tool::Inter3D(aNFD,
++                                       aNG,
++                                       *aTipPieces.Bound(aNG, NCollection_List<TopoDS_Shape>()),
++                                       LInt2,
++                                       mySide,
++                                       aNullEdge,
++                                       aNullFace,
++                                       aNullFace);
++              SetDone(aNFD, aNG);
++            }
++            const NCollection_List<TopoDS_Shape>& LInt1 = aTipPieces(aNG);
++            // The piece at the tip.
++            TopoDS_Edge  aCut;
++            double       aBest  = RealLast();
++            const TopoDS_Vertex aTipV = BRepLib_MakeVertex(aTip).Vertex();
++            for (NCollection_List<TopoDS_Shape>::Iterator itI(LInt1); itI.More(); itI.Next())
++            {
++              BRepExtrema_DistShapeShape aDist(aTipV, itI.Value());
++              if (aDist.IsDone() && aDist.NbSolution() > 0 && aDist.Value() < aBest)
++              {
++                aBest = aDist.Value();
++                aCut  = TopoDS::Edge(itI.Value());
++              }
++            }
++            if (aCut.IsNull() || aBest > aOffsetDist)
++            {
++              continue;
++            }
++            // Its orientation in the further face's offset: on from the
++            // image there of its edge at the vertex (the piece of it
++            // nearest to the tip), as the wire of the offset runs.
++            TopoDS_Edge aPrev;
++            double      aPrevDist = RealLast();
++            for (TopExp_Explorer aX(Build(aEG), TopAbs_EDGE); aX.More(); aX.Next())
++            {
++              BRepExtrema_DistShapeShape aDist(aTipV, aX.Current());
++              if (aDist.IsDone() && aDist.NbSolution() > 0 && aDist.Value() < aPrevDist)
++              {
++                aPrevDist = aDist.Value();
++                aPrev     = TopoDS::Edge(aX.Current());
++              }
++            }
++            if (aPrev.IsNull())
++            {
++              continue;
++            }
++            const TopAbs_Orientation aPrevOr = OrientationIn(myAsDes, aNG, aPrev, aPrev.Orientation());
++            BRepAdaptor_Curve aCC(aCut);
++            const gp_Pnt      aCut0 = aCC.Value(aCC.FirstParameter());
++            const gp_Pnt      aCut1 = aCC.Value(aCC.LastParameter());
++            const auto        aToPrev = [&](const gp_Pnt& theP) {
++              BRepExtrema_DistShapeShape aDist(BRepLib_MakeVertex(theP).Vertex(), aPrev);
++              return aDist.IsDone() && aDist.NbSolution() > 0 ? aDist.Value() : RealLast();
++            };
++            // (the end of the piece at that image)
++            const bool bFirstAtPrev = aToPrev(aCut0) <= aToPrev(aCut1);
++            // Where they meet, the image is kept on the side towards the
++            // middle of its edge, and the wire walks along it towards the
++            // meeting point (enters) or away from it.
++            double                        aPF, aPL;
++            const occ::handle<Geom_Curve> aPCurve = BRep_Tool::Curve(aPrev, aPF, aPL);
++            if (aPCurve.IsNull())
++            {
++              continue;
++            }
++            GeomAPI_ProjectPointOnCurve aOnPrev(bFirstAtPrev ? aCut0 : aCut1, aPCurve, aPF, aPL);
++            if (aOnPrev.NbPoints() == 0)
++            {
++              continue;
++            }
++            const double      aTA    = aOnPrev.LowerDistanceParameter();
++            const double      aDelta = 1.e-3 * (aPL - aPF);
++            BRepAdaptor_Curve aEGC(aEG);
++            const gp_Pnt      aMid = aEGC.Value(0.5 * (aEGC.FirstParameter() + aEGC.LastParameter()));
++            const bool        bKeptAfter = aPCurve->Value(std::min(aTA + aDelta, aPL)).Distance(aMid)
++                                    < aPCurve->Value(std::max(aTA - aDelta, aPF)).Distance(aMid);
++            const bool bEnters = (aPrevOr != TopAbs_REVERSED) != bKeptAfter;
++            // Running on from the image: forward where its first end is
++            // there and the image enters the vertex, or its last end is
++            // there and the image leaves it.
++            const TopAbs_Orientation aOrG = (bFirstAtPrev == bEnters) ? TopAbs_FORWARD : TopAbs_REVERSED;
++            TopAbs_Orientation aO1, aO2;
++            BRepOffset_Tool::OrientSection(aCut, aNFD, aNG, aO1, aO2);
++            if (aO2 != aOrG)
++            {
++              aO1 = TopAbs::Reverse(aO1);
++              aO2 = aOrG;
++            }
++            NCollection_List<TopoDS_Shape> aL1, aL2;
++            aL1.Append(aCut.Oriented(aO1));
++            aL2.Append(aCut.Oriented(aO2));
++            Store(aNFD, aNG, aL1, aL2);
++            TopoDS_Compound aC;
++            B.MakeCompound(aC);
++            B.Add(aC, aCut);
++            Build.Bind(aED, aC);
++            break;
++          }
++          if (Build.IsBound(aED))
++          {
++            break;
++          }
++        }
++      }
++    }
++  }
+ }
+ 
+ //=================================================================================================
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index c0797ed7..045293b7 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -5527,6 +5527,89 @@ static void AddJointsOfPieces(const TopoDS_Edge&                 thePiece,
+   }
+ }
+ 
++//=======================================================================
++// function : InsideChainOfPieces
++// purpose  : Whether thePiece of theImage (an edge's image in several
++//            pieces) is joined at both its ends to other pieces of it, and
++//            through them to a piece with vertices in theAsDes2d (where
++//            the image meets its neighbours): a piece in the middle of the
++//            chain, which nothing meets (the convex part of a crease that
++//            turns from concave to convex inside its edge, between the
++//            joints at the turns; mitcad#2418). Such a piece was removed
++//            as one without intersections with neighbours, and the chain
++//            and the offset of the face it bounds were left open.
++//=======================================================================
++static bool InsideChainOfPieces(const TopoDS_Edge&                 thePiece,
++                                const TopoDS_Shape&                theImage,
++                                const occ::handle<BRepAlgo_AsDes>& theAsDes2d)
++{
++  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aPieces;
++  TopExp::MapShapes(theImage, TopAbs_EDGE, aPieces);
++  if (aPieces.Extent() < 3)
++  {
++    return false;
++  }
++  const auto aJoined = [&](const TopoDS_Shape& theE, const TopoDS_Shape& theV) {
++    for (int i = 1; i <= aPieces.Extent(); ++i)
++    {
++      if (aPieces(i).IsSame(theE))
++      {
++        continue;
++      }
++      for (TopExp_Explorer aExpV(aPieces(i), TopAbs_VERTEX); aExpV.More(); aExpV.Next())
++      {
++        if (aExpV.Current().IsSame(theV))
++        {
++          return true;
++        }
++      }
++    }
++    return false;
++  };
++  TopoDS_Vertex aV1, aV2;
++  TopExp::Vertices(thePiece, aV1, aV2);
++  if (aV1.IsNull() || aV2.IsNull() || aV1.IsSame(aV2) || !aJoined(thePiece, aV1) || !aJoined(thePiece, aV2))
++  {
++    return false;
++  }
++  // through the joints to a piece the neighbours meet
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aReached;
++  aReached.Add(thePiece);
++  for (bool bGrown = true; bGrown;)
++  {
++    bGrown = false;
++    for (int i = 1; i <= aPieces.Extent(); ++i)
++    {
++      if (aReached.Contains(aPieces(i)))
++      {
++        continue;
++      }
++      bool bTouches = false;
++      for (TopExp_Explorer aExpV(aPieces(i), TopAbs_VERTEX); aExpV.More() && !bTouches; aExpV.Next())
++      {
++        for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator itR(aReached); itR.More() && !bTouches;
++             itR.Next())
++        {
++          for (TopExp_Explorer aExpR(itR.Value(), TopAbs_VERTEX); aExpR.More() && !bTouches; aExpR.Next())
++          {
++            bTouches = aExpR.Current().IsSame(aExpV.Current());
++          }
++        }
++      }
++      if (bTouches)
++      {
++        if (!theAsDes2d->Descendant(aPieces(i)).IsEmpty())
++        {
++          return true;
++        }
++        aReached.Add(aPieces(i));
++        bGrown = true;
++      }
++    }
++  }
++  return false;
++}
++
+ //=================================================================================================
+ 
+ bool TrimEdges(
+@@ -5641,6 +5724,12 @@ bool TrimEdges(
+               continue;
+             }
+             theNewEdges.Add(NEC);
++            if (theAsDes2d->Descendant(NEC).IsEmpty() && InsideChainOfPieces(NEC, NE, theAsDes2d))
++            {
++              // (mitcad#2418) a piece inside the chain, between two others:
++              // its ends are the joints
++              AddJointsOfPieces(NEC, NE, theAsDes2d);
++            }
+             {
+               if (!theAsDes2d->Descendant(NEC).IsEmpty())
+               {
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+index 6894f41d..0d6e1b06 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -2303,6 +2303,667 @@ static void DropCrossingsPastTangentEnd(
+   }
+ }
+ 
++//=======================================================================
++// function : JoinCreaseAcrossInnerTangency
++// purpose  : The intersection of the offsets of a crease's faces where the
++//            crease turns from concave to convex inside its edge, the faces
++//            tangent at a point between (a loft from a circle to a smaller
++//            one off its axis, a cylinder on each end: the rims are concave
++//            on one side and convex on the other; GitHub mitcad/Mitcad#641,
++//            mitcad#2418). The enlarged offsets are tangent at the offset of
++//            that point, and there their intersection is an X: the branch
++//            along the crease, on both sides of the point, and a second
++//            branch crossing it and running off to the enlarged faces'
++//            bounds, joined by pieces of a few microns, the branch along the
++//            crease not always connected across it. The pieces kept so far
++//            (CheckIntersFF's connected block, then the edge nearest to the
++//            edge's middle) were the crossing branch's alone, or the
++//            crease's on one side of the point: the offset of a face had no
++//            closed wire, and the thick solid failed.
++//            There the pieces of the crossing branch (an end at the point,
++//            its direction there across the crease's) and the pieces within
++//            the point's neighbourhood are dropped, the two pieces along the
++//            crease that end there share one vertex at the point, and the
++//            pieces connected to them are the intersection (theJoined).
++//            Past the point the crease is of the other kind than at the
++//            edge's middle, whose kind the analysis gave the edge: the
++//            pieces there are in theOtherKind (their orientation in the
++//            offset faces reversed). Where no such point is found, or the
++//            pieces at it are not one branch along the crease on each side
++//            and crossing ones, nothing changes (theJoined empty).
++//            With MITCAD_TRACE_OFFSET_CREASE set it says what it found.
++//=======================================================================
++static void JoinCreaseAcrossInnerTangency(
++  const TopoDS_Edge&                                                   RefEdge,
++  const TopoDS_Face&                                                   RefFace1,
++  const TopoDS_Face&                                                   RefFace2,
++  const NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>& AllEdges,
++  const TopoDS_Face&                                                   OffsetFace1,
++  const TopoDS_Face&                                                   OffsetFace2,
++  NCollection_List<TopoDS_Shape>&                                      theJoined,
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>&              theOtherKind)
++{
++  theJoined.Clear();
++  theOtherKind.Clear();
++  if (RefEdge.IsNull() || RefFace1.IsNull() || RefFace2.IsNull() || AllEdges.Extent() < 2
++      || BRep_Tool::Degenerated(RefEdge))
++  {
++    return;
++  }
++  // How far apart the projections of a point of the crease on both offsets
++  // may be where they are tangent.
++  const double aOnBoth = 1.e-2;
++  // The crease's edges: those common to both faces (the pair is
++  // intersected once for all of them), as oriented in RefFace1; not seams.
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aEdges2;
++  for (TopExp_Explorer aEx(RefFace2, TopAbs_EDGE); aEx.More(); aEx.Next())
++  {
++    aEdges2.Add(aEx.Current());
++  }
++  NCollection_Sequence<TopoDS_Edge>                      aCrease;
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aSeen;
++  for (TopExp_Explorer aEx(RefFace1, TopAbs_EDGE); aEx.More(); aEx.Next())
++  {
++    const TopoDS_Edge& aE = TopoDS::Edge(aEx.Current());
++    if (!aEdges2.Contains(aE) || BRep_Tool::Degenerated(aE) || BRepTools::IsReallyClosed(aE, RefFace1)
++        || BRepTools::IsReallyClosed(aE, RefFace2) || !aSeen.Add(aE))
++    {
++      continue;
++    }
++    aCrease.Append(aE);
++  }
++  if (aCrease.IsEmpty())
++  {
++    return;
++  }
++  // The crease's turn at a point of one of its edges: the sine of the angle
++  // between the faces' normals, signed by the side it turns to (along the
++  // edge as RefFace1's boundary runs: of one sign where the crease is
++  // convex, of the other where concave), 0 where not computed; its point
++  // and direction there (and in aDot the cosine of that angle).
++  const BRepAdaptor_Surface aS1(RefFace1, false);
++  const BRepAdaptor_Surface aS2(RefFace2, false);
++  double                    aDot  = 0.;
++  const auto                aTurn = [&](const TopoDS_Edge& theE, const double theT, gp_Pnt& theP, gp_Vec& theD) {
++    aDot = 0.;
++    gp_Vec aN[2];
++    for (int k = 0; k < 2; k++)
++    {
++      const TopoDS_Face&              aF = k == 0 ? RefFace1 : RefFace2;
++      double                          f2d, l2d;
++      const occ::handle<Geom2d_Curve> aPC = BRep_Tool::CurveOnSurface(theE, aF, f2d, l2d);
++      if (aPC.IsNull())
++      {
++        return 0.;
++      }
++      const gp_Pnt2d aUV = aPC->Value(theT);
++      gp_Pnt         aP;
++      gp_Vec         aDU, aDV;
++      (k == 0 ? aS1 : aS2).D1(aUV.X(), aUV.Y(), aP, aDU, aDV);
++      aN[k] = aDU.Crossed(aDV);
++      if (aN[k].Magnitude() <= gp::Resolution())
++      {
++        return 0.;
++      }
++      aN[k].Normalize();
++      if (aF.Orientation() == TopAbs_REVERSED)
++      {
++        aN[k].Reverse();
++      }
++    }
++    BRepAdaptor_Curve(theE).D1(theT, theP, theD);
++    if (theD.Magnitude() <= gp::Resolution())
++    {
++      return 0.;
++    }
++    theD.Normalize();
++    if (theE.Orientation() == TopAbs_REVERSED)
++    {
++      theD.Reverse();
++    }
++    aDot = aN[0].Dot(aN[1]);
++    return aN[0].Crossed(aN[1]).Dot(theD);
++  };
++  // The kind at the edge's middle, which the analysis gave it.
++  gp_Pnt aPMid;
++  gp_Vec aDMid;
++  double aRef1, aRef2;
++  BRep_Tool::Range(RefEdge, aRef1, aRef2);
++  TopoDS_Edge aRefInFace1 = RefEdge;
++  for (int i = 1; i <= aCrease.Length(); i++)
++  {
++    if (aCrease(i).IsSame(RefEdge))
++    {
++      aRefInFace1 = aCrease(i);
++    }
++  }
++  const double aRefTurn = aTurn(aRefInFace1, 0.5 * (aRef1 + aRef2), aPMid, aDMid);
++  if (aRefTurn == 0.)
++  {
++    return;
++  }
++  // The points where the crease turns, inside its edges (the offsets'
++  // tangencies: the point on both offsets), and the crease's direction
++  // there; and samples of the crease with its kind, which the pieces take.
++  const int                     aNbSamples = 64;
++  NCollection_Sequence<gp_Pnt>  aTangency;
++  NCollection_Sequence<gp_Vec>  aTangencyDir;
++  NCollection_Sequence<gp_Pnt>  aSample;
++  NCollection_Sequence<double>  aSampleTurn;
++  double                        aOffsetDist = RealLast();
++  for (int i = 1; i <= aCrease.Length(); i++)
++  {
++    const TopoDS_Edge& aE = aCrease(i);
++    double             aF, aL;
++    BRep_Tool::Range(aE, aF, aL);
++    double aPrevT = aF, aPrevTurn = 0.;
++    for (int k = 0; k <= aNbSamples; k++)
++    {
++      const double aT = aF + (aL - aF) * k / aNbSamples;
++      gp_Pnt       aP;
++      gp_Vec       aD;
++      const double aG = aTurn(aE, aT, aP, aD);
++      if (aG != 0.)
++      {
++        aSample.Append(aP);
++        aSampleTurn.Append(aG);
++      }
++      if (k > 0 && aG != 0. && aPrevTurn != 0. && (aG > 0.) != (aPrevTurn > 0.))
++      {
++        // The turn's root between the two samples, by bisection.
++        double aA = aPrevT, aB = aT, aGA = aPrevTurn;
++        for (int n = 0; n < 60 && aB - aA > Precision::PConfusion() * 1.e-3; n++)
++        {
++          const double aM  = 0.5 * (aA + aB);
++          const double aGM = aTurn(aE, aM, aP, aD);
++          if (aGM == 0.)
++          {
++            break;
++          }
++          if ((aGM > 0.) == (aGA > 0.))
++          {
++            aA  = aM;
++            aGA = aGM;
++          }
++          else
++          {
++            aB = aM;
++          }
++        }
++        const double aRoot = 0.5 * (aA + aB);
++        aTurn(aE, aRoot, aP, aD);
++        // (only where the faces are tangent, not where they fold back)
++        if (aRoot - aF > 1.e-3 * (aL - aF) && aL - aRoot > 1.e-3 * (aL - aF) && aDot > 0.)
++        {
++          GeomAPI_ProjectPointOnSurf aOn1(aP, BRep_Tool::Surface(OffsetFace1));
++          GeomAPI_ProjectPointOnSurf aOn2(aP, BRep_Tool::Surface(OffsetFace2));
++          if (!aOn1.IsDone() || aOn1.NbPoints() == 0 || !aOn2.IsDone() || aOn2.NbPoints() == 0
++              || aOn1.NearestPoint().Distance(aOn2.NearestPoint()) > aOnBoth)
++          {
++            if (TracingCrease())
++            {
++              std::fprintf(stderr, "offset crease: a turn at (%.6f %.6f %.6f) not on both offsets\n", aP.X(),
++                           aP.Y(), aP.Z());
++            }
++            return;
++          }
++          aTangency.Append(aOn1.NearestPoint());
++          aTangencyDir.Append(aD);
++          aOffsetDist = std::min(aOffsetDist, aP.Distance(aOn1.NearestPoint()));
++        }
++      }
++      if (aG != 0.)
++      {
++        aPrevT    = aT;
++        aPrevTurn = aG;
++      }
++    }
++  }
++  // Where the crease, one edge, flattens to tangency at both its ends (the
++  // crease between the sides of two lofts fading out at both ends, where
++  // both meet a cylinder; DropCrossingsPastTangentEnd takes a crease with
++  // one such end), the offsets are tangent at the offsets of both ends, and
++  // there the branch along the crease meets its continuation past the end
++  // and a branch crossing it. These are taken as the tangencies inside
++  // (after them in aTangency), but only the branch into the edge is kept at
++  // them, and nothing is joined.
++  const int aNbInner = aTangency.Length();
++  if (aCrease.Length() == 1)
++  {
++    const TopoDS_Edge& aE = aCrease(1);
++    TopoDS_Vertex      aEV1, aEV2;
++    TopExp::Vertices(aE, aEV1, aEV2);
++    double aF, aL;
++    BRep_Tool::Range(aE, aF, aL);
++    gp_Pnt       aP0, aP1, aPM;
++    gp_Vec       aD0, aD1, aDM;
++    const double aG0    = aTurn(aE, aF, aP0, aD0);
++    const double aDot0  = aDot;
++    const double aG1    = aTurn(aE, aL, aP1, aD1);
++    const double aDot1  = aDot;
++    const double aGM    = aTurn(aE, 0.5 * (aF + aL), aPM, aDM);
++    if (!aEV1.IsNull() && !aEV2.IsNull() && !aEV1.IsSame(aEV2) && aDot0 > 0. && aDot1 > 0.
++        && std::abs(aG0) <= 1.e-4 && std::abs(aG1) <= 1.e-4 && std::abs(aGM) > 1.e-4)
++    {
++      const BRepAdaptor_Curve aEC(aE);
++      for (int aEnd = 0; aEnd < 2; aEnd++)
++      {
++        gp_Pnt aP;
++        gp_Vec aIn;
++        aEC.D1(aEnd == 0 ? aF : aL, aP, aIn);
++        if (aIn.Magnitude() <= gp::Resolution())
++        {
++          return;
++        }
++        aIn.Normalize();
++        if (aEnd == 1)
++        {
++          aIn.Reverse();
++        }
++        GeomAPI_ProjectPointOnSurf aOn1(aP, BRep_Tool::Surface(OffsetFace1));
++        GeomAPI_ProjectPointOnSurf aOn2(aP, BRep_Tool::Surface(OffsetFace2));
++        if (!aOn1.IsDone() || aOn1.NbPoints() == 0 || !aOn2.IsDone() || aOn2.NbPoints() == 0
++            || aOn1.NearestPoint().Distance(aOn2.NearestPoint()) > aOnBoth)
++        {
++          return;
++        }
++        aTangency.Append(aOn1.NearestPoint());
++        aTangencyDir.Append(aIn);
++        aOffsetDist = std::min(aOffsetDist, aP.Distance(aOn1.NearestPoint()));
++      }
++    }
++  }
++  if (aTangency.IsEmpty())
++  {
++    return;
++  }
++  // The neighbourhood of the tangency on the offsets, where the pieces of
++  // the X end or the intersection turns from one branch into the other:
++  // some ten microns across (a tenth of a millimetre at most, a tenth of
++  // the offset for a thin one).
++  const double aNear = std::min(0.1, 0.1 * aOffsetDist);
++  if (TracingCrease())
++  {
++    for (int k = 1; k <= aTangency.Length(); k++)
++    {
++      std::fprintf(stderr, "offset crease: %s, the offsets tangent at (%.6f %.6f %.6f)\n",
++                   k <= aNbInner ? "turns inside the crease" : "tangent at its end", aTangency(k).X(),
++                   aTangency(k).Y(), aTangency(k).Z());
++    }
++  }
++  // An edge on a piece's curve between two of its parameters, with the
++  // given vertices and the piece's curves on both offset faces (null where
++  // the piece lies on a face's seam).
++  bool       aOnSeam = false;
++  const auto aPart   = [&](const TopoDS_Edge&   theE,
++                         const double         theT0,
++                         const double         theT1,
++                         const TopoDS_Vertex& theV0,
++                         const TopoDS_Vertex& theV1) {
++    TopoDS_Edge                   aNew;
++    double                        aF, aL;
++    const occ::handle<Geom_Curve> aCurve = BRep_Tool::Curve(theE, aF, aL);
++    if (aCurve.IsNull() || BRep_Tool::IsClosed(theE, OffsetFace1) || BRep_Tool::IsClosed(theE, OffsetFace2))
++    {
++      aOnSeam = true;
++      return aNew;
++    }
++    const double aTolE = std::max(BRep_Tool::Tolerance(theE), Precision::Confusion());
++    BRep_Builder aBB;
++    // (A curve of its own, the piece's run of the curve, of the same
++    // parameter: the pieces of one curve of intersection share it, and a
++    // vertex on two of them (the curve, closed, starting and ending there)
++    // has one parameter on it, that of the piece it was put on last.)
++    aBB.MakeEdge(aNew, new Geom_TrimmedCurve(aCurve, theT0, theT1), aTolE);
++    aBB.Add(aNew, theV0.Oriented(TopAbs_FORWARD));
++    aBB.Add(aNew, theV1.Oriented(TopAbs_REVERSED));
++    aBB.Range(aNew, theT0, theT1);
++    // (The vertices' parameters on it: where a vertex has none, its
++    // parameter is found by projection on the whole curve, which may run on
++    // past the piece along the crossing branch.)
++    aBB.UpdateVertex(theV0, theT0, aNew, BRep_Tool::Tolerance(theV0));
++    aBB.UpdateVertex(theV1, theT1, aNew, BRep_Tool::Tolerance(theV1));
++    for (int aSide = 0; aSide < 2; aSide++)
++    {
++      const TopoDS_Face&              aOF = aSide == 0 ? OffsetFace1 : OffsetFace2;
++      double                          aPF, aPL;
++      const occ::handle<Geom2d_Curve> aPC = BRep_Tool::CurveOnSurface(theE, aOF, aPF, aPL);
++      // (Only a curve of the same parameter as the edge's.)
++      if (!aPC.IsNull() && std::abs(aPF - aF) <= Precision::PConfusion()
++          && std::abs(aPL - aL) <= Precision::PConfusion())
++      {
++        aBB.UpdateEdge(aNew, aPC, aOF, aTolE);
++        aBB.Range(aNew, aOF, theT0, theT1);
++      }
++    }
++    return aNew;
++  };
++  // The pieces, those running through a tangency (from the crossing branch
++  // into the one along the crease) split there.
++  NCollection_Sequence<TopoDS_Edge> aAll;
++  for (int i = 1; i <= AllEdges.Extent(); i++)
++  {
++    const TopoDS_Edge aE = TopoDS::Edge(AllEdges(i).Oriented(TopAbs_FORWARD));
++    double            aF, aL;
++    const occ::handle<Geom_Curve> aCurve = BRep_Tool::Curve(aE, aF, aL);
++    if (aCurve.IsNull())
++    {
++      return;
++    }
++    NCollection_Sequence<double> aCuts;
++    for (int k = 1; k <= aTangency.Length(); k++)
++    {
++      if (aCurve->Value(aF).Distance(aTangency(k)) <= aNear || aCurve->Value(aL).Distance(aTangency(k)) <= aNear)
++      {
++        continue;
++      }
++      GeomAPI_ProjectPointOnCurve aOn(aTangency(k), aCurve, aF, aL);
++      if (TracingCrease() && aOn.NbPoints() > 0 && aOn.LowerDistance() <= 1.)
++      {
++        std::fprintf(stderr, "offset crease: a piece passes %.3g from the tangency %d at %.6g (its range %.6g..%.6g)\n",
++                     aOn.LowerDistance(), k, aOn.LowerDistanceParameter(), aF, aL);
++      }
++      if (aOn.NbPoints() > 0 && aOn.LowerDistance() <= aNear)
++      {
++        aCuts.Append(aOn.LowerDistanceParameter());
++      }
++    }
++    if (aCuts.IsEmpty())
++    {
++      aAll.Append(aE);
++      continue;
++    }
++    // (in their order along it; a piece may run through several)
++    for (int k = 1; k < aCuts.Length(); k++)
++    {
++      for (int n = aCuts.Length(); n > k; n--)
++      {
++        if (aCuts(n) < aCuts(n - 1))
++        {
++          aCuts.Exchange(n, n - 1);
++        }
++      }
++    }
++    TopoDS_Vertex aV1, aV2;
++    TopExp::Vertices(aE, aV1, aV2);
++    double        aT0 = aF;
++    TopoDS_Vertex aW0 = aV1;
++    for (int k = 1; k <= aCuts.Length() + 1; k++)
++    {
++      const double  aT1 = k <= aCuts.Length() ? aCuts(k) : aL;
++      TopoDS_Vertex aW1 = aV2;
++      if (k <= aCuts.Length())
++      {
++        aW1 = BRepLib_MakeVertex(aCurve->Value(aT1)).Vertex();
++        BRep_Builder().UpdateVertex(aW1, std::max(BRep_Tool::Tolerance(aE), Precision::Confusion()));
++      }
++      const TopoDS_Edge aSplit = aPart(aE, aT0, aT1, aW0, aW1);
++      if (aOnSeam)
++      {
++        return;
++      }
++      aAll.Append(aSplit);
++      aT0 = aT1;
++      aW0 = aW1;
++    }
++    if (TracingCrease())
++    {
++      std::fprintf(stderr, "offset crease: a piece split where it runs through %d tangencies\n", aCuts.Length());
++    }
++  }
++  // The pieces at the tangencies: crossing ones and those within the
++  // neighbourhood dropped; the two along the crease at each joined.
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aDropped;
++  // the pieces into the edge at its ends
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aSeeds;
++  // (piece, its end 0 or 1) -> the tangency it joins at
++  NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher> aJoinFirst, aJoinLast;
++  NCollection_Sequence<int>    aNbAlong;
++  NCollection_Sequence<double> aSideSum;
++  NCollection_Sequence<double> aJoinTol;
++  for (int k = 1; k <= aTangency.Length(); k++)
++  {
++    aNbAlong.Append(0);
++    aSideSum.Append(0.);
++    aJoinTol.Append(0.);
++  }
++  for (int i = 1; i <= aAll.Length(); i++)
++  {
++    const TopoDS_Edge aE = aAll(i);
++    BRepAdaptor_Curve aC(aE);
++    const double      aT[2] = {aC.FirstParameter(), aC.LastParameter()};
++    int               aAt[2] = {0, 0};
++    for (int aEnd = 0; aEnd < 2; aEnd++)
++    {
++      const gp_Pnt aP = aC.Value(aT[aEnd]);
++      for (int k = 1; k <= aTangency.Length() && aAt[aEnd] == 0; k++)
++      {
++        if (aP.Distance(aTangency(k)) <= aNear)
++        {
++          aAt[aEnd] = k;
++        }
++      }
++    }
++    if (aAt[0] == 0 && aAt[1] == 0)
++    {
++      continue;
++    }
++    if (aAt[0] != 0 && aAt[0] == aAt[1])
++    {
++      // a piece of the X's knot
++      aDropped.Add(aE);
++      continue;
++    }
++    bool                         aCrossing = false;
++    NCollection_Sequence<double> aSides;
++    for (int aEnd = 0; aEnd < 2; aEnd++)
++    {
++      if (aAt[aEnd] == 0)
++      {
++        aSides.Append(0.);
++        continue;
++      }
++      // Its direction into the piece: the chord to its point half a
++      // millimetre away (its tangent at the very end, in the X's knot, may
++      // turn off; on the first half of it at most).
++      const gp_Pnt aP = aC.Value(aT[aEnd]);
++      gp_Vec       aD;
++      for (int n = 1; n <= 64; n++)
++      {
++        const gp_Pnt aQ = aC.Value(aT[aEnd] + (aT[1 - aEnd] - aT[aEnd]) * 0.5 * n / 64);
++        aD              = gp_Vec(aP, aQ);
++        if (aD.Magnitude() >= 0.5)
++        {
++          break;
++        }
++      }
++      if (aD.Magnitude() <= Precision::Confusion())
++      {
++        return;
++      }
++      aD.Normalize();
++      const double aCos = aD.Dot(aTangencyDir(aAt[aEnd]));
++      if (TracingCrease())
++      {
++        const gp_Pnt aQ = aC.Value(aT[1 - aEnd]);
++        std::fprintf(stderr,
++                     "offset crease: a piece at the tangency %d, %.3g from it, its direction's cosine with the "
++                     "crease's %.3f, its other end (%.6f %.6f %.6f)\n",
++                     aAt[aEnd], aP.Distance(aTangency(aAt[aEnd])), aCos, aQ.X(), aQ.Y(), aQ.Z());
++      }
++      aSides.Append(aCos);
++      // (at an end: into the edge only)
++      aCrossing = aCrossing || (aAt[aEnd] > aNbInner ? aCos < 0.9 : std::abs(aCos) < 0.9);
++    }
++    if (aCrossing)
++    {
++      aDropped.Add(aE);
++      continue;
++    }
++    for (int aEnd = 0; aEnd < 2; aEnd++)
++    {
++      const int k = aAt[aEnd];
++      if (k == 0)
++      {
++        continue;
++      }
++      aNbAlong(k)++;
++      if (k > aNbInner)
++      {
++        aSeeds.Add(aE);
++        continue;
++      }
++      aSideSum(k) += aSides(aEnd + 1) > 0. ? 1. : -1.;
++      aJoinTol(k) = std::max(aJoinTol(k), aC.Value(aT[aEnd]).Distance(aTangency(k)));
++      (aEnd == 0 ? aJoinFirst : aJoinLast).Bind(aE, k);
++    }
++  }
++  // One piece along the crease on each side of each tangency inside the
++  // edges, one into the edge at each end, and some crossing piece dropped.
++  for (int k = 1; k <= aTangency.Length(); k++)
++  {
++    if (k <= aNbInner ? (aNbAlong(k) != 2 || aSideSum(k) != 0.) : aNbAlong(k) != 1)
++    {
++      if (TracingCrease())
++      {
++        std::fprintf(stderr, "offset crease: %d pieces along the crease at the tangency %d (sides %g): not joined\n",
++                     aNbAlong(k), k, aSideSum(k));
++      }
++      return;
++    }
++  }
++  if (aDropped.IsEmpty())
++  {
++    return;
++  }
++  // The vertices joining the two pieces at each tangency.
++  NCollection_Sequence<TopoDS_Vertex> aJoint;
++  for (int k = 1; k <= aTangency.Length(); k++)
++  {
++    TopoDS_Vertex aV = BRepLib_MakeVertex(aTangency(k)).Vertex();
++    BRep_Builder().UpdateVertex(aV, std::max(1.01 * aJoinTol(k), Precision::Confusion()));
++    aJoint.Append(aV);
++  }
++  // The pieces connected to those joined (by their vertices, the joined
++  // ends by the joint).
++  const auto aEndKey = [&](const TopoDS_Edge& theE, const int theEnd) -> TopoDS_Shape {
++    const NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher>& aJoins =
++      theEnd == 0 ? aJoinFirst : aJoinLast;
++    if (const int* pK = aJoins.Seek(theE))
++    {
++      return aJoint(*pK);
++    }
++    return theEnd == 0 ? TopExp::FirstVertex(theE, false) : TopExp::LastVertex(theE, false);
++  };
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aKept = aSeeds;
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aReached;
++  for (NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher>::Iterator aIt(aJoinFirst); aIt.More();
++       aIt.Next())
++  {
++    aKept.Add(aIt.Key());
++  }
++  for (NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher>::Iterator aIt(aJoinLast); aIt.More();
++       aIt.Next())
++  {
++    aKept.Add(aIt.Key());
++  }
++  for (bool aGrown = true; aGrown;)
++  {
++    aGrown = false;
++    for (NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>::Iterator aIt(aKept); aIt.More(); aIt.Next())
++    {
++      for (int aEnd = 0; aEnd < 2; aEnd++)
++      {
++        const TopoDS_Shape aV = aEndKey(TopoDS::Edge(aIt.Key()), aEnd);
++        if (!aV.IsNull())
++        {
++          aReached.Add(aV);
++        }
++      }
++    }
++    for (int i = 1; i <= aAll.Length(); i++)
++    {
++      const TopoDS_Edge aE = aAll(i);
++      if (aKept.Contains(aE) || aDropped.Contains(aE))
++      {
++        continue;
++      }
++      for (int aEnd = 0; aEnd < 2; aEnd++)
++      {
++        const TopoDS_Shape aV = aEndKey(aE, aEnd);
++        if (!aV.IsNull() && aReached.Contains(aV))
++        {
++          aKept.Add(aE);
++          aGrown = true;
++          break;
++        }
++      }
++    }
++  }
++  // The pieces kept, the joined ends on the joints (the same curves, their
++  // curves on both offset faces too).
++  NCollection_List<TopoDS_Shape> aPieces;
++  for (int i = 1; i <= aAll.Length(); i++)
++  {
++    const TopoDS_Edge aE = aAll(i);
++    if (!aKept.Contains(aE))
++    {
++      continue;
++    }
++    TopoDS_Edge aPiece = aE;
++    if (aJoinFirst.IsBound(aE) || aJoinLast.IsBound(aE))
++    {
++      double aF, aL;
++      BRep_Tool::Range(aE, aF, aL);
++      const TopoDS_Vertex aV1 = TopoDS::Vertex(aEndKey(aE, 0));
++      const TopoDS_Vertex aV2 = TopoDS::Vertex(aEndKey(aE, 1));
++      if (aV1.IsNull() || aV2.IsNull())
++      {
++        return;
++      }
++      aPiece = aPart(aE, aF, aL, aV1, aV2);
++      if (aOnSeam)
++      {
++        return;
++      }
++    }
++    // Its kind: that of the crease's sample nearest to its middle.
++    BRepAdaptor_Curve aC(aPiece);
++    const gp_Pnt      aM = aC.Value(0.5 * (aC.FirstParameter() + aC.LastParameter()));
++    double            aBest = RealLast(), aBestTurn = 0.;
++    for (int k = 1; k <= aSample.Length(); k++)
++    {
++      const double aD = aM.SquareDistance(aSample(k));
++      if (aD < aBest)
++      {
++        aBest     = aD;
++        aBestTurn = aSampleTurn(k);
++      }
++    }
++    if ((aBestTurn > 0.) != (aRefTurn > 0.))
++    {
++      theOtherKind.Add(aPiece);
++    }
++    aPieces.Append(aPiece);
++  }
++  if (aPieces.IsEmpty())
++  {
++    return;
++  }
++  theJoined = aPieces;
++  if (TracingCrease())
++  {
++    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aShown;
++    for (NCollection_List<TopoDS_Shape>::Iterator aIt(aPieces); aIt.More(); aIt.Next())
++    {
++      aShown.Add(aIt.Value());
++    }
++    std::fprintf(stderr, "offset crease: %d pieces dropped at the tangencies, %d of the other kind\n",
++                 aDropped.Extent(), theOtherKind.Extent());
++    TraceEdges("joined across the tangencies", aShown);
++  }
++}
++
+ //=================================================================================================
+ 
+ void BRepOffset_Tool::Inter3D(const TopoDS_Face&              F1,
+@@ -2369,8 +3030,16 @@ void BRepOffset_Tool::Inter3D(const TopoDS_Face&              F1,
+     }
+     TopoDS_Edge aMerged;
+     NCollection_List<TopoDS_Shape> aCut;
+-    DropCrossingsPastTangentEnd(RefEdge, theRefFace1, theRefFace2, TrueEdges, aAllEdges, F1, F2, aMerged, aCut,
+-                                theAnalyse);
++    // (mitcad#2418) Where the crease turns from concave to convex inside
++    // its edges, the branch along it joined across the turn; the pieces
++    // past it oriented as of the other kind.
++    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aOtherKind;
++    JoinCreaseAcrossInnerTangency(RefEdge, theRefFace1, theRefFace2, aAllEdges, F1, F2, aCut, aOtherKind);
++    if (aCut.IsEmpty())
++    {
++      DropCrossingsPastTangentEnd(RefEdge, theRefFace1, theRefFace2, TrueEdges, aAllEdges, F1, F2, aMerged, aCut,
++                                  theAnalyse);
++    }
+     // (The pieces' curves on both offset faces first: where one cannot be
+     // built, the cut is not taken, and the branch is kept whole.)
+     if (!aCut.IsEmpty())
+@@ -2432,7 +3101,7 @@ void BRepOffset_Tool::Inter3D(const TopoDS_Face&              F1,
+         BRepLib::SameParameter(aPiece, Precision::Confusion(), true);
+         TopAbs_Orientation aO1, aO2;
+         OrientSection(aPiece, F1, F2, aO1, aO2);
+-        if (Side == TopAbs_OUT)
++        if ((Side == TopAbs_OUT) != aOtherKind.Contains(aPiece))
+         {
+           aO1 = TopAbs::Reverse(aO1);
+           aO2 = TopAbs::Reverse(aO2);

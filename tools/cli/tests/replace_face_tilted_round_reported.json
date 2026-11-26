@@ -3,7 +3,7 @@
   {"cmd": "add_feature", "def": {"type": "replace_face", "body": "F2.b0", "faces": ["F5:end(r{c9})"],
     "target": {"body": "F12.b0", "face": "F12:side(c9)"}, "tangent_chain": true}},
   {"expect": {"feature": "ReplaceFace2", "status": "ok"}},
-  {"comment": "The design recomputes to four bodies (Body1, Body2, Body4, Body5: Extrude3 is a surface extrusion of one arc, one body); the file also lists a stored name Body3 (F6.b1) that no feature makes (mitcad#2381). The replacement adds and removes none."},
+  {"comment": "The design recomputes to four bodies (Body1, Body2, Body4, Body5), as it did in 0.70.0, which saved it (mitcad#2381, mitcad#2417). Its `bodies` list also names Body3 (F6.b1): that list is the document's body names, which a recompute adds to and nothing prunes, not the bodies made. The file stores no shapes, and Extrude3 as saved (a surface extrusion of the arc c52 alone, no profile) makes one sheet, F6.b0; only Extrude3 makes F6 bodies. So F6.b1 is a name left from an earlier definition of Extrude3. The replacement adds and removes no body."},
   {"expect": {"bodies": 4}},
   {"expect": {"body": "F2.b0", "has_face": "F13:replace(F5:end(r{c9}))", "no_face": "F5:end(r{c9})"}},
   {"comment": "The new top: the plane at the axis is at z = 56.024, from 54.090 to 57.957 across the circle; the highest point of the body."},

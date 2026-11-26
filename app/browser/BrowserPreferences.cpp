@@ -58,6 +58,35 @@ void setBrowserActivatePlace(BrowserControlPlace place) { savePlace(kActivatePla
 
 void setBrowserEyePlace(BrowserControlPlace place) { savePlace(kEyePlaceSetting, place); }
 
+// The timeline's presentation (mitcad#2427).
+namespace {
+const char* const kTimelinePresentationSetting = "timeline/presentation";
+} // namespace
+
+QString timelinePresentationId(TimelinePresentation presentation) {
+  return presentation == TimelinePresentation::HistoryList ? QStringLiteral("list") : QStringLiteral("strip");
+}
+
+TimelinePresentation timelinePresentationFromId(const QString& id) {
+  return id == QLatin1String("list") ? TimelinePresentation::HistoryList : TimelinePresentation::Strip;
+}
+
+TimelinePresentation timelinePresentation() {
+  return timelinePresentationFromId(QSettings().value(QLatin1String(kTimelinePresentationSetting)).toString());
+}
+
+void setTimelinePresentation(TimelinePresentation presentation) {
+  const QString key = QLatin1String(kTimelinePresentationSetting);
+  if (QSettings().contains(key) && timelinePresentation() == presentation) {
+    return;
+  }
+  const bool changed = timelinePresentation() != presentation;
+  QSettings().setValue(key, timelinePresentationId(presentation));
+  if (changed) {
+    emit BrowserPreferencesNotifier::instance().timelinePresentationChanged();
+  }
+}
+
 BrowserPreferencesNotifier& BrowserPreferencesNotifier::instance() {
   static BrowserPreferencesNotifier notifier;
   return notifier;

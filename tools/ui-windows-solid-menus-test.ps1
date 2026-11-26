@@ -71,7 +71,7 @@ $menus = [ordered]@{
   'SHEET METAL/CREATE' = 'Create Sketch | - | Face | Flange | Hem | Convert to Sheet Metal | - | Bend | Fold'
   'SHEET METAL/MODIFY' = ('Sheet Cut | Perforate | - | Corner Relief | Corner Round | Corner Chamfer' +
     ' | - | Unfold | Refold | Flat Pattern | Show Flat Pattern' +
-    ' | - | Export Flat Pattern... | Export Bend Table...').Replace('...', $e)
+    ' | - | Export Flat Pattern... | Create Drawing of Flat Pattern... | Export Bend Table...').Replace('...', $e)
   'SHEET METAL/RULES' = $rules
   'MANAGE/MATERIALS' = 'Edit Materials... | Edit Appearances...'.Replace('...', $e)
   'MANAGE/RULES' = $rules + ' | - | Plastic Rules'

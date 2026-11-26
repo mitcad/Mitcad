@@ -23,8 +23,9 @@
 #     (<home>/.mitcad is the user's own ~/.mitcad). The environment is
 #     cleared but for the MITCAD_* variables and the build parallelism
 #     (CMAKE_BUILD_PARALLEL_LEVEL, CARGO_BUILD_JOBS, VCPKG_MAX_CONCURRENCY),
-#     which pass in; a MITCAD_* path outside the bound folders is reported,
-#     as the root would not see it.
+#     which pass in; a MITCAD_* path outside the bound folders that the root
+#     does not have either is reported and not passed in, as the root would
+#     not see it.
 #   build-root.sh setup [--bind <dir>]... <root> <home> <checkout>
 #     As the user, once: copies <checkout> to <home>/src/mitcad and runs
 #     setup-user.sh (Rust, vcpkg, Qt, the render worker's libraries with
@@ -169,13 +170,25 @@ bwrap_args() {
   local name value bound
   while IFS='=' read -r name value; do
     case $name in MITCAD_* | CMAKE_BUILD_PARALLEL_LEVEL | CARGO_BUILD_JOBS | VCPKG_MAX_CONCURRENCY) ;; *) continue ;; esac
-    ARGS+=(--setenv "$name" "${!name}")
-    case $value in /*) ;; *) continue ;; esac
+    case $value in
+      /*) ;;
+      *) ARGS+=(--setenv "$name" "${!name}"); continue ;;
+    esac
     bound=0
     for dir in "$home" "$@" /tmp; do
       case ${value%%:*}/ in "${dir%/}"/*) bound=1 ;; esac
     done
-    [ "$bound" = 1 ] || echo "build-root: $name=$value is outside the bound folders" >&2
+    # A path the root has itself (a tool in its /usr) passes in too.
+    [ -e "$root${value%%:*}" ] && bound=1
+    # A path the root cannot see is not passed in: a test then runs as with
+    # the variable unset (skipped where it is optional) instead of failing on
+    # a file that is missing (0.74.0-rc1: MITCAD_LINUXCNC_SIM=/usr/bin/rs274,
+    # the host's LinuxCNC, which the root does not have).
+    if [ "$bound" = 1 ]; then
+      ARGS+=(--setenv "$name" "${!name}")
+    else
+      echo "build-root: $name=$value is outside the bound folders and not in the root: not passed in" >&2
+    fi
   done < <(env)
 }
 

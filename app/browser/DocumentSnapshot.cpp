@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -622,6 +623,25 @@ QJsonObject DocumentSnapshot::contactSet(const QString& name) const {
     }
   }
   return QJsonObject();
+}
+
+QHash<QString, QStringList> DocumentSnapshot::bodiesByFeature() const {
+  QStringList uids = bodies.keys();
+  uids.sort();
+  QHash<QString, QStringList> made;
+  for (const QString& uid : std::as_const(uids)) {
+    const QString last = bodies.constFind(uid)->lastFeature;
+    // The feature that made it: its uid before ".b" (F4 of F4.b0).
+    const qsizetype dot = uid.indexOf(QStringLiteral(".b"));
+    const QString maker = dot > 0 ? uid.left(dot) : QString();
+    if (!maker.isEmpty()) {
+      made[maker].append(uid);
+    }
+    if (!last.isEmpty() && last != maker) {
+      made[last].append(uid);
+    }
+  }
+  return made;
 }
 
 QJsonObject DocumentSnapshot::analysis(const QString& name) const {

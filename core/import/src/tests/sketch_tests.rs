@@ -293,6 +293,8 @@ fn light_bulbs_are_kept_where_they_differ_from_the_default() {
             construction_bulbs: 2,
             construction_bulbs_unknown: 0,
             bulbs_set: 3,
+            copied: 0,
+            copies_differ: 0,
         }
     );
     assert!(

@@ -1,7 +1,8 @@
 [
   {"comment":"SPDX-License-Identifier: MIT"},
   {"comment":"A Flange on several edges (mitcad#1872; tools/ui-sheet-flange-edges-test.sh and its Windows twin): sheet rules F1 (t = 1, r = 1, K = 0.44), Sketch1 F2 with a 40 x 30 rectangle at the origin and the sheet Face F3 (F3.b0) on it, its side faces y = 0, x = 40 and y = 30 free for one Flange (as cli.sheet_flange_edges)."},
-  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":1,"bend_radius":1,"allowance":{"type":"k_factor","k":0.44},"reference_side":"front","bend_relief":{"type":"round","width":1,"depth":2},"corner_relief":{"type":"round","width":1,"depth":2}}},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","flange_corner_relief":false,"thickness":1,"bend_radius":1,"allowance":{"type":"k_factor","k":0.44},"reference_side":"front","bend_relief":{"type":"round","width":1,"depth":2},"corner_relief":{"type":"round","width":1,"depth":2}}},
+  {"comment":"The rules keep flange corners as designs made before their corner relief at flange corners did (flange_corner_relief false, mitcad#2342, mitcad#2411): this script checks the corners themselves; the rules' relief there is checked by cli.sheet_flange_corner_relief, cli.sheet_flange_edges_corner_relief and cli.sheet_flange_corner_relief_types."},
   {"cmd":"sketch.create"},
   {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[0,0],"width":40,"height":30},
   {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},

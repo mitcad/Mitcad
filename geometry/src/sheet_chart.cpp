@@ -32,17 +32,21 @@
 #include <Bnd_Box.hxx>
 #include <Bnd_Box2d.hxx>
 #include <GProp_GProps.hxx>
+#include <Geom2dAPI_Interpolate.hxx>
 #include <Geom2dAdaptor_Curve.hxx>
 #include <Geom2dConvert.hxx>
 #include <Geom2d_BSplineCurve.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
+#include <GeomAPI_Interpolate.hxx>
 #include <GeomAdaptor_Surface.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
+#include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_Plane.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
+#include <NCollection_HArray1.hxx>
 #include <NCollection_List.hxx>
 #include <Precision.hxx>
 #include <TopExp.hxx>
@@ -106,6 +110,26 @@ struct Embedding {
   double uv_sign = 1;
   // Orientation of (u,v,front-to-back), relative to a positive volume.
   double material_sign = 1;
+  // Orientation of the chart's loops in the caps' UV plane: a cone's chart
+  // is polar there, (angle, distance) turned against (x, y).
+  double wire_sign = 1;
+  // A cone (mitcad#2435): the surfaces' offsets from the neutral cone
+  // (outwards; front, back), the generator distance of their reference
+  // circle and the sine and cosine of the half angle.
+  std::array<double, 2> cone_offsets{0, 0};
+  double rho_ref = 0;
+  double sin_angle = 0;
+  double cos_angle = 1;
+
+  const ConeEmbedding* cone() const { return std::get_if<ConeEmbedding>(&patch->embedding); }
+
+  // A cone chart point's developed angle in the chart's window.
+  double developed_angle(const gp_Pnt2d& p) const {
+    const double free = kPi - cone()->angle_extent / 2;
+    double phi = std::atan2(p.Y(), p.X());
+    if (phi < -free) phi += 2 * kPi;
+    return phi;
+  }
 
   gp_Pnt point(const gp_Pnt2d& p, bool back) const {
     if (const auto* plane = std::get_if<PlaneEmbedding>(&patch->embedding)) {
@@ -113,6 +137,14 @@ struct Embedding {
       if (back) result.Translate(thickness * parity(plane->front_to_back_sign) *
                                  gp_Vec(plane->front_frame.normal()));
       return result;
+    }
+    if (const auto* k = cone()) {
+      const double rho = std::hypot(p.X(), p.Y());
+      const double theta = developed_angle(p) / sin_angle;
+      const gp_Vec radial = std::cos(theta) * gp_Vec(k->radial_start) + std::sin(theta) * gp_Vec(k->angular_direction);
+      const double d = cone_offsets[back ? 1 : 0];
+      return k->apex.Translated((rho * sin_angle + d * cos_angle) * radial +
+                                (rho * cos_angle - d * sin_angle) * gp_Vec(k->axis));
     }
     const auto& c = std::get<CylinderEmbedding>(patch->embedding);
     const double r = c.inside_radius + ((back == c.inner_is_front) ? thickness : 0.0);
@@ -125,6 +157,9 @@ struct Embedding {
     if (const auto* c = std::get_if<CylinderEmbedding>(&patch->embedding)) {
       return {uv_sign * p.X() / c->neutral_radius, p.Y()};
     }
+    if (cone()) {
+      return {uv_sign * developed_angle(p) / sin_angle, std::hypot(p.X(), p.Y()) - rho_ref};
+    }
     return p;
   }
 
@@ -132,6 +167,8 @@ struct Embedding {
     if (std::holds_alternative<PlaneEmbedding>(patch->embedding)) {
       return back ? material_sign < 0 : material_sign > 0;
     }
+    // A cylinder's and a cone's surfaces face away from the axis.
+    if (const auto* k = cone()) return back != k->inner_is_front;
     return back != std::get<CylinderEmbedding>(patch->embedding).inner_is_front;
   }
 };
@@ -147,6 +184,39 @@ Embedding make_embedding(const SheetPatch& patch, double thickness) {
     result.material_sign = parity(p->front_to_back_sign);
     for (int back = 0; back < 2; ++back) {
       result.surfaces[back] = new Geom_Plane(gp_Ax3(result.point({0, 0}, back != 0), f.normal(), f.x_axis));
+    }
+  } else if (const auto* k = std::get_if<ConeEmbedding>(&patch.embedding)) {
+    finite(k->apex);
+    if (!(k->half_angle > kAngularTolerance && k->half_angle < kPi / 2 - kAngularTolerance)) {
+      throw std::invalid_argument("invalid sheet cone half angle");
+    }
+    result.sin_angle = std::sin(k->half_angle);
+    result.cos_angle = std::cos(k->half_angle);
+    detail::require_positive("sheet cone angle", k->angle_extent);
+    if (k->angle_extent >= 2 * kPi * result.sin_angle - kAngularTolerance ||
+        std::abs(k->axis.Dot(k->radial_start)) > kAngularTolerance ||
+        std::abs(k->axis.Dot(k->angular_direction)) > kAngularTolerance ||
+        std::abs(k->radial_start.Dot(k->angular_direction)) > kAngularTolerance) {
+      throw std::invalid_argument("invalid sheet cone angle or orthogonal basis");
+    }
+    result.uv_sign = k->axis.Crossed(k->radial_start).Dot(k->angular_direction) > 0 ? 1 : -1;
+    // The chart's (x, y) turns against the caps' (angle, distance): the
+    // polar frame (along the generator, round the axis) maps to (g, e),
+    // and (g, e, outward normal) is left-handed.
+    result.wire_sign = -result.uv_sign;
+    result.material_sign = -result.uv_sign * (k->inner_is_front ? 1 : -1);
+    const double inner = -k->neutral_depth, outer = thickness - k->neutral_depth;
+    result.cone_offsets = k->inner_is_front ? std::array<double, 2>{inner, outer} : std::array<double, 2>{outer, inner};
+    // A reference circle where both surfaces have a positive radius.
+    result.rho_ref = std::max(1.0, (std::abs(inner) + std::abs(outer)) * result.cos_angle / result.sin_angle + 1.0);
+    for (int back = 0; back < 2; ++back) {
+      const double d = result.cone_offsets[back];
+      // The cone moved along its normals by d: the same angle and, at the
+      // same parameters, the point moved along the normal.
+      const gp_Ax3 axes(k->apex.Translated(gp_Vec(k->axis) * (result.rho_ref * result.cos_angle - d * result.sin_angle)),
+                        k->axis, k->radial_start);
+      result.surfaces[back] =
+          new Geom_ConicalSurface(axes, k->half_angle, result.rho_ref * result.sin_angle + d * result.cos_angle);
     }
   } else {
     const auto& c = std::get<CylinderEmbedding>(patch.embedding);
@@ -165,6 +235,7 @@ Embedding make_embedding(const SheetPatch& patch, double thickness) {
       throw std::invalid_argument("invalid sheet cylinder radius, angle or orthogonal basis");
     }
     result.uv_sign = c.axis.Crossed(c.radial_start).Dot(c.angular_direction) > 0 ? 1 : -1;
+    result.wire_sign = result.uv_sign;
     result.material_sign = result.uv_sign * (c.inner_is_front ? 1 : -1);
     const gp_Ax3 axes(c.centre, c.axis, c.radial_start);
     for (int back = 0; back < 2; ++back) {
@@ -208,7 +279,61 @@ struct Rails {
   std::array<Curve3Ptr, 2> rail;
 };
 
+// A conical panel's boundary (mitcad#2435): the chart is the cone's
+// development, which the caps' parameters are not an affine image of. The
+// parameter curve and both rails are cubic B-splines through the exact
+// images of the chart curve's points at the same parameters (so the rails
+// pair pole by pole for the wall between them), more points until every
+// one is within a quarter of the tolerance of its exact image between the
+// points, on its surface too. The chart curve is read at its own parameter
+// (a line's length, an arc's angle), never a conversion's: an arc converted
+// to a rational spline changes speed at its knots, which no cubic through
+// evenly spaced points follows.
+Rails cone_rails(const occ::handle<Geom2d_Curve>& chart_curve, double first, double last, const Embedding& embedding,
+                 double tolerance) {
+  for (int n = 16; n <= 4096; n *= 2) {
+    throw_if_cancelled();
+    const occ::handle<NCollection_HArray1<double>> params = new NCollection_HArray1<double>(1, n + 1);
+    const occ::handle<NCollection_HArray1<gp_Pnt2d>> uv = new NCollection_HArray1<gp_Pnt2d>(1, n + 1);
+    std::array<occ::handle<NCollection_HArray1<gp_Pnt>>, 2> rail{new NCollection_HArray1<gp_Pnt>(1, n + 1),
+                                                                 new NCollection_HArray1<gp_Pnt>(1, n + 1)};
+    for (int i = 0; i <= n; ++i) {
+      const double t = first + (last - first) * i / n;
+      const gp_Pnt2d p = chart_curve->Value(t);
+      params->SetValue(i + 1, t);
+      uv->SetValue(i + 1, embedding.uv(p));
+      for (int back = 0; back < 2; ++back) rail[back]->SetValue(i + 1, embedding.point(p, back != 0));
+    }
+    Geom2dAPI_Interpolate uv_fit(uv, params, false, 1.0e-12);
+    uv_fit.Perform();
+    if (!uv_fit.IsDone()) throw std::runtime_error("sheet conical boundary could not be laid on its cone");
+    Rails result{uv_fit.Curve(), {}};
+    for (int back = 0; back < 2; ++back) {
+      GeomAPI_Interpolate fit(rail[back], params, false, 1.0e-12);
+      fit.Perform();
+      if (!fit.IsDone()) throw std::runtime_error("sheet conical boundary could not be laid on its cone");
+      result.rail[back] = fit.Curve();
+    }
+    double worst = 0;
+    for (int i = 0; i < n; ++i) {
+      const double t = first + (last - first) * (i + 0.5) / n;
+      const gp_Pnt2d p = chart_curve->Value(t);
+      const gp_Pnt2d at = result.uv->Value(t);
+      for (int back = 0; back < 2; ++back) {
+        const gp_Pnt exact = embedding.point(p, back != 0);
+        worst = std::max(worst, result.rail[back]->Value(t).Distance(exact));
+        worst = std::max(worst, embedding.surfaces[back]->Value(at.X(), at.Y()).Distance(exact));
+      }
+    }
+    if (worst <= tolerance / 4) return result;
+  }
+  throw std::runtime_error("sheet conical boundary exceeded the rail approximation tolerance");
+}
+
 Rails make_rails(const Curve2Ptr& chart_curve, const Embedding& embedding, double tolerance) {
+  if (embedding.cone()) {
+    return cone_rails(chart_curve, chart_curve->FirstParameter(), chart_curve->LastParameter(), embedding, tolerance);
+  }
   Rails result{map_uv(chart_curve, embedding), {}};
   if (std::holds_alternative<PlaneEmbedding>(embedding.patch->embedding)) {
     for (int back = 0; back < 2; ++back) result.rail[back] = plane_rail(chart_curve, embedding, back != 0);
@@ -394,6 +519,7 @@ std::vector<Port> make_ports(const SheetChartShapeSpec& spec, const std::vector<
       std::size_t p = 0;
       const auto& ref = *sides[side];
       const auto& edge = boundary(spec, ref.boundary, p);
+      if (embeddings[p].cone()) throw std::invalid_argument("sheet ports cannot join a conical panel");
       const auto curve = detail::make_sheet_curve(edge.curve);
       if (edge.curve.geometry.kind != SegmentKind::Line) throw std::invalid_argument("sheet tangent ports must be straight");
       detail::require_finite("sheet port axial scale", ref.axial.scale);
@@ -530,8 +656,11 @@ void region_faces(const MaterialRegion& input, const Embedding& embedding, std::
             ++shared->uses[back];
           }
         } else {
-          const auto spline = bounded_spline(curve, {curve.native_parameter(first), curve.native_parameter(last)});
-          const Rails rails = make_rails(spline, embedding, tolerance);
+          const double native_first = curve.native_parameter(first), native_last = curve.native_parameter(last);
+          const Rails rails = embedding.cone()
+                                  ? cone_rails(curve.curve, std::min(native_first, native_last),
+                                               std::max(native_first, native_last), embedding, tolerance)
+                                  : make_rails(bounded_spline(curve, {native_first, native_last}), embedding, tolerance);
           for (int back = 0; back < 2; ++back) {
             TopoDS_Edge current = cap_edge(rails.rail[back], rails.uv, embedding.surfaces[back], tolerance, vertices[back]);
             if (reverse) current.Reverse();
@@ -545,7 +674,7 @@ void region_faces(const MaterialRegion& input, const Embedding& embedding, std::
     for (int back = 0; back < 2; ++back) {
       if (!wire[back].IsDone()) throw std::runtime_error("sheet cap wire is disconnected");
       TopoDS_Wire current = wire[back].Wire();
-      if (embedding.uv_sign < 0) current.Reverse();
+      if (embedding.wire_sign < 0) current.Reverse();
       wires[back].push_back(current);
     }
   }
@@ -769,7 +898,9 @@ struct WallMeeting {
 // dimension) give none: the sheet keeps them as they are, neither fused
 // nor their faces merged, the corner line an edge of each. Throws the
 // collision refusal when a region does not close on its own, meets itself
-// or a common fails, as nothing then tells contact from penetration.
+// or a common fails, as nothing then tells contact from penetration. Pairs
+// are searched from the latest region back (the walls a feature added come
+// last), so a refusal names the new wall and the wall it meets.
 std::optional<WallMeeting> meeting_walls(const SheetChartShapeSpec& spec, const std::vector<Embedding>& embeddings,
                                          const std::vector<RegionMembership>& membership,
                                          const std::vector<std::size_t>& member_patch,
@@ -798,8 +929,11 @@ std::optional<WallMeeting> meeting_walls(const SheetChartShapeSpec& spec, const 
       return (first == key_a && second == key_b) || (first == key_b && second == key_a);
     });
   };
+  // The latest region first (mitcad#2445): a feature appends its new walls
+  // to the charts, and the sheet before it held, so the pair found first
+  // is the new wall and the one it meets, not two walls that were there.
   std::optional<WallMeeting> touching;
-  for (std::size_t i = 0; i < solids.size(); ++i) for (std::size_t j = i + 1; j < solids.size(); ++j) {
+  for (std::size_t j = solids.size(); j-- > 1;) for (std::size_t i = 0; i < j; ++i) {
     if (boxes[i].IsOut(boxes[j])) continue;
     if (detail::volume_of(common_of(solids[i], solids[j])) > spec.tolerance * spec.thickness * spec.thickness) {
       return WallMeeting{members[i], members[j], true};

@@ -38,16 +38,10 @@ fn marker_program(scratch: &Scratch, marker: &Path) -> String {
 /// A hook at `path` that writes `marker` and refuses.
 fn marker_hook(path: &Path, marker: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(
+    write_executable(
         path,
-        format!("#!/bin/sh\necho ran > \"{}\"\nexit 1\n", slashes(marker)),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+        &format!("#!/bin/sh\necho ran > \"{}\"\nexit 1\n", slashes(marker)),
+    );
 }
 
 /// git run as it is in `root`, as a user would (its outcome does not
@@ -487,19 +481,13 @@ fn the_configuration_files_are_read_as_git_reads_them() {
 fn passing_marker_hook(path: &Path, marker: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
-    fs::write(
+    write_executable(
         path,
-        format!(
+        &format!(
             "#!/bin/sh\necho {name} >> \"{}\"\nexit 0\n",
             slashes(marker)
         ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    );
 }
 
 /// A received project whose remote is a folder beside it (`../remote.git`,

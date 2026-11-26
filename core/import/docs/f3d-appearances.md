@@ -123,8 +123,10 @@ so deleting its last consumer shows it again.
 The light bulb is the item's `props.isLightBulbOn` (external dumps and the
 decoder), else a sketch's `detail.isVisible` (external dumps); otherwise
 the default decides. The decoder reads it for sketches of the current file
-format (sketch class version 18, most of 17) and for construction planes;
-older sketches, construction axes and points stay unknown. Copies of a
+format (sketch class version 18, most of 17), for sketch classes 15 to 17
+in the sketch's sub-chunk (mitcad#2449, below) and for construction
+planes; sketch classes 12 and older, construction axes and points stay
+unknown. Copies of a
 sketch imported into another component take its light bulb too
 (mitcad#1802; before they followed the default). The report
 counts sketches and construction features, those with unknown light bulb
@@ -169,6 +171,62 @@ their faces listed without triangles, or are not in the scene: in hidden
 occurrences, not in the design); and in a reported drill index the hidden body (a blank kept beside the copy the
 holes were cut in) has no mesh and the file's preview shows the holes.
 Shown, that blank covered the holes in MitCad.
+
+### Light bulbs of the copies of other documents (mitcad#2449)
+
+The components of other documents are filled with copies of those
+documents' own imports ([f3d-components.md](f3d-components.md),
+*Components of other documents*). Each document's import sets its
+sketches' and construction features' light bulbs as above, but the copy
+(`DocState::copy_component_overriding`, `core/model/src/document/copy.rs`)
+took the features without them, so every copied sketch followed the
+default: in a reported assembly package, where all 171 sketches are in
+the linked documents, every sketch no feature uses was shown although
+the documents hide them. A copy now takes its source's light bulbs
+(`copy_light_bulbs`), kept only where they differ from the copy's own
+default, and the display sizes of copied planes and axes; this holds for
+every copy of a component with its history (Paste New, a copy of
+another design, the copies the import makes per arrangement and for
+components placed twice inside a copy).
+
+The report counts the copied sketches and construction features and
+those shown or hidden otherwise than in their document's own import
+(`light_bulbs.copied`, `copies_differ`, checked as each component is
+filled), and each document of `references` carries its own import's
+`light_bulbs`, as well as its `fallbacks` (`name: why`), its `joints`
+and how long its import took (`seconds`): the design's own items do not
+list them. Tests: `core.model.assembly` (`copy_light_bulbs_tests.rs`),
+`core.import` (`the_copies_of_a_document_show_its_sketches_as_its_import_does`)
+and `cli.f3d_reported_package` on the reported package.
+
+### Light bulbs of sketch classes 15 to 17 (mitcad#2449)
+
+That package's documents are older: of their sketches, 150 in 33
+documents had no light bulb read, so every one no feature uses (also
+where the item that used it fell back) was shown, where the file hides
+nearly all of them. Their sketch objects (class 15, 16 and the older
+class 17) have no reference to the name anchor in the main part; the
+sub-chunk of the object keeps the light bulb in the same sequence as the
+main part of class 18: after the sub-chunk's header and its first
+reference, `u32 k | u8 0 | u8 light bulb`, then `[ref name anchor] |
+str16 name | u8 0 | u32 n | ref[n]`, without the anchor's reference in
+class 16 and the older 17 (`sketch::sub_chunk_light_bulb`).
+
+Settled against the API reference dumps (`analysis/f3d-api-ref`) of the
+corpora, the decoder's dumps (`MITCAD_F3D_DESIGN_REF`) giving each
+timeline sketch's object: the sketch classes of every design of
+`MITCAD_F3D_CORPUS`, `MITCAD_F3D_BACKUP`, `MITCAD_F3D_MODELS` and the
+reported designs (class 18: 938 designs, 17: 15, 16: 25, 15: 11, 12: 9;
+the backup's are all 18), and of them the 16 designs below 18 that have a
+dump. Three class 17 designs have both shown and hidden sketches; their
+48 sketches (6 shown, 42 hidden) all agree with the byte. The 30
+sketches of the class 16 and 17 designs without the anchor's reference
+(5 designs) are all hidden in their dumps and read hidden; no dump has a
+shown sketch of that layout or of class 15 (the class 15 designs are
+the package's alone). In the package the byte is 0 or 1 for each of its
+219 sketch objects of that layout (3 shown). Class 12 (9 designs, all
+hidden) lays the sub-chunk out otherwise and stays unknown. Test:
+`core.f3d-decode` (`reads_the_light_bulb_of_older_sketch_classes`).
 
 ## Appearances and materials
 

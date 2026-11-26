@@ -484,6 +484,9 @@ impl Kernel for OcctKernel {
             outside: spec.outside,
             tangent_chain: spec.tangent_chain,
             rounded: spec.rounded,
+            own_faces: spec.own.iter().map(|own| own.face.to_string()).collect(),
+            own_inside: spec.own.iter().map(|own| own.inside).collect(),
+            own_outside: spec.own.iter().map(|own| own.outside).collect(),
         };
         // OCCT's offsets look at their progress range only between their
         // steps: a call that does not return is given up (mitcad#1922).
@@ -527,6 +530,7 @@ impl Kernel for OcctKernel {
         body: &Self::Shape,
         faces: &[FaceName],
         distance: f64,
+        tangent_chain: bool,
     ) -> Result<Self::Shape, KernelError> {
         // As a shell's (mitcad#1922).
         occt(body)?;
@@ -534,7 +538,8 @@ impl Kernel for OcctKernel {
         let feature = feature.to_string();
         let faces = face_names(faces);
         abandon::abandonable(move || {
-            faceops::ffi::offset_faces(&feature, occt(&body)?, &faces, distance).map_err(failed)
+            faceops::ffi::offset_faces(&feature, occt(&body)?, &faces, distance, tangent_chain)
+                .map_err(failed)
         })
     }
 
@@ -3526,6 +3531,25 @@ impl Kernel for OcctKernel {
             },
             faces: mesh.faces,
         })
+    }
+
+    // Curved sheet faces developed (mitcad#2435).
+    fn sheet_face_development(
+        &self,
+        shape: &Self::Shape,
+        faces: &[FaceName],
+        neutral_depth: f64,
+        thickness: f64,
+    ) -> Result<mitcad_model::sheet::SheetFaceDevelopment, KernelError> {
+        sheet::face_development(shape, faces, neutral_depth, thickness)
+    }
+
+    fn face_bending(
+        &self,
+        shape: &Self::Shape,
+        face: &FaceName,
+    ) -> Result<mitcad_model::sheet::FaceBending, KernelError> {
+        sheet::face_bending(shape, face)
     }
 }
 

@@ -433,6 +433,20 @@ impl<K: Kernel> Document<K> {
         label: &str,
         features: Vec<BaseInput<K::Shape>>,
     ) -> Result<Vec<Imported>, ModelError> {
+        self.add_base_features_with(label, features, false)
+    }
+
+    /// [`Document::add_base_features`]; with `color_looks` (a STEP, IGES,
+    /// BRep, STL or OBJ import, mitcad#2423) each new body with a colour
+    /// gets the appearance of its colour (`face_colors`), set in the same
+    /// change that adds the features, so that the import's recompute stays
+    /// its last.
+    pub(crate) fn add_base_features_with(
+        &mut self,
+        label: &str,
+        features: Vec<BaseInput<K::Shape>>,
+        color_looks: bool,
+    ) -> Result<Vec<Imported>, ModelError> {
         if features.is_empty() {
             return Err(invalid("nothing to import"));
         }
@@ -463,11 +477,22 @@ impl<K: Kernel> Document<K> {
         }
         let mut taken: BTreeSet<String> = self.bodies().into_iter().map(|b| b.name).collect();
         let depth = self.undo_depth();
+        // The bodies' colours as their appearances (mitcad#2423): made
+        // before the features, set with them.
+        let (looks, mut look_warnings) = if color_looks {
+            self.body_color_looks(&features)
+        } else {
+            (
+                vec![Vec::new(); features.len()],
+                vec![Vec::new(); features.len()],
+            )
+        };
+        let looks_made = self.undo_depth() > depth;
         let added = self.with_written_from(written_from, |doc| {
             doc.apply(|state| {
                 taken.extend(state.body_names.values().cloned());
                 let mut added = Vec::with_capacity(defs.len());
-                for (def, name, component) in &defs {
+                for ((def, name, component), looks) in defs.iter().zip(&looks) {
                     let feature = state.add_feature_in(def, name.as_deref(), *component)?;
                     if let FeatureDef::Base(base) = def
                         && base.operation == Operation::NewBody
@@ -478,6 +503,17 @@ impl<K: Kernel> Document<K> {
                             if let Some(name) = &body.name {
                                 let name = unique_name(name, &mut taken);
                                 state.body_names.insert(BodyUid::new(feature.uid, i), name);
+                            }
+                        }
+                    }
+                    if let FeatureDef::Base(base) = def {
+                        for (i, look) in (0..).zip(looks) {
+                            if let Some(id) = look {
+                                let attributes = state
+                                    .body_attributes
+                                    .entry(base.body_uid(feature.uid, i))
+                                    .or_default();
+                                attributes.appearance = Some(id.clone());
                             }
                         }
                     }
@@ -513,8 +549,13 @@ impl<K: Kernel> Document<K> {
                 any_painted = true;
             }
         }
-        if any_painted {
+        if any_painted || looks_made {
             self.merge_undo(depth, label);
+        }
+        // What the bodies' colours could not do (mitcad#2423) first.
+        for (warnings, mut looks) in painted.iter_mut().zip(look_warnings.drain(..)) {
+            looks.append(warnings);
+            *warnings = looks;
         }
         let all = self.bodies();
         let mut result = Vec::with_capacity(added.len());
@@ -637,7 +678,8 @@ impl<K: Kernel> Document<K> {
             component: wrapper.as_ref().map(|w| w.component),
             ..BaseInput::new(kept)
         };
-        let mut imported = match self.add_base_features(&label, vec![base]) {
+        // The bodies' colours as their appearances (mitcad#2423).
+        let mut imported = match self.add_base_features_with(&label, vec![base], true) {
             Ok(mut added) => added.remove(0),
             Err(e) => {
                 self.undo_back_to(depth);
@@ -647,8 +689,8 @@ impl<K: Kernel> Document<K> {
         if wrapper.is_some() {
             self.merge_undo(depth, &label);
         }
-        // The empty bodies left out, then what the faces' colours could not
-        // do (mitcad#2313).
+        // The empty bodies left out, then what the bodies' and the faces'
+        // colours could not do (mitcad#2423, mitcad#2313).
         warnings.append(&mut imported.warnings);
         imported.warnings = warnings;
         Ok((imported, wrapper))

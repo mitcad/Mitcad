@@ -198,6 +198,9 @@ struct FileOut<'a> {
     // Explode views of assemblies (mitcad#2113), when there are any.
     #[serde(skip_serializing_if = "<[crate::explode::ExplodeView]>::is_empty")]
     explode_views: &'a [crate::explode::ExplodeView],
+    // The drawing book (mitcad#2448), when it has anything set.
+    #[serde(skip_serializing_if = "crate::document::DrawingBook::is_empty")]
+    drawing_book: &'a crate::document::DrawingBook,
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -625,6 +628,7 @@ pub(super) fn save_with(
         point_clouds: &state.point_clouds,
         decals: &state.decals,
         explode_views: &state.explode_views,
+        drawing_book: &state.drawing_book,
         statistics,
         preview,
     };
@@ -953,7 +957,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 54] = [
+const TOP_FIELDS: [&str; 55] = [
     "format",
     "version",
     "units",
@@ -1040,6 +1044,8 @@ const TOP_FIELDS: [&str; 54] = [
     "decals",
     // Explode views (mitcad#2113).
     "explode_views",
+    // The drawing book (mitcad#2448).
+    "drawing_book",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1853,6 +1859,19 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
     }
+    // The drawing book (mitcad#2448): references to drawings of the design
+    // and of linked designs, read tolerantly; a drawing that is gone loads
+    // (the book's entries say so).
+    let drawing_book = match top.remove("drawing_book") {
+        None | Some(Value::Null) => crate::document::DrawingBook::default(),
+        Some(value) => {
+            let book = serde_json::from_value::<crate::document::DrawingBook>(value)
+                .map_err(|e| schema(format!("drawing_book: {e}")))?;
+            book.check()
+                .map_err(|e| invalid(format!("drawing_book: {e}")))?;
+            book
+        }
+    };
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -2391,6 +2410,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         }
     }
     state.explode_views = explode_views;
+    state.drawing_book = drawing_book;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(

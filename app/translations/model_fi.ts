@@ -220,6 +220,10 @@
 </translation>
     </message>
     <message>
+        <source>  light bulbs of components of other documents: %1 sketches and construction features copied, %2 shown or hidden otherwise than in their documents</source>
+        <translation>  muiden dokumenttien komponenttien näkyvyyskytkimet: luonnoksia ja apupiirteitä kopioitu %1, näytetty tai piilotettu toisin kuin dokumenteissaan %2</translation>
+    </message>
+    <message>
         <source>  light bulbs: %1 sketches (%2 unknown), %3 construction features (%4 unknown), %5 kept where they differ from Mitcad&apos;s default</source>
         <translation>  näkyvyyskytkimet: luonnoksia %1 (tuntematon %2), apupiirteitä %3 (tuntematon %4), säilytetty %5, kun ne poikkeavat Mitcadin oletuksesta</translation>
     </message>
@@ -408,6 +412,10 @@
     <message>
         <source> (idle since %1)</source>
         <translation> (toimeton alkaen %1)</translation>
+    </message>
+    <message>
+        <source> (its Gaussian curvature reaches 1/(%1 mm)²)</source>
+        <translation> (sen Gaussin kaarevuus on jopa 1/(%1 mm)²)</translation>
     </message>
     <message>
         <source> (its end)</source>
@@ -2466,6 +2474,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: ei säilytettävää johdettua osaa ja liitosta</translation>
     </message>
     <message>
+        <source>%1 has no design to draw it from</source>
+        <translation>kohteella %1 ei ole mallia, josta se piirrettäisiin</translation>
+    </message>
+    <message>
         <source>%1 has no direction</source>
         <translation>%1: ei suuntaa</translation>
     </message>
@@ -3696,6 +3708,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 is no light id: use letters, digits, &apos;_&apos; and &apos;-&apos;</source>
         <translation>%1 ei ole valon tunniste: käytä kirjaimia, numeroita, merkkejä &apos;_&apos; ja &apos;-&apos;</translation>
+    </message>
+    <message>
+        <source>%1 is no longer in %2</source>
+        <translation>%1 ei ole enää kohteessa %2</translation>
     </message>
     <message>
         <source>%1 is no longer in %2: the explode view %3 no longer moves it</source>
@@ -5300,6 +5316,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 of %2: %3 is a body of %4, not of %5; pick it where an occurrence of %6 shows it</source>
         <translation>%1 (kohteessa %2): %3 on kohteen %4 kappale, ei kohteen %5; poimi se kohdasta, jossa kohteen %6 esiintymä näyttää sen</translation>
+    </message>
+    <message>
+        <source>%1 of %2: %3 is no longer linked in this design</source>
+        <translation>%1 (%2): %3 ei ole enää linkitetty tässä mallissa</translation>
     </message>
     <message>
         <source>%1 of %2: its views lead through %3, which would leave %4</source>
@@ -7200,6 +7220,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1: a tangency needs two curves</source>
         <translation>%1: tangenttisuus tarvitsee kaksi käyrää</translation>
+    </message>
+    <message>
+        <source>%1: a tangent distance to a line takes side outside or far</source>
+        <translation>%1: tangenttietäisyydelle viivaan käy puoli outside tai far</translation>
+    </message>
+    <message>
+        <source>%1: a tangent distance to a point takes side outside, inside or far</source>
+        <translation>%1: tangenttietäisyydelle pisteeseen käy puoli outside, inside tai far</translation>
     </message>
     <message>
         <source>%1: a template needs a name</source>
@@ -9184,6 +9212,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>, identity differs</source>
         <translation>, identiteetti eroaa</translation>
+    </message>
+    <message>
+        <source>, imported in %1 s</source>
+        <translation>, tuotu ajassa %1 s</translation>
     </message>
     <message>
         <source>, kept for the next state</source>
@@ -15678,6 +15710,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1 solua%2, avointa pinta-alaa %3 mm² (%4 % kentästä)</translation>
     </message>
     <message>
+        <source>%1 changed its structure: %2 now holds more than its one component, so it comes in with its root and components as the file has them; joints and references to its parts may need to be picked again</source>
+        <translation>%1 muutti rakennettaan: %2 sisältää nyt enemmän kuin yhden komponenttinsa, joten se tuodaan juurineen ja komponentteineen niin kuin tiedostossa; sen osien liitokset ja viittaukset voi olla tarpeen valita uudelleen</translation>
+    </message>
+    <message>
+        <source>%1 changed its structure: %2 now holds more than its one component, so it comes in with its root and components as the file has them; the references to its parts follow them</source>
+        <translation>%1 muutti rakennettaan: %2 sisältää nyt enemmän kuin yhden komponenttinsa, joten se tuodaan juurineen ja komponentteineen niin kuin tiedostossa; viittaukset sen osiin seuraavat niitä</translation>
+    </message>
+    <message>
+        <source>%1 changed its structure: %2 now holds more than its one component, so it comes in with its root and components as the file has them; the references to its parts follow them except these, which may need to be picked again: %3</source>
+        <translation>%1 muutti rakennettaan: %2 sisältää nyt enemmän kuin yhden komponenttinsa, joten se tuodaan juurineen ja komponentteineen niin kuin tiedostossa; viittaukset sen osiin seuraavat niitä paitsi nämä, jotka voi olla tarpeen valita uudelleen: %3</translation>
+    </message>
+    <message>
         <source>%1 cuts with a live tool: its station must hold one.</source>
         <translation>%1 leikkaa pyörivällä työkalulla: sen asemassa on oltava sellainen.</translation>
     </message>
@@ -15696,6 +15740,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 has colours on its triangles but none of its own</source>
         <translation>kohteen %1 kolmioilla on värejä, mutta sillä itsellään ei ole väriä</translation>
+    </message>
+    <message>
+        <source>%1 has flood and mist coolant here, no air blast.</source>
+        <translation>Ohjaimessa %1 on tässä tulva- ja sumujäähdytys, ei ilmapuhallusta.</translation>
     </message>
     <message>
         <source>%1 has no box to rest on the side</source>
@@ -15966,6 +16014,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1. Ohutlevysääntöjen nurkan vapautusleikkaus ei mahdu tämän laipan nurkkaan: pienennä nurkan vapautusleikkauksen leveyttä tai anna laipalle oma vapautusleikkaus</translation>
     </message>
     <message>
+        <source>%1: %2 has no sub-spindle here.</source>
+        <translation>%1: ohjaimessa %2 ei ole tässä vastakaraa.</translation>
+    </message>
+    <message>
         <source>%1: %2 is fixed where it is now; it will not follow the assembly</source>
         <translation>%1: %2 kiinnitetään nykyiselle paikalleen; se ei seuraa kokoonpanoa</translation>
     </message>
@@ -16024,6 +16076,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1: its %2 cannot be read (%3)</source>
         <translation>%1: sen ominaisuutta %2 ei voi lukea (%3)</translation>
+    </message>
+    <message>
+        <source>%1: its color: %2</source>
+        <translation>%1: sen väri: %2</translation>
     </message>
     <message>
         <source>%1: its component is gone</source>
@@ -16118,6 +16174,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1: revolveri törmää kohteeseen %2, joka liikkuu vastakaran mukana.</translation>
     </message>
     <message>
+        <source>%1: the turret runs into %2.</source>
+        <translation>%1: revolveri törmää kohteeseen %2.</translation>
+    </message>
+    <message>
+        <source>%1: the turret runs into the chuck.</source>
+        <translation>%1: revolveri törmää istukkaan.</translation>
+    </message>
+    <message>
         <source>%1: the turret runs into the sub-spindle&apos;s body.</source>
         <translation>%1: revolveri törmää vastakaran runkoon.</translation>
     </message>
@@ -16132,6 +16196,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>, not valid</source>
         <translation>, ei kelpaa</translation>
+    </message>
+    <message>
+        <source>. Flip the flange, or make it shorter or narrower (its Length or Width), so that its wall clears the sheet&apos;s other walls.</source>
+        <translation>. Käännä laippa tai tee siitä lyhyempi tai kapeampi (sen Pituus tai Leveys), jotta sen seinämä ei osu levyn muihin seinämiin.</translation>
     </message>
     <message>
         <source>1 body of %1 is not for print services and is left out: %2. The other %3 may be sent to a print service.</source>
@@ -16222,6 +16290,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Kehälle kiedotun luonnoksen on oltava karan akselin suuntaisella tasolla.</translation>
     </message>
     <message>
+        <source>A station&apos;s turret body needs a station on the turret, each station once.</source>
+        <translation>Aseman revolverirunko tarvitsee revolverissa olevan aseman, kunkin aseman vain kerran.</translation>
+    </message>
+    <message>
         <source>A turning operation turns: it has no live tool&apos;s place.</source>
         <translation>Sorvausvaihe sorvaa: sillä ei ole pyörivän työkalun paikkaa.</translation>
     </message>
@@ -16270,6 +16342,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Käyrät päättyvät jo yhteiseen pisteeseen</translation>
     </message>
     <message>
+        <source>D without G96 to use it</source>
+        <translation>D ilman sitä käyttävää G96:ta</translation>
+    </message>
+    <message>
         <source>Delete Parameter Group %1</source>
         <translation>Poista parametriryhmä %1</translation>
     </message>
@@ -16306,12 +16382,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Jatka kohtaamaan kohteessa %1</translation>
     </message>
     <message>
+        <source>F with G33, whose lead is its K word</source>
+        <translation>F-sana G33:n kanssa, jonka nousu on sen K-sana</translation>
+    </message>
+    <message>
         <source>Far Side</source>
         <translation>Kauempi sivu</translation>
     </message>
     <message>
+        <source>G%1 is not a command it reads on this control</source>
+        <translation>G%1 ei ole tällä ohjaimella luettava komento</translation>
+    </message>
+    <message>
         <source>G%1 needs its %2 word</source>
         <translation>G%1 tarvitsee sanan %2</translation>
+    </message>
+    <message>
+        <source>G%1 sets the cycles&apos; return level on this control; feeds per minute and per revolution are G94 and G95</source>
+        <translation>G%1 asettaa tällä ohjaimella kiertojen paluutason; syötöt minuuttia ja kierrosta kohden ovat G94 ja G95</translation>
     </message>
     <message>
         <source>G28 sends X or Z to the reference here, which the program must not</source>
@@ -16320,6 +16408,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>G28 without the C axis (H) it references</source>
         <translation>G28 ilman referoitavaa C-akselia (H)</translation>
+    </message>
+    <message>
+        <source>G33 without its lead (K)</source>
+        <translation>G33 ilman nousuaan (K)</translation>
     </message>
     <message>
         <source>G53.1 turns the tool to a tilted working plane, and there is none</source>
@@ -17082,6 +17174,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Turn part %1 of %2</source>
         <translation>Käännä osaa %1/%2</translation>
+    </message>
+    <message>
+        <source>Turning cycles are written as moves for this control</source>
+        <translation>Sorvauskierrot kirjoitetaan tälle ohjaimelle liikkeinä</translation>
     </message>
     <message>
         <source>Turning operations need a lathe as the setup&apos;s machine.</source>
@@ -18986,6 +19082,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>liitin on kokoonpanon omassa geometriassa</translation>
     </message>
     <message>
+        <source>a constant surface speed without a spindle limit (D) in its block</source>
+        <translation>vakiolastuamisnopeus ilman karan nopeusrajaa (D) samassa lohkossa</translation>
+    </message>
+    <message>
         <source>a constant surface speed without a spindle limit (G50 S) before it</source>
         <translation>vakiolastuamisnopeus ilman sitä edeltävää karan nopeusrajaa (G50 S)</translation>
     </message>
@@ -19434,6 +19534,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>leikkaus, joka ei poista mitään, on ohitettu</translation>
     </message>
     <message>
+        <source>a cut with the main spindle stopped before the feeds are per minute (%1)</source>
+        <translation>leikkaus pääkaran ollessa pysäytettynä ennen kuin syötöt ovat minuuttia kohden (%1)</translation>
+    </message>
+    <message>
         <source>a cut with the main spindle stopped before the feeds are per minute (G98)</source>
         <translation>leikkaus pääkaran ollessa pysäytettynä ennen kuin syötöt ovat minuuttia kohden (G98)</translation>
     </message>
@@ -19604,6 +19708,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a detail&apos;s circle has a size</source>
         <translation>detaljikuvannon ympyrällä on koko</translation>
+    </message>
+    <message>
+        <source>a developed face plane keeps no placed frame (its development sets it)</source>
+        <translation>kehitetty tahkotaso ei säilytä sijoitettua kehystä (sen kehitys asettaa sen)</translation>
     </message>
     <message>
         <source>a developed material chart is not planar</source>
@@ -19890,6 +19998,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tahko valitaan yhdelle kappaleelle kerrallaan</translation>
     </message>
     <message>
+        <source>a face is given its own thickness more than once</source>
+        <translation>tahkolle annetaan oma paksuus useammin kuin kerran</translation>
+    </message>
+    <message>
         <source>a face is left out</source>
         <translation>tahko jätetään pois</translation>
     </message>
@@ -19912,10 +20024,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a face is not planar (%1)</source>
         <translation>tahko ei ole tasomainen (%1)</translation>
-    </message>
-    <message>
-        <source>a face is not planar: only planar faces become panels of a sheet</source>
-        <translation>tahko ei ole tasomainen: vain tasomaisista tahkoista tulee levyn paneeleja</translation>
     </message>
     <message>
         <source>a face is not planar: panels are made of planar faces</source>
@@ -20042,6 +20150,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tahko tai taso</translation>
     </message>
     <message>
+        <source>a face plane&apos;s placed frame needs an origin and two axes that are not along each other</source>
+        <translation>tahkotason sijoitettu kehys tarvitsee origon ja kaksi akselia, jotka eivät ole samansuuntaiset</translation>
+    </message>
+    <message>
         <source>a face profile turned up to an object is not translated</source>
         <translation>kohteeseen asti pyöräytettyä tahkoprofiilia ei muunneta</translation>
     </message>
@@ -20082,6 +20194,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tahko ei ota kenttää &quot;at&quot;</translation>
     </message>
     <message>
+        <source>a face the shell removes cannot have its own thickness</source>
+        <translation>kuorinnan poistamalla tahkolla ei voi olla omaa paksuutta</translation>
+    </message>
+    <message>
         <source>a face to panelize is not planar: panels are made of planar faces</source>
         <translation>paneloitava tahko ei ole tasomainen: paneelit tehdään tasomaisista tahkoista</translation>
     </message>
@@ -20120,6 +20236,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a face&apos;s loops do not end</source>
         <translation>tahkon silmukat eivät pääty</translation>
+    </message>
+    <message>
+        <source>a face&apos;s own thickness can be given only on the sides of the shell&apos;s wall: inside, outside or both, as the shell&apos;s thickness</source>
+        <translation>tahkon oman paksuuden voi antaa vain kuoren seinämän niille puolille, joille kuoren paksuus on annettu: sisäpuolelle, ulkopuolelle tai molemmille</translation>
+    </message>
+    <message>
+        <source>a face&apos;s own thickness must be greater than zero, got %1</source>
+        <translation>tahkon oman paksuuden on oltava nollaa suurempi, saatiin %1</translation>
     </message>
     <message>
         <source>a face&apos;s panel holds no material of the body</source>
@@ -20212,6 +20336,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a feature without an id</source>
         <translation>piirre ilman tunnistetta</translation>
+    </message>
+    <message>
+        <source>a feed before the feeds are per revolution (%1)</source>
+        <translation>syöttö ennen kuin syötöt ovat kierrosta kohden (%1)</translation>
     </message>
     <message>
         <source>a feed before the feeds are per revolution (G99)</source>
@@ -21696,6 +21824,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a move from where the tool is not known</source>
         <translation>liike kohdasta, jossa työkalun paikkaa ei tunneta</translation>
+    </message>
+    <message>
+        <source>a move in X before the program sets diameter mode (G7)</source>
+        <translation>liike X-suunnassa ennen kuin ohjelma asettaa halkaisijatilan (G7)</translation>
     </message>
     <message>
         <source>a move with the Y axis while the main spindle turns: stop it (M5) first</source>
@@ -23814,6 +23946,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>pallon leveyspiirit ovat väärin päin</translation>
     </message>
     <message>
+        <source>a spherical surface</source>
+        <translation>pallopinta</translation>
+    </message>
+    <message>
         <source>a spine of %1 (not a sketch nor edges of a body here) is not translated yet</source>
         <translation>selkärankaa %1 (ei luonnos eikä tässä kappaleen särmiä) ei vielä muunneta</translation>
     </message>
@@ -24092,6 +24228,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a surface of class %1</source>
         <translation>luokan %1 pinta</translation>
+    </message>
+    <message>
+        <source>a surface of revolution</source>
+        <translation>pyörähdyspinta</translation>
     </message>
     <message>
         <source>a surface of revolution of a version MitCad does not read</source>
@@ -24458,12 +24598,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kierteen syvyys %1</translation>
     </message>
     <message>
+        <source>a thread from where the tool is not known</source>
+        <translation>kierre kohdasta, jossa työkalun paikkaa ei tunneta</translation>
+    </message>
+    <message>
         <source>a thread over the whole face has no offset</source>
         <translation>koko tahkon kattavalla kierteellä ei ole siirtymää</translation>
     </message>
     <message>
         <source>a thread over the whole wall has no offset</source>
         <translation>koko seinämän kattavalla kierteellä ei ole siirtymää</translation>
+    </message>
+    <message>
+        <source>a thread with the spindle stopped</source>
+        <translation>kierre karan ollessa pysäytettynä</translation>
     </message>
     <message>
         <source>a thread without a chamfer has no chamfer angle or diameter</source>
@@ -24568,6 +24716,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a topic that is not one of Mitcad&apos;s</source>
         <translation>aihe, joka ei ole Mitcadin</translation>
+    </message>
+    <message>
+        <source>a toroidal surface</source>
+        <translation>toruspinta</translation>
     </message>
     <message>
         <source>a torus whose axis is not the plane&apos;s normal</source>
@@ -25004,6 +25156,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an NPT thread cannot be modeled straight: Mitcad cuts it tapered (`taper`); make it cosmetic or tapered</source>
         <translation>NPT-kierrettä ei voi mallintaa suorana: Mitcad leikkaa sen kartiomaisena (`taper`); tee siitä kosmeettinen tai kartiomainen</translation>
+    </message>
+    <message>
+        <source>an O word, which calls a subroutine on this control</source>
+        <translation>O-sana, joka kutsuu tällä ohjaimella aliohjelmaa</translation>
     </message>
     <message>
         <source>an On Face relation&apos;s new source is a face (Replace Reference keeps the kind)</source>
@@ -25650,6 +25806,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>särmä: %1 ei ole paneelin pinnalla</translation>
     </message>
     <message>
+        <source>an edge: a curved face is converted on its own; bend and rip edges join flat faces only</source>
+        <translation>särmä: kaareva tahko muunnetaan yksinään; taivutus- ja repäisysärmät yhdistävät vain tasomaisia tahkoja</translation>
+    </message>
+    <message>
         <source>an edge: its panel is not planar</source>
         <translation>särmä: sen paneeli ei ole tasomainen</translation>
     </message>
@@ -25966,6 +26126,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>laajuus seuraavaan tahkoon asti, jota etsitään</translation>
     </message>
     <message>
+        <source>an extruded surface</source>
+        <translation>pursotettu pinta</translation>
+    </message>
+    <message>
         <source>an extrusion along %1 is not translated yet</source>
         <translation>pursotusta kohdetta %1 pitkin ei vielä muunneta</translation>
     </message>
@@ -26232,6 +26396,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an offset of %1 curves: %2</source>
         <translation>%1 käyrän siirtymä: %2</translation>
+    </message>
+    <message>
+        <source>an offset surface</source>
+        <translation>siirtymäpinta</translation>
     </message>
     <message>
         <source>an offset surface needs its body or faces</source>
@@ -27610,8 +27778,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>c%1: kohteen %2 viitekäyrä:</translation>
     </message>
     <message>
+        <source>cannot draw %1: %2</source>
+        <translation>kohdetta %1 ei voi piirtää: %2</translation>
+    </message>
+    <message>
         <source>cannot encode the bend table: %1</source>
         <translation>taivutustaulukkoa ei voi koodata: %1</translation>
+    </message>
+    <message>
+        <source>cannot follow the link to %1</source>
+        <translation>linkkiä kohteeseen %1 ei voi seurata</translation>
     </message>
     <message>
         <source>cannot make the folder for the copies: %1</source>
@@ -27730,8 +27906,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>vapausastetta jäljellä</translation>
     </message>
     <message>
+        <source>developments of curved faces</source>
+        <translation>kaarevien tahkojen levitykset</translation>
+    </message>
+    <message>
         <source>dot grid `%1`</source>
         <translation>pisteruudukko `%1`</translation>
+    </message>
+    <message>
+        <source>drawings[%1]: %2 is in the drawing book more than once</source>
+        <translation>drawings[%1]: %2 on piirustuskirjassa useammin kuin kerran</translation>
+    </message>
+    <message>
+        <source>drawings[%1]: the design of %2 has no file</source>
+        <translation>drawings[%1]: kohteen %2 mallilla ei ole tiedostoa</translation>
     </message>
     <message>
         <source>each edge at its own radius is a constant round of the picked edges alone: it takes a constant radius, an exact fit, rolling corners, no setbacks, mitred turns and no tangent chains (SolidCraft refuses it too)</source>
@@ -27740,6 +27928,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>each row of a crease table needs an allowance or a deduction, not both</source>
         <translation>nuuttaustaulukon jokaisella rivillä on oltava joko lisä tai vähennys, ei molempia</translation>
+    </message>
+    <message>
+        <source>edge %1: a curved face is converted on its own; bend and rip edges join flat faces only</source>
+        <translation>särmä %1: kaareva tahko muunnetaan yksinään; taivutus- ja repäisysärmät yhdistävät vain tasomaisia tahkoja</translation>
     </message>
     <message>
         <source>edge cells `%1`</source>
@@ -27822,6 +28014,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>explode_views[%1]: räjäytyskuvanto %2 on luettelossa useammin kuin kerran</translation>
     </message>
     <message>
+        <source>face %1 could not be developed: %2</source>
+        <translation>tahkoa %1 ei voitu levittää: %2</translation>
+    </message>
+    <message>
+        <source>face %1 is closed: it is opened at its seam to lie flat, and the corner gap there must be above 0</source>
+        <translation>tahko %1 on suljettu: se avataan saumastaan levitettäväksi, ja nurkan raon siinä on oltava nollaa suurempi</translation>
+    </message>
+    <message>
+        <source>face %1 is cylindrical or conical: only flat faces are joined by bends; it is converted on its own (pick it as the face, without bend edges)</source>
+        <translation>tahko %1 on sylinteri- tai kartiotahko: taivutukset yhdistävät vain tasomaisia tahkoja; se muunnetaan yksinään (poimi se tahkoksi ilman taivutussärmiä)</translation>
+    </message>
+    <message>
         <source>face %1 is no longer split; the sketch lies on the whole face %2</source>
         <translation>tahko %1 ei ole enää jaettu; luonnos on koko tahkolla %2</translation>
     </message>
@@ -27844,6 +28048,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>face: missing for an edge</source>
         <translation>tahko: puuttuu särmältä</translation>
+    </message>
+    <message>
+        <source>faces with their own thickness</source>
+        <translation>omapaksuiset tahkot</translation>
+    </message>
+    <message>
+        <source>faces with their own thickness need an inside or an outside thickness</source>
+        <translation>omapaksuiset tahkot tarvitsevat sisä- tai ulkopaksuuden</translation>
     </message>
     <message>
         <source>feature %1 is not a sketch</source>
@@ -30396,10 +30608,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>face %1 is not planar (%2)</source>
         <translation>tahko %1 ei ole tasomainen (%2)</translation>
-    </message>
-    <message>
-        <source>face %1 is not planar: only planar faces become panels of a sheet</source>
-        <translation>tahko %1 ei ole tasomainen: vain tasomaisista tahkoista tulee levyn paneeleja</translation>
     </message>
     <message>
         <source>face %1 is not round (%2): %3</source>
@@ -43140,6 +43348,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Piirrettä %1 ei voitu toistaa kuviossa: se ei leikkaa yhtään oman komponenttinsa kappaletta, ja peilattu tai kuvioitu leikkaus muuttaa vain oman komponenttinsa kappaleita.</translation>
     </message>
     <message>
+        <source>Edit Drawing Book</source>
+        <translation>Muokkaa piirustuskirjaa</translation>
+    </message>
+    <message>
         <source>Joints inside components are not written: each top-level occurrence moves as one link</source>
         <translation>Komponenttien sisäisiä liitoksia ei kirjoiteta: kukin ylimmän tason esiintymä liikkuu yhtenä linkkinä</translation>
     </message>
@@ -43260,8 +43472,44 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>ympyrällä tai ellipsillä ei ole päitä, joissa siirtymän pistettä voisi pitää</translation>
     </message>
     <message>
+        <source>a closed face is opened at its seam to lie flat: the corner gap there must be above 0</source>
+        <translation>suljettu tahko avataan saumastaan levitettäväksi: nurkan raon siinä on oltava nollaa suurempi</translation>
+    </message>
+    <message>
         <source>a command is open; finish or cancel it before running a script</source>
         <translation>komento on auki; lopeta tai peruuta se ennen komentosarjan suorittamista</translation>
+    </message>
+    <message>
+        <source>a curved face develops at the neutral surface of the rules&apos; K-factor; these rules give measured fold allowances, which do not apply to rolled material: use a K-factor</source>
+        <translation>kaareva tahko levitetään sääntöjen K-kertoimen neutraalipinnalta; nämä säännöt antavat mitatut taivutuslisät, jotka eivät koske valssattua materiaalia: käytä K-kerrointa</translation>
+    </message>
+    <message>
+        <source>a curved face is converted on its own: bend and rip edges join flat faces only</source>
+        <translation>kaareva tahko muunnetaan yksinään: taivutus- ja repäisysärmät yhdistävät vain tasomaisia tahkoja</translation>
+    </message>
+    <message>
+        <source>a curved panel is developed only as a sheet of its own</source>
+        <translation>kaareva paneeli levitetään vain omana levynään</translation>
+    </message>
+    <message>
+        <source>a cylindrical or conical face across a bend: only flat faces are joined by bends; a curved face is converted on its own (pick it as the Face, without bend edges)</source>
+        <translation>sylinteri- tai kartiotahko taivutuksen yli: taivutukset yhdistävät vain tasomaisia tahkoja; kaareva tahko muunnetaan yksinään (poimi se Tahkoksi ilman taivutussärmiä)</translation>
+    </message>
+    <message>
+        <source>a cylindrical or conical sheet&apos;s development does not follow ordinary features: make its holes and cuts before converting the face</source>
+        <translation>sylinteri- tai kartiolevyn levitys ei seuraa tavallisia piirteitä: tee sen reiät ja leikkaukset ennen tahkon muuntamista</translation>
+    </message>
+    <message>
+        <source>a face could not be developed: %1</source>
+        <translation>tahkoa ei voitu levittää: %1</translation>
+    </message>
+    <message>
+        <source>a face is closed: it is opened at its seam to lie flat, and the corner gap there must be above 0</source>
+        <translation>tahko on suljettu: se avataan saumastaan levitettäväksi, ja nurkan raon siinä on oltava nollaa suurempi</translation>
+    </message>
+    <message>
+        <source>a face is cylindrical or conical: only flat faces are joined by bends; it is converted on its own (pick it as the face, without bend edges)</source>
+        <translation>tahko on sylinteri- tai kartiotahko: taivutukset yhdistävät vain tasomaisia tahkoja; se muunnetaan yksinään (poimi se tahkoksi ilman taivutussärmiä)</translation>
     </message>
     <message>
         <source>a feature has the uid %1 already; give a free uid or none</source>
@@ -43394,6 +43642,10 @@ ament_package()
         <translation>se tuli mukaan verkkokappaleena, josta Muunna verkko ei voi tehdä solidia</translation>
     </message>
     <message>
+        <source>it couples the joints of %1</source>
+        <translation>se kytkee kohteen %1 liitokset</translation>
+    </message>
+    <message>
         <source>it does not run from the trailing edge round the leading edge back to the trailing edge</source>
         <translation>se ei kulje jättöreunasta johtoreunan ympäri takaisin jättöreunaan</translation>
     </message>
@@ -43468,6 +43720,14 @@ ament_package()
     <message>
         <source>its first line of numbers is not the surfaces&apos; point counts</source>
         <translation>sen ensimmäinen lukurivi ei ole pintojen pistemäärät</translation>
+    </message>
+    <message>
+        <source>its import did not run</source>
+        <translation>sen tuonti ei käynnistynyt</translation>
+    </message>
+    <message>
+        <source>its import stopped</source>
+        <translation>sen tuonti pysähtyi</translation>
     </message>
     <message>
         <source>its lines&apos; sketch is in another component</source>
@@ -47440,6 +47700,10 @@ ament_package()
         <translation>taivutuksen sisäänveto ei jätä särmää kohteeseen %1</translation>
     </message>
     <message>
+        <source>the bending of faces</source>
+        <translation>tahkojen taivutus</translation>
+    </message>
+    <message>
         <source>the bends are not coaxial</source>
         <translation>taivutukset eivät ole samanakselisia</translation>
     </message>
@@ -47692,12 +47956,24 @@ ament_package()
         <translation>kappale ei ole tasapaksu levy tahkon takana: tahkon levy eroaa siitä</translation>
     </message>
     <message>
+        <source>the body is not a plate of its rules&apos; thickness %1 mm behind a face (its sheet has volume %2 mm³, the body %3 mm³)</source>
+        <translation>kappale ei ole sääntöjensä paksuinen (%1 mm) levy tahkon takana (sen levyn tilavuus on %2 mm³, kappaleen %3 mm³)</translation>
+    </message>
+    <message>
         <source>the body is not a plate of its rules&apos; thickness %1 mm behind a face: its volume over the face&apos;s area is %2 mm</source>
         <translation>kappale ei ole sääntöjensä paksuinen (%1 mm) levy tahkon takana: sen tilavuus jaettuna tahkon pinta-alalla on %2 mm</translation>
     </message>
     <message>
+        <source>the body is not a plate of its rules&apos; thickness %1 mm behind face %2 (its sheet has volume %3 mm³, the body %4 mm³)</source>
+        <translation>kappale ei ole sääntöjensä paksuinen (%1 mm) levy tahkon %2 takana (sen levyn tilavuus on %3 mm³, kappaleen %4 mm³)</translation>
+    </message>
+    <message>
         <source>the body is not a plate of its rules&apos; thickness %1 mm behind face %2: its volume over the face&apos;s area is %3 mm</source>
         <translation>kappale ei ole sääntöjensä paksuinen (%1 mm) levy tahkon %2 takana: sen tilavuus jaettuna tahkon pinta-alalla on %3 mm</translation>
+    </message>
+    <message>
+        <source>the body is not a plate of its rules&apos; thickness %1 mm behind the face: a curved face converts with the body made of it alone, its back the thickness behind it and walls between them (a body of several curved faces, such as a transition, is converted face by face, split first)</source>
+        <translation>kappale ei ole sääntöjensä paksuinen (%1 mm) levy tahkon takana: kaareva tahko muunnetaan, kun kappale koostuu vain siitä, sen takapinnasta paksuuden verran sen takana ja niiden välisistä seinämistä (usean kaarevan tahkon kappale, kuten siirtymäkappale, muunnetaan tahko kerrallaan ensin jaettuna)</translation>
     </message>
     <message>
         <source>the body is not a plate of its rules&apos; thickness %1 mm behind the face: its volume over the face&apos;s area is %2 mm</source>
@@ -48468,6 +48744,10 @@ ament_package()
         <translation>nurkka</translation>
     </message>
     <message>
+        <source>the corner gap is wider than the cone&apos;s face is near its apex: make it smaller</source>
+        <translation>nurkan rako on leveämpi kuin kartiotahko kärkensä lähellä: pienennä sitä</translation>
+    </message>
+    <message>
         <source>the corner radius %1 mm must be less than half the shorter side (%2 mm)</source>
         <translation>nurkan säteen %1 mm on oltava pienempi kuin puolet lyhyemmästä sivusta (%2 mm)</translation>
     </message>
@@ -48694,6 +48974,18 @@ ament_package()
     <message>
         <source>the curve of %1 is not available here</source>
         <translation>kohteen %1 käyrä ei ole saatavilla tässä</translation>
+    </message>
+    <message>
+        <source>the curved panel has no area</source>
+        <translation>kaarevalla paneelilla ei ole pinta-alaa</translation>
+    </message>
+    <message>
+        <source>the curved panel has no material</source>
+        <translation>kaarevassa paneelissa ei ole materiaalia</translation>
+    </message>
+    <message>
+        <source>the curved panel was not developed</source>
+        <translation>kaarevaa paneelia ei levitetty</translation>
     </message>
     <message>
         <source>the curves are not one connected chain</source>
@@ -49012,6 +49304,14 @@ ament_package()
         <translation>levitetty solidi: %1</translation>
     </message>
     <message>
+        <source>the development of a face is not one region (%1 found)</source>
+        <translation>tahkon levitys ei ole yksi alue (löytyi %1)</translation>
+    </message>
+    <message>
+        <source>the development of face %1 is not one region (%2 found)</source>
+        <translation>tahkon %1 levitys ei ole yksi alue (löytyi %2)</translation>
+    </message>
+    <message>
         <source>the deviation could not be measured: %1</source>
         <translation>poikkeamaa ei voitu mitata: %1</translation>
     </message>
@@ -49194,6 +49494,14 @@ ament_package()
     <message>
         <source>the draft must be between -85 and 85 degrees, got %1 degrees</source>
         <translation>päästön on oltava välillä -85...85 astetta, annettiin %1 astetta</translation>
+    </message>
+    <message>
+        <source>the drawing book cannot be printed: %1</source>
+        <translation>piirustuskirjaa ei voi tulostaa: %1</translation>
+    </message>
+    <message>
+        <source>the drawing book has no drawing; choose its drawings first</source>
+        <translation>piirustuskirjassa ei ole piirustusta; valitse ensin sen piirustukset</translation>
     </message>
     <message>
         <source>the drawing has no model space block: its entities are taken as model space</source>
@@ -49632,8 +49940,20 @@ ament_package()
         <translation>tahko, jolla piste on: %1</translation>
     </message>
     <message>
+        <source>the face cannot be laid flat yet: it is %1, and only flat, cylindrical and conical faces are developed into cutting patterns; model it of such faces</source>
+        <translation>tahkoa ei voi vielä levittää: se on %1, ja leikkuukuvioiksi levitetään vain tasomaisia, sylinteri- ja kartiotahkoja; mallinna se tällaisista tahkoista</translation>
+    </message>
+    <message>
+        <source>the face cannot be laid flat: it is %1 curved in two directions%2, so its material would have to stretch and no cutting pattern is made for it; form the part another way (pressing, spinning or wheeling), or design it as separate developable pieces: flat, cylindrical or conical faces</source>
+        <translation>tahkoa ei voi levittää: se on kahteen suuntaan kaareva %1%2, joten sen materiaalin pitäisi venyä eikä sille tehdä leikkuukuviota; muotoile osa muulla tavalla (puristamalla, painopyörittämällä tai englanninpyörällä) tai suunnittele se erillisinä levitettävinä osina: tasomaisina, sylinteri- tai kartiotahkoina</translation>
+    </message>
+    <message>
         <source>the face comes from a text or a face&apos;s edge, not from a sketch curve</source>
         <translation>pinta tulee tekstistä tai pinnan reunasta, ei luonnoksen käyrästä</translation>
+    </message>
+    <message>
+        <source>the face could not be developed: %1</source>
+        <translation>tahkoa ei voitu levittää: %1</translation>
     </message>
     <message>
         <source>the face does not exist at this point of the timeline</source>
@@ -50712,6 +51032,10 @@ ament_package()
         <translation>vetosuunta</translation>
     </message>
     <message>
+        <source>radius mode (G8), but the program writes X as a diameter</source>
+        <translation>sädetila (G8), mutta ohjelma kirjoittaa X:n halkaisijana</translation>
+    </message>
+    <message>
         <source>retarget: %1 lost its parameter</source>
         <translation>uudelleenkohdistus: %1 menetti parametrinsa</translation>
     </message>
@@ -50830,6 +51154,10 @@ ament_package()
     <message>
         <source>the %1 section&apos;s edges lie between the same two faces: give the one to leave at right angles as the %2 condition&apos;s face</source>
         <translation>poikkileikkauksen %1 särmät ovat samojen kahden tahkon välissä: anna se, josta lähdetään kohtisuoraan, ehdon %2 tahkona</translation>
+    </message>
+    <message>
+        <source>the %1 word, an axis the program does not drive on this control</source>
+        <translation>sana %1, akseli, jota ohjelma ei tällä ohjaimella ohjaa</translation>
     </message>
     <message>
         <source>the %1&apos;s draft angle must lie between -90 and 90 degrees, got %2 rad</source>
@@ -51260,10 +51588,6 @@ ament_package()
         <translation>tahko ei ole tasomainen</translation>
     </message>
     <message>
-        <source>the face is not planar: only planar faces become panels of a sheet</source>
-        <translation>tahko ei ole tasomainen: vain tasomaisista tahkoista tulee levyn paneeleja</translation>
-    </message>
-    <message>
         <source>the face is not planar: pick a flat face, a plane or a profile&apos;s end</source>
         <translation>tahko ei ole tasomainen: valitse tasainen tahko, taso tai profiilin pää</translation>
     </message>
@@ -51334,6 +51658,26 @@ ament_package()
     <message>
         <source>the face&apos;s curve is in several sketches</source>
         <translation>pinnan käyrä on useassa luonnoksessa</translation>
+    </message>
+    <message>
+        <source>the face&apos;s development has no material</source>
+        <translation>tahkon levityksessä ei ole materiaalia</translation>
+    </message>
+    <message>
+        <source>the face&apos;s development is not one region (%1 found)</source>
+        <translation>tahkon levitys ei ole yksi alue (löytyi %1)</translation>
+    </message>
+    <message>
+        <source>the face&apos;s development is of another surface than the face&apos;s</source>
+        <translation>tahkon levitys on eri pinnasta kuin tahko</translation>
+    </message>
+    <message>
+        <source>the face&apos;s development lost all its material</source>
+        <translation>tahkon levitys menetti kaiken materiaalinsa</translation>
+    </message>
+    <message>
+        <source>the face&apos;s development: %1</source>
+        <translation>tahkon levitys: %1</translation>
     </message>
     <message>
         <source>the face&apos;s diameter comes from several dimensions of %1</source>
@@ -51434,6 +51778,10 @@ ament_package()
     <message>
         <source>the faces to extrude face opposite ways at a vertex</source>
         <translation>pursotettavat tahkot osoittavat kärkipisteessä vastakkaisiin suuntiin</translation>
+    </message>
+    <message>
+        <source>the faces&apos; developments do not join: %1</source>
+        <translation>tahkojen levitykset eivät liity toisiinsa: %1</translation>
     </message>
     <message>
         <source>the faces&apos; motion moves nothing</source>
@@ -53940,8 +54288,16 @@ ament_package()
         <translation>toiminnolla ei ole solidia tässä tuonnissa</translation>
     </message>
     <message>
+        <source>the operation ran out of memory at %1 before it started and was not run; the document is as it was before the command. The memory was in use before the command: close the designs and other applications you do not need, or save your work and restart MitCad, then try again</source>
+        <translation>toiminnolta loppui muisti kohdassa %1 ennen kuin se alkoi, eikä sitä suoritettu; dokumentti on kuten ennen komentoa. Muisti oli käytössä jo ennen komentoa: sulje mallit ja muut sovellukset, joita et tarvitse, tai tallenna työsi ja käynnistä MitCad uudelleen, ja yritä sitten uudelleen</translation>
+    </message>
+    <message>
         <source>the operation ran out of memory%1 at %2 and was stopped before the system would end the process; the document is as it was before the command. Do the work in smaller steps, for example join the bodies in smaller groups</source>
         <translation>toiminnolta loppui muisti%1 kohdassa %2, ja se pysäytettiin ennen kuin järjestelmä olisi lopettanut prosessin; dokumentti on kuten ennen komentoa. Tee työ pienemmissä vaiheissa, esimerkiksi liitä kappaleet pienemmissä ryhmissä</translation>
+    </message>
+    <message>
+        <source>the operation ran out of memory%1 at %2 and was stopped before the system would end the process; the sketch and the document are as they were before the command. Close the designs and other applications you do not need, or save your work and restart MitCad, then try again</source>
+        <translation>toiminnolta loppui muisti%1 kohdassa %2, ja se pysäytettiin ennen kuin järjestelmä olisi lopettanut prosessin; luonnos ja dokumentti ovat kuten ennen komentoa. Sulje mallit ja muut sovellukset, joita et tarvitse, tai tallenna työsi ja käynnistä MitCad uudelleen, ja yritä sitten uudelleen</translation>
     </message>
     <message>
         <source>the operation was cancelled</source>
@@ -54062,6 +54418,10 @@ ament_package()
     <message>
         <source>the page map has no section map page</source>
         <translation>sivukartassa ei ole osiokartan sivua</translation>
+    </message>
+    <message>
+        <source>the panel is flat</source>
+        <translation>paneeli on tasomainen</translation>
     </message>
     <message>
         <source>the panel of a face holds no material of a body</source>
@@ -56332,6 +56692,18 @@ ament_package()
         <translation>levy on suoran leikkauksen luonnoksen takana</translation>
     </message>
     <message>
+        <source>the sheet of a face could not be built: %1</source>
+        <translation>tahkon levyä ei voitu rakentaa: %1</translation>
+    </message>
+    <message>
+        <source>the sheet of face %1 could not be built: %2</source>
+        <translation>tahkon %1 levyä ei voitu rakentaa: %2</translation>
+    </message>
+    <message>
+        <source>the sheet of the face could not be built: %1</source>
+        <translation>tahkon levyä ei voitu rakentaa: %1</translation>
+    </message>
+    <message>
         <source>the sheet&apos;s length unit “%1” is not known</source>
         <translation>arkin pituusyksikköä ”%1” ei tunneta</translation>
     </message>
@@ -58118,12 +58490,20 @@ ament_package()
         <translation>tämän tietokoneen välityspalvelinta ei käytetä: %1</translation>
     </message>
     <message>
+        <source>this design</source>
+        <translation>tämä malli</translation>
+    </message>
+    <message>
         <source>this design is edited in place in %1 already; finish there first</source>
         <translation>tätä mallia muokataan jo paikallaan kohteessa %1; lopeta siellä ensin</translation>
     </message>
     <message>
         <source>this design was written by a newer MitCad: the %1 %2 %3 not read</source>
         <translation>tämän mallin on kirjoittanut uudempi MitCad: %1 %2 %3 lukematta</translation>
+    </message>
+    <message>
+        <source>this design&apos;s geometry kernel cannot draw the drawing book&apos;s sheets</source>
+        <translation>tämän mallin geometriaydin ei voi piirtää piirustuskirjan arkkeja</translation>
     </message>
     <message>
         <source>this design&apos;s geometry kernel cannot evaluate a copy of the design</source>
@@ -59312,6 +59692,10 @@ ament_package()
     <message>
         <source>walls of edges in %1 planes, each a surface extrusion along the direction, and of %2 curves in no plane, each a line swept along it</source>
         <translation>seinämät %1 tason särmistä, kukin pintapursotuksena suuntaa pitkin, ja %2 tasottomasta käyrästä, kukin sitä pitkin pyyhkäistynä viivana</translation>
+    </message>
+    <message>
+        <source>walls of the face&apos;s ends or holes are not normal to the material: the sheet cuts them normal to it, as its cutting pattern does, so it differs from the body by %1 mm³</source>
+        <translation>tahkon päiden tai reikien seinämät eivät ole kohtisuorassa materiaaliin: levy leikkaa ne kohtisuoraan siihen, kuten sen leikkuukuviokin, joten se eroaa kappaleesta %1 mm³</translation>
     </message>
     <message>
         <source>warning: %1 links %2 (component %3), outside the project: other copies of the project do not have it</source>

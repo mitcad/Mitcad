@@ -96,6 +96,22 @@ impl<P> PointPatternDef<P> {
         paths
     }
 
+    /// [`PointPatternDef::paths`], to change (mitcad#2466: they follow
+    /// parts that go one level down).
+    pub(crate) fn paths_mut(&mut self) -> Vec<&mut OccurrencePath> {
+        let mut paths: Vec<_> = self
+            .targets
+            .iter_mut()
+            .chain(self.anchor.iter_mut())
+            .filter_map(|p| p.occurrence.as_mut())
+            .collect();
+        paths.extend(self.context.iter_mut());
+        if let PatternObjects::Components { occurrences } = &mut self.objects {
+            paths.extend(occurrences.iter_mut());
+        }
+        paths
+    }
+
     pub(crate) fn context_path(
         &self,
         assembly: &Assembly,

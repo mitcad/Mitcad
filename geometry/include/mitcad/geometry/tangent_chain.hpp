@@ -3,7 +3,7 @@
 
 // The tangent chains of a body (mitcad#290): which edges a fillet or
 // chamfer with a tangent chain rounds together, and which faces a face
-// operation with a tangent chain (shell, draft, replace face) takes
+// operation with a tangent chain (shell, draft, replace face, offset face) takes
 // together, so that the application's hover can show the whole chain
 // before the pick.
 //

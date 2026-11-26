@@ -905,6 +905,46 @@ void sectionSnapTests() {
   CHECK(!existingProjection(projected, body.items()[0]).has_value());
 }
 
+// The places a tutorial's guide step names where a drawing tool's point
+// snapped (mitcad#2440, snapPlaces): the origin with the axes it lies on,
+// a point, a midpoint, along a curve, onto an axis, a centre, a body
+// vertex, a line's extension, the grid, nothing.
+void snapPlaceTests() {
+  SketchModel model = axisSketch();
+  SnapSettings settings;
+  settings.model = &model;
+  settings.toScreen = screenOf;
+  settings.grid = false;
+  settings.axes = true;
+  const auto places = [&model, &settings](const V2& at) { return snapPlaces(model, snapAt(settings, at)); };
+  CHECK(places(V2{0.3, 0.2}) == (QStringList{QStringLiteral("origin"), QStringLiteral("x_axis"),
+                                             QStringLiteral("y_axis"), QStringLiteral("point")}));
+  CHECK(places(V2{30.2, 0.1}) == QStringList{QStringLiteral("point")});
+  CHECK(places(V2{20.3, 0.1}) == QStringList{QStringLiteral("midpoint")});
+  CHECK(places(V2{15.0, 0.0}) == QStringList{QStringLiteral("curve")});
+  CHECK(places(V2{-140.0, 0.3}) == QStringList{QStringLiteral("x_axis")});
+  CHECK(places(V2{-0.2, -25.0}) == QStringList{QStringLiteral("y_axis")});
+  CHECK(places(V2{-40.0, 20.0}) == QStringList{QStringLiteral("free")});
+  settings.grid = true;
+  settings.gridStep = 5.0;
+  CHECK(places(V2{-41.2, 21.4}) == QStringList{QStringLiteral("grid")});
+
+  Snap center;
+  center.kind = Snap::Kind::Center;
+  center.point = QStringLiteral("p1");
+  center.curve = QStringLiteral("c9");
+  CHECK(snapPlaces(model, center) == (QStringList{QStringLiteral("center"), QStringLiteral("point")}));
+  Snap vertex;
+  vertex.kind = Snap::Kind::BodyVertex;
+  CHECK(snapPlaces(model, vertex) == QStringList{QStringLiteral("body_vertex")});
+  Snap extension;
+  extension.kind = Snap::Kind::OnCurve;
+  extension.curve = QStringLiteral("c2");
+  extension.extended = true;
+  CHECK(snapPlaces(model, extension) == QStringList{QStringLiteral("extension")});
+  CHECK(snapPlaces(model, Snap()) == QStringList{QStringLiteral("free")});
+}
+
 } // namespace
 
 int sketchSnapTests() {
@@ -915,6 +955,7 @@ int sketchSnapTests() {
   autoConstraintTests();
   extensionSnapTests();
   sectionSnapTests();
+  snapPlaceTests();
   return failures;
 }
 MITCAD_UNIT_TEST(sketchSnapTests);

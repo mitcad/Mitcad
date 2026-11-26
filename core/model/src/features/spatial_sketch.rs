@@ -92,7 +92,7 @@ impl FeatureInfo for SpatialSketchDef {
     fn references(&self) -> References {
         let mut references = References::default();
         match &self.support {
-            SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
+            SketchPlane::Face { face, body, .. } | SketchPlane::Developed { face, body, .. } => {
                 references.features.extend(face.features());
                 if let Some(body) = body {
                     references.body(*body);
@@ -132,7 +132,7 @@ impl FeatureInfo for SpatialSketchDef {
             .find(|f| f.uid == ctx.uid)
             .map(|f| f.component);
         match &self.support {
-            SketchPlane::Face { face, body } => {
+            SketchPlane::Face { face, body, .. } => {
                 for feature in face.features() {
                     ctx.feature(feature).map_err(|e| {
                         said_around(
@@ -339,7 +339,8 @@ impl LinkedReferences for SpatialSketchDef {
         // (mitcad#1550), as a planar sketch's.
         if let Some(link) = &self.planar.plane_link {
             match &self.support {
-                SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
+                SketchPlane::Face { face, body, .. }
+                | SketchPlane::Developed { face, body, .. } => {
                     out.extend(face.features().into_iter().map(|uid| (uid, link)));
                     if let Some(body) = body {
                         out.push((body.feature, link));
@@ -726,6 +727,7 @@ fn planar_output<K: Kernel>(
     };
     Ok(SketchOutput {
         frame: frames.frame,
+        plane: frames.plane,
         base: frames.base,
         regions: region_info.iter().map(|r| r.profile.clone()).collect(),
         region_info,

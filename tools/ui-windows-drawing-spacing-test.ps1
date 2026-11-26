@@ -137,7 +137,9 @@ function Drawing-Tool([string]$Name, [string]$Group) {
     if ($rows[$i] -eq $Name -or $rows[$i].StartsWith("$Name (")) { $row = $i; break }
   }
   if ($row -lt 0) { Ui-Fail "no $Name in the $Group group's menu: $entries" }
-  Ui-Step "$Name (Down x$($row + 1), Enter)" { Ui-Key (@('Down') * ($row + 1)); Ui-Key 'Return' }
+  # Disabled rows are passed over by the keys (mitcad#2446).
+  $downs = $row + 1 - (Ui-RibbonMenuSkipped $path $row)
+  Ui-Step "$Name (Down x$downs, Enter)" { Ui-Key (@('Down') * $downs); Ui-Key 'Return' }
 }
 
 # Offset-Of verb: the line_offset of the last "Drawing dimension <verb>:"

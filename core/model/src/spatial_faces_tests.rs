@@ -296,6 +296,7 @@ fn a_converted_sketch_on_a_face_puts_a_corner_on_it() {
         .add_sketch(SketchPlane::Face {
             face: Box::new(top.clone()),
             body: Some(body),
+            placed: None,
         })
         .unwrap()
         .uid;

@@ -7,7 +7,9 @@
 // are), other files opened with the system's app, added and their changes
 // recorded (add_files, record; mitcad#2204), Version
 // History, Project Settings and Sync Now of a project, Add Existing Project
-// Folder and Remove from List. The panel itself is projects/ProjectsPanel.
+// Folder and Remove from List; a design dragged onto the 3D view is
+// inserted there as a component (mitcad#2428, dropProjectDesign in
+// files/MainWindowFiles.cpp). The panel itself is projects/ProjectsPanel.
 #include "../MainWindow.hpp"
 #include "../WindowManager.hpp"
 
@@ -141,6 +143,9 @@ void MainWindow::createProjectsPanel() {
   host.currentRoot = [this] { return m_project.isProject() ? m_project.root : QString(); };
   host.currentRemote = [this] { return m_remote != nullptr ? m_remote->indicatorState() : ProjectIndicator::Remote(); };
   host.showForNaming = [this](bool on) { showProjectsForNaming(on); };
+  // A design dragged onto the 3D view (mitcad#2428, files/MainWindowFiles.cpp).
+  host.viewTakesDesign = [this](const QPoint& global) { return viewTakesProjectDesign(global); };
+  host.designDroppedOnView = [this](const QString& path, const QPoint& global) { dropProjectDesign(path, global); };
   m_projectsPanel = new ProjectsPanel(std::move(host));
   ProjectsPanel* panel = m_projectsPanel;
   // Queued: the panel's menus, editors and drags end before a dialog shows.

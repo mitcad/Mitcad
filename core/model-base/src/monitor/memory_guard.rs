@@ -20,7 +20,11 @@
 //! The error says what the command was ([`GuardedWork`], mitcad#2032): a
 //! modelling command is told to do the work in smaller steps, a file's
 //! import (`import_file`) that the file needs more memory than the system
-//! has left, as there is nothing of it to do in steps.
+//! has left, as there is nothing of it to do in steps, and a sketch edit
+//! (mitcad#2437) to free memory, as a sketch edit has no smaller steps.
+//! A command refused before it started ([`refusal_at_start`], mitcad#2437)
+//! did not take the memory: it was in use before, and the error says so
+//! and how to free it, not to do the work in smaller steps.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -52,6 +56,9 @@ pub enum GuardedWork {
     /// A file's import (`import_file`: STEP, IGES, ...): its error says the
     /// file needs more memory than the system has left.
     Import,
+    /// A sketch edit (the `sketch.` and `sketch3d.` commands, mitcad#2437):
+    /// its error advises freeing memory.
+    Sketch,
 }
 
 /// The share of the tightest limit at which a command is stopped: as the
@@ -120,7 +127,37 @@ pub fn refusal_for(
              and the design is as it was before the import",
             reading.text
         ),
+        GuardedWork::Sketch => format!(
+            "the operation ran out of memory{cause} at {} and was stopped before the system would \
+             end the process; the sketch and the document are as they were before the command. \
+             Close the designs and other applications you do not need, or save your work and \
+             restart MitCad, then try again",
+            reading.text
+        ),
     })
+}
+
+/// The error of a command refused before it started, at `reading` taken
+/// before it, or None while the memory suffices (below [`MEMORY_LOW`]).
+/// Such a command took none of the memory (mitcad#2437: a sketch
+/// dimension was refused at 13.9 GiB of 16 GiB that graphics textures of the
+/// view held): the error says that it was in use before the command and
+/// how to free it, not to do the work in smaller steps. A file's import
+/// keeps its own words ([`refusal_for`]).
+pub fn refusal_at_start(work: GuardedWork, reading: &MemoryReading) -> Option<String> {
+    if reading.share < MEMORY_LOW {
+        return None;
+    }
+    match work {
+        GuardedWork::Import => refusal_for(work, reading, reading.failed_allocations, 0.0),
+        GuardedWork::Command | GuardedWork::Sketch => Some(format!(
+            "the operation ran out of memory at {} before it started and was not run; the \
+             document is as it was before the command. The memory was in use before the \
+             command: close the designs and other applications you do not need, or save your \
+             work and restart MitCad, then try again",
+            reading.text
+        )),
+    }
 }
 
 /// Whether memory at `share` of the tightest limit, growing by `growth`
@@ -176,8 +213,14 @@ pub fn guarded_for<T>(
 ) -> T {
     let first = measure();
     let failed_before = first.failed_allocations;
-    if monitor.is_cancelled() || refuse(monitor, work, &first, failed_before, 0.0) {
+    if monitor.is_cancelled() {
         // (Fails at its first check.)
+        return f();
+    }
+    // Low before the command started: in the words of a refusal at the
+    // start (mitcad#2437).
+    if let Some(reason) = refusal_at_start(work, &first) {
+        monitor.cancel_because(&reason);
         return f();
     }
     let (done, finished) = mpsc::channel::<()>();
@@ -209,6 +252,28 @@ pub fn guarded_for<T>(
         let _ = watch.join();
     }
     result
+}
+
+/// [`guarded_for`] for a command whose result can say that it failed:
+/// refused before it started ([`refusal_at_start`]), or with its monitor
+/// cancelled for a reason already, `f` is not run at all and the result is
+/// `refused` of the reason (mitcad#2437). [`guarded_for`] runs it to fail at
+/// its first check of the monitor, but an edit that checks none before it
+/// changes the document would be made although refused. A monitor the user
+/// cancelled (no reason) runs `f` as [`guarded_for`] does.
+pub fn guarded_command<T, E>(
+    monitor: &Arc<RecomputeMonitor>,
+    work: GuardedWork,
+    measure: impl FnMut() -> MemoryReading + Send + 'static,
+    refused: impl FnOnce(String) -> E,
+    f: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    guarded_for(monitor, work, measure, || {
+        match monitor.cancel_reason().filter(|_| monitor.is_cancelled()) {
+            Some(reason) => Err(refused(reason)),
+            None => f(),
+        }
+    })
 }
 
 /// How fast the memory grew from `before` to `after` (a time and a share
@@ -286,6 +351,145 @@ mod tests {
         assert!(cancelled);
         let reason = monitor.cancel_reason().expect("a reason");
         assert!(reason.contains("ran out of memory at 0.9"), "{reason}");
+        // In the words of a refusal at the start (mitcad#2437).
+        assert!(
+            reason.contains("before it started and was not run"),
+            "{reason}"
+        );
+        assert!(!reason.contains("smaller steps"), "{reason}");
+    }
+
+    /// A command refused before it started took none of the memory
+    /// (mitcad#2437: a sketch dimension refused at 13.9 GiB of 16 GiB that
+    /// the view's graphics textures held): its error says the memory was in
+    /// use before the command and how to free it, not to do the work in
+    /// smaller steps or to join bodies; a sketch edit's the same. A file's
+    /// import keeps its own words; below the low share, none.
+    #[test]
+    fn a_refusal_at_the_start_in_its_own_words() {
+        assert_eq!(
+            refusal_at_start(GuardedWork::Command, &reading(MEMORY_LOW - 0.01, 0)),
+            None
+        );
+        for work in [GuardedWork::Command, GuardedWork::Sketch] {
+            let low = refusal_at_start(work, &reading(0.9, 0)).expect("low at the start");
+            assert!(
+                low.starts_with(
+                    "the operation ran out of memory at 0.9 GiB of 1.0 GiB (the command memory \
+                     limit) before it started and was not run; the document is as it was before \
+                     the command"
+                ),
+                "{low}"
+            );
+            assert!(
+                low.contains("The memory was in use before the command"),
+                "{low}"
+            );
+            assert!(
+                low.contains(
+                    "close the designs and other applications you do not need, or save your \
+                     work and restart MitCad, then try again"
+                ),
+                "{low}"
+            );
+            assert!(!low.contains("smaller steps"), "{low}");
+            assert!(!low.contains("join the bodies"), "{low}");
+        }
+        assert_eq!(
+            refusal_at_start(GuardedWork::Import, &reading(0.9, 0)),
+            refusal_for(GuardedWork::Import, &reading(0.9, 0), 0, 0.0)
+        );
+        // The guard refuses a sketch edit at the start in these words.
+        let monitor = Arc::new(RecomputeMonitor::new());
+        let ran = guarded_for(
+            &monitor,
+            GuardedWork::Sketch,
+            || reading(0.9, 0),
+            || monitor.is_cancelled(),
+        );
+        assert!(ran, "the edit ran with the monitor cancelled");
+        assert_eq!(
+            monitor.cancel_reason(),
+            refusal_at_start(GuardedWork::Sketch, &reading(0.9, 0))
+        );
+    }
+
+    /// A command refused before it started is not run at all
+    /// (mitcad#2437): an edit that checks no monitor would otherwise be
+    /// made although refused. With enough memory it runs; a monitor the
+    /// user cancelled before runs it to fail at its first check.
+    #[test]
+    fn a_command_refused_at_the_start_is_not_run() {
+        let monitor = Arc::new(RecomputeMonitor::new());
+        let mut ran = false;
+        let result: Result<(), String> = guarded_command(
+            &monitor,
+            GuardedWork::Sketch,
+            || reading(0.9, 0),
+            |reason| reason,
+            || {
+                ran = true;
+                Ok(())
+            },
+        );
+        assert!(!ran, "the refused command ran");
+        let reason = result.expect_err("refused");
+        assert_eq!(
+            Some(reason),
+            refusal_at_start(GuardedWork::Sketch, &reading(0.9, 0))
+        );
+        let monitor = Arc::new(RecomputeMonitor::new());
+        let result: Result<u32, String> = guarded_command(
+            &monitor,
+            GuardedWork::Sketch,
+            || reading(0.3, 0),
+            |reason| reason,
+            || Ok(7),
+        );
+        assert_eq!(result, Ok(7));
+        assert!(!monitor.is_cancelled());
+        let monitor = Arc::new(RecomputeMonitor::new());
+        monitor.cancel();
+        let mut checked = false;
+        let result: Result<(), String> = guarded_command(
+            &monitor,
+            GuardedWork::Command,
+            || reading(0.3, 0),
+            |reason| reason,
+            || {
+                checked = true;
+                Err("cancelled".to_owned())
+            },
+        );
+        assert!(checked, "a user's cancel runs the command to its check");
+        assert_eq!(result, Err("cancelled".to_owned()));
+    }
+
+    /// A sketch edit stopped while it computes (mitcad#2437) is told to
+    /// free memory, not to join bodies; the sketch and the document stay.
+    #[test]
+    fn a_sketch_edits_refusal_in_its_own_words() {
+        assert_eq!(
+            refusal_for(GuardedWork::Sketch, &reading(0.5, 0), 0, 0.0),
+            None
+        );
+        let low = refusal_for(GuardedWork::Sketch, &reading(0.9, 0), 0, 0.0).expect("low");
+        assert!(
+            low.starts_with(
+                "the operation ran out of memory at 0.9 GiB of 1.0 GiB (the command memory \
+                 limit) and was stopped before the system would end the process; the sketch and \
+                 the document are as they were before the command"
+            ),
+            "{low}"
+        );
+        assert!(low.contains("save your work and restart MitCad"), "{low}");
+        assert!(!low.contains("join the bodies"), "{low}");
+        assert!(!low.contains("smaller steps"), "{low}");
+        let fast = refusal_for(GuardedWork::Sketch, &reading(0.5, 0), 0, 4.0).expect("fast");
+        assert!(
+            fast.starts_with("the operation ran out of memory (growing too fast to go on) at 0.5"),
+            "{fast}"
+        );
     }
 
     /// Memory that runs low while the command computes cancels it then.

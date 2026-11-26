@@ -228,6 +228,10 @@ mod offset_free_ends_2277_tests;
 pub mod offset_hold;
 #[cfg(test)]
 mod offset_hold_2278_tests;
+// Projected elliptical arcs that followed their source solve where they
+// are (mitcad#2408).
+#[cfg(test)]
+mod followed_ellipse_2408_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -1155,12 +1159,15 @@ pub enum DimensionKind {
     },
     /// The gap between a circle or arc and a line it does not cross: the
     /// distance of its centre from the line (its infinite extension) minus
-    /// its radius.
+    /// its radius; with `side` far (mitcad#2451), to the circle's far side:
+    /// that distance plus the radius.
     TangentDistance {
         #[serde(with = "curve_serde")]
         circle: EntityUid,
         #[serde(with = "curve_serde")]
         line: EntityUid,
+        #[serde(default, skip_serializing_if = "TangentSide::is_outside")]
+        side: TangentSide,
     },
     /// The gap between two concentric circles or arcs (mitcad#445): the
     /// difference of their radii, on the side `b` is when it is added.
@@ -1222,7 +1229,10 @@ pub enum DimensionKind {
     /// (mitcad#1540): outside each other (`side` outside, the default) the
     /// distance of their centres minus both radii; one within the other
     /// (`side` inside) the larger radius minus the smaller one minus the
-    /// distance of the centres.
+    /// distance of the centres. With `side` far (mitcad#2451) between
+    /// their far sides, the outer tangents: the distance of the centres
+    /// plus both radii; with `near_far` from `a`'s near side to `b`'s far
+    /// side: the distance minus `a`'s radius plus `b`'s.
     TangentCircleDistance {
         #[serde(with = "curve_serde")]
         a: EntityUid,
@@ -1236,7 +1246,8 @@ pub enum DimensionKind {
     /// default) its distance from the centre minus the radius; for one
     /// inside (`side` inside) the radius minus that distance. With the
     /// centre of another circle as the point, the distance from one
-    /// circle's side to the other's centre.
+    /// circle's side to the other's centre. With `side` far (mitcad#2451),
+    /// from the circle's far side: the distance plus the radius.
     TangentPointDistance {
         #[serde(with = "curve_serde")]
         circle: EntityUid,
@@ -1247,15 +1258,24 @@ pub enum DimensionKind {
     },
 }
 
-/// Which gap a tangent dimension between a circle and a circle or a point
-/// measures (mitcad#1540): between things outside each other, or with one
-/// inside the circle.
+/// Which gap a tangent dimension measures (mitcad#1540): between things
+/// outside each other, or with one inside the circle; or to a circle's far
+/// side (mitcad#2451).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TangentSide {
+    /// To the near side (the nearest gap); not written.
     #[default]
     Outside,
+    /// One inside the circle (`tangent_circle_distance`,
+    /// `tangent_point_distance`).
     Inside,
+    /// To the far side of each circle: the centre distance plus the radius
+    /// (or both radii); any tangent dimension (mitcad#2451).
+    Far,
+    /// From `a`'s near side to `b`'s far side (`tangent_circle_distance`
+    /// only, mitcad#2451).
+    NearFar,
 }
 
 impl TangentSide {
@@ -1265,6 +1285,20 @@ impl TangentSide {
 
     pub fn inside(self) -> bool {
         self == Self::Inside
+    }
+
+    pub fn far(self) -> bool {
+        self == Self::Far
+    }
+
+    /// Whether the side is far for the first circle and the second
+    /// (`tangent_circle_distance`).
+    pub fn far_pair(self) -> (bool, bool) {
+        match self {
+            Self::Far => (true, true),
+            Self::NearFar => (false, true),
+            Self::Outside | Self::Inside => (false, false),
+        }
     }
 }
 
@@ -1291,7 +1325,7 @@ impl DimensionKind {
             LineDistance { a, b } | Angle { a, b, .. } | ConcentricDistance { a, b } => {
                 vec![c(*a), c(*b)]
             }
-            TangentDistance { circle, line } => vec![c(*circle), c(*line)],
+            TangentDistance { circle, line, .. } => vec![c(*circle), c(*line)],
             Length { line } => vec![c(*line)],
             Radius { curve } | Diameter { curve } => vec![c(*curve)],
             ArcLength { arc } => vec![c(*arc)],

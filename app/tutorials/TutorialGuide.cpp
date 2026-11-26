@@ -9,6 +9,7 @@
 #include <QDialog>
 #include <QEvent>
 #include <QFrame>
+#include <QJsonArray>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
@@ -169,9 +170,14 @@ QString targetText(const GuideStep& step) {
   case GuideStep::Target::Workspace: return QStringLiteral("workspace %1").arg(step.targetName);
   case GuideStep::Target::Tab: return QStringLiteral("tab %1").arg(step.targetName);
   case GuideStep::Target::Timeline: return QStringLiteral("the timeline");
+  case GuideStep::Target::Plane: return QStringLiteral("the plane %1").arg(step.targetName);
+  case GuideStep::Target::Field: return QStringLiteral("value box %1").arg(step.targetName);
   }
   return QString();
 }
+
+// A point of the sketch for the log: "(10, 5)".
+QString pointText(const QPointF& at) { return QStringLiteral("(%1, %2)").arg(at.x()).arg(at.y()); }
 
 // "orbited", "panned", "zoomed": a navigation (guideNavigationActions()) done.
 QString navigatedText(const QString& action) {
@@ -360,6 +366,78 @@ void TutorialGuide::viewNavigated(const QString& action) {
     return;
   }
   finish({{QStringLiteral("navigate"), action}}, QStringLiteral("the view %1").arg(navigatedText(action)));
+}
+
+bool TutorialGuide::planeAllowed(const QStringList& names, const QString& shown) {
+  if (!m_active || m_step.planeMatches(names)) {
+    return true;
+  }
+  mismatch({{QStringLiteral("plane"), shown}}, QStringLiteral("plane %1").arg(shown), m_step.plane(),
+           tr("Not this plane. Pick the one the step names."));
+  return false;
+}
+
+void TutorialGuide::planeMade(const QStringList& names) {
+  if (!m_active || m_step.done != GuideStep::Done::Plane || !m_step.planeMatches(names)) {
+    return;
+  }
+  finish({{QStringLiteral("plane"), m_step.doneName}}, QStringLiteral("a sketch on %1").arg(m_step.doneName));
+}
+
+bool TutorialGuide::drawingInput(const GuidePoint* point) {
+  if (!m_active) {
+    return true;
+  }
+  if (m_step.done == GuideStep::Done::Point) {
+    if (point == nullptr) {
+      return true; // Enter places no point where the pointer snapped
+    }
+    const QJsonArray at{point->at.x(), point->at.y()};
+    if (m_step.pointMatches(*point)) {
+      // The place it waited for, else (coordinates) where it snapped.
+      QString place = point->places.value(0, QStringLiteral("free"));
+      for (const QString& wanted : m_step.pointPlaces) {
+        if (point->places.contains(wanted)) {
+          place = wanted;
+          break;
+        }
+      }
+      finish({{QStringLiteral("point"), place}, {QStringLiteral("at"), at}},
+             QStringLiteral("a point at %1 %2").arg(place, pointText(point->at)));
+      return true;
+    }
+    const QString place = point->places.value(0, QStringLiteral("free"));
+    const QString wanted = m_step.pointAtGiven ? pointText(m_step.pointAt)
+                                               : m_step.pointPlaces.join(QStringLiteral(" or "));
+    mismatch({{QStringLiteral("point"), place}, {QStringLiteral("at"), at}},
+             QStringLiteral("point at %1 %2").arg(place, pointText(point->at)), wanted,
+             tr("Not this place. Click where the step says."));
+    return false;
+  }
+  if (m_step.done == GuideStep::Done::Field) {
+    QString typed;
+    if (!m_host.toolField || !m_host.toolField(m_step.doneName, &typed)) {
+      return true; // the tool does not ask for that value now
+    }
+    if (guideValueMatches(typed, m_step.value)) {
+      finish({{QStringLiteral("field"), m_step.doneName}, {QStringLiteral("value"), typed}},
+             QStringLiteral("%1 typed into %2").arg(typed, m_step.doneName));
+      return true;
+    }
+    mismatch({{QStringLiteral("field"), m_step.doneName}, {QStringLiteral("value"), typed}},
+             QStringLiteral("value %1 in %2").arg(typed.isEmpty() ? QStringLiteral("not typed") : typed,
+                                                  m_step.doneName),
+             m_step.value, tr("Not this value. Type the one the step gives."));
+    return false;
+  }
+  return true;
+}
+
+void TutorialGuide::mismatch(const QJsonObject& got, const QString& what, const QString& wanted,
+                             const QString& note) {
+  qInfo().noquote() << QStringLiteral("Guide: step %1 %2, not its %3").arg(m_step.id, what, wanted);
+  showNote(note);
+  emitEvent({{QStringLiteral("event"), QStringLiteral("mismatch")}, {QStringLiteral("got"), got}});
 }
 
 void TutorialGuide::holdView(bool held, const QString& why) {
@@ -644,6 +722,14 @@ void TutorialGuide::tick() {
     m_callout->raise();
   }
 
+  // While a job computes the model (a panel's preview), the step is not
+  // done yet: its end sets off reads of the document (the actions' update,
+  // the page's next step), which wait for the job. The next tick after it
+  // checks again (mitcad#2440: a Started step done as Extrude's preview
+  // began read the document under the job).
+  if (m_host.busy && m_host.busy()) {
+    return;
+  }
   switch (m_step.done) {
   case GuideStep::Done::Finished: break; // commandFinished
   case GuideStep::Done::Navigate: break; // viewNavigated
@@ -653,22 +739,38 @@ void TutorialGuide::tick() {
              QStringLiteral("the panel of %1 opened").arg(m_step.doneName));
     }
     break;
-  case GuideStep::Done::Value: {
-    const QString typed = m_host.inputText ? m_host.inputText(m_step.doneName) : QString();
+  case GuideStep::Done::Value:
+  case GuideStep::Done::Field: {
+    // An input of the open panel, or a drawing tool's value box as typed
+    // into (mitcad#2440: not the value under the pointer).
+    const bool field = m_step.done == GuideStep::Done::Field;
+    QString typed;
+    if (field) {
+      if (m_host.toolField && !m_host.toolField(m_step.doneName, &typed)) {
+        typed.clear();
+      }
+    } else if (m_host.inputText) {
+      typed = m_host.inputText(m_step.doneName);
+    }
     if (typed != m_typedLogged) {
       m_typedLogged = typed;
-      qDebug().noquote() << QStringLiteral("Guide: step %1 input %2 is '%3'").arg(m_step.id, m_step.doneName, typed);
+      qDebug().noquote() << QStringLiteral("Guide: step %1 %2 %3 is '%4'")
+                                .arg(m_step.id, field ? QStringLiteral("value box") : QStringLiteral("input"),
+                                     m_step.doneName, typed);
     }
     if (!guideValueMatches(typed, m_step.value)) {
       m_valueMatched.invalidate();
     } else if (!m_valueMatched.isValid()) {
       m_valueMatched.start();
     } else if (m_valueMatched.elapsed() >= kValueSettleMs) {
-      finish({{QStringLiteral("input"), m_step.doneName}, {QStringLiteral("value"), typed}},
+      finish({{field ? QStringLiteral("field") : QStringLiteral("input"), m_step.doneName},
+              {QStringLiteral("value"), typed}},
              QStringLiteral("%1 typed into %2").arg(typed, m_step.doneName));
     }
     break;
   }
+  case GuideStep::Done::Plane: break; // planeMade
+  case GuideStep::Done::Point: break; // drawingInput
   case GuideStep::Done::Mode:
     if (m_host.mode && m_host.mode() == m_step.doneName) {
       finish({{QStringLiteral("mode"), m_step.doneName}}, QStringLiteral("the mode is %1").arg(m_step.doneName));

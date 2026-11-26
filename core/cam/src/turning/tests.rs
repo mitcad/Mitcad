@@ -413,6 +413,7 @@ fn lathe() -> Machine {
             mill_turn: MillTurn::default(),
             sub_spindle: SubSpindle::default(),
             turret_body: None,
+            station_bodies: Vec::new(),
         }),
     }
 }

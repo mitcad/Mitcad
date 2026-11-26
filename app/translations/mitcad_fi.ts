@@ -3045,6 +3045,22 @@
         <translation>Varjostettu</translation>
     </message>
     <message>
+        <source>Flat Pattern View</source>
+        <translation>Levityskuvanto</translation>
+    </message>
+    <message>
+        <source>Places a sheet-metal body&apos;s Flat Pattern on the sheet</source>
+        <translation>Sijoittaa ohutlevykappaleen levityksen arkille</translation>
+    </message>
+    <message>
+        <source>Click where the Flat Pattern goes</source>
+        <translation>Napsauta levityksen paikkaa</translation>
+    </message>
+    <message>
+        <source>Bend Notes</source>
+        <translation>Taivutusmerkinnät</translation>
+    </message>
+    <message>
         <source>Projected View</source>
         <translation>Projektiokuvanto</translation>
     </message>
@@ -8913,6 +8929,30 @@
         <translation>Tahkot</translation>
     </message>
     <message>
+        <source>Own Thickness</source>
+        <translation>Oma paksuus</translation>
+    </message>
+    <message>
+        <source>Faces whose wall has this thickness</source>
+        <translation>Tahkot, joiden seinämällä on tämä paksuus</translation>
+    </message>
+    <message>
+        <source>Add Faces</source>
+        <translation>Lisää tahkoja</translation>
+    </message>
+    <message>
+        <source>Faces %1</source>
+        <translation>Tahkot %1</translation>
+    </message>
+    <message>
+        <source>Faces whose wall is thicker or thinner than the shell&apos;s</source>
+        <translation>Tahkot, joiden seinämä on kuoren seinämää paksumpi tai ohuempi</translation>
+    </message>
+    <message>
+        <source>The faces with their own thickness must be of the shelled body.</source>
+        <translation>Omapaksuisten tahkojen on oltava kuoritun kappaleen tahkoja.</translation>
+    </message>
+    <message>
         <source>Draft Sides</source>
         <translation>Päästön puolet</translation>
     </message>
@@ -8931,6 +8971,10 @@
     <message>
         <source>Positive out of the material</source>
         <translation>Positiivinen materiaalista ulos</translation>
+    </message>
+    <message>
+        <source>Also move the faces that continue the selected ones smoothly</source>
+        <translation>Siirrä myös tahkot, jotka jatkavat valittuja sileästi</translation>
     </message>
     <message>
         <source>Replace Face</source>
@@ -13266,8 +13310,16 @@
         <translation>Tekee solidista levyn, taivutettuna poimituista särmistä, repäistynä muualta</translation>
     </message>
     <message>
-        <source>The flat face that stays where it is; the material lies behind it</source>
-        <translation>Tasotahko, joka pysyy paikallaan; aine on sen takana</translation>
+        <source>The face that stays where it is: flat, a cylinder or a cone; the material lies behind it</source>
+        <translation>Tahko, joka pysyy paikallaan: tasomainen, sylinteri tai kartio; materiaali on sen takana</translation>
+    </message>
+    <message>
+        <source>The gap between two faces at a rip, or at the seam of a closed curved face</source>
+        <translation>Kahden tahkon väli repäisyssä tai suljetun kaarevan tahkon saumassa</translation>
+    </message>
+    <message>
+        <source>Select the face that stays where it is.</source>
+        <translation>Valitse tahko, joka pysyy paikallaan.</translation>
     </message>
     <message>
         <source>Bend Edges</source>
@@ -13294,16 +13346,8 @@
         <translation>Pois päältä: tahkojen välinen rako repäisyssä on levyn paksuus</translation>
     </message>
     <message>
-        <source>The gap between two faces at a rip</source>
-        <translation>Kahden tahkon välinen rako repäisyssä</translation>
-    </message>
-    <message>
         <source>New Rules: rules of its own, made with the sheet; or rules the design has</source>
         <translation>Uudet säännöt: omat säännöt, tehty levyn kanssa; tai mallin säännöt</translation>
-    </message>
-    <message>
-        <source>Select the flat face that stays where it is.</source>
-        <translation>Valitse tasotahko, joka pysyy paikallaan.</translation>
     </message>
     <message>
         <source>Bend</source>
@@ -19393,6 +19437,14 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Jaa pisteessä: napsauta käyrää kohdasta, josta se jaetaan.</translation>
     </message>
     <message>
+        <source>Tangent Near</source>
+        <translation>Lähempi tangentti</translation>
+    </message>
+    <message>
+        <source>Tangent Far</source>
+        <translation>Kauempi tangentti</translation>
+    </message>
+    <message>
         <source>Sketch Dimension: pick a line, circle, arc or point, of the sketch or a body edge or vertex (projected onto the sketch plane), or a sketch axis or the origin, then right-click for Driven.</source>
         <translation>Luonnosmitta: poimi luonnoksen viiva, ympyrä, kaari tai piste, kappaleen reuna tai kärki (projisoituna luonnostasolle), luonnoksen akseli tai origo; oikea napsautus tekee ohjatun mitan.</translation>
     </message>
@@ -21408,6 +21460,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Close</source>
         <translation>Sulje</translation>
+    </message>
+    <message>
+        <source>Flat View</source>
+        <translation>Levityskuvanto</translation>
     </message>
     <message>
         <source>Projected</source>
@@ -24969,6 +25025,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Lopeta paikallaan muokkaus</translation>
     </message>
     <message>
+        <source>Create Drawing of Flat Pattern…</source>
+        <translation>Luo levityksen piirustus…</translation>
+    </message>
+    <message>
         <source>New Point Cloud Deviation</source>
         <translation>Uusi pistepilven poikkeama</translation>
     </message>
@@ -26318,6 +26378,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Mittaa X säteenä karan akselista.</translation>
     </message>
     <message>
+        <source>Measure Y along the Y axis; leave both empty for a zone not limited in Y.</source>
+        <translation>Mittaa Y Y-akselin suunnassa; jätä molemmat tyhjiksi, jos kieltoaluetta ei rajata Y-suunnassa.</translation>
+    </message>
+    <message>
         <source>Measure Z from the sub-spindle&apos;s jaws&apos; face, positive away from the main spindle.</source>
         <translation>Mittaa Z vastakaran leukojen tahkosta, positiivinen poispäin pääkarasta.</translation>
     </message>
@@ -26372,6 +26436,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Unnamed zone</source>
         <translation>Nimetön kieltoalue</translation>
+    </message>
+    <message>
+        <source>Not limited</source>
+        <translation>Ei rajattu</translation>
     </message>
     <message>
         <source>%1 to %2</source>
@@ -26722,12 +26790,20 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Revolverin runko Z alkaen</translation>
     </message>
     <message>
-        <source>Where the turret&apos;s body ends in Z, towards the sub-spindle</source>
-        <translation>Mihin revolverin runko päättyy Z:ssa, vastakaran suuntaan</translation>
+        <source>Where the turret&apos;s body ends in Z, away from the main spindle</source>
+        <translation>Mihin revolverin runko päättyy Z:ssa, pääkarasta poispäin</translation>
     </message>
     <message>
         <source>Turret Body Z To</source>
         <translation>Revolverin runko Z asti</translation>
+    </message>
+    <message>
+        <source>A station&apos;s own body, as 3: 0, 120, -30, 25 for X from, X to, Z from, Z to; separated by ;</source>
+        <translation>Aseman oma runko, kuten 3: 0, 120, -30, 25 arvoille X alkaen, X asti, Z alkaen, Z asti; puolipisteellä (;) erotettuina</translation>
+    </message>
+    <message>
+        <source>Station Bodies</source>
+        <translation>Asemien rungot</translation>
     </message>
     <message>
         <source>The letter of the sub-spindle&apos;s axis along Z; B only without a B head</source>
@@ -26834,6 +26910,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Vastakaran kieltoalueet</translation>
     </message>
     <message>
+        <source>Turret</source>
+        <translation>Revolveri</translation>
+    </message>
+    <message>
         <source>%1: a length of zero or more.</source>
         <translation>%1: pituus, nolla tai enemmän.</translation>
     </message>
@@ -26876,6 +26956,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>The turret&apos;s body: X and Z each from a lowest up to a highest, or all left empty.</source>
         <translation>Revolverin runko: X ja Z kumpikin pienimmästä suurimpaan, tai kaikki tyhjinä.</translation>
+    </message>
+    <message>
+        <source>%1: each a station and its X from, X to, Z from and Z to, as 3: 0, 120, -30, 25.</source>
+        <translation>%1: kukin asema sekä sen X alkaen, X asti, Z alkaen ja Z asti, kuten 3: 0, 120, -30, 25.</translation>
     </message>
     <message>
         <source>Could not change the machine</source>
@@ -28747,6 +28831,14 @@ Napsautus: %2</translation>
     <message>
         <source>Close</source>
         <translation>Sulje</translation>
+    </message>
+    <message>
+        <source>Close the design</source>
+        <translation>Sulje malli</translation>
+    </message>
+    <message>
+        <source>Close Tab</source>
+        <translation>Sulje välilehti</translation>
     </message>
     <message>
         <source>Close Others</source>
@@ -30883,6 +30975,10 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
         <translation>Osaluettelo (piirustus)</translation>
     </message>
     <message>
+        <source>the drawing&apos;s component has no sheet-metal body of its own</source>
+        <translation>piirustuksen komponentilla ei ole omaa ohutlevykappaletta</translation>
+    </message>
+    <message>
         <source>PDF…</source>
         <translation>PDF…</translation>
     </message>
@@ -31412,6 +31508,22 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     <message>
         <source>Export Ti&amp;meline as Script…</source>
         <translation>Vie aikajana &amp;komentosarjana…</translation>
+    </message>
+    <message>
+        <source>Drawing &amp;Book…</source>
+        <translation>Piirustus&amp;kirja…</translation>
+    </message>
+    <message>
+        <source>%1 is this design: a design cannot be a component of itself.</source>
+        <translation>%1 on tämä malli: malli ei voi olla oma komponenttinsa.</translation>
+    </message>
+    <message>
+        <source>%1 links this design, so this design would become a component of itself.</source>
+        <translation>%1 linkittää tämän mallin, joten tästä mallista tulisi oma komponenttinsa.</translation>
+    </message>
+    <message>
+        <source>%1 links this design through %2, so this design would become a component of itself.</source>
+        <translation>%1 linkittää tämän mallin kohteen %2 kautta, joten tästä mallista tulisi oma komponenttinsa.</translation>
     </message>
     <message>
         <source>Inserted %1 as a mesh body; not converted to a solid: %2</source>
@@ -35592,6 +35704,26 @@ Lisää tallennetun mallin.</translation>
         <translation>Kirjoittaa valitun levyn levityksen DXF-tiedostoon</translation>
     </message>
     <message>
+        <source>Create Drawing of Flat Pattern…</source>
+        <translation>Luo levityksen piirustus…</translation>
+    </message>
+    <message>
+        <source>Create Drawing of Flat Pattern: select a sheet-metal body first.</source>
+        <translation>Luo levityksen piirustus: valitse ensin ohutlevykappale.</translation>
+    </message>
+    <message>
+        <source>Adds a drawing of the selected sheet&apos;s Flat Pattern and opens its sheet</source>
+        <translation>Lisää valitun levyn levityksestä piirustuksen ja avaa sen arkin</translation>
+    </message>
+    <message>
+        <source>the design has no sheet-metal body</source>
+        <translation>mallissa ei ole ohutlevykappaletta</translation>
+    </message>
+    <message>
+        <source>select a sheet-metal body first</source>
+        <translation>valitse ensin ohutlevykappale</translation>
+    </message>
+    <message>
         <source>Export Bend Table…</source>
         <translation>Vie taivutustaulukko…</translation>
     </message>
@@ -36344,6 +36476,13 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
             <numerusform>%n liikettä törmää vastakaraan tai sen mukana liikkuvaan kieltoalueeseen.</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>%n move(s) bring the turret into the chuck or a fixed zone.</source>
+        <translation>
+            <numerusform>%n liike vie revolverin istukkaan tai kiinteään kieltoalueeseen.</numerusform>
+            <numerusform>%n liikettä vie revolverin istukkaan tai kiinteään kieltoalueeseen.</numerusform>
+        </translation>
+    </message>
     <message>
         <source>In 3D: %1 mm³ left over the part, %2 mm³ of it cut away.</source>
         <translation>3D:ssä: työkappaleen päälle jää %1 mm³, ja %2 mm³ on leikattu pois.</translation>
@@ -36967,6 +37106,60 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     <message>
         <source>Close the command to open the Explode panel.</source>
         <translation>Sulje komento avataksesi Räjäytä-paneelin.</translation>
+    </message>
+    <message>
+        <source>Toolbar Panel</source>
+        <translation>Työkalupaneeli</translation>
+    </message>
+    <message>
+        <source>Shows or hides the toolbar panel; hidden, the view&apos;s top edge shows it</source>
+        <translation>Näyttää tai piilottaa työkalupaneelin; piilotettuna näkymän yläreuna tuo sen esiin</translation>
+    </message>
+    <message>
+        <source>Toolbar panel hidden. Choose View › Toolbar Panel or move the pointer to the top edge to show it.</source>
+        <translation>Työkalupaneeli piilotettu. Tuo se esiin valitsemalla Näytä › Työkalupaneeli tai viemällä osoitin yläreunaan.</translation>
+    </message>
+    <message>
+        <source>Toolbar panel hidden. Press %1 or move the pointer to the top edge to show it.</source>
+        <translation>Työkalupaneeli piilotettu. Tuo se esiin painamalla %1 tai viemällä osoitin yläreunaan.</translation>
+    </message>
+    <message>
+        <source>Drawing Book…</source>
+        <translation>Piirustuskirja…</translation>
+    </message>
+    <message>
+        <source>Prints chosen drawings of this design and its linked designs as one book</source>
+        <translation>Tulostaa valitut piirustukset tästä mallista ja sen linkitetyistä malleista yhtenä kirjana</translation>
+    </message>
+    <message>
+        <source>Could not read the drawing book: %1</source>
+        <translation>Piirustuskirjaa ei voitu lukea: %1</translation>
+    </message>
+    <message>
+        <source>Could not print the drawing book: %1</source>
+        <translation>Piirustuskirjaa ei voitu tulostaa: %1</translation>
+    </message>
+    <message>
+        <source>The drawing book has no sheet.</source>
+        <translation>Piirustuskirjassa ei ole yhtään arkkia.</translation>
+    </message>
+    <message>
+        <source>This design</source>
+        <translation>Tämä malli</translation>
+    </message>
+    <message numerus="yes">
+        <source>%1 of %2, %n sheet(s)</source>
+        <translation>
+            <numerusform>%2: %1, %n arkki</numerusform>
+            <numerusform>%2: %1, %n arkkia</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Printed the drawing book %1 on %n page(s).</source>
+        <translation>
+            <numerusform>Piirustuskirja %1 tulostettiin %n sivulle.</numerusform>
+            <numerusform>Piirustuskirja %1 tulostettiin %n sivulle.</numerusform>
+        </translation>
     </message>
 </context>
 <context>
@@ -44020,6 +44213,45 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     </message>
 </context>
 <context>
+    <name>mitcad::TimelineHistoryList</name>
+    <message>
+        <source>History list</source>
+        <translation>Historialista</translation>
+    </message>
+    <message numerus="yes">
+        <source>Hide its bodies (%n)</source>
+        <translation>
+            <numerusform>Piilota sen kappale (%n)</numerusform>
+            <numerusform>Piilota sen kappaleet (%n)</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Show its bodies (%n)</source>
+        <translation>
+            <numerusform>Näytä sen kappale (%n)</numerusform>
+            <numerusform>Näytä sen kappaleet (%n)</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Features of components the timeline&apos;s filter does not show</source>
+        <translation>Piirteet komponenteista, joita aikajanan suodatin ei näytä</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n feature(s) hidden by the filter</source>
+        <translation>
+            <numerusform>%n piirre piilotettu suodattimella</numerusform>
+            <numerusform>%n piirrettä piilotettu suodattimella</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;%n feature(s)</source>
+        <translation>
+            <numerusform>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;%n piirre</numerusform>
+            <numerusform>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;%n piirrettä</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
     <name>mitcad::TimelineStrip</name>
     <message numerus="yes">
         <source>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;%n feature(s); double-click to open</source>
@@ -44349,6 +44581,18 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     <message>
         <source>%1 is not part of this step.</source>
         <translation>%1 ei kuulu tähän vaiheeseen.</translation>
+    </message>
+    <message>
+        <source>Not this plane. Pick the one the step names.</source>
+        <translation>Ei tätä tasoa. Valitse taso, jonka vaihe nimeää.</translation>
+    </message>
+    <message>
+        <source>Not this place. Click where the step says.</source>
+        <translation>Ei tähän kohtaan. Napsauta vaiheen osoittamaa kohtaa.</translation>
+    </message>
+    <message>
+        <source>Not this value. Type the one the step gives.</source>
+        <translation>Ei tätä arvoa. Kirjoita vaiheen antama arvo.</translation>
     </message>
     <message>
         <source>Held back during this tutorial step.</source>
@@ -45543,6 +45787,10 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
         <translation>Valitun viivan leveys:</translation>
     </message>
     <message>
+        <source>Strip: icons at the bottom; History list: named rows under the Browser</source>
+        <translation>Nauha: kuvakkeet alareunassa; Historialista: nimetyt rivit Selaimen alla</translation>
+    </message>
+    <message>
         <source>Off: the menus are under the ☰ button before Undo, and Alt shows them</source>
         <translation>Pois: valikot ovat Kumoa-painikkeen edellä olevan ☰-painikkeen alla, ja Alt näyttää ne</translation>
     </message>
@@ -45634,6 +45882,18 @@ Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerr
     <message>
         <source>The orientation cube&apos;s size, with its arrows and Home button</source>
         <translation>Orientaatiokuution koko nuolineen ja Home-painikkeineen</translation>
+    </message>
+    <message>
+        <source>Strip</source>
+        <translation>Nauha</translation>
+    </message>
+    <message>
+        <source>History list</source>
+        <translation>Historialista</translation>
+    </message>
+    <message>
+        <source>Timeline:</source>
+        <translation>Aikajana:</translation>
     </message>
     <message>
         <source>Restore Default Layout</source>
@@ -47398,6 +47658,105 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
 </context>
 <context>
+    <name>mitcad::drawings::DrawingBookDialog</name>
+    <message>
+        <source>Drawing Book</source>
+        <translation>Piirustuskirja</translation>
+    </message>
+    <message>
+        <source>The book&apos;s title, on its cover page; the design&apos;s name when left empty</source>
+        <translation>Kirjan otsikko sen kansilehdellä; tyhjänä mallin nimi</translation>
+    </message>
+    <message>
+        <source>&amp;Title:</source>
+        <translation>&amp;Otsikko:</translation>
+    </message>
+    <message>
+        <source>Drawing</source>
+        <translation>Piirustus</translation>
+    </message>
+    <message>
+        <source>Sheets</source>
+        <translation>Arkit</translation>
+    </message>
+    <message>
+        <source>Checked drawings go into the book, in this order</source>
+        <translation>Valitut piirustukset tulevat kirjaan tässä järjestyksessä</translation>
+    </message>
+    <message>
+        <source>Move &amp;Up</source>
+        <translation>Siirrä &amp;ylös</translation>
+    </message>
+    <message>
+        <source>Moves the drawing, or the design with its drawings, one place up</source>
+        <translation>Siirtää piirustusta tai mallia piirustuksineen yhden paikan ylöspäin</translation>
+    </message>
+    <message>
+        <source>Move &amp;Down</source>
+        <translation>Siirrä &amp;alas</translation>
+    </message>
+    <message>
+        <source>Moves the drawing, or the design with its drawings, one place down</source>
+        <translation>Siirtää piirustusta tai mallia piirustuksineen yhden paikan alaspäin</translation>
+    </message>
+    <message>
+        <source>&amp;Cover page</source>
+        <translation>&amp;Kansilehti</translation>
+    </message>
+    <message>
+        <source>Prints a page with the title and the contents before the first sheet</source>
+        <translation>Tulostaa ennen ensimmäistä arkkia sivun, jossa on otsikko ja sisällys</translation>
+    </message>
+    <message>
+        <source>&amp;Print…</source>
+        <translation>&amp;Tulosta…</translation>
+    </message>
+    <message>
+        <source>Keeps the book with the design without printing it</source>
+        <translation>Säilyttää kirjan mallin mukana tulostamatta sitä</translation>
+    </message>
+    <message>
+        <source>In the Drawings folder of %1</source>
+        <translation>Kohteen %1 Piirustukset-kansiossa</translation>
+    </message>
+    <message>
+        <source>This design</source>
+        <translation>Tämä malli</translation>
+    </message>
+    <message>
+        <source>Drawings of this design</source>
+        <translation>Tämän mallin piirustukset</translation>
+    </message>
+    <message>
+        <source>%1, linked as %2</source>
+        <translation>%1, linkitetty nimellä %2</translation>
+    </message>
+    <message>
+        <source>Keeps the book with the design and prints it</source>
+        <translation>Säilyttää kirjan mallin mukana ja tulostaa sen</translation>
+    </message>
+    <message>
+        <source>No drawings yet. Create a drawing in this design or in a design it links to put it in the book.</source>
+        <translation>Piirustuksia ei vielä ole. Luo piirustus tähän malliin tai malliin, johon se linkittää, niin voit lisätä sen kirjaan.</translation>
+    </message>
+    <message>
+        <source>The book has no drawing to print</source>
+        <translation>Kirjassa ei ole tulostettavaa piirustusta</translation>
+    </message>
+    <message>
+        <source>Check the drawings to print</source>
+        <translation>Valitse tulostettavat piirustukset</translation>
+    </message>
+    <message>
+        <source>These drawings cannot be printed: %1. Uncheck them, or correct their designs, to print the book.</source>
+        <translation>Näitä piirustuksia ei voi tulostaa: %1. Poista niiden valinta tai korjaa niiden mallit, jotta kirjan voi tulostaa.</translation>
+    </message>
+    <message>
+        <source>Some chosen drawings cannot be printed</source>
+        <translation>Joitakin valittuja piirustuksia ei voi tulostaa</translation>
+    </message>
+</context>
+<context>
     <name>mitcad::drawings::DrawingSheetView</name>
     <message>
         <source>View %1: %2</source>
@@ -48091,6 +48450,10 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     <message>
         <source>Hidden Edges</source>
         <translation>Piilosärmät</translation>
+    </message>
+    <message>
+        <source>Flat Pattern View: the design has no sheet-metal body.</source>
+        <translation>Levityskuvanto: mallissa ei ole ohutlevykappaletta.</translation>
     </message>
     <message>
         <source>ISO: values along the line. ASME: horizontal in a break, inches without leading zero</source>

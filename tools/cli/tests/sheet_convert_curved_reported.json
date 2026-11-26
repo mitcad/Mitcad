@@ -1,0 +1,32 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The reported transition (mitcad#2435; sheet-convert-curved-reported-test.cmake opens it): Body1 F2.b0 a block 250 x 80 x 30; Body2 F5.b0 a loft from the block's top (the rectangle) up 100 to a circle of 75 (F5) and a neck of 30 on it (F6), whose cylinder the loft's four side edges split into four faces. Rules F7: t 2, K 0.5."},
+  {"cmd": "add_feature", "def": {"type": "sheet_rules", "thickness": 2, "bend_radius": 3, "allowance": {"type": "k_factor", "k": 0.5}, "reference_side": "front", "bend_relief": {"type": "rectangular", "width": 2, "depth": 3}, "corner_relief": {"type": "round", "width": 2, "depth": 3}}},
+
+  {"comment": "The loft's four sides (the broad sloped ones the report picked, then the narrow ones) bend two ways: each is refused naming it, with how much it bends, and no cutting pattern is made."},
+  {"cmd": "add_feature", "def": {"type": "sheet_convert", "rules": "F7", "body": "F5.b0", "face": "F5:side(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])})"}},
+  {"expect": {"feature": "F8", "status": "error", "error_contains": "the face cannot be laid flat: it is a freeform (spline) surface curved in two directions (its Gaussian curvature reaches 1/(66.7 mm)"}},
+  {"cmd": "add_feature", "def": {"type": "sheet_convert", "rules": "F7", "body": "F5.b0", "face": "F5:side(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c3[c2,c4])})"}},
+  {"expect": {"feature": "F9", "status": "error", "error_contains": "curved in two directions (its Gaussian curvature reaches 1/(66.7 mm)"}},
+  {"cmd": "add_feature", "def": {"type": "sheet_convert", "rules": "F7", "body": "F5.b0", "face": "F5:side(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])})"}},
+  {"expect": {"feature": "F10", "status": "error", "error_contains": "curved in two directions (its Gaussian curvature reaches 1/(231.9 mm)"}},
+  {"cmd": "add_feature", "def": {"type": "sheet_convert", "rules": "F7", "body": "F5.b0", "face": "F5:side(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c4[c3,c1])})"}},
+  {"expect": {"feature": "F11", "status": "error", "error_contains": "curved in two directions (its Gaussian curvature reaches 1/(231.9 mm)"}},
+  {"comment": "The neck's cylinder is developable, but the body is solid: no plate behind it."},
+  {"cmd": "add_feature", "def": {"type": "sheet_convert", "rules": "F7", "body": "F5.b0", "face": "F6:side(E{F5:end(r{c2})|F5:side(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])})})"}},
+  {"expect": {"feature": "F12", "status": "error", "error_contains": "is not a plate of its rules' thickness 2 mm"}},
+
+  {"comment": "Made of sheet: Body2 shelled 2 inside, its flat ends open (F13), and split 10 above the loft (F14): the neck is the tube F14.b0, 75 across, 2 thick and 20 long, its outer cylinder still the four faces (stored as splines). Picking one, the four convert as one panel at the neutral radius 36.5, opened where they meet again round the axis by the corner gap 2: the blank (73 pi - 2) by 20, 1460 pi - 40; folded, the tube less the gap's 2/36.5 rad, 2920 pi - 80. The shelled loft's sides still bend two ways."},
+  {"cmd": "add_feature", "def": {"type": "shell", "body": "F5.b0", "faces": ["F5:start(F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}))", "F6:end(F5:end(r{c2}))"], "inside": 2}},
+  {"cmd": "add_feature", "def": {"type": "split_body", "bodies": ["F5.b0"], "tool": {"type": "origin_plane", "plane": "xy", "offset": 140}}},
+  {"expect": {"feature": "F14", "status": "ok"}},
+  {"expect": {"bodies": 3, "body": "F14.b0", "volume": 9173.450548482197, "faces": 10}},
+  {"cmd": "add_feature", "def": {"type": "sheet_convert", "rules": "F7", "body": "F14.b0", "face": "F6:side(E{F5:end(r{c2})|F5:side(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])})})#1"}},
+  {"expect": {"feature": "F15", "status": "ok"}},
+  {"expect": {"body": "F14.b0", "volume": 9093.450548482197}},
+  {"expect": {"query": {"query": "sheet_state", "body": "F14.b0"}, "result": {"status": "valid"}}},
+  {"cmd": "set_flat_pattern", "body": "F14.b0"},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F14.b0"}, "result": {"status": "valid", "area": 4546.725274241098}}},
+  {"cmd": "export_flat_pattern_dxf", "body": "F14.b0", "path": "sheet_convert_curved_reported_neck.dxf"},
+  {"cmd": "add_feature", "def": {"type": "sheet_convert", "rules": "F7", "body": "F5.b0", "face": "F13:offset(F5:side(E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}))"}},
+  {"expect": {"feature": "F16", "status": "error", "error_contains": "curved in two directions"}}
+]

@@ -28,6 +28,23 @@ Selection facesOf(const QJsonObject& feature, const CommandContext& context) {
   return items;
 }
 
+// Shell's faces with their own thickness (mitcad#2443): a list of rows, each
+// faces and their Inside and Outside thickness as the shell's Direction has
+// them.
+const QString kOwnThickness = QStringLiteral("face_thicknesses");
+
+QString ownKey(int row, const char* id) {
+  return CommandState::rowKey(kOwnThickness, row, QString::fromLatin1(id));
+}
+
+bool shellInside(const CommandState& state) {
+  return state.whole().choice(QStringLiteral("direction")) != QStringLiteral("outside");
+}
+
+bool shellOutside(const CommandState& state) {
+  return state.whole().choice(QStringLiteral("direction")) != QStringLiteral("inside");
+}
+
 // An arrow out of the first face along its normal.
 std::optional<Manipulator> faceArrow(const CommandState& state, const CommandContext& context, const QString& key) {
   const Selection& faces = state.items(key);
@@ -85,6 +102,21 @@ CommandDef shellCommand(const CommandContext& context) {
       choiceInput(QStringLiteral("shell_type"), QObject::tr("Shell Type"),
                   {{QStringLiteral("sharp"), QStringLiteral("Sharp")}, {QStringLiteral("rounded"), QStringLiteral("Rounded")}},
                   QStringLiteral("sharp")),
+      // Faces whose wall has a thickness of its own (mitcad#2443).
+      listInput(kOwnThickness, QObject::tr("Own Thickness"),
+                {selectionInput(QStringLiteral("faces"), QObject::tr("Faces"), SelectKind::Face, 1, 0)
+                     .withoutMeshes()
+                     .withTooltip(QObject::tr("Faces whose wall has this thickness")),
+                 valueInput(QStringLiteral("inside"), QObject::tr("Inside Thickness"), ValueKind::Length,
+                            QStringLiteral("4 mm"))
+                     .withStepMinimum(0.0, true)
+                     .withVisible(shellInside),
+                 valueInput(QStringLiteral("outside"), QObject::tr("Outside Thickness"), ValueKind::Length,
+                            QStringLiteral("4 mm"))
+                     .withStepMinimum(0.0, true)
+                     .withVisible(shellOutside)},
+                QObject::tr("Add Faces"), QObject::tr("Faces %1"), 0)
+          .withTooltip(QObject::tr("Faces whose wall is thicker or thinner than the shell's")),
   };
   def.enabled = [&context] { return hasBodies(context); };
 
@@ -94,6 +126,26 @@ CommandDef shellCommand(const CommandContext& context) {
     const QString body = oneBody(items, result, QStringLiteral("faces"));
     if (body.isEmpty()) {
       return result;
+    }
+    // Each row's faces with its thickness on the sides the shell has.
+    QJsonArray own;
+    for (int i = 0; i < state.rows(kOwnThickness); ++i) {
+      const CommandState row = state.row(kOwnThickness, i);
+      const Selection& faces = row.items(QStringLiteral("faces"));
+      for (const SelectionItem& face : faces) {
+        if (face.owner != body) {
+          return Built::failure(QObject::tr("The faces with their own thickness must be of the shelled body."),
+                                ownKey(i, "faces"));
+        }
+      }
+      QJsonObject entry{{QStringLiteral("faces"), names(faces, SelectKind::Face)}};
+      if (shellInside(state)) {
+        entry.insert(QStringLiteral("inside"), row.expression(QStringLiteral("inside")));
+      }
+      if (shellOutside(state)) {
+        entry.insert(QStringLiteral("outside"), row.expression(QStringLiteral("outside")));
+      }
+      own.append(entry);
     }
     result.def = {{QStringLiteral("type"), QStringLiteral("shell")}, {QStringLiteral("body"), body}};
     const QJsonArray faces = names(items, SelectKind::Face);
@@ -112,6 +164,9 @@ CommandDef shellCommand(const CommandContext& context) {
     }
     if (state.choice(QStringLiteral("shell_type")) == QStringLiteral("rounded")) {
       result.def.insert(QStringLiteral("rounded"), true);
+    }
+    if (!own.isEmpty()) {
+      result.def.insert(kOwnThickness, own);
     }
     return result;
   };
@@ -133,11 +188,31 @@ CommandDef shellCommand(const CommandContext& context) {
     state.setChoice(QStringLiteral("shell_type"), feature.value(QStringLiteral("rounded")).toBool()
                                                       ? QStringLiteral("rounded")
                                                       : QStringLiteral("sharp"));
+    // The faces with their own thickness; a side an entry leaves out shows
+    // the shell's.
+    const QJsonArray own = feature.value(kOwnThickness).toArray();
+    state.setRows(kOwnThickness, static_cast<int>(own.size()));
+    for (int i = 0; i < static_cast<int>(own.size()); ++i) {
+      QJsonObject entry = own.at(i).toObject();
+      entry.insert(QStringLiteral("body"), feature.value(QStringLiteral("body")));
+      state.setItems(ownKey(i, "faces"), facesOf(entry, context));
+      for (const char* side : {"inside", "outside"}) {
+        const QString id = QString::fromLatin1(side);
+        loadValue(state, ownKey(i, side), entry.contains(id) ? entry.value(id) : feature.value(id), feature, context);
+      }
+    }
   };
 
   def.describe = [](const CommandState& state, const CommandContext&) {
-    return QStringLiteral("Added shell removing %1 face(s)")
-        .arg(names(state.items(QStringLiteral("faces")), SelectKind::Face).size());
+    const auto removed = names(state.items(QStringLiteral("faces")), SelectKind::Face).size();
+    qsizetype own = 0;
+    for (int i = 0; i < state.rows(kOwnThickness); ++i) {
+      own += names(state.row(kOwnThickness, i).items(QStringLiteral("faces")), SelectKind::Face).size();
+    }
+    if (own == 0) {
+      return QStringLiteral("Added shell removing %1 face(s)").arg(removed);
+    }
+    return QStringLiteral("Added shell removing %1 face(s), %2 face(s) at their own thickness").arg(removed).arg(own);
   };
   return def;
 }
@@ -240,12 +315,18 @@ CommandDef offsetFaceCommand(const CommandContext& context) {
   def.keywords = {QStringLiteral("press pull"), QStringLiteral("move face"), QStringLiteral("push")};
   def.featureType = QStringLiteral("offset_face");
   def.inputs = {
-      selectionInput(QStringLiteral("faces"), QObject::tr("Faces"), SelectKind::Face, 1, 0).withoutMeshes(),
+      // As Shell's, Draft's and Replace Face's (mitcad#2438): the hover
+      // shows the faces a pick takes with Tangent Chain on.
+      selectionInput(QStringLiteral("faces"), QObject::tr("Faces"), SelectKind::Face, 1, 0)
+          .withoutMeshes()
+          .withHoverChain(SelectKind::Face, QStringLiteral("tangent_chain")),
       valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("2 mm"))
           .withTooltip(QObject::tr("Positive out of the material"))
           .withManipulator([](const CommandState& state, const CommandContext& model) {
             return faceArrow(state, model, QStringLiteral("faces"));
           }),
+      checkInput(QStringLiteral("tangent_chain"), QObject::tr("Tangent Chain"), true)
+          .withTooltip(QObject::tr("Also move the faces that continue the selected ones smoothly")),
   };
   def.enabled = [&context] { return hasBodies(context); };
   def.build = [](const CommandState& state, const CommandContext&) {
@@ -259,11 +340,18 @@ CommandDef offsetFaceCommand(const CommandContext& context) {
                   {QStringLiteral("body"), body},
                   {QStringLiteral("faces"), names(faces, SelectKind::Face)},
                   {QStringLiteral("distance"), state.expression(QStringLiteral("distance"))}};
+    // Left out when off: the model's default, the faces alone.
+    if (state.checked(QStringLiteral("tangent_chain"))) {
+      result.def.insert(QStringLiteral("tangent_chain"), true);
+    }
     return result;
   };
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
     state.setItems(QStringLiteral("faces"), facesOf(feature, context));
     loadValue(state, QStringLiteral("distance"), feature.value(QStringLiteral("distance")), feature, context);
+    // An offset stored without it (every one before mitcad#2438) moves its
+    // faces alone and opens with Tangent Chain off.
+    state.setChecked(QStringLiteral("tangent_chain"), feature.value(QStringLiteral("tangent_chain")).toBool(false));
   };
   def.describe = [](const CommandState& state, const CommandContext&) {
     return QStringLiteral("Added offset face of %1 face(s), distance %2")

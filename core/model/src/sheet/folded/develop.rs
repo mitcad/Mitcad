@@ -112,6 +112,26 @@ pub(crate) fn station(embedding: &SheetEmbedding, u: f64, thickness: f64) -> Sta
                 },
             }
         }
+        // A conical panel (mitcad#2435): the front point at chart point
+        // (u, 0), the chart's x and y directions there.
+        SheetEmbedding::Cone(c) => {
+            let p = [u, 0.0];
+            let ([radial, angular], _) = c.frame(p, 0.0, thickness);
+            let (s, k) = c.half_angle.sin_cos();
+            let generator = add(scale(radial, s), scale(c.axis, k));
+            let normal = sub(scale(radial, k), scale(c.axis, s));
+            let (sp, cp) = c.developed_angle(p).sin_cos();
+            Station {
+                origin: c.point(p, 0.0, thickness),
+                x: sub(scale(generator, cp), scale(angular, sp)),
+                y: add(scale(generator, sp), scale(angular, cp)),
+                f: if c.inner_is_front {
+                    normal
+                } else {
+                    scale(normal, -1.0)
+                },
+            }
+        }
     }
 }
 
@@ -123,6 +143,10 @@ pub(crate) fn chart_point(
     depth: f64,
     thickness: f64,
 ) -> V3 {
+    // A cone's chart is its development (mitcad#2435), not a station's.
+    if let SheetEmbedding::Cone(c) = embedding {
+        return c.point(p, depth, thickness);
+    }
     // On a cylinder, f is the signed radial direction: depth changes the radius.
     let s = station(embedding, p[0], thickness);
     add(add(s.origin, scale(s.y, p[1])), scale(s.f, depth))
@@ -169,6 +193,7 @@ pub(crate) fn chart_coordinates(
             };
             Some(([phi.max(0.0) * c.neutral_radius, v], depth))
         }
+        SheetEmbedding::Cone(c) => c.coordinates(point, thickness),
     }
 }
 

@@ -266,8 +266,16 @@ QString preparePrintFolder(const QString& root, const QString& design, QString* 
 // face, edge or vertex its body, an occurrence the bodies shown in it), or
 // with none of that every body shown (`instances`, the query's answer),
 // each placement a body item with its occurrence, once; `selected` tells
-// which.
-Selection printStartBodies(const Selection& selection, const QJsonArray& instances, bool* selected);
+// which. While Isolate is on (`isolation`, the document's isolated items),
+// a component selected and the bodies shown stand for the placements the
+// view shows: those isolated (mitcad#2475).
+Selection printStartBodies(const Selection& selection, const QJsonArray& instances, bool* selected,
+                           const Selection& isolation = {});
+
+// Whether Send the Design's Plates starts on (mitcad#1050): when the design
+// has plates, unless the bodies come from a printable selection or Isolate
+// is on (mitcad#2475): those are sent, and the box sends the whole plates.
+bool printPlatesAtStart(int plates, bool printableSelection, bool isolated);
 
 // The Slicer row's choices: none (open the files' folder), `current` (the
 // settings' slicer) and `other` (one chosen by hand) unless found, the

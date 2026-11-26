@@ -48,7 +48,9 @@ The initial allowance law is a K-factor. A table of measured bend allowances
 can be added as another typed law later. The Bend Table export instead
 reports the bends already calculated for a particular sheet. The
 initial surface family is planar panels and constant-radius cylindrical bends.
-Conical, doubly curved, variable-thickness and stretched material, embossing and
+Since mitcad#2435 a cylindrical or conical face converts into a curved panel
+of its own ([notes](#implementation-notes-mitcad2435)). Doubly curved,
+variable-thickness and stretched material, embossing and
 arbitrary B-rep-to-sheet recognition are outside this contract. Unsupported
 surfaces must produce a specific error, never an approximate flat pattern
 reported as valid.
@@ -717,12 +719,23 @@ Decisions made while implementing the production Cut and the reliefs:
   where its bend meets another bend at a corner of the panel both leave: a
   flange on the next edge (the two bends' seams on the panel end at one point,
   not parallel) and the corners between the edges of a flange on several edges.
-  The cut is the Corner Relief feature's, with the same `J0`, `C` and shapes.
-  Both constructions leave the crossing zone open: a later flange's trim cuts
-  the earlier bend back to its tangent line, and a mitred corner ends each bend
-  short of the other's. So Tear and reliefs no wider than the narrower bend's
-  allowance cut nothing and are skipped. A wider square or disc also takes
-  face, bend and wall material outside the zone. Corners are not relieved when
+  The junction is developed as for the Corner Relief feature, with the same
+  `J0` and `C`. Both constructions leave the crossing zone open: a later
+  flange's trim cuts the earlier bend back to its tangent line, and a flange on
+  several edges opens a corner it relieves (mitcad#2411, `flange_edges::Opened`:
+  each bend runs on to the other's tangent line, as far as its wall's root
+  covers it, instead of ending where it clears the bisecting plane; a reflex
+  corner, a bend past a half turn or a corner where that line would end the
+  bend sooner keep the bisecting plane). So the relief is measured from `J0`
+  outward (mitcad#2411, `relief::Placement::Corner`): Tear adds nothing (the
+  bends meet at `J0`), Rectangular removes the crossing zone grown by the
+  width toward the panel (`-w <= s <= BA` on both strips: the bends end `w`
+  short of each other's tangent line, the panel loses a `w` square at its
+  corner), Round a disc of diameter `w` centred at `J0`. Every width cuts, so
+  the three types differ at every corner (mitcad#2342 centred them at `C`,
+  where a width under the narrower allowance cut nothing). A reflex corner
+  (the bends' middles past each other's tangent lines) is not relieved.
+  Corners are not relieved when
   the rules' `flange_corner_relief` is not true (a version flag that `resolve`
   sets on add and edit, so saved designs keep their corners until their rules
   are edited), when the process is not metal, by a flange (or at a bend of a
@@ -731,10 +744,18 @@ Decisions made while implementing the production Cut and the reliefs:
   the corner instead; the flange reads its definition through
   `Read::CornerReliefs`, like the flange-wall plane's `Read::WallFlange`.
   Imports set the flag false. CLI fixtures: `sheet_flange_corner_relief` (two
-  flanges on adjacent edges) and `sheet_flange_edges_corner_relief` (a flange
-  on three edges, the reported case's rules): Rectangular, Round and Tear,
-  a width inside the zone, the flag, a flange's own relief and the override,
-  by analytic flat areas.
+  flanges on adjacent edges), `sheet_flange_edges_corner_relief` (a flange
+  on three edges) and `sheet_flange_corner_relief_types` (the reported case:
+  a flange on four edges, the reporter's rules, Rectangular, Round and Tear of
+  1 mm and the flag false, by analytic volumes and flat areas): Rectangular,
+  Round and Tear, widths under and over the allowance, the flag, a flange's
+  own relief and the override, by analytic flat areas; `sheet_flange_adjacent`
+  by its volume. The fixtures of the miters themselves (`sheet_flange_edges`,
+  `_gap`, `_bend`, `_existing`, `sheet_flange_on_wall` and the
+  `sheet-flange-edges` UI script) give their rules `flange_corner_relief`
+  false and keep the corners designs made before have. Unit tests:
+  `relief::tests` (the grown zone), `flange_edges` tests (where an opened
+  bend ends).
 
 ### Implementation notes (mitcad#210)
 
@@ -1708,6 +1729,140 @@ straight edge back on itself in a form and its sizes, and makes a
   Edit Feature, the volumes, Unfold's flat volume and Refold), and
   `tools/ui-sheet-flange-hem-test.sh` (Flange's Hem makes a teardrop,
   which then opens in Hem).
+
+### Implementation notes (mitcad#2435)
+
+Convert to Sheet Metal of cylindrical and conical faces, and their Flat
+Patterns (`sheet/folded/curved.rs`):
+
+- **Curved panels.** A picked face stored as a cylinder or a cone becomes
+  panel slot 0 of a sheet of its own. A cylinder's chart is the existing
+  `SheetEmbedding::Cylinder` on a panel domain (`u` the angle times the
+  neutral radius, `v` along the axis); a cone's is the new
+  `SheetEmbedding::Cone` (`ConeEmbedding`): the development of the neutral
+  cone about its apex, chart `(x, y)` at `hypot(x, y)` from the apex along
+  the generator and the developed angle `atan2(y, x)`, which is that angle
+  over `sin(half_angle)` about the axis; `neutral_depth` (K t) from the
+  inner surface. The chart is the cutting blank: its lengths are the
+  neutral surface's. The neutral surface follows the rules' K-factor (0.5
+  for kerf-bend rules); measured fold allowances, deductions and crease
+  tables are refused for a rolled face, as they do not describe rolling.
+- **Reading the faces.** Every face of the body on the picked face's
+  cylinder or cone belongs to the panel: the reported neck, extruded from a
+  loft's round end, is a cylinder split into four faces by the loft's side
+  edges, and stored as splines. `Kernel::sheet_face_development`
+  (`geometry/src/sheet_develop.cpp`) takes the faces on one surface as
+  `face_geometry` recognises it (stored so, or as a spline, extrusion or
+  revolution within 1e-6 mm of it) and develops their edges from their 3D
+  curves: the angle round the axis runs on continuously along each wire (a
+  seam edge is met at both ends of the turn), the faces are turned by whole
+  turns to meet at their shared edges, and where they meet again round the
+  axis they stay apart (that is the seam of a closed panel). A generator
+  (one angle all along) is a line and a circle round the axis (one height on
+  a cylinder, one distance from the apex on a cone) a line or an arc about
+  the apex, from their exact ends; other edges are cubic B-splines through
+  their exact development within 1e-8 mm (as an emboss wraps onto a cone,
+  mitcad#473), one for each span where the edge's curve is twice
+  continuous (a spline's knots of lower continuity change its speed, which
+  no cubic through evenly spaced points follows). Faces stored as splines
+  are each recognised on their own (the body's faces are read with
+  `Kernel::recognised_face_geometries`), so pieces of one surface are gathered
+  within 1e-4 mm of the picked face's axis and radius and checked by their
+  points within 1e-5 mm of its surface. The faces' developments are united where they share edges.
+  The chart starts at the least angle; the material side is read from the
+  picked face's normal. Faces running to a cone's apex, not joined, or on
+  several surfaces are refused.
+- **Construction.** `geometry/src/sheet_chart.cpp` builds a cone panel's
+  caps on two cones moved along their normals (the same parameters at the
+  same generator point), its parameter curves and both rails cubic
+  B-splines through the exact images at the same parameters (so the walls
+  pair the rails pole by pole), refined until within a quarter of the
+  tolerance, each boundary read at its own parameter (a line's length, an
+  arc's angle; never a rational spline's, whose speed changes at its knots); the chart's `(x, y)` turns against the caps' `(angle,
+  distance)`, so its loops are reversed there. Ports never join a cone
+  panel.
+- **Closed faces and seams.** A face (or the faces) once round its axis is
+  opened at its seam edge (or where the faces meet again): a strip `corner_gap` wide (default the thickness, above 0),
+  half each side of the seam, of constant width along the seam's generator
+  (parallel lines in the development), is left out, and a cylinder's chart
+  is rebased to start at 0 (its angle must stay under a turn).
+- **Plate check.** The sheet of the whole face (a closed face in two halves,
+  each less than a turn) must have the body's volume and centre of mass.
+  Where it has not, the body is still a plate when every other face lies on
+  the surface the thickness behind the face or is a wall meeting both: then
+  walls not normal to the material (a hole drilled along one direction)
+  are cut normal to it, as the blank cuts them, and the feature warns by
+  how much the sheet differs from the body. Anything else is refused as no
+  plate (a solid, or a body of several surfaces such as a whole
+  transition: shell it and split the developable part off first).
+- **Faces that cannot lie flat.** A face that is no plane, cylinder or cone
+  is refused naming it. `Kernel::face_bending` gives the largest Gaussian
+  curvature over a grid of points inside the face: above `1e-6 / size^2` the
+  face bends two ways and the refusal says the material would have to
+  stretch (with the curvature as a radius) and to form the part another way
+  or design it of developable pieces; below, the face is a spline that may
+  lie flat but is no surface the sheet develops yet. The reported
+  transition (a loft from a 250 x 80 rectangle to a circle of 75, 100 high,
+  a neck of 30 on it) has twisted spline sides bending two ways (Gaussian
+  curvature up to 1/(66.7 mm)^2 on the broad sides, 1/(231.9 mm)^2 on the
+  narrow ones): each is refused naming it. Its neck is the part that
+  develops exactly: shelled 2 inside and split off above the loft, its four
+  faces convert into one blank.
+- **Flat Pattern.** `curved::developed` lays the curved panel's chart in the
+  plane touching its front at the chart's first boundary point (the chart
+  is the development already, so the outline, area and DXF come from it
+  unchanged). A curved panel among other walls is not developed.
+- **Not yet** (follow-ups, beyond the ticket's Wanted): bends, rips and
+  flanges joining a curved panel, panels on several surfaces in one sheet
+  (planes and cones of a transition joined), ordinary features on a curved
+  sheet (its sheet meaning is lost with a reason; make holes before
+  converting), choosing where a closed panel's seam lies, Unfold.
+- **Tests.** Model: `curved_tests.rs` (a cone's chart and its inverse,
+  rebasing, the back surface, the tangent plane). OCCT: `geometry.sheet_curved`
+  (conical panels of K 0.5 and 0.3 against `t (A + d cot(a) phi (rho2 -
+  rho1))`, a cylindrical panel, a cone's and a cylinder's face developed,
+  curvatures), CLI `sheet_convert_curved` (a tube and a frustum, open and
+  closed, with K 0.5 and 0.3: folded volumes and blank areas against the
+  analytic ones, DXFs; a hole developed; a sphere and a solid cylinder
+  refused), CLI `sheet_convert_curved_reported` (the reported transition,
+  skipped without it: the loft's four sides refused with their curvature, the
+  neck on the solid refused as no plate, then shelled and split: its four
+  spline faces one sheet, folded 2920 pi - 80, the blank 1460 pi - 40, a
+  DXF).
+
+### A lip on the top edge of a wall (mitcad#2445)
+
+A Flange on the top edge of a tray's wall (a return flange, the lip of a
+C channel) folded in over the tray passes into the end walls' tops where
+its wall runs the whole edge: the lip's Bend Line setback leaves its level
+wall 0.13 mm below the walls' tops for t = r = 1. It was refused as two
+walls passing through each other.
+
+- **Walls beside an end** (`flange_edges::walls_beside`). An end of a
+  flange's edge that meets no existing flange across a bend is checked
+  against every other flat panel of the sheet that stands across the
+  edge's line: the flange's cross-section at the end (points across its
+  bend and along its wall, on both surfaces and in the middle), carried
+  along the edge, meets that panel's near surface inside its outline (by
+  more than 0.001 mm) before it has gone past the end, or lies past that
+  surface by no more than `r + 2t + gap`. The flange then keeps the
+  corner gap short of that surface with the keep of an existing flange's
+  wall (`short_of`). Panels the flange stays clear of, by however little,
+  give none: such sheets build as before.
+- **One edge.** `bends::flange` hands a plain flange on one edge to the
+  route of a flange with a corner gap (`flange_edges`) when an end meets
+  such a panel (`meets_wall_beside`); an open corner joint is allowed
+  there, as it only sets the Inner Length. Its refusals of walls that meet
+  say what to change (Flip, the Length, the Width; for a flange on
+  several edges, the Corner Gap). Every other flange builds as before.
+- **The pair named.** The kernel's search for walls that meet
+  (`meeting_walls`) runs from the latest region back, so a refusal names
+  a new wall and the wall it meets.
+- Test: `cli.sheet_flange_lip` (a 200 x 100 tray: a lip folded in on the
+  long wall, its ends 1 mm short of the end walls; out; on a short wall
+  both ways; the flat patterns; a lip that crosses the tray refused naming
+  itself and the wall it hits); the model test
+  `a_lip_keeps_the_gap_short_of_a_wall_beside_its_end`.
 
 ## Kernel seam
 

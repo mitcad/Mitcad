@@ -506,6 +506,7 @@ fn tangent_distance_is_the_gap_between_a_circle_and_a_line() {
             circle,
             line: l,
             value: 1.0,
+            far: false,
         })
         .unwrap();
     solve_ok(&mut s);
@@ -527,6 +528,7 @@ fn tangent_distance_is_the_gap_between_a_circle_and_a_line() {
         circle,
         line: l,
         value: 3.0,
+        far: false,
     })
     .unwrap();
     solve_ok(&mut s);
@@ -1415,6 +1417,8 @@ fn tangent_circle_distance_is_the_gap_between_two_circles() {
             b,
             value: 12.0,
             inside: false,
+            far_a: false,
+            far_b: false,
         })
         .unwrap();
     assert_near(
@@ -1457,6 +1461,8 @@ fn tangent_circle_distance_is_the_gap_between_two_circles() {
                 b,
                 value: 11.0,
                 inside: true,
+                far_a: false,
+                far_b: false,
             })
             .unwrap();
         assert_near(s.measure(gap).unwrap(), 11.0, "20 - 5 - 4");
@@ -1486,6 +1492,7 @@ fn tangent_point_distance_is_the_gap_between_a_circle_and_a_point() {
             point: p,
             value: 4.0,
             inside: false,
+            far: false,
         })
         .unwrap();
     assert_near(s.measure(gap).unwrap(), 4.0, "9 - 5");
@@ -1499,6 +1506,7 @@ fn tangent_point_distance_is_the_gap_between_a_circle_and_a_point() {
             point: q,
             value: 4.0,
             inside: true,
+            far: false,
         })
         .unwrap();
     assert_near(s.measure(inside).unwrap(), 4.0, "5 - 1");
@@ -1507,4 +1515,109 @@ fn tangent_point_distance_is_the_gap_between_a_circle_and_a_point() {
     assert_near(dist(pt(&s, c), pt(&s, q)), 3.5, "5 - 1.5");
     // Not negative.
     assert!(s.set_dimension_value(inside, -1.0).is_err());
+}
+
+#[test]
+fn far_tangent_distances_measure_to_the_far_side() {
+    // mitcad#2451: a circle of radius 5 above a fixed line, centre at 12:
+    // its far (top) side is 17 from the line; a far gap of 30 moves the
+    // centre to 25, both below the line and above it.
+    for below in [false, true] {
+        let mut s = System::new();
+        let (l, _) = two_lines(&mut s, [0.0, 0.0, 10.0, 0.0], [0.0, 40.0, 10.0, 40.0]);
+        s.add_constraint(FixEntity(l)).unwrap();
+        let y = if below { -12.0 } else { 12.0 };
+        let c = s.add_point(4.0, y);
+        let circle = s.add_circle(c, 5.0).unwrap();
+        s.add_constraint(Radius {
+            entity: circle,
+            value: 5.0,
+        })
+        .unwrap();
+        let gap = s
+            .add_constraint(TangentDistance {
+                circle,
+                line: l,
+                value: 17.0,
+                far: true,
+            })
+            .unwrap();
+        assert_near(s.measure(gap).unwrap(), 17.0, "12 + 5");
+        s.set_dimension_value(gap, 30.0).unwrap();
+        solve_ok(&mut s);
+        let sign = if below { -1.0 } else { 1.0 };
+        assert_near(pt(&s, c)[1], sign * 25.0, "centre 30 - 5 from the line");
+        assert_near(s.measure(gap).unwrap(), 30.0, "the far gap");
+    }
+    // A point 9 from the centre of a fixed circle of radius 5: 14 from its
+    // far side; one inside it at 1, 6.
+    let mut s = System::new();
+    let c = s.add_point(0.0, 0.0);
+    s.add_constraint(FixPoint(c)).unwrap();
+    let circle = s.add_circle(c, 5.0).unwrap();
+    s.add_constraint(Radius {
+        entity: circle,
+        value: 5.0,
+    })
+    .unwrap();
+    let p = s.add_point(0.0, 9.0);
+    let far = s
+        .add_constraint(TangentPointDistance {
+            circle,
+            point: p,
+            value: 14.0,
+            inside: false,
+            far: true,
+        })
+        .unwrap();
+    assert_near(s.measure(far).unwrap(), 14.0, "9 + 5");
+    s.set_dimension_value(far, 20.0).unwrap();
+    solve_ok(&mut s);
+    assert_near(dist(pt(&s, c), pt(&s, p)), 15.0, "20 - 5");
+    let q = s.add_point(1.0, 0.0);
+    let inner = s
+        .add_constraint(TangentPointDistance {
+            circle,
+            point: q,
+            value: 6.0,
+            inside: true,
+            far: true,
+        })
+        .unwrap();
+    assert_near(s.measure(inner).unwrap(), 6.0, "1 + 5");
+    s.set_dimension_value(inner, 8.0).unwrap();
+    solve_ok(&mut s);
+    assert_near(dist(pt(&s, c), pt(&s, q)), 3.0, "8 - 5");
+    // Two circles of radii 5 and 3, centres 20 apart: the outer tangents
+    // 28 apart, the first's near side and the second's far side 18.
+    for (far_a, value, to, centres) in [(true, 28.0, 40.0, 32.0), (false, 18.0, 25.0, 27.0)] {
+        let mut s = System::new();
+        let c1 = s.add_point(0.0, 0.0);
+        s.add_constraint(FixPoint(c1)).unwrap();
+        let a = s.add_circle(c1, 5.0).unwrap();
+        let c2 = s.add_point(20.0, 0.0);
+        let b = s.add_circle(c2, 3.0).unwrap();
+        for (e, r) in [(a, 5.0), (b, 3.0)] {
+            s.add_constraint(Radius {
+                entity: e,
+                value: r,
+            })
+            .unwrap();
+        }
+        let gap = s
+            .add_constraint(TangentCircleDistance {
+                a,
+                b,
+                value,
+                inside: false,
+                far_a,
+                far_b: true,
+            })
+            .unwrap();
+        assert_near(s.measure(gap).unwrap(), value, "measured as drawn");
+        s.set_dimension_value(gap, to).unwrap();
+        solve_ok(&mut s);
+        assert_near(dist(pt(&s, c1), pt(&s, c2)), centres, "the centres");
+        assert_near(s.measure(gap).unwrap(), to, "the far gap");
+    }
 }

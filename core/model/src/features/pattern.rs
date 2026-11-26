@@ -2923,7 +2923,7 @@ impl Copying<'_> {
         let entry = ctx.feature_entry(uid)?;
         let stored = ctx.feature_tool(uid)?;
         let all = if self.compute == ComputeOption::Adjust {
-            adjust_copies(ctx, &entry, place, &stored, own)?
+            adjust_copies(ctx, set, &entry, place, &stored, own)?
         } else {
             moved_list(ctx, &stored, &place.steps, own)?
         };
@@ -3196,7 +3196,7 @@ impl Copying<'_> {
         };
         let mut reached = false;
         if self.compute == ComputeOption::Adjust {
-            let mut copies = adjust_copies(ctx, &entry, place, &stored, elements)?;
+            let mut copies = adjust_copies(ctx, set, &entry, place, &stored, elements)?;
             refuse_foreign_copies(ctx, *uid, &copies)?;
             if matches!(tool_use.operation, Operation::Cut | Operation::Join) {
                 copies = reaching(ctx, set, &participants, copies);
@@ -3862,10 +3862,34 @@ fn all_at_once<K: Kernel>(
 
 /// Adjust's copies of the feature at `place` at the elements, in their
 /// order: its tool rebuilt at each copy's place where the feature can
-/// ([`super::Evaluate::placed_tool`]; for rigid motions only, a mirror
-/// reflects the finished tool), else `stored`, the tool it left, moved
-/// there.
+/// ([`super::Evaluate::placed_tool`]; for rigid motions, and for
+/// reflections where every step that reflects it is a mirror's that
+/// rebuilds, [`rebuilds_step`]: an extrusion, mitcad#2430, a rib or a web,
+/// mitcad#2431), else `stored`, the tool it left, moved there. The rebuilt
+/// tool sees the bodies of `set`, as the pattern has made them so far
+/// (mitcad#2380: a hole through all of a flange the pattern copied before
+/// it goes through that copy of the flange).
 fn adjust_copies<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    set: &BodySet<K::Shape>,
+    entry: &FeatureEntry,
+    place: &Placed,
+    stored: &K::Shape,
+    elements: &[Element],
+) -> Result<Vec<K::Shape>, String> {
+    let now: Vec<(BodyUid, K::Shape)> = set
+        .uids()
+        .into_iter()
+        .filter_map(|uid| set.get(uid).map(|shape| (uid, shape.clone())))
+        .collect();
+    let outer = ctx.pattern_bodies.replace(now);
+    let copies = adjust_copies_among(ctx, entry, place, stored, elements);
+    ctx.pattern_bodies = outer;
+    copies
+}
+
+/// [`adjust_copies`] with the pattern's bodies in `ctx`.
+fn adjust_copies_among<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     entry: &FeatureEntry,
     place: &Placed,
@@ -3875,6 +3899,13 @@ fn adjust_copies<K: Kernel>(
     // The place's steps, composed: where the copy at an element goes is
     // the element's transform after them.
     let at = place.at();
+    // A mirror rebuilds the tools it reflects too (mitcad#2430), and so
+    // does a pattern at the places a mirror among its features reflects
+    // them to (mitcad#2432).
+    let steps_rebuild = place
+        .steps
+        .iter()
+        .all(|(step, instance)| rebuilds_step(ctx, step, instance.feature));
     let mut copies = Vec::with_capacity(elements.len());
     for element in elements {
         let instance = Instance {
@@ -3882,7 +3913,11 @@ fn adjust_copies<K: Kernel>(
             index: element.index,
         };
         let transform = element.transform.after(&at);
-        let placed = if transform.is_rigid() {
+        let rebuilds = transform.is_rigid()
+            || (transform.is_orthogonal()
+                && steps_rebuild
+                && rebuilds_step(ctx, &element.transform, ctx.uid));
+        let placed = if rebuilds {
             entry
                 .def
                 .evaluator::<K>()
@@ -3911,6 +3946,27 @@ fn adjust_copies<K: Kernel>(
         copies.push(copy);
     }
     Ok(copies)
+}
+
+/// Whether a step of a copy's place, `step` made by feature `by` (the
+/// feature being evaluated, or a pattern or mirror among its features that
+/// put the original there), lets Adjust rebuild the tool at the place
+/// rather than move the finished one: a rigid motion does; a reflection
+/// does where `by` is a mirror with `compute` `adjust` stored, as a mirror
+/// made or edited since mitcad#2430 has it
+/// ([`super::MirrorDef::rebuilds_reflected_tools`]), so that a pattern of
+/// such a mirror rebuilds the mirrored tool at each copy too
+/// (mitcad#2432). A reflection by a mirror saved before or with
+/// `identical`, and a scaled step, move the finished tool as before. The
+/// copy's whole placement is rigid or orthogonal besides
+/// ([`adjust_copies`]): two reflections are a rigid motion, which every
+/// pattern rebuilds at.
+fn rebuilds_step<K: Kernel>(ctx: &EvalContext<'_, K>, step: &Transform, by: FeatureUid) -> bool {
+    step.is_rigid()
+        || (step.is_orthogonal()
+            && ctx.feature_entry(by).is_ok_and(|entry| {
+                matches!(&entry.def, FeatureDef::Mirror(mirror) if mirror.rebuilds_reflected_tools())
+            }))
 }
 
 /// The tool moved through a place's steps (none for the pattern's own

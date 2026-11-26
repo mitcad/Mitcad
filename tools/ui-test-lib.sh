@@ -826,7 +826,7 @@ ui_drawing_tool_place() {
 # after it in the menu: "Bill of Materials (Drawing)" is ENTRY "Bill of
 # Materials" too.
 ui_ribbon_menu_choose() {
-  local before menu entry downs=0 found=0
+  local before menu entry downs=0 found=0 disabled
   before=$(grep -c "^Ribbon menu $2: " "$UI_LOG")
   ui_click_logged "Ribbon $2"
   for _ in $(seq 1 50); do
@@ -836,8 +836,17 @@ ui_ribbon_menu_choose() {
   menu=$(grep "^Ribbon menu $2: " "$UI_LOG" | tail -1)
   [ "$(grep -c "^Ribbon menu $2: " "$UI_LOG")" -gt "$before" ] || ui_fail "the $2 menu did not open for $1"
   menu=${menu#"Ribbon menu $2: "}
+  # The entries that cannot be chosen now, logged just before the menu's
+  # line ("Ribbon menu disabled DRAWING/CREATE: Flat Pattern View",
+  # mitcad#2446): the Down key passes over them, so they are not counted.
+  disabled=$(grep -E "^Ribbon menu (disabled )?$2: " "$UI_LOG" | tail -2 | head -1)
+  case "$disabled" in
+  "Ribbon menu disabled $2: "*) disabled=" | ${disabled#"Ribbon menu disabled $2: "} | " ;;
+  *) disabled="" ;;
+  esac
   while IFS= read -r entry; do
     [ "$entry" = "-" ] && continue
+    [ -n "$disabled" ] && [[ $disabled == *" | ${entry%% > \[*} | "* ]] && continue
     downs=$((downs + 1))
     # (A single ellipsis and three dots match each other, mitcad#645.)
     entry=${entry//…/...}

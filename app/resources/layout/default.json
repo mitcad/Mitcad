@@ -304,6 +304,7 @@
             "sheet.show_flat",
             "-",
             {"command": "sheet.export_dxf", "repeat": true},
+            "sheet.flat_pattern_drawing",
             {"command": "sheet.export_bend_table", "repeat": true}
           ]
         },
@@ -814,6 +815,7 @@
           "group": "CREATE",
           "entries": [
             {"command": "drawing.base_view", "button": true},
+            {"command": "drawing.flat_pattern_view", "button": true},
             {"command": "drawing.projected_view", "button": true},
             {"command": "drawing.section_view", "button": true},
             "drawing.detail_view",
@@ -977,6 +979,7 @@
         "file.export_drawing",
         "-",
         "file.print",
+        "file.drawing_book",
         "-",
         "file.recover",
         "-",
@@ -1062,6 +1065,7 @@
         "view.annotations",
         "view.comment_pins",
         "-",
+        "view.toolbar_panel",
         {
           "submenu": "PANELS",
           "entries": [{"extra": "panels"}, "-", "view.comments"]

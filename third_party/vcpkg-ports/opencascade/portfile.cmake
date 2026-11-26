@@ -376,6 +376,13 @@ vcpkg_from_github(
         2302-brepblend-walk-end-on-a-restriction-in-the-period-of-the-walk.patch
         2303-chfi3d-no-split-of-a-blend-at-a-minimum-of-noise-in-its-vanishing-end.patch
         2383-brepoffset-crease-split-in-several-edges-trimmed-once-and-oriented-in-each-face.patch
+        2384-intwalk-walk-end-put-on-a-boundary-within-a-room-scaled-to-the-parameter-range.patch
+        2415-brepoffset-seam-only-where-the-face-has-it-twice-and-an-intersection-chain-kept-whole.patch
+        2365-chfi3d-kpart-cut-across-the-seam-of-a-holes-wall-under-the-blend.patch
+        2418-brepoffset-crease-turning-inside-its-edge-joined-across-the-tangency-and-a-vanishing-tip-cut.patch
+        2433-brepoffset-face-vanishing-beside-a-removed-face-closed-by-it.patch
+        2463-brepoffset-arc-join-face-vanishing-beside-a-removed-face.patch
+        2462-brepoffset-wall-strip-at-a-removed-face-met-tangentially.patch
 )
 
 # The compiler cache (docs/development.md, "The compiler cache of the vcpkg

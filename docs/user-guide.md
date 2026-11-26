@@ -104,6 +104,7 @@ search: type the start of a command's name and press Enter.
   - [Browser](#browser)
   - [Units](#units)
   - [Timeline](#timeline)
+  - [The History list](#the-history-list)
   - [Timeline filter and search](#timeline-filter-and-search)
   - [Messages and their levels](#messages-and-their-levels)
   - [Find in Design](#find-in-design)
@@ -576,7 +577,14 @@ own Qt and does not use the system's.
 Without FUSE, run it with `--appimage-extract-and-run`. At each start
 the AppImage writes its desktop file and its icons into `$XDG_DATA_HOME`
 if they differ, so docks show the icon. In the desktop file, `Exec` is
-the AppImage and `StartupWMClass=Mitcad`. The AppImage has no GTK. Thus
+the AppImage and `StartupWMClass=Mitcad`; `TryExec`, `X-AppImage-Name`
+and `X-AppImage-Version` let AppImage managers list MitCad. When the
+desktop file is already there, for example written by an AppImage
+manager, MitCad merges its own keys into it instead of replacing it: the
+keys MitCad does not set (a manager's `TryExec`, `X-AppImage-*` keys
+and other keys of its own, a `NoDisplay` you set) stay, and when its
+`Exec` runs the same AppImage, what the manager put around it there
+(such as `env DESKTOPINTEGRATION=1`) stays too. The AppImage has no GTK. Thus
 it uses the `xdgdesktopportal` platform theme unless
 `QT_QPA_PLATFORMTHEME` is set. An AppImage in a writable folder updates
 itself. `MitCad.AppImage cli <arguments>` runs the bundled `mitcad-cli`
@@ -704,7 +712,13 @@ tutorial's step outlines what to use next (a button, an input of the
 open panel, a row of the Browser, the view, the workspace selector, a
 workspace in its list, a toolbar tab or the timeline) and says in a callout what to
 do. Until you do it, MitCad holds back other commands and clicks, with a
-short note in the callout; you can still turn, pan and zoom the view.
+short note in the callout; you can still turn, pan and zoom the view. A
+step may ask for one thing at a time in a sketch: a sketch on a given
+plane, a drawing tool's point at a given place (such as a rectangle's
+first corner at the origin) or a value typed into a drawing tool's box
+(its width). A pick of another plane, a click elsewhere or another value
+is held back with a note (*Not this plane.*, *Not this place.*, *Not this
+value.*), and you can try again.
 While the tutorial's page explains a step you have done, it may keep the
 input held (the callout gone) until you go on to its next step; the pane
 and Leave Tutorial stay free.
@@ -926,7 +940,8 @@ of Windows and Linux has the same title bar row and toolbar panel):
   Redo and the commands you added (see [Quick access](#quick-access)).
   Then the **design tabs**: each
   open design is a flat tab with its name (• marks unsaved changes) and
-  its ×, the one shown on a filled block; click a tab to show its
+  its ×, the one shown on a block of the accent color, its name in
+  bold; click a tab to show its
   design, drag it to reorder or to another window, right-click it for
   Close, Close Others, Close All, Show in Folder and Move to New Window.
   At the right the project indicator and the
@@ -951,6 +966,21 @@ of Windows and Linux has the same title bar row and toolbar panel):
   each as a submenu of its commands. The Start page has no workspace: the
   toolbar panel is hidden over it, and a click on the design's tab in the
   title bar row goes back to the design.
+- **Hiding the toolbar panel** for more room: **View › Toolbar Panel**
+  or **Ctrl+F1** (**⌘F1** on a Mac; change the key in Tools › Keyboard
+  Shortcuts, also to a single key) hides it in both layouts, and the view
+  takes its height; the title bar row with its menus, quick-access
+  buttons and design tabs stays. The choice holds for every window and
+  design, new ones too, and after a restart. While it is hidden, rest
+  the pointer for a moment at the top edge of the view, just under the
+  title bar row: the panel shows over the view, which stays where it is.
+  Use it as usual; it hides again when the pointer leaves it (not while
+  one of its menus is open). A command you start from it keeps it shown
+  while the command's panel is open, with the panels below it; once you
+  click OK or Cancel or press Esc, it hides when the pointer is away from
+  it. Dragging the view across the edge does not
+  show it. The same entry or key shows it for good again. The first time
+  you hide it, the window tells you how to get it back.
 - **Workspaces (Windows and Linux; the Docked layout everywhere):** a
   click on the workspace selector lists the workspaces, each with a line
   on what it is for and its tabs; click one to switch (or use the arrow keys and Enter). **Design** has
@@ -1001,10 +1031,13 @@ of Windows and Linux has the same title bar row and toolbar panel):
   **Card** puts the Browser on its card. **Rows** leaves the card out.
   Then each row, and the Browser's header, has a small box of its own,
   as wide as its content. The design shows between and beside the rows.
-  A click, a drag or the wheel there works in the view (select, orbit,
-  zoom).
+  A click, a drag or the wheel beside the rows works in the view
+  (select, orbit, zoom).
 
-  Only the boxes belong to the Browser. Its scroll bar is at the left,
+  Only the boxes and the narrow gaps between them belong to the
+  Browser: the wheel over a row or between two rows scrolls the rows,
+  and at the top or the bottom of the list it does nothing, so the
+  view does not zoom. Its scroll bar is at the left,
   beside the rows. The change applies at once. Rows is the default on
   every platform. A Card you chose stays Card, and **Restore Defaults**
   goes back to Rows.
@@ -2079,8 +2112,15 @@ The other long menus have sections with lines between them too.
 
 The toolbar has buttons for Press Pull, Fillet, Chamfer and Shell.
 
-Fillet, Chamfer, Shell, Draft and Replace Face obey the *Tangent Chain*
-option ([Tangent Chain](#tangent-chain)).
+Fillet, Chamfer, Shell, Draft, Replace Face, Offset Face and Press Pull
+on faces obey the *Tangent Chain* option ([Tangent Chain](#tangent-chain)).
+
+**Replace Face** moves the faces you pick (the source) onto a target: a
+plane, a face or a body. The faces next to them extend or shorten to
+meet it. When the target is on the far side of the material, for example
+a pocket's floor replaced onto the outside face under it or onto a plane
+beyond that face, the material between them is removed and the pocket
+becomes a hole through the body.
 
 **Split Face** and **Split Body** cut with a **Splitting Tool**: a plane,
 a face, a body or sketch curves. With **Extend Splitting Tool** (on by
@@ -2713,14 +2753,22 @@ A mill-turn lathe may also move its turret in Y, tilt a milling head
    it before them.
 9. For a sub-spindle whose body is more than a chuck and a housing, type
    its **Body Profile** on the same page: points of a Z from its jaws'
-   face and a diameter, such as `0, 80; 40, 80; 40, 160; 300, 160`. The
-   **Turret Body** rows give the turret's size round the tool (X and Z
-   from the tool's point); **Generate** and **Simulate** then also say
-   where the turret itself runs into the sub-spindle or a zone moving
-   with it. **Simulate** draws the sub-spindle where it is as each
-   operation cuts: where it waits while the main spindle cuts (when the
-   setup knows where its work zero is on the machine), then holding the
-   part.
+   face and a diameter, such as `0, 80; 40, 80; 40, 160; 300, 160`.
+   **Simulate** draws the sub-spindle where it is as each operation
+   cuts: where it waits while the main spindle cuts (when the setup knows
+   where its work zero is on the machine), then holding the part.
+10. On the **Turret** page of any lathe the **Turret Body** rows give the
+    turret's size round the tool (X and Z from the tool's point), and
+    **Station Bodies** a size of its own for single stations, such as
+    `3: 0, 120, -30, 25` (the station, then X from, X to, Z from, Z to;
+    more separated by `;`). **Generate** and **Simulate** then also say
+    where the turret itself runs into the chuck, a keep-out zone, the
+    sub-spindle or a zone moving with it. On a lathe with a Y axis the
+    keep-out zones and the zones moving with the sub-spindle have a Y as
+    well; leave both Y fields empty for a zone that reaches across every
+    Y. **Simulate** draws the zones where they are as each operation cuts
+    and the turret's body round the tool, in the same thin lines as the
+    sub-spindle.
 
 ### The selected body on the Make tabs
 
@@ -4052,6 +4100,23 @@ reference twice. Coincident targets, and targets at the anchor, cause
 an error. MitCad does not silently omit a copy. Edit the timeline
 feature to change the sources, the targets or the anchor.
 
+**Mirror** of Features has the Compute Option of the patterns. With
+**Adjust** (the default), MitCad builds an extrusion again on the other
+side of the mirror plane when its end depends on the bodies: To Next, up
+to an object, or Through All. Thus the mirrored copy of a boss extruded
+to the next face ends on the face on its own side, also when that face
+is lower or higher than on the original's side. MitCad builds a rib or
+a web again in the same way when it runs To Next or has Extend Ends:
+the mirrored rib grows to its next faces on its own side, its thickness
+on the side of the original's mirror image. **Identical** mirrors
+the finished result of the feature: the copy has the same length as the
+original. An extent up to an object keeps its object: if the copy must
+end at the mirror image of that object, use Identical. A mirror
+in a design that you saved with an earlier version of MitCad keeps its
+result until you edit it. A pattern with **Adjust** of such a mirror
+builds the mirrored extrusion again at each copy, so that each copy ends
+on the faces at its own place.
+
 ## Modify features
 
 The Modify group of the Solid tab changes bodies that exist. The
@@ -4084,6 +4149,11 @@ On a flat face, **Continue** sets how the face goes on:
   MitCad says so; use Offset or Straight there.
 
 A negative distance cuts into the body instead of adding to it.
+
+With Offset, **Tangent Chain** (on by default) also moves the faces that
+are joined to the selected face through smooth edges, as in Offset Face
+([Tangent Chain](#tangent-chain)). The hover shows them before the
+click. Straight and Along the Walls carry only the selected faces.
 
 With Straight and Along the Walls, **Taper Type** widens or narrows the
 new piece over the run:
@@ -4182,7 +4252,10 @@ all the edges of that face. Each set has its own Radius Type:
 - Constant
 - Chord Length: the width of the rounding across the edge
 - Variable: a start radius and an end radius, and Mid Radii at
-  positions from 0 at the start to 1 at the end
+  positions from 0 at the start to 1 at the end. Add Mid Radius adds a
+  row with Set, Position and Radius. In a narrow panel each of them is on
+  a line of its own under the row's name. Tab moves from one field to the
+  next
 - Asymmetric: a distance on each face. The first distance is on the
   Reference Face
 - Spline: control radii along the chain. The Knots run from 0 to 1, and
@@ -4393,6 +4466,24 @@ outside it (*Outside Thickness*) or both. *Shell Type* Rounded rounds the
 outer corners of an outside wall; Sharp keeps them sharp. The faces of
 the body keep their names, so later features on them still find them.
 
+Faces can have a wall of their own thickness: under *Own Thickness*,
+click *Add Faces*, pick the faces in the new row's *Faces* and give their
+*Inside Thickness* (and *Outside Thickness*, as *Direction* has them).
+Each row is a group of faces with one thickness; the other faces keep the
+shell's. For example, a box shelled 2 mm with its top open and its
+bottom in a row at 5 mm gets a 5 mm bottom and 2 mm sides. The
+thicknesses are parameters like the shell's own, so editing them (or the
+shell's thickness) rebuilds the shell. Faces that meet smoothly get one
+wall: with *Tangent Chain* on, the faces tangent to a face in a row take
+its thickness; with it off, or where two such faces are in rows of
+different thicknesses, the shell is refused. A Rounded wall rounds only
+between walls of one thickness: where a rounding would join a face of its
+own thickness to a face of another (a box's bottom and sides shelled
+Outside), the shell is refused and asks for one thickness or Sharp. When
+the walls around a face cannot reach its own thickness (a bottom thicker
+than the box is high), the feature fails and paints that face when you
+move the pointer over the message.
+
 A part of the body that is no thicker than the wall stays solid, and the
 cavity is only where the wall fits. For example, a cap with a flange
 2 mm thick, shelled 3 mm from its open bottom: the cap becomes a cup with
@@ -4403,6 +4494,10 @@ ends continue the body's sides (a keel as long as the body), where it
 stands in a corner on two faces, or where it stands on a curved face. Roundings and
 chamfers smaller than the wall do not stop the shell: the inside of the
 wall runs past them, keeping at least the wall's thickness from them.
+An opening whose edges are all rounded, with a wall no thicker than the
+rounding (a box with its top edges rounded 2 mm, shelled 1 mm with the top
+open), opens too, Sharp or Rounded: the wall ends at the rounding's edge
+in a narrow band straight down to the inside of the wall.
 
 The feature then shows a warning with the faces where this happened:
 "the wall does not fit under face …; it is left solid there", or "the
@@ -4510,13 +4605,22 @@ body, the faces or the thickness.
 
 ### Tangent Chain
 
-*Tangent Chain* is an option of Fillet, Chamfer, Shell, Draft and
-Replace Face. It is on by default. With the option on, Fillet and
-Chamfer also take the edges that continue a selected edge smoothly.
-Shell, Draft and Replace Face also take the faces that are joined to a
-selected face through smooth edges. The hover then shows the whole
-chain before the click. With the option off, the hover shows only the
-edge or the face under the pointer.
+*Tangent Chain* is an option of Fillet, Chamfer, Shell, Draft, Replace
+Face and Offset Face, and of Press Pull on faces with Continue set to
+Offset. It is on by default. With the option on, Fillet and Chamfer also
+take the edges that continue a selected edge smoothly. Shell, Draft,
+Replace Face, Offset Face and Press Pull also take the faces that are
+joined to a selected face through smooth edges. The hover then shows the
+whole chain before the click. With the option off, the hover shows only
+the edge or the face under the pointer.
+
+So one click on a face of a rounded block offsets that face, its
+roundings and the faces beyond them together, for example to grow a
+whole curved region by a gap. With Tangent Chain off, Offset Face and
+Press Pull move only the faces you select. Where such a face continues
+smoothly into a face that stays, a step forms along the seam. An Offset
+Face made before the option existed opens with it off and keeps its
+faces.
 
 With the option off, Fillet and Chamfer round or bevel only the selected
 edges, also where an edge continues smoothly into one you did not
@@ -6300,12 +6404,20 @@ negated: `-30`, or `-(r * 0.6)` for an expression.
 
 **Center or tangent:** a circle or an arc normally counts by its center.
 While Sketch Dimension selects, right-click a circle or an arc and
-choose *Tangent* to measure from its nearest side instead, or *Center*
-to measure from its center. If the circle is not selected yet, the
-choice also selects it. Between two circles by their sides, the
-dimension is the gap between them; when one circle is inside the other,
-it is the gap inside. From one side to the center of another circle or
-to a point, it is the gap from that side.
+choose *Tangent Near* to measure from its nearest side instead,
+*Tangent Far* to measure from its far side, or *Center* to measure from
+its center. If the circle is not selected yet, the choice also selects
+it. Between two circles by their near sides, the dimension is the gap
+between them; when one circle is inside the other, it is the gap inside.
+From one side to the center of another circle or to a point, it is the
+gap from that side.
+
+*Tangent Far* measures to the side away from the other selection: from a
+line to the top of an arc above it, the dimension is the distance of the
+arc's center from the line plus its radius. Between two circles by their
+far sides, it is the overall width across both; with one near side and
+one far side, it runs from the near side of the one to the far side of
+the other.
 
 The same menu has *Driving* and *Driven*. A driven dimension only
 measures: a click places it, without a value to type, and its value is
@@ -8206,6 +8318,48 @@ warnings" is beside it. It lists the features with warnings. The
 fallbacks, partial items and placeholders of an import are among them.
 It goes to these features in the same way. In the Floating layout,
 both are in the header of the Browser ([Layouts](#layouts)).
+
+### The History list
+
+The timeline can also show as a list with the name of each feature. In
+Preferences › Display, set **Timeline** to **History list** (beside
+**Layout**). The timeline then moves under the Browser, in the left
+column, in both layouts. Set **Timeline** back to **Strip** to have the
+icons at the bottom again. Every open window changes at once.
+
+- Each item of the timeline is a row with its icon and its full name.
+  The first feature is at the top.
+- The rows have the same colors as the Browser's rows. A failed feature
+  is red with the error's badge, a feature with a warning yellow with the
+  warning's badge. A feature after the marker or a suppressed feature is
+  gray; a suppressed feature is also struck through. A feature that the
+  search finds has a tinted row.
+- The marker is a bar between two rows, with a handle at its left end.
+  Drag it up or down to roll the design back or forward. The playback
+  buttons above the list step it as they step the strip's marker.
+- A timeline group is a folder row with its name. Its features are under
+  it. Click the arrow of the group to fold it or open it. A double-click
+  on the group's row does the same. The strip and the list fold the same
+  groups.
+- A sketch, a construction feature and a feature that made a body have an
+  eye, as in the Browser. The eye of a sketch or a construction feature
+  shows or hides it. The eye of a feature that made or last changed bodies
+  shows or hides those bodies.
+- The rows do everything that the strip's icons do: a click selects
+  (Shift+click and Ctrl+click too), a double-click edits, the context menu
+  has the same entries, F2 renames in the row, Delete deletes, and you
+  can drag a feature to another place. The tooltip of a row is the
+  tooltip of the icon.
+- The filter button, the search (Ctrl+F, Cmd+F on a Mac) and its field
+  are above the list.
+
+Drag the boundary between the Browser and the list to share the column's
+height. In the Docked layout, the list is the Timeline panel, under the
+Browser's panel; MitCad keeps the arrangement as it keeps the other
+panels. In the Floating layout, the list is a card under the Browser's
+card; its chevron folds it, and MitCad keeps the column's split. While you
+edit a sketch, the sketch's work steps show in the list's place
+([Sketch mode](#sketch-mode)).
 
 ### Timeline filter and search
 
@@ -10745,6 +10899,22 @@ places it, also on the second copy of a component placed twice. When
 that occurrence moves later, the move follows it. The Point of Point to
 Position and the Axis of Rotate work the same way. Insert Component
 inserts another design, linked or as a copy.
+
+A design that keeps all its work in one component, as a new design does
+in Component1, comes in as that component: one component named after the
+design, with Component1's bodies, features and the components inside it,
+and no Component1 level in between. It sits where you insert it, moved
+as Component1 was in its own design, so joints and picks on it name its
+parts directly (`bracket:1/Pin:1`). A design with bodies, sketches or
+features in its root, or with two components or more, comes in with its
+root as before. When such a linked design later gets a second component
+or work in its root, the next update brings its whole structure in and
+the message band says that its structure changed. Component1 then
+appears inside the linked component, and the joints, sketches and other
+picks of your design on its parts follow them there (`bracket:1/Pin:1`
+becomes `bracket:1/Component1:1/Pin:1`), so they keep the same parts
+and faces. Should one of them not be able to follow, the message names
+it; pick that one again.
 
 **Insert › From an Open Design…** lists the other designs open in this process,
 whether they are tabs or separate windows. Choose a design and press **Insert**,
@@ -13592,17 +13762,31 @@ edges. The Corner Relief command uses it too, unless you set another
 relief in its panel. The walls of a flange on several edges still meet by
 the flange's miters and corner gaps.
 
-The bends at such a corner always leave their crossing zone open, so
-**Tear** cuts no more than that. **Rectangular** cuts a square and
-**Round** cuts a circle of the width, centered where the two bends' center
-lines cross. These cut more than the open zone only when the width is
-larger than a bend's developed width, its bend allowance. A smaller
-relief changes nothing. When you change the rule, the corners follow.
+At a flange corner the two bends run up to each other's tangent line on the
+face, where they start, and the relief is measured from the inner corner
+where those two lines meet:
+
+- **Tear** cuts nothing more. The two bends meet at that corner and part
+  toward their walls.
+- **Rectangular** ends each bend the width short of the other's tangent line,
+  and cuts a square of the width from the corner of the face.
+- **Round** cuts a circle of the width centered on that corner, from the
+  face's corner and the end of each bend beside it.
+
+So the three types give three different corners at any width. When you
+change the rule, the corners follow. On a flange on several edges, a
+very large corner gap ends a bend where its wall ends, short of the
+corner.
 
 Some corners keep their own shape:
 
 - A flange with a relief of its own keeps its corners as they are.
-- A Corner Relief on a corner replaces the rule's relief there.
+- A Corner Relief on a corner replaces the rule's relief there. It
+  centers its shape where the two bends' center lines cross, and the
+  bends of a flange on several edges end short of each other there, as
+  they did before.
+- An inside corner of the face, where the bends run past each other, gets
+  no corner relief.
 - A design saved by an earlier MitCad, which did not cut this relief at
   flange corners, keeps its corners until you edit its sheet rules.
 - Imported designs keep the corners of the file.
@@ -13625,6 +13809,13 @@ corner of the inner or the outer surfaces. *Outer Tangent Length* measures
 from the plane that touches the outside of the bend. The Angle can be
 more than 180 degrees. A Length of 0 makes the bend alone, without a wall:
 a rolled hem.
+
+A **Flange** on the top edge of a wall makes a lip, for example the lip of
+a tray or a C channel. By default it folds in over the tray; Flip folds it
+out. Folded in, the lip stops the Corner Gap (the sheet's thickness) short
+of the walls at the tray's ends. If the lip still runs into another wall,
+for example a lip longer than the tray is wide, the message names the new
+flange and that wall. Flip the lip, or make it shorter or narrower.
 
 At an end inside an edge, a **Flange** uses the rules' bend relief or the
 selected **Own Bend Relief**. Rectangular and Round remove material around
@@ -13820,6 +14011,21 @@ its bend converts too: a vertical side wall on an inclined base. Its
 bend ends where its corner lets it. Without bend edges, a plate of the
 thickness of the rules becomes a sheet of one panel. The preview shows
 the sheet while you pick.
+
+The Face may also be a cylindrical or conical face: a rolled tube or a
+cone, closed or a part of one, with its holes. Pick it without bend
+edges. The face is unrolled at the neutral surface of the rules'
+K-factor, so its Flat Pattern is the cutting blank: a rectangle for a
+cylinder, a ring sector for a cone, with the holes of the face. A closed
+face is opened at its seam edge, the **Corner Gap** wide. Faces that lie
+on one cylinder or cone, such as a round neck split into pieces by the
+edges of a loft, convert together as one blank. A solid part must first
+be a sheet: shell it, and split off the part that is a cylinder or a
+cone. A face that
+bends two ways, such as a sphere or the twisted sides of a loft from a
+rectangle to a circle, cannot be laid flat without stretching the
+material: MitCad marks the face and says so. Form such a part another
+way, or model it of flat, cylindrical and conical faces.
 
 Contour Flange, Convert to Sheet Metal and Perforate keep the body a
 sheet. The sheet unfolds, refolds and has a Flat Pattern like any other
@@ -14318,6 +14524,18 @@ another folder or onto the project moves a design or a folder in its
 project. Each rename or move is one version, for example `Move
 parts/a.mitcad to old/a.mitcad`. A design that is open follows its new
 name. You cannot move a design between projects.
+
+**Drag a design into the open design.** Drag a design out of the panel
+and drop it on the 3D view to insert it as a component of the active
+component. While the pointer is over the view, it shows that a drop
+inserts. MitCad asks as **Insert Component** does: **Linked** (Enter: the
+whole design, or **Choose parts…**) or **Copy**. The component goes to
+the point of the face under the pointer, with its Z axis along the
+face's normal. Over empty space it goes to the origin. The insert is one
+undo step. If a command is open, the design comes in when you finish or
+cancel the command; the message band tells you so. You cannot insert the
+open design into itself, or a design that links the open design: the
+message band tells you why.
 
 **Delete.** **Delete** (Del) asks first. Then it removes a design or a
 folder as a new version. The project's history keeps the design or the
@@ -15223,8 +15441,8 @@ file's history.
 | DWG (`.dwg`, R13 to R2018) | Open, Import. 3D solids become bodies, 3D faces and meshes become mesh bodies, blocks become components with their occurrences | A drawing (R2000) | None. A drawing keeps no history |
 | `.3dm` (format versions 5 to 8) | Open, Import. Polysurfaces, surfaces and extrusions become bodies, meshes become mesh bodies, blocks become components with their occurrences | None | SubD objects as editable Forms. Otherwise none: a `.3dm` model keeps no history |
 | `.serp` (format versions 1 to 9) | Open, Import. Solids and surfaces become bodies, meshes become mesh bodies, layers become folders, blocks become components with their occurrences | None | None: a `.serp` file keeps no history MitCad reads |
-| STEP (`.step`, `.stp`) | Bodies with their colors; faces of another color get appearances in it. An assembly: its parts become components, each placed by an occurrence per instance | Bodies (AP214 or AP242) with their colors and the colors of faces with appearances of their own. Components as an assembly | None |
-| IGES (`.iges`, `.igs`) | Bodies with their colors; faces of another color get appearances in it | Bodies with their colors and the colors of faces with appearances of their own | None |
+| STEP (`.step`, `.stp`) | Bodies with their colors as their appearances; faces of another color get appearances in it. An assembly: its parts become components, each placed by an occurrence per instance | Bodies (AP214 or AP242) with their colors and the colors of faces with appearances of their own. Components as an assembly | None |
+| IGES (`.iges`, `.igs`) | Bodies with their colors as their appearances; faces of another color get appearances in it | Bodies with their colors and the colors of faces with appearances of their own | None |
 | BRep (`.brep`, `.brp`) | Bodies | Bodies | None |
 | STL | Meshes | Meshes | None |
 | OBJ | Meshes | Meshes | None |
@@ -16655,7 +16873,12 @@ The panel starts with the selected bodies in **Bodies**. A selected
 face, edge or vertex stands for its body. A component's occurrence
 selected in the browser stands for the bodies shown in it. If nothing
 is selected, the panel starts with every visible solid body and mesh
-body. On the Make tabs, **Send to Slicer** in the selected body's card
+body. While **Isolate** is on, both mean only what the view shows: with
+nothing selected the panel starts with the isolated bodies, and a body
+that the design places more than once is sent only where you isolated
+or selected it. When the design has print plates, a selection or
+Isolate also starts the panel with **Send the Design's Plates** off
+([Print plates](#print-plates)). On the Make tabs, **Send to Slicer** in the selected body's card
 ([The selected body on the Make tabs](#the-selected-body-on-the-make-tabs))
 starts it with that body alone. MitCad highlights the bodies that it will send. While the panel
 is open, click a body in the view to add it or to remove it. A window
@@ -16932,7 +17155,9 @@ it.
 
 **Sending plates.** With plates in the design, **Send to Slicer** has
 **Send the Design's Plates** on: it sends the plates instead of the bodies
-chosen. Bambu Studio, OrcaSlicer, QIDI Studio and PrusaSlicer 2.9 or later
+chosen. When you selected bodies or faces before opening it, or a
+component is isolated, the box starts off and only what you selected or
+isolated is sent; tick it to send the plates. Bambu Studio, OrcaSlicer, QIDI Studio and PrusaSlicer 2.9 or later
 get one 3MF with every plate, each plate with its own settings where the
 slicer keeps them per plate (the Bambu family's spiral vase and print
 sequence); UltiMaker Cura and older PrusaSlicer versions get a 3MF per
@@ -17288,6 +17513,7 @@ a button of its own.
 | Tool | What it makes |
 |---|---|
 | Base View | A view of the design: front, top, right, back, bottom, left, an isometric view from above or below, or *Current View*: the direction the 3D view looks at the design now, with its up. Click where it goes. |
+| Flat Pattern View | The flat blank of a sheet metal body, with its bend lines (see *Flat Pattern views* below). Click where it goes. |
 | Projected View | A view seen from one side of another view. Drag it out of the view, or click where it goes. |
 | Section View | A view of the design cut along a line. Click the line's two ends on a view, then where the section view goes. |
 | Detail View | A circle of a view at a larger scale. Click the circle's middle on a view, then its edge, then where the detail view goes. |
@@ -17299,8 +17525,9 @@ box about its size follows the pointer. The panel beside the sheet
 shows the tool's options. A base view's *Shows* list names what it can
 show: the whole design (in a component's drawing, the component) by
 its name, each occurrence in it (`Arm:1`, `Arm:1/Pin:2`), each of
-its own bodies, and the Flat Pattern of each of its sheet metal bodies
-(`Plate Flat Pattern`, see *Flat Pattern views* below). A base view
+its own bodies, and, after a separator, the Flat Pattern of each of its
+sheet metal bodies (`Plate Flat Pattern`, see *Flat Pattern views*
+below). A base view
 also has its orientation, its scale
 (*Fit the Sheet* unless you choose one), and whether it shows hidden
 edges, tangent edges and shaded faces. When you place a base view,
@@ -17310,9 +17537,27 @@ right of the front view places the view from the right. In
 first-angle projection, the view from the left goes there. A click at
 a corner places an isometric view. Esc ends the tool.
 
-**Flat Pattern views.** Choose a sheet metal body's Flat Pattern in *Shows* to draw
-its flat blank, so that you can dimension the blank on the drawing
-sheet. The view uses the body's own Flat Pattern settings (its fixed
+**Flat Pattern views.** A Flat Pattern view draws a sheet metal body's
+flat blank, so that you can dimension the blank on the drawing sheet.
+There are two ways to make one:
+
+- On an open drawing, **Flat Pattern View** in the Drawing tab's
+  **Create** group (after Base View). Its *Shows* lists only the Flat
+  Patterns; with one sheet metal body in the design it is chosen at
+  once, with several the first is, and you can choose another. Choose a
+  scale (*Fit the Sheet* unless you choose one) and click where the view
+  goes. Without a sheet metal body the command is disabled, and its
+  tooltip says why.
+- From the model, **Create Drawing of Flat Pattern…** in the menu of the
+  Flat Pattern row under the body in the browser, in the body's own
+  menu, and on the Sheet Metal tab beside Export Flat Pattern. It asks
+  for the new drawing's sheet as Create Drawing does, names the drawing
+  for the Flat Pattern (`Plate Flat Pattern Drawing`) and places the
+  Flat Pattern on it at *Fit the Sheet*.
+
+Command Search finds both by "flat", "unfold", "blank" or
+"development". You can also choose a Flat Pattern in a Base View's
+*Shows*. The view uses the body's own Flat Pattern settings (its fixed
 panel, x axis and Seen From side) and looks straight at the blank from
 that side, so it shows the same picture as the cut sheet and the Flat
 Pattern's DXF file; its orientation follows the Flat Pattern and cannot
@@ -17347,7 +17592,9 @@ properties:
 
 - A base view: its orientation (*Current View* takes the 3D view's
   direction again), and what it shows (*Shows*, the same list as the
-  tool's). A Flat Pattern view names the Flat Pattern it shows and has
+  tool's). Each box you check or clear redraws the view, and the list
+  stays unfolded and scrolled where it was, so you can clear one body
+  after another. A Flat Pattern view names the Flat Pattern it shows and has
   *Bend Notes* instead.
 - A projected view: the side of its view it is on.
 - A section: its letter, its hatching and *Look the Other Way*.
@@ -17946,6 +18193,36 @@ File › Print… (Ctrl+P) prints what is open:
 With nothing of these open, Print is not available. The system's print
 dialog chooses the printer, the paper and the copies.
 
+#### Drawing book
+
+A drawing book prints a set of existing drawings as one job: drawings of
+the main design and of the designs it links, in an order you choose,
+with a cover page if you want one. The book is saved with the main
+design, so the same set prints again later.
+
+1. Open the main design and choose File › Drawing Book….
+2. The list groups the drawings by design: **This design**, then each
+   linked design by its file name. A design linked several times is
+   listed once. Check the drawings to print. Two designs' drawings with
+   the same name are separate rows.
+3. Put them in order with **Move Up** and **Move Down**: a drawing moves
+   within its design, and a design row moves with all its drawings. The
+   book prints in the order of the list.
+4. Type a **Title**, and check **Cover page** for a first page with the
+   title and the list of drawings. The cover is off by default.
+5. **Print…** saves the book and opens the print dialog. **Save** keeps the
+   book without printing it. Saving the book is one step that Undo takes
+   back.
+
+Every sheet of each checked drawing is printed, each on a page of its
+own size, as File › Print… prints a drawing. The linked designs are read
+from their files as they are saved now, so a change you saved to a
+source drawing is in the next print. Printing changes no design.
+
+A checked drawing that is gone, or whose design is no longer linked or
+cannot be read, is marked with a warning, and the dialog says why.
+**Print…** is not available until you uncheck it or correct its design.
+
 ### Web viewer
 
 MitCad's web viewer shows a design in any web browser. It does not
@@ -18142,7 +18419,7 @@ guide that explains its settings.
 |---|---|---|
 | **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). **Show used sketches under their features** (off by default; see [Browser](#browser)). **Extrude starts with**: Operation from the bodies it touches (the default) or New Body (see [Extrude](#extrude)). **Save of a new design**: Ask (the default), On this computer or To a project (see [Saving and recovery](#saving-and-recovery)). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts), [Extrude](#extrude) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube** (with its **Size**), **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Browser background** (with **Rows at most**), **Browser Activate button** and **Browser Show eye**, **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube** (with its **Size**), **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Timeline** ([The History list](#the-history-list)), **Browser background** (with **Rows at most**), **Browser Activate button** and **Browser Show eye**, **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |

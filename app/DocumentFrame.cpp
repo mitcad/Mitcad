@@ -4,6 +4,7 @@
 #include "WindowManager.hpp"
 #include "framework/Dialogs.hpp"
 #include "framework/FitToScreen.hpp"
+#include "framework/Icons.hpp"
 #include "framework/InterfaceSize.hpp"
 #include "framework/MenuBarReveal.hpp"
 #include "framework/PlaceWatcher.hpp"
@@ -11,6 +12,7 @@
 #include "framework/TitleBar.hpp"
 #include "framework/UiSizes.hpp"
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -19,6 +21,7 @@
 #include <QDragEnterEvent>
 #include <QtLogging>
 #include <QDropEvent>
+#include <QEnterEvent>
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QMenu>
@@ -26,8 +29,11 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPixmap>
+#include <QPointer>
 #include <QSettings>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QStyleOptionTab>
 #include <QTabBar>
 #include <QTimer>
@@ -40,6 +46,77 @@ namespace mitcad {
 namespace {
 constexpr char kDocumentMime[] = "application/x-mitcad-document-window";
 
+// The × of a design's tab in the top bar's row (mitcad#2426): the shared
+// close mark (`dismiss`), on the shown design's accent block in the color
+// for text on the accent, elsewhere in the outline's; a round tint under the
+// pointer. The style's own close button drew its dark mark on the accent.
+class RowTabClose final : public QAbstractButton {
+public:
+  explicit RowTabClose(QTabBar* bar) : QAbstractButton(bar), m_bar(bar) {
+    setObjectName(QStringLiteral("documentTabClose"));
+    setFocusPolicy(Qt::NoFocus);
+    setAttribute(Qt::WA_Hover);
+    // Named as the style's close button of a tab ("Close Tab"): never a bare
+    // "Close", which is a command panel's button (the UI tests' `button
+    // '^Close$'` takes a button without text by its accessible name).
+    setToolTip(DocumentFrame::tr("Close the design"));
+    setAccessibleName(DocumentFrame::tr("Close Tab"));
+    resize(sizeHint());
+    connect(this, &QAbstractButton::clicked, this, [this] {
+      const int index = tabIndex();
+      if (m_bar != nullptr && index >= 0) emit m_bar->tabCloseRequested(index);
+    });
+  }
+  QSize sizeHint() const override {
+    const int side = uiIconSize(18);
+    return {side, side};
+  }
+
+protected:
+  void paintEvent(QPaintEvent*) override {
+    if (m_bar == nullptr) return;
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QPalette pal = m_bar->palette();
+    const bool shown = tabIndex() == m_bar->currentIndex();
+    const QColor onAccent = themeColor(ColorRole::AccentText, pal);
+    if (underMouse() || isDown()) {
+      QColor fill = shown ? onAccent : themeColor(ColorRole::Text, pal);
+      fill.setAlpha(isDown() ? 70 : 40);
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(fill);
+      painter.drawEllipse(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5));
+    }
+    const int side = uiIconSize(14);
+    const QRect mark((width() - side) / 2, (height() - side) / 2, side, side);
+    QPixmap pixmap = themeIcon(QStringLiteral("dismiss")).pixmap(QSize(side, side), devicePixelRatioF());
+    if (shown) {
+      QPainter tint(&pixmap);
+      tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+      tint.fillRect(QRectF(0, 0, pixmap.width(), pixmap.height()), onAccent);
+    }
+    painter.drawPixmap(mark, pixmap);
+  }
+  void enterEvent(QEnterEvent* event) override {
+    QAbstractButton::enterEvent(event);
+    update();
+  }
+  void leaveEvent(QEvent* event) override {
+    QAbstractButton::leaveEvent(event);
+    update();
+  }
+
+private:
+  int tabIndex() const {
+    if (m_bar == nullptr) return -1;
+    for (int i = 0; i < m_bar->count(); ++i) {
+      if (m_bar->tabButton(i, QTabBar::RightSide) == this) return i;
+    }
+    return -1;
+  }
+  QPointer<QTabBar> m_bar;
+};
+
 class DocumentTabs final : public QTabBar {
 public:
   DocumentTabs(DocumentFrame& frame, WindowManager& manager) : m_frame(frame), m_manager(&manager) {
@@ -51,13 +128,21 @@ public:
     setAcceptDrops(true);
   }
   // In a Floating title row (mitcad#1990): each design a flat tab on the
-  // bar, its name (a • after it while edited) and its ×, the shown one a
-  // flat block filled with a tint of the text, without the
-  // style's base line; else the style's tabs in the frame's own row.
+  // bar, its name (a • after it while edited) and its ×, the shown one on a
+  // block of the accent, as the toolbar panel's shown tab (mitcad#2426: a
+  // tint of the text read as little more than the hovered tab's fill),
+  // without the style's base line; else the style's tabs in the frame's
+  // own row.
   void setRowStyle(bool row) {
     if (row == m_rowStyle) return;
     m_rowStyle = row;
     setDrawBase(!row);
+    // The row's × (RowTabClose) instead of the style's, and back.
+    if (row) {
+      for (int i = 0; i < count(); ++i) useRowClose(i);
+    } else {
+      useStyleClose();
+    }
     // In the row the tabs share its room with the other controls: when it
     // is short they are narrowed to their names elided (minimumTabSizeHint),
     // every design's tab in sight, rather than scrolled with arrows, which
@@ -152,18 +237,18 @@ protected:
       const QRectF block = rowBlock(tab);
       const bool selected = i == currentIndex();
       if (selected || (i == hovered && isEnabled())) {
-        // The shown design a flat block filled with a tint of the text, no
-        // line round it; a hovered one on the chrome's hover fill.
-        QColor fill = text;
-        fill.setAlpha(28);
+        // The shown design a flat block of the accent (the chosen tab of
+        // docs/ui-conventions.md), no line round it; a hovered one on the
+        // chrome's hover fill.
         painter.setPen(Qt::NoPen);
-        painter.setBrush(selected ? fill : themeColor(ColorRole::HoverFill, pal));
-        painter.drawRoundedRect(block, 5, 5);
+        painter.setBrush(selected ? accentColor(pal) : themeColor(ColorRole::HoverFill, pal));
+        painter.drawRoundedRect(block, kControlRadius, kControlRadius);
       }
-      // The name left of the close button, elided in the middle.
+      // The name left of the close button, elided in the middle; on the
+      // accent in the color for text on it.
       const QRect name = nameRect(i);
       painter.setFont(nameFont(selected));
-      painter.setPen(selected ? text : quiet);
+      painter.setPen(selected ? themeColor(ColorRole::AccentText, pal) : quiet);
       const QString elided = shownName(i);
       painter.drawText(name, Qt::AlignVCenter | Qt::AlignLeft, elided);
       shown.append(elided);
@@ -197,6 +282,43 @@ protected:
     const QWidget* close = tabButton(index, QTabBar::RightSide);
     const int right = close != nullptr && !close->isHidden() ? close->geometry().left() - 4 : tab.right() - 10;
     return QRect(tab.left() + 12, tab.top(), std::max(0, right - tab.left() - 12), tab.height());
+  }
+  // A tab inserted in the row gets the row's × too; also once the tab bar
+  // is done with it, should it add the style's button after this.
+  void tabInserted(int index) override {
+    QTabBar::tabInserted(index);
+    if (!m_rowStyle) return;
+    useRowClose(index);
+    QTimer::singleShot(0, this, [this] {
+      if (!m_rowStyle) return;
+      for (int i = 0; i < count(); ++i) useRowClose(i);
+    });
+  }
+  // The row's × at the right of a tab (where the row's name room expects
+  // it, nameRect), the style's button gone from its side.
+  void useRowClose(int index) {
+    if (dynamic_cast<RowTabClose*>(tabButton(index, QTabBar::RightSide)) != nullptr) return;
+    const auto side =
+        static_cast<QTabBar::ButtonPosition>(style()->styleHint(QStyle::SH_TabBar_CloseButtonPosition, nullptr, this));
+    for (const QTabBar::ButtonPosition at : {side, QTabBar::RightSide}) {
+      if (QWidget* own = tabButton(index, at)) {
+        setTabButton(index, at, nullptr);
+        own->deleteLater();
+      }
+    }
+    setTabButton(index, QTabBar::RightSide, new RowTabClose(this));
+  }
+  // The style's close buttons again (the frame's own row): the row's go,
+  // the tab bar makes its own for every tab.
+  void useStyleClose() {
+    for (int i = 0; i < count(); ++i) {
+      if (QWidget* mine = dynamic_cast<RowTabClose*>(tabButton(i, QTabBar::RightSide))) {
+        setTabButton(i, QTabBar::RightSide, nullptr);
+        mine->deleteLater();
+      }
+    }
+    setTabsClosable(false);
+    setTabsClosable(true);
   }
   // The shown design's name in semibold.
   QFont nameFont(bool selected) const {

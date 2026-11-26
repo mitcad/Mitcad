@@ -1973,6 +1973,8 @@ void MainWindow::camSimulateAt(int index) {
                             .arg(point.move + 1);
   showCamStock(index);
   showCamSubSpindle(op.id, op.name);
+  // The zones and the turret's body round the tool (mitcad#2412).
+  showCamMachineParts(op.id, op.name, point.work);
   drawCamScene();
 }
 

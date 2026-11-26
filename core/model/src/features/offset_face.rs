@@ -2,7 +2,10 @@
 //! Offset face: moves faces of one body along their normals (which Press
 //! Pull on a face records). A positive distance moves out of the material;
 //! the neighbouring faces extend or shorten along their own surfaces. The
-//! faces keep their names.
+//! faces keep their names. With `tangent_chain` (mitcad#2438) the faces
+//! joined to a listed one through smooth edges move with it, as a replace
+//! face's do; a definition without it (every one before) moves the listed
+//! faces alone.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +25,11 @@ pub struct OffsetFaceDef<P = ParamId> {
     pub body: BodyUid,
     pub faces: Vec<FaceName>,
     pub distance: P,
+    /// Also the faces tangent to the listed ones (mitcad#2438). Off when
+    /// left out, so stored offsets keep their faces; the Offset Face and
+    /// Press Pull panels write it on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tangent_chain: bool,
 }
 
 impl<P> OffsetFaceDef<P> {
@@ -33,6 +41,7 @@ impl<P> OffsetFaceDef<P> {
             body: copy,
             faces: clone,
             distance: param,
+            tangent_chain: copy,
         }
     }
 }
@@ -72,7 +81,7 @@ impl<K: Kernel> Evaluate<K> for OffsetFaceDef {
         let faces = require_faces(ctx, self.body, &shape, &self.faces)?;
         let moved = ctx
             .kernel
-            .offset_faces(ctx.uid, &shape, &faces, distance)
+            .offset_faces(ctx.uid, &shape, &faces, distance, self.tangent_chain)
             .map_err(kernel_error)?;
         Ok(FeatureOutput {
             changes: vec![BodyChange::Set(self.body, moved)],

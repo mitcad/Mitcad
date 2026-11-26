@@ -199,11 +199,13 @@ pub enum Constraint {
     },
     /// The gap between a circle (or arc) and a line (meant for a line the
     /// circle does not cross): the distance of its centre from the line
-    /// minus its radius.
+    /// minus its radius; with `far` (mitcad#2451) plus its radius, to the
+    /// circle's far side.
     TangentDistance {
         circle: EntityId,
         line: EntityId,
         value: f64,
+        far: bool,
     },
     /// The gap between two circles or arcs (meant for concentric ones): the
     /// difference of their radii, on the side `b` is when the dimension is
@@ -217,20 +219,27 @@ pub enum Constraint {
     /// (mitcad#1540): for circles outside each other `|c_b - c_a| - r_a -
     /// r_b`; with `inside`, one within the other, the larger radius (when
     /// the dimension is added) minus the smaller one minus `|c_b - c_a|`.
+    /// Not inside, `far_a` and `far_b` (mitcad#2451) measure from that
+    /// circle's far side instead, its radius added: both far, the outer
+    /// tangents `|c_b - c_a| + r_a + r_b`.
     TangentCircleDistance {
         a: EntityId,
         b: EntityId,
         value: f64,
         inside: bool,
+        far_a: bool,
+        far_b: bool,
     },
     /// The gap between a circle or arc and a point at the circle's nearest
     /// side (mitcad#1540): `|p - c| - r` for a point outside it; with
-    /// `inside`, `r - |p - c|`.
+    /// `inside`, `r - |p - c|`; with `far` (mitcad#2451), from the circle's
+    /// far side, `|p - c| + r`.
     TangentPointDistance {
         circle: EntityId,
         point: PointId,
         value: f64,
         inside: bool,
+        far: bool,
     },
     /// Horizontal distance between two points: `|b.x - a.x|`, on the side
     /// `b` is when the dimension is added; with `signed` (mitcad#404),

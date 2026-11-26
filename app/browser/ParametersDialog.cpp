@@ -23,6 +23,7 @@
 #include <QEvent>
 #include <QFile>
 #include <QFileInfo>
+#include <QFocusEvent>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -277,6 +278,19 @@ public:
     if (edit != nullptr && index.column() == m_expressionColumn) {
       fitWholeText(edit, option.rect);
     }
+  }
+
+protected:
+  bool eventFilter(QObject* editor, QEvent* event) override {
+    // The application losing activation leaves the expression in edit mode.
+    // Committing it here would apply the draft before the user can open fx
+    // and cancel the formula editor.
+    if (event->type() == QEvent::FocusOut &&
+        static_cast<QFocusEvent*>(event)->reason() == Qt::ActiveWindowFocusReason &&
+        QApplication::activeWindow() == nullptr) {
+      return false;
+    }
+    return DecimalAlignDelegate::eventFilter(editor, event);
   }
 
 private:

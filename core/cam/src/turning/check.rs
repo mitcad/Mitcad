@@ -34,8 +34,9 @@ pub struct TurnPlacement {
 ///
 /// The sub-spindle's body and the zones moving with it (mitcad#2392,
 /// [`sub_spindle_hits`]): every operation's tool clear of them where the
-/// sub-spindle is as it cuts. The findings come by operation, the
-/// hand-over's before its operation's own.
+/// sub-spindle is as it cuts. The turret's body clear of the main chuck
+/// and the fixed zones ([`super::turret_hits`], mitcad#2412). The findings
+/// come by operation, the hand-over's before its operation's own.
 pub fn check_lathe(
     machine: &Machine,
     program: &TurningProgram,
@@ -171,6 +172,8 @@ pub fn check_lathe(
                 {
                     chuck = Some(p);
                 }
+                // On a lathe with a Y axis the tool turns at its Y 0, which
+                // a zone limited in Y must reach (mitcad#2412).
                 for (k, zone) in machine.zones.iter().enumerate() {
                     let b = &zone.bounds;
                     if zones[k].is_none()
@@ -178,6 +181,7 @@ pub fn check_lathe(
                         && machine_p[0] <= b.max[0] + 1e-9
                         && machine_p[2] >= b.min[2] - 1e-9
                         && machine_p[2] <= b.max[2] + 1e-9
+                        && (!lathe.has_y() || super::turret::zone_reaches_y(b, 0.0))
                     {
                         zones[k] = Some(p);
                     }
@@ -217,6 +221,9 @@ pub fn check_lathe(
     // each operation cuts (mitcad#2392); each operation's findings
     // together, the hand-over's first.
     out.extend(sub_spindle_hits(machine, program, Some(placement.work_z)));
+    // The turret's body against the main chuck and the fixed zones
+    // (mitcad#2412).
+    out.extend(super::turret_hits(machine, program, placement));
     out.sort_by_key(|f| f.operation);
     out
 }
@@ -224,7 +231,7 @@ pub fn check_lathe(
 /// Points along a turning move from `from` at most half a millimetre
 /// apart (its end included, its start not); the move's end alone when
 /// where it starts is not known.
-fn turn_move_points(from: Option<PXZ>, m: &TurnMove) -> Vec<PXZ> {
+pub(super) fn turn_move_points(from: Option<PXZ>, m: &TurnMove) -> Vec<PXZ> {
     let Some(f) = from else {
         return vec![m.to()];
     };
@@ -247,7 +254,7 @@ fn turn_move_points(from: Option<PXZ>, m: &TurnMove) -> Vec<PXZ> {
 
 /// Points along a live operation's moves at most half a millimetre apart,
 /// in its side's frame.
-fn live_move_points(live: &super::LiveOp) -> Vec<[f64; 3]> {
+pub(super) fn live_move_points(live: &super::LiveOp) -> Vec<[f64; 3]> {
     let mut out = Vec::new();
     let mut from: Option<[f64; 3]> = None;
     for (p, _) in live.points(0.01) {
@@ -357,6 +364,11 @@ const SUB_PARTS: [super::SubBody; 3] = [
 /// ([`super::TurretBody`]): at each of the tool's points the box against
 /// the body and the zones, one finding per operation and part ("Drill 1:
 /// the turret runs into the sub-spindle's housing."), after the tool's.
+///
+/// The tool's station's own turret body where it has one
+/// ([`super::Lathe::turret_body_at`], mitcad#2412); on a lathe with a Y
+/// axis the zones' Y too (the machine's Y, turning at its Y 0, the
+/// sub-spindle's turned round where it holds the part).
 pub fn sub_spindle_hits(
     machine: &Machine,
     program: &TurningProgram,
@@ -383,25 +395,38 @@ pub fn sub_spindle_hits(
         let within = |v: [f64; 2], b: &crate::machine::Bounds, axis: usize| {
             v[1] >= b.min[axis] - 1e-9 && v[0] <= b.max[axis] + 1e-9
         };
+        // The zones' Y on a lathe with a Y axis (mitcad#2412), turning at
+        // its Y 0; else X and Z only.
+        let y_checked = lathe.has_y();
+        let in_y =
+            |y: f64, b: &crate::machine::Bounds| !y_checked || super::turret::zone_reaches_y(b, y);
+        // The turret's body of the tool's station (mitcad#2412).
+        let body = lathe.turret_body_at(op.tool.number);
         let mut test = |r: f64, behind: f64, m: [f64; 2], shown: [f64; 3]| {
             if let Some(part) = sub.body_at(r, behind) {
                 tool.hit(part, shown);
             }
             for (k, zone) in sub.zones.iter().enumerate() {
-                if within([m[0]; 2], &zone.bounds, 0) && within([behind; 2], &zone.bounds, 2) {
+                if within([m[0]; 2], &zone.bounds, 0)
+                    && in_y(m[1], &zone.bounds)
+                    && within([behind; 2], &zone.bounds, 2)
+                {
                     tool.zones[k].get_or_insert(shown);
                 }
             }
             // The turret's body round the tool, at the machine's X and Y
             // of its controlled point (mitcad#2405).
-            if let Some(body) = &lathe.turret_body {
+            if let Some(body) = &body {
                 let (x, along) = body.at(m[0], behind);
                 let r_min = super::lathe::nearest_zero(x).hypot(m[1]);
                 for part in sub.body_across(r_min, along) {
                     turret.hit(part, shown);
                 }
                 for (k, zone) in sub.zones.iter().enumerate() {
-                    if within(x, &zone.bounds, 0) && within(along, &zone.bounds, 2) {
+                    if within(x, &zone.bounds, 0)
+                        && in_y(m[1], &zone.bounds)
+                        && within(along, &zone.bounds, 2)
+                    {
                         turret.zones[k].get_or_insert(shown);
                     }
                 }
@@ -414,7 +439,9 @@ pub fn sub_spindle_hits(
                     let w = live.side.to_work(q);
                     let z = held.map_or(w[2], |h| h.held_z(w[2]));
                     let shown = held.map_or(w, |h| h.main_point(w));
-                    test(w[0].hypot(w[1]), z - face, [m[0], m[1]], shown);
+                    // The machine's Y: the sub-spindle's turned round.
+                    let y = if held.is_some() { -m[1] } else { m[1] };
+                    test(w[0].hypot(w[1]), z - face, [m[0], y], shown);
                 }
             }
             None => {
@@ -583,9 +610,15 @@ fn check_live(
             {
                 chuck = Some(shown(w));
             }
+            // A zone whose Y bounds are equal is not limited in Y
+            // (mitcad#2412).
             for (k, zone) in machine.zones.iter().enumerate() {
                 let b = &zone.bounds;
-                if zones[k].is_none() && within(machine_p, b.min, b.max) {
+                let mut flat = machine_p;
+                if b.max[1] <= b.min[1] {
+                    flat[1] = b.min[1];
+                }
+                if zones[k].is_none() && within(flat, b.min, b.max) {
                     zones[k] = Some(shown(w));
                 }
             }
@@ -753,6 +786,53 @@ pub fn check_program(text: &str) -> Result<ProgramCheck, CamError> {
 /// sub-spindle's stop block stops the spindle that holds the part, as M5
 /// does, so that its live tools cut with it standing.
 pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<ProgramCheck, CamError> {
+    check_program_as(text, codes, Control::Fanuc)
+}
+
+/// The control a program is read back as (mitcad#2425).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Control {
+    /// A Fanuc lathe control in G-code system A ([`check_program`]).
+    #[default]
+    Fanuc,
+    /// LinuxCNC's interpreter on a lathe: X a diameter only after G7 (G8,
+    /// radius mode, is refused), feeds per minute and per revolution G94
+    /// and G95 (G98 and G99 are its canned cycles' return levels and are
+    /// refused), the spindle's limit as D in the G96 block, threads as G33
+    /// with their lead K (along the move) in every block and no F, tool
+    /// changes with M6 and the tool table's offsets (G43, G43 H, G49), path
+    /// blending (G61, G64 P) and incremental arc centres (G91.1). It knows
+    /// no cycles here (G70, G71, G76, the drilling cycles), no G32, no G50,
+    /// no O word (a subroutine there), no polar or cylindrical
+    /// interpolation and no C axis.
+    LinuxCnc,
+}
+
+/// [`check_program_with`] read as `control` does.
+pub fn check_program_as(
+    text: &str,
+    codes: &super::MillTurn,
+    control: Control,
+) -> Result<ProgramCheck, CamError> {
+    let lcnc = control == Control::LinuxCnc;
+    // The codes of feeds per revolution and per minute, and the refusal of
+    // a constant surface speed without its limit.
+    let (rev_code, min_code, no_limit) = if lcnc {
+        (
+            "G95",
+            "G94",
+            "a constant surface speed without a spindle limit (D) in its block",
+        )
+    } else {
+        (
+            "G99",
+            "G98",
+            "a constant surface speed without a spindle limit (G50 S) before it",
+        )
+    };
+    // X is a diameter on a Fanuc control; on LinuxCNC after G7.
+    let mut diameter = !lcnc;
     let lines: Vec<&str> = text.lines().collect();
     // The block that stops the sub-spindle, besides M5.
     let sub_stop: Option<Vec<(char, String)>> =
@@ -848,6 +928,8 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
                 c,
                 'X' | 'Z' | 'I' | 'K' | 'U' | 'W' | 'R' | 'C' | 'J' | 'H' | 'Y' | 'A' | 'B' | 'E'
             ) && !v.contains('.')
+                // LinuxCNC's H is a tool number with G43 (mitcad#2425).
+                && !(lcnc && *c == 'H')
             {
                 return Err(fail(
                     n,
@@ -880,9 +962,32 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
                     | 'A'
                     | 'B'
                     | 'E'
-            ) {
+            ) && !(lcnc && *c == 'D')
+            {
                 return Err(fail(n, format!("the word {c} is not one it reads")));
             }
+        }
+        // LinuxCNC (mitcad#2425): an O word calls a subroutine, D is the
+        // spindle's limit with G96.
+        if lcnc && get('O').is_some() {
+            return Err(fail(
+                n,
+                "an O word, which calls a subroutine on this control".to_owned(),
+            ));
+        }
+        if lcnc && get('D').is_some() && !gs.contains(&96) {
+            return Err(fail(n, "D without G96 to use it".to_owned()));
+        }
+        // Only X and Z there: no live tools, Y axis, B head or sub-spindle.
+        if lcnc
+            && let Some(w) = ['Y', 'C', 'A', 'B', 'E']
+                .into_iter()
+                .find(|&w| get(w).is_some())
+        {
+            return Err(fail(
+                n,
+                format!("the {w} word, an axis the program does not drive on this control"),
+            ));
         }
         if ws[0].0 == 'O' {
             continue;
@@ -909,6 +1014,8 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
             match v.parse::<u32>() {
                 Ok(3 | 4) => main_running = true,
                 Ok(5) => main_running = false,
+                // LinuxCNC's tool change stops the spindle (mitcad#2425).
+                Ok(6) if lcnc => main_running = false,
                 Ok(2 | 30) => {
                     if let Some(mode) = held {
                         return Err(fail(n, format!("the program ends in {mode}")));
@@ -975,6 +1082,44 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
         let mut no_move = false;
         for &g in &gs {
             match g {
+                // LinuxCNC's own (mitcad#2425), and what it does not
+                // take of a Fanuc control's.
+                7 if lcnc => diameter = true,
+                8 if lcnc => {
+                    return Err(fail(
+                        n,
+                        "radius mode (G8), but the program writes X as a diameter".to_owned(),
+                    ));
+                }
+                33 if lcnc => {
+                    motion = Some(g);
+                    drilling = None;
+                }
+                43 | 49 if lcnc => no_move = true,
+                61 | 64 | 90 if lcnc => {}
+                91 if lcnc => return Err(fail(n, "incremental moves are not read".to_owned())),
+                94 if lcnc => {
+                    per_rev = false;
+                    per_min = true;
+                }
+                95 if lcnc => {
+                    per_rev = true;
+                    per_min = false;
+                }
+                98 | 99 if lcnc => {
+                    return Err(fail(
+                        n,
+                        format!(
+                            "G{g} sets the cycles' return level on this control; feeds per minute and per revolution are G94 and G95"
+                        ),
+                    ));
+                }
+                28 | 32 | 50 | 70 | 71 | 76 | 83 | 87 if lcnc => {
+                    return Err(fail(
+                        n,
+                        format!("G{g} is not a command it reads on this control"),
+                    ));
+                }
                 0..=3 | 32 => {
                     motion = Some(g);
                     // A motion ends a drilling cycle.
@@ -1060,12 +1205,8 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
                     // A spindle started with its speed: the main one, or
                     // the sub-spindle with its own code (mitcad#2319).
                     if g == 96 {
-                        if !limit {
-                            return Err(fail(
-                                n,
-                                "a constant surface speed without a spindle limit (G50 S) before it"
-                                    .to_owned(),
-                            ));
+                        if !(limit || (lcnc && get('D').is_some())) {
+                            return Err(fail(n, no_limit.to_owned()));
                         }
                         css = true;
                         check.css_lines.push(n);
@@ -1075,12 +1216,8 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
                     main_running = true;
                 }
                 96 => {
-                    if !limit {
-                        return Err(fail(
-                            n,
-                            "a constant surface speed without a spindle limit (G50 S) before it"
-                                .to_owned(),
-                        ));
+                    if !(limit || (lcnc && get('D').is_some())) {
+                        return Err(fail(n, no_limit.to_owned()));
                     }
                     css = true;
                     check.css_lines.push(n);
@@ -1129,6 +1266,18 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
         // block of its own.
         for &g in &gd {
             match g {
+                // Incremental arc centres, LinuxCNC's default (mitcad#2425);
+                // nothing else with a decimal there.
+                911 if lcnc => {}
+                _ if lcnc => {
+                    return Err(fail(
+                        n,
+                        format!(
+                            "G{} is not a command it reads on this control",
+                            f64::from(g) / 10.0
+                        ),
+                    ));
+                }
                 121 => {
                     if plane != 17 {
                         return Err(fail(
@@ -1243,6 +1392,9 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
         if pending.is_some() || gs.contains(&70) || no_move {
             continue;
         }
+        if lcnc && motion == Some(33) && get('F').is_some() {
+            return Err(fail(n, "F with G33, whose lead is its K word".to_owned()));
+        }
         if let Some(f) = num('F')? {
             feed = Some(f * scale);
         }
@@ -1284,20 +1436,29 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
         let Some(mo) = motion else {
             return Err(fail(n, "a move without a motion (G0 to G3)".to_owned()));
         };
+        // X as a diameter (mitcad#2425): LinuxCNC reads it as a radius
+        // until G7.
+        if x.is_some() && !diameter {
+            return Err(fail(
+                n,
+                "a move in X before the program sets diameter mode (G7)".to_owned(),
+            ));
+        }
         // Feeds per revolution while the main spindle turns, per minute
         // while it stands (a live tool's, mitcad#2067).
         let need_feed = || -> Result<f64, CamError> {
             if main_running && !per_rev {
                 return Err(fail(
                     n,
-                    "a feed before the feeds are per revolution (G99)".to_owned(),
+                    format!("a feed before the feeds are per revolution ({rev_code})"),
                 ));
             }
             if !main_running && !per_min {
                 return Err(fail(
                     n,
-                    "a cut with the main spindle stopped before the feeds are per minute (G98)"
-                        .to_owned(),
+                    format!(
+                        "a cut with the main spindle stopped before the feeds are per minute ({min_code})"
+                    ),
                 ));
             }
             feed.ok_or_else(|| fail(n, "a cut without a feed".to_owned()))
@@ -1470,7 +1631,35 @@ pub fn check_program_with(text: &str, codes: &super::MillTurn) -> Result<Program
                     lead: feed.ok_or_else(|| fail(n, "a thread without its lead".to_owned()))?,
                 }
             }
-            _ => unreachable!("motions are 0 to 3 and 32"),
+            // LinuxCNC's thread (mitcad#2425): K the distance along the
+            // move per revolution, read back as the lead along the longer
+            // axis.
+            33 => {
+                if css {
+                    return Err(fail(n, "threading at a constant surface speed".to_owned()));
+                }
+                if !main_running {
+                    return Err(fail(n, "a thread with the spindle stopped".to_owned()));
+                }
+                let Some(k_) = num('K')? else {
+                    return Err(fail(n, "G33 without its lead (K)".to_owned()));
+                };
+                let (Some(fx), Some(fz)) = (at[0], at[1]) else {
+                    return Err(fail(
+                        n,
+                        "a thread from where the tool is not known".to_owned(),
+                    ));
+                };
+                let (dx, dz) = (to[0] - fx, to[1] - fz);
+                let length = dx.hypot(dz);
+                let lead = if length > 1e-12 {
+                    k_ * scale * dx.abs().max(dz.abs()) / length
+                } else {
+                    k_ * scale
+                };
+                TurnMove::Thread { to, lead }
+            }
+            _ => unreachable!("motions are 0 to 3, 32 and 33"),
         };
         at = [Some(to[0]), Some(to[1])];
         check.moves.push(ReadMove { line: n, motion: m });

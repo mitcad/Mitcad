@@ -3026,3 +3026,36 @@ target_sources(mitcad PRIVATE files/ImportItemProgress.cpp files/ImportItemProgr
 # "Linked designs"): a linked component's design edited inside the assembly
 # that holds it, saved to its own file.
 target_sources(mitcad PRIVATE files/MainWindowEditInPlace.cpp)
+
+# View › Toolbar Panel (mitcad#2426, GitHub mitcad/Mitcad#571, app/COMMANDS.md
+# "Toolbar panel hidden"): the toolbar panel hidden in every window, kept
+# between starts, and revealed by a rest of the pointer at the view's top edge.
+target_sources(mitcad PRIVATE MainWindowToolbarPanel.cpp framework/ToolbarPanelReveal.cpp
+               framework/ToolbarPanelReveal.hpp)
+
+# The timeline's History list (mitcad#2427, GitHub mitcad/Mitcad#581,
+# Preferences › Display › Timeline): the timeline as rows under the Browser,
+# painted with the Browser's rows (BrowserRows.hpp), and the window's panel
+# moved there.
+target_sources(mitcad PRIVATE
+  browser/BrowserRows.hpp
+  browser/TimelineHistoryList.cpp
+  browser/TimelineHistoryList.hpp
+  browser/MainWindowTimelineList.cpp)
+
+# A command panel's line of a list of values (mitcad#2421, GitHub
+# mitcad/Mitcad#671, app/COMMANDS.md "A list's values in a narrow panel"):
+# on one line while every field can be read, else each value on a line of
+# its own; read by the unit test list_line_layout.
+target_sources(mitcad PRIVATE framework/ListLineLayout.cpp framework/ListLineLayout.hpp)
+
+# File › Drawing Book… (mitcad#2448, GitHub mitcad/Mitcad#687, app/COMMANDS.md
+# "Drawing book"): drawings of the design and of its linked designs chosen,
+# ordered and kept with the design, printed as one job with an optional
+# cover page; the cover is read by the unit test drawing_book.
+target_sources(mitcad PRIVATE
+  drawings/DrawingBookDialog.cpp
+  drawings/DrawingBookDialog.hpp
+  printing/BookCover.cpp
+  printing/BookCover.hpp
+  printing/MainWindowDrawingBook.cpp)

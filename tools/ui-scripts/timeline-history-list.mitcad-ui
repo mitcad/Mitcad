@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: MIT
+# The timeline's History list (mitcad#2427, GitHub mitcad/Mitcad#581) in the
+# Floating layout, on tools/ui-scripts/timeline-history-list.json (Sketch1,
+# Base, Plane1, the group Posts of Post and Cap; the marker at the end):
+#   0. The default: the strip at the bottom.
+#   1. Preferences › Display › Timeline: History list. The timeline's card
+#      goes under the Browser's in the left column, with a split between
+#      them; the rows name the items in timeline order, the first at the
+#      top, the group a folder row with its features under it.
+#   2. The marker dragged up between Plane1 and the group: the model rolls
+#      back to 3 of 5, the group's features rolled back.
+#   3. The group folded by its arrow, and opened again.
+#   4. Sketch1's eye hides the sketch; Base's eye hides its body and shows
+#      it again.
+#   5. Base renamed from its row's context menu, in its row.
+#   6. Timeline: Strip again: the strip at the bottom, no rows.
+# Run by tools/ui-timeline-history-list-test.sh (Linux) and
+# tools/ui-windows-timeline-history-list-test.ps1 (Windows), before
+# timeline-history-list-docked.mitcad-ui (the Docked layout's steps), which
+# starts from the strip this run leaves in the settings the runs share.
+expect-ever 'View area'
+wait-idle
+window-resize 1260 860
+wait-idle
+sleep 300
+
+# 0. The strip at the bottom.
+expect-ever '^Timeline Cap at ' 30
+expect-never '^History row '
+capture rootY '^Browser Root at -?[0-9]+,(-?[0-9]+)$'
+capture rootX '^Browser Root at (-?[0-9]+),'
+
+# 1. The History list under the Browser.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice timelinePresentation 'History list'
+key Return
+wait-log '^Preferences: timeline list$'
+focus-main
+expect-setting timeline/presentation list
+wait-log '^Timeline panel: history list under the Browser$'
+wait-log '^Timeline presentation: history list$'
+wait-log '^History list: Sketch1, Base, Plane1, \[Posts: Post, Cap\]; marker after Cap$'
+wait-idle
+sleep 500
+wait-log '^Floating split browserDock/timelineDock at '
+expect-no-log '^Timeline Cap at '
+capture sketchY '^History row Sketch1 at -?[0-9]+,(-?[0-9]+)$'
+capture sketchX '^History row Sketch1 at (-?[0-9]+),'
+capture baseY '^History row Base at -?[0-9]+,(-?[0-9]+)$'
+capture planeY '^History row Plane1 at -?[0-9]+,(-?[0-9]+)$'
+capture groupY '^History group Posts at -?[0-9]+,(-?[0-9]+)$'
+capture postY '^History row Post at -?[0-9]+,(-?[0-9]+)$'
+capture capY '^History row Cap at -?[0-9]+,(-?[0-9]+)$'
+expect-less ${rootY} ${sketchY}
+expect-less ${sketchY} ${baseY}
+expect-less ${baseY} ${planeY}
+expect-less ${planeY} ${groupY}
+expect-less ${groupY} ${postY}
+expect-less ${postY} ${capY}
+# In the Browser's column, not across the view's bottom.
+expect-near ${sketchX} ${rootX} 0 120
+expect-log '^History eye Sketch1: shown$'
+expect-log '^History eye Base: shown$'
+
+# 2. The marker between Plane1 and the group.
+mark
+drag-logged '^History marker at ' '^History row Plane1 at '
+wait-log '^Marker at 3 of 5$'
+wait-idle
+wait-log '^History list: Sketch1, Base, Plane1, \[Posts: Post, Cap\]; marker after Plane1$'
+capture markerY '^History marker at -?[0-9]+,(-?[0-9]+)$'
+capture planeY '^History row Plane1 at -?[0-9]+,(-?[0-9]+)$'
+capture groupY '^History group Posts at -?[0-9]+,(-?[0-9]+)$'
+expect-less ${planeY} ${markerY}
+expect-less ${markerY} ${groupY}
+
+# 3. The group folded by its arrow, and opened again.
+mark
+click-logged '^History group Posts arrow at '
+wait-log '^Timeline group Posts collapsed$'
+wait-log '^History list: Sketch1, Base, Plane1, \[Posts folded\]; marker after Plane1$'
+wait-idle
+expect-no-log '^History row Cap at '
+mark
+click-logged '^History group Posts arrow at '
+wait-log '^Timeline group Posts expanded$'
+wait-log '^History list: Sketch1, Base, Plane1, \[Posts: Post, Cap\]; marker after Plane1$'
+wait-idle
+
+# 4. The light bulbs: a sketch's own, a feature's bodies.
+mark
+click-logged '^History eye Sketch1 at '
+wait-log '^Visibility History/Sketch1: hidden$'
+wait-log '^History eye Sketch1: hidden$'
+wait-idle
+mark
+click-logged '^History eye Base at '
+wait-log '^Visibility History/Base: hidden$'
+wait-log '^History eye Base: hidden$'
+wait-idle
+mark
+click-logged '^History eye Base at '
+wait-log '^Visibility History/Base: shown$'
+wait-log '^History eye Base: shown$'
+wait-idle
+
+# 5. Rename from the row's context menu, in the row.
+mark
+context-menu-logged '^History row Base at ' 'Rename'
+wait-log '^Renaming Base in the History list$'
+wait-idle
+key Ctrl+a
+type 'Base plate'
+key Return
+wait-log '^Renamed Base to Base plate$'
+wait-log '^History list: Sketch1, Base plate, Plane1, \[Posts: Post, Cap\]; marker after Plane1$'
+wait-idle
+
+# 6. The strip again.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice timelinePresentation 'Strip'
+key Return
+wait-log '^Preferences: timeline strip$'
+focus-main
+expect-setting timeline/presentation strip
+wait-log '^Timeline panel: strip at the bottom$'
+wait-log '^Timeline presentation: strip$'
+wait-log '^Timeline Base plate at '
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

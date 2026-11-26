@@ -256,6 +256,9 @@ public:
   // folder (the root's: "C0"), opened at once.
   virtual void openDrawing(const QString& /*uid*/) {}
   virtual void createDrawing(const QString& /*component*/) {}
+  // Create Drawing of Flat Pattern (mitcad#2446): a new drawing with the
+  // sheet-metal body's Flat Pattern placed on it.
+  virtual void createFlatPatternDrawing(const QString& /*body*/) {}
   // Whether a drawing is open over the 3D view: the Delete key then
   // deletes its views, never the model's selection behind it.
   virtual bool isDrawingOpen() const { return false; }

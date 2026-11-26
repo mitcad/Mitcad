@@ -3,7 +3,7 @@
 //! controls availability; edits reuse IDs by source path and target reference.
 
 use super::{DocState, ModelError};
-use crate::features::point_pattern::PatternInstance;
+use crate::features::point_pattern::{PatternInstance, PointPatternDef};
 use crate::features::{FeatureDef, PatternObjects};
 use crate::ids::{ComponentUid, FeatureUid};
 use crate::transform::Transform;
@@ -52,5 +52,37 @@ impl DocState {
                 .is_none_or(|p| p.feature != uid || desired.contains(&o.uid))
         });
         Ok(())
+    }
+
+    /// The occurrences Pattern at Points `uid` made keep their keys when
+    /// its paths are re-pointed (mitcad#2466: parts it repeats or takes
+    /// points on went one level down), so that the same copies stay at
+    /// the same points: each instance's source and target become those at
+    /// the same places of `after` as they were in `before`.
+    pub(crate) fn follow_point_pattern(
+        &mut self,
+        uid: FeatureUid,
+        before: &PointPatternDef,
+        after: &PointPatternDef,
+    ) {
+        let sources = |def: &PointPatternDef| match &def.objects {
+            PatternObjects::Components { occurrences } => occurrences.clone(),
+            _ => Vec::new(),
+        };
+        let (old_sources, new_sources) = (sources(before), sources(after));
+        if old_sources.len() != new_sources.len() || before.targets.len() != after.targets.len() {
+            return;
+        }
+        for o in &mut self.assembly.occurrences {
+            let Some(key) = o.pattern.as_mut().filter(|p| p.feature == uid) else {
+                continue;
+            };
+            if let Some(i) = old_sources.iter().position(|s| *s == key.source) {
+                key.source = new_sources[i].clone();
+            }
+            if let Some(i) = before.targets.iter().position(|t| *t == key.target) {
+                key.target = after.targets[i].clone();
+            }
+        }
     }
 }

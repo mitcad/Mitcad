@@ -15,7 +15,9 @@
 # operation on the main spindle after the sub-spindle's (mitcad#2392); the
 # sub-spindle's profile and the turret's body in Edit Machine..., the turret
 # running into the sub-spindle's chuck, Simulate drawing the sub-spindle
-# where it waits and at the grip (mitcad#2405).
+# where it waits and at the grip (mitcad#2405); a fixed zone with its Y, the
+# Turret page with a station's own body, the turret running into the fixed
+# zone, Simulate drawing the zones and the turret (mitcad#2412).
 param(
   [string]$App,
   [string]$Cli,

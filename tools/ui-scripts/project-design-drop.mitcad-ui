@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: MIT
+# mitcad#2428 (GitHub mitcad/Mitcad#561): a design of the Projects panel
+# dragged out of the panel onto the 3D view is inserted there as a
+# component, through Insert Component. The shared input script of
+# tools/ui-project-design-drop-test.sh (Linux, Floating and Docked),
+# tools/ui-windows-project-design-drop-test.ps1 and
+# tools/ui-macos-project-design-drop-test.sh. The runner made the Local
+# project ${MITCAD_TEST_PROJECT} with assembly.mitcad (a 20 mm cube from the
+# origin, its top face at Z 20: tools/ui-scripts/project-design-drop-assembly.json),
+# bracket.mitcad (a 10 x 10 x 5 mm block, 500 mm3:
+# project-design-drop-part.json) and back.mitcad (which links
+# assembly.mitcad: project-design-drop-back.json), and opened
+# assembly.mitcad. All files are synthetic.
+#   1. bracket.mitcad dragged onto the cube's top face: the cursor says a
+#      drop inserts, Insert Component asks, Enter takes it linked (whole
+#      design); one undo step; the linked component at the point of the
+#      face, its Z along the face's normal.
+#   2. bracket.mitcad dropped while Extrude is open: it waits, said; after
+#      Cancel Insert Component asks and Copy inserts a copy at its point.
+#   3. back.mitcad (links this design) and assembly.mitcad (this design)
+#      dropped: refused in words, nothing asked, nothing inserted.
+wait-idle
+capture-undo-depth before
+expect-ever '^Projects row ${MITCAD_TEST_PROJECT} at ' 30
+click-logged '^Projects row ${MITCAD_TEST_PROJECT} at '
+focus-widget projectsTree
+key Right
+wait-log '^Projects row ${MITCAD_TEST_PROJECT}/bracket\.mitcad at ' 10
+expect-ever '^Projects row ${MITCAD_TEST_PROJECT}/back\.mitcad at ' 10
+expect-ever '^Projects row ${MITCAD_TEST_PROJECT}/assembly\.mitcad at ' 10
+focus-main
+wait-idle
+
+# 1. Linked, at the point of the cube's top face under the drop.
+mark
+drag-logged-to-view-point '^Projects row ${MITCAD_TEST_PROJECT}/bracket\.mitcad at ' 10,10,20
+wait-log '^Projects panel: dragging ${MITCAD_TEST_PROJECT}/bracket\.mitcad over the 3D view$' 10
+wait-log '^Projects panel: drop of ${MITCAD_TEST_PROJECT}/bracket\.mitcad on the 3D view$' 10
+wait-log '^Projects panel: bracket\.mitcad dropped on the 3D view at [0-9]+,[0-9]+$' 10
+wait-log '^Projects panel: bracket\.mitcad goes in at the face under the drop, at ' 10
+wait-log '^Insert Component asked: bracket\.mitcad$' 10
+focus-dialog '^Insert Component$|^Insert bracket\.mitcad linked' 20
+key Return
+focus-main
+wait-log '^Insert Component: linked, whole design$' 10
+wait-log '^Inserted component bracket \(linked\) from bracket\.mitcad$' 30
+wait-idle 30
+expect-no-log '^Projects panel: drag .* to |^Projects panel: drop of .* refused'
+expect-undo-depth ${before} 1
+expect-model-bodies 2 8500
+# The new component is linked (its link is a path) and placed at the
+# face's point (10, 10, 20), its Z along the face's normal (+Z).
+capture-model-text link1 '{"query":"components"}' components.1.link
+capture-model-number x1 '{"query":"components"}' occurrences.0.world.0.3
+capture-model-number y1 '{"query":"components"}' occurrences.0.world.1.3
+capture-model-number z1 '{"query":"components"}' occurrences.0.world.2.3
+capture-model-number n1 '{"query":"components"}' occurrences.0.world.2.2
+expect-near ${x1} 10 0 0.5
+expect-near ${y1} 10 0 0.5
+expect-near ${z1} 20 0 0.01
+expect-near ${n1} 1 0 0.000001
+
+# 2. While Extrude is open the drop waits, said; after Cancel Insert
+# Component asks, and Copy inserts a copy at the drop's point (4, 4, 20).
+mark
+command solid.extrude
+expect-log '^Command Extrude started' 20
+drag-logged-to-view-point '^Projects row ${MITCAD_TEST_PROJECT}/bracket\.mitcad at ' 4,4,20
+wait-log '^Projects panel: bracket\.mitcad dropped on the 3D view at [0-9]+,[0-9]+$' 10
+wait-log '^Dropped bracket\.mitcad waits until Extrude is finished or canceled$' 20
+wait-idle
+expect-no-log '^Insert Component asked: '
+expect-undo-depth ${before} 1
+focus-main
+key Escape
+expect-log '^Command Extrude cancelled$' 20
+wait-log '^bracket\.mitcad comes in now that Extrude closed$' 20
+wait-log '^Insert Component asked: bracket\.mitcad$' 20
+focus-dialog '^Insert Component$|^Insert bracket\.mitcad linked' 20
+button '^Copy$'
+button '^OK$'
+focus-main
+wait-log '^Insert Component: copy$' 10
+wait-log '^Inserted component .+ \(copy\) from bracket\.mitcad$' 30
+wait-idle 30
+expect-undo-depth ${before} 2
+expect-model-bodies 3 9000
+capture-model-number x2 '{"query":"components"}' occurrences.1.world.0.3
+capture-model-number y2 '{"query":"components"}' occurrences.1.world.1.3
+capture-model-number z2 '{"query":"components"}' occurrences.1.world.2.3
+capture-model-number n2 '{"query":"components"}' occurrences.1.world.2.2
+expect-near ${x2} 4 0 0.5
+expect-near ${y2} 4 0 0.5
+expect-near ${z2} 20 0 0.01
+expect-near ${n2} 1 0 0.000001
+
+# 3. A design that links this one, and this design itself: refused in
+# words in the message band, nothing asked, nothing inserted.
+mark
+drag-logged-to-view-point '^Projects row ${MITCAD_TEST_PROJECT}/back\.mitcad at ' 15,5,20
+wait-log '^Projects panel: back\.mitcad dropped on the 3D view at [0-9]+,[0-9]+$' 10
+wait-log '^Insert Component refused: back\.mitcad links back to the open design: back\.mitcad > assembly\.mitcad$' 10
+wait-log '^Status warning: back\.mitcad links this design, so this design would become a component of itself\.$' 10
+mark
+drag-logged-to-view-point '^Projects row ${MITCAD_TEST_PROJECT}/assembly\.mitcad at ' 15,5,20
+wait-log '^Projects panel: assembly\.mitcad dropped on the 3D view at [0-9]+,[0-9]+$' 10
+wait-log '^Insert Component refused: assembly\.mitcad links back to the open design: assembly\.mitcad$' 10
+wait-log '^Status warning: assembly\.mitcad is this design: a design cannot be a component of itself\.$' 10
+wait-idle
+expect-no-log '^Insert Component asked: '
+expect-undo-depth ${before} 2
+expect-model-bodies 3 9000
+expect-never 'TestDriver: FAIL'

@@ -112,7 +112,9 @@ struct DrawingToolDef {
   bool iconOnly = false;
 };
 
-// The tools: Base View, Projected View, Section View, Detail View, Break;
+// The tools: Base View, Flat Pattern View (mitcad#2446: a base view of a
+// sheet-metal body's Flat Pattern), Projected View, Section View, Detail
+// View, Break;
 // then the annotations' tools: Dimension, Ordinate, Baseline, Model Items
 // (mitcad#1406: no picks; the sketch dimensions and the model's
 // annotations switched on for the selected views, or all the sheet's, by
@@ -162,8 +164,9 @@ QString toolGroupId(int group);
 // Note, "chain" for Baseline, "datum identifier" for Datum Label,
 // "surface texture" for Surface Finish, "break view" for Break, "bom" for
 // Parts List, "sketch" for Line and Arc, "bolt circle" for Center Pattern,
-// "virtual sharp" for Edge Extension (mitcad#729); besides "drawing" and
-// "sheet", which every tool has.
+// "virtual sharp" for Edge Extension (mitcad#729), flatPatternKeywords for
+// Flat Pattern View (mitcad#2446); besides "drawing" and "sheet", which
+// every tool has.
 QStringList toolKeywords(const QString& id);
 
 // What a base view shows (mitcad#725): its Shows list for a drawing of
@@ -181,6 +184,28 @@ QList<QPair<QString, QString>> subjectChoices(const QString& component, const QS
 // A body's Flat Pattern as the Shows list and the view panel name it
 // (mitcad#2280): "Plate Flat Pattern".
 QString flatPatternLabel(const QString& body);
+// The Flat Patterns alone of a drawing of `component` (mitcad#2446: Flat
+// Pattern View's Shows list, and whether it is enabled): one per sheet-metal
+// body of the component's own (`sheetBodies`, the `sheet_bodies` query), in
+// the `bodies` query's order, as subjectChoices lists them last
+// ("flat:F3.b0", "Plate Flat Pattern").
+QList<QPair<QString, QString>> flatPatternChoices(const QString& component, const QJsonArray& bodies,
+                                                  const QJsonArray& sheetBodies);
+// The index of the first Flat Pattern in a Shows list (mitcad#2446: Base
+// View's list has a separator before them), -1 when it has none.
+int firstFlatPattern(const QList<QPair<QString, QString>>& choices);
+// The model's command placing a Flat Pattern's view (mitcad#2446: Flat
+// Pattern View's click, and Create Drawing of Flat Pattern): a base view of
+// the Flat Pattern `choice` ("flat:F3.b0") with its bend notes on or off,
+// at `scale` ("fit" or empty: the model fits it to the sheet), its middle
+// at `at` (sheet mm; null: the model's place, the sheet's middle). Empty
+// when `choice` is no Flat Pattern.
+QJsonObject flatPatternView(const QString& drawing, int sheet, const QString& choice, const QString& scale,
+                            bool bendNotes, const QPointF* at);
+// The command search's other words of the Flat Pattern's drawing commands
+// (mitcad#2446: Flat Pattern View, Create Drawing of Flat Pattern): "flat",
+// "unfold", "blank", "development", "sheet metal".
+QStringList flatPatternKeywords();
 // A Shows choice as the model's `subject`; empty for the whole component
 // (the model's default). A "selection:" choice (selectionSubject) is its
 // subject as JSON.

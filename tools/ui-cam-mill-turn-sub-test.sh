@@ -21,7 +21,10 @@
 # an operation on the main spindle after the sub-spindle's (mitcad#2392).
 # The sub-spindle's profile and the turret's body in Edit Machine…, the
 # turret running into the sub-spindle's chuck, Simulate drawing the
-# sub-spindle where it waits and at the grip (mitcad#2405).
+# sub-spindle where it waits and at the grip (mitcad#2405). A fixed zone
+# with its Y, the Turret page with a station's own body, the turret running
+# into the fixed zone, Simulate drawing the zones and the turret
+# (mitcad#2412).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-cam-mill-turn-sub-test.sh

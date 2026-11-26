@@ -448,8 +448,9 @@ public:
 
   // The right-click menu (mitcad#1540): for the circle or arc under the
   // pointer (picked, or one a left click would pick there, which choosing
-  // picks) or else the last one picked, Center or Tangent: whether the
-  // dimension goes to its centre or to its tangent side; and Driving or
+  // picks) or else the last one picked, Center, Tangent Near or Tangent Far:
+  // whether the dimension goes to its centre or to its near or far tangent
+  // side (mitcad#2451); and Driving or
   // Driven for the dimension being made; Cancel steps back as Esc does.
   // None before anything is picked unless a circle or arc is under the
   // pointer: the right-click is then the tool's Esc, as in other tools.
@@ -484,12 +485,14 @@ public:
     }
     std::vector<ToolMenuEntry> entries;
     if (!target.isEmpty()) {
-      const bool current = m_tangent.value(target, false);
-      for (const bool tangent : {false, true}) {
+      const Side current = m_tangent.value(target, Side::Center);
+      for (const Side side : {Side::Center, Side::Near, Side::Far}) {
         ToolMenuEntry entry;
-        entry.text = tangent ? QObject::tr("Tangent") : QObject::tr("Center");
-        entry.checked = !picks && tangent == current;
-        entry.run = [this, target, tangent, picks] { choose(target, tangent, picks); };
+        entry.text = side == Side::Near  ? QObject::tr("Tangent Near")
+                     : side == Side::Far ? QObject::tr("Tangent Far")
+                                         : QObject::tr("Center");
+        entry.checked = !picks && side == current;
+        entry.run = [this, target, side, picks] { choose(target, side, picks); };
         entries.push_back(entry);
       }
     }
@@ -537,6 +540,9 @@ public:
 
 private:
   enum class State { Pick, Pick2, Place, Edit };
+  // Where a dimension meets a circle or arc: its centre, or its tangent
+  // side nearest the other pick or farthest from it (mitcad#2451).
+  enum class Side { Center, Near, Far };
 
   // A pick, by a left click or a choice of the right-click menu.
   void takePick(const QString& entity) {
@@ -594,12 +600,14 @@ private:
     return m_state == State::Pick || m_state == State::Pick2;
   }
 
-  // A circle or arc to its centre or its tangent side (mitcad#1540),
-  // picked now when `picks`.
-  void choose(const QString& entity, bool tangent, bool picks) {
-    m_tangent.insert(entity, tangent);
+  // A circle or arc to its centre or its near or far tangent side
+  // (mitcad#1540, mitcad#2451), picked now when `picks`.
+  void choose(const QString& entity, Side side, bool picks) {
+    m_tangent.insert(entity, side);
     qDebug().noquote() << QStringLiteral("Sketch Dimension: %1 by its %2")
-                              .arg(entity, tangent ? QStringLiteral("tangent side") : QStringLiteral("center"));
+                              .arg(entity, side == Side::Near  ? QStringLiteral("tangent side")
+                                           : side == Side::Far ? QStringLiteral("far tangent side")
+                                                               : QStringLiteral("center"));
     if (picks) {
       takePick(entity);
     }
@@ -631,14 +639,16 @@ private:
   }
 
   // A dimension's type for the log, with its side or sign: "horizontal_distance
-  // signed" (mitcad#409), "tangent_circle_distance inside" (mitcad#1540).
+  // signed" (mitcad#409), "tangent_circle_distance inside" (mitcad#1540),
+  // "tangent_distance far", "tangent_circle_distance near_far" (mitcad#2451).
   static QString kindOf(const QJsonObject& dimension) {
     QString kind = dimension.value(QStringLiteral("type")).toString();
     if (dimension.value(QStringLiteral("signed")).toBool()) {
       kind += QStringLiteral(" signed");
     }
-    if (dimension.value(QStringLiteral("side")).toString() == QStringLiteral("inside")) {
-      kind += QStringLiteral(" inside");
+    const QString side = dimension.value(QStringLiteral("side")).toString();
+    if (!side.isEmpty() && side != QStringLiteral("outside")) {
+      kind += QStringLiteral(" ") + side;
     }
     return kind;
   }
@@ -840,10 +850,15 @@ private:
       // (mitcad#445); other circles count by their centres.
       const bool concentric = ca != nullptr && cb != nullptr && ca->isCircular() && cb->isCircular() &&
                               dist(ca->curve.center, cb->curve.center) < 1e-9;
-      // A circle or arc the right-click menu set to its tangent side
-      // (mitcad#1540) is measured from there.
-      const bool tangentA = !concentric && ca != nullptr && ca->isCircular() && m_tangent.value(a, false);
-      const bool tangentB = !concentric && cb != nullptr && cb->isCircular() && m_tangent.value(b, false);
+      // A circle or arc the right-click menu set to its near or far tangent
+      // side (mitcad#1540, mitcad#2451) is measured from there.
+      const Side sideA = concentric || ca == nullptr || !ca->isCircular() ? Side::Center
+                                                                          : m_tangent.value(a, Side::Center);
+      const Side sideB = concentric || cb == nullptr || !cb->isCircular() ? Side::Center
+                                                                          : m_tangent.value(b, Side::Center);
+      const bool tangentA = sideA != Side::Center;
+      const bool tangentB = sideB != Side::Center;
+      const auto markFar = [&d] { d.json.insert(QStringLiteral("side"), QStringLiteral("far")); };
       if (!concentric && !tangentA && ca != nullptr && ca->isCircular()) {
         a = ca->center;
         ca = nullptr;
@@ -853,21 +868,37 @@ private:
         cb = nullptr;
       }
       if (tangentA && tangentB) {
-        // The gap between the nearest sides: inside when one circle holds
-        // the other's centre.
-        set(QStringLiteral("tangent_circle_distance"), {{"a", a}, {"b", b}});
-        if (dist(ca->curve.center, cb->curve.center) < std::max(ca->curve.radius, cb->curve.radius)) {
-          d.json.insert(QStringLiteral("side"), QStringLiteral("inside"));
+        if (sideA == Side::Far && sideB == Side::Far) {
+          // Between the far sides, the outer tangents (mitcad#2451).
+          set(QStringLiteral("tangent_circle_distance"), {{"a", a}, {"b", b}});
+          markFar();
+        } else if (sideA != sideB) {
+          // From the near side of one to the far side of the other: the
+          // near one first (mitcad#2451).
+          const bool farA = sideA == Side::Far;
+          set(QStringLiteral("tangent_circle_distance"), {{"a", farA ? b : a}, {"b", farA ? a : b}});
+          d.json.insert(QStringLiteral("side"), QStringLiteral("near_far"));
+        } else {
+          // The gap between the nearest sides: inside when one circle holds
+          // the other's centre.
+          set(QStringLiteral("tangent_circle_distance"), {{"a", a}, {"b", b}});
+          if (dist(ca->curve.center, cb->curve.center) < std::max(ca->curve.radius, cb->curve.radius)) {
+            d.json.insert(QStringLiteral("side"), QStringLiteral("inside"));
+          }
         }
       } else if (tangentA || tangentB) {
         const CurveData* circle = tangentA ? ca : cb;
         const QString other = tangentA ? b : a;
         const CurveData* otherCurve = tangentA ? cb : ca;
+        const bool farSide = (tangentA ? sideA : sideB) == Side::Far;
         if (otherCurve != nullptr) {
           if (!otherCurve->isLine()) {
             return std::nullopt;
           }
           set(QStringLiteral("tangent_distance"), {{"circle", circle->id}, {"line", otherCurve->id}});
+          if (farSide) {
+            markFar();
+          }
         } else {
           // A point, or another circle's centre.
           const auto at = model.pointAt(other);
@@ -875,7 +906,9 @@ private:
             return std::nullopt;
           }
           set(QStringLiteral("tangent_point_distance"), {{"circle", circle->id}, {"point", other}});
-          if (dist(*at, circle->curve.center) < circle->curve.radius) {
+          if (farSide) {
+            markFar();
+          } else if (dist(*at, circle->curve.center) < circle->curve.radius) {
             d.json.insert(QStringLiteral("side"), QStringLiteral("inside"));
           }
         }
@@ -1152,9 +1185,10 @@ private:
   State m_state = State::Pick;
   Selection m_selection;
   QStringList m_picks;
-  // The circles and arcs picked by their tangent side, not their centre
-  // (mitcad#1540), and whether the dimension is to be driven.
-  QHash<QString, bool> m_tangent;
+  // The circles and arcs picked by their near or far tangent side, not
+  // their centre (mitcad#1540, mitcad#2451), and whether the dimension is to
+  // be driven.
+  QHash<QString, Side> m_tangent;
   bool m_driven = false;
   V2 m_cursor;
   V2 m_placed;

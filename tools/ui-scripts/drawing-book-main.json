@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The main design of tools/ui-drawing-book-test.sh (mitcad#2448), run in the folder of a.mitcad and b.mitcad: a linked twice, b once, no drawing of its own."},
+  {"cmd": "insert_component", "path": "a.mitcad"},
+  {"cmd": "insert_component", "path": "a.mitcad"},
+  {"cmd": "insert_component", "path": "b.mitcad"}
+]

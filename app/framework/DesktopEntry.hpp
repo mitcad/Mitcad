@@ -19,8 +19,19 @@ namespace mitcad {
 // MIME type (mime/packages/mitcad.xml), after which the MIME database is
 // updated.
 
-// The bundled desktop file with Exec running the program.
-QString desktopEntryFor(const QString& bundled, const QString& program);
+// The bundled desktop file with Exec running the program (the bundled
+// Exec's arguments after it), TryExec naming it, X-AppImage-Name (the
+// bundled Name) and X-AppImage-Version (version, when given), for AppImage
+// managers that list programs by them (mitcad#2413), merged into the
+// earlier entry at the same place (empty when there is none), which an
+// AppImage manager may have written: the keys and groups the bundled file
+// does not define stay (a manager's X-AppImage-* keys, a user's NoDisplay),
+// the ones it defines are its, a manager's X-AppImage-Name stays, and when
+// the earlier Exec runs the same program, what stands around it there
+// stays (env DESKTOPINTEGRATION=1, field codes). Merging the result again
+// gives the same text.
+QString desktopEntryFor(const QString& bundled, const QString& program, const QString& version,
+                        const QString& earlier);
 
 // The bundled thumbnailer entry with TryExec and Exec running the program;
 // Exec's arguments (%i %o %s) stay.
@@ -29,15 +40,19 @@ QString thumbnailerEntryFor(const QString& bundled, const QString& program);
 // The desktop file and the icons of the AppImage at appImage, unpacked at
 // appDir, put into dataHome (applications/, icons/hicolor/), and the
 // thumbnailer with its entry and the MIME type when the AppImage has them;
-// only the files whose content differs are written.
+// only the files whose content differs are written. The desktop file is
+// desktopEntryFor's merge into the one already there, with the AppImage's
+// version.
 struct DesktopIntegration {
   QStringList written;
   QString error; // empty when everything is in place
 };
-DesktopIntegration integrateAppImage(const QString& appImage, const QString& appDir, const QString& dataHome);
+DesktopIntegration integrateAppImage(const QString& appImage, const QString& appDir, const QString& dataHome,
+                                     const QString& version);
 
 // The above when Mitcad runs as an AppImage (APPIMAGE and APPDIR, set by its
-// runtime) on Linux, into $XDG_DATA_HOME (~/.local/share); logged.
+// runtime) on Linux, into $XDG_DATA_HOME (~/.local/share), with the
+// application's version; logged.
 // Elsewhere it does nothing.
 void integrateDesktop();
 

@@ -462,7 +462,7 @@ päätä", never "napsauta keskipiste".
 | flexible (an occurrence, a subassembly) | joustava | Flexible: Joustava; its own joints move in its parent; rigid there: jäykkä |
 | sheet metal | ohutlevy | flat pattern: levitys; bend: taivutus |
 | drawing | piirustus | |
-| view (a drawing's) | kuvanto | base view: peruskuvanto; projected: projektiokuvanto; section: leikkauskuvanto; detail: detaljikuvanto; break: katkaisu; parent view: emokuvanto; the 3D view: näkymä |
+| view (a drawing's) | kuvanto | base view: peruskuvanto; Flat Pattern View: levityskuvanto (mitcad#2446); projected: projektiokuvanto; section: leikkauskuvanto; detail: detaljikuvanto; break: katkaisu; parent view: emokuvanto; the 3D view: näkymä |
 | orientation cube | suuntakuutio | its faces, in capitals: ETU, TAKA, VASEN, OIKEA, YLÄ, ALA (FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) |
 | standard view | näkymä + direction | Front View: Näkymä edestä; Back View: Näkymä takaa; Left View, Right View: Näkymä vasemmalta, Näkymä oikealta; Top View, Bottom View: Näkymä ylhäältä, Näkymä alhaalta; Isometric View: Isometrinen näkymä; each a whole text, never a name put into "%1 View" (mitcad#1687) |
 | sheet (a drawing's) | arkki | template: pohja; title block: nimiö; scale: mittakaava; first/third angle: ensimmäinen/kolmas kulma |

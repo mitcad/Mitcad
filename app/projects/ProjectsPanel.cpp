@@ -281,6 +281,11 @@ private:
 class ProjectsTreeWidget : public QTreeWidget {
 public:
   explicit ProjectsTreeWidget(ProjectsPanel& panel) : QTreeWidget(&panel), m_panel(panel) {}
+  ~ProjectsTreeWidget() override {
+    if (m_overView) {
+      QApplication::restoreOverrideCursor();
+    }
+  }
 
   QSize minimumSizeHint() const override { return dockedTreeMinimumSize(this, QTreeWidget::minimumSizeHint()); }
 
@@ -376,8 +381,12 @@ protected:
 
   // A drag of a design or a folder onto a folder, a project or a design
   // (its folder) of the same project moves it there. Done here rather than
-  // with the system's drag and drop: nothing leaves the panel.
+  // with the system's drag and drop: the tree keeps the mouse while its
+  // button is down. A design dragged out of the panel onto the 3D view is
+  // inserted there as a component (mitcad#2428): the cursor says a drop
+  // inserts while it is over the view.
   void mousePressEvent(QMouseEvent* event) override {
+    setOverView(false);
     m_drag.clear();
     if (event->button() == Qt::LeftButton && !editing()) {
       const QPoint pressed = event->position().toPoint();
@@ -400,6 +409,13 @@ protected:
           qInfo().noquote() << QStringLiteral("Projects panel: dragging %1")
                                   .arg(m_panel.keyOf(itemFromIndex(m_drag.item())));
         }
+        // Out of the rows over the 3D view: a design is inserted there.
+        if (onView(event)) {
+          setOver(nullptr);
+          setOverView(true);
+          return;
+        }
+        setOverView(false);
         setOver(itemAt(at));
         return;
       }
@@ -411,18 +427,30 @@ protected:
     if (m_drag.dragging()) {
       QTreeWidgetItem* dragged = itemFromIndex(m_drag.item());
       QTreeWidgetItem* over = itemAt(event->position().toPoint());
+      const bool viewDrop = onView(event);
       setOver(nullptr);
+      setOverView(false);
       unsetCursor();
       m_drag.clear();
       if (event->button() == Qt::LeftButton) {
-        m_panel.dropped(dragged, over);
+        if (viewDrop) {
+          m_panel.droppedOnView(dragged, event->globalPosition().toPoint());
+        } else {
+          m_panel.dropped(dragged, over);
+        }
       }
       m_panel.applyWaitingRows();
       return;
     }
+    setOverView(false);
     m_drag.clear();
     unsetCursor();
     QTreeWidget::mouseReleaseEvent(event);
+  }
+
+  void hideEvent(QHideEvent* event) override {
+    setOverView(false);
+    QTreeWidget::hideEvent(event);
   }
 
   // Files dragged from the file manager onto a project or folder row are
@@ -469,6 +497,31 @@ protected:
   }
 
 private:
+  // The dragged row is a design, the pointer is outside the rows, and the
+  // 3D view is under it (mitcad#2428).
+  bool onView(const QMouseEvent* event) const {
+    if (!m_drag.dragging() || viewport()->rect().contains(event->position().toPoint())) {
+      return false;
+    }
+    return m_panel.viewTakes(itemFromIndex(m_drag.item()), event->globalPosition().toPoint());
+  }
+
+  // The cursor over the 3D view: a drop inserts (the application's, as the
+  // tree has the mouse but not the pointer's place). Logged once per visit.
+  void setOverView(bool over) {
+    if (over == m_overView) {
+      return;
+    }
+    m_overView = over;
+    if (over) {
+      QApplication::setOverrideCursor(Qt::DragCopyCursor);
+      qInfo().noquote() << QStringLiteral("Projects panel: dragging %1 over the 3D view")
+                               .arg(m_panel.keyOf(itemFromIndex(m_drag.item())));
+    } else {
+      QApplication::restoreOverrideCursor();
+    }
+  }
+
   // The row files from the file manager would go into, highlighted as a
   // row's drag highlights its target.
   void setFileOver(QTreeWidgetItem* item) {
@@ -518,6 +571,7 @@ private:
   ProjectRowDrag m_drag;
   QPersistentModelIndex m_over;
   QPersistentModelIndex m_fileOver; // files from the file manager go here (mitcad#2204)
+  bool m_overView = false;          // a design dragged over the 3D view (mitcad#2428)
 };
 
 // ---------------------------------------------------------------------------
@@ -2167,6 +2221,19 @@ void ProjectsPanel::dropped(QTreeWidgetItem* dragged, QTreeWidgetItem* over) {
   const QString to = joinPath(folder, lastPart(from));
   qInfo().noquote() << QStringLiteral("Projects panel: drag %1 to %2").arg(from, to);
   emit moveRequested(rootOf(dragged), from, to, typeOf(dragged) == RowType::Folder);
+}
+
+bool ProjectsPanel::viewTakes(const QTreeWidgetItem* dragged, const QPoint& global) const {
+  // Designs only: a folder or another file has nothing to insert.
+  return typeOf(dragged) == RowType::Design && m_host.viewTakesDesign && m_host.viewTakesDesign(global);
+}
+
+void ProjectsPanel::droppedOnView(QTreeWidgetItem* dragged, const QPoint& global) {
+  if (typeOf(dragged) != RowType::Design || !m_host.designDroppedOnView) {
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Projects panel: drop of %1 on the 3D view").arg(keyOf(dragged));
+  m_host.designDroppedOnView(QDir::cleanPath(QDir(rootOf(dragged)).filePath(pathOf(dragged))), global);
 }
 
 // ---------------------------------------------------------------------------

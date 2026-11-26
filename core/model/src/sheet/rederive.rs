@@ -176,6 +176,20 @@ impl From<&str> for Failure {
     }
 }
 
+/// A sheet with a curved panel (mitcad#2435) is not re-derived: its chart
+/// is the face's development, which an ordinary feature's faces do not
+/// give back.
+fn curved_refusal(state: &SheetState) -> Result<(), Failure> {
+    match super::folded::curved::curved_panel(state) {
+        Some(_) => Err(Failure::Reason(
+            "a cylindrical or conical sheet's development does not follow ordinary features: \
+             make its holes and cuts before converting the face"
+                .into(),
+        )),
+        None => Ok(()),
+    }
+}
+
 fn kernel<T>(result: Result<T, KernelError>) -> Result<T, Failure> {
     result.map_err(|e| match e {
         KernelError::Unsupported(_) => Failure::Unsupported,
@@ -215,6 +229,7 @@ fn adapted<K: Kernel>(
 ) -> Result<Derived<K::Shape>, Failure> {
     let (state, rules) = read(ctx, body)?;
     let before = ctx.body(body)?;
+    curved_refusal(&state)?;
     if let Some(derived) = bends::across_bends(ctx, state.clone(), &rules, &before, shape)? {
         return Ok(derived);
     }
@@ -261,6 +276,7 @@ fn derive<K: Kernel>(
     before: &K::Shape,
     shape: &K::Shape,
 ) -> Result<SheetState, Failure> {
+    curved_refusal(&state)?;
     let thickness = rules.thickness;
     let faces = kernel(ctx.kernel.face_geometries(shape))?;
     // Planar charts grouped by plane and material direction: one trim each.

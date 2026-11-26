@@ -34,6 +34,9 @@ mod profile_plane;
 pub(crate) use profile_plane::{flange_wall_plane, wall_flange_key};
 // A flange on several connected edges with mitred corners (mitcad#1872).
 pub(crate) mod flange_edges;
+// Convert to Sheet Metal of cylindrical and conical faces and their Flat
+// Pattern (mitcad#2435).
+pub(crate) mod curved;
 
 use super::*;
 use crate::features::sheet::SheetRulesDef;

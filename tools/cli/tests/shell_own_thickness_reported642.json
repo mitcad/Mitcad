@@ -1,0 +1,17 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #642's second request (mitcad#2443; opened with --open, never committed; tools/cli/shell-sharp-reported-test.cmake): the report's first design (Body1, F2.b0: a cone on a ring revolved from Sketch1, a side boss, five notches cut up through the cone's wall) shelled as shell_sharp_reported642.json does, Inside 2 mm, Sharp, Tangent Chain on, the boss top and the foot removed, with the step's top (z = 80) at a wall of its own, 3 mm. It builds into one solid: the step's top measured 3 mm from its inside, the notches and the cone with the inside of their walls."},
+  {"cmd": "add_feature", "def": {"type": "shell", "body": "F2.b0",
+    "faces": ["F2:side(c1[c20,c7])", "F2:side(c19[c15,c21])"],
+    "inside": 2, "tangent_chain": true, "rounded": false,
+    "face_thicknesses": [{"faces": ["F2:side(c9[c7,c11])"], "inside": 3}]}},
+  {"expect": {"feature": "Shell1", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"comment": "The step's top with its inside 3 mm below."},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F2:side(c9[c7,c11]))"}},
+  {"expect": {"query": {"query": "measure", "a": "Body1/F2:side(c9[c7,c11])", "b": "Body1/F12:offset(F2:side(c9[c7,c11]))"},
+    "result": {"between": {"offset": 3}}}},
+  {"comment": "The notches' round ends and the cone keep the inside of their walls."},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F10:side(c1[c11,c8]))"}},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F11:inst4(F10:side(c1[c11,c8])))"}},
+  {"expect": {"body": "Body1", "has_face": "F12:offset(F2:side(c11[c9,c13+c21]))"}}
+]

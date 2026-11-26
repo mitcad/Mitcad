@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "BrowserPanel.hpp"
+#include "BrowserRows.hpp"
 #include "framework/ModelMessages.hpp"
 
 #include <algorithm>
@@ -1154,6 +1155,25 @@ public:
     return QRect(QPoint(left, cell.top() + 2), QPoint(std::max(left, right), cell.bottom() - 2));
   }
 
+  // The gap between a row's box and the box of the row below it
+  // (mitcad#2414), in the viewport's coordinates: as wide as both boxes
+  // have in common. It shows the view, but belongs to the row stack: the
+  // wheel there scrolls the rows rather than the camera (rowsRegion). Empty
+  // when either row is not laid out or the boxes have nothing in common.
+  QRect gapBelow(const QModelIndex& index) const {
+    const QRect above = rowBox(index);
+    const QRect below = rowBox(indexBelow(index));
+    if (above.isEmpty() || below.isEmpty() || below.top() <= above.bottom() + 1) {
+      return QRect();
+    }
+    const int left = std::max(above.left(), below.left());
+    const int right = std::min(above.right(), below.right());
+    if (right < left) {
+      return QRect();
+    }
+    return QRect(QPoint(left, above.bottom() + 1), QPoint(right, below.top() - 1));
+  }
+
   // Where a row's box would end with its whole name (mitcad#1932: the bare
   // card widens to it), in the viewport's coordinates, the right column
   // (mitcad#2223) right after it; -1 for a row not laid out.
@@ -1473,19 +1493,8 @@ private:
     if (!barColour.isValid()) {
       return;
     }
-    const QColor colour = barColour.value<QColor>();
-    const QRect cell = visualRect(index);
-    if (!colour.isValid() || cell.isEmpty()) {
-      return;
-    }
-    const QRectF bar(cell.left() - indentation() + kComponentBarLeft, cell.top() + kComponentBarInset,
-                     kComponentBarWidth, std::max(0, cell.height() - 2 * kComponentBarInset));
-    painter->save();
-    painter->setRenderHint(QPainter::Antialiasing);
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(colour);
-    painter->drawRoundedRect(bar, 1.25, 1.25);
-    painter->restore();
+    // One painting for the Browser and the History list (mitcad#2427).
+    browserRows::paintComponentBar(painter, visualRect(index), indentation(), barColour.value<QColor>());
   }
 
   // The rows a press on `item` drags (mitcad#2103): the selected rows of
@@ -1800,6 +1809,10 @@ QRegion BrowserPanel::rowsRegion() const {
       break;
     }
     region += m_tree->rowBox(index).intersected(inside).translated(origin);
+    // The gap to the next row's box too (mitcad#2414): it still shows the
+    // view, but the wheel there scrolls the rows (at either end the card
+    // takes it, GlassCard::wheelEvent), not the camera.
+    region += m_tree->gapBelow(index).intersected(inside).translated(origin);
   }
   for (const QScrollBar* bar : {m_tree->verticalScrollBar(), m_tree->horizontalScrollBar(), m_leftBar}) {
     if (bar != nullptr && bar->isVisible()) {
@@ -4729,6 +4742,7 @@ void BrowserPanel::logLayout() {
     // box, at the middle row in sight, where a click reaches the 3D view.
     int right = -1;
     std::vector<QRect> whole; // the boxes of rows whose middle is in sight
+    std::vector<QRect> gaps;  // the gaps between boxes in sight (mitcad#2414)
     for (QModelIndex index = m_tree->indexAt(QPoint(0, 0)); index.isValid(); index = m_tree->indexBelow(index)) {
       const QRect row = m_tree->visualRect(index);
       if (row.top() > viewport.bottom()) {
@@ -4739,6 +4753,14 @@ void BrowserPanel::logLayout() {
       if (viewport.contains(row.center())) {
         whole.push_back(box);
       }
+      if (const QRect gap = m_tree->gapBelow(index); !gap.isEmpty() && viewport.contains(gap)) {
+        gaps.push_back(gap);
+      }
+    }
+    // A place between two rows' boxes, the middle one in sight, where the
+    // wheel scrolls the rows (mitcad#2414).
+    if (!gaps.empty()) {
+      place(QStringLiteral("Browser between rows"), gaps[gaps.size() / 2]);
     }
     if (!whole.empty() && viewport.right() - right > 16) {
       const QRect middle = whole[whole.size() / 2];
@@ -4817,6 +4839,56 @@ void BrowserPanel::placeLeftScrollBar() {
   }
   queueRowsRegion();
   TestSync::singleShot(0, this, [this] { logLayout(); });
+}
+
+// The Browser's row painting for the History list (mitcad#2427,
+// BrowserRows.hpp): the roles it reads are the rows' own.
+static_assert(browserRows::kEyeRole == kEyeRole && browserRows::kBindingsRole == kBindingsRole &&
+                  browserRows::kEyeTipRole == kEyeTipRole && browserRows::kTextRole == kTextRole &&
+                  browserRows::kOwnerMarkRole == kOwnerMarkRole &&
+                  browserRows::kComponentColorRole == kComponentColorRole,
+              "BrowserRows.hpp's roles are the browser rows' (mitcad#2427)");
+
+QStyledItemDelegate* browserRows::installDelegate(QAbstractItemView* view) {
+  BrowserDelegate* delegate = chromeStyle() == ChromeStyle::Floating
+                                  ? static_cast<BrowserDelegate*>(new SidebarDelegate(view))
+                                  : static_cast<BrowserDelegate*>(new PanelDelegate(view));
+  view->setItemDelegate(delegate);
+  return delegate;
+}
+
+void browserRows::setEyeRight(QStyledItemDelegate* delegate, bool right) {
+  if (auto* rows = dynamic_cast<BrowserDelegate*>(delegate)) {
+    rows->setPlaces(false, right);
+  }
+}
+
+browserRows::RowParts browserRows::rowParts(const QStyledItemDelegate* delegate, const QStyleOptionViewItem& option,
+                                            const QModelIndex& index) {
+  const auto* rows = dynamic_cast<const BrowserDelegate*>(delegate);
+  if (rows == nullptr) {
+    return {};
+  }
+  const BrowserDelegate::Parts parts = rows->parts(option, index);
+  return {parts.eye, parts.fx, parts.name};
+}
+
+QIcon browserRows::levelIcon(const QIcon& icon, NoticeLevel level) {
+  return QIcon(new LinkedIconEngine(icon, noticeIcon(level)));
+}
+
+void browserRows::paintComponentBar(QPainter* painter, const QRect& cell, int indentation, const QColor& color) {
+  if (!color.isValid() || cell.isEmpty()) {
+    return;
+  }
+  const QRectF bar(cell.left() - indentation + kComponentBarLeft, cell.top() + kComponentBarInset,
+                   kComponentBarWidth, std::max(0, cell.height() - 2 * kComponentBarInset));
+  painter->save();
+  painter->setRenderHint(QPainter::Antialiasing);
+  painter->setPen(Qt::NoPen);
+  painter->setBrush(color);
+  painter->drawRoundedRect(bar, 1.25, 1.25);
+  painter->restore();
 }
 
 } // namespace mitcad

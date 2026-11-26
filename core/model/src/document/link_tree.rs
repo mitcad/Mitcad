@@ -32,6 +32,21 @@
 //!
 //! A design without components, chosen parts (mitcad#2130) and links
 //! saved before keep the flat form: the bodies as one base feature.
+//!
+//! A design whose root holds nothing of its own and one component (a new
+//! design's shape: the root and Component1, mitcad#2429) comes in as that
+//! component, without the root's level: the linked component stands for
+//! it ([`LinkTop`], [`single_component`]), its occurrence placed where the
+//! insert places it composed with the component's placement in the
+//! design. Read again while the design keeps that shape, it stays so; once
+//! the design has root content or more components, the design's whole
+//! structure comes in, with a line saying so. The one component then gets
+//! a component of its own inside the linked one, which takes the base
+//! feature of its bodies and the joints made for its own as they are, and
+//! the references of this design to its parts follow it (mitcad#2441,
+//! `DocState::open_top`): a joint or pick of `part:1/Key:1` names
+//! `part:1/Component1:1/Key:1`, one on the bodies of `part:1` names
+//! `part:1/Component1:1`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -40,10 +55,15 @@ use super::copy::CopySource;
 use super::linked_looks::SourceLook;
 use super::mounts::SourceMount;
 use super::{ComponentCopy, DocState, Document, ModelError, invalid};
-use crate::assembly::{Flex, Instance, LinkTree, LinkedComponent, LinkedFeature, LinkedOccurrence};
+use crate::assembly::{
+    ExternalLink, Flex, Instance, LinkTop, LinkTree, LinkedComponent, LinkedFeature,
+    LinkedOccurrence,
+};
 use crate::exchange::ImportBody;
-use crate::features::{BaseBody, BaseDef, FeatureDef, JointOrigin, ValueInput};
-use crate::ids::{ComponentUid, FeatureUid, OccurrenceUid};
+use crate::features::{
+    BaseBody, BaseDef, FeatureDef, GeomRef, JointOrigin, OccurrencePath, References, ValueInput,
+};
+use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::joints::Motion;
 use crate::kernel::Kernel;
 use crate::parameters::ParamId;
@@ -63,6 +83,9 @@ pub(super) struct TreeRead {
     pub components: Vec<ReadComponent>,
     pub occurrences: Vec<ReadOccurrence>,
     pub features: Vec<ReadFeature>,
+    /// Read as its one component (mitcad#2429): "the root" above is that
+    /// component, its components those placed in it.
+    pub top: Option<LinkTop>,
 }
 
 /// A component of the design placed in it, with its own visible bodies in
@@ -115,6 +138,53 @@ pub(super) fn has_components(source: &DocState) -> bool {
         .assembly
         .children(ComponentUid::ROOT)
         .any(|o| o.pattern.is_none())
+}
+
+/// The one component a design comes in as (mitcad#2429): its root holds
+/// no feature of its own (no body, sketch, feature or construction, also
+/// none suppressed or rolled back), no drawing, and exactly one occurrence, of a
+/// component placed only there that is neither linked, a library part nor
+/// made by a feature. None: the design comes in with its root.
+pub(crate) fn single_component(source: &DocState) -> Option<LinkTop> {
+    // A drawing of the root is the root's own too: a copy of the one
+    // component would leave it behind.
+    if source.features.iter().any(|f| f.component.is_root())
+        || source.drawings.iter().any(|d| d.component.is_root())
+    {
+        return None;
+    }
+    let a = &source.assembly;
+    let mut children = a.children(ComponentUid::ROOT);
+    let only = children.next()?;
+    if children.next().is_some() || only.pattern.is_some() {
+        return None;
+    }
+    let component = a.component(only.component)?;
+    let plain = component.link.is_none()
+        && component.library.is_none()
+        && component.created_by.is_none()
+        && !component.in_place;
+    if !plain || a.occurrences_of(only.component).count() != 1 {
+        return None;
+    }
+    Some(LinkTop {
+        component: only.component,
+        occurrence: only.uid,
+        placement: only.transform,
+    })
+}
+
+/// Mount frames of a design (in its root's coordinates) in those of its
+/// one component `top` (mitcad#2429).
+pub(super) fn mounts_in_top(top: &LinkTop, mounts: Vec<SourceMount>) -> Vec<SourceMount> {
+    let inverse = crate::assembly::inverse(&top.placement);
+    mounts
+        .into_iter()
+        .map(|m| SourceMount {
+            frame: inverse.after(&m.frame),
+            ..m
+        })
+        .collect()
 }
 
 /// A joint origin at a frame: a fixed plane through it on the same path.
@@ -175,28 +245,38 @@ impl<K: Kernel> Document<K> {
     /// appearances through `origin`) to link with its components: one
     /// evaluation at its marker. Its joints that do not hold there, are
     /// suppressed or rolled back are left out, as are its constraint sets
-    /// and motion links. Refused when it has no bodies to show.
+    /// and motion links. Refused when it has no bodies to show. With `top`
+    /// (mitcad#2429, [`single_component`]) it is read as that component:
+    /// its bodies, mount frames and joints as the root's, the components
+    /// placed in it as the design's, the root's level left out.
     pub(super) fn design_tree(
         &self,
         source: &DocState,
         path: &str,
         origin: &CopySource<'_>,
+        top: Option<&LinkTop>,
     ) -> Result<TreeRead, ModelError> {
         let kernel = &self.kernel;
         // A cancel (P7) stops this too.
         let monitor = self.monitor.as_ref();
         let result = recompute(kernel, source, &mut Cache::default(), monitor)?;
-        let mounts = super::mounts::evaluated_mounts(source, &result);
+        let mut mounts = super::mounts::evaluated_mounts(source, &result);
+        if let Some(top) = top {
+            mounts = mounts_in_top(top, mounts);
+        }
         let names = super::display_names(source, &result);
         let a = source.assembly.at_placements(&result.placements);
+        // What stands for the root: the design's, or its one component.
+        let head = top.map_or(ComponentUid::ROOT, |t| t.component);
+        let as_root = |c: ComponentUid| if c == head { ComponentUid::ROOT } else { c };
         // The components placed in the design, in its order.
         let placed: Vec<ComponentUid> = a
             .components
             .iter()
             .map(|c| c.uid)
-            .filter(|c| !a.paths_to(*c).is_empty())
+            .filter(|c| *c != head && !a.paths_to(*c).is_empty())
             .collect();
-        let inside = |c: ComponentUid| c.is_root() || placed.contains(&c);
+        let inside = |c: ComponentUid| c == head || placed.contains(&c);
         // A component's own visible bodies, in its coordinates.
         let own = |c: ComponentUid| -> Result<(Vec<BaseBody>, Vec<SourceLook>), ModelError> {
             let path = a.paths_to(c).into_iter().next().unwrap_or_default();
@@ -227,7 +307,7 @@ impl<K: Kernel> Document<K> {
             }
             Ok((self.base_bodies(&bodies)?, looks))
         };
-        let (root, root_looks) = own(ComponentUid::ROOT)?;
+        let (root, root_looks) = own(head)?;
         let mut components = Vec::with_capacity(placed.len());
         for c in &placed {
             let (bodies, looks) = own(*c)?;
@@ -249,7 +329,7 @@ impl<K: Kernel> Document<K> {
             .map(|o| ReadOccurrence {
                 source: o.uid,
                 component: o.component,
-                parent: o.parent,
+                parent: as_root(o.parent),
                 transform: result
                     .placements
                     .get(&o.uid)
@@ -319,7 +399,7 @@ impl<K: Kernel> Document<K> {
                 features.push(ReadFeature {
                     source: entry.uid,
                     name: entry.name.clone(),
-                    component: entry.component,
+                    component: as_root(entry.component),
                     def,
                 });
             }
@@ -331,6 +411,7 @@ impl<K: Kernel> Document<K> {
             components,
             occurrences,
             features,
+            top: top.copied(),
         })
     }
 }
@@ -346,7 +427,11 @@ impl DocState {
         read: &TreeRead,
         file: &str,
     ) -> Result<LinkTree, ModelError> {
-        let mut tree = LinkTree::default();
+        let mut tree = LinkTree {
+            // Standing for the design's one component (mitcad#2429).
+            top: read.top,
+            ..LinkTree::default()
+        };
         let mut components = BTreeMap::from([(ComponentUid::ROOT, made)]);
         for c in &read.components {
             let record = self.new_tree_component(c, file)?;
@@ -492,6 +577,352 @@ impl DocState {
             .collect()
     }
 
+    /// A linked design that came in as its one component (mitcad#2429)
+    /// read again as `now` (None: with its root, as the design has more
+    /// now): the occurrences of the linked component `made` follow where
+    /// the design's root places what the linked component stands for
+    /// (the one component's placement, or the root's identity), the moves
+    /// made here kept. Returns the one component it stood for when the
+    /// design now comes in with its root (`DocState::open_top` then
+    /// gives that component one of its own). A design linked with its root
+    /// stays so.
+    fn take_top(
+        &mut self,
+        made: ComponentUid,
+        tree: &mut LinkTree,
+        now: Option<LinkTop>,
+    ) -> Option<LinkTop> {
+        let before = tree.top?;
+        let placement = now.map_or(Transform::IDENTITY, |t| t.placement);
+        if placement != before.placement {
+            // An occurrence at T ∘ before goes to T ∘ placement.
+            let shift = crate::assembly::inverse(&before.placement).after(&placement);
+            for o in self
+                .assembly
+                .occurrences
+                .iter_mut()
+                .filter(|o| o.component == made)
+            {
+                o.transform = o.transform.after(&shift);
+            }
+        }
+        tree.top = now;
+        now.is_none().then_some(before)
+    }
+
+    /// A linked design that came in as its one component `top`
+    /// (mitcad#2429), read again with its root as `read` (mitcad#2441):
+    /// that component gets a component of its own, placed in the linked
+    /// component `made` where the design places it, and takes the base
+    /// feature of its bodies and the joints made for its own, which keep
+    /// their uids; the linked component gets a new base feature for the
+    /// root's bodies (`link` follows). The references of this design to
+    /// its parts follow, so that they name the same parts and geometry: a
+    /// path through an occurrence of `made` to a part placed in the one
+    /// component goes on through the new occurrence (as Reparent
+    /// Occurrence makes it follow), and so does one that ends at it and
+    /// names the geometry of its bodies (as Move History into Component
+    /// makes it follow) or a fixed frame or origin plane of a joint origin
+    /// (`deepen_fixed_origins`). The line of the update that says so,
+    /// naming what could not follow; when the design no longer places the
+    /// one component in its root, nothing can follow and the line says
+    /// that the parts may need to be picked again.
+    fn open_top(
+        &mut self,
+        made: ComponentUid,
+        link: &mut ExternalLink,
+        tree: &mut LinkTree,
+        top: &LinkTop,
+        read: &TreeRead,
+        file: &str,
+    ) -> Result<String, ModelError> {
+        let name = self.assembly.name(made);
+        let found = read
+            .components
+            .iter()
+            .find(|c| c.source == top.component)
+            .zip(read.occurrences.iter().find(|o| {
+                o.source == top.occurrence && o.component == top.component && o.parent.is_root()
+            }));
+        let Some((c, o)) = found else {
+            return Ok(format!(
+                "{name} changed its structure: {file} now holds more than its one component, so \
+                 it comes in with its root and components as the file has them; joints and \
+                 references to its parts may need to be picked again"
+            ));
+        };
+        let old = link.feature;
+        let bodies: Vec<BodyUid> = match self.entry(old).map(|e| &e.def) {
+            Some(FeatureDef::Base(base)) => (0u32..)
+                .zip(&base.bodies)
+                .map(|(i, _)| base.body_uid(old, i))
+                .collect(),
+            _ => Vec::new(),
+        };
+        // The one component's own, with its occurrence.
+        let component_name = self.free_component_name(&c.name);
+        let component = self.assembly.create(Some(&component_name), None);
+        self.assembly.set_policy(component, c.policy);
+        let occurrence = self.place_tree_occurrence(component, made, o);
+        tree.occurrences.push(LinkedOccurrence {
+            source: o.source,
+            occurrence,
+            gone: false,
+        });
+        // Its bodies' base feature and the joints made for its own go into
+        // it, as they are.
+        for f in &mut self.features {
+            if f.component == made && (f.uid == old || tree.made(f.uid)) {
+                Arc::make_mut(f).component = component;
+            }
+        }
+        tree.components.push(LinkedComponent {
+            source: c.source,
+            name: c.name.clone(),
+            component,
+            feature: old,
+            gone: false,
+        });
+        // The linked component's own bodies are the root's now.
+        let added = self.add_feature_in(&tree_base(read.root.clone(), file), None, made)?;
+        self.give_new_link_looks(added.uid, &read.root_looks)?;
+        link.feature = added.uid;
+        if let Some(l) = self
+            .assembly
+            .component_mut(made)
+            .and_then(|c| c.link.as_mut())
+        {
+            l.feature = added.uid;
+        }
+
+        // What the design made for it goes its own way.
+        let skip: BTreeSet<FeatureUid> = self
+            .features
+            .iter()
+            .filter(|f| f.component == made || tree.holds(f.component) || tree.made(f.uid))
+            .map(|f| f.uid)
+            .collect();
+        // The geometry of its bodies and its fixed frames, seen through an
+        // occurrence of the linked component.
+        super::move_features::follow_into(
+            self,
+            made,
+            component,
+            occurrence,
+            &[old],
+            &bodies,
+            !read.root.is_empty(),
+        );
+        self.deepen_fixed_origins(made, occurrence, &skip);
+        self.deepen_picked_points(made, occurrence, &BTreeSet::from([old]), &skip);
+        // The parts placed in it, one level down.
+        let inside: Vec<OccurrenceUid> = read
+            .occurrences
+            .iter()
+            .filter(|r| r.parent == top.component)
+            .filter_map(|r| {
+                tree.occurrences
+                    .iter()
+                    .filter(|t| t.source == r.source)
+                    .map(|t| t.occurrence)
+                    .find(|uid| {
+                        self.assembly
+                            .occurrence(*uid)
+                            .is_some_and(|x| x.parent == made)
+                    })
+            })
+            .collect();
+        let mut moves = Vec::new();
+        for path in self.assembly.paths_to(made) {
+            for part in &inside {
+                let mut old = path.clone();
+                old.push(*part);
+                let mut new = path.clone();
+                new.extend([occurrence, *part]);
+                moves.push((old, new));
+            }
+        }
+        let stuck = super::reparent::follow_moved_down(self, &moves, &skip);
+        for part in &inside {
+            if let Some(x) = self.assembly.occurrence_mut(*part) {
+                x.parent = component;
+            }
+        }
+        Ok(if stuck.is_empty() {
+            format!(
+                "{name} changed its structure: {file} now holds more than its one component, so \
+                 it comes in with its root and components as the file has them; the references \
+                 to its parts follow them"
+            )
+        } else {
+            format!(
+                "{name} changed its structure: {file} now holds more than its one component, so \
+                 it comes in with its root and components as the file has them; the references \
+                 to its parts follow them except these, which may need to be picked again: {}",
+                stuck.join("; ")
+            )
+        })
+    }
+
+    /// The points and axes of this design's features (not `skip`) picked
+    /// on the linked component `made` that its joint origins' rewrites do
+    /// not carry (mitcad#2466): Pattern at Points' targets and anchor and
+    /// moves' picked points and axes (paths from the root that end at an
+    /// occurrence of `made`), when fixed or an origin plane, axis or point
+    /// or on the geometry of `moved` (the bodies of the one component it
+    /// stood for), and motion links' origins on that geometry (the fixed
+    /// ones go in [`DocState::deepen_fixed_origins`]), go on through
+    /// `occurrence`, which places that component now. The occurrences a
+    /// pattern made keep their keys.
+    fn deepen_picked_points(
+        &mut self,
+        made: ComponentUid,
+        occurrence: OccurrenceUid,
+        moved: &BTreeSet<FeatureUid>,
+        skip: &BTreeSet<FeatureUid>,
+    ) {
+        let assembly = self.assembly.clone();
+        // From `from`, fixed geometry too when `fixed`.
+        let deepen =
+            |from: ComponentUid, path: &mut OccurrencePath, geometry: &GeomRef, fixed: bool| {
+                if crate::joints::path_component(&assembly, from, &path.0) != Ok(made) {
+                    return false;
+                }
+                let is_fixed = matches!(
+                    geometry,
+                    GeomRef::Origin(_)
+                        | GeomRef::FixedPlane { .. }
+                        | GeomRef::FixedAxis { .. }
+                        | GeomRef::FixedPoint(_)
+                );
+                let mut refs = References::default();
+                geometry.add_to(&mut refs);
+                if (fixed && is_fixed) || refs.features.iter().any(|f| moved.contains(f)) {
+                    path.0.push(occurrence);
+                    return true;
+                }
+                false
+            };
+        let mut patterns = Vec::new();
+        for f in &mut self.features {
+            if skip.contains(&f.uid) {
+                continue;
+            }
+            let mut def = f.def.clone();
+            let mut changed = false;
+            match &mut def {
+                FeatureDef::PatternAtPoints(p) => {
+                    for point in p.targets.iter_mut().chain(p.anchor.iter_mut()) {
+                        if let Some(path) = point.occurrence.as_mut() {
+                            changed |= deepen(ComponentUid::ROOT, path, &point.point, true);
+                        }
+                    }
+                }
+                FeatureDef::MotionLink(link) => {
+                    for o in link.coupling.origins_mut() {
+                        changed |= deepen(f.component, &mut o.occurrence, &o.geometry, false);
+                    }
+                }
+                other => {
+                    if let Some(spec) = other.move_spec_mut() {
+                        for (geometry, path) in spec.placed_references_mut() {
+                            if let Some(path) = path.as_mut() {
+                                changed |= deepen(ComponentUid::ROOT, path, geometry, true);
+                            }
+                        }
+                    }
+                }
+            }
+            if !changed {
+                continue;
+            }
+            if let (FeatureDef::PatternAtPoints(before), FeatureDef::PatternAtPoints(after)) =
+                (&f.def, &def)
+            {
+                patterns.push((f.uid, before.clone(), after.clone()));
+            }
+            Arc::make_mut(f).def = def;
+        }
+        for (uid, before, after) in patterns {
+            self.follow_point_pattern(uid, &before, &after);
+        }
+    }
+
+    /// The joint origins of this design's features (not `skip`) on a fixed
+    /// frame or an origin plane, axis or point of the linked component
+    /// `made` (a path that ends at one of its occurrences) go on through
+    /// `occurrence` (mitcad#2441): they were in the coordinates of the one
+    /// component it stood for, which that occurrence places now. Joints,
+    /// as-built joints' origins, constraint rows, bound lengths and motion
+    /// links.
+    fn deepen_fixed_origins(
+        &mut self,
+        made: ComponentUid,
+        occurrence: OccurrenceUid,
+        skip: &BTreeSet<FeatureUid>,
+    ) {
+        let assembly = self.assembly.clone();
+        for f in &mut self.features {
+            if skip.contains(&f.uid) {
+                continue;
+            }
+            let component = f.component;
+            let deepen = |path: &mut OccurrencePath, geometry: &GeomRef| -> bool {
+                let fixed = matches!(
+                    geometry,
+                    GeomRef::Origin(_)
+                        | GeomRef::FixedPlane { .. }
+                        | GeomRef::FixedAxis { .. }
+                        | GeomRef::FixedPoint(_)
+                );
+                if fixed && crate::joints::path_component(&assembly, component, &path.0) == Ok(made)
+                {
+                    path.0.push(occurrence);
+                    return true;
+                }
+                false
+            };
+            let origin = |o: &mut JointOrigin| deepen(&mut o.occurrence, &o.geometry);
+            let mut def = f.def.clone();
+            let mut changed = false;
+            match &mut def {
+                FeatureDef::Joint(j) => {
+                    changed |= origin(&mut j.a);
+                    changed |= origin(&mut j.b);
+                }
+                FeatureDef::AsBuiltJoint(j) => {
+                    if let Some(o) = j.origin.as_mut() {
+                        changed |= origin(o);
+                    }
+                }
+                FeatureDef::ConstraintSet(set) => {
+                    for row in &mut set.rows {
+                        for o in [&mut row.a, &mut row.b]
+                            .into_iter()
+                            .chain(row.a2.as_mut())
+                            .chain(row.b2.as_mut())
+                        {
+                            changed |= origin(o);
+                        }
+                    }
+                }
+                FeatureDef::BoundLength(b) => {
+                    changed |= deepen(&mut b.from.occurrence, &b.from.geometry);
+                    changed |= deepen(&mut b.to.occurrence, &b.to.geometry);
+                }
+                FeatureDef::MotionLink(l) => {
+                    for o in l.coupling.origins_mut() {
+                        changed |= origin(o);
+                    }
+                }
+                _ => {}
+            }
+            if changed {
+                Arc::make_mut(f).def = def;
+            }
+        }
+    }
+
     /// A linked design kept with its components read again: everything
     /// made for it updated in place (see the module docs). Adds a line to
     /// `messages` per part gone that stays and per flexible occurrence's
@@ -507,12 +938,18 @@ impl DocState {
             file,
             read,
         } = update;
-        let Some(link) = self.assembly.component(made).and_then(|c| c.link.clone()) else {
+        let Some(mut link) = self.assembly.component(made).and_then(|c| c.link.clone()) else {
             return Ok(());
         };
         let Some(mut tree) = link.tree.clone() else {
             return Ok(());
         };
+        // Back with its root (mitcad#2429): the one component it stood
+        // for gets one of its own, and the references follow (mitcad#2441).
+        if let Some(top) = self.take_top(made, &mut tree, read.top) {
+            let line = self.open_top(made, &mut link, &mut tree, &top, &read, &file)?;
+            messages.push(line);
+        }
         // The root's own bodies and mount frames.
         super::mounts::update_linked_mounts(self, made, &read.mounts)?;
         self.set_tree_bodies(link.feature, read.root.clone(), &read.root_looks)?;
@@ -805,5 +1242,7 @@ pub(super) fn copied_tree(
                 })
             })
             .collect(),
+        // It stands for the design's one component as before (mitcad#2429).
+        top: tree.top,
     }
 }

@@ -2099,6 +2099,12 @@ private:
   bool m_originCorner = false;
   QString m_loggedOriginSize;
   bool m_resizeToLog = false;
+  // The view's sizes after a resize of the widget (mitcad#2422): to check
+  // at the next frame drawn, then to log once the view rests
+  // (logViewSizes), whether OCCT's size followed or not.
+  bool m_sizesToCheck = false;
+  bool m_sizesToLog = false;
+  void logViewSizes();
   FirstBodiesFit m_firstFit; // the design's first bodies fitted once (expectFirstBodies)
   bool m_documentVisible = true;
   bool m_directFrameQueued = false; // requestFrame() in an unexposed window
@@ -2135,7 +2141,8 @@ private:
   // cannot, empty when it can (or is not needed).
   QString prepareViewEgl();
   // Binds the view's framebuffer at the view's size in pixels, made or
-  // resized first, in OCCT's context (the view's own one current).
+  // resized first, in OCCT's context (the view's own one current), and
+  // sets the viewport to its size (mitcad#2422).
   bool bindViewEglFramebuffer(const occ::handle<OpenGl_Context>& gl);
   // The framebuffer's pixels into the frame paintGL() paints.
   void readViewEglFrame(const occ::handle<OpenGl_Context>& gl);
@@ -2553,6 +2560,10 @@ private:
   QPointF m_pickListPosition;
   bool m_pickListArmed = false;
   bool m_pickListHeld = false;
+  // When the view last logged that the wheel reached it (wheelEvent,
+  // mitcad#2414: UI tests tell the wheel the Browser's rows take from the
+  // view's), at most twice a second.
+  QElapsedTimer m_wheelLogClock;
 };
 
 } // namespace mitcad

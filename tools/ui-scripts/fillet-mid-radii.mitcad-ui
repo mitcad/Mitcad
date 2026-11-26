@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+# Fillet's Mid Radii in a narrow panel (mitcad#2421, GitHub
+# mitcad/Mitcad#671), on fillet-mid-radii.json (a stepped block F1.b0, its
+# top's edge at x 0 E{F1:side3|F1:top}):
+#   Fillet on the edge with Radius Type Variable, two Mid Radii added: in
+#   the Command panel's width each row's Set, Position and Radius stand
+#   each on a line of their own under the row's name and ✕ ("stacked"),
+#   no field narrower than a short value needs and no label cut ("Panel
+#   Fillet inputs: none clipped"). Keyboard: Set of the first row typed,
+#   Tab to its Position and Radius and on to the second row's fields, each
+#   typed. An invalid Radius in the second row: its error under the field
+#   as high as its text, nothing clipped; a valid one takes the error away.
+# Run by tools/ui-fillet-mid-radii-test.sh (Linux: Floating and Docked, at
+# Text size 100% and 150%).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Fillet on the top's edge, Variable.
+mark
+command solid.fillet
+wait-log '^Panel Fillet input sets[.]0[.]size at ' 20
+click-pick-offset 'edge F1[.]b0/E[{]F1:side3[|]F1:top[}]' 0 0 '^edge E[{]F1:side3[|]F1:top[}] of F1[.]b0$'
+wait-log '^Fillet Edges: 1 edge' 20
+mark
+qt-choice input_sets.0.size 'Variable'
+expect-choice-text sets.0.size '^Variable$'
+wait-log '^Panel Fillet add mid at [0-9]+,[0-9]+$' 20
+wait-idle
+
+# Two Mid Radii: each row stacked, nothing clipped.
+mark
+click-logged '^Panel Fillet add mid at '
+wait-log '^Panel Fillet input mid[.]0[.]radius at [0-9]+,[0-9]+$' 20
+wait-idle
+mark
+click-logged '^Panel Fillet add mid at '
+wait-log '^Panel Fillet input mid[.]1[.]radius at [0-9]+,[0-9]+$' 20
+wait-idle
+wait-log '^Panel Fillet row mid[.]0 stacked$' 20
+wait-log '^Panel Fillet row mid[.]1 stacked$' 20
+wait-log '^Panel Fillet inputs: none clipped$' 20
+
+# The keyboard: the first row's Set typed, Tab to Position and Radius, on to
+# the second row.
+mark
+type-in '^Panel Fillet input mid[.]0[.]set at ' '1.0'
+wait-log '^Panel field mid[.]0[.]set: 1[.]0$' 10
+key Tab
+wait-log '^Panel Fillet Tab: mid[.]0[.]set -> mid[.]0[.]position$' 10
+type 0.25
+wait-log '^Panel field mid[.]0[.]position: 0[.]25$' 10
+key Tab
+wait-log '^Panel Fillet Tab: mid[.]0[.]position -> mid[.]0[.]radius$' 10
+type 4
+wait-log '^Panel field mid[.]0[.]radius: 4$' 10
+key Tab
+wait-log '^Panel Fillet Tab: mid[.]0[.]radius -> mid[.]1[.]set$' 10
+type 1.0
+wait-log '^Panel field mid[.]1[.]set: 1[.]0$' 10
+key Tab
+wait-log '^Panel Fillet Tab: mid[.]1[.]set -> mid[.]1[.]position$' 10
+type 0.75
+wait-log '^Panel field mid[.]1[.]position: 0[.]75$' 10
+wait-idle
+expect-input-text mid.0.set '^1([.]0)?$'
+expect-input-text mid.0.position '^0[.]25$'
+expect-input-text mid.1.position '^0[.]75$'
+
+# An invalid Radius: its error under the field, whole; nothing clipped.
+mark
+type-in '^Panel Fillet input mid[.]1[.]radius at ' 'radius_of_the_middle_of_the_edge * 2'
+wait-log '^Fillet Radius: radius_of_the_middle_of_the_edge [*] 2 is invalid: ' 20
+wait-idle
+wait-log '^Panel Fillet inputs: none clipped$' 20
+wait-log '^Panel Fillet row mid[.]1 stacked$' 20
+
+# A valid one: the error gone.
+mark
+type-in '^Panel Fillet input mid[.]1[.]radius at ' '5'
+wait-log '^Fillet Radius: 5 = 5 mm$' 20
+wait-idle
+expect-input-text mid.1.radius '^5$'
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

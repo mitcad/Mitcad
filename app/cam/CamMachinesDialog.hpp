@@ -63,9 +63,13 @@ private:
   void newMachine();
   void editMachine();
   // A machine's keep-out zones, or (`sub`, mitcad#2392) the zones moving
-  // with a lathe's sub-spindle, their Z from its jaws' face.
-  QWidget* machineZonesPage(QDialog* dialog, QJsonArray& zones, bool lathe, bool sub = false);
-  std::optional<QJsonObject> askZone(QDialog* parent, QJsonObject zone, bool lathe, bool sub = false);
+  // with a lathe's sub-spindle, their Z from its jaws' face. On a lathe
+  // with a Y axis (`latheY`, asked as each zone is shown or edited,
+  // mitcad#2412) their Y too, both ends empty: not limited in Y.
+  QWidget* machineZonesPage(QDialog* dialog, QJsonArray& zones, bool lathe, bool sub = false,
+                            std::function<bool()> latheY = {});
+  std::optional<QJsonObject> askZone(QDialog* parent, QJsonObject zone, bool lathe, bool sub = false,
+                                     bool latheY = false);
   void deleteMachine();
   void importMachine();
   void saveMachine(const QString& library);

@@ -66,7 +66,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
 | `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images); its line art as SVG (mitcad#1736, `format: "svg"`) is a drawing view's projection along the camera (`core/model/src/preview/lines.rs`). |
-| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC, Makera Carvera and Carvera Air); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76, the program check, the turned section's simulation; live tools on the C axis in `turning/live.rs`, mitcad#2067: milling and drilling on the face and the diameter, polar and cylindrical interpolation; mitcad#2319: planes with the Y axis and tilted by a B head, the sub-spindle's hand-over, the whole program cut in 3D in `turning/solid.rs`; mitcad#2375: live tools on the sub-spindle with its own C axis, its speeds, travel and chuck in the lathe check; mitcad#2392: its body and moving zones in the lathe check and the simulation, a control that mirrors only Z on it; mitcad#2405: its own revolved profile, the turret's body against it, its outline and place per operation for Simulate). No model, no OCCT; offsets by cavalier_contours. |
+| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC, Makera Carvera and Carvera Air); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76 and the LinuxCNC one longhand (mitcad#2425), the program check, the turned section's simulation; live tools on the C axis in `turning/live.rs`, mitcad#2067: milling and drilling on the face and the diameter, polar and cylindrical interpolation; mitcad#2319: planes with the Y axis and tilted by a B head, the sub-spindle's hand-over, the whole program cut in 3D in `turning/solid.rs`; mitcad#2375: live tools on the sub-spindle with its own C axis, its speeds, travel and chuck in the lathe check; mitcad#2392: its body and moving zones in the lathe check and the simulation, a control that mirrors only Z on it; mitcad#2405: its own revolved profile, the turret's body against it, its outline and place per operation for Simulate; mitcad#2412: the turret's body against the main chuck and the fixed zones in `turning/turret.rs`, a body per station, the zones' Y on a lathe with a Y axis, the zones and the turret per operation for Simulate in `turning/drawn.rs`). No model, no OCCT; offsets by cavalier_contours. |
 | `core/subdiv` (`mitcad-subdiv`) | Rust | Forms (mitcad#1757): control cages, their edits, Catmull-Clark subdivision with creases and boundaries and the limit surface as bicubic patches, below the model (re-exported as `mitcad_model::subdiv`); no OCCT ([Forms](#forms-subdivision-surfaces)). |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
@@ -345,6 +345,14 @@ design in a project.
   `follow_set_members`, `follow_set_paths`). The Browser shows a member as
   a row of its item's own type marked with the set's name, so that it acts
   as the item's row, except that Delete there removes the link.
+- **Drawing book** (mitcad#2448, `document/drawing_book.rs`): a print set
+  of existing drawings kept with a main design, as references (the linked
+  design's file as its link saves it, the drawing's id there, its name);
+  its command is an undo step that recomputes nothing. The linked designs'
+  drawings are listed from their files as they are now (read only), and
+  their sheets are drawn for printing on each design read from its file
+  and evaluated on a forked kernel (`core/model-api/src/drawing_book.rs`),
+  so the book never copies a drawing and printing changes no design.
 - **Parameters:** name, expression (`d1 * 2 + 5 mm`), unit, comment,
   kind (model or user), evaluated in dependency order; cycles and unit
   mismatches are errors. Internal units are mm and radians. Input accepts
@@ -2313,6 +2321,16 @@ is the crate `core/sketch`, mitcad#780) is stored; its evaluation
   solve with the least movement) and lists their ids on a last line
   (`[conflicts: k5]`) that the application takes off and paints.
 
+A sketch on a planar face keeps the frame it had when it was placed
+(`SketchPlane::Face`'s `placed`, mitcad#2409): the edit that places it
+stores the frame its recompute found (`frame_to_keep`, in
+`Document::apply`'s step), and every later evaluation carries that frame
+onto the face as it is (`DatumPlane::carry`: turned about the line where
+the old and new planes meet, moved along the normal for a parallel one),
+so a face an earlier edit tilts takes the sketch with it. A face plane
+without one (a design saved before) keeps the default face frame. A 3D
+sketch's face support keeps its frame the same way (mitcad#2465).
+
 Evaluation: resolve the frame; compute projections (linked ones follow
 their sources by topological name); solve from the stored positions;
 report DOF, fully constrained entities, conflicting and redundant
@@ -2418,7 +2436,13 @@ and then moved to the followed positions to start the solve
 geometry constrained to the projection keeps the side it has in the stored
 sketch whatever the size of the move; before, the sides came from the moved
 start, and a point dimensioned 0.5 mm from a projected edge that moved
-0.5 mm lay on the edge and took a side by chance. A large move is also
+0.5 mm lay on the edge and took a side by chance. The move takes the
+points, circle radii and ellipse minor radii, and an elliptical arc's end
+parameters follow its moved ends (`System::seat_elliptical_arc_ends`,
+mitcad#2408): a projected arc's fix holds them, and left where the arc was
+built they contradicted its moved fixed ends (a section of a cone on a
+face a draft turned failed with "the projected geometry contradicts
+itself"). A large move is also
 solved in steps (as the solver's continuation does for a dimension
 change). The stored definition
 keeps the positions of the last edit; the evaluation's moved entities
@@ -3069,7 +3093,18 @@ it and compares the two.
   by OCCT in the view's overlay layer (`app/view/ViewPaintLayer`,
   mitcad#2296), not by widgets over the view: Qt repaints such a widget
   after every frame and composes the window under the view again, which
-  capped sketch mode near 30 frames a second.
+  capped sketch mode near 30 frames a second. Each picture is a texture
+  of its own; OCCT lets a replaced picture's texture go only at the second
+  full frame after it, and a frame in which only the picture changed is an
+  immediate one, so the view draws a full frame once a layer replaced two
+  pictures since the last one (`app/view/ReplacedPictures.hpp`,
+  mitcad#2437: while Sketch Dimension's value followed the pointer, the
+  textures took gigabytes, which on Apple silicon count in the process's
+  footprint, and the memory guard refused the dimension). The rule holds
+  for every repaint, also those of a sketch left alone: nothing repaints
+  an idle sketch, but each pointer move shows another place over the
+  badge and paints the overlay again (mitcad#2453,
+  `tools/ui-sketch-idle-memory-test.sh`).
   Tools use a custom cursor (`app/framework/Cursors`). Body edges and
   vertices in the sketch plane, which the Dimension tool picks and the
   drawing tools snap to (mitcad#1967), come from the model's `plane_geometry` query (the
@@ -3209,7 +3244,13 @@ it and compares the two.
   break asks the monitor (`geometry::CancelRange`; the parsing before it
   takes none and cannot be stopped), and the guard's reason says that the
   file could not be imported because it needs more memory than the system
-  has left (`GuardedWork::Import`), not to join bodies. The application,
+  has left (`GuardedWork::Import`), not to join bodies. A command refused
+  before it started (the memory low when it came) is not run at all
+  (`memory_guard::guarded_command`; a sketch edit checks no monitor before
+  it changes the sketch) and says that the memory was in use before it and
+  how to free it, not to work in smaller steps; a sketch edit's error
+  (`GuardedWork::Sketch`, the `sketch.` and `sketch3d.` commands) advises
+  freeing memory (mitcad#2437). The application,
   the headless MCP server
   (`--memory-limit` for a lower limit) and `mitcad-cli info`/`run` turn it
   on (`guard_command_memory`); the bridge's imports (`import_f3d`,
@@ -3885,7 +3926,12 @@ it and compares the two.
   `release_hold`, or the tutorial left or closed), and reports
   what completed the step as an event (to the page, and as the resource
   `mitcad://ui-guide`, `core/mcp/src/ui_guide.rs`), input it held back
-  too (`held`, mitcad#2366). A page's input demonstration
+  too (`held`, mitcad#2366). Sketch input steps (mitcad#2440) check one
+  interaction at a time where it happens: the plane in
+  `MainWindow::createSketchOnPick`, a 2D drawing tool's click and Enter
+  through `SketchController::setGuideCheck` (its snap named by
+  `sketch::snapPlaces`, its value boxes), holding back what misses as a
+  `mismatch` event. A page's input demonstration
   (`GuideDemonstration`: its own pictures and timing, plain Qt Gui and
   Svg) is played by the engine on a layer of the window that takes no
   input, over the step's target read again every frame; the learner's
@@ -4010,7 +4056,11 @@ it and compares the two.
   no EGL surface for their X11 window, while 0.69's GLX window drew), then
   in a Wayland session native Wayland (opt-in otherwise, mitcad#2031);
   where nothing is left, the window draws and the view says it cannot
-  start. The
+  start. In the view's own EGL context the view's framebuffer is read back
+  into Qt's at each frame; OCCT takes the view's size from the viewport
+  when it wraps that framebuffer, so `bindViewEglFramebuffer` sets the
+  viewport to it as Qt does in its own context (mitcad#2422: without it a
+  resized window kept the old picture size and picks). The
   log's `Graphics check:` lines name each attempt and the EGL call that failed
   ([app/COMMANDS.md](../app/COMMANDS.md#the-window-when-opengl-fails-at-start-mitcad2292)).
   Qt's platform is chosen before the application object
@@ -4339,7 +4389,14 @@ Floating is a full-window 3D view with the panels over it:
   only the menu bar is above the view, and the title bar row (a `GlassCard`,
   `titleCard`), the ribbon's groups (`Ribbon::setGroupCards`: each group a
   card, the ribbon masked to them) and the notices (`noticeCard`) are rows
-  of cards over the view's top (`FloatingLayout::addTopRow`).
+  of cards over the view's top (`FloatingLayout::addTopRow`). View ›
+  Toolbar Panel (mitcad#2426, `MainWindowToolbarPanel.cpp`) hides the
+  toolbar panel's row by one application setting for every window
+  (`FloatingLayout::setRowHidden`; Docked: the panel under the top bar);
+  `ToolbarPanelReveal` keeps a thin band under the top bar whose pointer
+  rest shows the row over the view without moving the cards (Docked: the
+  panel taken out of the top bar over the view's top) until the pointer
+  has left it and nothing opened from it is open.
 - `GlassCard`: the rounded Browser, Command and Timeline cards and the
   message band's card. The Command card shows only while it has something
   to say. There is no status bar; messages go to the message band right
@@ -4885,8 +4942,15 @@ just made).
   version base and edit lock along (`openDesignMoved`, the lock through
   `LockController::designSaved`); deleting it closes it. Renames and new
   names are typed in place (`QTreeWidget` editors), drags are the tree's
-  own mouse handling (no system drag and drop: nothing leaves the panel;
-  only files dropped from the file manager come in, below).
+  own mouse handling (no system drag and drop; only files dropped from the
+  file manager come in, below). The tree keeps the mouse while its button
+  is down, so a design row dragged out of the panel and let go over the 3D
+  view is the window's drop there (mitcad#2428, the Host's
+  `viewTakesDesign` and `designDroppedOnView`): `MainWindow::dropProjectDesign`
+  refuses the open design and a design linking it (the `link_check`
+  query's `back`) and otherwise inserts it through Insert Component at the
+  face under the drop, waiting as a dropped file does while a command is
+  open (`Arrival::project`).
   A project's **other files** (mitcad#2204: pictures, PDFs, spreadsheets,
   archives; `projects/files.rs` in the core) are `project_tree`'s `files`,
   rows after their folder's designs with the system's icon; the core lists
@@ -5151,6 +5215,17 @@ expressions). Formats: [libraries.md](libraries.md).
   refuses those components (`Assembly::linked_in`); `update_links`
   updates them in place, keeping the joints' uids. Designs without
   components, chosen parts and links saved before keep the flat form.
+  A design whose root holds nothing but one component (a new design's
+  root and Component1, mitcad#2429) is inserted, copied or linked, as that
+  component: `link_tree::single_component` finds it, a copy copies it by
+  its path, and a link reads the design with it standing for the root
+  (`LinkTree::top`, its placement composed into the occurrence's); once
+  the file has more, Update Link brings the whole structure back:
+  `DocState::open_top` gives Component1 a component of its own that
+  takes its base feature and joints as they are, and the holder's
+  references follow with the rewrites of Reparent Occurrence
+  (`reparent::follow_moved_down`) and Move History into Component
+  (`move_features::follow_into`), mitcad#2441.
 - **Edit in Place** (mitcad#2321, `document/edit_in_place.rs`,
   `app/files/MainWindowEditInPlace.cpp`): a linked component's design is
   edited in its own document inside the holder's window. The window's

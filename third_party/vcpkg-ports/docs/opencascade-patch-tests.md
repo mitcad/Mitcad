@@ -5013,6 +5013,26 @@ the bottom piece with 5 a sliver face (keep_r5_e7: 7 faces); with it all
 of them build valid, keep_r5_e7 with 6 faces. Its failure without the
 patch is still to be shown in the port's before/after run (mitcad#1986).
 
+## 2365
+
+[2365-chfi3d-kpart-cut-across-the-seam-of-a-holes-wall-under-the-blend.patch](../opencascade/2365-chfi3d-kpart-cut-across-the-seam-of-a-holes-wall-under-the-blend.patch)
+
+Test: geometry/tests/port/p2365-counterbore-seam-under-rounding.cpp (ctest
+geometry.port.2365): a block chamfered along its bottom with two
+counterbores through the chamfer, each 1 mm from an end face, both walls'
+seams towards +y, the chamfer's edges with the end faces rounded with 2 by
+OCCT's fillet alone: test_each_end_edge_alone_as_its_mirror_image and
+test_both_end_edges_as_mirror_images, valid solids whose two ends are each
+other's mirror images (each end takes 28.0273 mm3, a grid of points round
+the rim the same at both ends). In the OCCT lab (the case
+2365-counterbore-seam-under-rounding) the chain without the patch takes
+26.8059 mm3 at y = 20, with 17 faces against 14 at y = -20 (both edges:
+22144.9018 mm3 and 18 faces); with it 22171.7075 mm3 and 14 faces at each
+end alone, 22143.6803 and 15 together; the lab's other 45 cases unchanged.
+The reported design: cli.fillet_counterbore_seam_reported (GitHub #635).
+Its failure without the patch is still to be shown in the port's
+before/after run (mitcad#1986).
+
 ## 2383
 
 [2383-brepoffset-crease-split-in-several-edges-trimmed-once-and-oriented-in-each-face.patch](../opencascade/2383-brepoffset-crease-split-in-several-edges-trimmed-once-and-oriented-in-each-face.patch)
@@ -5033,3 +5053,164 @@ offset shell in two; five notches: 344949 mm3), with it valid solids of
 50882.6 and 53054.3 mm3 (that without notches, 49807.6, plus five times
 what one notch adds, 649.3). Its failure without the patch is still to be
 shown in the port's before/after run (mitcad#1986).
+
+## 2384
+
+[2384-intwalk-walk-end-put-on-a-boundary-within-a-room-scaled-to-the-parameter-range.patch](../opencascade/2384-intwalk-walk-end-put-on-a-boundary-within-a-room-scaled-to-the-parameter-range.patch)
+
+Test: geometry/tests/port/p2384-walk-end-on-a-boundary-at-any-parameter-scale.cpp
+(ctest geometry.port.2384),
+test_arc_length_loft_section_reaches_the_tangent_points,
+test_arc_length_loft_joined_to_its_mirror_image and
+test_unit_parameter_loft_unchanged: MitCad's loft from a circle of radius
+170 at z = 315 to one of radius 85 at z = 0 centred at x = 225 (its side
+parametrized by arc length) and its mirror image about x = 0: the section
+of the two sides ends on both points where they are tangent, (0, 170, 315)
+and (0, -170, 315), within 1e-6 mm, and the kernel's union is one valid
+solid of the union's volume (twice the loft's half at x >= 0) reaching
+x = -310 and 310; the kernel's own loft of the same circles gives both as
+before. Also geometry.mirror_loft_join (MitCad's join, alone and with the
+design's end extrusions) and the reporter's design in cli.shell_reported
+(GitHub mitcad/Mitcad#641). In the OCCT lab (the case
+2384-loft-mirror-join, MitCad's loft and its mirror image as B-rep files)
+the chain without the patch gives a section of 4 edges ending 0.004288 mm
+from (0, -170, 315) and a fuse of 3 faces, the loft's volume and x from
+-171.9; with it 5 edges ending on both points and a fuse of 5 faces,
+27 047 300 mm3, x -310.9 .. 310.9, valid. The 44 other shared cases are
+unchanged. OCCT's boolean group (4093 cases) against the chain without
+the patch: none fixed or broken, 3304 the same, 786 skipped, 2 failing
+with and without it (bsection/B6, volumemaker/E5), and periodicity/A2 OK
+with a changed log: a box made periodic, planar faces only (which never
+reach PutToBoundary, called by the parametric surfaces' intersection),
+its twin faces listed in another order (a centroid at x 12.0455 for
+12.9545, the mirror about 12.5).
+
+## 2415
+
+[2415-brepoffset-seam-only-where-the-face-has-it-twice-and-an-intersection-chain-kept-whole.patch](../opencascade/2415-brepoffset-seam-only-where-the-face-has-it-twice-and-an-intersection-chain-kept-whole.patch)
+
+Test: geometry/tests/port/p2415-seam-only-where-the-face-has-it-twice.cpp
+(ctest geometry.port.2415): a disk with an arm whose flat sides are tangent
+to it, the disk's seam on one tangent line, shelled 2 and 1 mm inside with
+Sharp corners by OCCT's thick solid alone: test_seam_on_tangent_line_plain
+(the disk's top open) and test_seam_on_tangent_line_boss_and_rims (a boss
+on the arm's end, its top open, the disk's rims rounded 3 mm, as GitHub
+#642's second design has it): one valid solid each time, of the volume the
+same body gives with its seam at +x, the arm's side on the seam with its
+wall. MitCad's shell on the same body: geometry.shell_seam_on_tangent_edge;
+the reported designs: cli.shell_sharp_reported (GitHub #642's second
+design, Sharp 2 and 1 mm with the boss top open; GitHub #645's loft cut to
+a slot, closed 2 mm, the patch's second part, which no synthetic body
+reproduces yet). In the OCCT lab (the case
+2415-seam-on-tangent-edge-and-slot-loft) the chain without the patch gives
+for the plain body a valid solid of 147950 mm3 at 2 mm (36384.7 with the
+seam at +x) and no result for the boss body (43304.5 with the seam at +x);
+with it the volumes of the seam at +x; #645's split body's closed offset
+1 and 2 mm inside, Sharp and Rounded, gives no shape without the patch and
+valid solids of 79844.0 and 68937.2 mm3 with it. The lab's shared set (45
+cases) shows no other change (the five-notch body of
+2383-cone-notch-on-ring-top keeps 53054.3 mm3); OCCT's blend and chamfer
+groups are the same (670 same, none fixed or broken), the offset and
+thrusection groups break and fix none, their 19 "changed results" the same
+values in another order or differences at round-off (the same cases change
+between two runs of the chain without the patch). Its failure without the
+patch is still to be shown in the port's before/after run (mitcad#1986).
+
+## 2418
+
+[2418-brepoffset-crease-turning-inside-its-edge-joined-across-the-tangency-and-a-vanishing-tip-cut.patch](../opencascade/2418-brepoffset-crease-turning-inside-its-edge-joined-across-the-tangency-and-a-vanishing-tip-cut.patch)
+
+Test: geometry/tests/port/p2418-crease-turning-from-concave-to-convex.cpp
+(ctest geometry.port.2418): GitHub #641's three-way pipe built from MitCad's
+loft (its side parametrized by arc length) and the kernel's cylinders,
+union, mirror and fillet, shelled 5 and 2 mm inside with its three ends open,
+Sharp, by OCCT's thick solid alone (tolerance 1e-6, as MitCad's Shell):
+test_pipe_crotch_sharp_5 and _2 (the crease between the lofts tangent at
+both ends) and test_pipe_crotch_rounded_5 (the crotch rounded 20 by the
+kernel's fillet, the rounding vanishing at the top circle): one valid solid
+of the volume measured with patches 2418 and 2433 (within 1e-5: 2522285.2,
+1019549.1 and 2512531.0 mm3; the lab's bodies, built in DRAW from the
+stored loft and cylinders, give volumes 0.04 to 0.1 % apart, and the
+reported design 2511954.5 and 2520204.5 in MitCad against the lab's
+2512228.5 and 2521317.4: different bodies, not a change of the result, as
+the lab's case with patch 2433 after 2418 gives its values unchanged),
+points half the wall inside
+the loft's side and the top cylinder in the solid, a millimetre past the
+wall in the cavity. The reported design: cli.shell_reported
+(shell_reported641.json, Sharp 5 mm with and without Fillet5). In the OCCT
+lab (the case 2418-pipe-shell) the chain without the patch gives no thick
+solid Sharp for any of the three bodies at 5 mm, nor for the reported and
+the unrounded ones at 2 mm; with it valid solids of 2.51223e6, 1.01575e6
+(reported), 2.52132e6, 1.0185e6 (unrounded) and 2.5131e6 mm3 (the kernel's
+fillet), Rounded unchanged (2.5118e6). The lab's shared set (48 cases) shows
+no other change; OCCT's blend and chamfer groups are the same (none fixed,
+broken or changed); the offset group fixes none, lists compshape A3 as
+broken (a known problem, BAD in its log: its TODO line) and 18 "changed
+results" that are not the patch's: the case 2418-offset-group-samples runs
+those 19 cases alone, with the same results with and without the patch.
+## 2433
+
+[2433-brepoffset-face-vanishing-beside-a-removed-face-closed-by-it.patch](../opencascade/2433-brepoffset-face-vanishing-beside-a-removed-face-closed-by-it.patch)
+
+Test: geometry/tests/port/p2433-face-vanishing-beside-a-removed-face.cpp
+(ctest geometry.port.2433): a box 40 x 30 x 20, its top edges rounded 2 mm,
+shelled inside with the top open and Sharp corners by OCCT's thick solid
+alone, 3 and 4 mm (test_rounded_top_open_wall_thicker_than_rounding): one
+valid solid of the body's volume less the cavity (40 - 2w) x (30 - 2w) x
+(20 - w), the corner the rounding fills in the wall. In the OCCT lab (the
+case 2433-rounded-top-open) the chain without the patch gives no result for
+the rounded box at 3 and 4 mm; with it 10010.9 and 12618.9 mm3, valid, and
+every other line of the case the same (the sharp box at 1 to 4 mm; the
+rounded box at 1 and 2 mm Sharp and at any wall Rounded, and GitHub #645's
+split body with its top open at 1 to 3 mm: no result or invalid, before and
+after). The lab's shared set (49 cases with this one) shows no other change;
+OCCT's offset group breaks and fixes none (662 same, 130 failing in both),
+its 21 "changed results" the same values in another order (16) or
+differences at round-off (5; the masses of offset/shape_type_a/A1, 2e-4
+apart, come out so in a run of another chain without this patch too). The port's before/after run (mitcad#1986, 26.11.2026) shows its test failing without the patch (with 2462 and 2463 reverted too): the thick solid is not done.
+
+## 2463
+
+[2463-brepoffset-arc-join-face-vanishing-beside-a-removed-face.patch](../opencascade/2463-brepoffset-arc-join-face-vanishing-beside-a-removed-face.patch)
+
+Test: geometry/tests/port/p2463-arc-join-face-vanishing-beside-a-removed-face.cpp
+(ctest geometry.port.2463): a box 40 x 30 x 20, its top edges rounded 2 mm,
+shelled inside with the top open and Rounded corners (the arc join) by
+OCCT's thick solid alone, 3 and 4 mm (test_rounded_top_open_arc_join): one
+valid solid of the body's volume less the cavity (40 - 2w) x (30 - 2w) x
+(20 - w), the corner the rounding fills in the wall. In the OCCT lab (the
+case 2433-rounded-top-open) the chain without the patch gives no result for
+the rounded box Rounded at 3 and 4 mm; with it 10010.9 and 12618.9 mm3,
+valid, and every other line the same. The lab's shared set (49 cases)
+shows no other change. OCCT's blend, chamfer and offset groups break
+nothing (1334 same, 167 failing in both), their 18 "changed results" the
+same values in another order; offset/compshape/A3 (an arc-join thick solid
+with two faces removed, marked OCC23068) came out right in that run, but it
+gives the right volume (3.0764e+06) or a wrong one from run to run on one
+build (3 runs in 8 wrong with 2462 too), and neither patch's code runs on
+it (no face vanishes there): noise, not a fix. The port's before/after run (mitcad#1986, 26.11.2026) shows its test failing without the patch (with 2462 reverted too): the thick solid is not done.
+
+## 2462
+
+[2462-brepoffset-wall-strip-at-a-removed-face-met-tangentially.patch](../opencascade/2462-brepoffset-wall-strip-at-a-removed-face-met-tangentially.patch)
+
+Test: geometry/tests/port/p2462-wall-strip-at-a-removed-face-met-tangentially.cpp
+(ctest geometry.port.2462): a box 40 x 30 x 20, its top edges rounded 2 mm,
+shelled inside with the top open by OCCT's thick solid alone, 1 and 1.5 mm,
+Sharp and Rounded (test_top_open_wall_no_thicker_than_rounding): one valid
+solid of the body's volume less the cavity computed from the inner
+roundings (3822.835 and 5502.710 mm3 in the OCCT lab, within 1e-6 of it),
+a point in the wall under the top's edge in it, one past the strip and one
+in the inner rounding's quarter not. In the OCCT lab (the case
+2462-top-open-met-tangentially, a fresh copy of the body per run) the chain
+without the patch gives no result Sharp and an invalid solid Rounded for
+the box at 1 mm, and no result for GitHub #645's body with its top open at
+1 and 2 mm; with it one valid solid each (3822.8; 9595.7 and 18284.9 mm3,
+Rounded 9595.6 and 18284.9); the box at 2 mm and the body at 3 mm give no
+result before and after. The case 2433-rounded-top-open differs in the
+same lines (its loft's Rounded runs, after its failed 3 mm runs on the same
+body, come out invalid there). The lab's shared set (50 cases) shows no
+other change. OCCT's blend, chamfer and offset groups: 1334 same, 167
+failing in both, 18 "changed results" the same values in another order,
+and offset/compshape/A3 wrong in that run (see 2463: it flips from run to
+run). The port's before/after run (mitcad#1986, 26.11.2026) shows its test failing without the patch (alone): the thick solid is not done.

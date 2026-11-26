@@ -38,6 +38,10 @@
 //!   and ends short of the edge's end at the other, and is cut back to its
 //!   tangent line beside the bend.
 //!
+//! - A cylindrical or conical picked face is a curved panel of its own
+//!   (mitcad#2435, [`super::curved`]); other curved faces are refused
+//!   saying why they cannot be laid flat.
+//!
 //! The panels are all placed first, from the faces as the body has them;
 //! then each is cut at its rips, then back to its bends' tangent lines,
 //! and the bends are made last, between the cut panels.
@@ -107,11 +111,9 @@ fn face<K: Kernel>(
         .face_geometry(shape, name)
         .map_err(kernel_error)?;
     let SurfaceGeometry::Plane { origin, normal } = surface else {
-        return Err(placed_at(
-            vec![NoticePlace::face(name.to_string())],
-            "the face is not planar: only planar faces become panels of a sheet",
-            format!("face {name} is not planar: only planar faces become panels of a sheet"),
-        ));
+        // A curved face across a bend, or one that bends two ways
+        // (mitcad#2435).
+        return Err(super::curved::not_flat(ctx, shape, name, &surface));
     };
     let curves = ctx
         .kernel
@@ -516,6 +518,34 @@ pub(crate) fn convert<K: Kernel>(
         .copied()
         .ok_or_else(|| format!("body {} has no owner", d.body))?;
     let uid = ctx.uid;
+    // A cylindrical or conical face is a curved panel of its own; other
+    // curved faces are refused saying why (mitcad#2435).
+    let surface = ctx
+        .kernel
+        .face_geometry(&shape, &fixed_name)
+        .map_err(kernel_error)?;
+    if !matches!(surface, SurfaceGeometry::Plane { .. }) {
+        let base = SheetState {
+            schema: 2,
+            algorithm: ALGORITHM_VERSION,
+            body: d.body,
+            owner,
+            shape_generation: String::new(),
+            rules: d.rules,
+            rules_version: rules_version.clone(),
+            panels: Vec::new(),
+            charts: Vec::new(),
+            bends: Vec::new(),
+            joins: Vec::new(),
+            opened: Vec::new(),
+            lineage: Vec::new(),
+            overlays: Vec::new(),
+            gaps: Vec::new(),
+            invalidated: None,
+            blockers: Vec::new(),
+        };
+        return super::curved::convert(d, ctx, &shape, &fixed_name, &surface, base, &rules);
+    }
     let fixed = face(ctx, &shape, &fixed_name)?;
     let into = scale(fixed.normal, -1.0);
     let hint = fixed

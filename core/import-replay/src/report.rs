@@ -403,6 +403,21 @@ pub struct ReferenceReport {
     /// The documents it refers to in turn.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<ReferenceReport>,
+    /// Its own import's items that fell back to the file's bodies, each
+    /// `name: why` (mitcad#2449: a package's fallbacks are in its linked
+    /// documents, whose items the design's report does not list).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fallbacks: Vec<String>,
+    /// Its own import's light bulbs (mitcad#2449).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub light_bulbs: Option<LightBulbReport>,
+    /// Its own import's joints (mitcad#2449), when it has any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub joints: Option<JointReport>,
+    /// How long its own import took, s (mitcad#2449); None where this
+    /// import had imported it before, for another reference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f64>,
 }
 
 impl ReferenceReport {
@@ -437,9 +452,12 @@ impl ReferenceReport {
                 n("skipped")
             )
         };
+        let seconds = self
+            .seconds
+            .map_or(String::new(), |s| format!(", imported in {s:.1} s"));
         let _ = writeln!(
             out,
-            "{indent}{}: {}, occurrences: {}{}{}{items}{}",
+            "{indent}{}: {}, occurrences: {}{}{}{items}{seconds}{}",
             self.title(),
             self.status,
             self.occurrences,
@@ -453,6 +471,9 @@ impl ReferenceReport {
                 .as_deref()
                 .map_or(String::new(), |n| format!(": {n}"))
         );
+        for fallback in &self.fallbacks {
+            let _ = writeln!(out, "{indent}  fallback: {fallback}");
+        }
         for r in &self.references {
             r.text(out, depth + 1);
         }
@@ -510,6 +531,13 @@ pub struct LightBulbReport {
     /// Light bulbs kept because they differ from the default: a used
     /// sketch shown, an unused one hidden, construction geometry hidden.
     pub bulbs_set: usize,
+    /// Sketches and construction features copied into the components of
+    /// other documents (mitcad#2449), each copy once.
+    pub copied: usize,
+    /// Of them, those shown or hidden otherwise than in their document's
+    /// own import (mitcad#2449: the copies showed the sketches a document
+    /// hides).
+    pub copies_differ: usize,
 }
 
 /// How the file's joints, as-built joints, joint origins and ground items
@@ -863,6 +891,14 @@ impl DesignReport {
                 b.construction_bulbs,
                 b.construction_bulbs_unknown,
                 b.bulbs_set
+            );
+        }
+        if b.copied > 0 {
+            let _ = writeln!(
+                out,
+                "  light bulbs of components of other documents: {} sketches and construction \
+                 features copied, {} shown or hidden otherwise than in their documents",
+                b.copied, b.copies_differ
             );
         }
         let j = &self.joints;

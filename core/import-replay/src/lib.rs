@@ -1794,10 +1794,24 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         // The occurrences start where the file places them at the end of
         // its timeline: their last captured positions (mitcad#75).
         for (occurrence, placement) in self.captures.last() {
-            if let Err(e) = self
+            // A grounded occurrence placed along the paths inside it is
+            // freed for the move and grounded again (mitcad#2449).
+            let grounded = self.captures.worked_out(occurrence)
+                && self
+                    .doc
+                    .assembly()
+                    .occurrence(occurrence)
+                    .is_some_and(|o| o.grounded);
+            if grounded {
+                let _ = self.doc.set_occurrence_grounded(occurrence, false);
+            }
+            let moved = self
                 .doc
-                .set_occurrence_transform(occurrence, placement, false)
-            {
+                .set_occurrence_transform(occurrence, placement, false);
+            if grounded {
+                let _ = self.doc.set_occurrence_grounded(occurrence, true);
+            }
+            if let Err(e) = moved {
                 let name = self.doc.assembly().occurrence_name(occurrence);
                 self.report
                     .warnings

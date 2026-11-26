@@ -67,6 +67,13 @@ fn painted(doc: &Document<MockKernel>, body: BodyUid) -> BTreeMap<String, (Strin
         .collect()
 }
 
+/// The body's own appearance: its name and colour.
+fn body_look(doc: &Document<MockKernel>, body: BodyUid) -> Option<(String, [f64; 3])> {
+    let id = doc.body_attributes(body).appearance?;
+    let appearance = doc.appearance(&id)?;
+    Some((appearance.name.clone(), appearance.display_color()))
+}
+
 fn read(doc: &Document<MockKernel>, path: &str, bodies: Vec<ImportBody<MockShape>>) {
     doc.kernel()
         .files
@@ -94,8 +101,13 @@ fn faces_of_their_own_color_get_appearances_in_the_import_step() {
             (import_face(f1, 5), red),
         ])
     );
-    // One appearance per colour; the body keeps its colour.
-    assert_eq!(doc.custom_appearances().len(), 2);
+    // One appearance per colour; the body keeps its colour, as its
+    // appearance (mitcad#2423).
+    assert_eq!(doc.custom_appearances().len(), 3);
+    assert_eq!(
+        body_look(&doc, body),
+        Some(("Imported color 204 204 204".to_owned(), GREY))
+    );
     // The import is one undo step, appearances and all.
     assert_eq!(doc.undo_depth(), 1);
     assert_eq!(doc.undo_label(), Some("Import colored.step"));
@@ -116,11 +128,14 @@ fn a_file_without_face_colors_imports_as_before() {
         .import_file("/models/plain.step", &ReadOptions::default(), None)
         .unwrap();
     assert!(imported.warnings.is_empty());
-    assert!(
-        doc.face_appearances(BodyUid::new(imported.feature.uid, 0))
-            .is_empty()
+    let body = BodyUid::new(imported.feature.uid, 0);
+    assert!(doc.face_appearances(body).is_empty());
+    // The body's colour alone: its appearance (mitcad#2423).
+    assert_eq!(doc.custom_appearances().len(), 1);
+    assert_eq!(
+        body_look(&doc, body),
+        Some(("Imported color 204 204 204".to_owned(), GREY))
     );
-    assert!(doc.custom_appearances().is_empty());
     assert_eq!(doc.undo_depth(), 1);
 }
 
@@ -228,5 +243,7 @@ fn face_appearances_are_written_as_face_colors_and_read_back() {
         painted(doc, body).into_values().collect()
     };
     assert_eq!(names(&doc, again_body), names(&doc, body));
-    assert_eq!(doc.custom_appearances().len(), 2);
+    // The faces' two colours and the body's grey (mitcad#2423), used again.
+    assert_eq!(doc.custom_appearances().len(), 3);
+    assert_eq!(body_look(&doc, again_body), body_look(&doc, body));
 }

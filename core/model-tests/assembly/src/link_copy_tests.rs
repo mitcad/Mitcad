@@ -231,3 +231,94 @@ fn a_linked_file_in_the_project_or_a_copy_is_inserted_as_it_is() {
     assert_eq!(entries.len(), 1);
     mitcad_model::testing::remove_temp(&dir);
 }
+
+/// `design` with a linked component of the file `linked`, written to
+/// `path` (the link recorded relative to `path`'s folder).
+fn write_linking(path: &Path, linked: &Path) {
+    let mut doc = design(1);
+    let options = InsertOptions {
+        base: path.parent().map(Path::to_path_buf),
+        ..InsertOptions::default()
+    };
+    doc.insert_component(linked.to_str().unwrap(), &options)
+        .unwrap();
+    std::fs::write(path, doc.to_json()).unwrap();
+}
+
+/// A design that is the open design or links back to it (mitcad#2428):
+/// `link_check` with `design` answers the chain of links in `back`, which
+/// Insert Component and a design dropped from the Projects panel refuse.
+#[test]
+fn link_check_finds_a_chain_of_links_back_to_the_open_design() {
+    let dir = mitcad_model::testing::unique_temp_path("2428-back");
+    let project = dir.join("project");
+    mitcad_model::Project::init(&project).unwrap();
+    let parts = project.join("parts");
+    std::fs::create_dir_all(&parts).unwrap();
+    // The open design, a design linking it, one linking that one, a plain
+    // design, and two designs linking each other.
+    let assembly = project.join("assembly.mitcad");
+    std::fs::write(&assembly, design(1).to_json()).unwrap();
+    let sub = parts.join("sub.mitcad");
+    write_linking(&sub, &assembly);
+    let top = project.join("top.mitcad");
+    write_linking(&top, &sub);
+    let plain = parts.join("plain.mitcad");
+    std::fs::write(&plain, design(2).to_json()).unwrap();
+    let first = parts.join("first.mitcad");
+    std::fs::write(&first, design(1).to_json()).unwrap();
+    let second = parts.join("second.mitcad");
+    write_linking(&second, &first);
+    write_linking(&first, &second);
+
+    let holder = Document::new(MockKernel::default());
+    let base = project.to_string_lossy().to_string();
+    let design_file = assembly.to_string_lossy().to_string();
+    let check = |path: &Path| {
+        query(
+            &holder,
+            json!({"query": "link_check", "path": path.to_string_lossy(), "base": base,
+                   "design": design_file}),
+        )
+    };
+    let names = |answer: &Value| -> Vec<String> {
+        answer["back"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no chain: {answer}"))
+            .iter()
+            .map(|f| {
+                Path::new(f.as_str().unwrap())
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    };
+    // The open design itself.
+    assert_eq!(names(&check(&assembly)), ["assembly.mitcad"]);
+    // Directly and through another design, the shortest chain first.
+    assert_eq!(names(&check(&sub)), ["sub.mitcad", "assembly.mitcad"]);
+    assert_eq!(
+        names(&check(&top)),
+        ["top.mitcad", "sub.mitcad", "assembly.mitcad"]
+    );
+    // A path relative to the design's folder.
+    let relative = query(
+        &holder,
+        json!({"query": "link_check", "path": "parts/sub.mitcad", "base": base,
+               "design": design_file}),
+    );
+    assert_eq!(names(&relative), ["sub.mitcad", "assembly.mitcad"]);
+    // No link back: null, also for a loop of links that does not reach it.
+    assert_eq!(check(&plain)["back"], Value::Null);
+    assert_eq!(check(&first)["back"], Value::Null);
+    // Without `design` nothing is walked.
+    let without = query(
+        &holder,
+        json!({"query": "link_check", "path": top.to_string_lossy(), "base": base}),
+    );
+    assert_eq!(without["back"], Value::Null, "{without}");
+    assert_eq!(without["followed"], json!(true), "{without}");
+    mitcad_model::testing::remove_temp(&dir);
+}

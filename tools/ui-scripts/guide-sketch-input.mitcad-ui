@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# A tutorial's guide steps on the learner's sketch input one interaction at
+# a time (mitcad#2440, GitHub mitcad/Mitcad#628; docs/tutorials.md "Sketch
+# input steps") in an empty design:
+#   1. A plane step on XY: a pick of the XZ plane is held back (no sketch,
+#      the callout's note), the XY plane's is taken and completes it.
+#   2. A point step on the origin with the 2-Point Rectangle tool: a first
+#      corner off the origin is held back, the one at the origin completes
+#      it and goes to the tool.
+#   3. A value step on the width: the opposite corner's click without the
+#      width typed and Enter with another width are held back; the width
+#      typed completes it, and Enter then adds the rectangle 40 wide from
+#      the origin.
+# Run by tools/ui-guide-sketch-input-test.sh (Linux),
+# tools/ui-windows-guide-sketch-input-test.ps1 (Windows) and
+# tools/ui-macos-guide-sketch-input-test.sh (macOS).
+expect-ever 'Browser arrow Root/Origin at' 30
+wait-idle
+
+# 1. The plane: XZ held back, XY taken.
+mark
+guide-step '{"id": "plane", "text": "Click Create Sketch, then the XY plane.", "target": {"plane": "XY"}, "done": {"plane": "XY"}, "allow": ["sketch.create"]}'
+expect-log '^Guide: step plane started: target the plane XY, navigation free$' 20
+command sketch.create
+wait-log '^Datum xz at '
+wait-log '^Datum xy at '
+wait-idle
+mark
+click-logged '^Datum xz at '
+expect-log '^Guide: step plane plane xz, not its XY$' 20
+expect-widget-property guideCalloutNote visible true
+expect-widget-property guideCallout visible true
+wait-idle
+expect-no-log '^Sketch started on'
+mark
+click-logged '^Datum xy at '
+wait-log '^Sketch started on xy'
+expect-log '^Guide: step plane done: a sketch on XY$' 20
+expect-widget-property guideCallout visible false
+wait-log '^Sketch view -?[0-9.]+,'
+wait-idle
+
+# 2. The rectangle's first corner at the origin: a click off it held back.
+mark
+guide-step '{"id": "corner", "text": "Pick 2-Point Rectangle, then click the origin for the first corner.", "target": {"view": true}, "done": {"point": "origin"}, "allow": ["sketch.rectangle"]}'
+expect-log '^Guide: step corner started: target the view, navigation free$' 20
+command sketch.rectangle
+wait-idle
+mark
+sketch-click 10 5
+expect-log '^Guide: step corner point at [a-z_]+ [(][-0-9.e]+, [-0-9.e]+[)], not its origin$' 20
+expect-widget-property guideCalloutNote visible true
+wait-idle
+expect-no-log '^Guide: step corner done'
+mark
+sketch-click 0 0
+expect-log '^Guide: step corner done: a point at origin [(]-?0, -?0[)]$' 20
+wait-idle
+
+# 3. The width: the opposite corner's click without it and Enter with
+# another width held back; the width typed completes the step.
+mark
+guide-step '{"id": "width", "text": "Type the width 40.", "target": {"field": "width"}, "done": {"field": "width", "value": "40"}, "allow": ["sketch.rectangle"]}'
+expect-log '^Guide: step width started: target value box width, navigation free$' 20
+sketch-move 30 20
+wait-idle
+mark
+sketch-click 30 20
+expect-log '^Guide: step width value not typed in width, not its 40$' 20
+wait-idle
+expect-no-log '^Added rectangle'
+mark
+type 25
+key Return
+expect-log '^Guide: step width value 25 in width, not its 40$' 20
+wait-idle
+expect-no-log '^Added rectangle'
+expect-no-log '^Guide: step width done'
+mark
+key Backspace
+key Backspace
+type 40
+expect-log '^Guide: step width done: 40 typed into width$' 20
+expect-widget-property guideCallout visible false
+mark
+key Return
+wait-log '^Added rectangle 40 x [0-9.]+ mm at '
+wait-idle
+key Escape
+wait-idle
+expect-never '^(TestDriver: FAIL|OCCT view event failed)'
