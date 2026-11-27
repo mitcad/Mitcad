@@ -1837,6 +1837,11 @@ std::optional<gp_Trsf> placeSeenAt(const CommandState& state, const CommandConte
   return seenWorld(state, context);
 }
 
+std::pair<QString, QString> placedComponent(const CommandState& state) {
+  const QJsonObject where = state.object(kContext);
+  return {where.value(QStringLiteral("component")).toString(), seenPath(state)};
+}
+
 std::optional<std::pair<QJsonValue, QJsonArray>> planeCenterOf(const CommandState& state,
                                                               const CommandContext& context) {
   if (placeForm(state) != PlaceForm::Face) {

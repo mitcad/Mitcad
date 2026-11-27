@@ -57,6 +57,10 @@ pub struct CutSheet {
     /// no compensation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kerf: Option<f64>,
+    /// The plasma torch's settings of its cutting program (mitcad#2553);
+    /// the defaults when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cutting: Option<crate::cam::engine::sheet_cut::PlasmaSettings>,
 }
 
 impl Default for CutSheet {
@@ -66,6 +70,7 @@ impl Default for CutSheet {
             height: DEFAULT_HEIGHT,
             parts: Vec::new(),
             kerf: None,
+            cutting: None,
         }
     }
 }

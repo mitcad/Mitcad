@@ -18,6 +18,7 @@
 #include <QtLogging>
 
 #include "../OcctViewer.hpp"
+#include "ClearOfOrigin.hpp"
 #include "Diagnostics.hpp"
 #include "HandleStep.hpp"
 #include "Theme.hpp"
@@ -72,6 +73,16 @@ const double kEdgeOnSine = std::sin(15.0 * kPi / 180.0);
 const double kEdgeOnCosine = std::cos(15.0 * kPi / 180.0);
 constexpr double kFaintOpacity = 0.4; // a handle seen edge-on, not hovered
 constexpr double kPointerLength = 30.0; // a pointing marker's arrow (mitcad#2048)
+
+// An arrow kept clear of its origin (Manipulator::clearOfOrigin,
+// mitcad#2481, mitcad#2508): how far beyond the origin its knob is drawn at
+// zero, in pixels: more than a click's reach, and past each arrow it is
+// drawn past (clearPast) by that and an arrow's length.
+double clearLift(const Manipulator& m) {
+  const HandleSize size = sizeOf(m);
+  const double clear = 2.0 * size.grab + 10.0;
+  return clear + std::max(m.clearPast, 0) * (clear + size.arrow);
+}
 
 // An arrow's or a ring's color while neither hovered nor dragged: its
 // role's (Manipulator::color; Free Move's by its axis, mitcad#1581).
@@ -480,6 +491,15 @@ ManipulatorOverlay::Drawn ManipulatorOverlay::draw(const Handle& handle) const {
     drawn.origin = m_viewer.toWidgetF(m.origin);
     drawn.handle = m_viewer.toWidgetF(end);
     const QPointF along = m_viewer.toWidgetF(end.Translated(gp_Vec(m.direction))) - drawn.handle;
+    if (m.clearOfOrigin) {
+      // Off what the arrow starts from (mitcad#2481), and past the arrows
+      // it is drawn past (mitcad#2508): lifted along the arrow at zero,
+      // less as the value's point moves away either way (clearDrawn), so
+      // that a drag moves it from where it is drawn without a jump.
+      const QPointF way = unit(along);
+      const double ahead = QPointF::dotProduct(drawn.handle - drawn.origin, way);
+      drawn.handle += way * (clearDrawn(ahead, clearLift(m)) - ahead);
+    }
     drawn.tip = drawn.handle + unit(along) * sizeOf(m).arrow;
     if (boxed) {
       // A dimension's value on its line: at its middle, or, where the
@@ -608,10 +628,17 @@ ManipulatorOverlay::DragValue ManipulatorOverlay::valueAt(const Handle& handle, 
     if (length2 < 1e-4) {
       return {handle.value, handle.value}; // looking along the arrow
     }
-    // Where the arrow was grabbed, not its base, follows the cursor.
+    // Where the arrow was grabbed, not its base, follows the cursor. An
+    // arrow kept clear of its origin (mitcad#2508): the value whose knob
+    // is drawn there, so that the first move takes it from where it was
+    // grabbed, not from its value's own point.
     const double factor = std::abs(m.factor) > 1e-12 ? m.factor : 1.0;
-    const double raw = std::max(
-        m.minimum, m.base + QPointF::dotProduct(position - m_grab - a, ab) / length2 / factor);
+    double along = QPointF::dotProduct(position - m_grab - a, ab) / length2;
+    if (m.clearOfOrigin) {
+      const double pixels = std::sqrt(length2);
+      along = clearValue(along * pixels, clearLift(m)) / pixels;
+    }
+    const double raw = std::max(m.minimum, m.base + along / factor);
     // The step fixed when the drag began (mitcad#1431); a value asked
     // for outside a drag at the step it would take now.
     const double step = m_dragStep > 0.0 ? m_dragStep : arrowStep(handle).step;
@@ -805,12 +832,16 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
       const Handle& handle = m_handles[static_cast<std::size_t>(m_drag)];
       m_dragStart = handle.value;
       // An arrow keeps the point grabbed under the cursor; a ring turns by
-      // as much as the cursor turns about it from where it was pressed.
+      // as much as the cursor turns about it from where it was pressed. An
+      // arrow drawn clear of its origin (mitcad#2481) is grabbed where it
+      // is drawn, so that it ends where the pointer is released; valueAt
+      // gives the value whose knob is drawn under it (mitcad#2508).
       m_grab = m_pressAt - draw(handle).handle;
       m_angleLast = ringAngle(handle, m_pressAt);
       m_turned = 0.0;
       m_visualValue = handle.value;
       m_dragStep = 0.0;
+      m_firstMove = true;
       // For UI tests: the color it is drawn in while dragged (mitcad#1707).
       qDebug().noquote() << QStringLiteral("Handle drag %1 %2: color %3")
                                 .arg(m_command, handle.key, colorRoleName(activeRole(handle.manipulator)));
@@ -830,6 +861,24 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
     if (m_drag >= 0) {
       Handle& handle = m_handles[static_cast<std::size_t>(m_drag)];
       const DragValue value = valueAt(handle, e->position());
+      if (std::exchange(m_firstMove, false) && handle.manipulator.kind == Manipulator::Kind::Arrow) {
+        // For UI tests (mitcad#2508): how far the drag's first move took
+        // the pointer along the arrow and the value's point, in pixels on
+        // the screen; a value that jumps moves much further.
+        const Manipulator& m = handle.manipulator;
+        const QPointF a = m_viewer.toWidgetF(m.origin);
+        const QPointF ab = m_viewer.toWidgetF(m.origin.Translated(gp_Vec(m.direction))) - a;
+        const double pixels = std::hypot(ab.x(), ab.y());
+        if (pixels > 1e-2) {
+          const double pointer = QPointF::dotProduct(e->position() - m_pressAt, ab) / pixels;
+          const double factor = std::abs(m.factor) > 1e-12 ? m.factor : 1.0;
+          const double moved = (value.continuous - m_dragStart) * factor * pixels;
+          qDebug().noquote() << QStringLiteral("Handle first move %1 %2: %3 px along the arrow, the value %4 px")
+                                    .arg(m_command, handle.key)
+                                    .arg(pointer, 0, 'f', 1)
+                                    .arg(moved, 0, 'f', 1);
+        }
+      }
       if (!m_visualValue || *m_visualValue != value.continuous) {
         m_visualValue = value.continuous;
         ++m_visualUpdates;
@@ -1211,6 +1260,12 @@ void ManipulatorOverlay::logPlaces() {
         // Free Move's beyond the rings).
         const QPoint head = mapTo(window(), drawn.tip.toPoint());
         lines << QStringLiteral("Arrow head %1 %2 at %3,%4").arg(m_command, key).arg(head.x()).arg(head.y());
+        // Its knob and where it starts (mitcad#2508: an arrow kept clear
+        // of its origin, Manipulator::clearOfOrigin).
+        const QPoint knob = mapTo(window(), drawn.handle.toPoint());
+        const QPoint start = mapTo(window(), drawn.origin.toPoint());
+        lines << QStringLiteral("Arrow knob %1 %2 at %3,%4").arg(m_command, key).arg(knob.x()).arg(knob.y());
+        lines << QStringLiteral("Arrow start %1 %2 at %3,%4").arg(m_command, key).arg(start.x()).arg(start.y());
       }
       if (seenEdgeOn(m)) {
         // Seen edge-on (mitcad#1707): a ring yields to the arrows, a large

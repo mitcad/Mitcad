@@ -785,6 +785,23 @@ void addConvertProjected(CommandRegistry& registry, SketchController& c) {
   registry.add(def);
 }
 
+// Profile Boundary (mitcad#2551): the selected curves of the face's outline
+// the sketch got when it was made bound profiles as drawn curves do (a
+// boss's circle makes a hole in an inset of the outline), and back, as one
+// undo step; they stay linked to the face's edges. Enabled while the
+// selection holds such curves (SketchController::selectionHasAutomatic);
+// also in their context menu.
+void addProfileBoundary(CommandRegistry& registry, SketchController& c) {
+  CommandDef def = sketchCommand("sketch.profile_boundary", QObject::tr("Profile Boundary"), "profile-boundary",
+                                 CommandDef::Kind::Action);
+  def.run = [&c] { c.toggleProfileBoundary(); };
+  def.enabled = [&c] { return c.selectionHasAutomatic(); };
+  def.tooltip = QObject::tr("Lets the selected curves of the face's outline bound profiles and back");
+  def.keywords = {QStringLiteral("hole"), QStringLiteral("profile"), QStringLiteral("outline"),
+                  QStringLiteral("boundary")};
+  registry.add(def);
+}
+
 bool filletCurve(const sketch::CurveData& curve) { return curve.isLine() || curve.isArc() || curve.isConic(); }
 
 // Whether the end `point` of the curve `own` and an end of another fillet
@@ -2512,6 +2529,7 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   add({"sketch.centerline", QObject::tr("Centerline"), "centerline", [&c] { c.toggleCenterline(); }, none, QObject::tr("Turns the selected lines into center lines and back")},
       CommandDef::Kind::Action);
   addConvertProjected(registry, c);
+  addProfileBoundary(registry, c);
   add({"sketch.delete", QObject::tr("Delete"), "delete", [&c] { c.deleteSelection(); },
        QKeySequence(Qt::Key_Delete),
        QObject::tr("Deletes the selected sketch geometry, constraints and dimensions")},

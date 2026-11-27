@@ -5,7 +5,8 @@ cmake_minimum_required(VERSION 3.24)
 # (a bearing block with fillets; never committed): `github-177-*.mitcad`
 # under MITCAD_MITCAD_REPORTED. Its drawing D1 (four views, none with
 # tangent edges) is written as SVG by export-drawing, and its body as a
-# .brep file, which test_drawing --tangent-edges projects in seven views:
+# .brep file, which the drawing test (test_geometry_surfaces drawing
+# --tangent-edges) projects in seven views:
 # with Tangent Edges off no line along an edge between faces that meet
 # tangentially (or along a seam), exact and polygonal; with it on, those
 # lines thin; every other sharp line that OCCT's hidden-line removal
@@ -18,9 +19,10 @@ cmake_minimum_required(VERSION 3.24)
 # checked as well, its tangent edges drawn as sharp ones by the hidden-line
 # removal alone. Skipped when the folder or the design is not there.
 #
-# cmake -DCLI=<mitcad-cli> -DTEST=<test_drawing> -DWORK=<folder> -P drawing-tangent-edges-test.cmake
+# cmake -DCLI=<mitcad-cli> -DTEST=<test_geometry_surfaces> -DTEST_NAME=drawing -DWORK=<folder>
+#   -P drawing-tangent-edges-test.cmake
 
-foreach(var CLI TEST WORK)
+foreach(var CLI TEST TEST_NAME WORK)
   if(NOT DEFINED ${var})
     message(FATAL_ERROR "drawing-tangent-edges-test.cmake needs -D${var}=...")
   endif()
@@ -62,6 +64,6 @@ endif()
 message(STATUS "ok   drawing D1 written: 4 views")
 
 run("${CLI}" export "${design}" "${WORK}/reported.brep")
-run("${TEST}" --tangent-edges "${WORK}/reported.brep")
+run("${TEST}" "${TEST_NAME}" --tangent-edges "${WORK}/reported.brep")
 message(STATUS "${output}")
 message(STATUS "ok   no tangent edges drawn with Tangent Edges off")

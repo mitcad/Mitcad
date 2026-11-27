@@ -131,6 +131,8 @@ const Allowed kAllowed[] = {
     {"view/DecalView.cpp", 1, "white under a decal's image (mitcad#2244), which OCCT multiplies its texture by"},
     {"view/ViewPaintLayer.cpp", 1,
      "white under the picture of a drawing the view draws itself (mitcad#2296), which OCCT multiplies its texture by"},
+    {"view/CamStockOverlay.cpp", 1,
+     "white as Simulate's stock material (mitcad#2569), which OCCT multiplies its vertices' role colors by"},
 };
 
 // The source text without its comments: strings (raw strings too) and

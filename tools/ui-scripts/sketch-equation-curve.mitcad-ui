@@ -52,8 +52,8 @@ command sketch.finish
 wait-log '^Sketch finished'
 wait-idle
 
-# 2. The profile closed through the origin, extruded 12 mm (not the 10 mm
-# Extrude starts with, so that the typed distance makes a new preview).
+# 2. The profile closed through the origin, extruded 12 mm (Extrude starts
+# at 0 mm and waits for a distance, mitcad#2481: the typed one previews).
 model-command '{"cmd":"sketch.add_line","sketch":"F1","start":"${last}","end":"p3"}'
 model-command '{"cmd":"sketch.add_line","sketch":"F1","start":"p3","end":"${first}"}'
 wait-idle
@@ -62,7 +62,7 @@ expect-near ${area} 12 0.02
 mark
 command solid.extrude
 expect-log 'Extrude Profiles: 1 profile '
-expect-log 'Preview Extrude: ok' 30
+expect-log 'Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
 wait-idle
 mark
 focus-widget input_distance

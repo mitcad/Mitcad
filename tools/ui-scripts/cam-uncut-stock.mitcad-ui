@@ -1,0 +1,244 @@
+# SPDX-License-Identifier: MIT
+# The uncut stock on the screen (mitcad#2569, follow-up of mitcad#2552;
+# app/COMMANDS.md "The CNC group", "The uncut stock"), the input script of
+# tools/ui-cam-uncut-stock-test.sh, on tools/ui-scripts/cam-uncut-stock.json:
+# a block milled on a router (Setup 1: its stock a box from (-10, -10, -5)
+# to (50, 40, 15)) and a tube turned on a lathe about the design's Z
+# through (160, 15) (Setup 2: its stock a bar 40 mm across from Z -29 to
+# 21 with an 8 mm bore, a tube; the part 30 mm across, Z 0 to 20, with a
+# 12 mm hole), each stock with room round its part where the view shows
+# the stock alone over the background. Without the layout grid, in the
+# orthographic camera, read from the view's own frame at model points
+# (TestDriver.hpp "capture-view-point-tint" and the steps after it):
+#
+#   1. On the light background, from the isometric corner: each stock
+#      drawn over the background, see-through (the block seen through it
+#      nearly as it is without it), its outline at least 2.5:1 on the
+#      background as the view draws it (thin lines, 3:1 and more in their
+#      colour, app.unit's color roles test); Setup 1's eye hides its stock
+#      only, Setup 2's its own only; seen from the top, the bottom and the
+#      front, the stock's faces shaded alike from either side and across.
+#   2. The same on the dark background.
+#   3. Generate and Simulate with the bored lathe stock: the stock as cut
+#      shaded alike on its face and its back (its own grey, not the
+#      background), the uncut stock set aside; closing Simulate brings it
+#      back as before.
+#   4. The block picked through its stock.
+#
+# The model points (mm): over the box alone (20,35,15), beside it on the
+# screen (47.5,62.5,15); over the tube alone, through its bore below the
+# part (174.14,0.86,-3), beside it (149.14,-24.14,-3); the block's top
+# (20,15,10); the box's top far edge at y 40, z 15, the background over
+# it (20,40,23); the bar's face circle (radius 20, z 21) on its far side,
+# the background over it (145.86,29.14,29).
+expect-ever 'View area'
+wait-idle
+# Before any mark: the lines logged as the design opened count too.
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+wait-log '^CAM uncut stock: 2 setup\(s\): box, tube; 544 vertices, 524 triangles, 268 edge\(s\)$' 30
+wait-log '^CAM states: Setup 1: no operations; Setup 2: Turn Facing 1 not_generated, Turn Roughing 1 not_generated$'
+
+mark
+command view.grid
+wait-log '^Layout grid off$'
+command view.orthographic
+wait-idle
+
+# 1. The light background.
+mark
+command view.environment.gradient
+expect-view-background light
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+capture-view-image '${MITCAD_TEST_WORK}/uncut-light.png'
+capture-view-point-tint millTint 20,35,15 47.5,62.5,15
+expect-less 3 ${millTint}
+capture-view-point-tint latheTint 174.14,0.86,-3 149.14,-24.14,-3
+expect-less 3 ${latheTint}
+capture-view-point-pixel partSeen 20,15,10
+capture-view-edge-contrast millEdge 20,40,23 0,40,15 10,40,15 20,40,15 30,40,15 40,40,15
+expect-less 2.5 ${millEdge}
+capture-view-edge-contrast latheEdge 145.86,29.14,29 154.82,34.32,21 150,32.32,21 145.86,29.14,21 142.68,25,21 140.68,20.18,21
+expect-less 2.5 ${latheEdge}
+
+# Setup 1's eye off: its stock gone, Setup 2's as it was; the block as it
+# is without the stock, its look through the stock not far from it.
+mark
+click-logged '^Browser eye Root/CAM/Setup 1 at '
+wait-log '^Visibility Root/CAM/Setup 1: hidden$'
+wait-log '^CAM uncut stock: 1 setup\(s\): tube; 520 vertices, 512 triangles, 256 edge\(s\)$'
+wait-idle
+capture-view-point-tint millGone 20,35,15 47.5,62.5,15
+expect-less ${millGone} 2
+capture-view-point-tint latheKept 174.14,0.86,-3 149.14,-24.14,-3
+expect-near ${latheKept} ${latheTint} 0 3
+capture-view-point-pixel partBare 20,15,10
+expect-colors-near '${partSeen}' '${partBare}' 90
+mark
+click-logged '^Browser eye Root/CAM/Setup 1 at '
+wait-log '^Visibility Root/CAM/Setup 1: shown$'
+wait-log '^CAM uncut stock: 2 setup\(s\): box, tube; 544 vertices, 524 triangles, 268 edge\(s\)$'
+
+# Setup 2's eye off: its stock gone, Setup 1's as it was.
+mark
+click-logged '^Browser eye Root/CAM/Setup 2 at '
+wait-log '^Visibility Root/CAM/Setup 2: hidden$'
+wait-log '^CAM uncut stock: 1 setup\(s\): box; 24 vertices, 12 triangles, 12 edge\(s\)$'
+wait-idle
+capture-view-point-tint latheGone 174.14,0.86,-3 149.14,-24.14,-3
+expect-less ${latheGone} 2
+capture-view-point-tint millKept 20,35,15 47.5,62.5,15
+expect-near ${millKept} ${millTint} 0 3
+mark
+click-logged '^Browser eye Root/CAM/Setup 2 at '
+wait-log '^Visibility Root/CAM/Setup 2: shown$'
+wait-log '^CAM uncut stock: 2 setup\(s\): box, tube; 544 vertices, 524 triangles, 268 edge\(s\)$'
+wait-idle
+
+# From the top and the bottom: through the box's top and bottom faces,
+# and through the bar's face and back rings outside the part, the one
+# seen from outside and the other from inside in turn: alike. From the
+# front through the box's front and back faces: alike with the top and
+# bottom ones (every face lit the same way when it faces the camera).
+command view.top
+wait-idle
+command view.fit
+wait-idle
+capture-view-point-tint millTop 20,35,15 65,35,15
+expect-less 3 ${millTop}
+capture-view-point-tint latheTop 160,32.5,21 130,32.5,21
+expect-less 3 ${latheTop}
+command view.bottom
+wait-idle
+command view.fit
+wait-idle
+capture-view-point-tint millBottom 20,35,-5 65,35,-5
+expect-near ${millBottom} ${millTop} 0 6
+capture-view-point-tint latheBottom 160,32.5,-29 130,32.5,-29
+expect-near ${latheBottom} ${latheTop} 0 6
+command view.front
+wait-idle
+command view.fit
+wait-idle
+capture-view-point-tint millFront 20,-10,12.5 65,-10,12.5
+expect-near ${millFront} ${millTop} 0 6
+
+# 2. The dark background: the same.
+mark
+command view.environment.dark
+expect-view-background dark
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+capture-view-image '${MITCAD_TEST_WORK}/uncut-dark.png'
+capture-view-point-tint millTintDark 20,35,15 47.5,62.5,15
+expect-less 3 ${millTintDark}
+capture-view-point-tint latheTintDark 174.14,0.86,-3 149.14,-24.14,-3
+expect-less 3 ${latheTintDark}
+capture-view-point-pixel partSeenDark 20,15,10
+capture-view-edge-contrast millEdgeDark 20,40,23 0,40,15 10,40,15 20,40,15 30,40,15 40,40,15
+expect-less 2.5 ${millEdgeDark}
+capture-view-edge-contrast latheEdgeDark 145.86,29.14,29 154.82,34.32,21 150,32.32,21 145.86,29.14,21 142.68,25,21 140.68,20.18,21
+expect-less 2.5 ${latheEdgeDark}
+mark
+click-logged '^Browser eye Root/CAM/Setup 1 at '
+wait-log '^Visibility Root/CAM/Setup 1: hidden$'
+wait-log '^CAM uncut stock: 1 setup\(s\): tube; 520 vertices, 512 triangles, 256 edge\(s\)$'
+wait-idle
+capture-view-point-tint millGoneDark 20,35,15 47.5,62.5,15
+expect-less ${millGoneDark} 2
+capture-view-point-tint latheKeptDark 174.14,0.86,-3 149.14,-24.14,-3
+expect-near ${latheKeptDark} ${latheTintDark} 0 3
+capture-view-point-pixel partBareDark 20,15,10
+expect-colors-near '${partSeenDark}' '${partBareDark}' 90
+mark
+click-logged '^Browser eye Root/CAM/Setup 1 at '
+wait-log '^Visibility Root/CAM/Setup 1: shown$'
+wait-log '^CAM uncut stock: 2 setup\(s\): box, tube; 544 vertices, 524 triangles, 268 edge\(s\)$'
+wait-idle
+command view.top
+wait-idle
+command view.fit
+wait-idle
+capture-view-point-tint millTopDark 20,35,15 65,35,15
+expect-less 3 ${millTopDark}
+capture-view-point-tint latheTopDark 160,32.5,21 130,32.5,21
+expect-less 3 ${latheTopDark}
+command view.bottom
+wait-idle
+command view.fit
+wait-idle
+capture-view-point-tint millBottomDark 20,35,-5 65,35,-5
+expect-near ${millBottomDark} ${millTopDark} 0 6
+capture-view-point-tint latheBottomDark 160,32.5,-29 130,32.5,-29
+expect-near ${latheBottomDark} ${latheTopDark} 0 6
+command view.front
+wait-idle
+command view.fit
+wait-idle
+capture-view-point-tint millFrontDark 20,-10,12.5 65,-10,12.5
+expect-near ${millFrontDark} ${millTopDark} 0 6
+
+# 3. Generate, then Simulate the lathe setup (the last one): the stock as
+#    cut drawn by itself, the uncut stock set aside.
+mark
+command make.cam_generate
+wait-log '^CAM states: Setup 1: no operations; Setup 2: Turn Facing 1 up_to_date, Turn Roughing 1 up_to_date$' 60
+wait-log '^CAM toolpaths drawn: 2 operation\(s\), [1-9][0-9]* moves$' 30
+expect-never 'CAM generate .* failed'
+mark
+command make.cam_simulate
+wait-log '^CAM simulate: Setup 2, 2 operations, [1-9][0-9]* points$' 30
+wait-log '^CAM turned stock: Setup 2: left [0-9.]+, [0-9]+ gouge\(s\), [0-9]+ rapid cut\(s\)$' 60
+wait-log '^CAM turned stock overlay: [1-9][0-9]* vertices, [1-9][0-9]* triangles$'
+wait-log '^CAM uncut stock: 2 setup\(s\): box, tube; 544 vertices, 524 triangles, 268 edge\(s\), under the cut stock$'
+focus-dialog '^Simulate$'
+focus-widget camSimulateSlider
+key End
+wait-log '^CAM simulate at ([0-9]+) of \1: '
+# Its face (cut to the part's face) from the top and its back from the
+# bottom, each facing the camera, between the bore and the part's
+# outside: the same grey, far from the background.
+command view.top
+wait-idle
+command view.fit
+wait-idle
+capture-view-image '${MITCAD_TEST_WORK}/cut-top.png'
+capture-view-point-pixel cutFace 160,3,20
+capture-view-point-tint cutTint 160,3,20 130,3,20
+expect-less 20 ${cutTint}
+command view.bottom
+wait-idle
+command view.fit
+wait-idle
+capture-view-image '${MITCAD_TEST_WORK}/cut-bottom.png'
+capture-view-point-pixel cutBack 160,3,-29
+expect-colors-near '${cutFace}' '${cutBack}' 24
+mark
+focus-dialog '^Simulate$'
+key Escape
+wait-log '^CAM simulate closed$'
+wait-log '^CAM stock overlay: none$'
+wait-log '^CAM uncut stock: 2 setup\(s\): box, tube; 544 vertices, 524 triangles, 268 edge\(s\)$'
+focus-main
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+capture-view-point-tint latheBack 174.14,0.86,-3 149.14,-24.14,-3
+expect-near ${latheBack} ${latheTintDark} 0 5
+
+# 4. The block's top picked through its stock (the stock is never picked):
+#    with no command, the places a click picks are logged first; the
+#    block's top has one although its stock is all round it.
+mark
+idle-pick-places
+wait-log '^Pick face F1[.]b0/F1:top at ' 20
+click-pick 'face F1[.]b0/F1:top at '
+wait-log '^Selected: 1 [a-z]+ .*F1[.]b0'
+expect-never 'TestDriver: FAIL|CAM operation refused|CAM setup refused|OCCT view event failed'

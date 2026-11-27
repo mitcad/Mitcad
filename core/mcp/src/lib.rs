@@ -55,6 +55,9 @@ pub use new_feature_defaults::new_feature_defaults;
 // (mitcad#2224): which calls use them, the refusal without the
 // preference, and the binding to the open design's project.
 pub mod print_library;
+// The live queries that run as model jobs, off the window's UI thread
+// (mitcad#2540).
+pub mod query_jobs;
 
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

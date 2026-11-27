@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Press Pull's Offset on a curved face (mitcad#2509), tools/ui-press-pull-curved-offset-test.sh: the circle c2 of radius 10 about the origin of Sketch1 (F1) on the XY plane extruded 10 mm with a taper of -3 degrees (Extrude1, F2): Body1 (F2.b0), a cone narrowing upwards from radius 10 at z = 0 to 10 - 10 tan 3 deg at z = 10, its side F2:side(c2). All geometry is synthetic."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [0, 0]},
+    {"id": "c2", "type": "circle", "center": "p1", "radius": 10}]}},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c2}"}],
+    "extent": {"type": "distance", "distance": 10, "taper": "-3 deg"}, "operation": "new_body"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"expect": {"bodies": 1}}
+]

@@ -28,6 +28,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Pln.hxx>
 
 #include "convert.hpp"
@@ -68,10 +69,27 @@ Bounds box_of(const TopoDS_Shape& shape) {
   return box;
 }
 
+// A strip's direction in the plane (its part along the normal left out).
+gp_Dir strip_direction(const Plane& plane, const Strip& strip) {
+  const gp_Vec normal(direction(plane));
+  gp_Vec along(strip.along.x, strip.along.y, strip.along.z);
+  along -= normal * along.Dot(normal);
+  if (along.Magnitude() <= gp::Resolution()) {
+    throw Error("the section strip needs a direction in the plane");
+  }
+  if (!(std::isfinite(strip.from) && std::isfinite(strip.to) && strip.from < strip.to)) {
+    throw Error("the section strip needs a width");
+  }
+  return gp_Dir(along);
+}
+
 // A square face in the plane, centred where the plane meets the line from
-// the box centre along the normal, large enough to cover the box.
-// `distance` is the signed distance of the box centre from the plane.
-TopoDS_Face cover(const Bounds& box, const Plane& plane, double& size, double& distance) {
+// the box centre along the normal, large enough to cover the box; with a
+// strip, the part of it within the strip (a null face when the strip
+// misses it, mitcad#2479). `distance` is the signed distance of the box
+// centre from the plane.
+TopoDS_Face cover(const Bounds& box, const Plane& plane, double& size, double& distance,
+                  const Strip* strip = nullptr) {
   const Vec3 extent = box.size();
   size = std::sqrt(extent.x * extent.x + extent.y * extent.y + extent.z * extent.z) + 1.0;
   const gp_Dir normal = direction(plane);
@@ -79,7 +97,26 @@ TopoDS_Face cover(const Bounds& box, const Plane& plane, double& size, double& d
                       0.5 * (box.min.z + box.max.z));
   distance = gp_Vec(detail::pnt(plane.origin), center).Dot(gp_Vec(normal));
   const gp_Pnt on_plane = center.Translated(gp_Vec(normal) * -distance);
-  return BRepBuilderAPI_MakeFace(gp_Pln(on_plane, normal), -size, size, -size, size).Face();
+  if (strip == nullptr) {
+    return BRepBuilderAPI_MakeFace(gp_Pln(on_plane, normal), -size, size, -size, size).Face();
+  }
+  // The face's u runs along the strip from where the box centre meets the
+  // plane; the strip's ends measure from the plane's origin.
+  const gp_Dir along = strip_direction(plane, *strip);
+  const double shift = gp_Vec(detail::pnt(plane.origin), on_plane).Dot(gp_Vec(along));
+  const double low = std::max(strip->from - shift, -size);
+  const double high = std::min(strip->to - shift, size);
+  if (!(low < high)) {
+    return TopoDS_Face();
+  }
+  return BRepBuilderAPI_MakeFace(gp_Pln(gp_Ax3(on_plane, normal, along)), low, high, -size, size).Face();
+}
+
+// An empty compound: what a cut leaves of a shape that goes as a whole.
+TopoDS_Shape nothing() {
+  TopoDS_Compound none;
+  BRep_Builder().MakeCompound(none);
+  return none;
 }
 
 } // namespace
@@ -120,15 +157,10 @@ ClipSide clip_side(const Bounds& box, const Plane& plane) {
   return ClipSide::Cut;
 }
 
-Section section(const TopoDS_Shape& shape, const Plane& plane) {
-  if (shape.IsNull()) {
-    throw Error("cannot section a null shape");
-  }
-  if (detail::mesh_only(shape)) {
-    return detail::mesh_section(shape, plane);
-  }
-  Section result;
-  BRepAlgoAPI_Section curves(shape, gp_Pln(detail::pnt(plane.origin), direction(plane)), false);
+namespace {
+
+// The curves of a section not yet built.
+TopoDS_Shape section_curves(BRepAlgoAPI_Section& curves) {
   curves.Approximation(true);
   // The shape is a body of the model, which other results share: the
   // booleans here leave its sub-shapes as they are.
@@ -137,7 +169,40 @@ Section section(const TopoDS_Shape& shape, const Plane& plane) {
   if (!curves.IsDone() || curves.HasErrors()) {
     throw Error("the section could not be computed");
   }
-  result.curves = curves.Shape();
+  return curves.Shape();
+}
+
+// section and section_within: the whole plane, or the strip of it.
+Section section_of(const TopoDS_Shape& shape, const Plane& plane, const Strip* strip) {
+  if (shape.IsNull()) {
+    throw Error("cannot section a null shape");
+  }
+  if (detail::mesh_only(shape)) {
+    if (strip != nullptr) {
+      throw Error("a section limited to a strip cuts bodies with surfaces only");
+    }
+    return detail::mesh_section(shape, plane);
+  }
+  Section result;
+  TopoDS_Face band;
+  if (strip != nullptr) {
+    double size = 0.0;
+    double distance = 0.0;
+    band = cover(box_of(shape), plane, size, distance, strip);
+    if (band.IsNull()) {
+      // The strip misses the shape.
+      result.curves = nothing();
+      result.faces = nothing();
+      return result;
+    }
+  }
+  if (strip != nullptr) {
+    BRepAlgoAPI_Section curves(shape, band, false);
+    result.curves = section_curves(curves);
+  } else {
+    BRepAlgoAPI_Section curves(shape, gp_Pln(detail::pnt(plane.origin), direction(plane)), false);
+    result.curves = section_curves(curves);
+  }
   for (TopExp_Explorer it(result.curves, TopAbs_EDGE); it.More(); it.Next()) {
     ++result.edge_count;
   }
@@ -151,8 +216,12 @@ Section section(const TopoDS_Shape& shape, const Plane& plane) {
   }
   double size = 0.0;
   double distance = 0.0;
-  const TopoDS_Face disk = cover(box_of(solids), plane, size, distance);
-  // The part of the plane inside the solids, holes included.
+  const TopoDS_Face disk = cover(box_of(solids), plane, size, distance, strip);
+  if (disk.IsNull()) {
+    result.faces = nothing();
+    return result;
+  }
+  // The part of the plane (of the strip) inside the solids, holes included.
   BRepAlgoAPI_Common common;
   build_keeping_inputs(common, disk, solids);
   if (!common.IsDone() || common.HasErrors()) {
@@ -164,6 +233,14 @@ Section section(const TopoDS_Shape& shape, const Plane& plane) {
   }
   result.area = surface_properties(result.faces).Mass();
   return result;
+}
+
+} // namespace
+
+Section section(const TopoDS_Shape& shape, const Plane& plane) { return section_of(shape, plane, nullptr); }
+
+Section section_within(const TopoDS_Shape& shape, const Plane& plane, const Strip& strip) {
+  return section_of(shape, plane, &strip);
 }
 
 namespace {
@@ -202,14 +279,37 @@ Plane moved(const Plane& plane, double by) {
   return result;
 }
 
+// What clip gives for a shape it keeps whole (`kept`) or removes whole,
+// with `faces` what became of each face.
+TopoDS_Shape whole(const TopoDS_Shape& shape, bool kept, std::vector<ClippedFace>* faces) {
+  if (faces) {
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> own;
+    TopExp::MapShapes(shape, TopAbs_FACE, own);
+    faces->clear();
+    for (int i = 1; i <= own.Extent(); ++i) {
+      ClippedFace face{own(i), {}};
+      if (kept) {
+        face.pieces.push_back(face.face);
+      }
+      faces->push_back(std::move(face));
+    }
+  }
+  return kept ? shape : nothing();
+}
+
 // The shape cut by the slab from the plane over the whole shape (its box
 // `box`) on the normal side, with the fuzzy value (0: none), and with
-// `faces` what became of each face; Error when the boolean fails.
+// `faces` what became of each face; Error when the boolean fails. With a
+// strip, the slab is the strip's prism (mitcad#2479).
 TopoDS_Shape cut_at(const TopoDS_Shape& shape, const Bounds& box, const Plane& plane, double fuzzy,
-                    std::vector<ClippedFace>* faces) {
+                    std::vector<ClippedFace>* faces, const Strip* strip) {
   double size = 0.0;
   double distance = 0.0;
-  const TopoDS_Face disk = cover(box, plane, size, distance);
+  const TopoDS_Face disk = cover(box, plane, size, distance, strip);
+  if (disk.IsNull()) {
+    // The strip misses the shape: nothing goes.
+    return whole(shape, true, faces);
+  }
   // A slab from the plane over the whole shape on the normal side.
   const double depth = std::abs(distance) + size;
   const TopoDS_Shape removed =
@@ -250,7 +350,7 @@ TopoDS_Shape cut_at(const TopoDS_Shape& shape, const Bounds& box, const Plane& p
 
 // One attempt on a shape with surfaces whose box is `box`.
 TopoDS_Shape attempt_clip(const TopoDS_Shape& shape, const Bounds& box, const Plane& plane, ClipAttempt attempt,
-                          std::vector<ClippedFace>* faces, ClipReport* report) {
+                          std::vector<ClippedFace>* faces, ClipReport* report, const Strip* strip = nullptr) {
   double fuzzy = 0.0;
   double shift = 0.0;
   if (attempt == ClipAttempt::Fuzzy) {
@@ -259,7 +359,9 @@ TopoDS_Shape attempt_clip(const TopoDS_Shape& shape, const Bounds& box, const Pl
     shift = kClipShift;
   }
   try {
-    TopoDS_Shape result = cut_at(shape, box, shift != 0.0 ? moved(plane, shift) : plane, fuzzy, faces);
+    // The plane moves along its normal: the strip's ends stay where they
+    // are along it.
+    TopoDS_Shape result = cut_at(shape, box, shift != 0.0 ? moved(plane, shift) : plane, fuzzy, faces, strip);
     if (report) {
       report->attempt = attempt;
       report->fuzzy = fuzzy;
@@ -306,8 +408,33 @@ TopoDS_Shape clip_by(const TopoDS_Shape& shape, const Plane& plane, ClipAttempt 
   }
 }
 
-TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane, std::vector<ClippedFace>* faces,
-                  ClipReport* report) {
+namespace {
+
+// What clip_within does with a shape whose box is `box`: clip_side's
+// answer for the plane, and a box wholly outside the strip is kept, one
+// within it is removed only when it lies on the normal side.
+ClipSide strip_side(const Bounds& box, const Plane& plane, const Strip& strip) {
+  const ClipSide side = clip_side(box, plane);
+  if (box.empty || side == ClipSide::Kept) {
+    return side;
+  }
+  const gp_Dir along = strip_direction(plane, strip);
+  Plane across;
+  across.origin = plane.origin;
+  across.normal = {along.X(), along.Y(), along.Z()};
+  const PlaneReach reach = plane_reach(box, across);
+  if (reach.max <= strip.from + Precision::Confusion() || reach.min >= strip.to - Precision::Confusion()) {
+    return ClipSide::Kept;
+  }
+  const bool within =
+      reach.min >= strip.from - Precision::Confusion() && reach.max <= strip.to + Precision::Confusion();
+  return side == ClipSide::Removed && within ? ClipSide::Removed : ClipSide::Cut;
+}
+
+// clip and clip_within: the half-space beyond the whole plane, or the
+// strip's prism of it.
+TopoDS_Shape clip_of(const TopoDS_Shape& shape, const Plane& plane, const Strip* strip,
+                     std::vector<ClippedFace>* faces, ClipReport* report) {
   if (shape.IsNull()) {
     throw Error("cannot clip a null shape");
   }
@@ -315,32 +442,18 @@ TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane, std::vector<Cli
     *report = ClipReport{};
   }
   if (detail::mesh_only(shape)) {
+    if (strip != nullptr) {
+      throw Error("a section limited to a strip cuts bodies with surfaces only");
+    }
     return detail::mesh_clip(shape, plane, faces);
   }
   const Bounds box = box_of(shape);
   // A shape the plane does not reach is kept or removed as a whole without
   // a boolean (mitcad#438): Section Analysis clips every body shown, and
   // most lie on one side.
-  const ClipSide side = clip_side(box, plane);
+  const ClipSide side = strip != nullptr ? strip_side(box, plane, *strip) : clip_side(box, plane);
   if (side != ClipSide::Cut) {
-    if (faces) {
-      NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> own;
-      TopExp::MapShapes(shape, TopAbs_FACE, own);
-      faces->clear();
-      for (int i = 1; i <= own.Extent(); ++i) {
-        ClippedFace face{own(i), {}};
-        if (side == ClipSide::Kept) {
-          face.pieces.push_back(face.face);
-        }
-        faces->push_back(std::move(face));
-      }
-    }
-    if (side == ClipSide::Kept) {
-      return shape;
-    }
-    TopoDS_Compound nothing;
-    BRep_Builder().MakeCompound(nothing);
-    return nothing;
+    return whole(shape, side == ClipSide::Kept, faces);
   }
   // The attempts in turn (mitcad#1230): a plane along the seams and edges
   // of a revolved body's profile made the plain boolean fail, and the body
@@ -348,7 +461,7 @@ TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane, std::vector<Cli
   std::string failed;
   for (const ClipAttempt attempt : {ClipAttempt::Plain, ClipAttempt::Fuzzy, ClipAttempt::Moved}) {
     try {
-      TopoDS_Shape result = attempt_clip(shape, box, plane, attempt, faces, report);
+      TopoDS_Shape result = attempt_clip(shape, box, plane, attempt, faces, report, strip);
       if (report) {
         report->failed = failed;
       }
@@ -358,6 +471,17 @@ TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane, std::vector<Cli
     }
   }
   throw Error("the shape could not be clipped (" + failed + ")");
+}
+
+} // namespace
+
+TopoDS_Shape clip(const TopoDS_Shape& shape, const Plane& plane, std::vector<ClippedFace>* faces,
+                  ClipReport* report) {
+  return clip_of(shape, plane, nullptr, faces, report);
+}
+
+TopoDS_Shape clip_within(const TopoDS_Shape& shape, const Plane& plane, const Strip& strip, ClipReport* report) {
+  return clip_of(shape, plane, &strip, nullptr, report);
 }
 
 } // namespace mitcad::analysis

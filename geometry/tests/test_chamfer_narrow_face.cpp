@@ -59,6 +59,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/thread.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -844,7 +845,7 @@ void test_thread_start_ring() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(chamfer_narrow_face) {
   test::guarded("socket one edge", test::test_socket_one_edge);
   test::guarded("socket all edges", test::test_socket_all_edges);
   test::guarded("socket two distances", test::test_socket_two_distances);

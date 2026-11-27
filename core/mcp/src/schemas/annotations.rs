@@ -41,6 +41,10 @@ pub(super) const COMMANDS: &[&str] = &[
     "set_decal_visible",
     "rename_decal",
     "delete_decal",
+    // The point cloud tools (mitcad#2516, `point_clouds.rs`).
+    "align_point_cloud",
+    "filter_point_cloud",
+    "reconstruct_point_cloud",
 ];
 
 /// An annotation's kinds (`MeasureKind`): the dimensions, then the leader
@@ -437,6 +441,119 @@ fn point_cloud(command: &str) -> Option<Value> {
             "properties": {"name": cloud()},
             "required": ["name"],
             "examples": [{"cmd": "delete_point_cloud", "name": "PointCloud1"}]
+        }),
+        _ => return point_cloud_tool(command),
+    };
+    Some(spec)
+}
+
+/// A box in the design's coordinates (a region or a crop).
+fn cloud_box(description: &str) -> Value {
+    json!({
+        "type": "object",
+        "description": description,
+        "properties": {
+            "min": vec3("The lowest corner, mm"),
+            "max": vec3("The highest corner, mm"),
+            "inside": flag(true, "Keeps the points inside (false: those outside)")
+        },
+        "required": ["min", "max"],
+        "additionalProperties": false
+    })
+}
+
+/// The point cloud tools' schemas (mitcad#2516; fields without `cmd`).
+fn point_cloud_tool(command: &str) -> Option<Value> {
+    let spec = match command {
+        "align_point_cloud" => json!({
+            "description": "Moves a point cloud onto a body (its faces, or some of them), a mesh body or another cloud: from where it is, from picked point pairs or from its shape, refined by the best fit (iterative closest points); answers the motion and the remaining deviation. The point_cloud_alignment query takes the same fields and moves nothing.",
+            "properties": {
+                "name": cloud(),
+                "body": text("The target body's uid (bodies query); or give target_cloud"),
+                "faces": ids("Only these faces of the body are matched; all when left out"),
+                "target_cloud": text("Another point cloud as the target, by its name"),
+                "start": choice(&["placed", "shape", "pairs"], "Where the best fit starts: where the cloud is (default), its middle and main axes matched to the target's, or the pairs"),
+                "pairs": {
+                    "type": "array",
+                    "description": "Picked point pairs, at least three: a point on the cloud and its place on the target, in the design's coordinates",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "cloud": vec3("The point on the cloud, mm"),
+                            "target": vec3("Its place on the target, mm")
+                        },
+                        "required": ["cloud", "target"],
+                        "additionalProperties": false
+                    }
+                },
+                "best_fit": flag(true, "Refines the start by the best fit"),
+                "region": cloud_box("Only the cloud's points in this box take part (inside is not read)"),
+                "max_distance": number("Points farther than this from the target (mm) are left out; the mean distance and three standard deviations when left out"),
+                "max_iterations": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200, "description": "The best fit's rounds at most"},
+                "max_samples": {"type": "integer", "minimum": 3, "maximum": 1000000, "default": 20000, "description": "The cloud's points matched at most (every n-th of a larger cloud)"}
+            },
+            "required": ["name"],
+            "examples": [{"cmd": "align_point_cloud", "name": "PointCloud1", "body": "F1.b0", "start": "shape"}]
+        }),
+        "filter_point_cloud" => json!({
+            "description": "Makes a new point cloud of a cloud's points without its outliers and noise and cropped by a box or a lasso; the cloud it came from is kept, hidden.",
+            "properties": {
+                "name": cloud(),
+                "new_name": text("The new cloud's name; '<name> Filtered' when left out"),
+                "keep_shown": flag(false, "The cloud it came from stays shown"),
+                "statistical": {
+                    "type": "object",
+                    "description": "Statistical outliers: points whose neighbors are farther than the cloud's mean by more than ratio standard deviations",
+                    "properties": {
+                        "neighbors": {"type": "integer", "minimum": 1, "maximum": 200, "default": 16},
+                        "ratio": {"type": "number", "default": 2.0}
+                    },
+                    "additionalProperties": false
+                },
+                "radius": {
+                    "type": "object",
+                    "description": "Outliers by radius: points with fewer than neighbors others within radius mm",
+                    "properties": {
+                        "radius": number("mm"),
+                        "neighbors": {"type": "integer", "minimum": 1, "maximum": 200, "default": 4}
+                    },
+                    "required": ["radius"],
+                    "additionalProperties": false
+                },
+                "smooth": {
+                    "type": "object",
+                    "description": "Noise: each point moved onto the plane of its nearest points",
+                    "properties": {
+                        "neighbors": {"type": "integer", "minimum": 3, "maximum": 200, "default": 16},
+                        "passes": {"type": "integer", "minimum": 1, "maximum": 20, "default": 1}
+                    },
+                    "additionalProperties": false
+                },
+                "crop_box": cloud_box("A crop by a box in the design's coordinates"),
+                "lasso": {
+                    "type": "object",
+                    "description": "A crop by a lasso: a polygon on a plane facing the viewer, the points seen inside it along normal",
+                    "properties": {
+                        "normal": vec3("Toward the viewer"),
+                        "points": {"type": "array", "minItems": 3, "items": vec3("A corner, mm")},
+                        "inside": flag(true, "Keeps the points inside (false: those outside)")
+                    },
+                    "required": ["normal", "points"],
+                    "additionalProperties": false
+                }
+            },
+            "required": ["name"],
+            "examples": [{"cmd": "filter_point_cloud", "name": "PointCloud1", "statistical": {"neighbors": 16, "ratio": 2.0}}]
+        }),
+        "reconstruct_point_cloud" => json!({
+            "description": "Builds a closed mesh of a point cloud (normals estimated, a signed distance from their tangent planes meshed) as a new mesh body in the cloud's component.",
+            "properties": {
+                "name": cloud(),
+                "detail": {"type": "integer", "minimum": 8, "maximum": 256, "default": 64, "description": "Cubes of the grid along the cloud's longest side"},
+                "neighbors": {"type": "integer", "minimum": 3, "maximum": 100, "default": 12, "description": "The nearest points a normal is estimated of"}
+            },
+            "required": ["name"],
+            "examples": [{"cmd": "reconstruct_point_cloud", "name": "PointCloud1", "detail": 64}]
         }),
         _ => return None,
     };

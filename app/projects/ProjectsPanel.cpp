@@ -339,6 +339,14 @@ protected:
   }
 
   bool event(QEvent* event) override {
+    // A modal window that took the release (WindowBlocked, as
+    // TimelineHistoryList::event has it) or the window no longer active:
+    // the drag ends without a drop, and the copy cursor over the 3D view
+    // goes with it instead of staying over the whole application
+    // (mitcad#2527).
+    if (event->type() == QEvent::WindowBlocked || event->type() == QEvent::WindowDeactivate) {
+      endDrag();
+    }
     // The panel's keys before the window's shortcuts (Return confirms a
     // command there, Delete deletes in a sketch).
     if (event->type() == QEvent::ShortcutOverride && !editing() && currentItem() != nullptr) {
@@ -497,6 +505,21 @@ protected:
   }
 
 private:
+  // A press or a drag dropped without its release (event); logged for a
+  // drag.
+  void endDrag() {
+    const bool dragging = m_drag.dragging();
+    setOver(nullptr);
+    setOverView(false);
+    m_drag.clear();
+    if (!dragging) {
+      return;
+    }
+    unsetCursor();
+    qInfo().noquote() << QStringLiteral("Projects panel: drag ended without a drop");
+    m_panel.applyWaitingRows();
+  }
+
   // The dragged row is a design, the pointer is outside the rows, and the
   // 3D view is under it (mitcad#2428).
   bool onView(const QMouseEvent* event) const {

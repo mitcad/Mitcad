@@ -14,7 +14,7 @@
 //   - a file that is no design: no picture, an error;
 //   - Initialize twice and GetThumbnail before Initialize are refused.
 // The C ABI underneath is tested on designs the model saved
-// (core/thumbnailer/tests/capi.rs).
+// (core/thumbnailer/tests/thumbnail/capi.rs).
 //
 //   test_thumbnail_handler --dll <mitcad-thumbnails.dll> --work <dir>
 //     loads the build's DLL itself (ctest app.thumbnails-windows) and

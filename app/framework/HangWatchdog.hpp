@@ -74,6 +74,11 @@ public:
   // model command's id (ReportCenter::noteAction), a test step. Any
   // thread; never design content.
   static void noteActivity(const QString& activity);
+  // The graphics call the UI thread is about to make, "" when it returned
+  // (mitcad#2406: a view paint layer's texture upload and draw): a hang
+  // inside it adds "in graphics step: <step>" to the hang's first line, so
+  // that the call that stalled is named. Any thread.
+  static void noteGraphicsStep(const QString& step);
 
 private:
   void beat();

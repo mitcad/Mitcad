@@ -40,3 +40,16 @@ mod sub_turret_tests;
 // turret's body against the main chuck and the fixed zones, a body per
 // station (mitcad#2412).
 mod turret_tests;
+
+// Manual G-code in a lathe setup's program (mitcad#2506).
+mod manual_tests;
+
+// Turn Finishing into undercuts: the Plunge choice (mitcad#2503).
+mod plunge_tests;
+
+// A turning tool's and a boring bar's insert and holder (mitcad#2502).
+mod insert_tests;
+
+// Turn Roughing into undercuts: its Plunge choice, the G71 kept for the
+// roughing without one, the finish after it (mitcad#2549).
+mod rough_plunge_tests;

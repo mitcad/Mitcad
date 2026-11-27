@@ -104,6 +104,7 @@ class QHBoxLayout;
 class QKeyEvent;
 class QVBoxLayout;
 class QLabel;
+class QScrollArea;
 class QTabBar;
 class QTimer;
 class QToolButton;
@@ -202,6 +203,17 @@ public:
   // "Cut sheet labels: on".
   void setCutLabels(bool on);
   bool cutLabels() const { return m_cutLabels; }
+  // A cut sheet's nesting and plasma program (mitcad#2553,
+  // CutSheetCutting.cpp): Nest Components… (the spacing asked for,
+  // nest_cut_sheet), Show Cutting Paths (the drawing query's cutting_paths
+  // drawn over the sheet, the layout's problems in the status bar and the
+  // panel) and Cutting Program… (the torch's settings tried with the
+  // cut_sheet_cutting query, kept with edit_cut_sheet, the program written
+  // with post_cut_sheet).
+  void nestParts();
+  void setCuttingPaths(bool on);
+  bool cuttingPaths() const { return m_cuttingPaths; }
+  void postCuttingProgram();
 
   // The window's ribbon has the tools (mitcad#1008): its DRAWING tab (CUT
   // SHEET for a cut sheet) holds Close Drawing, Sheet… and Add Revision…
@@ -352,10 +364,13 @@ private:
   // A base view's Exploded View list (mitcad#2113): Assembled, then the
   // drawing's component's explode views by name.
   QList<QPair<QString, QString>> explodeChoices() const;
-  // A base view's Shows in its panel (mitcad#1293): the component's
-  // occurrences and bodies (subjectRows) checked as `subject` shows them;
-  // a change sends the bodies checked as the view's subject.
-  QWidget* showsList(int view, const QJsonObject& subject);
+  // A base view's Shows in its panel (mitcad#1293), two rows of the form:
+  // a heading with how many of the bodies the view draws, which opens and
+  // folds the list under it (mitcad#2498), and the list: the component's
+  // occurrences and bodies (subjectRows) checked as `subject` shows them,
+  // as high as the panel has room for. A change sends the bodies checked
+  // as the view's subject.
+  void addShows(int view, const QJsonObject& subject);
   // The place of the base view's Shows tree in the panel (mitcad#2434),
   // kept by drawing and view before fillPanel takes the tree away, for
   // the tree it builds next: a visibility edit redraws the drawing and
@@ -551,15 +566,26 @@ private:
   DrawingSheetView* m_sheetView = nullptr;
   QWidget* m_panel = nullptr;
   QLabel* m_panelTitle = nullptr;
+  // The page of the panel's fields under its title, which scrolls when the
+  // panel is too low for them (mitcad#2498), and what the panel was built
+  // for last ("D1/0/3/0/1//0/0": drawing, sheet, view, annotation, how many
+  // selected, tool, title block, cut sheet): the page is scrolled back to
+  // its top for another one, and kept where it was when the same one is
+  // built again (an edit of it).
+  QScrollArea* m_panelScroll = nullptr;
+  QString m_panelSubject;
   QFormLayout* m_form = nullptr;
   // A base view's Shows tree's place (keepShowsPlace, mitcad#2434): its
   // occurrences unfolded, its row at the top and its current row, each row
-  // by its occurrence path and body ("O1/O2|uid"); by drawing and view
-  // ("D1/3").
+  // by its occurrence path and body ("O1/O2|uid"), whether the list is
+  // open under its heading and how high it was (mitcad#2498); by drawing
+  // and view ("D1/3").
   struct ShowsPlace {
     QSet<QString> open;
     QString top;
     QString current;
+    bool shown = false;
+    int height = 0;
   };
   QHash<QString, ShowsPlace> m_showsPlaces;
   QString m_loggedButtons;
@@ -581,6 +607,14 @@ private:
   bool m_cutSheet = false;
   bool m_cutLabels = false;
   QString m_cutWarnings;
+  // Show Cutting Paths is on (mitcad#2553), and the state last logged.
+  bool m_cuttingPaths = false;
+  QString m_loggedCutting;
+  // The cutting paths' state of the drawing query's answer: logged and in
+  // the status bar when it changes.
+  void showCutting(const QJsonObject& answer);
+  // The panel's rows of the cutting paths' state (fillCutSheetPanel).
+  void addCuttingRows();
   // The title block editor while it is on (mitcad#1625), and its sheet.
   std::optional<TitleBlockEditor> m_blockEditor;
   int m_blockSheet = 0;

@@ -923,7 +923,7 @@ impl Raw {
         let docs = design::package(path?).ok()?;
         let doc = docs.open(docs.position(label).unwrap_or(0)).ok()?;
         let streams = design::find_design_streams(&doc).ok()??;
-        let segment = design::stream::Segment::parse(&streams.meta, streams.bulk).ok()?;
+        let segment = streams.into_segment().ok()?;
         let decoded = design::decode::decode(&segment);
         let items = decoded.timeline.iter().map(|t| t.id).collect();
         let (_, local_ids) = design::sketch::sketch_details(&segment);

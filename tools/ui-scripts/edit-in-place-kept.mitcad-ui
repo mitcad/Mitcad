@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: MIT
+# Edit in Place's kept edits (mitcad#2527), the input script of
+# tools/ui-edit-in-place-kept-test.sh, on holder.mitcad holding a
+# 40 x 40 x 5 plate of its own (Plate) and linking part.mitcad (a 10 mm
+# cube) on it, both in one folder (tools/ui-scripts/edit-in-place-holder.json,
+# edit-in-place-part.json). No tab of the part is open, so Edit in Place
+# reads the file.
+#   1. Edit in Place, a 5 mm block added, Finish: the unsaved edits are kept
+#      for the holder's Save.
+#   2. part.mitcad opened in a tab of its own: the kept edits are asked about
+#      first; Don't Save: the tab opens the file as saved. A 2 mm block
+#      added there and saved (the runner keeps that file to compare).
+#   3. The holder's Save: nothing asked, nothing written over the tab's save
+#      (the runner compares the file); the part opened again in a new tab
+#      has the tab's block and not the one made in place.
+#   4. Edit in Place again, a block added, Finish; the runner then changes
+#      part.mitcad on disk (two cubes).
+#   5. The holder's Save asks, the file changed on disk since it was read;
+#      Don't Save keeps what the file has (the runner compares it).
+# All geometry is synthetic.
+wait-idle
+capture-document-window holder
+expect-model-bodies 2 9000
+
+# 1. Edit in Place without a tab; Finish keeps the unsaved edits.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Edit in Place'
+wait-log '^Edit in Place C[0-9]+: part[.]mitcad read, 1 bodies of the assembly$'
+wait-idle
+expect-model-bodies 2 9000
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[-10,-10],"length":5,"width":5,"height":5,"operation":"new_body"}}'
+expect-model-bodies 3 9125
+expect-document-modified yes
+mark
+command assemble.finish_edit_in_place
+wait-log '^Finish Edit in Place C[0-9]+: changed, unsaved; Edit in Place part$'
+wait-idle
+expect-model-bodies 3 9125
+
+# 2. The part in a tab of its own: the kept edits asked about first.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Open Linked Design'
+wait-log '^Open Linked Design: .*/part[.]mitcad$'
+wait-log '^Save question: part[.]mitcad \(in place, before it opens in a tab\)$'
+focus-dialog '^Save the changes made in place to part\.mitcad before it opens\?$'
+button "^Don't Save$"
+wait-log '^Edit in Place: the unsaved changes made in place to part[.]mitcad dropped$'
+wait-idle
+expect-document-windows 2
+capture-document-window part
+expect-model-bodies 1 1000
+# The tab's change, saved.
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[20,0],"length":2,"width":2,"height":2,"operation":"new_body"}}'
+expect-model-bodies 2 1008
+mark
+command file.save
+wait-log '^Saved .*/part[.]mitcad$'
+expect-file '${MITCAD_TEST_WORK}/tab-saved.mitcad' 60
+
+# 3. The holder's Save writes nothing over the tab's save and asks nothing.
+focus-document-window holder
+wait-idle
+mark
+command file.save
+wait-log '^Saved .*/holder[.]mitcad$'
+wait-idle
+expect-no-log '^Edit in Place: saved |^Save question: '
+# The part read again in a new tab: the tab's block, not the one made in
+# place.
+focus-document-window part
+command file.close
+expect-document-window-gone part
+expect-document-windows 1
+focus-document-window holder
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Open Linked Design'
+wait-log '^Open Linked Design: .*/part[.]mitcad$'
+wait-idle
+expect-no-log '^Save question: '
+expect-document-windows 2
+capture-document-window partAgain
+expect-model-bodies 2 1008
+command file.close
+expect-document-window-gone partAgain
+expect-document-windows 1
+focus-document-window holder
+wait-idle
+
+# 4. Kept edits again; the runner changes the file on disk after Finish.
+mark
+context-menu-logged '^Browser Root/part:1 at ' 'Edit in Place'
+wait-log '^Edit in Place C[0-9]+: part[.]mitcad read, 1 bodies of the assembly$'
+wait-idle
+expect-model-bodies 3 9008
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[-10,-10],"length":5,"width":5,"height":5,"operation":"new_body"}}'
+expect-model-bodies 4 9133
+mark
+command assemble.finish_edit_in_place
+wait-log '^Finish Edit in Place C[0-9]+: changed, unsaved; Edit in Place part$'
+wait-idle
+expect-file '${MITCAD_TEST_WORK}/part-changed' 60
+
+# 5. The holder's Save asks first; Don't Save keeps what the file has.
+mark
+command file.save
+wait-log '^Save question: part[.]mitcad \(in place, changed on disk\)$'
+focus-dialog '^part\.mitcad changed on disk after it was edited in place\.$'
+button "^Don't Save$"
+wait-log '^Edit in Place: the unsaved changes made in place to part[.]mitcad dropped$'
+wait-log '^Saved .*/holder[.]mitcad$'
+wait-idle
+expect-no-log '^Edit in Place: saved '
+quit

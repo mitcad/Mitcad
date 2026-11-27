@@ -159,7 +159,15 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # Surface groups of faces for model_render's edges (mitcad#2148).
   kernel/surface_groups.rs
   # Point Cloud Deviation: closest points on a body's faces (mitcad#2240).
-  kernel/point_clouds.rs)
+  kernel/point_clouds.rs
+  # Minimum Radius: the largest curvature of each face (mitcad#2518).
+  kernel/min_radius.rs
+  # Sheet faces sampled for an approximate development (mitcad#2442).
+  kernel/sheet_grid.rs
+  # Continuity Analysis: the continuity across a body's edges (mitcad#2521).
+  kernel/edge_continuity.rs
+  # Surface quality analyses: curvature and iso curves of faces (mitcad#2517).
+  kernel/surface_quality.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -384,6 +392,22 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/point_clouds.cpp
   cpp/bridge/point_clouds.hpp)
+# Minimum Radius: the largest curvature of each face (mitcad#2518).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/min_radius.cpp
+  cpp/bridge/min_radius.hpp)
+# Sheet faces sampled for an approximate development (mitcad#2442).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/sheet_grid.cpp
+  cpp/bridge/sheet_grid.hpp)
+# Continuity Analysis: the continuity across a body's edges (mitcad#2521).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/edge_continuity.cpp
+  cpp/bridge/edge_continuity.hpp)
+# Surface quality analyses: curvature and iso curves of faces (mitcad#2517).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/surface_quality.cpp
+  cpp/bridge/surface_quality.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.
@@ -401,22 +425,15 @@ target_link_libraries(mitcad_bridge PRIVATE mitcad_geometry_analysis)
 target_link_libraries(mitcad_bridge PRIVATE mitcad_geometry_io)
 
 if(BUILD_TESTING)
-  add_executable(test_bridge tests/test_bridge.cpp)
-  target_link_libraries(test_bridge PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_analysis
-                                            mitcad_warnings)
-  add_test(NAME core.bridge COMMAND test_bridge)
-
-  # The import's analysis queries as operations: a crash inside OCCT is the
-  # query's error, not the end of the import process (mitcad#2294).
-  add_executable(test_analysis_crash tests/test_analysis_crash.cpp)
-  target_link_libraries(test_analysis_crash PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_analysis
-                                                    mitcad_warnings)
-  add_test(NAME core.analysis_crash_boundary_distances COMMAND test_analysis_crash boundary-distances)
-  set_tests_properties(core.analysis_crash_boundary_distances PROPERTIES
-    ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=boundary distances" TIMEOUT 120)
-  add_test(NAME core.analysis_crash_points_inside COMMAND test_analysis_crash points-inside)
-  set_tests_properties(core.analysis_crash_points_inside PROPERTIES
-    ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=points inside" TIMEOUT 120)
+  # The bridge's C++ tests in one bundle (mitcad#2497, cmake/TestBundles.cmake):
+  # each ctest runs one test of test_core_bridge in a process of its own
+  # (`test_core_bridge <test> [arguments]`); a test is registered in
+  # tests/bundled/<test file's stem>.cmake, included below. The corpus
+  # programs (test_brep_import, test_exchange, test_f3d_import) stay programs
+  # of their own: tools and UI tests run them by name.
+  mitcad_add_test_bundle(test_core_bridge)
+  target_link_libraries(test_core_bridge PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_analysis)
+  mitcad_include_bundled_tests("${CMAKE_CURRENT_SOURCE_DIR}/tests/bundled")
 
   # .f3d body import: Rust reads and converts, C++ builds with OCCT. The
   # corpus run reads MITCAD_F3D_CORPUS (default ~/f3d-corpus) and is skipped
@@ -512,7 +529,9 @@ if(BUILD_TESTING)
   # core.doctests_release run the documentation tests.
   #
   # mitcad_cargo_test(<name> <package> [RELEASE] [PARTS <part> <filter>...]):
-  # the ctest <name> runs the package's tests (RELEASE: optimised). With
+  # the ctest <name> runs the package's tests (RELEASE: optimised; the
+  # tests of an integration test binary, tests/<group>/main.rs and its
+  # modules, each in a process of its own, mitcad#2496). With
   # PARTS, <name>.<part> runs the tests whose names contain <filter>,
   # <name>.rest the others, and <name>.parts checks that the parts together
   # hold each of the package's tests exactly once (a new module goes to the
@@ -750,13 +769,13 @@ if(BUILD_TESTING)
   # api, on the mock kernel (mitcad#1013, core/model-tests/cam).
   mitcad_cargo_test(core.model.cam mitcad-model-tests-cam)
   # The posts' G-code run through the controllers' own code
-  # (core/cam/tests/controller_sim.rs, ignored in core.cam): grbl 1.1's
+  # (core/cam/tests/sim/controller_sim.rs, ignored in core.cam): grbl 1.1's
   # parser and planner on the host (MITCAD_GRBL_SIM) and grblHAL's
   # simulator (MITCAD_GRBLHAL_SIM), both GPL programs run apart, never
   # linked; skipped without the variable (docs/cam.md, "Simulation and
   # checks"). The LinuxCNC turning post's programs through LinuxCNC's
   # stand-alone interpreter (MITCAD_LINUXCNC_SIM, mitcad#2425,
-  # core/cam/tests/linuxcnc_lathe_sim.rs), the same way.
+  # core/cam/tests/sim/linuxcnc_lathe_sim.rs), the same way.
   foreach(sim grbl grblhal linuxcnc)
     add_test(NAME core.cam_${sim}_sim
       COMMAND "${CMAKE_COMMAND}" "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-debug.tsv"

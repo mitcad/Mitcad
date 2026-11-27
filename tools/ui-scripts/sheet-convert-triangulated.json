@@ -1,0 +1,16 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Convert to Sheet Metal by triangulation (mitcad#2442; the Linux UI test sheet-convert-triangulated and its Windows and macOS twins): sheet rules F1 (t = 2, K = 0.5) and a rectangle-to-round transition with an offset, as cli.sheet_convert_triangulated makes it: a rectangle 120 x 80 (Sketch F2), a 60 mm circle centred (10, 5) 80 up (plane F3, Sketch F4), lofted (F5.b0) and shelled 2 mm inside with both ends open (F6)."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":2,"bend_radius":3,"allowance":{"type":"k_factor","k":0.5},"reference_side":"front","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[-60,-40],"width":120,"height":80},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":80}}},
+  {"cmd":"sketch.create","plane":"F3"},
+  {"cmd":"sketch.add_circle","sketch":"F4","center":[10,5],"diameter":60},
+  {"cmd":"add_feature","def":{"type":"loft","sections":[
+    {"type":"profile","sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"},
+    {"type":"profile","sketch":"F4","region":"r{c1}"}],"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"shell","body":"F5.b0",
+    "faces":["F5:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})","F5:end(r{c1})"],"inside":2}},
+  {"expect":{"feature":"F6","status":"ok","bodies":1}}
+]

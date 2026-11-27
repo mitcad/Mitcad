@@ -41,6 +41,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -166,7 +167,7 @@ void test_rounding_over_a_concave_crease_of_its_side() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_concave_crease) {
   test::guarded("test_rounding_over_a_concave_crease_of_its_side",
                 test::test_rounding_over_a_concave_crease_of_its_side);
   if (test::failures == 0) {

@@ -64,6 +64,10 @@ native-click selectionCreate0
 expect-log '^Selection card create chose Extrude$'
 expect-log '^Command Extrude started$'
 expect-log '^Extrude Profiles: 1 face '
+# A new Extrude starts at 0 mm (mitcad#2481): 10 mm typed, so that the
+# first preview chooses Join and Local bodies is shown.
+native-type input_distance '10 mm'
+wait-log '^Preview Extrude: ok' 30
 wait-idle 30
 expect-native-command-layout input_objects input_flip fx_distance fx_taper commandHeader_parameters
 expect-native-layout

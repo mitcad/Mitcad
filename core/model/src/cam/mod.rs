@@ -25,6 +25,9 @@ pub mod library;
 pub mod outline;
 // The stock simulation's options (mitcad#1013, phase 3).
 pub mod simulate;
+// Turn Finishing into undercuts: the Plunge choice (mitcad#2503).
+pub mod plunge;
+pub use plunge::{PLUNGE_CLEARANCE, Plunge};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -287,6 +290,12 @@ pub struct CamTool {
     /// (radial, cutting the diameter); axial when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mount: Option<LiveMount>,
+    /// A turning tool's or boring bar's insert and holder (mitcad#2502):
+    /// the ISO codes, the tip and approach angles and the hand worked out
+    /// from them, and what was typed over them; none when only the nose
+    /// radius is known (tools kept before it have none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insert: Option<engine::turning::InsertGeometry>,
 }
 
 /// How a live tool sits on a lathe's turret (mitcad#2067).
@@ -473,6 +482,18 @@ impl CamTool {
         if let Some(cutting) = &self.cutting {
             cutting.validate().map_err(|e| format!("Tool {n}: {e}"))?;
         }
+        // The insert and holder of a turning tool or boring bar (mitcad#2502).
+        if let Some(insert) = &self.insert {
+            if !matches!(
+                self.shape,
+                ToolKind::Turning { .. } | ToolKind::Boring { .. }
+            ) {
+                return Err(format!(
+                    "Tool {n}: only turning tools and boring bars take an insert and a holder."
+                ));
+            }
+            insert.validate().map_err(|e| format!("Tool {n}: {e}"))?;
+        }
         Ok(())
     }
 
@@ -540,6 +561,13 @@ impl CamTool {
             kind,
             nose_radius,
             max_depth: self.flute_length,
+            // The trailing edge the simulation draws (mitcad#2503).
+            back_angle: matches!(
+                self.shape,
+                ToolKind::Turning { .. } | ToolKind::Boring { .. }
+            )
+            .then(|| self.back_angle())
+            .flatten(),
         };
         tool.validate()?;
         Ok(tool)
@@ -628,7 +656,21 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 impl CamMachine {
+    /// What is wrong with a machine put in: [`Self::check_stored`] and a
+    /// controller MitCad writes for, of the machine's kind.
     pub fn check(&self) -> Result<(), String> {
+        self.check_with(true)
+    }
+
+    /// What is wrong with a machine a design file keeps,
+    /// whatever its controller: a controller MitCad does not write for (a
+    /// design made in another build, mitcad#2531) still opens with its
+    /// toolpaths, and the post refuses when asked to write G-code.
+    pub fn check_stored(&self) -> Result<(), String> {
+        self.check_with(false)
+    }
+
+    fn check_with(&self, controller: bool) -> Result<(), String> {
         if !valid_id(&self.id) {
             return Err(
                 "A machine's id is 1 to 64 letters, digits, underscores or hyphens.".to_owned(),
@@ -639,11 +681,12 @@ impl CamMachine {
             return Err("A machine needs a name of at most 120 characters.".to_owned());
         }
         let lathe = m.lathe.is_some();
-        let known = if lathe {
-            engine::turning_dialect(&m.controller).is_some()
-        } else {
-            engine::dialect(&m.controller).is_some()
-        };
+        let known = !controller
+            || if lathe {
+                engine::turning_dialect(&m.controller).is_some()
+            } else {
+                engine::dialect(&m.controller).is_some()
+            };
         if !known {
             // A dialect of the other kind of machine says which kind it is
             // for (mitcad#2119); an unknown one is only refused.
@@ -957,6 +1000,14 @@ pub struct LatheSetup {
     /// The stock's bore diameter; a solid bar when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_bore: Option<CamValue>,
+    /// A bar of a given size (mitcad#2550), with stock `around_bodies`
+    /// only: its diameter in place of the side margin, and its length
+    /// from its face (the top margin in front of the part's face) towards
+    /// the chuck in place of the bottom margin; each margin when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_diameter: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock_length: Option<CamValue>,
     /// The tool change position: a diameter and a work Z; 50 mm clear of
     /// the stock's diameter and its face when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -974,6 +1025,74 @@ pub struct LatheSetup {
     /// back (mitcad#2319); none: the program stays on the main spindle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hand_over: Option<HandOverSetup>,
+    /// Blocks of G-code the programmer writes into the program between
+    /// the operations (mitcad#2506), in their order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manual_code: Vec<ManualCode>,
+}
+
+/// A block of G-code the programmer writes into a lathe setup's program
+/// (mitcad#2506): the stock's handling the operations do not compute, as
+/// pulling the bar after parting off. It is written as it is after the
+/// operation `after` (its id; before the first operation when left out),
+/// and after the blocks before it that follow the same operation; when
+/// that operation is suppressed, where it would be. Neither the simulation
+/// nor the read-back of the program sees what it does: the post leaves the
+/// machine in a defined state before it (the coolant and the spindle off,
+/// the tool at the tool change position) and states everything again after
+/// it (`docs/cam.md`, "Manual G-code").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualCode {
+    #[serde(default = "manual_code_name")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<u32>,
+    /// Its lines, as they are written.
+    #[serde(default)]
+    pub text: String,
+}
+
+fn manual_code_name() -> String {
+    "Manual G-code".to_owned()
+}
+
+/// The most lines a manual block has (mitcad#2506).
+pub const MAX_MANUAL_LINES: usize = 500;
+/// The most manual blocks a setup has.
+pub const MAX_MANUAL_BLOCKS: usize = 64;
+
+impl ManualCode {
+    /// Its lines that are written: each trimmed, blank ones left out.
+    pub fn lines(&self) -> Vec<String> {
+        self.text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+impl CamSetup {
+    /// Keeps the manual blocks in their place when an operation leaves the
+    /// setup (mitcad#2506): those after it follow the operation before it,
+    /// or come first.
+    pub fn operation_leaves(&mut self, index: usize) {
+        let Some(gone) = self.operations.get(index).map(|o| o.id) else {
+            return;
+        };
+        let before = index
+            .checked_sub(1)
+            .and_then(|i| self.operations.get(i))
+            .map(|o| o.id);
+        if let Some(lathe) = &mut self.lathe {
+            for block in &mut lathe.manual_code {
+                if block.after == Some(gone) {
+                    block.after = before;
+                }
+            }
+        }
+    }
 }
 
 /// The sub-spindle's hand-over of a lathe setup (mitcad#2319), each value
@@ -1001,6 +1120,8 @@ impl LatheSetup {
         let hand_over = self.hand_over.as_ref();
         [
             &self.stock_bore,
+            &self.stock_diameter,
+            &self.stock_length,
             &self.change_diameter,
             &self.change_z,
             &self.chuck_gap,
@@ -1019,6 +1140,8 @@ impl LatheSetup {
         let hand_over = self.hand_over.as_mut();
         [
             &mut self.stock_bore,
+            &mut self.stock_diameter,
+            &mut self.stock_length,
             &mut self.change_diameter,
             &mut self.change_z,
             &mut self.chuck_gap,
@@ -1160,15 +1283,23 @@ pub enum OperationKind {
     // diameter is a diameter.
     /// Facing the part's front from the stock's face.
     TurnFace,
-    /// Roughing the outside or the bore in passes along Z.
+    /// Roughing the outside or the bore in passes along Z; `plunge` how
+    /// far the passes go into undercuts (mitcad#2549; not written when
+    /// they do not, so older files keep their roughing).
     TurnRough {
         #[serde(default)]
         side: TurnSide,
+        #[serde(default, skip_serializing_if = "Plunge::is_none")]
+        plunge: Plunge,
     },
-    /// Finishing the outside or the bore along its contour.
+    /// Finishing the outside or the bore along its contour; `plunge` how
+    /// it goes into undercuts (mitcad#2503; not written when it does
+    /// not).
     TurnFinish {
         #[serde(default)]
         side: TurnSide,
+        #[serde(default, skip_serializing_if = "Plunge::is_none")]
+        plunge: Plunge,
     },
     /// A groove between two Z (from the groove's face input when left
     /// out), down to the profile there.
@@ -1873,9 +2004,9 @@ impl CamState {
             return Err(format!("a design has at most {MAX_SETUPS} setups"));
         }
         for (i, machine) in self.machines.iter().enumerate() {
-            machine.check()?;
+            machine.check_stored()?;
             if self.machines[..i].iter().any(|m| m.id == machine.id) {
-                return Err(format!("the machine {} is listed twice", machine.id));
+                return Err("two machines have the same id".to_owned());
             }
         }
         let mut ids = std::collections::BTreeSet::new();
@@ -1890,12 +2021,12 @@ impl CamState {
                 ));
             }
             if !ids.insert(setup.id) {
-                return Err(format!("the id {} is used twice", setup.id));
+                return Err("two setups or operations have the same id".to_owned());
             }
             for op in &setup.operations {
                 check_operation(op)?;
                 if !ids.insert(op.id) {
-                    return Err(format!("the id {} is used twice", op.id));
+                    return Err("two setups or operations have the same id".to_owned());
                 }
             }
         }
@@ -1917,17 +2048,25 @@ pub fn check_name(name: &str, what: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// What is wrong with a setup by itself.
-pub fn check_setup(setup: &CamSetup) -> Result<(), String> {
-    check_name(&setup.name, "setup")?;
-    if !(1..=6).contains(&setup.work_offset) {
-        return Err("The work offset must be one of G54 to G59.".to_owned());
-    }
-    if let Some(dialect) = &setup.dialect
+/// Whether MitCad writes for a setup's dialect, when one is set: checked
+/// where a setup is added or its dialect set, not when a design is read
+/// (a dialect of another build opens, and the post refuses it in words,
+/// mitcad#2531).
+pub fn check_dialect(dialect: Option<&str>) -> Result<(), String> {
+    if let Some(dialect) = dialect
         && engine::dialect(dialect).is_none()
         && engine::turning_dialect(dialect).is_none()
     {
         return Err("MitCad does not write G-code for that controller.".to_owned());
+    }
+    Ok(())
+}
+
+/// What is wrong with a setup by itself (its dialect: [`check_dialect`]).
+pub fn check_setup(setup: &CamSetup) -> Result<(), String> {
+    check_name(&setup.name, "setup")?;
+    if !(1..=6).contains(&setup.work_offset) {
+        return Err("The work offset must be one of G54 to G59.".to_owned());
     }
     if !(setup.post.arc_tolerance.is_finite() && setup.post.arc_tolerance > 0.0) {
         return Err("The arc tolerance must be more than zero.".to_owned());
@@ -1945,6 +2084,27 @@ pub fn check_setup(setup: &CamSetup) -> Result<(), String> {
         && !(1..=9999).contains(&number)
     {
         return Err("The program number must be from 1 to 9999.".to_owned());
+    }
+    // Manual G-code (mitcad#2506); what the controller takes is checked
+    // when the program is written.
+    let manual = setup.lathe.as_ref().map_or(&[][..], |l| &l.manual_code[..]);
+    if manual.len() > MAX_MANUAL_BLOCKS {
+        return Err(format!(
+            "A setup has at most {MAX_MANUAL_BLOCKS} blocks of manual G-code."
+        ));
+    }
+    for block in manual {
+        check_name(&block.name, "manual G-code block")?;
+        let lines = block.lines();
+        if lines.is_empty() {
+            return Err(format!("The manual G-code {} has no code.", block.name));
+        }
+        if lines.len() > MAX_MANUAL_LINES {
+            return Err(format!(
+                "The manual G-code {} has more than {MAX_MANUAL_LINES} lines.",
+                block.name
+            ));
+        }
     }
     Ok(())
 }
@@ -2324,6 +2484,41 @@ pub struct CamToolInput {
     /// A live tool's holder on a lathe (mitcad#2067).
     #[serde(default)]
     pub mount: Option<LiveMount>,
+    /// A turning tool's or boring bar's insert and holder (mitcad#2502).
+    #[serde(default)]
+    pub insert: Option<InsertInput>,
+}
+
+/// A turning tool's insert and holder as `cam_tool_put` takes them
+/// (mitcad#2502): ISO codes (`CNMG 120408`, `PCLNR 2525 M12`, a boring
+/// bar's `S25S-PCLNR 12`), angles in degrees, a hand, or codes and values
+/// together: a typed value wins over the code's and is kept as typed, so
+/// that leaving it out later goes back to the code's.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InsertInput {
+    #[serde(default)]
+    pub insert: Option<String>,
+    #[serde(default)]
+    pub holder: Option<String>,
+    #[serde(default)]
+    pub tip_angle: Option<CamValue>,
+    #[serde(default)]
+    pub approach_angle: Option<CamValue>,
+    #[serde(default)]
+    pub hand: Option<engine::turning::Hand>,
+}
+
+impl InsertInput {
+    /// Whether nothing is given: the tool then has no insert.
+    pub fn is_empty(&self) -> bool {
+        let blank = |s: &Option<String>| s.as_deref().is_none_or(|s| s.trim().is_empty());
+        blank(&self.insert)
+            && blank(&self.holder)
+            && self.tip_angle.is_none()
+            && self.approach_angle.is_none()
+            && self.hand.is_none()
+    }
 }
 
 /// A tool's kind with its values as [`CamValue`]s.
@@ -2443,6 +2638,7 @@ impl CamToolInput {
                 inside: *inside,
             },
         };
+        let (shape, insert) = self.resolve_insert(params, shape)?;
         let diameter = length(&self.diameter)?;
         // A lathe tool's flute length is the deepest it cuts.
         let flute_default = match shape {
@@ -2483,12 +2679,72 @@ impl CamToolInput {
                 .map(str::to_owned),
             cutting,
             mount: self.mount,
+            insert,
         };
         if tool.name.is_empty() {
             tool.name = tool.default_name();
         }
         tool.check()?;
         Ok(tool)
+    }
+
+    /// A turning tool's or boring bar's insert and holder (mitcad#2502),
+    /// with the shape whose nose radius is the insert code's corner radius
+    /// when none is typed. A typed nose radius stays whatever the code.
+    fn resolve_insert(
+        &self,
+        params: &Parameters,
+        shape: ToolKind,
+    ) -> Result<(ToolKind, Option<engine::turning::InsertGeometry>), String> {
+        use engine::turning::{InsertGeometry, TypedInsert};
+        let Some(input) = self.insert.as_ref().filter(|i| !i.is_empty()) else {
+            return Ok((shape, None));
+        };
+        let (typed_radius, boring) = match &self.shape {
+            ToolShapeInput::Turning { nose_radius } => (nose_radius, false),
+            ToolShapeInput::Boring { nose_radius } => (nose_radius, true),
+            _ => {
+                return Err(
+                    "Only turning tools and boring bars take an insert and a holder.".to_owned(),
+                );
+            }
+        };
+        let angle = |v: &Option<CamValue>| {
+            v.as_ref()
+                .map(|v| v.evaluate(params, ValueKind::Angle))
+                .transpose()
+        };
+        let nose_radius = typed_radius
+            .as_ref()
+            .map(|v| v.evaluate(params, ValueKind::Length))
+            .transpose()?;
+        let typed = TypedInsert {
+            tip_angle: angle(&input.tip_angle)?,
+            approach_angle: angle(&input.approach_angle)?,
+            hand: input.hand,
+            nose_radius,
+        };
+        let read = InsertGeometry::read(
+            input.insert.as_deref().unwrap_or_default(),
+            input.holder.as_deref().unwrap_or_default(),
+            typed,
+        )?;
+        if let Some(holder) = &read.holder
+            && holder.bar
+            && !boring
+        {
+            return Err(format!(
+                "{} is a boring bar's code: a turning tool needs a holder's code, like PCLNR 2525 M12.",
+                holder.text
+            ));
+        }
+        // The insert code's corner radius when none is typed.
+        let shape = match (nose_radius, read.code_nose_radius()) {
+            (None, Some(r)) if boring => ToolKind::Boring { nose_radius: r },
+            (None, Some(r)) => ToolKind::Turning { nose_radius: r },
+            _ => shape,
+        };
+        Ok((shape, Some(read.geometry)))
     }
 }
 

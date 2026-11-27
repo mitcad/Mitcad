@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Split Body's Keep (mitcad#2504), tools/ui-split-body-keep-selected-test.sh and tools/ui-split-body-keep-all-test.sh: a 30 x 20 x 10 block (sketch F1, Body1 F2.b0) from the origin and Plane1 (F3), the yz plane moved 10 mm along X, which cuts it into a 10 mm piece (2000 mm3, behind the plane) and a 20 mm piece (4000 mm3, in front of it)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 30, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane",
+    "definition": {"type": "offset", "plane": "yz", "distance": 10}}}
+]

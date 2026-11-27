@@ -13,7 +13,8 @@
 # makes of tools/ui-scripts/point-cloud-deviation.json and the scan written
 # here beside it (16 points 0.5 mm above the block's top, 16 points 0.3 mm
 # above its bottom, inside the material). Insert > Point Cloud reads the
-# scan; Inspect > Point Cloud Deviation gives the statistics and colours the
+# scan, chosen with Choose File... (mitcad#2474: no message left, OK
+# available at once); Inspect > Point Cloud Deviation gives the statistics and colours the
 # points, a point's tooltip its distance; a wider tolerance takes in the
 # inner points; the top face only, then 11 of the 32 points measured, the
 # others dimmed (mitcad#2265); OK keeps it as Deviation1, saved (checked in
@@ -47,7 +48,7 @@ export MITCAD_TEST_STEP_MS=100
 export MITCAD_TEST_INPUT=$here/ui-scripts/point-cloud-deviation.mitcad-ui
 export MITCAD_TEST_WORK=$work
 ui_start_display
-ui_start_app --ui=qt --no-mcp --open "$file"
+ui_start_app --ui=qt --no-mcp --no-native-dialogs --open "$file"
 for _ in $(seq 1 1500); do
   kill -0 "$UI_RUNNER" 2> /dev/null || break
   sleep 0.2
@@ -55,6 +56,7 @@ done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail "point cloud deviation driver timed out"; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
 UI_RUNNER=""
+ui_expect_log 'Panel Point Cloud message: error gone: Choose a point cloud file.' 'the file chosen in the dialog clears the message'
 ui_expect_log 'Point clouds drawn: PointCloud1 32 points' 'the scan inserted and drawn'
 ui_expect_log '32 of 32 points, signed, mean 0.100 mm, mean absolute 0.400 mm' 'the statistics'
 ui_expect_log 'deviation 32 point(s)' 'the colour map drawn'

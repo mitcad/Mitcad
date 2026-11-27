@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: MIT
+# Minimum Distance (mitcad#2519), the shared input script of
+# tools/ui-minimum-distance-test.sh (Linux),
+# tools/ui-windows-minimum-distance-test.ps1 (Windows) and
+# tools/ui-macos-minimum-distance-test.sh (macOS), on minimum-distance.json
+# saved as distance-blocks.mitcad in the work folder: Body1, a 10 x 10 mm
+# block as high as the parameter height (10 mm), and Body2, the same square
+# from 15 to 25 mm above XY: 5 mm apart along Z. ASCII only: the Windows
+# runner copies it as ASCII.
+#   1. Inspect > Minimum Distance: Body1 from the browser as Selection 1,
+#      Body2 as Selection 2: 5 mm from Body1's top (z 10) to Body2's
+#      bottom (z 15); the view draws the line with its value.
+#   2. Check Clearance at 6 mm: the pair is closer, the line is drawn in
+#      the clearance's color; at 4 mm it is clear.
+#   3. OK keeps it as MinDistance1, shown, measured again when the model
+#      changes: height 12 mm gives 3 mm, height 15 mm touching (0 mm).
+#   4. Its light bulb hides and shows it; a double-click edits it with its
+#      settings; saved (the runner checks the file); deleted from its
+#      context menu and undone.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+
+# --- 1. The panel, Body1 to Body2.
+mark
+command inspect.minimum_distance
+wait-log '^Command Minimum Distance started' 20
+wait-idle
+expect-ever '^Browser Root/Bodies/Body1 at ' 30
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Minimum Distance Selection 1: 1 body' 20
+wait-idle
+mark
+click-logged '^Panel Minimum Distance input second at '
+wait-idle
+click-logged '^Browser Root/Bodies/Body2 at '
+wait-log '^Minimum Distance Selection 2: 1 body' 20
+wait-log '^Inspect Minimum Distance: 5[.]000 mm from Body1 [(][^)]*, 10[)] to Body2 [(][^)]*, 15[)]$' 60
+wait-log '^Print overlay: .*, minimum distance #[0-9a-f]{6}, marker 5[.]00 mm at [(][^)]*, 12[.]5[)]; legend Minimum Distance: #[0-9a-f]{6} Minimum distance$' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/minimum-distance.png'
+
+# --- 2. A clearance of 6 mm marks the pair; 4 mm leaves it clear.
+mark
+click-logged '^Panel Minimum Distance input check_clearance at '
+wait-idle
+type-in '^Panel Minimum Distance input clearance at ' '6 mm'
+wait-log '^Inspect Minimum Distance: 5[.]000 mm from Body1 .*; clearance 6 mm: closer$' 60
+wait-log '^Print overlay: .*, minimum distance #[0-9a-f]{6} closer than the clearance, marker 5[.]00 mm at .*; legend Minimum Distance: #[0-9a-f]{6} Closer than the clearance, 6 mm$' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/minimum-distance-clearance.png'
+mark
+type-in '^Panel Minimum Distance input clearance at ' '4 mm'
+wait-log '^Inspect Minimum Distance: 5[.]000 mm from Body1 .*; clearance 4 mm: clear$' 60
+wait-idle 60
+mark
+type-in '^Panel Minimum Distance input clearance at ' '6 mm'
+wait-log '^Inspect Minimum Distance: 5[.]000 mm .*; clearance 6 mm: closer$' 60
+wait-idle 60
+
+# --- 3. Kept as MinDistance1, shown, and measured again when the model
+# changes.
+capture-undo-depth before_ok
+mark
+button '^OK$'
+wait-log '^Kept Minimum Distance as MinDistance1' 30
+wait-log '^Browser Root/Analysis/MinDistance1 at ' 30
+wait-log '^Minimum distance MinDistance1: 5[.]000 mm from Body1 .*; clearance 6 mm: closer$' 60
+wait-log 'legend MinDistance1: ' 30
+wait-idle 60
+expect-undo-depth ${before_ok} 1
+expect-no-log '^Section analysis at '
+capture-model-number kept '{"query":"minimum_distance","name":"MinDistance1"}' distance
+expect-near ${kept} 5 1e-6 1e-6
+mark
+model-command '{"cmd":"set_parameter","name":"height","value":12}'
+wait-log '^Minimum distance MinDistance1: 3[.]000 mm from Body1 [(][^)]*, 12[)] to Body2 [(][^)]*, 15[)]; clearance 6 mm: closer$' 60
+wait-idle 60
+capture-model-number closer '{"query":"minimum_distance","name":"MinDistance1"}' distance
+expect-near ${closer} 3 1e-6 1e-6
+mark
+model-command '{"cmd":"set_parameter","name":"height","value":15}'
+wait-log '^Minimum distance MinDistance1: 0[.]000 mm [(]touching[)] from Body1 .*; clearance 6 mm: closer$' 60
+wait-idle 60
+mark
+model-command '{"cmd":"set_parameter","name":"height","value":10}'
+wait-log '^Minimum distance MinDistance1: 5[.]000 mm ' 60
+wait-idle 60
+
+# The light bulb hides and shows it.
+mark
+click-logged '^Browser eye Root/Analysis/MinDistance1 at '
+wait-log '^Visibility Root/Analysis/MinDistance1: hidden' 20
+wait-log '^Print overlay: none' 30
+wait-idle 60
+mark
+click-logged '^Browser eye Root/Analysis/MinDistance1 at '
+wait-log '^Visibility Root/Analysis/MinDistance1: shown' 20
+wait-log 'legend MinDistance1: ' 60
+wait-idle 60
+
+# A double-click edits it with its settings; Esc leaves it as it was.
+mark
+dblclick-logged '^Browser Root/Analysis/MinDistance1 at '
+wait-log '^Editing analysis MinDistance1 with Minimum Distance' 20
+wait-log '^Inspect Minimum Distance: 5[.]000 mm .*; clearance 6 mm: closer$' 60
+wait-idle 60
+key escape
+wait-log '^Command Minimum Distance cancelled' 20
+wait-log '^Minimum distance MinDistance1: 5[.]000 mm ' 60
+wait-idle 60
+
+# Saved: the runner finds the analysis in the file.
+mark
+command file.save
+wait-log 'Saved .*distance-blocks[.]mitcad' 30
+wait-idle
+
+# Deleted from its context menu, and undone.
+mark
+context-menu-logged '^Browser Root/Analysis/MinDistance1 at ' 'Delete'
+wait-log '^Context menu: Edit Minimum Distance [|] Hide [|] Rename [|] Delete' 20
+wait-log '^Deleted analysis MinDistance1' 20
+wait-log '^Print overlay: none' 30
+wait-idle 60
+mark
+key ctrl+z
+wait-log '^Undo: Delete MinDistance1' 20
+wait-log 'legend MinDistance1: ' 60
+wait-idle 60
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

@@ -29,6 +29,7 @@
 #include <TopoDS.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -140,7 +141,7 @@ void test_rounding_kept_on_the_narrow_face_cut_by_the_rim() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_tangent_overflow) {
   test::guarded("test_rounding_kept_on_the_narrow_face_cut_by_the_rim",
                 test::test_rounding_kept_on_the_narrow_face_cut_by_the_rim);
   if (test::failures == 0) {

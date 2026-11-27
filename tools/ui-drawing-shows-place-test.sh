@@ -6,7 +6,8 @@
 # body) placed 20 times in a grid, Plate:1 to Plate:20, with a drawing
 # whose base view draws all of them, that mitcad-cli makes. In the Docked
 # and then the Floating layout:
-#   - The view selected; its Shows (20 folded occurrences, 14 rows in
+#   - The view selected and its Shows opened under its heading (folded at
+#     first, mitcad#2498); the list (20 folded occurrences, 14 rows in
 #     sight) scrolled to its end (End), Plate:20 unfolded and its body's
 #     box cleared (Right, Right, Space): the view draws 19 bodies, and the
 #     panel built again keeps the list's place (the same occurrences
@@ -154,6 +155,12 @@ open_view() {
   ui_step "select the view"                ui_click_logged "Drawing view 1"
   ui_expect_new "Drawing view 1 selected" "the view selected"
   ui_expect_new "Drawing view 1 shows $2 of $TOTAL bodies" "its Shows: $2 of the $TOTAL bodies checked"
+  # The list folded under its heading at first (mitcad#2498): opened.
+  ui_expect_new "Drawing panel drawingViewShowsToggle at" "its Shows heading in the panel"
+  settled "Drawing panel drawingViewShowsToggle"
+  ui_mark
+  ui_step "open its Shows"                 ui_click_logged "Drawing panel drawingViewShowsToggle"
+  ui_expect_new "Drawing view 1 Shows opened" "the list opened under its heading"
   ui_expect_new "Drawing panel drawingViewShows row $FIRST_ROW at" "$FIRST_ROW's row in sight"
   settled "Drawing panel drawingViewShows row $FIRST_ROW"
 }

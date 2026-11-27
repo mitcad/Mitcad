@@ -753,6 +753,107 @@ fn move_face_moves_faces_by_a_rigid_motion() {
     assert!(scaled.is_err() || matches!(status(&b, scaled.unwrap()), FeatureStatus::Failed(_)));
 }
 
+/// Move Face up to an object (mitcad#2548): the top moved along its normal
+/// to the level of a plane, a point, a face or a body's first flat face in
+/// front of it, found again when the object changes; an object that gives
+/// no stop says why.
+#[test]
+fn move_face_moves_flat_faces_up_to_an_object() {
+    let mut b = block();
+    b.doc.kernel().lists_geometry.set(true);
+    let up_to = |b: &Block, object: Value| json!({"type": "move_face", "body": b.body, "faces": [top(b)], "to_object": object});
+    // A fixed plane 15 above the top (the top at z = 20).
+    let plane = add!(
+        b,
+        up_to(
+            &b,
+            json!({"type": "plane", "plane":
+            {"origin": [5.0, 5.0, 35.0], "normal": [0.0, 0.0, -1.0]}})
+        ),
+    )
+    .unwrap();
+    assert_eq!(status(&b, plane), FeatureStatus::Ok);
+    assert!(history(&b, b.body).ends_with("1 faces,0,0,15)"));
+    // A point: the plane through it parallel to the top.
+    let point = add!(
+        b,
+        up_to(
+            &b,
+            json!({"type": "point", "point": {"point": [100.0, -3.0, 12.5]}})
+        ),
+    )
+    .unwrap();
+    assert_eq!(status(&b, point), FeatureStatus::Ok);
+    assert!(history(&b, b.body).ends_with("1 faces,0,0,-7.5)"));
+    // A plate apart from the block, 40 to 45 above the sketch plane: its
+    // underside, and the plate as a body (its nearest flat face in front).
+    let sketch = b.doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = b
+        .doc
+        .add_rectangle(sketch, [0.0, 0.0], &num(60.0), &num(40.0))
+        .unwrap()
+        .region;
+    let plate = add!(
+        b,
+        json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+               "start": {"type": "offset", "offset": 40},
+               "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}),
+    )
+    .unwrap();
+    let plate_body = BodyUid::new(plate, 0);
+    let underside = FaceName::start(plate, region.clone());
+    let face = add!(
+        b,
+        up_to(
+            &b,
+            json!({"type": "face", "body": plate_body, "face": underside})
+        ),
+    )
+    .unwrap();
+    assert_eq!(status(&b, face), FeatureStatus::Ok);
+    assert!(history(&b, b.body).ends_with("1 faces,0,0,20)"));
+    let body = add!(b, up_to(&b, json!({"type": "body", "body": plate_body}))).unwrap();
+    assert_eq!(status(&b, body), FeatureStatus::Ok);
+    assert!(history(&b, b.body).ends_with("1 faces,0,0,20)"));
+    // The plate moved down 10: the stop follows it.
+    let lower = def(
+        json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+               "start": {"type": "offset", "offset": 30},
+               "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}),
+    );
+    b.doc.edit_feature(plate, &lower).unwrap();
+    assert_eq!(status(&b, body), FeatureStatus::Ok);
+    assert!(history(&b, b.body).ends_with("1 faces,0,0,10)"));
+    // Objects that give no stop: a plane across the top, the block itself
+    // (no flat face in front of its top), a motion besides the object, a
+    // body to go through.
+    let failed = |b: &mut Block, value: Value| -> String {
+        match add!(b, value) {
+            Ok(uid) => match status(b, uid) {
+                FeatureStatus::Failed(message) => message.to_string(),
+                other => panic!("expected a failure, got {other:?}"),
+            },
+            Err(error) => error.to_string(),
+        }
+    };
+    let across = up_to(&b, json!({"type": "plane", "plane": "xz"}));
+    assert!(failed(&mut b, across).contains("not parallel"));
+    let itself = up_to(&b, json!({"type": "body", "body": b.body}));
+    assert!(failed(&mut b, itself).contains("no flat face parallel to the faces to move in front"));
+    let mut both = up_to(&b, json!({"type": "plane", "plane": "xy"}));
+    both["transform"] = json!({"type": "translate_xyz", "x": 1.0, "y": 0.0, "z": 0.0});
+    assert!(failed(&mut b, both).contains("takes no other motion"));
+    let through = up_to(
+        &b,
+        json!({"type": "body", "body": plate_body, "through": true}),
+    );
+    assert!(failed(&mut b, through).contains("not through it"));
+    // A side of the block is not flat for the mock kernel: refused as such.
+    let side_face = json!({"type": "move_face", "body": b.body, "faces": [side(b.extrude, 1, 1)],
+                           "to_object": {"type": "plane", "plane": "yz"}});
+    assert!(failed(&mut b, side_face).contains("only flat faces move up to an object"));
+}
+
 /// The faces a fillet or chamfer made on the body.
 fn dressed_faces(b: &Block, role: &str) -> usize {
     b.doc.body_shape(b.body).map_or(0, |s| {

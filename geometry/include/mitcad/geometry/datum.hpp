@@ -148,6 +148,16 @@ struct SurfacePoint {
 // outward normal there.
 SurfacePoint face_point_normal(const Shape& shape, const std::string& face, const gp_Pnt& near);
 
+// A point on a face, inside its edges, with the outward normal there (the
+// face's orientation and location applied): the middle of the face's
+// parameter range where that lies on the face, else the point of a 16 x 16
+// grid over the range nearest that middle that lies inside the face and has
+// a normal (not a cone's tip). Where the drag handle of a curved face's
+// Offset starts (Press Pull, Offset Face; mitcad#2478): the middle of a
+// cone's or a loft's bounding box lies on its axis, off the face. Null for
+// a mesh body's triangles and a face with no such point.
+std::optional<SurfacePoint> face_inner_point(const TopoDS_Face& face);
+
 // Display shapes: a square face of side `size` centred on the origin, an
 // edge of length `size` centred on the origin, a vertex.
 ShapePtr plane_shape(const gp_Pnt& origin, const gp_Dir& normal, const gp_Dir& x_axis,

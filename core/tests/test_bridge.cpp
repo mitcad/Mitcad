@@ -39,6 +39,7 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAPI_PointsToBSplineSurface.hxx>
@@ -57,6 +58,8 @@
 #include "bridge/analysis.hpp"
 #include "bridge/memory.hpp"
 #include "bridge/point_clouds.hpp"
+#include "bridge/surface_quality.hpp"
+#include "mitcad_bridge/kernel/surface_quality.h"
 #include "mitcad/geometry/cancel.hpp"
 #include "mitcad/geometry/geometry.hpp"
 #include "mitcad/geometry/input_check.hpp"
@@ -64,6 +67,7 @@
 #include "mitcad_bridge/lib.h"
 #include "mitcad_bridge/memory.h"
 #include "rust/cxx.h"
+#include "bundled_test.hpp"
 
 // The Rust panic hook's sink and a test panic (core/ffi/src/panic_note.rs).
 extern "C" void mitcad_set_panic_sink(void (*sink)(const char* message, std::size_t length));
@@ -2570,6 +2574,61 @@ void test_point_cloud_deviation_of_a_block() {
   }
 }
 
+// Minimum Radius with the kernel (mitcad#2518): the demo block (60 x 40 x
+// 20) reports no radius while its faces are planes; with roundings of 2, 5
+// and 10 mm on three of its vertical edges the smallest radius is 2 mm, on
+// the 2 mm rounding at corner 1 (60, 0), and a limit of 4 mm marks that
+// face alone, a quarter of a cylinder of radius 2 and 20 mm high.
+void test_minimum_radius_of_a_filleted_block() {
+  auto document = mitcad::new_demo_document();
+  const auto ask = [&document](const char* json) {
+    try {
+      return std::string(document->query(json));
+    } catch (const rust::Error& error) {
+      std::fprintf(stderr, "min_radius_analysis failed: %s\n", error.what());
+      ++failures;
+      return std::string();
+    }
+  };
+  const char* const request =
+      R"({"query": "min_radius_analysis", "bodies": ["F2.b0"], "limit": 4, "triangles": false})";
+  const std::string flat = ask(request);
+  CHECK(contains(flat, R"("smallest":null)"));
+  CHECK(json_number(flat, "under_count") == 0.0);
+
+  run(*document, fillet(quoted(corner1("F2")), 2.0));
+  run(*document, fillet(quoted("E{F2:side(c2[c1,c3])|F2:side(c3[c2,c4])}"), 5.0));
+  run(*document, fillet(quoted("E{F2:side(c3[c2,c4])|F2:side(c4[c3,c1])}"), 10.0));
+  const std::string rounded = ask(request);
+  CHECK(std::abs(json_number(rounded, "smallest") - 2.0) < 1e-6);
+  CHECK(json_number(rounded, "under_count") == 1.0);
+  CHECK(std::abs(json_number(rounded, "under_area") - 20.0 * kPi) < 1e-3);
+  // Where: on the 2 mm rounding.
+  std::array<double, 3> at{std::nan(""), std::nan(""), std::nan("")};
+  const std::size_t found = rounded.find("\"at\":[");
+  if (found != std::string::npos) {
+    const char* p = rounded.c_str() + found + 6;
+    for (double& coordinate : at) {
+      char* end = nullptr;
+      coordinate = std::strtod(p, &end);
+      p = *end == ',' ? end + 1 : end;
+    }
+  }
+  CHECK(at[0] > 58.0 - 1e-6 && at[0] < 60.0 + 1e-6);
+  CHECK(at[1] > -1e-6 && at[1] < 2.0 + 1e-6);
+  CHECK(at[2] > -1e-6 && at[2] < 20.0 + 1e-6);
+  // A limit of 6 mm marks the 5 mm rounding too, 11 mm all three; a
+  // planar side face picked alone has no radius.
+  CHECK(json_number(ask(R"({"query": "min_radius_analysis", "bodies": ["F2.b0"], "limit": 6, "triangles": false})"),
+                    "under_count") == 2.0);
+  CHECK(json_number(ask(R"({"query": "min_radius_analysis", "bodies": ["F2.b0"], "limit": 11, "triangles": false})"),
+                    "under_count") == 3.0);
+  const std::string side =
+      ask(R"j({"query": "min_radius_analysis", "faces": [{"body": "F2.b0", "face": "F2:side(c4[c3,c1])"}]})j");
+  CHECK(contains(side, R"("smallest":null)"));
+  CHECK(json_number(side, "faces") == 1.0);
+}
+
 // A rigid transform as 4 rows of 4.
 using Placement = std::array<std::array<double, 4>, 4>;
 
@@ -3403,9 +3462,137 @@ void test_spatial_sketch_on_a_drafted_face_keeps_its_place() {
   CHECK(!contains(std::string(opened->to_json()), "\"placed\""));
 }
 
+// The surface quality analyses' samples (mitcad#2517): each vertex's
+// principal curvatures, the larger first, `expected` for the vertices
+// `where` takes (by the vertex and its outward normal); how many were
+// checked, -1 when one is off by more than 1e-6 or has none.
+template <class Where>
+int curvatures_are(const mitcad::bridge::SurfaceSampleMesh& mesh, std::array<double, 2> expected, Where where) {
+  int checked = 0;
+  const std::size_t count =
+      std::min({mesh.vertices.size() / 3, mesh.normals.size() / 3, mesh.curvatures.size() / 2});
+  for (std::size_t v = 0; v < count; ++v) {
+    const gp_Pnt p(mesh.vertices[3 * v], mesh.vertices[3 * v + 1], mesh.vertices[3 * v + 2]);
+    const gp_Vec n(mesh.normals[3 * v], mesh.normals[3 * v + 1], mesh.normals[3 * v + 2]);
+    if (!where(p, n)) {
+      continue;
+    }
+    const double k1 = mesh.curvatures[2 * v];
+    const double k2 = mesh.curvatures[2 * v + 1];
+    if (!(std::abs(k1 - expected[0]) < 1e-6 && std::abs(k2 - expected[1]) < 1e-6)) {
+      std::fprintf(stderr, "curvature at (%g, %g, %g): %g, %g; expected %g, %g\n", p.X(), p.Y(), p.Z(), k1, k2,
+                   expected[0], expected[1]);
+      return -1;
+    }
+    ++checked;
+  }
+  return checked;
+}
+
+// Surface quality analyses (mitcad#2517) with the kernel: the principal
+// curvatures at the mesh vertices of a ball (1/R both ways, its poles
+// too), a shaft (1/R round it, none along it), the plane ends and a box's
+// faces (zero), and a bore through a block (hollow: -1/R), signed positive
+// where a face bulges outwards, with outward normals; iso curves trimmed
+// to their faces (the block's top crossed by the bore gives two pieces of
+// a curve across it), with a ball's normal curvature 1/R along every one;
+// and the surface_analysis query's zebra stripes and iso curves on the demo
+// block (60 x 40 x 20), logged counts.
+void test_surface_quality_of_known_surfaces() {
+  const rust::Slice<const rust::String> all;
+  const auto samples = [&all](const TopoDS_Shape& occt) {
+    const mitcad::geometry::Shape shape(occt);
+    return mitcad::bridge::surface_samples(shape, all, 0.01, 0.2, 0);
+  };
+  const auto anywhere = [](const gp_Pnt&, const gp_Vec&) { return true; };
+
+  // A ball of radius 5: 0.2 both ways everywhere, normals out of it.
+  const mitcad::bridge::SurfaceSampleMesh ball = samples(BRepPrimAPI_MakeSphere(5.0).Shape());
+  CHECK(ball.vertices.size() > 30 && ball.curvatures.size() * 3 == ball.vertices.size() * 2);
+  CHECK(curvatures_are(ball, {0.2, 0.2}, anywhere) == static_cast<int>(ball.vertices.size() / 3));
+  bool outward = true;
+  for (std::size_t v = 0; 3 * v + 2 < ball.vertices.size(); ++v) {
+    const gp_Vec p(ball.vertices[3 * v], ball.vertices[3 * v + 1], ball.vertices[3 * v + 2]);
+    const gp_Vec n(ball.normals[3 * v], ball.normals[3 * v + 1], ball.normals[3 * v + 2]);
+    outward = outward && n.Dot(p) > 0.999 * p.Magnitude();
+  }
+  CHECK(outward);
+
+  // A shaft of radius 4: 0.25 round it and none along it on its side, zero
+  // on its plane ends.
+  const mitcad::bridge::SurfaceSampleMesh shaft = samples(BRepPrimAPI_MakeCylinder(4.0, 10.0).Shape());
+  const auto side = [](const gp_Pnt&, const gp_Vec& n) { return std::abs(n.Z()) < 1e-6; };
+  const auto ends = [](const gp_Pnt&, const gp_Vec& n) { return std::abs(std::abs(n.Z()) - 1.0) < 1e-6; };
+  CHECK(curvatures_are(shaft, {0.25, 0.0}, side) > 10);
+  CHECK(curvatures_are(shaft, {0.0, 0.0}, ends) > 10);
+  CHECK(shaft.face_triangles.size() == 3);
+
+  // A box: zero everywhere; a bore of radius 4 through a block: hollow.
+  CHECK(curvatures_are(samples(BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape()), {0.0, 0.0}, anywhere) > 0);
+  const TopoDS_Shape block = BRepPrimAPI_MakeBox(20.0, 20.0, 10.0).Shape();
+  const TopoDS_Shape tool =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(10.0, 10.0, -1.0), gp_Dir(0.0, 0.0, 1.0)), 4.0, 12.0).Shape();
+  BRepAlgoAPI_Cut cut(block, tool);
+  CHECK(cut.IsDone());
+  const TopoDS_Shape bored = cut.Shape();
+  const auto bore = [](const gp_Pnt& p, const gp_Vec& n) {
+    return std::abs(n.Z()) < 1e-6 && std::abs(std::hypot(p.X() - 10.0, p.Y() - 10.0) - 4.0) < 1e-3;
+  };
+  CHECK(curvatures_are(samples(bored), {0.0, -0.25}, bore) > 10);
+
+  // Iso curves: a box's faces give two whole curves each per count; the
+  // bored block's top and bottom have curves broken by the bore.
+  const mitcad::geometry::Shape box(BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape());
+  const mitcad::bridge::IsoCurveSet boxed = mitcad::bridge::face_isocurves(box, all, 3, 0.01);
+  CHECK(boxed.counts.size() == 6 * 2 * 3);
+  CHECK(boxed.points.size() == boxed.normals.size() && boxed.curvatures.size() * 3 == boxed.points.size());
+  const mitcad::geometry::Shape bored_shape(bored);
+  const mitcad::bridge::IsoCurveSet broken = mitcad::bridge::face_isocurves(bored_shape, all, 1, 0.01);
+  CHECK(broken.counts.size() > static_cast<std::size_t>(bored_shape.face_count()) * 2);
+  // A ball's every curve bends 1/R along it, where it has a normal.
+  const mitcad::geometry::Shape sphere(BRepPrimAPI_MakeSphere(5.0).Shape());
+  const mitcad::bridge::IsoCurveSet round = mitcad::bridge::face_isocurves(sphere, all, 2, 0.01);
+  CHECK(round.counts.size() == 4);
+  int bent = 0;
+  for (const double k : round.curvatures) {
+    if (std::isfinite(k)) {
+      CHECK(std::abs(k - 0.2) < 1e-6);
+      ++bent;
+    }
+  }
+  CHECK(bent > 20);
+
+  // The query on the demo block: three stripes from +Z, 30 % of each dark,
+  // make its top (0°) and bottom (180°) dark and its sides (90°, half way
+  // through a stripe) light; two curves each way per face.
+  auto document = mitcad::new_demo_document();
+  std::string zebra;
+  std::string isocurves;
+  try {
+    zebra = std::string(document->query(
+        R"({"query": "surface_analysis", "analysis": {"type": "zebra", "bodies": ["F2.b0"], "stripes": 3, "width": 0.3}, "geometry": false})"));
+    isocurves = std::string(document->query(
+        R"({"query": "surface_analysis", "analysis": {"type": "isocurve", "bodies": ["F2.b0"], "count": 2}, "geometry": false})"));
+  } catch (const rust::Error& error) {
+    std::fprintf(stderr, "surface_analysis failed: %s\n", error.what());
+    ++failures;
+    return;
+  }
+  std::printf("surface quality: zebra dark %g mm^2 (%g triangles), light %g mm^2 (%g triangles); %g iso curves of "
+              "%g points\n",
+              json_number(zebra, "dark_area"), json_number(zebra, "dark_triangles"), json_number(zebra, "light_area"),
+              json_number(zebra, "light_triangles"), json_number(isocurves, "curves"),
+              json_number(isocurves, "points"));
+  CHECK(std::abs(json_number(zebra, "dark_area") - 2.0 * 60.0 * 40.0) < 1e-6);
+  CHECK(std::abs(json_number(zebra, "light_area") - 2.0 * (60.0 + 40.0) * 20.0) < 1e-6);
+  CHECK(json_number(zebra, "dark_triangles") >= 4);
+  CHECK(json_number(isocurves, "curves") == 6 * 2 * 2);
+  CHECK(json_number(isocurves, "points") >= 6 * 2 * 2 * 2);
+}
+
 } // namespace
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(bridge) {
   // One test by its name (`test_bridge thread-ends`), else all.
   if (argc > 1 && std::string(argv[1]) == "thread-ends") {
     test_thread_end_pieces_keep_their_names();
@@ -3429,6 +3616,10 @@ int main(int argc, char** argv) {
   }
   if (argc > 1 && std::string(argv[1]) == "drafted-face-2465") {
     test_spatial_sketch_on_a_drafted_face_keeps_its_place();
+    return failures == 0 ? 0 : 1;
+  }
+  if (argc > 1 && std::string(argv[1]) == "min-radius-2518") {
+    test_minimum_radius_of_a_filleted_block();
     return failures == 0 ? 0 : 1;
   }
   test_block_fillet_and_dimension_change();
@@ -3475,6 +3666,8 @@ int main(int argc, char** argv) {
   test_sketch_on_a_drafted_face_keeps_its_place();
   test_replaced_floor_opens_a_through_hole();
   test_spatial_sketch_on_a_drafted_face_keeps_its_place();
+  test_minimum_radius_of_a_filleted_block();
+  test_surface_quality_of_known_surfaces(); // mitcad#2517
 
   if (failures == 0) {
     std::puts("test_bridge: all checks passed");

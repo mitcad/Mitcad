@@ -201,6 +201,9 @@ struct FileOut<'a> {
     // The drawing book (mitcad#2448), when it has anything set.
     #[serde(skip_serializing_if = "crate::document::DrawingBook::is_empty")]
     drawing_book: &'a crate::document::DrawingBook,
+    // Construction sets (mitcad#2514), when there are any.
+    #[serde(skip_serializing_if = "<[crate::document::ConstructionSet]>::is_empty")]
+    construction_sets: &'a [crate::document::ConstructionSet],
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -629,6 +632,7 @@ pub(super) fn save_with(
         decals: &state.decals,
         explode_views: &state.explode_views,
         drawing_book: &state.drawing_book,
+        construction_sets: &state.construction_sets,
         statistics,
         preview,
     };
@@ -957,7 +961,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 55] = [
+const TOP_FIELDS: [&str; 56] = [
     "format",
     "version",
     "units",
@@ -1046,6 +1050,8 @@ const TOP_FIELDS: [&str; 55] = [
     "explode_views",
     // The drawing book (mitcad#2448).
     "drawing_book",
+    // Construction sets (mitcad#2514).
+    "construction_sets",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1313,6 +1319,34 @@ pub(super) fn take_unknown_fields(value: &mut Value) -> Vec<String> {
         top.remove(field);
     }
     unknown
+}
+
+/// Reads a design file's CAM section (mitcad#1013) and checks it as a
+/// whole: a value it cannot decode is a schema error, a section that
+/// decodes but is wrong (two operations with one id) an invalid one; the
+/// message says what is wrong without naming the section.
+fn read_cam(value: Value) -> Result<crate::cam::CamState, FileError> {
+    let mut cam =
+        serde_json::from_value::<crate::cam::CamState>(value).map_err(|e| schema(e.to_string()))?;
+    cam.check().map_err(invalid)?;
+    Ok(cam)
+}
+
+/// Takes the CAM section out of a version 2 or 3 design file's object and
+/// reads it (mitcad#2581): None without one. A section this build cannot
+/// read (a value of another build, two operations with one id) is an
+/// error of its own, what is wrong with it in words, not the file's: the
+/// caller opens the design without its CAM and says why, so that the
+/// model is never locked out by its CAM. The rest of the file is read and
+/// checked as before.
+pub(super) fn take_cam(value: &mut Value) -> Result<Option<crate::cam::CamState>, String> {
+    match value.as_object_mut().and_then(|top| top.remove("cam")) {
+        None | Some(Value::Null) => Ok(None),
+        Some(cam) => read_cam(cam).map(Some).map_err(|e| match e {
+            FileError::Schema(message) | FileError::Invalid(message) => message,
+            other => other.to_string(),
+        }),
+    }
 }
 
 /// Reads a version 2 or 3 design file's object whose unknown top-level
@@ -1761,14 +1795,15 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     // CAM (mitcad#1013): read tolerantly, so that fields a newer MitCad
     // adds inside the section are ignored; each machine and setup checked.
     // An input whose body or sketch is gone is kept (its toolpath says so).
+    // A design file's section that cannot be read was already taken out
+    // ([`take_cam`], mitcad#2581); here only one the caller left in.
     let cam = match top.remove("cam") {
         None | Some(Value::Null) => crate::cam::CamState::default(),
-        Some(value) => {
-            let mut cam = serde_json::from_value::<crate::cam::CamState>(value)
-                .map_err(|e| schema(format!("cam: {e}")))?;
-            cam.check().map_err(|e| invalid(format!("cam: {e}")))?;
-            cam
-        }
+        Some(value) => read_cam(value).map_err(|e| match e {
+            FileError::Schema(message) => schema(format!("cam: {message}")),
+            FileError::Invalid(message) => invalid(format!("cam: {message}")),
+            other => other,
+        })?,
     };
     // The user parameters' groups (mitcad#2180): their paths, in order;
     // the parameters say which one each is in.
@@ -1872,6 +1907,18 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             book
         }
     };
+    // Construction sets (mitcad#2514): names once each, at most one
+    // active; sets of components that are gone and members whose items are
+    // gone are left out once the state is read.
+    let construction_sets = array(&mut top, "construction_sets", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            serde_json::from_value::<crate::document::ConstructionSet>(value)
+                .map_err(|e| schema(format!("construction_sets[{i}]: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    crate::document::check_construction_sets(&construction_sets).map_err(invalid)?;
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -2411,6 +2458,8 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     }
     state.explode_views = explode_views;
     state.drawing_book = drawing_book;
+    state.construction_sets = construction_sets;
+    state.prune_construction_sets();
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(

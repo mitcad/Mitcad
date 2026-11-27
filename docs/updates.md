@@ -275,6 +275,7 @@ release carries these assets:
 | `mitcad-<version>-windows-x64.exe` | the NSIS installer (`package`) |
 | `mitcad-<version>-windows-x64.zip` | the portable `.zip` (`package`; announce only) |
 | `Mitcad-<version>-x86_64.AppImage` | the Linux AppImage (`appimage`) |
+| `Mitcad-<version>-aarch64.AppImage` | the Linux AppImage for 64-bit ARM (`appimage` on an aarch64 machine) |
 | `Mitcad-<version>-macos-arm64.dmg` | the macOS application disk image (`dmg`) |
 | `update-manifest.json` | the signed manifest (`update-manifest`) |
 
@@ -369,7 +370,8 @@ folders stay the system's.
   releases before mitcad#938 have none and never expire. Older MitCad
   versions ignore the field.
 - `assets`: one entry per platform. `windows-x64` is the installer,
-  `linux-x64` is the AppImage and `macos-arm64` is the disk image. Each
+  `linux-x64` is the AppImage, `linux-arm64` is the aarch64 AppImage and
+  `macos-arm64` is the disk image. Each
   entry gives the HTTPS address of the download, its size, its SHA-256
   and the Ed25519 signature of its statement:
 

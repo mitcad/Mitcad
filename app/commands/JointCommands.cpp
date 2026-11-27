@@ -34,6 +34,7 @@
 #include "../framework/ViewGhosts.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
+#include "ConstraintTypeChoice.hpp"
 
 namespace mitcad {
 namespace cmd {
@@ -1813,6 +1814,8 @@ const Choices kConstraintTypes = {{QStringLiteral("align"), QStringLiteral("Alig
                                   {QStringLiteral("insert"), QStringLiteral("Insert")},
                                   {QStringLiteral("insert_axis"), QStringLiteral("Insert (Axis)")}};
 
+// A type's fixed choice label in English (automaticTypeLabel translates
+// it); the type itself when the table has none, empty for none.
 QString typeLabel(const QString& type) {
   for (const auto& [value, label] : kConstraintTypes) {
     if (value == type) {
@@ -2193,8 +2196,7 @@ CommandDef constraintCommand(const CommandContext& context) {
                .withChoices([&context](const CommandState& row) {
                  Choices choices;
                  const QString inferred = inferredType(row, context);
-                 choices.append({kAuto, inferred.isEmpty() ? QObject::tr("Automatic")
-                                                           : QObject::tr("Automatic (%1)").arg(typeLabel(inferred))});
+                 choices.append({kAuto, automaticTypeLabel(typeLabel(inferred))});
                  choices += kConstraintTypes;
                  return choices;
                }),
@@ -2347,8 +2349,7 @@ CommandDef singleConstraintCommand(const CommandContext& context) {
           .withChoices([&context](const CommandState& state) {
             Choices choices;
             const QString inferred = inferredType(state, context);
-            choices.append({kAuto, inferred.isEmpty() ? QObject::tr("Automatic")
-                                                      : QObject::tr("Automatic (%1)").arg(typeLabel(inferred))});
+            choices.append({kAuto, automaticTypeLabel(typeLabel(inferred))});
             choices += kConstraintTypes;
             return choices;
           }),

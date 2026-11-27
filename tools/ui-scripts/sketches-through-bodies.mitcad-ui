@@ -46,9 +46,10 @@ mark
 click-pick 'profile F2/'
 wait-log '^Extrude Profiles: 1 profile \[profile r\{.*\} of F2\]'
 expect-log '^Pick priority: profile F2/.* before a nearer face$'
-# The automatic operation cuts (the tool goes into the block from the
-# profile, mitcad#289); Join is chosen in the panel, with the block as its
-# body.
+# 10 mm typed (a new Extrude starts at 0 mm, mitcad#2481). The automatic
+# operation cuts (the tool goes into the block from the profile,
+# mitcad#289); Join is chosen in the panel, with the block as its body.
+type-in '^Panel Extrude input distance at ' '10 mm'
 expect-ever '^Extrude Local bodies: 1 body \[body F1\.b0\]' 30
 wait-idle
 mark

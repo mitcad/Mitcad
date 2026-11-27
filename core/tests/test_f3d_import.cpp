@@ -794,7 +794,11 @@ const ModelCheck kLoftModels[] = {
     {"loft_direction_w2", 5e-3, false, "LoftFeature"},    // +0.48 % (+0.52 % to the file's own body)
     {"loft_point_tangent", 1e-4, true, "LoftFeature"},
     {"loft_rail_circle_one", 1e-3, true, "LoftFeature"},  // its bent faces integrate to about 1e-4
-    {"loft_rails_circle_two", 1e-3, true, "LoftFeature"},
+    // +0.24 % (mitcad#2374): the rails kept the side's outermost lines, each
+    // circle stretched between them into an ellipse; the stored body shares
+    // the rails' pulls out by a smooth step round the circle, as MitCad did
+    // before.
+    {"loft_rails_circle_two", 3e-3, true, "LoftFeature"},
     {"loft_rails_squares", 1e-4, true, "LoftFeature"},
     {"loft_tangent_face", 1e-6, true, "LoftFeature"},
     {"loft_smooth_face", 1e-6, true, "LoftFeature"},

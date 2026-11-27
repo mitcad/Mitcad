@@ -278,6 +278,9 @@ private:
                   bool conflicted = false) const;
   void paintPreview(QPainter& painter, const ToolPreview& preview) const;
   void paintSnap(QPainter& painter) const;
+  // The Curvature comb option's combs (mitcad#2520): the teeth and their
+  // envelope in the inspection's colour, each inflection point a ring.
+  void paintCurvatureComb(QPainter& painter) const;
   // What a command's panel shows in the sketch (mitcad#1563): the points
   // its inputs picked with the sketch's snaps (Point to Point's, joined
   // from the first to the second), its handle (Move/Copy's arrow pair)

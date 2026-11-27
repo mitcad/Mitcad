@@ -1,5 +1,6 @@
 ; SPDX-License-Identifier: MIT
-; The .mitcad file type for the NSIS installer (cmake/Packaging.cmake). The
+; The .mitcad file type, and MitCad under Open with for the files it
+; imports, for the NSIS installer (cmake/Packaging.cmake). The
 ; commands live in a file of their own: CPack mangles double quotes in its
 ; CPACK_NSIS_EXTRA_*_COMMANDS variables.
 ;
@@ -16,6 +17,11 @@
   WriteRegStr SHCTX "Software\Classes\Mitcad.Project" "" "MitCad design"
   WriteRegStr SHCTX "Software\Classes\Mitcad.Project\shell\open\command" "" \
     '"$INSTDIR\bin\mitcad.exe" --open "%1"'
+  ; The files MitCad imports under Open with (below).
+  WriteRegStr SHCTX "Software\Classes\Mitcad.Import" "" "Model for MitCad"
+  WriteRegStr SHCTX "Software\Classes\Mitcad.Import\shell\open\command" "" \
+    '"$INSTDIR\bin\mitcad.exe" --open "%1"'
+  !insertmacro MitcadImportExtensions MitcadOpenWithRegister
   ; Explorer's thumbnails of designs (below).
   !insertmacro MitcadThumbnailsRegister
   ; Tell the shell that file associations changed.
@@ -25,9 +31,63 @@
 !macro MitcadFileTypeUnregister
   !insertmacro MitcadThumbnailsUnregister
   !insertmacro MitcadThumbnailsMoveAside
+  !insertmacro MitcadImportExtensions MitcadOpenWithUnregister
+  DeleteRegKey SHCTX "Software\Classes\Mitcad.Import"
   DeleteRegKey SHCTX "Software\Classes\.mitcad"
   DeleteRegKey SHCTX "Software\Classes\Mitcad.Project"
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+!macroend
+
+; The files MitCad imports (mitcad#2527): offered under Explorer's Open
+; with, not made theirs. Each extension's OpenWithProgids names the ProgID
+; Mitcad.Import, which opens the file as Mitcad.Project's command does
+; (app/main.cpp: --open imports a file of another format). The extension's
+; own default and the other programs' entries stay as they are: the
+; uninstaller removes only its value, and leaves the OpenWithProgids key,
+; which other programs may share. The list is every extension of
+; app/files/FileFormats.cpp but .mitcad (app.unit desktop_entry_types).
+; tools/installer-windows-test.ps1 reads the list below, one
+; "!insertmacro ${OPERATION} <extension>" line each, and checks every
+; value after the install and the uninstall (mitcad#2555).
+!macro MitcadOpenWithRegister EXT
+  WriteRegStr SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "Mitcad.Import" ""
+!macroend
+
+!macro MitcadOpenWithUnregister EXT
+  DeleteRegValue SHCTX "Software\Classes\.${EXT}\OpenWithProgids" "Mitcad.Import"
+!macroend
+
+!macro MitcadImportExtensions OPERATION
+  !insertmacro ${OPERATION} f3d
+  !insertmacro ${OPERATION} f3z
+  !insertmacro ${OPERATION} fcstd
+  !insertmacro ${OPERATION} step
+  !insertmacro ${OPERATION} stp
+  !insertmacro ${OPERATION} iges
+  !insertmacro ${OPERATION} igs
+  !insertmacro ${OPERATION} brep
+  !insertmacro ${OPERATION} brp
+  !insertmacro ${OPERATION} serp
+  !insertmacro ${OPERATION} stl
+  !insertmacro ${OPERATION} obj
+  !insertmacro ${OPERATION} 3mf
+  !insertmacro ${OPERATION} dxf
+  !insertmacro ${OPERATION} svg
+  !insertmacro ${OPERATION} ipt
+  !insertmacro ${OPERATION} iam
+  !insertmacro ${OPERATION} ifc
+  !insertmacro ${OPERATION} ifczip
+  !insertmacro ${OPERATION} rvt
+  !insertmacro ${OPERATION} rfa
+  !insertmacro ${OPERATION} rte
+  !insertmacro ${OPERATION} rft
+  !insertmacro ${OPERATION} sc
+  !insertmacro ${OPERATION} solidcraft
+  !insertmacro ${OPERATION} solvecraft
+  !insertmacro ${OPERATION} dwg
+  !insertmacro ${OPERATION} 3dm
+  !insertmacro ${OPERATION} glb
+  !insertmacro ${OPERATION} gltf
 !macroend
 
 ; Explorer's thumbnails of designs (mitcad#1695): the thumbnail handler

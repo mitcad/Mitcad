@@ -19,6 +19,8 @@ std::shared_ptr<geometry::Shape> rim_band(const ShapeList& body, const RimBand& 
   band.free = spec.free;
   band.start = spec.start;
   band.end = spec.end;
+  band.tangent = spec.tangent;
+  band.side_taper = spec.side_taper;
   std::shared_ptr<geometry::Shape> made;
   geometry::run_operation("band", [&] { made = geometry::rim_band(band); });
   return made;

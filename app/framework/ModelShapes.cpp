@@ -381,6 +381,25 @@ TopoDS_Shape polylineShape(const QJsonArray& points) {
   return polygon.IsDone() ? TopoDS_Shape(polygon.Wire()) : TopoDS_Shape();
 }
 
+TopoDS_Shape featureCurveShape(const QJsonObject& curve) {
+  const QJsonArray polylines = curve.value(QStringLiteral("polylines")).toArray();
+  if (polylines.size() < 2) {
+    return polylineShape(curve.value(QStringLiteral("points")).toArray());
+  }
+  TopoDS_Compound compound;
+  BRep_Builder builder;
+  builder.MakeCompound(compound);
+  bool any = false;
+  for (const QJsonValue& points : polylines) {
+    const TopoDS_Shape wire = polylineShape(points.toArray());
+    if (!wire.IsNull()) {
+      builder.Add(compound, wire);
+      any = true;
+    }
+  }
+  return any ? TopoDS_Shape(compound) : TopoDS_Shape();
+}
+
 gp_Vec vectorOf(const QJsonValue& xyz) {
   const QJsonArray a = xyz.toArray();
   return gp_Vec(a.at(0).toDouble(), a.at(1).toDouble(), a.at(2).toDouble());

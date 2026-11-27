@@ -39,6 +39,8 @@
 #include <gp_Circ.hxx>
 #include <gp_Trsf.hxx>
 
+#include "bundled_test.hpp"
+
 namespace {
 int failures = 0;
 void check(bool condition, const char* expression, int line) {
@@ -296,7 +298,7 @@ void smoothSeamsLeftOut() {
 }
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(view_edges) {
   fineLinesOfALargeBody();
   highlightsOnTheBodysLines();
   sketchCurvesCutAsBodyEdges();

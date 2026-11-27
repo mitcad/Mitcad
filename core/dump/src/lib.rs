@@ -473,6 +473,12 @@ record! {
         /// hole's modelled thread, which cuts the thread into the bore of
         /// the hole's own operation).
         "last_result_no" => last_result_no: i32,
+        /// A loose sketch (mitcad#2493): a sketch that no sketch item
+        /// holds, which the item at this index names first (its profile).
+        /// It comes right before that item, with an index after the
+        /// timeline's items, and stands for the sketch item the file does
+        /// not have (`object_id` is the sketch's own object).
+        "sketch_for" => sketch_for: i64,
     }
 }
 

@@ -55,6 +55,8 @@
 #include <gp_Ax2.hxx>
 #include <gp_Pnt.hxx>
 
+#include "bundled_test.hpp"
+
 namespace {
 
 int failures = 0;
@@ -226,7 +228,7 @@ void test_rounding(const TopoDS_Shape& body, const std::vector<double>& sides, c
 
 }  // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_rib_foot_corner) {
   const TopoDS_Shape body = guide();
   check(BRepCheck_Analyzer(body).IsValid(), "the guide is valid");
   test_rounding(body, {1.0}, "one foot");

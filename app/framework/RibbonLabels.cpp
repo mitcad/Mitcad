@@ -72,6 +72,11 @@ const std::pair<const char*, const char*> kShortLabels[] = {
     // Weld symbols (mitcad#2350).
     {"drawing.weld", QT_TRANSLATE_NOOP("RibbonLabel", "Weld")},
     {"drawing.propose_welds", QT_TRANSLATE_NOOP("RibbonLabel", "Propose")},
+    // Nesting and the cutting program (mitcad#2553).
+    {"make.nest_flat_patterns", QT_TRANSLATE_NOOP("RibbonLabel", "Nest")},
+    {"cut_sheet.nest", QT_TRANSLATE_NOOP("RibbonLabel", "Nest")},
+    {"cut_sheet.cutting_paths", QT_TRANSLATE_NOOP("RibbonLabel", "Paths")},
+    {"cut_sheet.post", QT_TRANSLATE_NOOP("RibbonLabel", "Program")},
 };
 
 } // namespace

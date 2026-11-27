@@ -1281,3 +1281,313 @@ fn an_align_moves_its_bodies_and_a_pattern_of_a_paste_copies_the_pasted_bodies()
         json!({"type": "bodies", "bodies": ["F3.b0"]})
     );
 }
+
+#[test]
+fn a_pattern_of_a_pattern_also_tries_the_inner_patterns_features_once() {
+    // mitcad#2529: a design of an older build patterns an earlier pattern,
+    // and its history copies only that pattern's own features, once at each
+    // copy. After the read objects (the inner pattern, repeated at every
+    // place it put its features), the inner pattern's features come as a
+    // candidate of their own, inferred, with a note.
+    let mut items = vec![
+        rectangle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    items.push(
+        json!({"index": 2, "name": "C-Pattern1", "objectType": "CircularPatternFeature",
+        "detail": {"inputEntities": [
+                       {"kind": "feature", "objectType": "ExtrudeFeature", "name": "Extrude1",
+                        "timeline_index": 1}],
+                   "patternEntityType": "FeaturesPatternType",
+                   "axis": {"kind": "construction_axis", "name": "Z", "origin": "Z"},
+                   "quantity": param("d6", "2", 2.0, ""),
+                   "totalAngle": param("d7", "360 deg", std::f64::consts::TAU, "deg"),
+                   "isSymmetric": false}}),
+    );
+    let mut dump = timeline_dump(items);
+    for (name, expression, unit) in [("d6", "2", ""), ("d7", "360 deg", "deg")] {
+        dump.parameters
+            .as_mut()
+            .unwrap()
+            .model
+            .as_mut()
+            .unwrap()
+            .push(
+                serde_json::from_value(
+                    json!({"name": name, "expression": expression, "unit": unit}),
+                )
+                .unwrap(),
+            );
+    }
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(&mut doc, &dump, &mut NoGeometry, &Options::default());
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let extrusion: FeatureUid = report.items[1].features[0].parse().unwrap();
+    let inner: FeatureUid = report.items[2].features[0].parse().unwrap();
+
+    let empty = timeline_dump(Vec::new());
+    let options = Options::default();
+    let mut geometry = NoGeometry;
+    let mut oracle = Oracle::new(&mut geometry);
+    oracle.enabled = false;
+    let mut importer = Importer {
+        body_scope: body_scope::Scope::capture(&doc).enter(&doc),
+        families: &crate::ReplayFamilies,
+        oracle,
+        doc: &mut doc,
+        dump: &empty,
+        options: &options,
+        params: ParamMap::default(),
+        sketches: HashMap::new(),
+        features: HashMap::from([(1, extrusion), (2, inner)]),
+        report: DesignReport::default(),
+        pending: Vec::new(),
+        mesh_bodies: Vec::new(),
+        translating: None,
+        cut_sources: std::cell::OnceCell::new(),
+        defined: Default::default(),
+        at_final: false,
+        started: std::time::Instant::now(),
+        components: components::Components::default(),
+        component: ComponentUid::ROOT,
+        sketch_copies: HashMap::new(),
+        part_sketches: HashMap::new(),
+        stopped_at: Cell::new(None),
+        trying: false,
+        alternatives: HashMap::new(),
+        guesses: None,
+        defer_guesses: false,
+        own_state: None,
+        untranslated: None,
+        kernel_failed: false,
+        start_bases: HashMap::new(),
+        deadline: None,
+        captures: captures::Captures::default(),
+        memory_released: 0,
+        frame_entities: Default::default(),
+        workers: Default::default(),
+        learn: None,
+        dressups: HashMap::new(),
+        notes: Default::default(),
+        suppressed: Default::default(),
+        made_ahead: HashMap::new(),
+        exact_pairs: None,
+        waited: Default::default(),
+        deviations: Default::default(),
+        deviated: Default::default(),
+        deviated_log: Default::default(),
+        deviation_points: Default::default(),
+        sources: None,
+        linker: None,
+        focus_paths: HashMap::new(),
+        link_paths: Default::default(),
+    };
+    let pattern = json!({"kind": "feature", "objectType": "CircularPatternFeature",
+                         "name": "C-Pattern1", "timeline_index": 2});
+    for kind in ["RectangularPatternFeature", "CircularPatternFeature"] {
+        let item = serde_json::from_value(json!({"index": 3, "objectType": kind,
+        "detail": {
+            "inputEntities": [pattern.clone()],
+            "axis": {"kind": "construction_axis", "origin": "X"},
+            "quantity": {"kind": "parameter", "value": 2.0, "unit": ""},
+            "totalAngle": {"kind": "parameter", "value": 180.0, "unit": "deg"},
+            "directionOne": [1.0, 0.0, 0.0],
+            "quantityOne": {"kind": "parameter", "value": 2.0, "unit": ""},
+            "distanceOne": {"kind": "parameter", "value": 1.0, "unit": "cm"}
+        }}))
+        .unwrap();
+        let candidates = importer.translate_op(kind, &item).unwrap();
+        let objects: Vec<&Value> = candidates.iter().map(|c| &c.defs[0]["objects"]).collect();
+        assert_eq!(
+            objects,
+            [
+                &json!({"type": "features", "features": [inner.to_string()]}),
+                &json!({"type": "features", "features": [extrusion.to_string()]})
+            ],
+            "{kind}"
+        );
+        assert_ne!(
+            candidates[0].input_provenance,
+            InputProvenance::Inferred,
+            "{kind}"
+        );
+        assert_eq!(
+            candidates[1].input_provenance,
+            InputProvenance::Inferred,
+            "{kind}"
+        );
+        assert_eq!(
+            candidates[1].note.as_deref(),
+            Some(
+                "the features of the pattern it copies, once at each copy (checked against the history)"
+            ),
+            "{kind}"
+        );
+    }
+    // A pattern of the extrusion alone has no such candidate.
+    let item = serde_json::from_value(json!({"index": 3, "objectType": "RectangularPatternFeature",
+    "detail": {
+        "inputEntities": [{"kind": "feature", "objectType": "ExtrudeFeature", "name": "Extrude1",
+                           "timeline_index": 1}],
+        "directionOne": [1.0, 0.0, 0.0],
+        "quantityOne": {"kind": "parameter", "value": 2.0, "unit": ""},
+        "distanceOne": {"kind": "parameter", "value": 1.0, "unit": "cm"}
+    }}))
+    .unwrap();
+    assert_eq!(
+        importer
+            .translate_op("RectangularPatternFeature", &item)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_mirror_of_an_extrusion_up_to_an_object_also_tries_it_mirrored_as_it_is() {
+    // mitcad#2529: Adjust rebuilds the image of an extrusion up to an
+    // object up to the same object (through the body between them, where
+    // the object lies on the original's side); a design's mirror of such a
+    // cut removes only the cut's own volume. After the read candidates, the
+    // mirror with Identical (the tool mirrored as it is) comes as a guess.
+    // The block, and a second extrusion of its rectangle up to the block's
+    // corner (as an_extrusion_up_to_a_vertex_comes_in_up_to_the_point).
+    let block = || {
+        vec![
+            rectangle_sketch(0),
+            extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+        ]
+    };
+    let mut first = Document::new(MockKernel::default());
+    import(&mut first, &timeline_dump(block()));
+    let top = first
+        .body_shape(BodyUid::new(FeatureUid(2), 0))
+        .expect("the block")
+        .faces
+        .iter()
+        .map(ToString::to_string)
+        .find(|f| f.contains(":end("))
+        .expect("a top face");
+    let vertex = format!("V{{{top}}}")
+        .parse::<mitcad_model::VertexName>()
+        .unwrap()
+        .to_string();
+    let mut items = block();
+    let mut item = extrude(2, 0, "NewBodyFeatureOperation", "d2");
+    let detail = item["detail"].as_object_mut().unwrap();
+    detail.remove("taperAngleOne");
+    detail.insert(
+        "extentOne".to_owned(),
+        json!({"_type": "ToEntityExtentDefinition",
+               "entity": {"kind": "vertex", "objectType": "BRepVertex", "point": [4.0, 0.0, 1.0]}}),
+    );
+    items.push(item);
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel()
+        .vertex_points
+        .borrow_mut()
+        .insert(vertex, [40.0, 0.0, 10.0]);
+    let report = import(&mut doc, &timeline_dump(items));
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let by_distance: FeatureUid = report.items[1].features[0].parse().unwrap();
+    let up_to: FeatureUid = report.items[2].features[0].parse().unwrap();
+
+    let empty = timeline_dump(Vec::new());
+    let options = Options::default();
+    let mut geometry = NoGeometry;
+    let mut oracle = Oracle::new(&mut geometry);
+    oracle.enabled = false;
+    let mut importer = Importer {
+        body_scope: body_scope::Scope::capture(&doc).enter(&doc),
+        families: &crate::ReplayFamilies,
+        oracle,
+        doc: &mut doc,
+        dump: &empty,
+        options: &options,
+        params: ParamMap::default(),
+        sketches: HashMap::new(),
+        features: HashMap::from([(1, by_distance), (2, up_to)]),
+        report: DesignReport::default(),
+        pending: Vec::new(),
+        mesh_bodies: Vec::new(),
+        translating: None,
+        cut_sources: std::cell::OnceCell::new(),
+        defined: Default::default(),
+        at_final: false,
+        started: std::time::Instant::now(),
+        components: components::Components::default(),
+        component: ComponentUid::ROOT,
+        sketch_copies: HashMap::new(),
+        part_sketches: HashMap::new(),
+        stopped_at: Cell::new(None),
+        trying: false,
+        alternatives: HashMap::new(),
+        guesses: None,
+        defer_guesses: false,
+        own_state: None,
+        untranslated: None,
+        kernel_failed: false,
+        start_bases: HashMap::new(),
+        deadline: None,
+        captures: captures::Captures::default(),
+        memory_released: 0,
+        frame_entities: Default::default(),
+        workers: Default::default(),
+        learn: None,
+        dressups: HashMap::new(),
+        notes: Default::default(),
+        suppressed: Default::default(),
+        made_ahead: HashMap::new(),
+        exact_pairs: None,
+        waited: Default::default(),
+        deviations: Default::default(),
+        deviated: Default::default(),
+        deviated_log: Default::default(),
+        deviation_points: Default::default(),
+        sources: None,
+        linker: None,
+        focus_paths: HashMap::new(),
+        link_paths: Default::default(),
+    };
+    for (index, moved) in [(2, true), (1, false)] {
+        let item = serde_json::from_value(json!({"index": 3, "objectType": "MirrorFeature",
+        "detail": {
+            "inputEntities": [{"kind": "feature", "objectType": "ExtrudeFeature",
+                               "timeline_index": index}],
+            "mirrorPlane": {"kind": "construction_plane", "origin": "YZ"},
+            "isCombine": false
+        }}))
+        .unwrap();
+        let candidates = importer.translate_op("MirrorFeature", &item).unwrap();
+        // The mirror as read and its join flag the other way; for the
+        // extrusion up to the corner, the mirror as it is after them.
+        assert_eq!(candidates.len(), if moved { 3 } else { 2 }, "{index}");
+        assert_eq!(candidates[0].defs[0]["compute"], "adjust");
+        if moved {
+            let last = &candidates[2];
+            assert_eq!(last.defs[0]["compute"], "identical");
+            assert_eq!(
+                last.defs[0]["objects"],
+                json!({"type": "features", "features": [up_to.to_string()]})
+            );
+            assert!(last.guess);
+            assert_eq!(last.input_provenance, InputProvenance::Inferred);
+            assert_eq!(
+                last.note.as_deref(),
+                Some(
+                    "its extrusions up to an object mirrored as they are (a guess the history checks)"
+                )
+            );
+        }
+    }
+}

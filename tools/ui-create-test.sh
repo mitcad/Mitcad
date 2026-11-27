@@ -294,6 +294,8 @@ ui_step "Thin Extrude"                     ui_choose "Panel Extrude input type" 
 ui_expect_log "Extrude: Type = Thin Extrude" "thin chosen"
 ui_step "pick the first line"              ui_click_logged "Sketch entity F1/c1"
 ui_expect_log "Extrude Profiles: 1 sketch curve" "one line picked"
+# A new Extrude starts at 0 mm and builds nothing (mitcad#2481).
+ui_step "distance 10 mm"                   ui_type_in "Panel Extrude input distance" "10 mm"
 ui_expect_log "Preview Extrude: ok" "the first line previewed"
 # The preview of the first line, the design's first body, leaves the view
 # as it was (mitcad#467): the second line is picked right away where it

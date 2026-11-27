@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: MIT
+# Split Body keeping the piece clicked (mitcad#2504, GitHub
+# mitcad/Mitcad#647, app/COMMANDS.md "Split Body's Keep") on
+# split-body-keep.json (a 30 x 20 x 10 block Body1, F2.b0, and Plane1 at
+# x = 10):
+#   1. Split Body: Body1 and Plane1 picked; the preview of both pieces
+#      builds with Keep at All Pieces.
+#   2. Keep set to Selected: no piece is picked, the panel asks for the
+#      dots and previews nothing; the dot of the piece in front of the
+#      plane (its middle at 20, 10, 5) clicked: Pieces 2, its preview.
+#   3. OK: one body is left, the 20 mm piece of 4000 mm3, in one undo step.
+#   4. Undo brings the whole block back.
+# Run by tools/ui-split-body-keep-selected-test.sh (Linux).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle 30
+# The browser folded by Collapse All, then its Bodies and Construction
+# folders opened, and their rows' places waited for.
+expect-ever '^Browser opened (folded|expanded): ' 30
+expect-ever '^Browser Root at ' 30
+mark
+context-menu-logged '^Browser Root at ' 'Collapse All'
+wait-log '^Browser collapsed all$' 10
+wait-idle
+mark
+click-logged '^Browser arrow Root/Bodies at '
+wait-log '^Browser Root/Bodies/Body1 at ' 30
+wait-idle
+mark
+click-logged '^Browser arrow Root/Construction at '
+wait-log '^Browser Root/Construction/Plane1 at ' 30
+wait-idle
+expect-model-bodies 1 6000
+
+# 1. Body1 split by Plane1, every piece kept in the preview.
+capture-undo-depth start
+mark
+command solid.split_body
+wait-log '^Command Split Body started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Split Body Bodies to Split: 1 body' 30
+wait-idle
+mark
+click-logged '^Panel Split Body input tool at '
+wait-idle
+click-logged '^Browser Root/Construction/Plane1 at '
+wait-log '^Split Body Splitting Tool: 1 ' 30
+wait-log '^Preview Split Body: ok' 60
+wait-idle 60
+
+# 2. Keep Selected: the dots of the two pieces, nothing picked yet; the dot
+#    of the piece in front of the plane clicked.
+mark
+qt-choice input_keep 'Selected'
+wait-log '^Split Body: Keep = Selected' 30
+wait-log '^Preview Split Body: not built: Click the dots of the pieces to keep in the view' 30
+wait-idle 30
+expect-input-text pieces '^$'
+mark
+click-view-point 20,10,5
+wait-log '^Split Body Pieces: 2$' 30
+wait-log '^Preview Split Body: ok' 60
+wait-idle 60
+expect-input-text pieces '^2$'
+screenshot '${MITCAD_TEST_WORK}/split-body-keep-selected.png'
+
+# 3. OK: the clicked piece alone is left, the other removed by the split.
+mark
+button '^OK$'
+wait-log '^Added split body of 1 body[(]ies[)] keeping pieces 2' 60
+wait-idle 60
+expect-undo-depth ${start} 1
+expect-model-bodies 1 4000
+
+# 4. One undo step brings the whole block back.
+mark
+command edit.undo
+wait-log '^Undo: ' 30
+wait-idle 30
+expect-undo-depth ${start} 0
+expect-model-bodies 1 6000
+expect-never 'Recompute failed|The document was read while a job computes it|TestDriver: FAIL'

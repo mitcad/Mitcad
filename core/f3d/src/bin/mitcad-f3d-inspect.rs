@@ -764,7 +764,7 @@ fn cmd_off_timeline(files: &[String]) -> Result<(), String> {
             let Some(s) = design::find_design_streams(&doc).map_err(|e| e.to_string())? else {
                 continue;
             };
-            let seg = design::Segment::parse(&s.meta, s.bulk).map_err(|e| e.to_string())?;
+            let seg = s.into_segment().map_err(|e| e.to_string())?;
             let dec = decode::decode(&seg);
             let timeline: HashMap<u64, usize> =
                 dec.timeline.iter().map(|t| (t.id, t.pos)).collect();
@@ -980,7 +980,7 @@ fn cmd_presentations(path: &str) -> Result<(), String> {
         let Some(s) = design::find_design_streams(&doc).map_err(|e| e.to_string())? else {
             continue;
         };
-        let seg = design::Segment::parse(&s.meta, s.bulk).map_err(|e| e.to_string())?;
+        let seg = s.into_segment().map_err(|e| e.to_string())?;
         for o in &seg.objects {
             let d = seg.data(o);
             let mut items: Vec<(usize, String)> = Vec::new();
@@ -1037,7 +1037,7 @@ fn cmd_edge_curves(path: &str) -> Result<(), String> {
         let Some(s) = design::find_design_streams(&doc).map_err(|e| e.to_string())? else {
             continue;
         };
-        let seg = design::Segment::parse(&s.meta, s.bulk).map_err(|e| e.to_string())?;
+        let seg = s.into_segment().map_err(|e| e.to_string())?;
         let mut classes_seen: BTreeMap<String, (usize, usize)> = BTreeMap::new();
         let mut without = 0;
         for o in seg.objects_of(classes::FACE_REF) {
@@ -1159,7 +1159,7 @@ fn cmd_attrs(path: &str, key: &str, value: Option<&str>) -> Result<(), String> {
         let Some(s) = design::find_design_streams(&doc).map_err(|e| e.to_string())? else {
             continue;
         };
-        let seg = design::Segment::parse(&s.meta, s.bulk).map_err(|e| e.to_string())?;
+        let seg = s.into_segment().map_err(|e| e.to_string())?;
         for o in &seg.objects {
             let Some(root) = seg.root_part(seg.data(o)) else {
                 continue;
@@ -1210,7 +1210,7 @@ fn cmd_objects(path: &str, class: &str, max: Option<usize>) -> Result<(), String
         let Some(s) = design::find_design_streams(&doc).map_err(|e| e.to_string())? else {
             continue;
         };
-        let seg = design::Segment::parse(&s.meta, s.bulk).map_err(|e| e.to_string())?;
+        let seg = s.into_segment().map_err(|e| e.to_string())?;
         let mut shown = 0;
         let id = prefix
             .strip_prefix("ID:")

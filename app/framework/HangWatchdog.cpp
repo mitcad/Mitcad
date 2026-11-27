@@ -25,6 +25,9 @@ constexpr qsizetype kQuoted = 200;
 
 std::mutex g_activityMutex;
 QString g_activity;
+// The graphics call the UI thread is in (noteGraphicsStep), "" none; under
+// g_activityMutex.
+QString g_graphicsStep;
 
 qint64 steadyMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -167,6 +170,11 @@ void HangWatchdog::noteActivity(const QString& activity) {
   g_activity = activity;
 }
 
+void HangWatchdog::noteGraphicsStep(const QString& step) {
+  const std::lock_guard<std::mutex> lock(g_activityMutex);
+  g_graphicsStep = step;
+}
+
 void HangWatchdog::beat() {
   const qint64 now = steadyMs();
   qint64 before = 0;
@@ -211,12 +219,18 @@ void HangWatchdog::watch() {
       m_reported = true;
       m_nextReport = hung + kRepeatMs;
       QString activity;
+      QString graphicsStep;
       {
         const std::lock_guard<std::mutex> activityLock(g_activityMutex);
         activity = g_activity;
+        graphicsStep = g_graphicsStep;
       }
       QStringList known;
       known << QStringLiteral("last action: %1").arg(activity.isEmpty() ? QStringLiteral("none") : quoted(activity));
+      // Inside a graphics call that has not returned (mitcad#2406).
+      if (!graphicsStep.isEmpty()) {
+        known << QStringLiteral("in graphics step: %1").arg(quoted(graphicsStep));
+      }
       const QString line = lastUiLine();
       if (!line.isEmpty()) {
         known << QStringLiteral("last line: %1").arg(quoted(line));

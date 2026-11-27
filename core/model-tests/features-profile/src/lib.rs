@@ -51,3 +51,14 @@ mod loft_perpendicular_tests;
 // A rib's Direction Normal to Curves: the far side the chain offset by
 // the depth (mitcad#2398).
 mod rib_normal_tests;
+// Cosmetic taps of a tapped hole's mirrored and patterned copies
+// (mitcad#2501).
+mod mirrored_tap_tests;
+// Extrude To Next: up to the first face of the bodies ahead, without a
+// pick (GitHub mitcad/Mitcad#674).
+mod extrude_to_next_tests;
+// Isoparametric Curve: a face's u or v curves as 3D curves (mitcad#2522).
+mod isoparametric_curve_tests;
+// A mirrored or patterned cosmetic Thread feature keeps its thread
+// (mitcad#2537).
+mod mirrored_thread_tests;

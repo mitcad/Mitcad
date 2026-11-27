@@ -29,7 +29,8 @@ What a design file keeps of a drawing stays in the model
 (`core/model/src/drawing`): the definition (`def.rs`) with its stored
 annotations (`annotate_def.rs`), table settings (`tables_def.rs`) and
 templates and revisions (`template_def.rs`), a cut sheet's material and
-parts (`cut_sheet_def.rs`), and the options of
+parts (`cut_sheet_def.rs`), the parameters its texts refer to
+(`parameter_text.rs`, `{param:Name}`, mitcad#2483), and the options of
 `export_drawing`. This crate re-exports all of it under the same paths,
 so `mitcad_model_drawing::…` names everything of drawings.
 

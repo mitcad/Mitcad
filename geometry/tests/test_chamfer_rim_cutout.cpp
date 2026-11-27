@@ -44,6 +44,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -215,7 +216,7 @@ void test_rim_chamfered_over_a_pocket() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(chamfer_rim_cutout) {
   test::guarded("test_rim_chamfered_over_a_pocket", test::test_rim_chamfered_over_a_pocket);
   if (test::failures == 0) {
     std::puts("test_chamfer_rim_cutout: all checks passed");

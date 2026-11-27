@@ -90,7 +90,24 @@ pub fn write(sheet: &Sheet) -> String {
                     start,
                     end,
                 } => {
-                    if end - start >= TAU - 1e-9 {
+                    if end - start >= TAU - 1e-9 && !pen.dashes().is_empty() {
+                        // A dashed circle's dashes start where the screen's
+                        // and the PDF's do (mitcad#2477): at its start,
+                        // counter-clockwise on paper, in two halves. An SVG
+                        // circle starts at 0° and runs clockwise on paper,
+                        // its dashes mirrored about its centre line.
+                        let at =
+                            |a: f64| p(center[0] + radius * a.cos(), center[1] + radius * a.sin());
+                        let _ = writeln!(
+                            out,
+                            r#"<path d="M {} A {r} {r} 0 0 0 {} A {r} {r} 0 0 0 {}"{}/>"#,
+                            at(*start),
+                            at(start + PI),
+                            at(*start),
+                            stroke(*pen),
+                            r = n(*radius)
+                        );
+                    } else if end - start >= TAU - 1e-9 {
                         let _ = writeln!(
                             out,
                             r#"<circle cx="{}" cy="{}" r="{}"{}/>"#,
@@ -206,3 +223,7 @@ pub fn write(sheet: &Sheet) -> String {
     let _ = writeln!(out, "</svg>");
     out
 }
+
+#[cfg(test)]
+#[path = "svg_tests.rs"]
+mod tests;

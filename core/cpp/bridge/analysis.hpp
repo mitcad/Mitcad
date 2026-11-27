@@ -129,7 +129,8 @@ std::unique_ptr<AnalysisClips> analysis_clip_all(const ShapeList& shapes,
 std::unique_ptr<AnalysisClips> analysis_detach_all(const ShapeList& shapes,
                                                    rust::Slice<const AnalysisPlane> planes);
 AnalysisComparison analysis_compare_step(const ShapeList& bodies, rust::Str path,
-                                         rust::Str step_body, std::size_t samples, double fuzzy);
+                                         rust::Str step_body, std::size_t samples, double fuzzy,
+                                         double seconds, double booleans_above);
 
 // .f3d import (T1).
 AnalysisComparison analysis_compare_shapes(const ShapeList& a, const ShapeList& b,

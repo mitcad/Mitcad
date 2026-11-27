@@ -31,13 +31,14 @@
 //! shows the design in full; a component switched to its envelope keeps the
 //! frames they had in full (`ExternalLink::frames`) and they use those.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
 use super::components::{digest, file_label, resolve_path};
 use super::mounts::SourceMount;
 use super::{DocState, Document, ModelError, invalid};
-use crate::assembly::{EnvelopeFrame, ExternalLink};
+use crate::assembly::{EnvelopeFrame, ExternalLink, LinkPart, LinkTop, LinkTree, TreeEnvelope};
 use crate::exchange::ImportBody;
 use crate::features::envelope::{Sources, build, check_detail};
 use crate::features::{BaseBody, BaseDef, FeatureDef, ValueInput};
@@ -199,12 +200,6 @@ impl<K: Kernel> Document<K> {
         let component = placed.component;
         let name = self.state.assembly.occurrence_name(occurrence);
         let link = self.plain_link(component, &name)?;
-        // Kept with its components (mitcad#2209): shown in full.
-        if show && link.tree.is_some() {
-            return Err(invalid(format!(
-                "{name} keeps the components of its design, so it is not shown by its envelope"
-            )));
-        }
         match (show, detail) {
             (true, Some(detail)) => check_detail(detail).map_err(invalid)?,
             (false, Some(_)) => {
@@ -214,6 +209,27 @@ impl<K: Kernel> Document<K> {
                 ));
             }
             _ => {}
+        }
+        if let Some(tree) = link.tree.clone() {
+            let occurrences = if all {
+                self.state
+                    .assembly
+                    .occurrences_of(component)
+                    .map(|o| o.uid)
+                    .collect()
+            } else {
+                BTreeSet::from([occurrence])
+            };
+            return self.set_tree_envelope(
+                component,
+                &name,
+                &link,
+                tree,
+                occurrences,
+                show,
+                detail,
+                base,
+            );
         }
         // Shown so already: its own detail size or the component's.
         if (!show && link.envelope.is_none())
@@ -402,6 +418,179 @@ impl<K: Kernel> Document<K> {
         })
     }
 
+    /// A linked tree's display changes without moving occurrences to
+    /// different components. Parent relationships and flexible values
+    /// still use the same occurrence paths and joint IDs.
+    #[allow(clippy::too_many_arguments)]
+    fn set_tree_envelope(
+        &mut self,
+        component: ComponentUid,
+        name: &str,
+        link: &ExternalLink,
+        mut tree: LinkTree,
+        occurrences: BTreeSet<OccurrenceUid>,
+        show: bool,
+        detail: Option<f64>,
+        base: Option<&Path>,
+    ) -> Result<LinkEnvelope, ModelError> {
+        let currently = |uid| tree.envelope(uid).map(|e| e.detail);
+        let wanted = if show {
+            detail
+                .or_else(|| occurrences.iter().find_map(|uid| currently(*uid)))
+                .or_else(|| tree.envelopes.first().map(|e| e.detail))
+        } else {
+            None
+        };
+        if (!show || wanted.is_some()) && occurrences.iter().all(|uid| currently(*uid) == wanted) {
+            return Ok(LinkEnvelope {
+                component,
+                detail: wanted,
+                changed: false,
+            });
+        }
+        let reuse =
+            wanted.and_then(|detail| tree.envelopes.iter().position(|e| e.detail == detail));
+        let prepared = if show && reuse.is_none() {
+            let (_, source) = self.read_link(link, base)?;
+            let (bodies, detail) = self.tree_envelope(
+                &source,
+                &link.path,
+                wanted,
+                link.parts.as_deref(),
+                tree.top.as_ref(),
+            )?;
+            Some((bodies, detail))
+        } else {
+            None
+        };
+        let label = if show {
+            format!("Show {name} as Envelope")
+        } else {
+            format!("Show {name} in Full")
+        };
+        self.apply(|state| {
+            for envelope in &mut tree.envelopes {
+                envelope.occurrences.retain(|id| {
+                    !occurrences.contains(id) && state.assembly.occurrence(*id).is_some()
+                });
+            }
+            let detail = if let Some(index) = reuse {
+                let envelope = &mut tree.envelopes[index];
+                envelope.occurrences.extend(occurrences);
+                Some(envelope.detail)
+            } else if let Some((bodies, detail)) = prepared {
+                let feature = state
+                    .add_feature_in(
+                        &FeatureDef::Base(BaseDef {
+                            source: Some(file_label(&link.path)),
+                            ..BaseDef::new(bodies)
+                        }),
+                        None,
+                        component,
+                    )?
+                    .uid;
+                tree.envelopes.push(TreeEnvelope {
+                    detail,
+                    feature,
+                    occurrences,
+                });
+                Some(detail)
+            } else {
+                None
+            };
+            // Keep referenced envelope bodies for relations made while an
+            // envelope was shown. Without references, they are disposable.
+            let unused: BTreeSet<_> = tree
+                .envelopes
+                .iter()
+                .filter(|e| {
+                    e.occurrences.is_empty()
+                        && state.dependents(&BTreeSet::from([e.feature])).is_empty()
+                })
+                .map(|e| e.feature)
+                .collect();
+            tree.envelopes.retain(|e| !unused.contains(&e.feature));
+            if !unused.is_empty() {
+                state.remove_features(&unused);
+            }
+            if let Some(link) = state
+                .assembly
+                .component_mut(component)
+                .and_then(|c| c.link.as_mut())
+            {
+                link.tree = Some(tree);
+            }
+            Ok((
+                label,
+                LinkEnvelope {
+                    component,
+                    detail,
+                    changed: true,
+                },
+            ))
+        })
+    }
+
+    /// Refreshes existing tree envelopes in place with the newly read
+    /// source or a different choice of linked parts; `top`: the design's
+    /// one component the link stands for as it is read now (mitcad#2429).
+    pub(super) fn read_tree_envelopes(
+        &self,
+        source: &DocState,
+        path: &str,
+        parts: Option<&[LinkPart]>,
+        tree: &LinkTree,
+        top: Option<&LinkTop>,
+    ) -> Result<Vec<(FeatureUid, Vec<BaseBody>)>, ModelError> {
+        tree.envelopes
+            .iter()
+            .map(|envelope| {
+                let (bodies, _) =
+                    self.tree_envelope(source, path, Some(envelope.detail), parts, top)?;
+                Ok((envelope.feature, bodies))
+            })
+            .collect()
+    }
+
+    /// [`Document::design_envelope_chosen`] of a design linked with its
+    /// components: its body and the detail size used, in the coordinates
+    /// of the design's one component when the link stands for that
+    /// (mitcad#2429), else of its root.
+    fn tree_envelope(
+        &self,
+        source: &DocState,
+        path: &str,
+        detail: Option<f64>,
+        parts: Option<&[LinkPart]>,
+        top: Option<&LinkTop>,
+    ) -> Result<(Vec<BaseBody>, f64), ModelError> {
+        let Some(top) = top.filter(|t| !t.placement.is_identity()) else {
+            let (bodies, _, used) = self.design_envelope_chosen(source, path, detail, parts)?;
+            return Ok((bodies, used));
+        };
+        let shapes = self.design_shapes_chosen(source, path, None, parts)?;
+        if shapes.bodies.is_empty() {
+            return Err(invalid(format!(
+                "{} has no bodies to show",
+                file_label(path)
+            )));
+        }
+        let into = crate::assembly::inverse(&top.placement);
+        let bodies = shapes
+            .bodies
+            .into_iter()
+            .map(|mut body| {
+                body.shape = self
+                    .kernel
+                    .transform_shape(&body.shape, &into, None)
+                    .map_err(|e| invalid(format!("{path}: {e}")))?;
+                Ok(body)
+            })
+            .collect::<Result<Vec<_>, ModelError>>()?;
+        let (bodies, _, used) = self.envelope_of(bodies, Vec::new(), path, detail)?;
+        Ok((bodies, used))
+    }
+
     /// The other components that link the same file as it is, each with
     /// the detail size it is shown at (None: in full), in the order they
     /// were made.
@@ -420,6 +609,7 @@ impl<K: Kernel> Document<K> {
                 let other = c.link.as_ref()?;
                 // The same parts of it (mitcad#2130).
                 (other.path == link.path
+                    && other.tree.is_none()
                     && crate::assembly::same_parts(other.parts.as_deref(), link.parts.as_deref()))
                 .then_some((c.uid, other.envelope))
             })

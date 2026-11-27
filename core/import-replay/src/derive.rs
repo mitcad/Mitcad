@@ -27,7 +27,7 @@ use serde_json::{Map, Value, json};
 
 use crate::components::{InsertedComponent, transform};
 use crate::report::DesignReport;
-use crate::{Candidate, Importer, InputProvenance};
+use crate::{Candidate, CandidateCore, Importer, InputProvenance};
 
 /// The note of a derive that brings nothing.
 pub const BRINGS_NOTHING: &str =
@@ -284,8 +284,8 @@ impl<K: Kernel> Importer<'_, K> {
         if list.is_empty() {
             return Err(BRINGS_NOTHING.to_owned());
         }
-        let mut bodies: Vec<String> = Vec::new();
-        let mut links = Map::new();
+        // Each entity's body and its link, in order.
+        let mut copies: Vec<(String, Value)> = Vec::new();
         for (j, e) in list.iter().enumerate() {
             let kind = e.get("kind").and_then(Value::as_str).unwrap_or("entity");
             if kind != "body" {
@@ -356,16 +356,46 @@ impl<K: Kernel> Importer<'_, K> {
                     .set_occurrence_transform(source.occurrence, wanted, false)
                     .map_err(|e| e.to_string())?;
             }
-            bodies.push(body.to_string());
-            links.insert(
+            copies.push((
                 body.to_string(),
                 json!({"source": OccurrencePath(path).to_string()}),
-            );
+            ));
         }
-        let mut c = Candidate::new(json!({"type": "derive", "bodies": bodies, "links": links}));
+        let mut c = Candidate {
+            core: CandidateCore::of(derives(copies)),
+            ..Candidate::new(Value::Null)
+        };
         c.input_provenance = InputProvenance::Read;
         Ok(vec![c])
     }
+}
+
+/// The `derive` definitions of a derive's copies (body, link), in order:
+/// one, unless a body comes more than once (the same body of another
+/// document at several placements, mitcad#2493: a derive lists each body
+/// once, with one link), then one more for each repeat, each in the order
+/// of the entities.
+fn derives(copies: Vec<(String, Value)>) -> Vec<Value> {
+    let mut groups: Vec<(Vec<String>, Map<String, Value>)> = Vec::new();
+    for (body, link) in copies {
+        let at = match groups
+            .iter()
+            .position(|(bodies, _)| !bodies.contains(&body))
+        {
+            Some(at) => at,
+            None => {
+                groups.push((Vec::new(), Map::new()));
+                groups.len() - 1
+            }
+        };
+        let (bodies, links) = &mut groups[at];
+        bodies.push(body.clone());
+        links.insert(body, link);
+    }
+    groups
+        .into_iter()
+        .map(|(bodies, links)| json!({"type": "derive", "bodies": bodies, "links": links}))
+        .collect()
 }
 
 /// Whether two placements are the same within rounding.
@@ -378,4 +408,34 @@ fn same(a: &Transform, b: &Transform) -> bool {
         .flatten()
         .zip(rb.iter().flatten())
         .all(|(x, y)| (x - y).abs() < 1e-9)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_body_at_two_placements_takes_a_derive_each() {
+        let link = |s: &str| json!({"source": s});
+        // Distinct bodies: one derive.
+        let one = derives(vec![
+            ("F1.b0".into(), link("O1/O2")),
+            ("F1.b1".into(), link("O1/O2")),
+        ]);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0]["bodies"], json!(["F1.b0", "F1.b1"]));
+        // The same body through two occurrences (mitcad#2493): two derives,
+        // each with its own link.
+        let two = derives(vec![
+            ("F1.b0".into(), link("O3/O4")),
+            ("F1.b0".into(), link("O5/O6")),
+            ("F1.b1".into(), link("O5/O6")),
+        ]);
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0]["bodies"], json!(["F1.b0", "F1.b1"]));
+        assert_eq!(two[0]["links"]["F1.b0"]["source"], "O3/O4");
+        assert_eq!(two[1]["bodies"], json!(["F1.b0"]));
+        assert_eq!(two[1]["links"]["F1.b0"]["source"], "O5/O6");
+        assert!(two.iter().all(|d| d["type"] == "derive"));
+    }
 }

@@ -69,6 +69,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -371,7 +372,7 @@ void test_lofts_and_their_shells() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(accurate_volumes) {
   test::guarded("test_common_bodies", test::test_common_bodies);
   test::guarded("test_faces_area", test::test_faces_area);
   test::guarded("test_lofts_and_their_shells", test::test_lofts_and_their_shells);

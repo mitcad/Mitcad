@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MIT
+# Minimum Radius (mitcad#2518), the shared input script of
+# tools/ui-min-radius-test.sh (Linux), tools/ui-windows-min-radius-test.ps1
+# (Windows) and tools/ui-macos-min-radius-test.sh (macOS), on min-radius.json
+# saved as min-radius-part.mitcad in the work folder: a 40 x 30 x 20 mm block
+# (Body1) with vertical edges rounded 2, 5 and 10 mm. Each rounding is a
+# quarter of a cylinder 20 mm high: 20 pi r / 2 mm2, so 62.83, 157.08 and
+# 314.16 mm2. ASCII only: the Windows runner copies it as ASCII.
+#   1. Inspect > Minimum Radius with the shown body: the smallest radius is
+#      2 mm, marked in the view; no limit, nothing else drawn.
+#   2. Radius Limit 11 mm: all three roundings under it (534.1 mm2); 4 mm:
+#      the 2 mm rounding alone (62.8 mm2), drawn over the body.
+#   3. OK keeps it as MinRadius1, shown; its light bulb hides and shows it;
+#      a double-click edits it with its limit; saved (the runner checks the
+#      file); deleted from its context menu and undone.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+
+# --- 1. The panel with the shown body, without a limit.
+mark
+command inspect.min_radius
+wait-log '^Command Minimum Radius started' 20
+wait-log '^Minimum Radius Bodies: 1 body' 20
+wait-log '^Inspect Minimum Radius: smallest 2[.]000 mm on Body1$' 60
+wait-log '^Print overlay: 0 overhang triangle[(]s[)] #[0-9a-f]{6}, 0 thin triangle[(]s[)] #[0-9a-f]{6} [(]0[.]0 mm\^2[)], marker Smallest radius 2[.]00 mm at [(][^)]*[)]; legend Minimum Radius: #[0-9a-f]{6} Smallest radius 2[.]00 mm$' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/min-radius-marker.png'
+
+# --- 2. A limit of 11 mm, then 4 mm.
+mark
+type-in '^Panel Minimum Radius input limit at ' '11 mm'
+wait-log '^Inspect Minimum Radius: smallest 2[.]000 mm on Body1, under 11 mm: 3 face[(]s[)], 534[.]1 mm\^2$' 60
+wait-idle 60
+mark
+type-in '^Panel Minimum Radius input limit at ' '4 mm'
+wait-log '^Inspect Minimum Radius: smallest 2[.]000 mm on Body1, under 4 mm: 1 face[(]s[)], 62[.]8 mm\^2$' 60
+wait-log '^Print overlay: 0 overhang triangle[(]s[)] #[0-9a-f]{6}, [1-9][0-9]* thin triangle[(]s[)] #[0-9a-f]{6} [(]6[0-9][.][0-9] mm\^2[)], marker Smallest radius 2[.]00 mm at [(][^)]*[)]; legend Minimum Radius: #[0-9a-f]{6} Smallest radius 2[.]00 mm [|] #[0-9a-f]{6} Radius under 4 mm$' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/min-radius-limit.png'
+
+# --- 3. Kept as MinRadius1 in the Analysis folder, shown.
+capture-undo-depth before_ok
+mark
+button '^OK$'
+wait-log '^Kept Minimum Radius as MinRadius1' 30
+wait-log '^Browser Root/Analysis/MinRadius1 at ' 30
+wait-log '^Minimum radius MinRadius1: smallest 2[.]000 mm on Body1, under 4 mm: 1 face[(]s[)], 62[.]8 mm\^2$' 60
+wait-log 'legend MinRadius1: ' 30
+wait-idle 60
+expect-undo-depth ${before_ok} 1
+expect-no-log '^Section analysis at '
+
+# The light bulb hides and shows it.
+mark
+click-logged '^Browser eye Root/Analysis/MinRadius1 at '
+wait-log '^Visibility Root/Analysis/MinRadius1: hidden' 20
+wait-log '^Print overlay: none' 30
+wait-idle 60
+mark
+click-logged '^Browser eye Root/Analysis/MinRadius1 at '
+wait-log '^Visibility Root/Analysis/MinRadius1: shown' 20
+wait-log 'legend MinRadius1: ' 60
+wait-idle 60
+
+# A double-click edits it with its limit; Esc leaves it as it was.
+mark
+dblclick-logged '^Browser Root/Analysis/MinRadius1 at '
+wait-log '^Editing analysis MinRadius1 with Minimum Radius' 20
+wait-log '^Inspect Minimum Radius: smallest 2[.]000 mm on Body1, under 4 mm: 1 face[(]s[)]' 60
+wait-idle 60
+key escape
+wait-log '^Command Minimum Radius cancelled' 20
+wait-log '^Minimum radius MinRadius1: smallest 2[.]000 mm on Body1, under 4 mm: ' 60
+wait-idle 60
+
+# Saved: the runner finds the analysis in the file.
+mark
+command file.save
+wait-log 'Saved .*min-radius-part[.]mitcad' 30
+wait-idle
+
+# Deleted from its context menu, and undone.
+mark
+context-menu-logged '^Browser Root/Analysis/MinRadius1 at ' 'Delete'
+wait-log '^Context menu: Edit Minimum Radius [|] Hide [|] Rename [|] Delete' 20
+wait-log '^Deleted analysis MinRadius1' 20
+wait-log '^Print overlay: none' 30
+wait-idle 60
+mark
+key ctrl+z
+wait-log '^Undo: Delete MinRadius1' 20
+wait-log 'legend MinRadius1: ' 60
+wait-idle 60
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

@@ -55,6 +55,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -198,7 +199,7 @@ void test_rounding_ending_where_the_seam_ends_at_minus_y() { round_the_ridge(1.5
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_seam_run_on) {
   test::guarded("test_rounding_ending_where_the_seam_ends_at_plus_y",
                 test::test_rounding_ending_where_the_seam_ends_at_plus_y);
   test::guarded("test_rounding_ending_where_the_seam_ends_at_minus_y",

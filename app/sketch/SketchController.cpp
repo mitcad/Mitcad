@@ -31,6 +31,7 @@
 #include "../framework/Diagnostics.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Json.hpp"
+#include "../framework/ModelBusy.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Numbers.hpp"
 #include "../framework/ParameterField.hpp"
@@ -79,7 +80,7 @@ std::vector<SketchController*>& liveControllers() {
 }
 
 // A press that moves further than this starts a drag.
-constexpr double kDragPixels = 4.0;
+constexpr double kDragPixels = kClickPixels;
 // A point dragged with these held goes where it is dropped, without
 // snapping (mitcad#1538): Shift, or Alt where the desktop leaves Alt-drags
 // to the application, as the drawing sheet's tools.
@@ -260,14 +261,28 @@ const QString kEditorSource = QStringLiteral("sketch/editor");
 // ---------------------------------------------------------------------------
 // SketchOp
 
-SketchOp::SketchOp(SketchController& controller) : m_c(controller), m_depth(controller.undoDepth()) {
+SketchOp::SketchOp(SketchController& controller) : m_c(controller) {
+  try {
+    m_depth = m_c.undoDepth();
+  } catch (const ModelBusy&) {
+    // A job computes the model (mitcad#2500): the action changes nothing
+    // and says why (run()), instead of a ModelBusy out of the menu's or the
+    // key's handler, which ends the application on macOS.
+    m_busy = true;
+    qWarning().noquote() << QStringLiteral("Sketch action refused: %1").arg(errorText(ModelBusy()));
+  }
   // The last action's refusal is no longer shown (mitcad#1566).
   m_c.setConflict(QStringLiteral("action"), {});
 }
 
 SketchOp::~SketchOp() {
   if (!m_finished) {
-    rollback();
+    // Nothing may leave a destructor (an unwinding one would terminate).
+    try {
+      rollback();
+    } catch (const std::exception& e) {
+      qWarning().noquote() << QStringLiteral("Sketch action not taken back: %1").arg(errorText(e));
+    }
   }
 }
 
@@ -276,6 +291,12 @@ QJsonObject SketchOp::command(const QString& name) const {
 }
 
 bool SketchOp::run(const QJsonObject& command, QJsonObject* result) {
+  if (m_busy) {
+    m_error = errorText(ModelBusy());
+    qDebug().noquote() << QStringLiteral("Sketch command %1 refused: %2")
+                              .arg(command.value(QStringLiteral("cmd")).toString(), m_error);
+    return false;
+  }
   try {
     // A dimension asks for the first-dimension rule while the preference
     // is on (mitcad#860): the dimension tool's and a drawing tool's typed
@@ -839,7 +860,17 @@ const SketchModel& SketchOp::model() {
 
 bool SketchOp::commit() {
   m_finished = true;
-  const int depth = m_c.undoDepth();
+  if (m_busy) {
+    return false; // nothing ran (mitcad#2500)
+  }
+  int depth = m_depth;
+  try {
+    depth = m_c.undoDepth();
+  } catch (const ModelBusy&) {
+    // Not after this action's own commands, which ended their jobs.
+    qWarning().noquote() << QStringLiteral("Sketch action not merged: %1").arg(errorText(ModelBusy()));
+    return false;
+  }
   if (depth > m_depth + 1 || (m_relabel && depth > m_depth)) {
     try {
       m_c.runModel({{QStringLiteral("cmd"), QStringLiteral("merge_undo")},
@@ -858,12 +889,17 @@ bool SketchOp::commit() {
 
 void SketchOp::rollback() {
   m_finished = true;
-  for (int guard = 0; guard < 64 && m_c.undoDepth() > m_depth; ++guard) {
-    try {
+  if (m_busy) {
+    return; // nothing ran (mitcad#2500)
+  }
+  try {
+    for (int guard = 0; guard < 64 && m_c.undoDepth() > m_depth; ++guard) {
       m_c.runModel({{QStringLiteral("cmd"), QStringLiteral("undo")}});
-    } catch (const std::exception&) {
-      break;
     }
+  } catch (const std::exception& e) {
+    // A refused undo, or the depth unreadable (ModelBusy): what is left
+    // stays in the history, to be undone by hand.
+    qWarning().noquote() << QStringLiteral("Sketch action not taken back: %1").arg(errorText(e));
   }
   // The view goes back with the scale it followed (mitcad#1948).
   if (m_viewShift.Magnitude() > 0.0) {
@@ -884,6 +920,7 @@ SketchController::SketchController(SketchHost& host, OcctViewer& viewer, Command
                     : dimensionText == QStringLiteral("name_value") ? DimensionText::NameValue
                                                                     : DimensionText::Value;
   m_showPoints = QSettings().value(QStringLiteral("sketch/showPoints"), true).toBool();
+  m_showComb = QSettings().value(QStringLiteral("sketch/curvatureComb"), false).toBool(); // mitcad#2520
   // Off, every shown sketch's points are drawn without markers, finished
   // sketches too (mitcad#1764).
   viewer.setSketchPointsHidden(!m_showPoints);
@@ -1094,8 +1131,11 @@ void SketchController::reload() {
   }
   ScopedTiming timing("sketch reload"); // the sketch query read again (mitcad#670)
   try {
-    if (m_model.load(m_host.queryObject(
-            {{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), m_uid}}))) {
+    const QJsonObject sketch =
+        m_host.queryObject({{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), m_uid}});
+    // The curvature comb's curves are read from it (mitcad#2520).
+    m_combSketch = sketch;
+    if (m_model.load(sketch)) {
       // The frame in the design, where the view shows the component
       // (mitcad#505); the sketch coordinates stay the same.
       const gp_Trsf placement = m_host.sketchPlacement(m_uid);
@@ -1157,6 +1197,9 @@ void SketchController::reload() {
   logHandle();
   // A sketch that does not solve paints its conflicts (mitcad#1566).
   conflictChanged();
+  // The curvature comb follows the curves, also at a drag's steps
+  // (mitcad#2520).
+  updateCurvatureComb();
   updateConvertAction();
   m_overlay->update();
   emit changed();
@@ -1483,6 +1526,18 @@ void SketchController::resetTool() {
 }
 
 void SketchController::deleteSelection() {
+  // Asked for while a job computes the model (mitcad#2500): after the job,
+  // only if the selection is still the one Delete was asked for.
+  if (const Selection asked = m_host.selection(); !waitForModel(QStringLiteral("Delete"), [this, asked] {
+        if (m_host.selection() != asked) {
+          qInfo().noquote() << QStringLiteral("Sketch Delete not done: the selection changed while the model computed");
+          error(tr("Nothing was deleted: the selection changed while the model computed. Select again and delete."));
+          return;
+        }
+        deleteSelection();
+      })) {
+    return;
+  }
   // One point that only one spline uses leaves the spline, which stays
   // (Remove Point, mitcad#2326); where the model refuses that (too few
   // points left, a projected or an offset's spline) the point goes with
@@ -1685,6 +1740,49 @@ void SketchController::updateConvertAction() {
   if (QAction* action = m_registry.action(QStringLiteral("sketch.convert_projected"))) {
     action->setEnabled(selectionHasProjected());
   }
+  // Profile Boundary likewise (mitcad#2551).
+  if (QAction* action = m_registry.action(QStringLiteral("sketch.profile_boundary"))) {
+    action->setEnabled(selectionHasAutomatic());
+  }
+}
+
+bool SketchController::selectionHasAutomatic() const {
+  if (!isActive()) {
+    return false;
+  }
+  return std::any_of(m_host.selection().begin(), m_host.selection().end(), [this](const SelectionItem& item) {
+    return item.owner == m_uid && item.kind == SelectKind::SketchCurve && m_model.automaticCurve(item.name);
+  });
+}
+
+void SketchController::toggleProfileBoundary() {
+  QJsonArray curves;
+  bool all = true;
+  for (const SelectionItem& item : m_host.selection()) {
+    if (item.owner == m_uid && item.kind == SelectKind::SketchCurve && m_model.automaticCurve(item.name)) {
+      curves.append(item.name);
+      all = all && m_model.profileBoundary(item.name);
+    }
+  }
+  if (curves.isEmpty()) {
+    hint(tr("Profile Boundary: select curves of the face's outline first."));
+    return;
+  }
+  SketchOp op(*this);
+  QJsonObject cmd = op.command(QStringLiteral("sketch.set_profile_boundary"));
+  cmd.insert(QStringLiteral("curves"), curves);
+  cmd.insert(QStringLiteral("boundary"), !all);
+  if (!op.run(cmd)) {
+    const QString reason = op.error();
+    op.rollback();
+    error(tr("Profile Boundary: %1").arg(reason));
+    return;
+  }
+  op.commit();
+  qDebug().noquote() << QStringLiteral("Profile boundary %1: %2")
+                            .arg(all ? QStringLiteral("off") : QStringLiteral("on"),
+                                 QJsonDocument(curves).toJson(QJsonDocument::Compact));
+  updateConvertAction();
 }
 
 void SketchController::convertProjected() {
@@ -2033,6 +2131,20 @@ void SketchController::setDimensionSigned(const QString& id, bool on) {
 void SketchController::setDimensionDriven(const QString& id, bool driven) {
   const DimensionData* d = m_model.dimension(id);
   if (d == nullptr || d->driven == driven) {
+    return;
+  }
+  // Asked for while a job computes the model (mitcad#2500, GitHub
+  // mitcad/Mitcad#706: the menu was open as the job began): after the job,
+  // on the dimension as the sketch has it then.
+  if (!waitForModel(driven ? QStringLiteral("Make Driven") : QStringLiteral("Make Driving"), [this, id, driven] {
+        if (m_model.dimension(id) == nullptr) {
+          qInfo().noquote() << QStringLiteral("Dimension %1 not made %2: it was removed while the model computed")
+                                   .arg(id, driven ? QStringLiteral("driven") : QStringLiteral("driving"));
+          error(tr("The dimension is no longer in the sketch: nothing was changed."));
+          return;
+        }
+        setDimensionDriven(id, driven); // nothing to do when it is so already
+      })) {
     return;
   }
   SketchOp op(*this);
@@ -2388,6 +2500,90 @@ void SketchController::applyShowPoints(bool on) {
   m_overlay->update();
   // The markers over a selected curve's highlight come and go with them.
   m_overlay->logHighlights();
+}
+
+void SketchController::setShowCurvatureComb(bool on) {
+  if (on == m_showComb) {
+    return;
+  }
+  m_showComb = on;
+  QSettings().setValue(QStringLiteral("sketch/curvatureComb"), on);
+  // For UI tests (mitcad#2520).
+  qDebug().noquote() << QStringLiteral("Curvature comb %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  updateCurvatureComb();
+  emit optionsChanged();
+  m_overlay->update();
+}
+
+void SketchController::updateCurvatureComb() {
+  if (!m_showComb || !isActive()) {
+    if (!m_comb.empty() || m_comb.answered > 0 || !m_combLogged.isEmpty()) {
+      m_comb = CurvatureCombDrawing();
+      m_combLogged.clear();
+    }
+    m_combScale = 0.0;
+    return;
+  }
+  // The selected curves of this sketch and the one dragged; with none
+  // selected, its splines, conics and ellipses, where a comb tells most.
+  QStringList chosen;
+  for (const SelectionItem& item : m_host.selection()) {
+    if (item.kind == SelectKind::SketchCurve && item.owner == m_uid && !chosen.contains(item.name)) {
+      chosen << item.name;
+    }
+  }
+  if (!chosen.isEmpty() && m_dragEntity.startsWith(QLatin1Char('c')) && !chosen.contains(m_dragEntity)) {
+    chosen << m_dragEntity;
+  }
+  // Each curve as the sketch query gave it: the model combs that geometry
+  // without solving the sketch again.
+  QHash<QString, QJsonObject> geometry;
+  for (const QJsonValue& value : m_combSketch.value(QStringLiteral("entities")).toArray()) {
+    const QJsonObject entity = value.toObject();
+    const QJsonObject shape = entity.value(QStringLiteral("geometry")).toObject();
+    if (!shape.isEmpty()) {
+      geometry.insert(entity.value(QStringLiteral("id")).toString(), shape);
+    }
+  }
+  static const QStringList freeForm{QStringLiteral("spline"), QStringLiteral("fitted_spline"),
+                                    QStringLiteral("conic"), QStringLiteral("ellipse"),
+                                    QStringLiteral("elliptical_arc")};
+  QJsonArray items;
+  QStringList combed;
+  for (const CurveData& curve : m_model.curves) {
+    const bool wanted = chosen.isEmpty() ? freeForm.contains(curve.type) : chosen.contains(curve.id);
+    if (!wanted || !geometry.contains(curve.id)) {
+      continue;
+    }
+    items.append(QJsonObject{{QStringLiteral("geometry"), geometry.value(curve.id)}});
+    combed << curve.id;
+  }
+  const bool dragging = draggingGeometry();
+  CurvatureCombDrawing comb;
+  if (!items.isEmpty()) {
+    // A drag keeps the scale it started with, so that the teeth grow and
+    // shrink with the curvature instead of the longest staying as long.
+    const std::optional<double> scale =
+        dragging && m_combScale > 0.0 ? std::optional<double>(m_combScale) : std::nullopt;
+    try {
+      comb = curvatureCombDrawing(
+          m_host.queryObject(curvatureCombQuery(items, CurvatureCombSettings::load(), scale)));
+    } catch (const std::exception& e) {
+      qWarning().noquote() << QStringLiteral("Curvature comb: %1").arg(QString::fromUtf8(e.what()));
+    }
+  }
+  if (!dragging) {
+    m_combScale = comb.scale;
+  }
+  m_comb = comb;
+  const QString log = QStringLiteral("Sketch curvature comb%1: %2: %3")
+                          .arg(dragging ? QStringLiteral(" (dragging)") : QString(),
+                               combed.isEmpty() ? QStringLiteral("no curve") : combed.join(QLatin1Char(' ')),
+                               curvatureCombLog(comb));
+  if (log != m_combLogged) {
+    m_combLogged = log;
+    qDebug().noquote() << log;
+  }
 }
 
 void SketchController::setShowProfiles(bool on) {
@@ -3553,6 +3749,10 @@ void SketchController::setPicked(const QStringList& entities) {
 }
 
 void SketchController::refreshView() {
+  // The selection chooses the combed curves (mitcad#2520).
+  if (isActive() && m_showComb) {
+    updateCurvatureComb();
+  }
   m_overlay->update();
   // The selection's highlights (mitcad#946), also where the view never
   // paints (Windows session 0).
@@ -5239,6 +5439,30 @@ QString SketchController::undoLabel() const {
   return m_host.queryObject({{QStringLiteral("query"), QStringLiteral("document")}})
       .value(QStringLiteral("undo"))
       .toString();
+}
+
+bool SketchController::waitForModel(const QString& action, std::function<void()> again) {
+  if (m_host.modelReadableNow()) {
+    return true;
+  }
+  // Asked for again (the key pressed twice): the edit waits once.
+  if (m_waitingEdits.contains(action)) {
+    qInfo().noquote() << QStringLiteral("Sketch %1 waits already").arg(action);
+    return false;
+  }
+  m_waitingEdits.insert(action);
+  qInfo().noquote() << QStringLiteral("Sketch %1 waits until the model is idle").arg(action);
+  hint(tr("The model is still computing: the change is made once it is done."));
+  m_host.whenIdle(this, [this, action, sketch = m_uid, again = std::move(again)] {
+    m_waitingEdits.remove(action);
+    if (!isActive() || m_uid != sketch) {
+      qInfo().noquote() << QStringLiteral("Sketch %1 not done: the sketch was closed while the model computed").arg(action);
+      return;
+    }
+    qInfo().noquote() << QStringLiteral("Sketch %1 goes on: the model is idle").arg(action);
+    again();
+  });
+  return false;
 }
 
 } // namespace mitcad::sketch

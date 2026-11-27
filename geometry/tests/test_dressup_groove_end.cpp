@@ -58,6 +58,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/user_error.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -347,7 +348,7 @@ void run_too_large(bool arc, double ratio) {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(dressup_groove_end) {
   // The groove end's build says on the standard error why it gives up
   // (MITCAD_TRACE_GROOVE_END), so that a failing row's log tells which
   // check refused it.

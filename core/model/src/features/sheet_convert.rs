@@ -45,7 +45,34 @@ pub struct SheetConvertDef<P = ParamId> {
     /// How the faces meet at the rips; none: `bisect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub miter: Option<SheetMiter>,
+    /// How a curved face is laid flat (mitcad#2442); none: `exact`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub development: Option<SheetDevelopment>,
+    /// The triangles of a `triangulated` development; none: 64.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triangles: Option<P>,
+    /// Further faces developed with `face` by triangulation, each joined
+    /// to the one before it along a whole edge across the strip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<FaceName>,
 }
+
+/// How Convert to Sheet Metal lays a curved face flat (mitcad#2442).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetDevelopment {
+    /// Exactly, without stretching: flat, cylindrical and conical faces.
+    Exact,
+    /// Approximately, by triangulation between two edges of the face (a
+    /// transition): the pattern says how far its lengths are from the
+    /// face's.
+    Triangulated,
+}
+
+/// The triangles of a triangulated development unless the feature names
+/// another number, and the most it takes.
+pub const DEFAULT_TRIANGLES: f64 = 64.0;
+pub const MAX_TRIANGLES: f64 = 4000.0;
 
 impl<P> SheetConvertDef<P> {
     pub const TYPE: &'static str = "sheet_convert";
@@ -60,6 +87,9 @@ impl<P> SheetConvertDef<P> {
             rips: clone,
             corner_gap: option,
             miter: copy,
+            development: copy,
+            triangles: option,
+            faces: clone,
         }
     }
 }
@@ -70,6 +100,7 @@ impl FeatureInfo for SheetConvertDef {
         r.body(self.body);
         r.features.insert(self.rules);
         add_faces(&mut r, [&self.face]);
+        add_faces(&mut r, &self.faces);
         for edge in self.bends.iter().chain(&self.rips) {
             r.features.extend(edge.features());
         }
@@ -100,6 +131,15 @@ impl FeatureInfo for SheetConvertDef {
                 ));
             }
         }
+        for (i, face) in self.faces.iter().enumerate() {
+            if self.faces[..i].contains(face) || *face == self.face {
+                return Err(crate::notice::placed(
+                    "a face is picked more than once",
+                    crate::notice::NoticePlace::face(face.to_string()),
+                    format!("face {face} is picked more than once"),
+                ));
+            }
+        }
         for f in self.references().features {
             ctx.feature(f)?;
         }
@@ -115,6 +155,13 @@ impl FeatureInfo for SheetConvertDef {
             && !(g.is_finite() && g >= 0.0)
         {
             return Err(format!("the corner gap must not be negative, got {g}"));
+        }
+        if let Some(n) = self.triangles.map(value)
+            && !(n.fract() == 0.0 && (2.0..=MAX_TRIANGLES).contains(&n))
+        {
+            return Err(format!(
+                "the number of triangles must be a whole number from 2 to {MAX_TRIANGLES}, got {n}"
+            ));
         }
         Ok(())
     }

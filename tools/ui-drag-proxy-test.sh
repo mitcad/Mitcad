@@ -226,8 +226,10 @@ join_case() {
   ui_expect_log "Bodies shown: F2.b0" "$label: the block shown" > /dev/null
   ui_mark
   ui_step "extrude (E)"                    ui_key e
-  ui_expect_new "Extrude: automatic Operation = Join" "$label: Join onto the block" 30
+  # A new Extrude starts at 0 mm and chooses nothing until a distance is
+  # typed (mitcad#2481).
   ui_step "distance 5"                     ui_type_in "Panel Extrude input distance" "5"
+  ui_expect_new "Extrude: automatic Operation = Join" "$label: Join onto the block (5 mm typed)" 30
   ui_wait_idle
   ui_expect_new "Preview Extrude: ok" "$label: previewed" 30
   ui_expect_log "Preview tool at 60.000,50.000,22.500" "$label: the tool where the boss is"
@@ -301,9 +303,12 @@ no_new "Extrude: automatic Operation" "5 mm down from 10 mm over the block: New 
 ui_expect_log "Manipulator Extrude distance at " "the distance's arrow" > /dev/null
 ui_focus_main
 ui_mark
-# About 0.5 mm a pixel: 40 pixels take the tool 15 to 25 mm down, from
-# z = 30 into the block's top at z = 20 but not through it.
-held_drag "Manipulator Extrude distance" 0 40
+# About 0.45 mm a pixel. Near its profile the arrow is kept clear of it,
+# its lift fading out over four lifts (mitcad#2508): from -5 mm the value
+# moves 4/5 as far as the pointer, so 55 pixels take the tool 22 to 28 mm
+# down, from z = 30 into the block's top at z = 20, more than half of it
+# in the block (Cut), but not through it.
+held_drag "Manipulator Extrude distance" 0 55
 ui_expect_new "Manipulator Extrude distance dragged to " "released" 20
 value=$(new_line "Manipulator Extrude distance dragged to " | sed 's/.* dragged to //')
 awk -v v="$value" 'BEGIN { exit !(v < -10 && v > -30) }' || ui_fail "the drag did not end in the block: $value"

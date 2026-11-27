@@ -363,6 +363,19 @@ pub use primitive::ConeDef;
 // End caps: a plate closing a tube's or a profile's open end (mitcad#2243).
 pub mod end_cap;
 pub use end_cap::EndCapDef;
+// Isoparametric Curve: a face's u or v curves as 3D curves (mitcad#2522).
+pub mod isoparametric_curve;
+pub use isoparametric_curve::IsoparametricCurveDef;
+// Lofted Flange: a sheet transition between two profiles (mitcad#2512).
+pub mod sheet_lofted;
+pub use sheet_lofted::SheetLoftedFlangeDef;
+// Mesh tools that change a mesh's shape: Smooth, Combine, Offset and Shell,
+// Align and Plane Cut (mitcad#2515).
+pub mod mesh_shape_tools;
+pub use mesh_shape_tools::{
+    MeshAlignDef, MeshCombineDef, MeshCombineOp, MeshCutKeep, MeshOffsetDef, MeshOffsetMode,
+    MeshOffsetSide, MeshPlaneCutDef, MeshPointPair, MeshRegion, MeshSmoothDef,
+};
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -566,6 +579,13 @@ feature_types! {
     Cone(ConeDef),
     // End caps of tubes and profiles (mitcad#2243).
     EndCap(EndCapDef),
+    // Isoparametric Curve (mitcad#2522).
+    IsoparametricCurve(IsoparametricCurveDef),
+    // Lofted Flange (mitcad#2512).
+    SheetLoftedFlange(SheetLoftedFlangeDef),
+    // Mesh Smooth, Combine, Offset and Shell, Align, Plane Cut (mitcad#2515).
+    MeshSmooth(MeshSmoothDef), MeshCombine(MeshCombineDef), MeshOffset(MeshOffsetDef),
+    MeshAlign(MeshAlignDef), MeshPlaneCut(MeshPlaneCutDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is
@@ -656,11 +676,14 @@ impl FeatureDef {
 
     /// Whether the feature makes a 3D curve ([`FeatureOutput::curve`]) that
     /// later features take as a path, project or grow from: an Intersection
-    /// Curve (mitcad#1405) or a Helix Curve (mitcad#1777).
+    /// Curve (mitcad#1405), a Helix Curve (mitcad#1777) or an Isoparametric
+    /// Curve (mitcad#2522).
     pub fn makes_curve(&self) -> bool {
         matches!(
             self,
-            FeatureDef::IntersectionCurve(_) | FeatureDef::HelixCurve(_)
+            FeatureDef::IntersectionCurve(_)
+                | FeatureDef::HelixCurve(_)
+                | FeatureDef::IsoparametricCurve(_)
         )
     }
 }
@@ -1141,6 +1164,10 @@ pub struct EvalContext<'a, K: Kernel> {
     /// How long unpacking the restored shapes it read took (mitcad#886):
     /// not part of the evaluation's time.
     pub(crate) unpack_time: std::time::Duration,
+    /// The pieces a Split Body made before it kept some (mitcad#2504), for
+    /// its panel's dots: kept with its result also when it failed (no
+    /// piece left to keep).
+    pub(crate) piece_choices: Vec<split_body::PieceChoice>,
 }
 
 impl<'a, K: Kernel> EvalContext<'a, K> {
@@ -1170,6 +1197,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             datum_links: std::collections::BTreeMap::new(),
             next_body: 0,
             unpack_time: std::time::Duration::ZERO,
+            piece_choices: Vec::new(),
         }
     }
 

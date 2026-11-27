@@ -7,13 +7,23 @@
 #include <BRepBndLib.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
+#include <Message_ProgressScope.hxx>
 #include <TopExp_Explorer.hxx>
 #include <NCollection_List.hxx>
 
 namespace mitcad::analysis {
 
+namespace {
+
+// A check stopped by its range's user break (mitcad#2540).
+[[noreturn]] void stopped() {
+  throw Error("the interference check was cancelled");
+}
+
+} // namespace
+
 std::vector<Interference> interferences(const std::vector<TopoDS_Shape>& bodies,
-                                        const InterferenceOptions& options) {
+                                        const InterferenceOptions& options, const Message_ProgressRange& range) {
   std::vector<TopoDS_Shape> solids;
   std::vector<Bnd_Box> boxes;
   for (const TopoDS_Shape& body : bodies) {
@@ -27,11 +37,20 @@ std::vector<Interference> interferences(const std::vector<TopoDS_Shape>& bodies,
   }
 
   std::vector<Interference> result;
+  // One step per body, its pairs with the bodies after it inside: a
+  // cancel stops the check between two pairs and inside a pair's boolean.
+  Message_ProgressScope all(range, "Interference", static_cast<double>(solids.size() > 0 ? solids.size() : 1));
   for (std::size_t i = 0; i < solids.size(); ++i) {
+    const Message_ProgressRange row = all.Next();
     if (!TopExp_Explorer(solids[i], TopAbs_SOLID).More()) {
       continue;
     }
+    Message_ProgressScope pairs(row, "Interference pairs", static_cast<double>(solids.size() - i));
     for (std::size_t j = i + 1; j < solids.size(); ++j) {
+      if (pairs.UserBreak()) {
+        stopped();
+      }
+      const Message_ProgressRange pair = pairs.Next();
       if (boxes[i].IsOut(boxes[j]) || !TopExp_Explorer(solids[j], TopAbs_SOLID).More()) {
         continue;
       }
@@ -52,7 +71,10 @@ std::vector<Interference> interferences(const std::vector<TopoDS_Shape>& bodies,
       if (options.fuzzy > 0.0) {
         common.SetFuzzyValue(options.fuzzy);
       }
-      common.Build();
+      common.Build(pair);
+      if (pairs.UserBreak()) {
+        stopped();
+      }
       if (!common.IsDone() || common.HasErrors()) {
         throw Error("interference of bodies " + std::to_string(i) + " and " + std::to_string(j) +
                     " could not be computed");

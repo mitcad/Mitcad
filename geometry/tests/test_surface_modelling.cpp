@@ -67,6 +67,17 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <stdexcept>
 
+// A rounded rim extended past its curved corners, and a plane past a curved
+// edge (mitcad#2525).
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeSphere.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <TopoDS_Compound.hxx>
+#include <gp_Circ.hxx>
+
 #include "check.hpp"
 #include "mitcad/geometry/user_error.hpp"
 #include "mitcad/geometry/extrude.hpp"
@@ -76,6 +87,7 @@
 #include "mitcad/geometry/surface_offsets.hpp"
 #include "mitcad/geometry/surface_sweeps.hpp"
 #include "mitcad/geometry/surfaces.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -492,6 +504,160 @@ void test_a_trimmed_plane_falls_back_to_square_sides() {
   CHECK_NEAR_TOL(area(*notched), 175.0, 1e-6);
   CHECK_NEAR_TOL(area(*flat), 700.0, 1e-6);
   CHECK(flat->edge_count() == 4);
+}
+
+// A rounded rim (mitcad#2525, GitHub mitcad/Mitcad#689, the outer rim of
+// an offset shell): the top of a rounded slab, a 2a x 2b plate at z = r
+// with a quarter round of radius r along each side down to z = 0 and an
+// eighth of a sphere at each corner, open at z = 0. Each corner's sphere
+// has its axis tilted (its poles and its seam away from the corner), so
+// that the rim is no isoline of it and the corner face is trimmed inside
+// its surface's parameter range; the rounds are whole cylinder quarters.
+constexpr double kRimA = 10.0;
+constexpr double kRimB = 6.0;
+
+// A quarter round along a side, from `start` along `along`, its rim at
+// z = 0 where `out` points.
+TopoDS_Face round_side(double r, const gp_Pnt& start, const gp_Dir& along, const gp_Dir& out, double length) {
+  const occ::handle<Geom_CylindricalSurface> cylinder = new Geom_CylindricalSurface(gp_Ax3(start, along, out), r);
+  return BRepBuilderAPI_MakeFace(cylinder, 0.0, kPi / 2, 0.0, length, 1.0e-7).Face();
+}
+
+// The eighth of a sphere at the corner (sx a, sy b, 0), sx and sy +-1.
+TopoDS_Face round_corner(double r, double sx, double sy) {
+  const gp_Ax2 axes(gp_Pnt(sx * kRimA, sy * kRimB, 0.0), gp_Dir(-sx, sy, 0.5), gp_Dir(-sx, -sy, 0.0));
+  const TopoDS_Shape ball = BRepPrimAPI_MakeSphere(axes, r).Shape();
+  const double x0 = sx > 0 ? kRimA : -kRimA - r - 1.0;
+  const double y0 = sy > 0 ? kRimB : -kRimB - r - 1.0;
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(x0, y0, 0.0), r + 1.0, r + 1.0, r + 1.0).Shape();
+  const TopoDS_Shape piece = BRepAlgoAPI_Common(ball, box).Shape();
+  for (TopExp_Explorer f(piece, TopAbs_FACE); f.More(); f.Next()) {
+    if (BRepAdaptor_Surface(TopoDS::Face(f.Current())).GetType() == GeomAbs_Sphere) {
+      return TopoDS::Face(f.Current());
+    }
+  }
+  return TopoDS_Face();
+}
+
+g::ShapePtr rounded_rim(double r) {
+  const double a = kRimA;
+  const double b = kRimB;
+  const std::vector<std::pair<TopoDS_Face, std::string>> faces{
+      {BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0, 0, r), gp_Dir(0, 0, 1)), -a, a, -b, b).Face(), "F2:end(r1)"},
+      {round_side(r, gp_Pnt(-a, b, 0), gp_Dir(1, 0, 0), gp_Dir(0, 1, 0), 2 * a), "F2:side(c1)"},
+      {round_side(r, gp_Pnt(a, b, 0), gp_Dir(0, -1, 0), gp_Dir(1, 0, 0), 2 * b), "F2:side(c2)"},
+      {round_side(r, gp_Pnt(a, -b, 0), gp_Dir(-1, 0, 0), gp_Dir(0, -1, 0), 2 * a), "F2:side(c3)"},
+      {round_side(r, gp_Pnt(-a, -b, 0), gp_Dir(0, 1, 0), gp_Dir(-1, 0, 0), 2 * b), "F2:side(c4)"},
+      {round_corner(r, 1, 1), "F2:corner(v1)"},
+      {round_corner(r, 1, -1), "F2:corner(v2)"},
+      {round_corner(r, -1, -1), "F2:corner(v3)"},
+      {round_corner(r, -1, 1), "F2:corner(v4)"}};
+  BRep_Builder builder;
+  TopoDS_Compound all;
+  builder.MakeCompound(all);
+  std::vector<g::Shape::NamedFace> named;
+  for (const auto& [face, name] : faces) {
+    CHECK(!face.IsNull());
+    builder.Add(all, face);
+    named.push_back({face, {name}});
+  }
+  const g::Shape pieces(all, named);
+  return g::stitch({&pieces}, 1.0e-5);
+}
+
+// The rim's area: the plate, the rounds' quarters of cylinders and the
+// corners' half sphere; and what Natural adds `d` past the whole rim: the
+// rounds' strips d wide and the corners' zone down to the angle d / r.
+double rim_area(double r) { return 4 * kRimA * kRimB + 2 * kPi * r * (kRimA + kRimB) + 2 * kPi * r * r; }
+double rim_grown(double r, double d) { return 4 * d * (kRimA + kRimB) + 2 * kPi * r * r * std::sin(d / r); }
+
+// Natural Extend of the rim by d: the whole rim (one joined surface round
+// it, the corners included), one curved corner alone (its neighbours
+// stay) and one straight side alone (the existing path of an untrimmed
+// face).
+void check_rim_extends(const g::Shape& rim, const std::string& corner, double r, double d) {
+  const double a = kRimA;
+  const double b = kRimB;
+  const double drop = -r * std::sin(d / r);
+  const double reach = r * std::cos(d / r);
+  CHECK(g::open_boundaries(rim).size() == 1);
+  const g::ShapePtr whole = g::extend_surface(rim, {}, {{0, {}, {}}}, d, g::ExtendMode::Natural);
+  CHECK(!solid(*whole));
+  CHECK(whole->face_count() == 9);
+  CHECK(named(*whole, corner) == 1);
+  CHECK(g::open_boundaries(*whole).size() == 1);
+  CHECK_NEAR_TOL(area(*whole), rim_area(r) + rim_grown(r, d), 1e-5);
+  CHECK_NEAR_TOL(z_range(*whole).first, drop, 1e-5);
+  CHECK(has_vertex(*whole, gp_Pnt(a, b + reach, drop)));
+  CHECK(has_vertex(*whole, gp_Pnt(-a - reach, -b, drop)));
+  CHECK(BRepCheck_Analyzer(whole->occt()).IsValid());
+  // The corner at (a, b) alone, picked by a point on its rim: a quarter of
+  // the zone, its sides down the rounds' end circles; the rounds' rims stay.
+  const gp_Pnt on_corner(a + r * std::sqrt(0.5), b + r * std::sqrt(0.5), 0.0);
+  const g::ShapePtr one = g::extend_surface(rim, {}, {{0, {}, {on_corner}}}, d, g::ExtendMode::Natural);
+  CHECK(one->face_count() == 9);
+  CHECK(named(*one, corner) == 1);
+  CHECK(g::open_boundaries(*one).size() == 1);
+  CHECK_NEAR_TOL(area(*one), rim_area(r) + kPi / 2 * r * r * std::sin(d / r), 1e-5);
+  CHECK_NEAR_TOL(z_range(*one).first, drop, 1e-5);
+  CHECK(has_vertex(*one, gp_Pnt(a, b + reach, drop)));
+  CHECK(has_vertex(*one, gp_Pnt(a + reach, b, drop)));
+  CHECK(has_vertex(*one, gp_Pnt(a, b + r, 0)));
+  CHECK(has_vertex(*one, gp_Pnt(a + r, b, 0)));
+  CHECK(has_vertex(*one, gp_Pnt(-a, b + r, 0)));
+  CHECK(BRepCheck_Analyzer(one->occt()).IsValid());
+  // A straight side alone: its strip d wide.
+  const g::ShapePtr straight = g::extend_surface(rim, {}, {{0, {}, {gp_Pnt(0, b + r, 0)}}}, d, g::ExtendMode::Natural);
+  CHECK(straight->face_count() == 9);
+  CHECK_NEAR_TOL(area(*straight), rim_area(r) + 2 * a * d, 1e-6);
+  CHECK(has_vertex(*straight, gp_Pnt(a, b + reach, drop)));
+}
+
+void test_a_rounded_rim_is_extended_past_its_curved_corners() {
+  const double r = 4.0;
+  const g::ShapePtr rim = rounded_rim(r);
+  CHECK(rim->face_count() == 9);
+  CHECK_NEAR_TOL(area(*rim), rim_area(r), 1e-6);
+  check_rim_extends(*rim, "F2:corner(v1)", r, 3.0);
+  // As in the report: the faces offset 1 outwards (the rounds of radius 5,
+  // the corners' spheres on their tilted axes), then extended.
+  const g::ShapePtr shell = g::offset_surface("F3", *rim, {}, 1.0, false);
+  CHECK(shell->face_count() == 9);
+  CHECK_NEAR_TOL(area(*shell), rim_area(r + 1.0), 1e-6);
+  check_rim_extends(*shell, "F3:offset(F2:corner(v1))", r + 1.0, 3.0);
+  // The input is left as it was.
+  CHECK_NEAR_TOL(area(*rim), rim_area(r), 1e-6);
+  CHECK(g::open_boundaries(*rim).size() == 1);
+}
+
+void test_a_plane_is_extended_past_a_curved_edge() {
+  // mitcad#2525: a half disc of radius 10 extended 2 past its arc, picked
+  // by a point on it. The plane continues as itself (in every mode), the
+  // sides continue the straight edge: a half disc of radius 12, one face.
+  const TopoDS_Edge arc =
+      BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 10.0), 0.0, kPi).Edge();
+  const TopoDS_Edge chord = BRepBuilderAPI_MakeEdge(gp_Pnt(-10, 0, 0), gp_Pnt(10, 0, 0)).Edge();
+  const TopoDS_Face face = BRepBuilderAPI_MakeFace(BRepBuilderAPI_MakeWire(arc, chord).Wire(), true).Face();
+  BRep_Builder builder;
+  TopoDS_Shell shell;
+  builder.MakeShell(shell);
+  builder.Add(shell, face);
+  const g::ShapePtr sheet =
+      std::make_shared<g::Shape>(shell, std::vector<g::Shape::NamedFace>{{face, {"F2:end(r1)"}}});
+  CHECK_NEAR_TOL(area(*sheet), 50.0 * kPi, 1e-6);
+  for (const g::ExtendMode mode : {g::ExtendMode::Natural, g::ExtendMode::Tangent}) {
+    const g::ShapePtr grown = g::extend_surface(*sheet, {}, {{0, {}, {gp_Pnt(0, 10, 0)}}}, 2.0, mode);
+    CHECK(grown->face_count() == 1);
+    CHECK(named(*grown, "F2:end(r1)") == 1);
+    CHECK_NEAR_TOL(area(*grown), 72.0 * kPi, 1e-5);
+    CHECK(has_vertex(*grown, gp_Pnt(12, 0, 0)));
+    CHECK(has_vertex(*grown, gp_Pnt(-12, 0, 0)));
+    CHECK(has_vertex(*grown, gp_Pnt(10, 0, 0)));
+    CHECK(BRepCheck_Analyzer(grown->occt()).IsValid());
+  }
+  // The input is left as it was.
+  CHECK_NEAR_TOL(area(*sheet), 50.0 * kPi, 1e-6);
+  CHECK(sheet->edge_count() == 2);
 }
 
 // The name of the walls' edge between the two faces.
@@ -1186,7 +1352,7 @@ void test_a_network_names_the_pair_that_does_not_meet() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(surface_modelling) {
   mitcad::geometry::enable_input_checks(true);
   test::guarded("test_open_curves_are_extruded_into_a_surface", test::test_open_curves_are_extruded_into_a_surface);
   test::guarded("test_curves_are_revolved_into_a_surface", test::test_curves_are_revolved_into_a_surface);
@@ -1218,6 +1384,9 @@ int main() {
                 test::test_a_network_runs_between_the_outer_crossings_of_curves_that_run_on);
   test::guarded("test_a_network_names_the_pair_that_does_not_meet",
                 test::test_a_network_names_the_pair_that_does_not_meet);
+  test::guarded("test_a_rounded_rim_is_extended_past_its_curved_corners",
+                test::test_a_rounded_rim_is_extended_past_its_curved_corners);
+  test::guarded("test_a_plane_is_extended_past_a_curved_edge", test::test_a_plane_is_extended_past_a_curved_edge);
   for (const std::string& change : mitcad::geometry::input_changes()) {
     std::fprintf(stderr, "an input changed: %s\n", change.c_str());
     ++test::failures;

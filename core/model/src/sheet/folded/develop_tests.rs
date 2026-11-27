@@ -141,6 +141,7 @@ fn state(charts: Vec<SheetPatch>, bends: Vec<BendDomain>) -> SheetState {
         gaps: Vec::new(),
         invalidated: None,
         blockers: Vec::new(),
+        approximation: None,
     }
 }
 

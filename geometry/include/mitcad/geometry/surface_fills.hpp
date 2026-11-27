@@ -63,7 +63,19 @@ struct BoundaryCurve {
 // face's edges are the boundaries' curves; chains of sketch curves whose
 // ends lie within 1e-6 of the largest coordinate of those ends (at least
 // 1e-6 mm, as the model joins them) share a corner (mitcad#2220).
-ShapePtr boundary_fill(const std::string& feature, const std::vector<BoundaryCurve>& loop);
+//
+// The face also runs through the `guides` (mitcad#2526): sketch curves
+// inside the loop (each curve of a guide's `curves` a guide of its own;
+// they need not join each other or the loop), which neither bound nor
+// split it, so its edges are the loop's alone. With guides, the face must
+// lie within kGuideTolerance of every guide and of the loop's curves;
+// refused in words otherwise (placed_error: the guide that the face
+// misses and its gap in the detail, the guide and the farthest point
+// painted), and a guide that is not
+// sketch curves is refused.
+inline constexpr double kGuideTolerance = 1.0e-2;
+ShapePtr boundary_fill(const std::string& feature, const std::vector<BoundaryCurve>& loop,
+                       const std::vector<BoundaryCurve>& guides = {});
 
 // A new surface body of one face "<feature>:boundary" through a network:
 // lofted through the curves `u` in order (the first or the last may be a

@@ -73,6 +73,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -426,7 +427,7 @@ void test_boss_on_a_rounded_corner() {
 // With the argument "probe" the diagnosis's printout instead of the checks;
 // with "probe" and a BRep file, the same printout for the body in it (its
 // open faces the flat ones at heights 0 and 20).
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(shell_boss_on_corner) {
   if (argc > 2 && std::string(argv[1]) == "probe") {
     const std::string path = argv[2];
     test::guarded("probe file", [&path] {

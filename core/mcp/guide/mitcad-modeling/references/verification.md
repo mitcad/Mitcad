@@ -78,7 +78,9 @@ result does not prove the intended clearance or contact: measure those.
 `interference` checks bodies where they are; `assembly_path` checks the
 way a body goes into place (slid along a direction or turned about an
 axis past other bodies) and reports the first contact and the clearance
-along the path.
+along the path. On a large design give `interference` the `bodies` that
+can meet (its answer warns over 1000 pairs). An `assembly_path` answer
+with `stopped` is partial: it covers the path only up to `checked_to`.
 
 Read `parameters` to verify that named sizes drive geometry. For a
 parameter with a min and a max, run `parameter_range`: it evaluates the

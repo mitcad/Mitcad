@@ -367,7 +367,7 @@ impl PointCloud {
 }
 
 /// The inverse of a rigid motion.
-fn rigid_inverse(t: &Transform) -> Transform {
+pub(super) fn rigid_inverse(t: &Transform) -> Transform {
     let linear: [[f64; 3]; 3] = std::array::from_fn(|r| std::array::from_fn(|c| t.linear[c][r]));
     let back = Transform {
         linear,

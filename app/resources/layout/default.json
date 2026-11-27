@@ -42,7 +42,7 @@
             "-",
             {
               "submenu": "Curves",
-              "entries": ["solid.helix", "solid.intersection_curve", "solid.helix_curve"]
+              "entries": ["solid.helix", "solid.intersection_curve", "solid.helix_curve", "solid.isoparametric_curve"]
             },
             "-",
             "solid.plastic",
@@ -79,7 +79,7 @@
             "solid.convert_mesh",
             {
               "submenu": "Mesh",
-              "entries": ["solid.mesh_section", "solid.mesh_repair", "solid.mesh_decimate", "solid.mesh_remove", "solid.mesh_segment", "solid.mesh_fit_surface"]
+              "entries": ["solid.mesh_section", "solid.mesh_repair", "solid.mesh_decimate", "solid.mesh_remove", "solid.mesh_segment", "solid.mesh_fit_surface", "solid.mesh_smooth", "solid.mesh_combine", "solid.mesh_offset", "solid.mesh_align", "solid.mesh_plane_cut"]
             },
             "-",
             "solid.move",
@@ -159,6 +159,14 @@
             {"command": "inspect.print_analysis", "repeat": true},
             "inspect.draft_analysis",
             "inspect.point_cloud_deviation",
+            "inspect.min_radius",
+            "inspect.continuity_analysis",
+            "inspect.minimum_distance",
+            "inspect.zebra",
+            "inspect.curvature_map",
+            "inspect.isocurve_analysis",
+            "inspect.environment_map",
+            "inspect.curvature_comb",
             "inspect.properties",
             "inspect.center_of_mass",
             "comment.add"
@@ -260,7 +268,10 @@
             "construct.point_edge_plane",
             "construct.point_along_path",
             "-",
-            "construct.coordinate_system"
+            "construct.coordinate_system",
+            "-",
+            "surface.construction_set",
+            "surface.deactivate_construction_set"
           ]
         },
         {
@@ -283,6 +294,7 @@
             {"command": "sheet.flange", "button": true},
             "sheet.hem",
             "sheet.convert",
+            "sheet.lofted_flange",
             "-",
             {"command": "sheet.bend", "button": true},
             "sheet.fold"
@@ -477,6 +489,12 @@
     {
       "tab": "MAKE_LASER",
       "groups": [
+        {
+          "group": "NEST",
+          "entries": [
+            {"command": "make.nest_flat_patterns", "button": true}
+          ]
+        },
         {
           "group": "EXPORT",
           "entries": [
@@ -738,6 +756,7 @@
             "sketch.construction",
             "sketch.centerline",
             "sketch.convert_projected",
+            "sketch.profile_boundary",
             "sketch.create_block",
             "sketch.edit_block",
             "sketch.explode_block",
@@ -893,7 +912,15 @@
         {
           "group": "PARTS",
           "entries": [
-            {"command": "drawing.add_parts", "button": true}
+            {"command": "drawing.add_parts", "button": true},
+            {"command": "cut_sheet.nest", "button": true}
+          ]
+        },
+        {
+          "group": "CUTTING",
+          "entries": [
+            {"command": "cut_sheet.cutting_paths", "button": true},
+            {"command": "cut_sheet.post", "button": true}
           ]
         },
         {
@@ -975,6 +1002,7 @@
         "file.export",
         "file.export_script",
         "view.export_snapshot",
+        "view.export_turntable",
         "file.create_drawing",
         "file.export_drawing",
         "-",
@@ -1013,7 +1041,7 @@
           "entries": ["view.home", "view.front", "view.back", "view.left", "view.right", "view.top", "view.bottom", "view.iso"]
         },
         "view.look_at",
-        {"submenu": "CAMERA", "icon": "perspective", "entries": ["view.orthographic", "view.perspective"]},
+        {"submenu": "CAMERA", "icon": "perspective", "entries": ["view.orthographic", "view.perspective", "view.perspective_orthographic_faces"]},
         "view.anaglyph",
         {
           "submenu": "VISUAL STYLE",
@@ -1190,7 +1218,12 @@
     "sketch.explode_text",
     "sketch.edit_equation_curve",
     "assemble.explode_step",
-    "assemble.finish_edit_in_place"
+    "assemble.finish_edit_in_place",
+    "view.isolate",
+    "view.unisolate",
+    "insert.align_point_cloud",
+    "insert.filter_point_cloud",
+    "insert.reconstruct_point_cloud"
   ],
   "optional": [
     "file.render_image",

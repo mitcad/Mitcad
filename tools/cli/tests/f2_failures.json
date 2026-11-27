@@ -6,14 +6,15 @@
     "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
     "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
 
-  {"comment": "Fillet1 F3: G2 fillets of the three edges that meet at (60, 0, 20): G2 chains that meet at a corner are not built."},
+  {"comment": "Fillet1 F3: the three edges that meet at (60, 0, 20), two G2 and the vertical one asymmetric: asymmetric roundings cannot meet others at a corner (mitcad#2332; all three G2 build, cli.fillet_g2_corner)."},
   {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "sets": [
-    {"edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}",
-               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}",
+    {"edges": ["E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}",
                "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}"],
-     "size": {"type": "constant", "radius": 2}, "continuity": "curvature"}]}},
+     "size": {"type": "constant", "radius": 2}, "continuity": "curvature"},
+    {"edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"],
+     "size": {"type": "asymmetric", "distance1": 2, "distance2": 3}}]}},
   {"expect": {"feature": "Fillet1", "status": "error",
-    "error_contains": "unsupported: asymmetric and curvature continuous fillets that meet other rounded edges at a corner",
+    "error_contains": "unsupported: asymmetric fillets that meet other rounded edges at a corner",
     "body": "Body1", "volume": 48000}},
 
   {"comment": "Fillet2 F4: a setback corner where three edges rounded 14 mm meet at (60, 0, 20): the setback (21 mm) is longer than the 20 mm vertical edge."},

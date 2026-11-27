@@ -256,6 +256,7 @@ impl DocState {
                 FeatureDef::SheetFace(d) => Some(d.rules),
                 FeatureDef::SheetContour(d) => Some(d.rules),
                 FeatureDef::SheetConvert(d) => Some(d.rules),
+                FeatureDef::SheetLoftedFlange(d) => Some(d.rules),
                 _ => None,
             })
             .collect();
@@ -908,6 +909,124 @@ impl CopyReferences<'_> {
         std::iter::once(context.clone()).chain(targets).collect()
     }
 
+    /// A cut scope of an Extrude, a Revolve or a Hole (mitcad#200;
+    /// mitcad#2131, mitcad#2160) as the copy in `component` keeps it: its
+    /// context the copy's component, its targets and excluded bodies in
+    /// the copied subtree following the copy, the others as they were
+    /// (refused when copied into another design).
+    fn cut_scope(
+        &self,
+        original: &crate::features::extrude_scope::CutScope,
+        component: ComponentUid,
+    ) -> Result<crate::features::extrude_scope::CutScope, ModelError> {
+        use crate::features::extrude_scope::{
+            BodyTarget, ComponentTarget, MachinedFrame, TargetScope,
+        };
+        let target = |t: &ComponentTarget| -> Result<ComponentTarget, ModelError> {
+            match self.path(&t.occurrence) {
+                Some(path) => Ok(ComponentTarget {
+                    component: crate::joints::path_component(
+                        self.destination,
+                        ComponentUid::ROOT,
+                        &path.0,
+                    )
+                    .map_err(invalid)?,
+                    occurrence: path,
+                }),
+                None if self.same_document => Ok(t.clone()),
+                None => Err(invalid(
+                    "cannot copy an assembly cut target outside the inserted component",
+                )),
+            }
+        };
+        let mut scope = original.clone();
+        let source_component = crate::joints::path_component(
+            self.source,
+            ComponentUid::ROOT,
+            &original.context.occurrence.0,
+        )
+        .map_err(invalid)?;
+        if source_component != original.context.component {
+            return Err(invalid(
+                "cannot copy an assembly cut whose source context no longer resolves",
+            ));
+        }
+        let preferred = self.path(&original.context.occurrence);
+        scope.context = ComponentTarget {
+            component,
+            occurrence: OccurrencePath(
+                crate::links::first_path(
+                    self.destination,
+                    component,
+                    preferred.as_ref().map(|p| p.0.as_slice()),
+                )
+                .map_err(invalid)?,
+            ),
+        };
+        let bodies = original
+            .excluded_bodies()
+            .iter()
+            .map(|b| {
+                let mapped = target(&ComponentTarget {
+                    component: b.component,
+                    occurrence: b.occurrence.clone(),
+                })?;
+                let body = if self.path(&b.occurrence).is_some() {
+                    self.body(b.body)
+                } else {
+                    b.body
+                };
+                Ok(BodyTarget {
+                    component: mapped.component,
+                    occurrence: mapped.occurrence,
+                    body,
+                })
+            })
+            .collect::<Result<Vec<_>, ModelError>>()?;
+        let targets = original
+            .stored_targets()
+            .iter()
+            .map(target)
+            .collect::<Result<Vec<_>, _>>()?;
+        // Where the cut lies against each occurrence it machines
+        // (mitcad#2131) goes with the occurrence: its copy keeps the
+        // material removed where it was on the part.
+        scope.frames = original
+            .frames
+            .iter()
+            .map(|f| {
+                let mapped = target(&ComponentTarget {
+                    component: f.component,
+                    occurrence: f.occurrence.clone(),
+                })?;
+                Ok(MachinedFrame {
+                    component: mapped.component,
+                    occurrence: mapped.occurrence,
+                    transform: f.transform,
+                })
+            })
+            .collect::<Result<Vec<_>, ModelError>>()?;
+        scope.targets = match &original.targets {
+            // An automatic scope found its targets in the design it was
+            // made in (mitcad#1667): copied from another design, it cuts
+            // the copied components it could find there, by name, and none
+            // of this design's, which it never saw.
+            TargetScope::Automatic { .. } if !self.same_document => TargetScope::Explicit {
+                included: self.copied_targets(&scope.context, &targets),
+                excluded_bodies: bodies,
+            },
+            TargetScope::Automatic { .. } => TargetScope::Automatic {
+                excluded: targets,
+                excluded_bodies: bodies,
+            },
+            TargetScope::Explicit { .. } => TargetScope::Explicit {
+                included: targets,
+                excluded_bodies: bodies,
+            },
+        };
+        Ok(scope)
+    }
+
     fn body(&self, body: BodyUid) -> BodyUid {
         BodyUid::new(
             self.uids
@@ -1043,6 +1162,12 @@ impl CopyReferences<'_> {
             }
             return Ok(());
         }
+        // An Extrude's, a Revolve's or a Hole's cut scope (mitcad#200;
+        // Revolve and Hole since mitcad#2131, mitcad#2160): its places
+        // follow the copy.
+        if let (Some(to), Some(from)) = (copy.cut_scope_mut(), original.stored_cut_scope()) {
+            *to = Some(self.cut_scope(from, component)?);
+        }
         match (copy, original) {
             (FeatureDef::PatternAtPoints(copy), FeatureDef::PatternAtPoints(original)) => {
                 for (to, from) in copy
@@ -1074,99 +1199,6 @@ impl CopyReferences<'_> {
                 }
             }
             (FeatureDef::Extrude(copy), FeatureDef::Extrude(original)) => {
-                if let Some(original) = &original.cut_scope {
-                    use crate::features::extrude_scope::{
-                        BodyTarget, ComponentTarget, TargetScope,
-                    };
-                    let target = |t: &ComponentTarget| -> Result<ComponentTarget, ModelError> {
-                        match self.path(&t.occurrence) {
-                            Some(path) => Ok(ComponentTarget {
-                                component: crate::joints::path_component(
-                                    self.destination,
-                                    ComponentUid::ROOT,
-                                    &path.0,
-                                )
-                                .map_err(invalid)?,
-                                occurrence: path,
-                            }),
-                            None if self.same_document => Ok(t.clone()),
-                            None => Err(invalid(
-                                "cannot copy an assembly cut target outside the inserted component",
-                            )),
-                        }
-                    };
-                    let mut scope = original.clone();
-                    let source_component = crate::joints::path_component(
-                        self.source,
-                        ComponentUid::ROOT,
-                        &original.context.occurrence.0,
-                    )
-                    .map_err(invalid)?;
-                    if source_component != original.context.component {
-                        return Err(invalid(
-                            "cannot copy an assembly cut whose source context no longer resolves",
-                        ));
-                    }
-                    let preferred = self.path(&original.context.occurrence);
-                    scope.context = ComponentTarget {
-                        component,
-                        occurrence: OccurrencePath(
-                            crate::links::first_path(
-                                self.destination,
-                                component,
-                                preferred.as_ref().map(|p| p.0.as_slice()),
-                            )
-                            .map_err(invalid)?,
-                        ),
-                    };
-                    let bodies = original
-                        .excluded_bodies()
-                        .iter()
-                        .map(|b| {
-                            let mapped = target(&ComponentTarget {
-                                component: b.component,
-                                occurrence: b.occurrence.clone(),
-                            })?;
-                            let body = if self.path(&b.occurrence).is_some() {
-                                self.body(b.body)
-                            } else {
-                                b.body
-                            };
-                            Ok(BodyTarget {
-                                component: mapped.component,
-                                occurrence: mapped.occurrence,
-                                body,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, ModelError>>()?;
-                    let targets = original
-                        .stored_targets()
-                        .iter()
-                        .map(target)
-                        .collect::<Result<Vec<_>, _>>()?;
-                    scope.targets = match &original.targets {
-                        // An automatic scope found its targets in the
-                        // design it was made in (mitcad#1667): copied from
-                        // another design, it cuts the copied components it
-                        // could find there, by name, and none of this
-                        // design's, which it never saw.
-                        TargetScope::Automatic { .. } if !self.same_document => {
-                            TargetScope::Explicit {
-                                included: self.copied_targets(&scope.context, &targets),
-                                excluded_bodies: bodies,
-                            }
-                        }
-                        TargetScope::Automatic { .. } => TargetScope::Automatic {
-                            excluded: targets,
-                            excluded_bodies: bodies,
-                        },
-                        TargetScope::Explicit { .. } => TargetScope::Explicit {
-                            included: targets,
-                            excluded_bodies: bodies,
-                        },
-                    };
-                    copy.cut_scope = Some(scope);
-                }
                 // The objects on other components' bodies (mitcad#104):
                 // as a sweep's.
                 copy.object_links.clear();
@@ -1227,6 +1259,16 @@ impl CopyReferences<'_> {
                     let (link, internal) = self.link(link, component)?;
                     let mapped = if internal { self.body(*body) } else { *body };
                     copy.body_links.insert(mapped, link);
+                }
+            }
+            // An Isoparametric Curve's face on another component's body
+            // (mitcad#2554): as a sweep's.
+            (FeatureDef::IsoparametricCurve(copy), FeatureDef::IsoparametricCurve(original)) => {
+                copy.links.clear();
+                for (body, link) in &original.links {
+                    let (link, internal) = self.link(link, component)?;
+                    let mapped = if internal { self.body(*body) } else { *body };
+                    copy.links.insert(mapped, link);
                 }
             }
             // A construction plane's faces on other components' bodies

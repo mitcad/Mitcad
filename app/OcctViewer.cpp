@@ -36,6 +36,7 @@
 #include "view/CameraHeight.hpp"
 #include "view/CameraTurn.hpp"
 #include "view/DefaultView.hpp"
+#include "view/FaceProjection.hpp"
 #include "view/PickFacing.hpp"
 #include "view/SectionHatch.hpp"
 #include "view/ViewCube.hpp"
@@ -165,6 +166,7 @@
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <V3d_AmbientLight.hxx>
 #include <V3d_DirectionalLight.hxx>
 #include <gp.hxx>
@@ -2246,7 +2248,16 @@ void OcctViewer::activatePicking(const occ::handle<AIS_Shape>& object) {
   };
   const SelectFilter kinds = activeKinds();
   if (info->second.body) {
-    if (kinds.testFlag(SelectKind::Body)) {
+    // A body whose shape is a lone face (a mesh body, a single sewn
+    // strip), edge or vertex: its whole-body owner covers the same place
+    // as that face's, edge's or vertex's. An input that takes that kind
+    // too picks it as before (the body's face for Fit Surface); one that
+    // takes only bodies picks the body (Thicken, mitcad#2544).
+    const TopAbs_ShapeEnum whole = object->Shape().IsNull() ? TopAbs_SHAPE : object->Shape().ShapeType();
+    const bool sameAsPart = (whole == TopAbs_FACE && kinds.testFlag(SelectKind::Face)) ||
+                            (whole == TopAbs_EDGE && kinds.testFlag(SelectKind::Edge)) ||
+                            (whole == TopAbs_VERTEX && kinds.testFlag(SelectKind::Vertex));
+    if (kinds.testFlag(SelectKind::Body) && !sameAsPart) {
       activate(0, kFaceSensitivity);
     }
     if (kinds.testFlag(SelectKind::Face)) {
@@ -5029,6 +5040,11 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
     m_context->Remove(m_previewGuide, false);
     m_previewGuide.Nullify();
   }
+  // So do the coloured edges beside it (mitcad#2521).
+  for (const occ::handle<AIS_Shape>& edges : m_previewEdges) {
+    m_context->Remove(edges, false);
+  }
+  m_previewEdges.clear();
   if (!shape.IsNull()) {
     m_preview = new AIS_Shape(shape);
     // A tool the preview's job meshed (DisplayMeshes, a stand-in in the
@@ -5161,6 +5177,41 @@ void OcctViewer::setPreviewGuide(const TopoDS_Shape& shape) {
                               .arg(m_previewGuide->ZLayer() == Graphic3d_ZLayerId_Top)
                               .arg(lines);
   }
+  sceneChanged();
+}
+
+void OcctViewer::setPreviewEdges(const std::vector<std::pair<TopoDS_Shape, ColorRole>>& edges) {
+  for (const occ::handle<AIS_Shape>& drawn : m_previewEdges) {
+    m_context->Remove(drawn, false);
+  }
+  m_previewEdges.clear();
+  QStringList logged;
+  for (const auto& [shape, role] : edges) {
+    if (shape.IsNull()) {
+      continue;
+    }
+    occ::handle<AIS_Shape> drawn = new AIS_Shape(shape);
+    setEdgeStyle(drawn, viewRole(role, m_backgroundDark), 3.0);
+    m_context->Display(drawn, AIS_WireFrame, -1, false);
+    m_context->Deactivate(drawn);
+    m_context->SetZLayer(drawn, Graphic3d_ZLayerId_Top);
+    m_previewEdges.push_back(drawn);
+    // A compound's items (Continuity Analysis' edges, one polyline each),
+    // else the shape's edges.
+    int count = 0;
+    if (shape.ShapeType() == TopAbs_COMPOUND) {
+      for (TopoDS_Iterator it(shape); it.More(); it.Next()) {
+        ++count;
+      }
+    } else {
+      for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) {
+        ++count;
+      }
+    }
+    logged << QStringLiteral("%1 %2").arg(colorRoleName(role)).arg(count);
+  }
+  qDebug().noquote() << QStringLiteral("Preview colored edges: %1")
+                            .arg(logged.isEmpty() ? QStringLiteral("none") : logged.join(QStringLiteral(", ")));
   sceneChanged();
 }
 
@@ -5471,6 +5522,26 @@ void OcctViewer::refreshBrowserHover() {
   }
 }
 
+namespace {
+
+// Whether the owner is its object's whole-shape owner (selection mode 0),
+// not one of its faces, edges or vertices (modes of their own). Mode 0 has
+// a single owner for the whole shape, shared by all its sensitive
+// entities.
+bool wholeShapeOwner(const occ::handle<SelectMgr_EntityOwner>& owner) {
+  if (!owner->HasSelectable()) {
+    return false;
+  }
+  const occ::handle<SelectMgr_Selection>& selection = owner->Selectable()->Selection(0);
+  if (selection.IsNull() || selection->Entities().IsEmpty()) {
+    return false;
+  }
+  const occ::handle<SelectMgr_SensitiveEntity>& entity = selection->Entities().First();
+  return !entity.IsNull() && !entity->BaseSensitive().IsNull() && entity->BaseSensitive()->OwnerId() == owner;
+}
+
+} // namespace
+
 std::optional<SelectionItem>
 OcctViewer::itemFor(const occ::handle<SelectMgr_EntityOwner>& owner) const {
   if (owner.IsNull()) {
@@ -5490,6 +5561,12 @@ OcctViewer::itemFor(const occ::handle<SelectMgr_EntityOwner>& owner) const {
   SelectionItem item = info->second.item;
   const occ::handle<StdSelect_BRepOwner> brep = occ::handle<StdSelect_BRepOwner>::DownCast(owner);
   if (brep.IsNull() || !brep->HasShape()) {
+    return item;
+  }
+  // A body whose shape is a lone face (a single sewn strip or face,
+  // mitcad#2544), edge or vertex: its whole-body owner has that face's
+  // shape too, and is still the body.
+  if (wholeShapeOwner(owner)) {
     return item;
   }
   const TopoDS_Shape& part = brep->Shape();
@@ -5801,13 +5878,13 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
   for (const PickBody& source : sources) {
     const geometry::Shape& body = *source.shape;
     const gp_Trsf& placement = source.placement;
-    // Whether a click at the point picks the named item.
-    const auto probe = [&](const gp_Pnt& local, SelectKind kind, const std::string& name) {
+    // What a click at the point picks and the input takes, and where.
+    const auto pickAt = [&](const gp_Pnt& local) -> std::pair<const std::optional<SelectionItem>*, QPoint> {
       // Probe the exact logical pixel that callers receive (the projection
       // rounded to the nearest pixel), including its device pixels at 2x.
       const QPoint at = toWidgetF(local.Transformed(placement)).toPoint();
       if (!inside.contains(at) || isCovered(at)) {
-        return false;
+        return {nullptr, at};
       }
       auto there = picked.find({at.x(), at.y()});
       if (there == picked.end()) {
@@ -5818,13 +5895,40 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
         }
         there = picked.emplace(std::make_pair(at.x(), at.y()), std::move(item)).first;
       }
-      const std::optional<SelectionItem>& item = there->second;
-      if (item && item->kind == kind && item->name.toStdString() == name) {
-        found.emplace_back(*item, at);
+      return {&there->second, at};
+    };
+    // Whether a click at the point picks the named item.
+    const auto probe = [&](const gp_Pnt& local, SelectKind kind, const std::string& name) {
+      const auto [item, at] = pickAt(local);
+      if (item != nullptr && *item && (*item)->kind == kind && (*item)->name.toStdString() == name) {
+        found.emplace_back(**item, at);
         return true;
       }
       return false;
     };
+    // The whole body, where a click on one of its faces picks it: one
+    // place, also for a body that is a lone face (mitcad#2544).
+    if (kinds.testFlag(SelectKind::Body) && source.body && source.body->kind == SelectKind::Body &&
+        mayTake(*source.body)) {
+      const auto probeBody = [&](const gp_Pnt& local) {
+        const auto [item, at] = pickAt(local);
+        if (item != nullptr && *item && (*item)->kind == SelectKind::Body && **item == *source.body) {
+          found.emplace_back(**item, at);
+          return true;
+        }
+        return false;
+      };
+      bool placed = false;
+      for (int i = 0; i < body.face_count() && !placed; ++i) {
+        const TopoDS_Face& face = body.face(i);
+        const auto middle = parameterMiddleOf(face);
+        placed = middle && probeBody(*middle);
+        if (!placed) {
+          const auto fattest = middleOf(face);
+          placed = fattest && probeBody(*fattest);
+        }
+      }
+    }
     // Whether a click could take the body's named face, edge or vertex.
     const auto takes = [&source, &mayTake](SelectKind kind, const std::string& name, const QString& geometry) {
       if (!source.body) {
@@ -6938,6 +7042,7 @@ void OcctViewer::settleCamera() {
 }
 
 void OcctViewer::fitPending(const occ::handle<Graphic3d_Camera>& camera) const {
+  followFaces(*camera); // mitcad#2473, as fitCamera
   if (m_framingNewDesign) {
     frameOrigin(camera);
   } else {
@@ -7010,6 +7115,10 @@ void OcctViewer::lookAlong(const gp_Dir& normal, const gp_Dir& up) { turnTo(norm
 void OcctViewer::lookHome() { goHome(); }
 
 void OcctViewer::fitCamera(const occ::handle<Graphic3d_Camera>& fitted) const {
+  // Fitted in the projection Perspective with Orthographic Faces gives its
+  // direction (mitcad#2473): a turn from a face to a corner fits the
+  // perspective it ends in.
+  followFaces(*fitted);
   // What FitAll fits: the shown objects, without the orientation cube.
   m_viewStep = "the shown objects' box";
   const Bnd_Box box = m_view->View()->MinMaxValues();
@@ -7154,6 +7263,9 @@ gp_Vec OcctViewer::areaShift(const occ::handle<Graphic3d_Camera>& camera, const 
 
 void OcctViewer::moveCamera(const occ::handle<Graphic3d_Camera>& end) {
   AbortViewAnimation();
+  // Where it ends, in the projection Perspective with Orthographic Faces
+  // gives it (mitcad#2473); an animation's start follows in its frames.
+  followFaces(*end);
   // A window nobody sees moves at once: one not exposed (Windows session 0,
   // where Qt never exposes it) draws no steady frames, so a glide stayed at
   // its start until something else drew one, and the datums' places waited
@@ -7658,7 +7770,10 @@ void OcctViewer::turnCube(const QString& arrow) {
   // up direction is snapped across the snapped direction, so that the three
   // stay square whatever the camera holds: snapped on their own, an up that
   // leaned towards the direction would become it, and their cross would
-  // throw (mitcad#773).
+  // throw (mitcad#773). From where a glide still running goes, not from its
+  // half-way camera: a second arrow within the glide turns on from the
+  // first one's end (mitcad#2527).
+  settleCamera();
   const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
   const gp_Dir direction = nearestAxis(camera->Direction().XYZ());
   const gp_Dir up = nearestAxis(upAcross(direction, camera->Up().XYZ()).XYZ());
@@ -7695,6 +7810,16 @@ bool OcctViewer::isOnOrientationCube(const QPointF& position) {
 
 void OcctViewer::cameraMoved() { m_restTimer->start(); }
 
+void OcctViewer::logViewArea() {
+  // Where the view is in the window, for UI tests that click in it.
+  const QPoint corner = mapTo(window(), QPoint(0, 0));
+  qDebug().noquote() << QStringLiteral("View area %1 %2 %3 %4")
+                            .arg(corner.x())
+                            .arg(corner.y())
+                            .arg(width())
+                            .arg(height());
+}
+
 void OcctViewer::logViewSizes() {
   // After a resize (mitcad#2422): the widget's size, its size in device
   // pixels, the size OCCT draws and picks at and, in the view's own EGL
@@ -7723,7 +7848,10 @@ void OcctViewer::logViewSizes() {
     line += QStringLiteral(", read back %1x%2").arg(readBack.width()).arg(readBack.height());
   }
 #endif
-  qDebug().noquote() << line;
+  // Info, so that the session log a user sends with a report has it
+  // (mitcad#2471: GitHub mitcad/Mitcad#672's log had no size after the
+  // window was resized, only the missing "View: resized to" line).
+  qInfo().noquote() << line;
   if (drawn != device || readBack != device) {
     qWarning().noquote() << QStringLiteral("3D view: drawn at %1x%2 pixels (read back %3x%4), but the view is %5x%6 "
                                            "pixels: the picture and the picks do not fit the window")
@@ -7741,6 +7869,12 @@ void OcctViewer::logCamera() {
   if (moving) {
     m_restTimer->start();
     return;
+  }
+  // The projection Perspective with Orthographic Faces gives the camera at
+  // rest (mitcad#2473), also where no frame has applied it yet.
+  if (m_orthographicFaces && followFaces(*m_view->Camera())) {
+    m_view->Invalidate();
+    requestFrame();
   }
   const occ::handle<Graphic3d_Camera>& current = m_view->Camera();
   if (m_resizeToLog) {
@@ -7760,9 +7894,15 @@ void OcctViewer::logCamera() {
     m_sizesToLog = false;
     logViewSizes();
   }
-  const QString text = QStringLiteral("Camera direction %1 up %2 (%3)")
+  // The projection in use (stereo: Anaglyph 3D, mitcad#1449) and, with
+  // Perspective with Orthographic Faces, the mode (mitcad#2473):
+  // "(orthographic, perspective with orthographic faces)".
+  const QString mode = m_orthographicFaces
+                           ? QStringLiteral(", %1").arg(cameraProjectionText(CameraProjection::PerspectiveOrthographicFaces))
+                           : QString();
+  const QString text = QStringLiteral("Camera direction %1 up %2 (%3%4)")
                            .arg(vectorText(current->Direction().XYZ()), vectorText(current->Up().XYZ()),
-                                projectionName()); // stereo: Anaglyph 3D (mitcad#1449)
+                                projectionName(), mode);
   // The grid's spacing once it changes (UI tests check it against the zoom),
   // in the design's unit (mitcad#1210).
   const double step = m_gridShown ? gridStep() : 0.0;
@@ -7980,7 +8120,14 @@ QRectF OcctViewer::cubeOutline() const {
 }
 
 CameraState OcctViewer::camera() const {
-  const occ::handle<Graphic3d_Camera>& current = m_view->Camera();
+  occ::handle<Graphic3d_Camera> current = new Graphic3d_Camera();
+  current->Copy(m_view->Camera());
+  // At rest, the projection Perspective with Orthographic Faces gives it
+  // (mitcad#2473), also before the next frame has applied it.
+  const occ::handle<AIS_AnimationCamera>& animation = ViewAnimation();
+  if (animation.IsNull() || animation->IsStopped()) {
+    followFaces(*current);
+  }
   CameraState state;
   state.eye = current->Eye();
   state.target = current->Center();
@@ -7988,6 +8135,7 @@ CameraState OcctViewer::camera() const {
   // A stereo camera (Anaglyph 3D, mitcad#1449) is a perspective one.
   state.perspective = !current->IsOrthographic();
   state.height = current->ViewDimensions().Y();
+  state.orthographicFaces = m_orthographicFaces;
   return state;
 }
 
@@ -8001,8 +8149,11 @@ CameraState OcctViewer::pendingCamera() const {
   if (m_fitPending) {
     fitPending(pending);
   }
-  return {pending->Eye(), pending->Center(), pending->Up(), !pending->IsOrthographic(),
-          pending->ViewDimensions().Y()};
+  followFaces(*pending); // mitcad#2473
+  CameraState state{pending->Eye(), pending->Center(), pending->Up(), !pending->IsOrthographic(),
+                    pending->ViewDimensions().Y()};
+  state.orthographicFaces = m_orthographicFaces;
+  return state;
 }
 
 void OcctViewer::setCamera(const CameraState& state) {
@@ -8015,12 +8166,16 @@ void OcctViewer::setCamera(const CameraState& state) {
     m_viewStep = "the camera";
     occ::handle<Graphic3d_Camera> end = new Graphic3d_Camera();
     end->Copy(m_view->Camera());
-    end->SetProjectionType(state.perspective ? Graphic3d_Camera::Projection_Perspective
-                                             : Graphic3d_Camera::Projection_Orthographic);
+    // Perspective with Orthographic Faces (mitcad#2473) is the camera's,
+    // as its projection is: perspective but along a face direction.
+    m_orthographicFaces = state.orthographicFaces;
+    const bool perspective = state.perspective || state.orthographicFaces;
+    end->SetProjectionType(perspective ? Graphic3d_Camera::Projection_Perspective
+                                       : Graphic3d_Camera::Projection_Orthographic);
     if (m_anaglyph) {
       // Anaglyph 3D stays on (mitcad#1449): the view's projection is the
       // one it goes back to.
-      m_monoPerspective = state.perspective;
+      m_monoPerspective = perspective;
       keepProjection(*end);
     }
     end->SetEyeAndCenter(state.eye, state.target);
@@ -8031,23 +8186,99 @@ void OcctViewer::setCamera(const CameraState& state) {
     // OCCT's scale is the shorter side, so a view taller than wide takes
     // the height times its aspect (mitcad#959).
     setVisibleHeight(*end, state.height);
+    followFaces(*end);
     m_viewStep = "the camera's move";
     moveCamera(end);
   });
 }
 
 void OcctViewer::setPerspective(bool perspective) {
+  setCameraProjection(perspective ? CameraProjection::Perspective : CameraProjection::Orthographic);
+}
+
+void OcctViewer::setCameraProjection(CameraProjection projection) {
+  const bool perspective = projection != CameraProjection::Orthographic;
+  m_orthographicFaces = projection == CameraProjection::PerspectiveOrthographicFaces;
   if (m_anaglyph) {
     // The camera stays a stereo one (mitcad#1449); this is the projection
     // Anaglyph 3D goes back to.
     m_monoPerspective = perspective;
     return;
   }
-  m_view->Camera()->SetProjectionType(perspective ? Graphic3d_Camera::Projection_Perspective
-                                                  : Graphic3d_Camera::Projection_Orthographic);
+  if (m_orthographicFaces) {
+    // Perspective with Orthographic Faces (mitcad#2473): what it gives
+    // along the camera's direction now, the height at the target kept; an
+    // animation on its way goes on with its ends in the mode.
+    followFacesInView();
+  } else {
+    m_view->Camera()->SetProjectionType(perspective ? Graphic3d_Camera::Projection_Perspective
+                                                    : Graphic3d_Camera::Projection_Orthographic);
+  }
   m_view->Invalidate();
   cameraMoved();
   requestFrame();
+}
+
+CameraProjection OcctViewer::cameraProjection() const {
+  if (m_orthographicFaces) {
+    return CameraProjection::PerspectiveOrthographicFaces;
+  }
+  return (m_anaglyph ? m_monoPerspective : isPerspective()) ? CameraProjection::Perspective
+                                                            : CameraProjection::Orthographic;
+}
+
+QString cameraProjectionText(CameraProjection projection) {
+  switch (projection) {
+  case CameraProjection::Perspective:
+    return QStringLiteral("perspective");
+  case CameraProjection::PerspectiveOrthographicFaces:
+    return QStringLiteral("perspective with orthographic faces");
+  case CameraProjection::Orthographic:
+    break;
+  }
+  return QStringLiteral("orthographic");
+}
+
+bool OcctViewer::followFaces(Graphic3d_Camera& camera) const {
+  if (!m_orthographicFaces || m_anaglyph) {
+    return false;
+  }
+  // A 3D mouse motion runs in perspective (its Fly and Camera modes work
+  // as in Perspective); the rule applies again once it rests.
+  if (m_spaceMouseTiming.frames > 0) {
+    return mitcad::setProjectionKeepingHeight(camera, false);
+  }
+  return mitcad::followFaceProjection(camera);
+}
+
+void OcctViewer::followFacesInView() {
+  if (!m_orthographicFaces || m_anaglyph) {
+    return;
+  }
+  const occ::handle<AIS_AnimationCamera>& animation = ViewAnimation();
+  if (!animation.IsNull() && !animation->IsStopped()) {
+    // The animation sets the view's camera from its ends in each frame
+    // (Graphic3d_Camera::Interpolate starts from a copy of its start and
+    // ends on a copy of its end): the end gets the mode's projection, and
+    // the start a perspective one when the animation turns the view, so
+    // that it runs in perspective and only a face it ends at is
+    // orthographic (a cube click from one face to another, or to a corner).
+    const occ::handle<Graphic3d_Camera>& start = animation->CameraStart();
+    const occ::handle<Graphic3d_Camera>& end = animation->CameraEnd();
+    if (!start.IsNull() && !end.IsNull()) {
+      followFaces(*end);
+      if (mitcad::alongSameFace(start->Direction(), end->Direction())) {
+        followFaces(*start);
+      } else {
+        mitcad::setProjectionKeepingHeight(*start, false);
+      }
+    }
+    return;
+  }
+  if (followFaces(*m_view->Camera())) {
+    m_view->Invalidate();
+    cameraMoved(); // the camera's line names the projection it switched to
+  }
 }
 
 bool OcctViewer::isPerspective() const {
@@ -8074,6 +8305,9 @@ void OcctViewer::keepProjection(Graphic3d_Camera& camera) const {
   // The focal length in force (mitcad#1717), the model as large at the
   // target as before.
   mitcad::setFieldOfViewKeepingHeight(camera, m_anaglyph ? m_anaglyphFieldOfView : m_perspectiveFieldOfView);
+  // Perspective with Orthographic Faces (mitcad#2473): a mono camera put
+  // back (Anaglyph 3D off, a sketch's camera) in the projection it gives.
+  followFaces(camera);
 }
 
 void OcctViewer::endViewAnimation() {
@@ -8100,7 +8334,9 @@ void OcctViewer::setAnaglyph(bool on) {
   endViewAnimation();
   const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
   if (on) {
-    m_monoPerspective = !camera->IsOrthographic();
+    // Perspective with Orthographic Faces (mitcad#2473) is a perspective
+    // one, also while it is orthographic at a face.
+    m_monoPerspective = m_orthographicFaces || !camera->IsOrthographic();
     Graphic3d_RenderingParams& params = m_view->ChangeRenderingParams();
     params.StereoMode = Graphic3d_StereoMode_Anaglyph;
     params.AnaglyphFilter = Graphic3d_RenderingParams::Anaglyph_RedCyan_Optimized;
@@ -8421,6 +8657,8 @@ void OcctViewer::setBackground(const QColor& top, const QColor& bottom, bool gra
       m_context->Redisplay(m_buildOutside, false);
     }
     recolorPrintOverlay();
+    // The uncut stock's grey and edges (mitcad#2552).
+    recolorCamUncutStock();
     emit backgroundToneChanged();
   }
   if (paper != m_paper) {
@@ -9010,6 +9248,15 @@ void OcctViewer::setDocumentVisible(bool visible) {
     m_scrollTimer->stop();
     m_restTimer->stop();
   } else {
+    // Shown again, as its design's tab is chosen (mitcad#2471): a view
+    // hidden in its tab is not resized with the window and follows it
+    // only now. Its place, and once a frame is drawn and the view rests
+    // its sizes (logViewSizes) and the camera's rest (cameraRested: the
+    // datums' pick places), are logged anew, also when its size stayed:
+    // the lines logged last may be another design's view.
+    logViewArea();
+    m_sizesToCheck = true;
+    m_restedView.clear();
     updateNavigation();
     requestFrame();
   }
@@ -9474,13 +9721,7 @@ void OcctViewer::logHeadlessViewArea() {
 void OcctViewer::resizeGL(int width, int height) {
   QOpenGLWidget::resizeGL(width, height);
   applyDevicePixelRatio(); // a move to another screen resizes the view
-  // Where the view is in the window, for UI tests that click in it.
-  const QPoint corner = mapTo(window(), QPoint(0, 0));
-  qDebug().noquote() << QStringLiteral("View area %1 %2 %3 %4")
-                            .arg(corner.x())
-                            .arg(corner.y())
-                            .arg(width)
-                            .arg(height);
+  logViewArea();
   placeHomeButton();
   placeCubeArrows();
   m_loggedCamera.clear(); // the cube's places moved
@@ -9950,10 +10191,16 @@ void OcctViewer::updateNavigation() {
       line += QStringLiteral(" (%1)").arg(m_navigationRepainted.join(QStringLiteral(", ")));
     }
     // The drawings over the view it draws itself (mitcad#2296), painted
-    // with its frames: "sketch overlay painted 12 time(s) by the view".
+    // with its frames: "sketch overlay painted 12 time(s) by the view"; as
+    // widgets over the view after the view's path failed (mitcad#2406):
+    // "sketch overlay painted 12 time(s) as a widget over the view".
     for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
       if (layer && layer->isShown()) {
-        line += QStringLiteral(", %1 painted %2 time(s) by the view").arg(layer->name()).arg(layer->takePaints());
+        line += QStringLiteral(", %1 painted %2 time(s) %3")
+                    .arg(layer->name())
+                    .arg(layer->takePaints())
+                    .arg(layer->drawnByView() ? QStringLiteral("by the view")
+                                              : QStringLiteral("as a widget over the view"));
       }
     }
     if (!m_loggedPrintOverlay.isEmpty() && m_loggedPrintOverlay != QStringLiteral("Print overlay: none")) {
@@ -10904,7 +11151,9 @@ void OcctViewer::turnView(double right, double up) {
   if (m_view->Window().IsNull() || (right == 0.0 && up == 0.0)) {
     return;
   }
-  AbortViewAnimation();
+  // From where a glide still running goes (a cube face clicked or a named
+  // view just before), not from its half-way camera (mitcad#2527).
+  settleCamera();
   const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
   try {
     // About the centre a mouse orbit turns about (mitcad#1791: the fixed
@@ -10965,6 +11214,10 @@ void OcctViewer::handleViewRedraw(const occ::handle<AIS_InteractiveContext>& con
       setRenderedImage(QImage());
     }
   }
+  // Perspective with Orthographic Faces (mitcad#2473): the camera as moved
+  // for this frame (an orbit, a zoom, a turn) in the projection its
+  // direction gives, or a camera animation's ends.
+  followFacesInView();
   // The camera has moved for this frame: the grid follows the zoom at once,
   // the cube's own perspective the direction (mitcad#774).
   updateGrid();
@@ -10993,6 +11246,14 @@ void OcctViewer::handleViewRedraw(const occ::handle<AIS_InteractiveContext>& con
   }
   const gp_Dir drawnFrom = m_view->Camera()->Direction();
   AIS_ViewController::handleViewRedraw(context, view);
+  // What their texture upload and draw found in this frame (GL errors,
+  // times; mitcad#2406): logged, and a failure turns them into widgets over
+  // the view for the session.
+  for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
+    if (layer) {
+      layer->afterFrame();
+    }
+  }
   if (fullFrame) {
     for (const QPointer<ViewPaintLayer>& layer : m_paintLayers) {
       if (layer) {

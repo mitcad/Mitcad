@@ -1648,6 +1648,15 @@ const Choices kConvertMiters = {{QStringLiteral("bisect"), QStringLiteral("Bisec
                                 {QStringLiteral("earlier_runs_past"), QStringLiteral("Earlier Face Runs Past")},
                                 {QStringLiteral("later_runs_past"), QStringLiteral("Later Face Runs Past")}};
 
+// How a curved face is laid flat (the model's `development`, mitcad#2442):
+// exactly, or approximately by triangulation (a transition's faces).
+const Choices kConvertDevelopments = {{QStringLiteral("exact"), QStringLiteral("Exact")},
+                                      {QStringLiteral("triangulated"), QStringLiteral("Approximate")}};
+// Their labels for the catalogues: the panel translates them in the
+// context Choice (choiceLabel, framework/CommandPanel.cpp).
+[[maybe_unused]] constexpr const char* kConvertDevelopmentLabels[] = {QT_TRANSLATE_NOOP("Choice", "Exact"),
+                                                                       QT_TRANSLATE_NOOP("Choice", "Approximate")};
+
 // The picked edges' names, all on `body`; false (with `built` failed on
 // `input`) for an edge of another body.
 bool edgeNames(const Selection& picked, const QString& body, const QString& input, QJsonArray& names,
@@ -1684,19 +1693,38 @@ CommandDef sheetConvertCommand(const CommandContext& context) {
   def.featureType = QStringLiteral("sheet_convert");
   const auto own = [](const CommandState& s) { return s.choice(QStringLiteral("rules")) == QStringLiteral("new"); };
   const auto ownGap = [](const CommandState& s) { return s.checked(QStringLiteral("custom_gap")); };
+  // Faces laid flat approximately, by triangulation (mitcad#2442).
+  const auto approximate = [](const CommandState& s) {
+    return s.choice(QStringLiteral("development")) == QStringLiteral("triangulated");
+  };
+  const auto exact = [approximate](const CommandState& s) { return !approximate(s); };
   def.inputs = {
       selectionInput(QStringLiteral("face"), QObject::tr("Face"), SelectKind::Face, 1, 1)
           .withoutMeshes()
           .withTooltip(QObject::tr("The face that stays where it is: flat, a cylinder or a cone; the material lies behind it")),
+      choiceInput(QStringLiteral("development"), QObject::tr("Development"), kConvertDevelopments,
+                  QStringLiteral("exact"))
+          .withTooltip(QObject::tr("Exact: without stretching. Approximate: other curved faces, by triangulation")),
+      selectionInput(QStringLiteral("faces"), QObject::tr("Further Faces"), SelectKind::Face, 0, 0)
+          .withoutMeshes()
+          .withTooltip(QObject::tr("Faces laid flat with the Face, each joined to the next along an edge"))
+          .withVisible(approximate),
+      valueInput(QStringLiteral("triangles"), QObject::tr("Triangles"), ValueKind::Unitless, QStringLiteral("64"))
+          .withStepMinimum(2)
+          .withTooltip(QObject::tr("How many triangles the faces are laid flat in: more, closer to the faces"))
+          .withVisible(approximate),
       selectionInput(QStringLiteral("bends"), QObject::tr("Bend Edges"), SelectKind::Edge, 0, 0)
           .withoutMeshes()
-          .withTooltip(QObject::tr("Straight edges between flat faces where the sheet bends; none: a plate")),
+          .withTooltip(QObject::tr("Straight edges between flat faces where the sheet bends; none: a plate"))
+          .withVisible(exact),
       selectionInput(QStringLiteral("rips"), QObject::tr("Rip Edges"), SelectKind::Edge, 0, 0)
           .withoutMeshes()
           .withTooltip(QObject::tr("Edges between converted faces to cut open; every other such edge is a rip "
-                                   "anyway")),
+                                   "anyway"))
+          .withVisible(exact),
       choiceInput(QStringLiteral("miter"), QObject::tr("Miter"), kConvertMiters, QStringLiteral("bisect"))
-          .withTooltip(QObject::tr("Where two faces meet at a rip: cut on the plane between them, or one runs past")),
+          .withTooltip(QObject::tr("Where two faces meet at a rip: cut on the plane between them, or one runs past"))
+          .withVisible(exact),
       checkInput(QStringLiteral("custom_gap"), QObject::tr("Own Corner Gap"), false)
           .withTooltip(QObject::tr("Off: the gap between the faces at a rip is the sheet's thickness")),
       valueInput(QStringLiteral("corner_gap"), QObject::tr("Corner Gap"), ValueKind::Length, QStringLiteral("1 mm"))
@@ -1732,10 +1760,19 @@ CommandDef sheetConvertCommand(const CommandContext& context) {
       return Built::failure(QObject::tr("Select the face that stays where it is."), QStringLiteral("face"));
     }
     const SelectionItem fixed = faces.first();
+    const bool triangulated = state.choice(QStringLiteral("development")) == QStringLiteral("triangulated");
     QJsonArray bends;
     QJsonArray rips;
-    if (!edgeNames(state.items(QStringLiteral("bends")), fixed.owner, QStringLiteral("bends"), bends, result) ||
-        !edgeNames(state.items(QStringLiteral("rips")), fixed.owner, QStringLiteral("rips"), rips, result)) {
+    QJsonArray further;
+    if (triangulated) {
+      for (const SelectionItem& item : state.items(QStringLiteral("faces"))) {
+        if (item.owner != fixed.owner) {
+          return Built::failure(QObject::tr("Select faces of the body the face is on."), QStringLiteral("faces"));
+        }
+        further.append(item.name);
+      }
+    } else if (!edgeNames(state.items(QStringLiteral("bends")), fixed.owner, QStringLiteral("bends"), bends, result) ||
+               !edgeNames(state.items(QStringLiteral("rips")), fixed.owner, QStringLiteral("rips"), rips, result)) {
       return result;
     }
     const QString rules = state.choice(QStringLiteral("rules"));
@@ -1751,8 +1788,15 @@ CommandDef sheetConvertCommand(const CommandContext& context) {
     if (!rips.isEmpty()) {
       result.def.insert(QStringLiteral("rips"), rips);
     }
-    if (state.choice(QStringLiteral("miter")) != QStringLiteral("bisect")) {
+    if (!triangulated && state.choice(QStringLiteral("miter")) != QStringLiteral("bisect")) {
       result.def.insert(QStringLiteral("miter"), state.choice(QStringLiteral("miter")));
+    }
+    if (triangulated) {
+      result.def.insert(QStringLiteral("development"), QStringLiteral("triangulated"));
+      result.def.insert(QStringLiteral("triangles"), state.expression(QStringLiteral("triangles")));
+      if (!further.isEmpty()) {
+        result.def.insert(QStringLiteral("faces"), further);
+      }
     }
     if (state.checked(QStringLiteral("custom_gap"))) {
       result.def.insert(QStringLiteral("corner_gap"), state.expression(QStringLiteral("corner_gap")));
@@ -1765,6 +1809,14 @@ CommandDef sheetConvertCommand(const CommandContext& context) {
     state.setItems(QStringLiteral("face"), {face(body, str(feature, "face"))});
     state.setItems(QStringLiteral("bends"), edgeItems(body, feature.value(QStringLiteral("bends")).toArray()));
     state.setItems(QStringLiteral("rips"), edgeItems(body, feature.value(QStringLiteral("rips")).toArray()));
+    state.setChoice(QStringLiteral("development"),
+                    feature.value(QStringLiteral("development")).toString(QStringLiteral("exact")));
+    Selection further;
+    for (const QJsonValue& name : feature.value(QStringLiteral("faces")).toArray()) {
+      further.append(face(body, name.toString()));
+    }
+    state.setItems(QStringLiteral("faces"), further);
+    loadCount(state, QStringLiteral("triangles"), feature.value(QStringLiteral("triangles")), feature, model);
     state.setChoice(QStringLiteral("rules"), str(feature, "rules"));
     state.setChecked(QStringLiteral("editing"), true);
     state.setChoice(QStringLiteral("miter"), feature.value(QStringLiteral("miter")).toString(QStringLiteral("bisect")));
@@ -1775,6 +1827,11 @@ CommandDef sheetConvertCommand(const CommandContext& context) {
     loadOverrides(feature, state, model);
   };
   def.describe = [](const CommandState& state, const CommandContext&) {
+    if (state.choice(QStringLiteral("development")) == QStringLiteral("triangulated")) {
+      return QStringLiteral("Converted to sheet metal by triangulation: %1 face(s), %2 triangles")
+          .arg(state.items(QStringLiteral("faces")).size() + 1)
+          .arg(state.expression(QStringLiteral("triangles")));
+    }
     return QStringLiteral("Converted to sheet metal: %1 bend edge(s), %2 rip edge(s) picked")
         .arg(state.items(QStringLiteral("bends")).size())
         .arg(state.items(QStringLiteral("rips")).size());
@@ -2559,6 +2616,255 @@ CommandDef sheetFlatPatternCommand(const CommandContext& context) {
   return def;
 }
 
+// ---------------------------------------------------------------------------
+// Lofted Flange (mitcad#2512; the model's `sheet_lofted_flange`): a
+// transition made as sheet between two sketch profiles, of flat facets bent
+// on a press brake or formed smooth.
+
+namespace {
+
+// The labels translated by their own tr() when the command is made.
+Choices loftedMethods() {
+  return {{QStringLiteral("press_brake"), QObject::tr("Press Brake")},
+          {QStringLiteral("die_formed"), QObject::tr("Die Formed")}};
+}
+
+// How a press brake's facets are sized (the model's `facets` or
+// `chord_tolerance`).
+Choices facetSizes() {
+  return {{QStringLiteral("count"), QObject::tr("Count")},
+          {QStringLiteral("chord"), QObject::tr("Chord Tolerance")}};
+}
+
+// A profile's picks as the model's profile: one region of a sketch, or
+// curves of one sketch; false (with `built` failed on `input`) otherwise.
+bool loftedProfile(const Selection& picked, const QString& input, QJsonObject& profile, Built& built) {
+  if (picked.isEmpty()) {
+    built = Built::failure(QObject::tr("Select a profile, or curves of a sketch."), input);
+    return false;
+  }
+  const SelectionItem& first = picked.first();
+  if (first.kind == SelectKind::Profile) {
+    if (picked.size() > 1) {
+      built = Built::failure(QObject::tr("Select one profile, or curves of one sketch."), input);
+      return false;
+    }
+    profile = {{QStringLiteral("sketch"), first.owner}, {QStringLiteral("region"), first.name}};
+    return true;
+  }
+  QJsonArray curves;
+  for (const SelectionItem& item : picked) {
+    if (item.kind != SelectKind::SketchCurve || item.owner != first.owner) {
+      built = Built::failure(QObject::tr("Select one profile, or curves of one sketch."), input);
+      return false;
+    }
+    curves.append(item.name);
+  }
+  profile = {{QStringLiteral("sketch"), first.owner}, {QStringLiteral("curves"), curves}};
+  return true;
+}
+
+// The picks of a stored profile.
+Selection loftedItems(const QJsonObject& profile, const CommandContext& context) {
+  const QString sketch = str(profile, "sketch");
+  Selection items;
+  if (profile.contains(QStringLiteral("region"))) {
+    items.append(itemOf(QJsonObject{{QStringLiteral("sketch"), sketch},
+                                    {QStringLiteral("region"), profile.value(QStringLiteral("region"))}},
+                        context));
+    return items;
+  }
+  for (const QJsonValue& curve : profile.value(QStringLiteral("curves")).toArray()) {
+    items.append(itemOf(QJsonObject{{QStringLiteral("sketch"), sketch}, {QStringLiteral("curve"), curve}}, context));
+  }
+  return items;
+}
+
+bool pressBrake(const CommandState& s) { return s.choice(QStringLiteral("method")) == QStringLiteral("press_brake"); }
+
+// Die formed and laid flat approximately, by triangulation (mitcad#2560).
+bool loftedApproximate(const CommandState& s) {
+  return !pressBrake(s) && s.choice(QStringLiteral("development")) == QStringLiteral("triangulated");
+}
+
+} // namespace
+
+CommandDef sheetLoftedFlangeCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("sheet.lofted_flange");
+  def.name = QObject::tr("Lofted Flange");
+  def.icon = QStringLiteral("sheet-lofted-flange");
+  def.tooltip = QObject::tr("A transition of sheet between two profiles, of flat facets or formed smooth");
+  def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("loft"),   QStringLiteral("transition"),
+                  QStringLiteral("duct"),        QStringLiteral("hopper"), QStringLiteral("hood"),
+                  QStringLiteral("square to round")};
+  def.featureType = QStringLiteral("sheet_lofted_flange");
+  const auto own = [](const CommandState& s) { return s.choice(QStringLiteral("rules")) == QStringLiteral("new"); };
+  const auto byCount = [](const CommandState& s) {
+    return pressBrake(s) && s.choice(QStringLiteral("facet_size")) == QStringLiteral("count");
+  };
+  const auto byChord = [](const CommandState& s) {
+    return pressBrake(s) && s.choice(QStringLiteral("facet_size")) == QStringLiteral("chord");
+  };
+  const auto ownSeam = [](const CommandState& s) { return s.checked(QStringLiteral("custom_seam")); };
+  const auto ownGap = [](const CommandState& s) { return s.checked(QStringLiteral("custom_gap")); };
+  def.inputs = {
+      selectionInput(QStringLiteral("first"), QObject::tr("First Profile"), SelectKind::Profile | SelectKind::SketchCurve,
+                     1, 0)
+          .withTooltip(QObject::tr("A profile, or curves of one sketch joined end to end")),
+      selectionInput(QStringLiteral("second"), QObject::tr("Second Profile"),
+                     SelectKind::Profile | SelectKind::SketchCurve, 1, 0)
+          .withTooltip(QObject::tr("The other end: closed if the first is closed, open if it is open")),
+      choiceInput(QStringLiteral("method"), QObject::tr("Method"), loftedMethods(), QStringLiteral("press_brake"))
+          .withTooltip(QObject::tr("Press Brake: flat facets folded at bend lines; Die Formed: formed smooth")),
+      choiceInput(QStringLiteral("facet_size"), QObject::tr("Facets By"), facetSizes(), QStringLiteral("count"))
+          .withTooltip(QObject::tr("A count of facets for each rounded region, or a chord tolerance"))
+          .withVisible(pressBrake),
+      valueInput(QStringLiteral("facets"), QObject::tr("Facets"), ValueKind::Unitless, QStringLiteral("4"))
+          .withStepMinimum(1.0)
+          .withTooltip(QObject::tr("The flat facets of each region about a corner or an arc"))
+          .withVisible(byCount),
+      valueInput(QStringLiteral("chord_tolerance"), QObject::tr("Chord Tolerance"), ValueKind::Length,
+                 QStringLiteral("0.5 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("As few facets as stay within this distance of the arcs"))
+          .withVisible(byChord),
+      // mitcad#2560: bends of the rules' radius; die formed profiles
+      // without a surface that lies flat, by triangulation.
+      checkInput(QStringLiteral("bends"), QObject::tr("Bends"), false)
+          .withTooltip(QObject::tr("On: the folds are bends of the rules' bend radius; off: sharp folds"))
+          .withVisible(pressBrake),
+      choiceInput(QStringLiteral("development"), QObject::tr("Development"), kConvertDevelopments,
+                  QStringLiteral("exact"))
+          .withTooltip(QObject::tr("Exact: lies flat as it is. Approximate: other profiles, by triangulation"))
+          .withVisible([](const CommandState& s) { return !pressBrake(s); }),
+      valueInput(QStringLiteral("triangles"), QObject::tr("Triangles"), ValueKind::Unitless, QStringLiteral("64"))
+          .withStepMinimum(2)
+          .withTooltip(QObject::tr("The triangles it is laid flat in: more, closer to its surface"))
+          .withVisible(loftedApproximate),
+      checkInput(QStringLiteral("custom_seam"), QObject::tr("Own Seam"), false)
+          .withTooltip(QObject::tr("Off: a closed transition opens along the shortest line between its profiles")),
+      valueInput(QStringLiteral("seam"), QObject::tr("Seam"), ValueKind::Unitless, QStringLiteral("0"))
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("Where the seam runs from: a fraction of the first profile's length, 0 to 1"))
+          .withVisible(ownSeam),
+      checkInput(QStringLiteral("custom_gap"), QObject::tr("Own Gap"), false)
+          .withTooltip(QObject::tr("Off: the gap at the seam is the sheet's thickness")),
+      valueInput(QStringLiteral("gap"), QObject::tr("Gap"), ValueKind::Length, QStringLiteral("1 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("The gap at the seam of a closed transition"))
+          .withVisible(ownGap),
+      flipInput(QStringLiteral("flip"), QObject::tr("Flip")),
+      choiceInput(QStringLiteral("rules"), QObject::tr("Rules"), {{QStringLiteral("new"), QStringLiteral("New Rules")}},
+                  QStringLiteral("new"))
+          .withTooltip(QObject::tr("New Rules: rules of its own, made with the sheet; or rules the design has"))
+          .withChoices([&context](const CommandState& state) {
+            Choices choices = rulesFeatures(context);
+            if (!state.checked(QStringLiteral("editing"))) {
+              choices.prepend({QStringLiteral("new"), QObject::tr("New Rules")});
+            }
+            return choices;
+          }),
+      editingInput(),
+  };
+  def.inputs += ruleInputs(own, false);
+  def.enabled = [&context] { return hasSketches(context); };
+  // The newest rules when the design has some.
+  def.init = [](CommandState& state, const CommandContext& model) {
+    const Choices rules = rulesFeatures(model);
+    if (!rules.isEmpty()) {
+      state.setChoice(QStringLiteral("rules"), rules.last().first);
+    }
+  };
+  def.build = [](const CommandState& state, const CommandContext&) {
+    Built result;
+    QJsonObject first;
+    QJsonObject second;
+    if (!loftedProfile(state.items(QStringLiteral("first")), QStringLiteral("first"), first, result) ||
+        !loftedProfile(state.items(QStringLiteral("second")), QStringLiteral("second"), second, result)) {
+      return result;
+    }
+    const QString rules = state.choice(QStringLiteral("rules"));
+    QJsonObject rulesDef = rulesOf(state, false);
+    rulesDef.remove(QStringLiteral("type"));
+    result.def = {{QStringLiteral("type"), QStringLiteral("sheet_lofted_flange")},
+                  {QStringLiteral("rules"), rules == QStringLiteral("new") ? QJsonValue(rulesDef) : QJsonValue(rules)},
+                  {QStringLiteral("profiles"), QJsonArray{first, second}}};
+    if (pressBrake(state)) {
+      if (state.choice(QStringLiteral("facet_size")) == QStringLiteral("chord")) {
+        result.def.insert(QStringLiteral("chord_tolerance"), state.expression(QStringLiteral("chord_tolerance")));
+      } else {
+        result.def.insert(QStringLiteral("facets"), state.expression(QStringLiteral("facets")));
+      }
+      if (state.checked(QStringLiteral("bends"))) {
+        result.def.insert(QStringLiteral("bends"), true);
+      }
+    } else {
+      result.def.insert(QStringLiteral("method"), QStringLiteral("die_formed"));
+      if (loftedApproximate(state)) {
+        result.def.insert(QStringLiteral("development"), QStringLiteral("triangulated"));
+        result.def.insert(QStringLiteral("triangles"), state.expression(QStringLiteral("triangles")));
+      }
+    }
+    if (state.checked(QStringLiteral("custom_seam"))) {
+      result.def.insert(QStringLiteral("seam"), state.expression(QStringLiteral("seam")));
+    }
+    if (state.checked(QStringLiteral("custom_gap"))) {
+      result.def.insert(QStringLiteral("gap"), state.expression(QStringLiteral("gap")));
+    }
+    if (state.checked(QStringLiteral("flip"))) {
+      result.def.insert(QStringLiteral("flip"), true);
+    }
+    return result;
+  };
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& model) {
+    const QJsonArray profiles = feature.value(QStringLiteral("profiles")).toArray();
+    state.setItems(QStringLiteral("first"), loftedItems(profiles.at(0).toObject(), model));
+    state.setItems(QStringLiteral("second"), loftedItems(profiles.at(1).toObject(), model));
+    state.setChoice(QStringLiteral("rules"), str(feature, "rules"));
+    state.setChecked(QStringLiteral("editing"), true);
+    state.setChoice(QStringLiteral("method"), feature.value(QStringLiteral("method")).toString(QStringLiteral("press_brake")));
+    if (feature.contains(QStringLiteral("chord_tolerance"))) {
+      state.setChoice(QStringLiteral("facet_size"), QStringLiteral("chord"));
+      loadValue(state, QStringLiteral("chord_tolerance"), feature.value(QStringLiteral("chord_tolerance")), feature,
+                model);
+    } else {
+      state.setChoice(QStringLiteral("facet_size"), QStringLiteral("count"));
+      if (feature.contains(QStringLiteral("facets"))) {
+        loadValue(state, QStringLiteral("facets"), feature.value(QStringLiteral("facets")), feature, model);
+      }
+    }
+    state.setChecked(QStringLiteral("custom_seam"), feature.contains(QStringLiteral("seam")));
+    if (feature.contains(QStringLiteral("seam"))) {
+      loadValue(state, QStringLiteral("seam"), feature.value(QStringLiteral("seam")), feature, model);
+    }
+    state.setChecked(QStringLiteral("custom_gap"), feature.contains(QStringLiteral("gap")));
+    if (feature.contains(QStringLiteral("gap"))) {
+      loadValue(state, QStringLiteral("gap"), feature.value(QStringLiteral("gap")), feature, model);
+    }
+    state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
+    state.setChecked(QStringLiteral("bends"), feature.value(QStringLiteral("bends")).toBool());
+    state.setChoice(QStringLiteral("development"),
+                    feature.value(QStringLiteral("development")).toString(QStringLiteral("exact")));
+    loadCount(state, QStringLiteral("triangles"), feature.value(QStringLiteral("triangles")), feature, model);
+  };
+  def.describe = [](const CommandState& state, const CommandContext&) {
+    if (!pressBrake(state)) {
+      return loftedApproximate(state)
+                 ? QStringLiteral("Added lofted flange, die formed, laid flat by %1 triangles")
+                       .arg(state.expression(QStringLiteral("triangles")))
+                 : QStringLiteral("Added lofted flange, die formed");
+    }
+    const QString bends = state.checked(QStringLiteral("bends")) ? QStringLiteral(", with bends") : QString();
+    return state.choice(QStringLiteral("facet_size")) == QStringLiteral("chord")
+               ? QStringLiteral("Added lofted flange, press brake, chord tolerance %1%2")
+                     .arg(text(state, "chord_tolerance"), bends)
+               : QStringLiteral("Added lofted flange, press brake, %1 facets per region%2")
+                     .arg(text(state, "facets"), bends);
+  };
+  return def;
+}
+
 } // namespace mitcad::cmd
 
 namespace mitcad {
@@ -2588,6 +2894,8 @@ void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext&
   registry.add(showFlat);
   // Sheet parts by material and process (mitcad#1939).
   registerSheetProcessCommands(registry, context);
+  // Lofted Flange (mitcad#2512).
+  registry.add(sheetLoftedFlangeCommand(context));
 }
 
 } // namespace mitcad

@@ -30,6 +30,8 @@ public:
     std::function<void(const QString&, int)> itemRemoved;
     std::function<void(const QString&)> rowAdded;
     std::function<void(const QString&, int)> rowRemoved;
+    // A list's row moved up or down (InputDef::orderedRows, mitcad#2506).
+    std::function<void(const QString&, int, int)> rowMoved;
     std::function<void()> accepted;
     // Apply (CommandDef::applyNext, mitcad#2293): adds the feature and
     // keeps the panel open for the next one.

@@ -53,8 +53,12 @@ std::optional<QJsonValue> askAnnotationTextHeight(QWidget* parent, const QJsonOb
 std::optional<QJsonValue> askAnnotationTolerance(QWidget* parent, const QJsonValue& current, bool angle,
                                                  const QString& what);
 // A note's text (several lines), `current` to start with (a note's own
-// when it is changed); none when cancelled or empty.
-std::optional<QString> askNoteText(QWidget* parent, const QString& what, const QString& current = QString());
+// when it is changed); none when cancelled or empty. With `parameters`
+// (the model's `parameters` query; a drawing's Text and Note, mitcad#2483)
+// the text's menu has Insert Parameter… and a reference to a parameter the
+// design lacks is named under it (drawings/ParameterInsert.hpp).
+std::optional<QString> askNoteText(QWidget* parent, const QString& what, const QString& current = QString(),
+                                   const std::function<QJsonArray()>& parameters = {});
 // A new datum label's letter, `suggested` (the model's next_datum_letter)
 // to start with; none when cancelled.
 std::optional<QString> askDatumLetter(QWidget* parent, const QString& suggested, const QString& what);

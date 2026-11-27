@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Curved panels' charts (mitcad#2435): a cone's development and its
 //! inverse, a chart turned round its axis, the back surface of a plate and
-//! the plane a curved panel develops into.
+//! the plane a curved panel develops into; the planes of an elbow's mitre
+//! joints (mitcad#2559).
 
 use super::*;
 
@@ -191,4 +192,54 @@ fn a_curved_panel_develops_into_its_tangent_plane() {
     // Into the material from an outer front: towards the axis.
     let radial = [origin[0], origin[1], 0.0];
     assert!(dot(f, radial) < 0.0);
+}
+
+#[test]
+fn a_mitre_joint_lies_in_its_plane() {
+    // A tube of radius 20 about +y cut at 22.5 degrees through the origin
+    // (mitcad#2559): the ellipse the cut leaves on the tube lies in the
+    // plane y + x tan a = 0.
+    let t = (std::f64::consts::PI / 8.0).tan();
+    let points: Vec<V3> = (0..64)
+        .map(|i| {
+            let s = std::f64::consts::TAU * f64::from(i) / 64.0;
+            let (x, z) = (20.0 * s.cos(), 20.0 * s.sin());
+            [x, -x * t, z]
+        })
+        .collect();
+    let plane = plane_of(&points, 1e-6).expect("the ellipse spans a plane");
+    let n = scale([t, 1.0, 0.0], 1.0 / t.hypot(1.0));
+    assert!(norm(cross(plane.normal, n)) <= 1e-9);
+    assert!(dot(plane.origin, plane.normal).abs() <= 1e-9);
+    // The same plane from half of the ellipse (a joint split at the seam).
+    let half = plane_of(&points[..33], 1e-6).expect("half of it spans the plane");
+    assert!(half.same(&plane));
+    // Another joint's plane, 1 mm on or turned, is another plane.
+    let moved = JointPlane {
+        origin: add(plane.origin, plane.normal),
+        ..plane
+    };
+    assert!(!plane.same(&moved));
+    let turned = JointPlane {
+        normal: [0.0, 1.0, 0.0],
+        ..plane
+    };
+    assert!(!plane.same(&turned));
+}
+
+#[test]
+fn a_straight_or_bent_edge_is_no_mitre_joint() {
+    // A generator (a line) spans no plane; a saddle curve where a drilled
+    // hole meets a tube is in none.
+    let line: Vec<V3> = (0..10).map(|i| [0.0, f64::from(i), 20.0]).collect();
+    assert!(plane_of(&line, 1e-6).is_none());
+    let saddle: Vec<V3> = (0..64)
+        .map(|i| {
+            let s = std::f64::consts::TAU * f64::from(i) / 64.0;
+            let (x, y) = (5.0 * s.cos(), 5.0 * s.sin());
+            [x, y, (400.0 - x * x).sqrt()]
+        })
+        .collect();
+    assert!(plane_of(&saddle, 1e-4).is_none());
+    assert!(plane_of(&saddle[..2], 1e-4).is_none());
 }

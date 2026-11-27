@@ -107,6 +107,7 @@ struct ProxyMesh;
 namespace cam {
 struct ToolpathScene;
 struct StockMesh;
+struct UncutStock;
 }
 
 // The existing platform format for both viewport and global share context:
@@ -287,6 +288,15 @@ enum class CubeProjection { FollowView, Orthographic, Perspective };
 // "perspective".
 QString cubeProjectionId(CubeProjection projection);
 
+// The view camera's projection as View › Camera chooses it: orthographic,
+// perspective, or Perspective with Orthographic Faces (mitcad#2473),
+// perspective except while the camera looks exactly along one of the six
+// face directions, then orthographic (view/FaceProjection.hpp).
+enum class CameraProjection { Orthographic, Perspective, PerspectiveOrthographicFaces };
+// Its id in the logs and the MCP: "orthographic", "perspective" or
+// "perspective with orthographic faces".
+QString cameraProjectionText(CameraProjection projection);
+
 // What a left drag without keys that starts on a body does (mitcad#150):
 // the view's window selection, the owner's drag, or neither (refused: the
 // owner says why).
@@ -312,8 +322,12 @@ struct CameraState {
   gp_Pnt eye;
   gp_Pnt target;
   gp_Dir up = gp_Dir(0, 0, 1);
+  // The projection in use (a stereo camera's is a perspective one).
   bool perspective = false;
   double height = 250.0; // of the view at the target
+  // Perspective with Orthographic Faces (mitcad#2473): the camera follows
+  // it, `perspective` then says what it gives along this direction.
+  bool orthographicFaces = false;
 };
 
 // 3D view: Qt owns the OpenGL context and the widget's framebuffer object,
@@ -461,6 +475,16 @@ public:
   // a cut into the part CamGouge); never picked. An empty mesh clears it.
   // Logs "CAM stock overlay: …" when it changes.
   void setCamStock(const cam::StockMesh& mesh);
+  // The uncut stock (mitcad#2552, view/CamStockOverlay.cpp,
+  // cam::uncutStockOfSetups): the shown setups' stock before any cut,
+  // see-through in CamStock's colour with its edges thin in CamStockEdge's
+  // (mitcad#2569),
+  // under the toolpaths, the part seen and picked through it; never
+  // picked; set aside while Simulate's stock (setCamStock) is shown and
+  // back when that clears. An empty stock clears it. Logs "CAM uncut
+  // stock: …" (with ", under the cut stock" while set aside) when that
+  // changes.
+  void setCamUncutStock(const cam::UncutStock& stock);
   // Show Build Volume (mitcad#640, view/BuildVolume.cpp): the design
   // printer's bed and printable height as lines, and the boxes of the bodies
   // that do not fit in the warning's colour for the view's background
@@ -549,14 +573,32 @@ public:
   // `group`: only the shown annotations of that group (mitcad#702); all
   // shown ones when empty.
   QImage snapshot(const QSize& size, bool transparent, bool withMeasurements, const QString& group = QString());
+  // The same picture, without annotations, through `camera` instead of the
+  // view's (Export Turntable's frames, mitcad#2523, view/Snapshot.cpp); the
+  // view's own camera is back after it. `direction`, when given, gets the
+  // direction of the camera the view rendered with.
+  QImage snapshotFrom(const occ::handle<Graphic3d_Camera>& camera, const QSize& size, gp_Dir* direction = nullptr);
 
   // The camera (named views, U5).
   CameraState camera() const;
   // The camera after a pending animation/fit, without applying either.
   CameraState pendingCamera() const;
   // Moves the camera there, smoothly when the navigation settings say so.
+  // A camera with orthographicFaces turns Perspective with Orthographic
+  // Faces on (its projection then follows the direction), one without it
+  // off, as its projection is the camera's.
   void setCamera(const CameraState& camera);
+  // Orthographic or perspective (Perspective with Orthographic Faces off).
   void setPerspective(bool perspective);
+  // The camera's projection (mitcad#2473): Perspective with Orthographic
+  // Faces makes it orthographic at once while it looks along a face
+  // direction, the height at the target kept, and then before every frame
+  // as the camera moves; an animation that turns the view off a face runs
+  // in perspective. While Anaglyph 3D is on the camera stays a stereo one
+  // and this is the projection it goes back to. A 3D mouse motion keeps it
+  // perspective until it rests (Fly and Camera work as in Perspective).
+  void setCameraProjection(CameraProjection projection);
+  CameraProjection cameraProjection() const;
   bool isPerspective() const;
   // The orientation cube's projection (mitcad#774); its size and place in
   // the corner are the same in each. Logs "Orientation cube projection …"
@@ -994,6 +1036,15 @@ public:
   // displayed wireframe <0|1>, top layer <0|1>; lines: from x,y,z to x,y,z;
   // …" (straight edges, each with its ends; other edges counted).
   void setPreviewGuide(const TopoDS_Shape& shape);
+  // Edges beside setPreview's, each shape's in a colour role of its own
+  // (Continuity Analysis' classes, mitcad#2521): solid and 3 px wide, in
+  // the top layer (hidden by the bodies in front of them, drawn over the
+  // bodies' own edges), in the role's colour for the view's background when
+  // set. Never picked; setPreview and an empty list clear them. Logged for
+  // the UI tests: "Preview colored edges: <role> <count>, …", the count a
+  // compound's items (one per analysed edge), else the shape's edges
+  // (none: "Preview colored edges: none").
+  void setPreviewEdges(const std::vector<std::pair<TopoDS_Shape, ColorRole>>& edges);
   // A provisional drag presentation (mitcad#636, framework/DragProxy.hpp):
   // the mesh at each placement, see-through amber with dashed edges and
   // not pickable, standing in for the command preview's tool, which is
@@ -1328,8 +1379,8 @@ public:
   // picks). Sketch mode's axes take only the clicks that are not.
   bool claimsClick(const QPointF& position);
   // For UI tests: a point in the widget where a click picks each face,
-  // edge or vertex of the shown bodies that the filter takes (only those
-  // a click there would pick).
+  // edge or vertex of the shown bodies that the filter takes, and one for
+  // each whole body it takes (only those a click there would pick).
   // Candidate probes move OCCT's detected owner. Wait for navigation and
   // pending pointer selection to finish before probing, even for logging.
   bool pickPointsReady() const;
@@ -2045,6 +2096,7 @@ private:
   occ::handle<AIS_Shape> m_preview;
   int m_previewMode = 1; // AIS_Shaded, or AIS_WireFrame for errors/measurement guides
   occ::handle<AIS_Shape> m_previewGuide; // setPreviewGuide's (mitcad#1979), wireframe
+  std::vector<occ::handle<AIS_Shape>> m_previewEdges; // setPreviewEdges' (mitcad#2521)
   // setProvisional's (mitcad#636), and the frames drawn.
   occ::handle<AIS_InteractiveObject> m_provisional;
   quint64 m_framesDrawn = 0;
@@ -2101,10 +2153,14 @@ private:
   bool m_resizeToLog = false;
   // The view's sizes after a resize of the widget (mitcad#2422): to check
   // at the next frame drawn, then to log once the view rests
-  // (logViewSizes), whether OCCT's size followed or not.
+  // (logViewSizes), whether OCCT's size followed or not; also after the
+  // view is shown again (its design's tab chosen, mitcad#2471).
   bool m_sizesToCheck = false;
   bool m_sizesToLog = false;
   void logViewSizes();
+  // "View area x y w h": where the view is in its window, for UI tests
+  // that click in it; after a resize and when the view is shown again.
+  void logViewArea();
   FirstBodiesFit m_firstFit; // the design's first bodies fitted once (expectFirstBodies)
   bool m_documentVisible = true;
   bool m_directFrameQueued = false; // requestFrame() in an unexposed window
@@ -2279,6 +2335,9 @@ private:
   occ::handle<AIS_InteractiveObject> m_printTriangles;
   // The narrow gaps between bodies over everything (mitcad#1519).
   occ::handle<AIS_InteractiveObject> m_printGaps;
+  // Their color's role: a Minimum Distance's line (mitcad#2519) is drawn
+  // in PreviewTarget, closer than its clearance in Interference.
+  ColorRole m_printGapRole = ColorRole::PrintGap;
   // Point Cloud Deviation's coloured points (mitcad#2240), with their
   // places (3 numbers each) and distances for the hover's words
   // (deviationToolTip, view/PrintOverlay.cpp).
@@ -2286,6 +2345,16 @@ private:
   std::vector<float> m_deviationPlaces;
   std::vector<float> m_deviationDistances;
   bool deviationToolTip(const QPoint& at, const QPoint& global);
+  // Surface quality analyses (mitcad#2517, view/PrintOverlay.cpp): a
+  // Curvature Map's colored triangles, an Isocurve Analysis' curves and an
+  // Environment Map's mirrored faces, those in a layer of their own (made
+  // the first time one is shown), the only one that takes the view's
+  // environment texture (setEnvironmentMap).
+  occ::handle<AIS_InteractiveObject> m_surfaceShading;
+  occ::handle<AIS_InteractiveObject> m_surfaceLines;
+  occ::handle<AIS_InteractiveObject> m_surfaceMirror;
+  Graphic3d_ZLayerId m_environmentLayer = Graphic3d_ZLayerId_UNKNOWN;
+  void setEnvironmentMap(const PrintOverlay& overlay);
   // Filament changes' print colours and rings (setFilamentChangeOverlay,
   // mitcad#1643).
   occ::handle<AIS_InteractiveObject> m_filamentBands;
@@ -2300,6 +2369,15 @@ private:
   // Simulate's stock (setCamStock, mitcad#1013).
   occ::handle<AIS_InteractiveObject> m_camStock;
   QString m_loggedCamStock = QStringLiteral("CAM stock overlay: none");
+  // The uncut stock (setCamUncutStock, mitcad#2552): its object, its log
+  // line without the state, the line logged last; recolored for the
+  // background's tone; logged again when Simulate's stock sets it aside or
+  // gives it back.
+  occ::handle<AIS_InteractiveObject> m_camUncutStock;
+  QString m_camUncutStockText = QStringLiteral("CAM uncut stock: none");
+  QString m_loggedCamUncutStock = QStringLiteral("CAM uncut stock: none");
+  void recolorCamUncutStock();
+  void logCamUncutStock();
   // The build volume's lines and the boxes of bodies outside it
   // (setBuildVolume, mitcad#640).
   occ::handle<AIS_Shape> m_buildFrame;
@@ -2422,6 +2500,16 @@ private:
   // Anaglyph 3D was switched); and the field of view in force
   // (mitcad#1717), with the height at the target kept.
   void keepProjection(Graphic3d_Camera& camera) const;
+  // Perspective with Orthographic Faces (mitcad#2473): on or off.
+  bool m_orthographicFaces = false;
+  // The projection the mode gives a mono `camera` now (perspective during
+  // a 3D mouse motion), the height at the target kept; nothing when the
+  // mode is off or Anaglyph 3D is on. True when the projection changed.
+  bool followFaces(Graphic3d_Camera& camera) const;
+  // followFaces on the view's camera before a frame or a log; during a
+  // camera animation on its start and end instead: its end as the mode
+  // gives it, its start perspective when it turns the view off a face.
+  void followFacesInView();
   // An animation of the view ended where it was going (its cameras keep
   // the projection and field of view it started with).
   void endViewAnimation();

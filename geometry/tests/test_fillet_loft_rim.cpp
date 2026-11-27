@@ -78,6 +78,7 @@
 #include "mitcad/geometry/press_pull.hpp"
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -707,7 +708,7 @@ void check_far_end_unsplit(bool merge) {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(fillet_loft_rim) {
   const std::string part = argc > 1 ? argv[1] : "";
   if (part == "--probe" && argc > 2) {
     test::probe(argv[2], argc > 3 && std::string(argv[3]) == "--trace");

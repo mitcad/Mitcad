@@ -35,6 +35,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -209,7 +210,7 @@ void test_curve_surface_with_kept_polyhedra() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(kernel_repeated_work) {
   test::guarded("test_blend_line_keeps_order_and_addresses", test::test_blend_line_keeps_order_and_addresses);
   test::guarded("test_curve_surface_with_kept_polyhedra", test::test_curve_surface_with_kept_polyhedra);
   if (test::failures == 0) {

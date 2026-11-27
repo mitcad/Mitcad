@@ -1002,7 +1002,7 @@ fn grbl_comments_and_names_keep_out_the_characters_grbl_acts_on_at_once() {
     // grbl and grblHAL take `?`, `~` and `!` out of the stream wherever
     // they are, a comment too (a status report, a cycle start, a feed
     // hold); found by running the output through grbl
-    // (tests/controller_sim.rs).
+    // (tests/sim/controller_sim.rs).
     let mut p = program();
     p.name = "Bracket! rev ~2?".into();
     p.operations[0].name = "Contour \u{f8}6 (outside)".into();

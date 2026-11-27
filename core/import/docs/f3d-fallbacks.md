@@ -277,7 +277,11 @@ again on the history's state before it exactly (in half its time), when
 the bodies before it carry an earlier item's approximation (they are the
 state's only within the matching tolerance), or when it is a fillet or
 chamfer the geometry kernel failed on them (the stored state's edges are
-split otherwise, and a rounding that fails on one builds on the other);
+split otherwise, and a rounding that fails on one builds on the other),
+or any other item one of whose definitions the kernel failed on them
+(`kernel_failure`: an invalid result, a failed boolean or taper, an
+offset of faces left open, a delete of faces whose neighbours do not
+close the gap, mitcad#325 and mitcad#2557);
 also an item the history names no state for, on bodies that carry an
 approximation (`retry.rs`).
 

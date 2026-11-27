@@ -16,7 +16,9 @@
 // own, kept until it comes in; a design closed first drops them, said. A
 // design dragged from the Projects panel onto the view (mitcad#2428) is an
 // arrival too: inserted through Insert Component, which asks how, so it
-// waits for an inspection as well.
+// waits for an inspection as well. A drop on the 3D view keeps the place
+// worked out at the drop (MainWindow::ViewDrop, mitcad#2527): it goes in
+// there, wherever the camera has turned while it waited.
 #include "../MainWindow.hpp"
 
 #include <algorithm>
@@ -197,12 +199,12 @@ void MainWindow::showWebNote(const QString& note, bool warning) {
 // ---------------------------------------------------------------------------
 // Files dropped on the window
 
-void MainWindow::arriveDropped(const QStringList& paths, std::optional<QPointF> onView) {
+void MainWindow::arriveDropped(const QStringList& paths, const std::optional<ViewDrop>& drop) {
   const ArrivalGate gate = arrivalGate();
   // From Idle with nothing waiting, and in a read-only window (whose
   // import says why), as before.
   if (windowReadOnly() || (gate == ArrivalGate::Now && m_arrivals.isEmpty())) {
-    openDroppedNow(paths, onView);
+    openDroppedNow(paths, drop);
     return;
   }
   // A MitCad design opens, and a drawing goes into the sketch, whatever is
@@ -221,12 +223,12 @@ void MainWindow::arriveDropped(const QStringList& paths, std::optional<QPointF> 
     }
   }
   if (!now.isEmpty()) {
-    openDroppedNow(now, onView);
+    openDroppedNow(now, drop);
   }
   if (!beside.isEmpty()) {
     Arrival arrival;
     arrival.paths = beside;
-    arrival.onView = onView;
+    arrival.drop = drop;
     bringIn(arrival, ArrivalGate::Beside);
   }
   if (later.isEmpty()) {
@@ -234,7 +236,7 @@ void MainWindow::arriveDropped(const QStringList& paths, std::optional<QPointF> 
   }
   Arrival arrival;
   arrival.paths = later;
-  arrival.onView = onView;
+  arrival.drop = drop;
   // What it waits for, as the hint names it: the open command (an
   // inspection too, for what does not come in beside it).
   arrival.waitedFor = gate != ArrivalGate::Now ? arrivalWaitsFor() : QString();
@@ -260,7 +262,7 @@ void MainWindow::arriveProjectDesign(const Arrival& given) {
   // From Idle with nothing waiting, and in a read-only window (whose
   // Insert Component says why): at once.
   if (windowReadOnly() || (gate == ArrivalGate::Now && m_arrivals.isEmpty() && !modelBusy())) {
-    insertDroppedDesign(given.paths.first(), given.onView);
+    insertDroppedDesign(given.paths.first(), given.drop);
     return;
   }
   // Insert Component asks how to insert it: it waits for an inspection
@@ -326,7 +328,7 @@ void MainWindow::bringIn(const Arrival& arrival, ArrivalGate gate) {
   }
   if (arrival.project) {
     // Never beside an inspection (insertsBeside: a design waits).
-    insertDroppedDesign(arrival.paths.first(), arrival.onView);
+    insertDroppedDesign(arrival.paths.first(), arrival.drop);
     return;
   }
   if (gate == ArrivalGate::Beside) {
@@ -338,7 +340,7 @@ void MainWindow::bringIn(const Arrival& arrival, ArrivalGate gate) {
     });
     return;
   }
-  openDroppedNow(arrival.paths, arrival.onView);
+  openDroppedNow(arrival.paths, arrival.drop);
 }
 
 void MainWindow::scheduleArrivals() {

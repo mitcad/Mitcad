@@ -1,0 +1,7 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The design of tools/ui-scripts/surface-analysis.mitcad-ui (mitcad#2517): a cylinder 20 mm across and 10 mm high on the XY plane at the origin (F1, Body1): its side curves 0.1/mm round it and not along it, its two ends are flat."},
+  {"cmd":"add_feature","def":{"type":"cylinder","plane":"xy","center":[0,0],"diameter":20,"height":10,"operation":"new_body"}},
+  {"expect":{"bodies":1}},
+  {"expect":{"total_volume":3141.592653589793,"tolerance":1e-6}}
+]

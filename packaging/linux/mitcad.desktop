@@ -1,12 +1,19 @@
 # SPDX-License-Identifier: MIT
+# MitCad takes one file to open or import (app/main.cpp), so Exec has %f:
+# several files chosen in a file manager start MitCad once for each.
+# MimeType lists the types of every extension MitCad opens (app/files/
+# FileFormats.cpp) but .sc, whose glob is Scala source's: the system's
+# types where shared-mime-info has one, the others from mitcad-mime.xml
+# (app.unit desktop_entry_types, mitcad#2527).
 [Desktop Entry]
 Type=Application
 Name=MitCad
 GenericName=Parametric CAD
 Comment=Parametric 3D CAD with a design history
-Exec=mitcad
+Exec=mitcad %f
 Icon=mitcad
 StartupWMClass=Mitcad
 Terminal=false
 Categories=Graphics;3DGraphics;Engineering;
 Keywords=CAD;3D;model;parametric;sketch;
+MimeType=application/x-mitcad;model/step;model/iges;model/x-brep;model/x-serp;model/stl;model/obj;model/3mf;model/gltf-binary;model/gltf+json;image/vnd.dxf;image/svg+xml;application/x-extension-fcstd;model/x-f3d;model/x-ipt;model/x-ifc;model/x-rvt;model/x-solidcraft;image/vnd.dwg;model/x-3dm;

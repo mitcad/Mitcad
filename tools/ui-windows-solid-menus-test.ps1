@@ -51,7 +51,8 @@ $menus = [ordered]@{
   'SOLID/MODIFY' = 'Press Pull | Fillet | Chamfer | Shell | Draft' +
     ' | - | Offset Face | Move Face | Replace Face | Fill Cavity | Split Face | Delete Face' +
     ' | - | Combine | Split Body | Panelize | Scale | Convert Mesh' +
-    ' | Mesh > [Mesh Section | Repair Mesh | Decimate Mesh | Remove Region | Segment Mesh | Fit Surface]' +
+    ' | Mesh > [Mesh Section | Repair Mesh | Decimate Mesh | Remove Region | Segment Mesh | Fit Surface' +
+    ' | Smooth Mesh | Combine Meshes | Offset Mesh | Align Mesh | Plane Cut]' +
     ' | - | Move/Copy | Align' +
     ' | - | Joinery > [Dogbone | Mortise and Tenon]' +
     ' | - | Material | Appearance'
@@ -59,7 +60,7 @@ $menus = [ordered]@{
     ' | - | Joint | As-Built Joint | Joint Origin | Rigid Group | Constraint | Constraint Set' +
     ' | - | Drive Joint | Motion Link | Contact Set | - | Let It Hang | - | Animate Joint | Motion Study... | Explode...').Replace('...', $e)
   'SOLID/CONSTRUCT' = $construct
-  'SOLID/INSPECT' = 'Measure | Interference | Section Analysis | Print Analysis | Draft Analysis | Point Cloud Deviation | Physical Properties | Center of Mass | Add Comment'
+  'SOLID/INSPECT' = 'Measure | Interference | Section Analysis | Print Analysis | Draft Analysis | Point Cloud Deviation | Minimum Radius | Continuity Analysis | Minimum Distance | Zebra | Curvature Map | Isocurve Analysis | Environment Map | Curvature Comb | Physical Properties | Center of Mass | Add Comment'
   'SOLID/INSERT' = ('Insert Component | Insert from Library' +
     ' | - | Insert Mesh | Insert DXF | Insert SVG | Insert Points | From an Open Design... | Component from Web... | Import...' +
     ' | Image Reference | Point Cloud | Decal').Replace('...', $e)
@@ -67,8 +68,8 @@ $menus = [ordered]@{
     ' | - | Patch | Ruled Surface | Boundary Surface | Blend Surface | - | Offset Surface'
   'SURFACE/MODIFY' = 'Trim | Untrim | Extend | - | Stitch | Unstitch | Reverse Normal | - | Match Surface | Fair Surface' +
     ' | - | Thicken | Boundary Fill'
-  'SURFACE/CONSTRUCT' = $construct
-  'SHEET METAL/CREATE' = 'Create Sketch | - | Face | Flange | Hem | Convert to Sheet Metal | - | Bend | Fold'
+  'SURFACE/CONSTRUCT' = $construct + ' | - | New Construction Set | Deactivate Construction Set'
+  'SHEET METAL/CREATE' = 'Create Sketch | - | Face | Flange | Hem | Convert to Sheet Metal | Lofted Flange | - | Bend | Fold'
   'SHEET METAL/MODIFY' = ('Sheet Cut | Perforate | - | Corner Relief | Corner Round | Corner Chamfer' +
     ' | - | Unfold | Refold | Flat Pattern | Show Flat Pattern' +
     ' | - | Export Flat Pattern... | Create Drawing of Flat Pattern... | Export Bend Table...').Replace('...', $e)

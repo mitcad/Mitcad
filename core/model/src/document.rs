@@ -221,7 +221,9 @@ use std::time::{Duration, Instant};
 
 pub use analyses::{Analysis, AnalysisDef, SectionAnalysis, SectionPlane};
 pub use analyses::{DEFAULT_DRAFT_ANGLE, DraftAnalysis, check_draft_angle};
+// Minimum Radius (mitcad#2518).
 pub use analyses::{EstimateCheck, MinGapCheck, OverhangCheck, PrintAnalysis, ThinWallCheck};
+pub use analyses::{MinRadiusAnalysis, check_min_radius_limit};
 pub use analyses::{check_minimum_wall, check_overhang_angle, print_material};
 pub use appearances::DeletedAppearance;
 pub use bodies::{BodyAttributes, FaceAppearance};
@@ -448,6 +450,10 @@ pub struct DocState {
     /// The drawing book (mitcad#2448): drawings of the design and of the
     /// designs it links, to print as one job.
     pub(crate) drawing_book: DrawingBook,
+    /// Construction sets (mitcad#2514), in the order they were added:
+    /// named Browser groups of a component's sketches, construction
+    /// geometry and surface bodies, at most one of them active.
+    pub construction_sets: Vec<ConstructionSet>,
 }
 
 impl Default for DocState {
@@ -506,6 +512,7 @@ impl Default for DocState {
             decals: Vec::new(),
             explode_views: Vec::new(),
             drawing_book: DrawingBook::default(),
+            construction_sets: Vec::new(),
         }
     }
 }
@@ -3139,6 +3146,10 @@ impl<K: Kernel> Document<K> {
                     .rename_parameter(old, new)
                     .map_err(invalid)?;
                 next.cam.rename_parameter(old, new);
+                // And the drawings' texts that show it (mitcad#2483).
+                for drawing in &mut next.drawings {
+                    drawing.rename_parameter(old, new);
+                }
             }
             next.rename_in_comments(&renames);
         }
@@ -3202,6 +3213,9 @@ impl<K: Kernel> Document<K> {
         next.prune_selection_sets();
         // Explode views lose the occurrences deleted (mitcad#2113).
         next.prune_explode_views();
+        // Construction sets lose the items deleted or moved away, and the
+        // active one its activity in another component (mitcad#2514).
+        next.prune_construction_sets();
         // A sketch that got its first consumer hides (unless the user's
         // preference keeps it shown, mitcad#2393), one that lost its last
         // shows (mitcad#7).
@@ -3248,6 +3262,9 @@ impl<K: Kernel> Document<K> {
         // The joints BUILD placed its parts with are named after them
         // (mitcad#2088), also through a rename that recomputes nothing.
         next.follow_build_joint_names(&self.state);
+        // New sketches, construction geometry and surface bodies join the
+        // active construction set in this undo step (mitcad#2514).
+        next.gather_into_active_set(&self.state, &self.result, result.as_ref(), &self.kernel);
         self.commit(label, next);
         self.configuration_moves = (self.revision, moves);
         if let Some(result) = result {
@@ -3366,8 +3383,8 @@ impl<K: Kernel> Document<K> {
         let component = component.unwrap_or(self.state.assembly.active);
         self.state.editable(component)?;
         // Faceted Convert Mesh hides its mesh body (mitcad#1082).
-        if let Some(mesh) = mesh_convert::hidden_mesh(def) {
-            return self.add_hiding_mesh(def, name, component, None, mesh);
+        if let Some(meshes) = mesh_convert::hidden_mesh(def) {
+            return self.add_hiding_mesh(def, name, component, None, meshes);
         }
         self.check_profiles(def)?;
         // Where an assembly cut lies against what it machines (mitcad#2131).
@@ -4928,6 +4945,7 @@ impl<K: Kernel> Document<K> {
                         after: None,
                         outline: group.outline,
                         automatic,
+                        boundaries: Vec::new(),
                     });
                 }
             }
@@ -5076,6 +5094,37 @@ impl<K: Kernel> Document<K> {
         }
         self.command_checkpoint = None;
         Ok(())
+    }
+
+    /// Runs `command`, a command made of other commands (Standard Box,
+    /// Glue Flap), all or nothing (mitcad#2527): when it fails, the
+    /// definition, its revision and the undo and redo history are as
+    /// before it, as [`Document::restore_command`] leaves them, and its
+    /// error is given. It keeps what it restores itself, so it also runs
+    /// inside a frontend command's checkpoint, where
+    /// [`Document::begin_command`] is refused. When the state before cannot
+    /// be computed again (a cancel), that error is given instead and the
+    /// document stays as the failure left it.
+    pub fn all_or_nothing<T, E: From<ModelError>>(
+        &mut self,
+        command: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let state = self.state.clone();
+        let (revision, saved_revision) = (self.revision, self.saved_revision);
+        let (undo, redo) = (self.undo.clone(), self.redo.clone());
+        let error = match command(self) {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        let result = self.compute(&state)?;
+        self.state = state;
+        self.revision = revision;
+        self.saved_revision = saved_revision;
+        self.undo = undo;
+        self.redo = redo;
+        self.preview = None;
+        self.set_result(result);
+        Err(error)
     }
 
     /// Restores the state before the last command; returns its label. A
@@ -5664,6 +5713,16 @@ impl<K: Kernel> Document<K> {
         })
     }
 
+    /// The pieces the previewed Split Body made before it kept some
+    /// (mitcad#2504), also when it kept none; empty for another feature.
+    pub fn preview_piece_choices(&self) -> &[crate::features::split_body::PieceChoice] {
+        self.preview
+            .as_ref()
+            .and_then(|preview| preview.result.result(preview.uid))
+            .and_then(|r| r.output.as_deref())
+            .map_or(&[], |output| output.piece_choices.as_slice())
+    }
+
     /// The previewed definition state, for queries.
     pub fn preview_feature(&self) -> Option<&FeatureEntry> {
         let preview = self.preview.as_ref()?;
@@ -5958,6 +6017,32 @@ pub use edit_in_place::{InPlaceContext, InPlaceMode};
 // printed as one job (mitcad#2448).
 mod drawing_book;
 pub use drawing_book::{BookDrawing, BookEntry, BookSource, DrawingBook, SourceDrawing};
+// Point cloud tools: a cloud aligned to a body, a mesh or another cloud,
+// filtered into a new cloud, and rebuilt as a mesh body (mitcad#2516).
+mod point_cloud_tools;
+pub use point_cloud_tools::{
+    AlignSettings, AlignStart, AlignTarget, Alignment, CloudFilter, CloudFiltered,
+    CloudReconstructed, DEFAULT_ALIGN_SAMPLES,
+};
+// Several features' definitions replaced in one command, one recompute
+// (mitcad#2495).
+mod feature_edits;
+// Construction sets: named Browser groups of a component that collect new
+// sketches, construction geometry and surface bodies while active
+// (mitcad#2514).
+mod construction_sets;
+pub(crate) use construction_sets::check_construction_sets;
+pub use construction_sets::{ConstructionMember, ConstructionSet, construction_kind};
+// Minimum Distance analyses (mitcad#2519).
+pub use analyses::{MinimumDistanceAnalysis, check_clearance, check_distance_pick};
+// Surface quality analyses: Zebra, Curvature Map, Isocurve Analysis and
+// Environment Map kept in the document (mitcad#2517).
+mod surface_analyses;
+pub use surface_analyses::{
+    CurvatureAnalysis, DEFAULT_ISOCURVES, DEFAULT_ZEBRA_STRIPES, DEFAULT_ZEBRA_WIDTH,
+    EnvironmentAnalysis, IsocurveAnalysis, MAX_ISOCURVES, MAX_ZEBRA_STRIPES, SurfaceTarget,
+    ZebraAnalysis, check_isocurve_count, check_limit, check_zebra_settings,
+};
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

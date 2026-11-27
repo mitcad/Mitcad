@@ -88,6 +88,7 @@
 #include <gp_Vec.hxx>
 
 #include "test_only.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -505,7 +506,7 @@ void test_tower_behind_a_rounded_rim(double gap, double x0) {
 
 // Each test function runs where MITCAD_TEST_ONLY names it, or without it
 // (test_only.hpp).
-int main() {
+MITCAD_BUNDLED_TEST(fillet_tangent_ride) {
   using test_only::selected;
   try {
     if (selected("test_wall")) {

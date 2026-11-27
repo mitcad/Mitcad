@@ -17,10 +17,12 @@
 
 #include <QDebug>
 #include <QHash>
+#include <QJsonDocument>
 #include <QRegularExpression>
 
 #include "mitcad/geometry/datum.hpp"
 
+#include "../framework/CutTargetsPanel.hpp"
 #include "../framework/HandleStep.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Numbers.hpp"
@@ -1028,6 +1030,32 @@ std::optional<PlaneFrame> frameOf(const SelectionItem& item, const CommandContex
   return frame;
 }
 
+std::optional<std::pair<gp_Pnt, gp_Dir>> faceNormal(const SelectionItem& item, const CommandContext& context) {
+  if (item.kind != SelectKind::Face) {
+    return std::nullopt;
+  }
+  // A planar face as before: its middle, its normal.
+  if (const std::optional<PlaneFrame> frame = frameOf(item, context)) {
+    const std::optional<gp_Pnt> center = centerOf({item}, context);
+    if (!center) {
+      return std::nullopt;
+    }
+    return std::make_pair(*center, frame->normal);
+  }
+  // A curved face (mitcad#2478): its box's middle may be off the face (a
+  // cone's lies on its axis), so a point on it and the normal there.
+  const TopoDS_Shape shape = context.itemShape(item);
+  TopExp_Explorer faces(shape, TopAbs_FACE);
+  if (!faces.More()) {
+    return std::nullopt;
+  }
+  const std::optional<geometry::SurfacePoint> inner = geometry::face_inner_point(TopoDS::Face(faces.Current()));
+  if (!inner) {
+    return std::nullopt;
+  }
+  return std::make_pair(inner->point, inner->normal);
+}
+
 std::optional<std::pair<gp_Pnt, gp_Dir>> axisOf(const SelectionItem& item,
                                                  const CommandContext& context) {
   if (item.kind == SelectKind::Axis) {
@@ -1631,6 +1659,129 @@ QString planeCurveRefusal(const SelectionItem& item, const CommandContext& conte
   return QObject::tr("This curve of %1 does not lie in its sketch plane: walls and surfaces grow from a 3D "
                      "sketch's curves in its sketch plane.")
       .arg(name);
+}
+
+// ---------------------------------------------------------------------------
+// Assembly cut scopes (mitcad#200; Revolve and Hole since mitcad#2160)
+
+void initializeCutScope(CommandState& state, const CommandContext& model) {
+  const QJsonObject components = model.queryObject({{QStringLiteral("query"), QStringLiteral("components")}});
+  QJsonValue component = state.object(QStringLiteral("cut_owner")).value(QStringLiteral("component"));
+  if (component.isUndefined()) {
+    component = components.value(QStringLiteral("active"));
+  }
+  state.setObject(QStringLiteral("cut_scope"),
+                  {{QStringLiteral("context"), QJsonObject{{QStringLiteral("component"), component},
+                                                            {QStringLiteral("occurrence"), QString()}}},
+                   {QStringLiteral("targets"), QJsonObject{{QStringLiteral("type"), QStringLiteral("automatic")},
+                                                            {QStringLiteral("excluded"), QJsonArray()},
+                                                            {QStringLiteral("excluded_bodies"), QJsonArray()}}}});
+  state.setChecked(QStringLiteral("cut_context_from_profile"), true);
+  const QJsonObject document = model.queryObject({{QStringLiteral("query"), QStringLiteral("document")}});
+  state.setObject(QStringLiteral("cut_view"),
+                  cutTargetVisibility(components, model.queryArray(QStringLiteral("bodies")), document));
+}
+
+InputDef cutTargetsInput(std::function<bool(const CommandState&)> shown) {
+  InputDef targets;
+  targets.type = InputDef::Type::CutTargets;
+  targets.id = QStringLiteral("cut_scope");
+  targets.label = QObject::tr("Affected components");
+  targets.visible = std::move(shown);
+  targets.onChange = [](CommandState& state, const CommandContext&) {
+    state.setChecked(QStringLiteral("cut_scope_chosen"), true);
+  };
+  return targets;
+}
+
+bool cutTargetsReported(QJsonObject& report, CommandState& state, bool cutting, const QString& command) {
+  // An automatic Cut preview alone chooses no lasting targets for a
+  // feature ultimately accepted as Join; deliberate choices do.
+  QJsonObject view = state.object(QStringLiteral("cut_view"));
+  QJsonObject scope = state.object(QStringLiteral("cut_scope"));
+  if (view.isEmpty() || scope.isEmpty() || !cutting || !report.contains(QStringLiteral("cut_targets"))) {
+    return false;
+  }
+  const bool changed = excludeHiddenCutTargets(scope, view, report);
+  state.setObject(QStringLiteral("cut_view"), view);
+  if (changed) {
+    state.setObject(QStringLiteral("cut_scope"), scope);
+    const QJsonObject targets = scope.value(QStringLiteral("targets")).toObject();
+    qDebug().noquote() << QStringLiteral("%1: hidden targets start unchecked: excluded %2, excluded bodies %3")
+                              .arg(command,
+                                   QString::fromUtf8(QJsonDocument(targets.value(QStringLiteral("excluded")).toArray())
+                                                         .toJson(QJsonDocument::Compact)),
+                                   QString::fromUtf8(
+                                       QJsonDocument(targets.value(QStringLiteral("excluded_bodies")).toArray())
+                                           .toJson(QJsonDocument::Compact)));
+  }
+  return changed;
+}
+
+void loadCutScope(const QJsonObject& feature, CommandState& state, const CommandContext& context, bool cutting) {
+  const QJsonObject scope = feature.value(QStringLiteral("cut_scope")).toObject();
+  state.setObject(QStringLiteral("cut_scope"), scope);
+  state.setObject(QStringLiteral("cut_view"), {});
+  state.setChecked(QStringLiteral("cut_scope_chosen"),
+                   !scope.isEmpty() && !scope.value(QStringLiteral("initialize_on_cut")).toBool());
+  state.setChecked(QStringLiteral("cut_scope_legacy"),
+                   scope.isEmpty() && (cutting || !state.items(QStringLiteral("objects")).isEmpty()));
+  if (feature.contains(QStringLiteral("uid"))) {
+    const QJsonObject stored = context.queryObject(
+        {{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), feature.value(QStringLiteral("uid"))}});
+    state.setObject(QStringLiteral("cut_owner"),
+                    {{QStringLiteral("component"), stored.value(QStringLiteral("component")).toString(QStringLiteral("C0"))}});
+  }
+}
+
+namespace {
+
+// The path of the occurrence of the `components` query's tree that places
+// `component` first (depth first); empty when it is placed nowhere.
+QString firstPlacing(const QJsonArray& level, const QString& parent, const QString& component) {
+  for (const QJsonValue& value : level) {
+    const QJsonObject occurrence = value.toObject();
+    const QString uid = occurrence.value(QStringLiteral("uid")).toString();
+    const QString path = parent.isEmpty() ? uid : parent + QLatin1Char('/') + uid;
+    if (occurrence.value(QStringLiteral("component")).toString() == component) {
+      return path;
+    }
+    const QString inside = firstPlacing(occurrence.value(QStringLiteral("children")).toArray(), path, component);
+    if (!inside.isEmpty()) {
+      return inside;
+    }
+  }
+  return QString();
+}
+
+} // namespace
+
+QString firstOccurrencePath(const QJsonObject& components, const QString& component) {
+  if (component.isEmpty() || component == QStringLiteral("C0")) {
+    return QString();
+  }
+  return firstPlacing(components.value(QStringLiteral("occurrences")).toArray(), QString(), component);
+}
+
+QJsonArray assemblyComponents(const QJsonObject& components) {
+  QJsonArray found;
+  const QJsonArray occurrences = components.value(QStringLiteral("occurrences")).toArray();
+  if (!occurrences.isEmpty()) {
+    found.append(QStringLiteral("C0"));
+  }
+  std::function<void(const QJsonArray&)> walk = [&found, &walk](const QJsonArray& level) {
+    for (const QJsonValue& value : level) {
+      const QJsonObject occurrence = value.toObject();
+      const QJsonArray children = occurrence.value(QStringLiteral("children")).toArray();
+      const QJsonValue component = occurrence.value(QStringLiteral("component"));
+      if (!children.isEmpty() && !found.contains(component)) {
+        found.append(component);
+      }
+      walk(children);
+    }
+  };
+  walk(occurrences);
+  return found;
 }
 
 } // namespace mitcad::cmd

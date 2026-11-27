@@ -38,6 +38,12 @@ void registerModifyCommands(CommandRegistry& registry, const CommandContext& con
   registry.add(meshRemoveCommand(context));
   registry.add(meshSegmentCommand(context));
   registry.add(meshFitSurfaceCommand(context));
+  // Mesh tools that change a mesh's shape (mitcad#2515).
+  registry.add(meshSmoothCommand(context));
+  registry.add(meshCombineCommand(context));
+  registry.add(meshOffsetCommand(context));
+  registry.add(meshAlignCommand(context));
+  registry.add(meshPlaneCutCommand(context));
   // Moving bodies and components.
   registry.add(moveCommand(context));
   registry.add(alignCommand(context));

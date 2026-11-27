@@ -77,6 +77,7 @@
 #include <gp_Torus.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -370,7 +371,7 @@ void test_reported_body() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_crease_end_corner) {
   test::guarded("test_cut_cylinder_rims_at_30_degrees", test::test_cut_cylinder_rims_at_30_degrees);
   test::guarded("test_cut_cylinder_rims_at_45_degrees", test::test_cut_cylinder_rims_at_45_degrees);
   test::guarded("test_cut_cylinder_rims_without_the_block", test::test_cut_cylinder_rims_without_the_block);

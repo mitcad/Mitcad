@@ -882,52 +882,6 @@ if(BUILD_TESTING)
   set_tests_properties(app.layout_coverage PROPERTIES TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;MITCAD_TEST_LAYOUT_COVERAGE=1;MITCAD_SETTINGS_DIR=${CMAKE_CURRENT_BINARY_DIR}/layout-coverage-settings;MITCAD_AUTOSAVE_DIR=${CMAKE_CURRENT_BINARY_DIR}/layout-coverage-autosave;MITCAD_RESULT_STORE=off"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-  # Verify the shared Rust/GUI cache path against the platform's actual Qt path.
-  add_executable(test_library_paths tests/library_paths.cpp files/LibraryPaths.cpp)
-  target_include_directories(test_library_paths PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_library_paths PRIVATE mitcad_ffi Qt6::Core mitcad_warnings)
-  add_test(NAME app.library_paths COMMAND test_library_paths)
-  set_tests_properties(app.library_paths PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-  add_executable(test_view_tessellation tests/view_tessellation.cpp)
-  target_include_directories(test_view_tessellation PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_view_tessellation PRIVATE mitcad_geometry_io mitcad_geometry TKV3d TKPrim TKBO mitcad_warnings)
-  add_test(NAME app.view_tessellation COMMAND test_view_tessellation
-    "${CMAKE_CURRENT_BINARY_DIR}/view-tessellation-files")
-  # The view's lines (mitcad#1633): detached copies of a body's edges cut
-  # finely, the body's own edges unwritten, a highlight's copy the body's.
-  add_executable(test_view_edges tests/view_edges.cpp view/ViewEdges.cpp)
-  target_include_directories(test_view_edges PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_view_edges PRIVATE mitcad_geometry_io mitcad_geometry TKV3d TKPrim TKBO mitcad_warnings)
-  add_test(NAME app.view_edges COMMAND test_view_edges)
-  # A dragged Extrude's preview meshes on the synthetic 83-hole fixture
-  # (mitcad#635): the model's commands and the preview job's meshing,
-  # without a window; `--bench` times them.
-  add_executable(test_preview_meshing tests/preview_meshing.cpp framework/DisplayMeshes.cpp)
-  target_include_directories(test_preview_meshing PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_preview_meshing PRIVATE Qt6::Core mitcad_ffi mitcad_geometry mitcad_geometry_io
-    TKMesh TKPrim TKTopAlgo TKBRep TKV3d mitcad_warnings)
-  # A cancelled display meshing's endless face at the process's end
-  # (mitcad#936): the application's end and its crash reports.
-  target_sources(test_preview_meshing PRIVATE framework/ProcessEnd.cpp report/CrashHandler.cpp)
-  if(WIN32)
-    target_link_libraries(test_preview_meshing PRIVATE dbghelp)
-  endif()
-  # A dragged Extrude's provisional tool (mitcad#636): the owned mesh copy,
-  # its stretches and moves, and Extrude's rules, without a window; Move/
-  # Copy's provisional motion (mitcad#838).
-  add_executable(test_drag_proxy tests/drag_proxy.cpp framework/DragProxy.cpp commands/ExtrudeDragProxy.cpp
-    framework/Command.cpp commands/MoveDragMotion.cpp)
-  target_include_directories(test_drag_proxy PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_drag_proxy PRIVATE Qt6::Core Qt6::Gui mitcad_geometry TKMesh TKPrim TKTopAlgo TKBRep
-    mitcad_warnings)
-  add_test(NAME app.drag_proxy COMMAND test_drag_proxy)
-  set_tests_properties(app.drag_proxy PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-  add_test(NAME app.preview_meshing COMMAND test_preview_meshing)
-  set_tests_properties(app.preview_meshing PROPERTIES TIMEOUT 300
-    ENVIRONMENT "MITCAD_RESULT_STORE=off"
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   # Check renderer device policy and fallback independently of UI helpers.
   add_test(NAME app.render_devices COMMAND test_app --render-devices)
   # No print server (mitcad#1591): the print tests' QPrinters print to PDF
@@ -1313,21 +1267,6 @@ target_sources(mitcad PRIVATE
   webbrowser/MainWindowComponentWeb.cpp
   webbrowser/BrowserDiagnostics.cpp
   webbrowser/BrowserDiagnostics.hpp)
-# The first use with a local manifest (mitcad#1579): a package and a manifest
-# signed by mitcad-release with a test key, checked, verified, unpacked and
-# installed through the bridge; a tampered package and another interface
-# refused.
-if(BUILD_TESTING AND TARGET mitcad-release)
-  add_executable(test_browser_component_flow tests/browser_component_flow.cpp webbrowser/BrowserComponent.cpp
-    webbrowser/BrowserComponent.hpp webbrowser/BrowserComponentInstall.cpp webbrowser/BrowserComponentInstall.hpp)
-  target_include_directories(test_browser_component_flow PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_browser_component_flow PRIVATE Qt6::Core Qt6::Gui mitcad_ffi mitcad_warnings)
-  add_dependencies(test_browser_component_flow mitcad-release)
-  add_test(NAME app.browser_component_flow
-    COMMAND test_browser_component_flow "$<TARGET_FILE:mitcad-release>")
-  set_tests_properties(app.browser_component_flow PROPERTIES TIMEOUT 120
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-endif()
 add_subdirectory(webbrowser)
 # In-app tutorials (mitcad#2012, docs/tutorials.md): the guide step shown in
 # a design window (one engine for a tutorial page's bridge and live MCP's
@@ -1541,6 +1480,13 @@ target_sources(mitcad PRIVATE
   drawings/SheetSizeRows.hpp
   drawings/TitleBlockEditor.cpp
   drawings/TitleBlockEditor.hpp)
+# Parameters in a drawing's texts (mitcad#2483): {param:Name} in a Text, a
+# Note or a title block field, and Insert Parameter… in their editors' menus.
+target_sources(mitcad PRIVATE
+  drawings/ParameterInsert.cpp
+  drawings/ParameterInsert.hpp
+  drawings/ParameterReferences.cpp
+  drawings/ParameterReferences.hpp)
 # Sketch text from font files: Preferences' Fonts page and the font
 # chooser of Edit Text (mitcad#473).
 target_sources(mitcad PRIVATE
@@ -1620,18 +1566,6 @@ target_sources(mitcad PRIVATE
 target_sources(mitcad PRIVATE
   framework/SectionPreview.cpp
   framework/SectionPreview.hpp)
-if(BUILD_TESTING)
-  # A preview's clips and caps through the model's commands, as the window
-  # asks for them, without a window.
-  add_executable(test_section_preview tests/section_preview.cpp framework/SectionPreview.cpp)
-  target_include_directories(test_section_preview PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_section_preview PRIVATE Qt6::Core mitcad_ffi mitcad_geometry TKBO TKTopAlgo TKPrim
-    TKBRep mitcad_warnings)
-  add_test(NAME app.section_preview COMMAND test_section_preview)
-  set_tests_properties(app.section_preview PROPERTIES TIMEOUT 120
-    ENVIRONMENT "MITCAD_RESULT_STORE=off"
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-endif()
 
 # Native scheduling, pool initialization and exception-safe QoS restoration
 # (mitcad#556). No windows or renderer performance campaign.
@@ -1842,6 +1776,16 @@ target_sources(mitcad PRIVATE
   view/SnapshotDialog.cpp
   view/SnapshotDialog.hpp
   view/ViewSnapshot.cpp
+  # File > Export Turntable (mitcad#2523): frames through the turned
+  # camera, the video by the FFmpeg program; the scene of Render Image
+  # shared with its rendered frames.
+  render/ShownScene.cpp
+  render/ShownScene.hpp
+  view/Turntable.cpp
+  view/Turntable.hpp
+  view/TurntableDialog.cpp
+  view/TurntableDialog.hpp
+  view/TurntableExport.cpp
   # Annotations (mitcad#702): their window, editor and dialogs, and the
   # view's clicks and drags on them.
   MainWindowAnnotations.cpp
@@ -2103,36 +2047,15 @@ if(BUILD_TESTING)
   target_link_libraries(test_chat_agent PRIVATE Qt6::Core mitcad_warnings)
   mitcad_utf8_code_page(test_chat_agent)
   add_dependencies(mitcad test_chat_agent)
-  # The tool calls' group rows (mitcad#983) as the panel asks for them, the
-  # chat's Rust logic through the bridge.
-  add_executable(test_chat_tool_groups tests/chat_tool_groups.cpp agent/ChatLogic.hpp)
-  target_include_directories(test_chat_tool_groups PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_chat_tool_groups PRIVATE mitcad_ffi Qt6::Core mitcad_warnings)
-  add_test(NAME app.chat_tool_groups COMMAND test_chat_tool_groups)
-  set_tests_properties(app.chat_tool_groups PROPERTIES
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-  # An API agent's key across a change in Preferences while a message runs
-  # (mitcad#1309): ApiAgent against a local service and a stand-in of the
-  # live listener, keys for the run only.
-  add_executable(test_api_agent tests/api_agent.cpp agent/ApiAgent.cpp agent/ApiAgent.hpp agent/ChatAgent.hpp
-    agent/ChatSettings.cpp agent/ChatSettings.hpp mcp/LocalEndpoint.cpp mcp/LocalEndpoint.hpp)
-  if(WIN32)
-    target_sources(test_api_agent PRIVATE mcp/WindowsEndpointSecurity.cpp mcp/WindowsEndpointSecurity.hpp)
-    target_link_libraries(test_api_agent PRIVATE advapi32)
-  endif()
-  target_include_directories(test_api_agent PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_link_libraries(test_api_agent PRIVATE mitcad_ffi Qt6::Core Qt6::Network qt6keychain mitcad_warnings)
-  mitcad_utf8_code_page(test_api_agent)
-  add_test(NAME app.api_agent COMMAND test_api_agent)
-  set_tests_properties(app.api_agent PROPERTIES TIMEOUT 120
-    ENVIRONMENT "MITCAD_TEST_KEYCHAIN=off"
-    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 
 # A stored view's height set as OCCT's camera scale through the view's
 # aspect (mitcad#959): OcctViewer::setCamera restores named views and Home
 # at any aspect; the unit tests use OCCT's cameras (TKService).
 target_sources(mitcad PRIVATE view/CameraHeight.hpp)
+# Perspective with Orthographic Faces (mitcad#2473): orthographic while the
+# camera looks along a face direction, the height at the target kept.
+target_sources(mitcad PRIVATE view/FaceProjection.hpp)
 # Create Sketch and the Construct commands ask whether to activate the
 # component of a picked face, plane or edge (mitcad#960, app/COMMANDS.md
 # "Activating the picked component"): the decision and the question, and
@@ -2241,6 +2164,9 @@ endif()
 target_sources(mitcad PRIVATE commands/ConvertMeshCommands.cpp)
 # Mesh tools for reverse engineering (mitcad#1871).
 target_sources(mitcad PRIVATE commands/MeshToolsCommands.cpp)
+# Mesh tools that change a mesh's shape: Smooth, Combine, Offset and Shell,
+# Align, Plane Cut (mitcad#2515).
+target_sources(mitcad PRIVATE commands/MeshShapeCommands.cpp)
 
 # File › Print… (mitcad#1089, app/COMMANDS.md "Print"): a drawing's sheets
 # each on a page of its size, a sketch or a cut sheet at 1:1 tiled over
@@ -2610,6 +2536,8 @@ target_sources(mitcad PRIVATE
 target_sources(mitcad PRIVATE
   cam/CamMachinesDialog.cpp
   cam/CamMachinesDialog.hpp
+  cam/CamManualCode.cpp
+  cam/CamManualCode.hpp
   cam/CamSimulateDialog.cpp
   cam/CamSimulateDialog.hpp
   cam/CamToolpaths.cpp
@@ -2780,6 +2708,25 @@ if(BUILD_TESTING)
   foreach(mitcad_unit_test_file IN LISTS mitcad_unit_test_files)
     include("${mitcad_unit_test_file}")
   endforeach()
+endif()
+
+# The app's tests that link parts of the application without Qt Widgets, in
+# two bundles (mitcad#2497, cmake/TestBundles.cmake): test_app_view (the
+# view's meshes and lines, previews, drag proxies) and test_app_services
+# (paths, the chat's logic, API agents, the web browser component's
+# packages). Each ctest runs one test in a process of its own
+# (`test_app_view <test> [arguments]`); each test is registered in
+# tests/bundled/<test file's stem>.cmake, included here, after every
+# variable and target they use. test_chat_agent, test_assistant_client and
+# the platforms' own tests stay programs of their own: UI tests run them.
+if(BUILD_TESTING)
+  foreach(bundle IN ITEMS view services)
+    mitcad_add_test_bundle(test_app_${bundle})
+    target_include_directories(test_app_${bundle} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  endforeach()
+  # The API agent's paths are UTF-8 on Windows, as the application's.
+  mitcad_utf8_code_page(test_app_services)
+  mitcad_include_bundled_tests("${CMAKE_CURRENT_SOURCE_DIR}/tests/bundled")
 endif()
 
 # Panelize in the SOLID tab's MODIFY group (mitcad#2005, app/COMMANDS.md
@@ -3059,3 +3006,58 @@ target_sources(mitcad PRIVATE
   printing/BookCover.cpp
   printing/BookCover.hpp
   printing/MainWindowDrawingBook.cpp)
+
+# Point cloud tools (mitcad#2516, app/COMMANDS.md "Point Cloud Tools"):
+# Align Point Cloud, Filter Point Cloud and Reconstruct Mesh.
+target_sources(mitcad PRIVATE commands/PointCloudTools.cpp commands/PointCloudTools.hpp)
+
+# Minimum Radius (mitcad#2518, app/COMMANDS.md "Minimum Radius"): the
+# definition, the min_radius_analysis query and its answer in words, and the
+# marker and faces under the limit the view draws over the bodies.
+target_sources(mitcad PRIVATE commands/MinRadiusAnalysis.cpp commands/MinRadiusAnalysis.hpp)
+# Construction sets (mitcad#2514, GitHub mitcad/Mitcad#656, app/COMMANDS.md
+# "Construction Sets"): New Construction Set and Deactivate Construction
+# Set in the Surface tab's Construct group; the Browser's rows are
+# BrowserPanel's and BrowserController's.
+target_sources(mitcad PRIVATE MainWindowConstructionSets.cpp)
+
+# Inspect › Minimum Distance (mitcad#2519, app/COMMANDS.md "Minimum
+# Distance"): the definition, the minimum_distance query and its answer in
+# words, and the line between the closest points the view draws.
+target_sources(mitcad PRIVATE commands/MinimumDistance.cpp commands/MinimumDistance.hpp)
+
+# Inspect › Continuity Analysis (mitcad#2521, app/COMMANDS.md "Continuity
+# Analysis"): the edge_continuity query of the picked edges, faces and
+# bodies, its answer in words and the edges by the class they reach; read
+# by the unit test continuity_analysis.
+target_sources(mitcad PRIVATE commands/ContinuityAnalysis.cpp commands/ContinuityAnalysis.hpp)
+
+# Surface quality analyses (mitcad#2517, app/COMMANDS.md "Zebra", "Curvature
+# Map", "Isocurve Analysis", "Environment Map"): the definitions, the
+# surface_analysis query and its answer in words, and what the view draws
+# over the faces.
+target_sources(mitcad PRIVATE commands/SurfaceAnalysis.cpp commands/SurfaceAnalysis.hpp)
+
+# Curvature Comb (mitcad#2520, app/COMMANDS.md "Curvature Comb"): the
+# curvature_comb query and its answer as teeth, envelope and inflection
+# points (read by the unit test curvature_comb), Inspect > Curvature Comb and
+# sketch mode's Curvature comb option.
+target_sources(mitcad PRIVATE commands/CurvatureComb.cpp commands/CurvatureComb.hpp
+               commands/CurvatureCombCommand.cpp commands/CurvatureCombCommand.hpp)
+
+# Nesting Flat Patterns and a cut sheet's plasma program (mitcad#2553,
+# app/COMMANDS.md "Nest Flat Patterns and the cutting program"): Laser's
+# Nest Flat Patterns… dialog, and the Cut Sheet tab's Nest Components…,
+# Show Cutting Paths and Cutting Program… (DrawingWorkspace's members in a
+# file of their own).
+target_sources(mitcad PRIVATE drawings/CutSheetCutting.cpp drawings/NestFlatPatternsDialog.cpp
+  drawings/NestFlatPatternsDialog.hpp)
+
+# What the session log says for a window on Linux whose widgets over the 3D
+# view were not seen (mitcad#2031, GitHub mitcad/Mitcad#434): the start-up's
+# Graphics environment: line (the session, the graphics cards, the render
+# offload and scaling variables; read by the unit test graphics_environment)
+# and the Painted:, Frame presented with: and Paint check lines of the
+# widgets over the view when the window shows and the Start page is left.
+target_sources(mitcad PRIVATE framework/GraphicsEnvironment.cpp framework/GraphicsEnvironment.hpp
+               framework/PaintWatch.cpp framework/PaintWatch.hpp)

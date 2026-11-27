@@ -71,6 +71,7 @@
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/profile.hpp"
 #include "../src/cutouts.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -538,7 +539,7 @@ void run_notch() { notch_rims("notch", *notch(), {1.5, 2.0}); }
 
 } // namespace
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(probe_fillet_rim_narrow_corner) {
   std::vector<std::string> which;
   for (int i = 1; i < argc; ++i) {
     which.emplace_back(argv[i]);

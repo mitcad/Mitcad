@@ -47,6 +47,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/extrude.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -409,7 +410,7 @@ void test_slab() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_roof_slab) {
   test::guarded("roof slab", test::test_slab);
   if (test::failures == 0) {
     std::puts("test_fillet_roof_slab: all checks passed");

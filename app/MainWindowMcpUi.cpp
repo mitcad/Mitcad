@@ -1037,6 +1037,12 @@ QJsonObject MainWindow::mcpCameraJson() const {
           {QStringLiteral("height"), camera.height},
           {QStringLiteral("width"), camera.height * aspect},
           {QStringLiteral("projection"), camera.perspective ? QStringLiteral("perspective") : QStringLiteral("orthographic")},
+          // The mode the projection comes from (mitcad#2473): orthographic,
+          // perspective or perspective_orthographic_faces.
+          {QStringLiteral("projection_mode"),
+           camera.orthographicFaces ? QStringLiteral("perspective_orthographic_faces")
+           : camera.perspective    ? QStringLiteral("perspective")
+                                   : QStringLiteral("orthographic")},
           {QStringLiteral("fov"), m_viewer->fieldOfView()},
           // mm as on a 35 mm frame, the same field of view (mitcad#1717)
           {QStringLiteral("focal_length"), m_viewer->focalLength()},
@@ -1081,10 +1087,13 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   bool set = false;
   if (arguments.contains(QStringLiteral("projection"))) {
     const QString projection = arguments.value(QStringLiteral("projection")).toString();
-    if (projection != QStringLiteral("orthographic") && projection != QStringLiteral("perspective")) {
-      refuse(QStringLiteral("projection must be orthographic or perspective."));
+    const QString faces = QStringLiteral("perspective_orthographic_faces"); // mitcad#2473
+    if (projection != QStringLiteral("orthographic") && projection != QStringLiteral("perspective") &&
+        projection != faces) {
+      refuse(QStringLiteral("projection must be orthographic, perspective or perspective_orthographic_faces."));
     }
-    camera.perspective = projection == QStringLiteral("perspective");
+    camera.perspective = projection != QStringLiteral("orthographic");
+    camera.orthographicFaces = projection == faces;
     set = true;
   }
   if (hasEye) {
@@ -1117,7 +1126,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
       refuse(QStringLiteral("height must be more than 0 mm."));
     }
     camera.height = height;
-  } else if (camera.perspective && (hasEye || hasTarget)) {
+  } else if ((camera.perspective || camera.orthographicFaces) && (hasEye || hasTarget)) {
     // The eye given stays where it is: the height follows from its distance.
     camera.height = 2.0 * camera.eye.Distance(camera.target) * std::tan(fov * kPi / 360.0);
   }

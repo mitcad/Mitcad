@@ -977,7 +977,7 @@ agrees on its category, class, box (where the reference keeps the stored
 box: it trims walls at joins, cuts columns by walls and draws some by
 their type's profile), transform, type, type name, family name and level,
 and every material on its name, colour and transparency, with these
-explained differences (`tests/corpus.rs`):
+explained differences (`tests/read/corpus.rs`):
 
 - **Levels the reference finds by its own rules** (the nearest level below
   the box, a host of the same class, a constraint read by position) where
@@ -1052,7 +1052,7 @@ cubic feet, radians, kilograms); its definition tells what they are
 
 `cargo test -p mitcad-rvt` (`core.rvt` in ctest): the written project and
 family (container, pages, members, metadata, schema, walks, chains,
-element views, saved meshes) and `tests/corpus.rs` on the corpus (skipped
+element views, saved meshes) and `tests/read/corpus.rs` on the corpus (skipped
 without `MITCAD_RVT_CORPUS`; its files several at once, each in a thread
 of its own, the largest first: `MITCAD_CORPUS_JOBS`, else a quarter of
 the cores, at most 4; mitcad#875). The import: `core/import-rvt/src` (mock

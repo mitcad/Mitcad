@@ -2,11 +2,72 @@
 <!-- SPDX-License-Identifier: MIT -->
 <!-- The MIME type of MitCad designs (mitcad#1539), for file managers and
      their thumbnailers (mitcad.thumbnailer); installed as
-     share/mime/packages/mitcad.xml. A design file is JSON text. -->
+     share/mime/packages/mitcad.xml. A design file is JSON text.
+
+     Then the types of the files MitCad imports that shared-mime-info does
+     not define (mitcad#2527), so that a file manager offers MitCad for
+     them (mitcad.desktop's MimeType). The ones it defines (model/iges,
+     model/stl, model/obj, model/3mf, model/gltf-binary, model/gltf+json,
+     image/vnd.dxf, image/vnd.dwg, image/svg+xml) are not declared again.
+     A registered name where there is one (model/step), else an x- name;
+     globs match either case. .sc is not claimed: it is Scala source's
+     (text/x-scala). app.unit desktop_entry_types checks this file against
+     the desktop entry and the extensions MitCad opens. -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-mitcad">
     <comment>MitCad design</comment>
     <sub-class-of type="application/json"/>
     <glob pattern="*.mitcad"/>
+  </mime-type>
+  <!-- ISO 10303-21 text: text editors stay offered. -->
+  <mime-type type="model/step">
+    <comment>STEP model</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.step"/>
+    <glob pattern="*.stp"/>
+  </mime-type>
+  <mime-type type="model/x-brep">
+    <comment>BRep model</comment>
+    <glob pattern="*.brep"/>
+    <glob pattern="*.brp"/>
+  </mime-type>
+  <mime-type type="model/x-serp">
+    <comment>SERP model</comment>
+    <glob pattern="*.serp"/>
+  </mime-type>
+  <mime-type type="application/x-extension-fcstd">
+    <comment>FCStd design</comment>
+    <glob pattern="*.fcstd"/>
+  </mime-type>
+  <mime-type type="model/x-f3d">
+    <comment>F3D design</comment>
+    <glob pattern="*.f3d"/>
+    <glob pattern="*.f3z"/>
+  </mime-type>
+  <mime-type type="model/x-ipt">
+    <comment>IPT and IAM design</comment>
+    <glob pattern="*.ipt"/>
+    <glob pattern="*.iam"/>
+  </mime-type>
+  <mime-type type="model/x-ifc">
+    <comment>IFC model</comment>
+    <glob pattern="*.ifc"/>
+    <glob pattern="*.ifczip"/>
+  </mime-type>
+  <mime-type type="model/x-rvt">
+    <comment>RVT and RFA model</comment>
+    <glob pattern="*.rvt"/>
+    <glob pattern="*.rfa"/>
+    <glob pattern="*.rte"/>
+    <glob pattern="*.rft"/>
+  </mime-type>
+  <mime-type type="model/x-solidcraft">
+    <comment>SolidCraft design</comment>
+    <glob pattern="*.solidcraft"/>
+    <glob pattern="*.solvecraft"/>
+  </mime-type>
+  <mime-type type="model/x-3dm">
+    <comment>3DM model</comment>
+    <glob pattern="*.3dm"/>
   </mime-type>
 </mime-info>

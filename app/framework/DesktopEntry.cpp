@@ -196,7 +196,9 @@ const QString kAppImageVersion = QStringLiteral("X-AppImage-Version");
 // The Exec line running the program: when the earlier entry's Exec runs
 // the same program, what an AppImage manager put around it stays (env
 // DESKTOPINTEGRATION=1 before it, field codes after it); otherwise the
-// bundled entry's arguments follow it.
+// bundled entry's arguments follow it (%f, the file a file manager opens
+// in MitCad, mitcad#2527), also over an earlier MitCad's Exec without
+// arguments.
 QString execLine(const QString& bundledExec, const std::optional<QString>& earlierExec, const QString& program) {
   const QString bundled = unescapeValue(bundledExec);
   const std::vector<ExecArgument> bundledArguments = execArguments(bundled);

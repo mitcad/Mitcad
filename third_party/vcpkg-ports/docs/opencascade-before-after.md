@@ -35,11 +35,11 @@ it*), or shown together with the patch where they build on its lines
 (*together with*). A suite part is linked without the parts of
 its executable that do not build at that state.
 
-Verdicts: Test: none: 41; fails with several later patches reverted too: 21; fails without the patch: 133; fails without the patch (the test does not build): 5; not shown: 56; passes without the patch: 1.
+Verdicts: Test: none: 41; fails with several later patches reverted too: 21; fails without the patch: 134; fails without the patch (the test does not build): 5; not shown: 56; passes without the patch: 1.
 
 In-chain verdicts: fails without the patch at its place: 69; fails without the patch at its place (the test does not build without it): 2; fails without the patch at its place (the test needs the API it adds): 1; not shown: 7.
 
-Shown to fail without the patch at the tip or at its place in the chain: 210 of the 216 patches with a test (the others: 0058, 0071, 0072, 0170, 0171, 0180).
+Shown to fail without the patch at the tip or at its place in the chain: 211 of the 217 patches with a test (the others: 0058, 0071, 0072, 0170, 0171, 0180).
 
 | Patch | Reverted | Test | With | Without | Verdict | In chain | Before / with it | In-chain verdict |
 |---|---|---|---|---|---|---|---|---|
@@ -331,3 +331,4 @@ Shown to fail without the patch at the tip or at its place in the chain: 210 of 
 | 2433 | with 2462, 2463 | `geometry.port.2433` | passed | failed in test_rounded_top_open_wall_thicker_than_rounding (geometry/tests/port/p2433-face-vanishing-beside-a-removed-face.cpp:80: check failed: maker.IsDone()) | fails without the patch | - | - | - |
 | 2462 | alone | `geometry.port.2462` | passed | failed in test_top_open_wall_no_thicker_than_rounding (geometry/tests/port/p2462-wall-strip-at-a-removed-face-met-tangentially.cpp:96: check failed: maker.IsDone()) | fails without the patch | - | - | - |
 | 2463 | with 2462 | `geometry.port.2463` | passed | failed in test_rounded_top_open_arc_join (geometry/tests/port/p2463-arc-join-face-vanishing-beside-a-removed-face.cpp:79: check failed: maker.IsDone()) | fails without the patch | - | - | - |
+| 2494 | alone | `geometry.port.2494` | passed | failed in test_box_rounding_of_five_edges, test_slot_walls_met_tangentially (geometry/tests/port/p2494-rounding-of-chained-sides-vanishing-beside-a-removed-face.cpp:130: check failed: maker.IsDone()) | fails without the patch | - | - | - |

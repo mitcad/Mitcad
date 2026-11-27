@@ -69,6 +69,7 @@
 #include "../src/remnant_patch.hpp"
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -507,7 +508,7 @@ void corner_cut_across_a_rounding() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(dressup_blend_remnants) {
   test::guarded("patch at a corner", test::patch_at_a_corner);
   test::guarded("patch at a corner past an edge end", test::patch_at_a_corner_past_an_edge_end);
   test::guarded("slot in a rounded edge", test::slot_in_a_rounded_edge);

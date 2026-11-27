@@ -49,6 +49,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -249,7 +250,7 @@ void test_rounding_of_a_pin_on_a_plate_end_round_most_of_it() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_tangent_end_face) {
   test::guarded("test_rounding_cut_by_a_face_going_on_tangentially_from_the_pin",
                 test::test_rounding_cut_by_a_face_going_on_tangentially_from_the_pin);
   test::guarded("test_rounding_of_a_pin_on_a_plate_end_round_most_of_it",

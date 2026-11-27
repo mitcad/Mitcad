@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Shell, Draft, Offset Face, Replace Face, Split Face, Split Body and
 // Delete (U4; commands.md, "Face features (F2)").
+#include <algorithm>
 #include <cmath>
+#include <memory>
+#include <vector>
 
 #include <QJsonArray>
+#include <QStringList>
 
 #include <TopExp_Explorer.hxx>
+#include <gp_Pnt.hxx>
 
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
@@ -45,19 +50,19 @@ bool shellOutside(const CommandState& state) {
   return state.whole().choice(QStringLiteral("direction")) != QStringLiteral("inside");
 }
 
-// An arrow out of the first face along its normal.
+// An arrow out of the first face along its normal; on a curved face from a
+// point on it (mitcad#2478).
 std::optional<Manipulator> faceArrow(const CommandState& state, const CommandContext& context, const QString& key) {
   const Selection& faces = state.items(key);
   if (faces.isEmpty()) {
     return std::nullopt;
   }
-  const auto frame = frameOf(faces.first(), context);
-  const auto center = centerOf({faces.first()}, context);
-  if (!frame || !center) {
+  const auto at = faceNormal(faces.first(), context);
+  if (!at) {
     return std::nullopt;
   }
   // Stepped by the faces' size (mitcad#1431).
-  Manipulator handle = arrow(*center, frame->normal);
+  Manipulator handle = arrow(at->first, at->second);
   handle.scale = itemsScale(faces, context);
   return handle;
 }
@@ -479,7 +484,115 @@ CommandDef splitFaceCommand(const CommandContext& context) {
   return def;
 }
 
+namespace {
+
+// Split Body's Keep (mitcad#2504): All Pieces, or Selected: the pieces
+// whose dots are clicked in the view (their numbers in Pieces, "1, 3"),
+// the others removed by the split. The dots come from the preview's
+// `piece_choices` (every piece before keeping, with a point inside it and
+// what keeps it: its side of a single plane, else that point); the last
+// ones stay known while no preview is shown, so that they show once Keep
+// is Selected and nothing is picked yet. The definition's `keep` is what
+// keeps each piece picked; an edited split keeps its own `keep` until a
+// dot is clicked (`loaded_keep`: it and the numbers of the pieces its
+// first preview kept).
+const QString kKeep = QStringLiteral("keep");
+const QString kPieces = QStringLiteral("pieces");
+const QString kLoadedKeep = QStringLiteral("loaded_keep");
+
+struct PieceChoices {
+  QJsonArray list; // the last preview's `piece_choices`
+};
+
+QList<int> numbersIn(const QString& text) {
+  QList<int> numbers;
+  for (const QString& part : text.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+    bool ok = false;
+    const int number = part.trimmed().toInt(&ok);
+    if (ok && number > 0 && !numbers.contains(number)) {
+      numbers.append(number);
+    }
+  }
+  std::sort(numbers.begin(), numbers.end());
+  return numbers;
+}
+
+QString textOf(const QList<int>& numbers) {
+  QStringList texts;
+  for (const int number : numbers) {
+    texts << QString::number(number);
+  }
+  return texts.join(QStringLiteral(", "));
+}
+
+bool keepsSelected(const CommandState& state) {
+  return state.choice(kKeep) == QStringLiteral("selected");
+}
+
+// Other bodies or another tool make other pieces: Keep goes back to All
+// Pieces, whose preview shows the new ones.
+void forgetPieces(CommandState& state, PieceChoices& choices) {
+  if (keepsSelected(state)) {
+    state.setChoice(kKeep, QStringLiteral("all"));
+  }
+  state.setText(kPieces, QString());
+  state.setObject(kLoadedKeep, QJsonObject());
+  choices.list = QJsonArray();
+}
+
+// The definition's `keep` of the inputs; empty for All Pieces or while no
+// piece is picked.
+QJsonArray keepOf(const CommandState& state, const PieceChoices& choices) {
+  if (!keepsSelected(state)) {
+    return QJsonArray();
+  }
+  const QList<int> numbers = numbersIn(state.text(kPieces));
+  const QJsonObject loaded = state.object(kLoadedKeep);
+  const QJsonArray own = loaded.value(QStringLiteral("keep")).toArray();
+  if (!own.isEmpty() &&
+      (!loaded.contains(QStringLiteral("numbers")) ||
+       numbersIn(loaded.value(QStringLiteral("numbers")).toString()) == numbers)) {
+    return own; // the edited split's own, no dot clicked since
+  }
+  QJsonArray keep;
+  for (const int number : numbers) {
+    if (number <= choices.list.size()) {
+      keep.append(choices.list.at(number - 1).toObject().value(QStringLiteral("keep")));
+    }
+  }
+  return keep;
+}
+
+} // namespace
+
 CommandDef splitBodyCommand(const CommandContext& context) {
+  const auto choices = std::make_shared<PieceChoices>();
+  InputDef pieces =
+      textInput(kPieces, QObject::tr("Pieces"), QString())
+          .withTooltip(QObject::tr("The pieces to keep, by number (1, 3): click their dots in the view"))
+          .withVisible(keepsSelected)
+          .withToggles([choices](const CommandState& state, const CommandContext&, const QJsonObject& report) {
+            std::vector<Manipulator> toggles;
+            const QJsonArray list = report.contains(QStringLiteral("piece_choices"))
+                                        ? report.value(QStringLiteral("piece_choices")).toArray()
+                                        : choices->list;
+            const QList<int> on = numbersIn(state.text(kPieces));
+            for (int i = 0; i < list.size(); ++i) {
+              const QJsonArray xyz = list.at(i).toObject().value(QStringLiteral("point")).toArray();
+              if (xyz.size() != 3) {
+                continue;
+              }
+              Manipulator toggle;
+              toggle.kind = Manipulator::Kind::Toggle;
+              toggle.origin = gp_Pnt(xyz[0].toDouble(), xyz[1].toDouble(), xyz[2].toDouble());
+              toggle.element = i + 1;
+              toggle.on = on.contains(i + 1);
+              toggles.push_back(toggle);
+            }
+            return toggles;
+          });
+  pieces.togglesUnpreviewed = true; // the dots also while no piece is picked
+  const auto forget = [choices](CommandState& state, const CommandContext&) { forgetPieces(state, *choices); };
   CommandDef def;
   def.id = QStringLiteral("solid.split_body");
   def.name = QObject::tr("Split Body");
@@ -489,20 +602,42 @@ CommandDef splitBodyCommand(const CommandContext& context) {
   def.featureType = QStringLiteral("split_body");
   def.extendedToolPreview = true; // the splitting tool as it is extended (mitcad#712)
   def.inputs = {
-      selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies to Split"), SelectKind::Body, 1, 0).withoutMeshes(),
-      toolInput(),
+      selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies to Split"), SelectKind::Body, 1, 0)
+          .withoutMeshes()
+          .withOnChange(forget),
+      toolInput().withOnChange(forget),
       checkInput(QStringLiteral("extend"), QObject::tr("Extend Splitting Tool"), true),
       toolOffsetInput(),
   };
   def.inputs += directionInputs();
+  def.inputs += {
+      choiceInput(kKeep, QObject::tr("Keep"),
+                  {{QStringLiteral("all"), QStringLiteral("All Pieces")},
+                   {QStringLiteral("selected"), QStringLiteral("Selected")}},
+                  QStringLiteral("all"))
+          .withTooltip(QObject::tr("Every piece, or only the pieces whose dots are clicked in the view"))
+          .withOnChange([](CommandState& state, const CommandContext&) {
+            // Picked anew: no piece is picked yet.
+            state.setText(kPieces, QString());
+            state.setObject(kLoadedKeep, QJsonObject());
+          }),
+      pieces,
+  };
   def.enabled = [&context] { return hasBodies(context); };
-  def.build = [](const CommandState& state, const CommandContext& context) {
+  def.build = [choices](const CommandState& state, const CommandContext& context) {
     Built result;
     const Selection& bodies = state.items(QStringLiteral("bodies"));
     QJsonObject def{{QStringLiteral("type"), QStringLiteral("split_body")},
                     {QStringLiteral("bodies"), bodyUids(bodies)}};
     if (!addTool(def, state, result)) {
       return result;
+    }
+    if (keepsSelected(state)) {
+      const QJsonArray keep = keepOf(state, *choices);
+      if (keep.isEmpty()) {
+        return Built::asking(QObject::tr("Click the dots of the pieces to keep in the view."), kPieces);
+      }
+      def.insert(QStringLiteral("keep"), keep);
     }
     // A face or body of another component as the tool, read where it was
     // picked (mitcad#2299): the split stays in the bodies' component.
@@ -515,7 +650,7 @@ CommandDef splitBodyCommand(const CommandContext& context) {
     result.def = def;
     return result;
   };
-  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+  def.load = [choices](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
     Selection bodies = bodiesOf(feature.value(QStringLiteral("bodies")).toArray());
     loadTool(feature, state, context);
     // A linked tool where its link saw it, the bodies where the link saw
@@ -523,9 +658,48 @@ CommandDef splitBodyCommand(const CommandContext& context) {
     linkSplitPicks(feature.value(QStringLiteral("tool_links")).toObject(), bodies,
                    state.items(QStringLiteral("tool")));
     state.setItems(QStringLiteral("bodies"), bodies);
+    // Its own `keep` until a dot is clicked; Pieces numbers the pieces its
+    // first preview keeps (previewReported).
+    const QJsonArray keep = feature.value(QStringLiteral("keep")).toArray();
+    choices->list = QJsonArray();
+    state.setChoice(kKeep, keep.isEmpty() ? QStringLiteral("all") : QStringLiteral("selected"));
+    state.setText(kPieces, QString());
+    state.setObject(kLoadedKeep, keep.isEmpty() ? QJsonObject() : QJsonObject{{QStringLiteral("keep"), keep}});
   };
+  // The pieces the preview found, for the dots; an edited split's pieces
+  // its own `keep` keeps into Pieces, once.
+  def.previewReported = [choices](QJsonObject& report, CommandState& state) {
+    if (!report.contains(QStringLiteral("piece_choices"))) {
+      return false;
+    }
+    choices->list = report.value(QStringLiteral("piece_choices")).toArray();
+    QJsonObject loaded = state.object(kLoadedKeep);
+    if (!keepsSelected(state) || loaded.value(QStringLiteral("keep")).toArray().isEmpty() ||
+        loaded.contains(QStringLiteral("numbers"))) {
+      return false;
+    }
+    QList<int> numbers;
+    for (int i = 0; i < choices->list.size(); ++i) {
+      if (choices->list.at(i).toObject().value(QStringLiteral("kept")).toBool()) {
+        numbers.append(i + 1);
+      }
+    }
+    loaded.insert(QStringLiteral("numbers"), textOf(numbers));
+    state.setObject(kLoadedKeep, loaded);
+    if (state.text(kPieces) == textOf(numbers)) {
+      return false;
+    }
+    state.setText(kPieces, textOf(numbers));
+    return true; // the same definition again, the panel showing the numbers
+  };
+  def.ended = [choices](bool) { choices->list = QJsonArray(); };
   def.canEdit = [&context](const QJsonObject& feature) { return toolEditable(feature, context); };
   def.describe = [](const CommandState& state, const CommandContext&) {
+    if (keepsSelected(state)) {
+      return QStringLiteral("Added split body of %1 body(ies) keeping pieces %2")
+          .arg(state.items(QStringLiteral("bodies")).size())
+          .arg(state.text(kPieces));
+    }
     return QStringLiteral("Added split body of %1 body(ies)").arg(state.items(QStringLiteral("bodies")).size());
   };
   return def;

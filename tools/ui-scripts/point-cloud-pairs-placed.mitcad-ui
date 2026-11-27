@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: MIT
+# Point pairs on bodies of a placed component (mitcad#2566), the shared
+# input script of tools/ui-point-cloud-pairs-placed-test.sh (Linux),
+# tools/ui-windows-point-cloud-pairs-placed-test.ps1 (Windows) and
+# tools/ui-macos-point-cloud-pairs-placed-test.sh (macOS), on
+# point-cloud-pairs-placed.json saved as point-cloud-pairs-placed.mitcad in
+# the work folder: the component Body1, its occurrence Body1:1 turned 90
+# degrees about Z and moved by (-10, 40, 0), holds the block Body1 (F1.b0,
+# 20 x 20 x 10 mm from its origin; in the design from (-30, 40, 0) to (-10,
+# 60, 10)) and a mesh block 30 mm along its X (F4.b0; in the design from
+# (-30, 70, 0) to (-10, 90, 10)); the point cloud Scan in the root, 306
+# points on the block's faces turned 30 degrees about Z and moved 20 mm
+# along X. Body1 is active. The view gives a click on a body in its
+# component's coordinates (SelectionItem::at).
+#   1. Align Point Cloud with the Start Point Pairs: three pairs, each a
+#      shown point of Scan's top face, then where it belongs on Body1's top
+#      face as the view shows it. Align Point Cloud's pairs are in the
+#      design: each body point is logged moved by Body1:1's placement, the
+#      best fit leaves RMS within 0.01 mm, and OK puts the cloud on the
+#      block where the view shows it. Undone, so that the cloud is out of
+#      the way of the next clicks.
+#   2. Align Mesh: the mesh block onto Body1 by three pairs clicked on the
+#      top faces and the best fit. mesh_align's pairs are in the feature's
+#      component's coordinates: the mesh moves 30 mm (along Body1's X) and
+#      turns 0 degrees, and lies within 0.01 mm RMS of the block.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+expect-ever '^Browser Root/Point Clouds/Scan at ' 30
+expect-ever '^Point clouds drawn: Scan 306 points$' 30
+
+# --- 1. Scan aligned onto Body1 of the placed component by three pairs.
+mark
+context-menu-logged '^Browser Root/Point Clouds/Scan at ' 'Align Point Cloud'
+wait-log '^Command Align Point Cloud started' 20
+wait-idle 60
+qt-choice input_start 'Point Pairs'
+wait-log '^Align Point Cloud: Start = Point Pairs' 20
+wait-log '^Inspect Align Point Cloud: failed: Click a point of the cloud, then where it belongs on Body1; three pairs or more[.]$' 30
+wait-idle 60
+# The panel grew by the Point Pairs row: the points in the free area.
+command view.fit
+wait-idle
+capture-undo-depth before_align
+
+# Body1's (4, 4, 10), (16, 4, 10) and (16, 16, 10) are at (-14, 44, 10),
+# (-14, 56, 10) and (-26, 56, 10) in the design.
+mark
+click-view-point 21.464102,5.464102,10
+wait-log '^Align Point Cloud points: 1 [(]Scan at 21[.]464, 5[.]464, 10[.]000[)]$' 30
+wait-idle 60
+mark
+click-view-point -14,44,10
+wait-log '^Align Point Cloud target point: F1[.]b0 at -1[34][.][0-9]+, 4[34][.][0-9]+, 10[.]000 in the design$' 30
+wait-log '^Align Point Cloud points: 2$' 30
+wait-idle 60
+mark
+click-view-point 31.856406,11.464102,10
+wait-log '^Align Point Cloud points: 3 [(]Scan at 31[.]856, 11[.]464, 10[.]000[)]$' 30
+wait-idle 60
+mark
+click-view-point -14,56,10
+wait-log '^Align Point Cloud target point: F1[.]b0 at -1[34][.][0-9]+, 5[56][.][0-9]+, 10[.]000 in the design$' 30
+wait-log '^Align Point Cloud points: 4$' 30
+wait-idle 60
+mark
+click-view-point 25.856406,21.856406,10
+wait-log '^Align Point Cloud points: 5 [(]Scan at 25[.]856, 21[.]856, 10[.]000[)]$' 30
+wait-idle 60
+mark
+click-view-point -26,56,10
+wait-log '^Align Point Cloud target point: F1[.]b0 at -2[56][.][0-9]+, 5[56][.][0-9]+, 10[.]000 in the design$' 30
+wait-log '^Align Point Cloud points: 6$' 30
+wait-log '^Inspect Align Point Cloud: Scan to Body1: RMS 0[.]00[0-9] mm, mean 0[.]00[0-9] mm, max [0-9.]+ mm, 306 of 306 points, [0-9]+ rounds(, settled)?, pairs RMS [0-9.]+ mm$' 120
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/point-cloud-pairs-placed-aligned.png'
+mark
+button '^OK$'
+wait-log '^Aligned point cloud Scan to Body1: RMS 0[.]00[0-9] mm, .*, pairs RMS [0-9.]+ mm$' 120
+wait-idle 60
+expect-undo-depth ${before_align} 1
+# The cloud lies on the block where the view shows it: its box is the
+# placed block's.
+capture-model-number scan_low_x '{"query":"point_clouds"}' 0.bounds.0.0
+capture-model-number scan_high_x '{"query":"point_clouds"}' 0.bounds.1.0
+capture-model-number scan_low_y '{"query":"point_clouds"}' 0.bounds.0.1
+capture-model-number scan_high_y '{"query":"point_clouds"}' 0.bounds.1.1
+capture-model-number scan_low_z '{"query":"point_clouds"}' 0.bounds.0.2
+capture-model-number scan_high_z '{"query":"point_clouds"}' 0.bounds.1.2
+expect-near ${scan_low_x} -30 0 0.01
+expect-near ${scan_high_x} -10 0 0.01
+expect-near ${scan_low_y} 40 0 0.01
+expect-near ${scan_high_y} 60 0 0.01
+expect-near ${scan_low_z} 0 0 0.01
+expect-near ${scan_high_z} 10 0 0.01
+mark
+focus-main
+key ctrl+z
+wait-log '^Undo: ' 20
+wait-idle 60
+
+# --- 2. The mesh block aligned onto Body1 in their component by three
+# pairs: the mesh's (34, 4, 10), (46, 4, 10) and (46, 16, 10) are at
+# (-14, 74, 10), (-14, 86, 10) and (-26, 86, 10) in the design.
+mark
+command solid.mesh_align
+wait-log '^Command Align Mesh started' 30
+wait-idle 60
+command view.fit
+wait-idle
+click-view-point -20,80,10
+wait-log '^Align Mesh Mesh Body: 1 body [[]body F4[.]b0' 30
+wait-idle 60
+click-logged '^Panel Align Mesh input target at '
+click-view-point -20,50,10
+wait-log '^Align Mesh Target: 1 body [[]body F1[.]b0' 30
+wait-idle 60
+click-logged '^Panel Align Mesh input pairs at '
+wait-idle 60
+mark
+click-view-point -14,74,10
+wait-log '^Align Mesh points: 1$' 30
+wait-idle 60
+mark
+click-view-point -14,44,10
+wait-log '^Align Mesh points: 2$' 30
+wait-idle 60
+mark
+click-view-point -14,86,10
+wait-log '^Align Mesh points: 3$' 30
+wait-idle 60
+mark
+click-view-point -14,56,10
+wait-log '^Align Mesh points: 4$' 30
+wait-idle 60
+mark
+click-view-point -26,86,10
+wait-log '^Align Mesh points: 5$' 30
+wait-idle 60
+mark
+click-view-point -26,56,10
+wait-log '^Align Mesh points: 6$' 30
+wait-log '^Preview Align Mesh: ok, info: Moved (29[.]9[0-9]*|30([.]0[0-9]*)?) mm and turned -?0([.]0[0-9]*)?.{1,2}; the mesh lies within [0-9.]+ mm of the target, 0([.]00[0-9]*)? mm on average [(]root mean square[)]' 120
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/point-cloud-pairs-placed-mesh.png'
+capture-undo-depth before_mesh
+mark
+key Return
+wait-log '^Added mesh align of F4[.]b0 onto F1[.]b0, 3 point pairs, best fit' 60
+wait-idle 60
+expect-undo-depth ${before_mesh} 1
+expect-ever '^Timeline MeshAlign1 at ' 30
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

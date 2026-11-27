@@ -10,10 +10,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <memory>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -149,6 +152,8 @@ const TestDriver::StepSpec kStepSpecs[] = {
     // A sketch's or construction feature's light bulb as the model gives
     // it, by the feature's name (yes|no, mitcad#2393).
     {"expect-feature-shown", 2, 2, TestDriver::kIdle},
+    // A job of the test's own that holds the model (true|false, mitcad#2500).
+    {"hold-model-job", 1, 1, TestDriver::kPlain},
 };
 
 } // namespace
@@ -566,6 +571,39 @@ void TestDriver::runModelStep(const QString& name, const QStringList& a, int lin
       return false;
     }, 6, wanted ? QStringLiteral("expected %1 to be shown").arg(feature)
                  : QStringLiteral("expected %1 to be hidden").arg(feature));
+  } else if (name == QLatin1String("hold-model-job")) {
+    // A job of its own on the model's worker, "test hold", that holds the
+    // model from `hold-model-job true` until `hold-model-job false`
+    // (mitcad#2500, GitHub mitcad/Mitcad#706): what a menu, a key or a
+    // queued call meets when it comes while a job computes the model. It
+    // does not give way to a read (idleDocument then refuses it), as a job
+    // the user started does not; a cancel (closing the window) ends it.
+    static const auto gate = std::make_shared<std::atomic<bool>>(false);
+    auto* window = qobject_cast<MainWindow*>(mainWindow);
+    if (!window || (a.at(0) != QStringLiteral("true") && a.at(0) != QStringLiteral("false"))) {
+      fail(line, QStringLiteral("hold-model-job true|false requires a document window")); return;
+    }
+    if (a.at(0) == QStringLiteral("false")) {
+      gate->store(false);
+      return;
+    }
+    DocumentSession& session = window->documentSession();
+    if (session.busy() || gate->load()) {
+      fail(line, QStringLiteral("hold-model-job true requires the model idle")); return;
+    }
+    gate->store(true);
+    const bool started = session.startAsync(
+        QStringLiteral("test hold"), QStringLiteral("Test hold"),
+        [held = gate](ModelJob& job) {
+          while (held->load() && !job.control().is_cancelled()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
+        },
+        std::make_shared<DocumentSession::AsyncResult>(), window, DocumentSession::Completion());
+    if (!started) {
+      gate->store(false);
+      fail(line, QStringLiteral("hold-model-job true: the job did not start")); return;
+    }
   }
 }
 

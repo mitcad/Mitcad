@@ -51,6 +51,8 @@
 #include "FeatureStatus.hpp"
 #include "../view/CenterOfMass.hpp"
 #include "../framework/UiSizes.hpp"
+#include "../cam/CamManualCode.hpp"
+#include "../commands/SurfaceAnalysis.hpp"
 
 namespace mitcad {
 namespace {
@@ -474,6 +476,11 @@ public:
   }
   bool anyRight() const { return m_activateRight || m_eyeRight; }
 
+  // The rows' spacing (mitcad#2513): the height SidebarDelegate and
+  // PanelDelegate give a row; Standard, the default, as it always was.
+  void setSpacing(BrowserRowSpacing spacing) { m_spacing = spacing; }
+  BrowserRowSpacing spacing() const { return m_spacing; }
+
   // A row's tooltip while its name is cut short (mitcad#1932): the name in
   // full, then the row's own tooltip, if any.
   static QString elidedTip(const QString& name, const QString& own) {
@@ -605,6 +612,16 @@ public:
   }
 
 protected:
+  // A row's height with the spacing (mitcad#2513), from the layout's own
+  // least height `standard` and the style's height for the row, `content`:
+  // Compact keeps the icon (the decoration's height, also with the eye
+  // before it) and the name whole, with 2 px of air above and below, inside
+  // the selection's band and the Rows background's box.
+  int spacedHeight(const QStyleOptionViewItem& option, int standard, int content) const {
+    const int least = std::max(option.decorationSize.height(), option.fontMetrics.height()) + 4;
+    return spacedBrowserRowHeight(m_spacing, standard, content, least);
+  }
+
   QRect editorRect(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     const Parts at = parts(option, index);
     // Match the custom bulb/icon/name layout, rather than the style's
@@ -758,6 +775,7 @@ private:
 
   bool m_activateRight = false;
   bool m_eyeRight = false;
+  BrowserRowSpacing m_spacing = BrowserRowSpacing::Standard; // mitcad#2513
 };
 
 // The rows of the tree in a floating card: like a macOS sidebar, a selected
@@ -797,7 +815,9 @@ public:
 
   QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     QSize size = BrowserDelegate::sizeHint(option, index);
-    size.setHeight(std::max(size.height(), 26));
+    // At least 26 px with the Standard spacing (mitcad#2513: less or more
+    // with the others).
+    size.setHeight(spacedHeight(option, 26, size.height()));
     return size;
   }
 
@@ -844,7 +864,9 @@ public:
 
   QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     QSize size = BrowserDelegate::sizeHint(option, index);
-    size.setHeight(std::max(size.height(), panel::kRowHeight));
+    // At least the panels' row height with the Standard spacing
+    // (mitcad#2513: less or more with the others).
+    size.setHeight(spacedHeight(option, panel::kRowHeight, size.height()));
     return size;
   }
 
@@ -997,11 +1019,19 @@ QString jointTooltip(const DocumentSnapshot& snapshot, const DocumentSnapshot::F
 // An analysis' icon by its type: Section, Print (mitcad#620) or Draft
 // Analysis (mitcad#2166).
 QString analysisIcon(const QString& type) {
+  // The surface quality analyses (mitcad#2517).
+  if (isSurfaceAnalysis(type)) {
+    return surfaceAnalysisIcon(type);
+  }
   return type == QStringLiteral("print")   ? QStringLiteral("print-analysis")
          : type == QStringLiteral("draft") ? QStringLiteral("draft-analysis")
          // Point Cloud Deviation (mitcad#2240).
          : type == QStringLiteral("point_cloud_deviation") ? QStringLiteral("point-cloud-deviation")
-                                                           : QStringLiteral("section-analysis");
+         // Minimum Radius (mitcad#2518).
+         : type == QStringLiteral("min_radius") ? QStringLiteral("min-radius")
+         // Minimum Distance (mitcad#2519).
+         : type == QStringLiteral("minimum_distance") ? QStringLiteral("minimum-distance")
+                                                      : QStringLiteral("section-analysis");
 }
 
 } // namespace
@@ -1107,6 +1137,24 @@ public:
   void setPlaces(bool activateRight, bool eyeRight) {
     m_delegate->setPlaces(activateRight, eyeRight);
     scheduleDelayedItemsLayout(); // the rows' size hints changed
+    viewport()->update();
+  }
+
+  // The rows' spacing (mitcad#2513): the rows laid out again at once with
+  // their new height, the row at the top of the view still at the top
+  // (scrolled per pixel, the same scroll value would show other rows); the
+  // selection, the current row and what is open stay as they were.
+  void setSpacing(BrowserRowSpacing spacing) {
+    if (spacing == m_delegate->spacing()) {
+      return;
+    }
+    const QPersistentModelIndex top =
+        verticalScrollBar()->value() > 0 ? QPersistentModelIndex(indexAt(QPoint(1, 1))) : QPersistentModelIndex();
+    m_delegate->setSpacing(spacing);
+    doItemsLayout();
+    if (top.isValid()) {
+      scrollTo(top, QAbstractItemView::PositionAtTop);
+    }
     viewport()->update();
   }
 
@@ -1280,6 +1328,10 @@ protected:
     if (m_camPress.type == BrowserNode::Type::Body ||
         (m_camPress.type == BrowserNode::Type::Component && !m_camPress.occurrence.isEmpty())) {
       m_dragSources = draggedWith(item, m_camPress);
+    } else if (m_camPress.type == BrowserNode::Type::CamManualCode) {
+      // A lathe setup's block of manual G-code (mitcad#2532): itself alone,
+      // with the drop's line or frame (dropFor).
+      m_dragSources = {m_camPress};
     } else if (m_camPress.type != BrowserNode::Type::CamOperation) {
       m_camPress = BrowserNode();
     }
@@ -1779,6 +1831,19 @@ void BrowserPanel::setControlPlaces(BrowserControlPlace activate, BrowserControl
   TestSync::singleShot(0, this, [this] { logLayout(); });
 }
 
+void BrowserPanel::setRowSpacing(BrowserRowSpacing spacing) {
+  if (spacing == m_rowSpacing) {
+    return;
+  }
+  m_rowSpacing = spacing;
+  m_tree->setSpacing(spacing);
+  // The card's height, the Rows background's boxes and the logged places
+  // follow the rows' new height.
+  emit contentHeightChanged();
+  queueRowsRegion();
+  TestSync::singleShot(0, this, [this] { logLayout(); });
+}
+
 BrowserPanel::RowPlaces BrowserPanel::rowPlaces(const QString& path) const {
   RowPlaces found;
   for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
@@ -1965,6 +2030,25 @@ bool BrowserPanel::dropFor(const QVector<BrowserNode>& sources, const BrowserNod
     return false;
   }
   const BrowserNode::Type kind = sources.first().type;
+  if (kind == BrowserNode::Type::CamManualCode) {
+    // A lathe setup's block of manual G-code (mitcad#2532), one at a time,
+    // within its own setup: on the setup's row, below it (the program's
+    // start); on one of the setup's operations or other blocks, before it,
+    // or after it with `lowerHalf`. Another setup's rows refuse it.
+    const BrowserNode& source = sources.first();
+    if (sources.size() != 1) {
+      return false;
+    }
+    if (target.type == BrowserNode::Type::CamSetup) {
+      *place = BrowserDrop::After;
+      return target.uid == source.camSetup;
+    }
+    if (target.type == BrowserNode::Type::CamOperation || target.type == BrowserNode::Type::CamManualCode) {
+      *place = lowerHalf ? BrowserDrop::After : BrowserDrop::Before;
+      return target.camSetup == source.camSetup && !(target.type == source.type && target.uid == source.uid);
+    }
+    return false;
+  }
   // The occurrence path of the occurrence a component's row is placed in
   // ("O1/O4": "O1"; "O1": the root's, "").
   const auto parentOf = [](const QString& path) {
@@ -2303,6 +2387,8 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("cam-setup:") + node.uid;
   case BrowserNode::Type::CamOperation:
     return QStringLiteral("cam-operation:") + node.uid;
+  case BrowserNode::Type::CamManualCode: // mitcad#2506
+    return QStringLiteral("cam-manual:") + node.uid;
   case BrowserNode::Type::BodyFolder: // mitcad#1802
     return QStringLiteral("body-folder:") + node.uid + at;
   case BrowserNode::Type::SketchCurve: // mitcad#1978: under each of its sketch's rows
@@ -2317,6 +2403,8 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("selection-sets");
   case BrowserNode::Type::SelectionSet:
     return QStringLiteral("selection-set:") + node.uid;
+  case BrowserNode::Type::ConstructionSet: // mitcad#2514
+    return QStringLiteral("construction-set:") + node.uid + at;
   case BrowserNode::Type::None:
     break;
   }
@@ -2507,6 +2595,7 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                          node.type == BrowserNode::Type::SelectionSet || // mitcad#2192
                          node.type == BrowserNode::Type::PointCloud ||   // mitcad#2240
                          node.type == BrowserNode::Type::ExplodeView ||  // mitcad#2113
+                         node.type == BrowserNode::Type::ConstructionSet || // mitcad#2514
                          (node.type == BrowserNode::Type::NamedView &&
                           node.uid.startsWith(QStringLiteral("named:")));
   if (renamable) {
@@ -2523,14 +2612,15 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                     node.type == BrowserNode::Type::ImageReferences || node.type == BrowserNode::Type::Features ||
                     node.type == BrowserNode::Type::CamFolder || node.type == BrowserNode::Type::CamSetup ||
                     node.type == BrowserNode::Type::SelectionSets || node.type == BrowserNode::Type::PointClouds ||
-                    node.type == BrowserNode::Type::Decals || node.type == BrowserNode::Type::ExplodeViews;
+                    node.type == BrowserNode::Type::Decals || node.type == BrowserNode::Type::ExplodeViews ||
+                    node.type == BrowserNode::Type::ConstructionSet; // mitcad#2514: its new items in sight
   item->setExpanded(m_expanded.value(key, open));
   return item;
 }
 
 void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot,
                                     const QString& component, const QString& occurrence,
-                                    bool shown, const SketchUses& uses) {
+                                    bool shown, const SketchUses& uses, const QString& envelope) {
   const auto gray = [](QTreeWidgetItem* item, bool visible) {
     if (!visible) {
       setNameRole(item, ColorRole::TextHidden);
@@ -2542,20 +2632,183 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
   folder.component = component;
   folder.hasEye = true;
 
-  // Bodies.
-  if (def != nullptr && !def->bodies.isEmpty()) {
+  // Construction sets (mitcad#2514): the set each item of the component
+  // that is in one is in, by its uid (a sketch's, a construction
+  // feature's, a body's). Their rows leave their usual folders for their
+  // sets' rows. An occurrence shown as its envelope lists only that body.
+  const QJsonArray sets = envelope.isEmpty() ? snapshot.constructionSetsOf(component) : QJsonArray{};
+  QHash<QString, QString> setOf;
+  for (const QJsonValue& value : sets) {
+    const QJsonObject set = value.toObject();
+    const QString name = set.value(QStringLiteral("name")).toString();
+    for (const QJsonValue& member : set.value(QStringLiteral("members")).toArray()) {
+      const QJsonObject m = member.toObject();
+      setOf.insert(m.contains(QStringLiteral("body")) ? m.value(QStringLiteral("body")).toString()
+                                                      : m.value(QStringLiteral("feature")).toString(),
+                   name);
+    }
+  }
+  // The Bodies folder's eye is its own (mitcad#1771): off, it hides every
+  // body of the component, their own light bulbs (and Show When
+  // conditions, mitcad#863) as they are, also those listed in a
+  // construction set; on, each body follows its own.
+  const bool bodiesOn = snapshot.folderShown(component, DocumentSnapshot::Folder::Bodies);
+  // A body's row, in the Bodies folder, a folder of it or a construction
+  // set.
+  const auto addBodyRow = [&](QTreeWidgetItem* into, const QString& uid) {
+    const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
+    BrowserNode node;
+    node.type = BrowserNode::Type::Body;
+    node.uid = uid;
+    node.occurrence = occurrence;
+    node.component = component;
+    node.name = uid == envelope ? tr("Envelope") : (body.name.isEmpty() ? uid : body.name);
+    node.visible = body.visible;
+    node.hasEye = true;
+    node.transparent = body.transparent;
+    node.folder = body.folder; // mitcad#2103: dragged out of it
+    node.constructionSet = setOf.value(uid); // mitcad#2514
+    node.mesh = body.mesh;
+    // Left out by Isolate (mitcad#1700): its eye off, its name greyed.
+    node.isolatedOut = !DocumentSnapshot::isolationShows(snapshot.isolation, uid, occurrence);
+    // Its folder hidden (mitcad#1771): greyed, its own eye as it is.
+    const bool drawn = shown && bodiesOn && body.visible && !node.isolatedOut;
+    const QString feature = uid.section(QLatin1Char('.'), 0, 0);
+    const DocumentSnapshot::Feature* made = snapshot.feature(feature);
+    // In words (mitcad#1741): the body's uid is for agents and logs.
+    QString tip = made != nullptr ? tr("%1, made by %2").arg(node.name, made->name) : node.name;
+    // The face that lies on the print bed (mitcad#731).
+    if (!body.printBedFace.isEmpty()) {
+      tip += QLatin1Char('\n') + tr("Print bed face: %1").arg(printBedText(snapshot, body));
+    }
+    QTreeWidgetItem* row = addRow(into, node, QStringLiteral("body"), tip);
+    gray(row, drawn);
+    // Bindings (mitcad#809).
+    if (body.bound()) {
+      QStringList lines;
+      if (!body.appearanceExpr.isEmpty()) {
+        lines << tr("Appearance = %1").arg(body.appearanceExpr);
+      }
+      if (!body.materialExpr.isEmpty()) {
+        lines << tr("Material = %1").arg(body.materialExpr);
+      }
+      if (!body.visibleWhen.isEmpty()) {
+        lines << tr("Shown when %1").arg(body.visibleWhen);
+      }
+      for (auto face = body.faceAppearanceExprs.begin(); face != body.faceAppearanceExprs.end(); ++face) {
+        lines << tr("Appearance of face %1 = %2").arg(face.key(), face.value().toString());
+      }
+      const int count = static_cast<int>(lines.size()); // one line per bound property
+      lines << body.warnings;
+      markBound(row, m_nodes.value(row).path, lines, count);
+    }
+    // Its light bulb follows the condition (mitcad#863).
+    if (!body.visibleWhen.isEmpty()) {
+      markConditionBulb(row, m_nodes.value(row).path, body.visible,
+                        conditionBulbTip(node.name, body.visible, body.visibleWhen,
+                                         snapshot.conditionParts(body.visibleWhen)),
+                        true);
+    }
+    addSheetRows(row, snapshot, node, drawn);
+  };
+  // View › Show greys a hidden kind's rows, their light bulbs as they are
+  // (mitcad#1287); so does its folder's own eye (mitcad#1771), also for
+  // the rows listed in a construction set.
+  const bool sketchesShown =
+      snapshot.showSketches && snapshot.folderShown(component, DocumentSnapshot::Folder::Sketches);
+  const bool constructionShown =
+      snapshot.showConstruction && snapshot.folderShown(component, DocumentSnapshot::Folder::Construction);
+  // The sets' rows, before the Bodies folder, in the order they were made:
+  // each with its items' own rows in the order they joined it; the active
+  // set's name in bold.
+  QStringList loggedSets;
+  for (const QJsonValue& value : sets) {
+    const QJsonObject set = value.toObject();
+    BrowserNode node;
+    node.type = BrowserNode::Type::ConstructionSet;
+    node.uid = set.value(QStringLiteral("name")).toString();
+    node.name = node.uid;
+    node.occurrence = occurrence;
+    node.component = component;
+    node.active = set.value(QStringLiteral("active")).toBool();
+    const QJsonArray members = set.value(QStringLiteral("members")).toArray();
+    const QString tip =
+        node.active
+            ? tr("%1: the active construction set. New sketches, construction geometry and surfaces go here.")
+                  .arg(node.name)
+            : tr("%1: %n item(s)", nullptr, static_cast<int>(members.size())).arg(node.name);
+    QTreeWidgetItem* row = addRow(parent, node, QStringLiteral("construction-set"), tip);
+    if (node.active) {
+      QFont font = row->font(kName);
+      font.setBold(true);
+      row->setFont(kName, font);
+    }
+    gray(row, shown);
+    QStringList names;
+    for (const QJsonValue& member : members) {
+      const QJsonObject m = member.toObject();
+      if (m.contains(QStringLiteral("body"))) {
+        const QString uid = m.value(QStringLiteral("body")).toString();
+        if (def != nullptr && def->bodies.contains(uid)) {
+          addBodyRow(row, uid);
+          names << m.value(QStringLiteral("name")).toString();
+        }
+        continue;
+      }
+      const DocumentSnapshot::Feature* feature = snapshot.feature(m.value(QStringLiteral("feature")).toString());
+      if (feature == nullptr || feature->component != component || !feature->isActive()) {
+        continue;
+      }
+      const bool sketch = feature->isAnySketch();
+      QTreeWidgetItem* itemRow = addSketchRow(row, snapshot, *feature, occurrence, component, sketch, shown,
+                                              sketch ? sketchesShown : constructionShown);
+      m_nodes[itemRow].constructionSet = node.uid;
+      if (sketch) {
+        addFeatureRows(itemRow, snapshot, *feature, occurrence, shown, uses);
+      }
+      names << feature->name;
+    }
+    loggedSets << QStringLiteral("%1 [%2%3]").arg(node.name, node.active ? QStringLiteral("active: ") : QString(),
+                                                  names.join(QStringLiteral(", ")));
+  }
+  // For UI tests: a component's sets, which is active and what each lists,
+  // when they change.
+  const QString setsLine = loggedSets.isEmpty() ? QString()
+                                                : QStringLiteral("Browser Construction Sets of %1: %2")
+                                                      .arg(def != nullptr && !def->name.isEmpty() ? def->name : component,
+                                                           loggedSets.join(QStringLiteral(", ")));
+  if (setsLine != m_loggedConstructionSets.value(component)) {
+    m_loggedConstructionSets.insert(component, setsLine);
+    if (!setsLine.isEmpty()) {
+      qDebug().noquote() << setsLine;
+    }
+  }
+
+  // Bodies: those in no construction set (an envelope occurrence's: its
+  // envelope body only).
+  const QStringList bodyIds = !envelope.isEmpty() ? QStringList{envelope}
+                                                : (def != nullptr ? def->bodies : QStringList{});
+  QStringList looseBodies;
+  bool bodiesHeld = false;
+  for (const QString& uid : bodyIds) {
+    if (setOf.contains(uid)) {
+      bodiesHeld = true;
+    } else {
+      looseBodies << uid;
+    }
+  }
+  // Every body in a set: the folder stays while its eye is off, so that it
+  // can be turned on again.
+  if (!looseBodies.isEmpty() || (bodiesHeld && !bodiesOn)) {
     folder.type = BrowserNode::Type::Bodies;
     folder.name = tr("Bodies");
-    // The folder's eye is its own (mitcad#1771): off, it hides every body
-    // in it, their own light bulbs (and Show When conditions, mitcad#863)
-    // as they are; on, each body follows its own. Greyed while the view
-    // shows none of its bodies.
-    const bool folderOn = snapshot.folderShown(component, DocumentSnapshot::Folder::Bodies);
+    // Greyed while the view shows none of its bodies.
+    const bool folderOn = bodiesOn;
     // Isolate (mitcad#1700): the folder is left out when the isolation
     // leaves out every body in it.
     bool anyIsolated = false;
     bool anyShown = false;
-    for (const QString& uid : def->bodies) {
+    for (const QString& uid : bodyIds) {
       const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
       const bool isolated = DocumentSnapshot::isolationShows(snapshot.isolation, uid, occurrence);
       anyIsolated = anyIsolated || isolated;
@@ -2571,7 +2824,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
     // folder; its eye shows whether a body in it is shown and shows or
     // hides them all.
     QHash<QString, QTreeWidgetItem*> bodyFolders;
-    for (const QString& uid : def->bodies) {
+    for (const QString& uid : std::as_const(looseBodies)) {
       const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
       if (body.folder.isEmpty() || bodyFolders.contains(body.folder)) {
         continue;
@@ -2585,7 +2838,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       bodyFolder.hasEye = true;
       bool inShown = false;
       bool inIsolated = false;
-      for (const QString& other : def->bodies) {
+      for (const QString& other : bodyIds) {
         const DocumentSnapshot::Body b = snapshot.bodies.value(other);
         if (b.folder == body.folder) {
           inShown = inShown || b.visible;
@@ -2598,62 +2851,12 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       gray(row, shown && folderOn && inShown && inIsolated);
       bodyFolders.insert(body.folder, row);
     }
-    for (const QString& uid : def->bodies) {
-      const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
-      QTreeWidgetItem* const into = bodyFolders.value(body.folder, bodies);
-      BrowserNode node;
-      node.type = BrowserNode::Type::Body;
-      node.uid = uid;
-      node.occurrence = occurrence;
-      node.component = component;
-      node.name = body.name.isEmpty() ? uid : body.name;
-      node.visible = body.visible;
-      node.hasEye = true;
-      node.transparent = body.transparent;
-      node.folder = body.folder; // mitcad#2103: dragged out of it
-      node.mesh = body.mesh;
-      // Left out by Isolate (mitcad#1700): its eye off, its name greyed.
-      node.isolatedOut = !DocumentSnapshot::isolationShows(snapshot.isolation, uid, occurrence);
-      // Its folder hidden (mitcad#1771): greyed, its own eye as it is.
-      const bool drawn = shown && folderOn && body.visible && !node.isolatedOut;
-      const QString feature = uid.section(QLatin1Char('.'), 0, 0);
-      const DocumentSnapshot::Feature* made = snapshot.feature(feature);
-      // In words (mitcad#1741): the body's uid is for agents and logs.
-      QString tip = made != nullptr ? tr("%1, made by %2").arg(node.name, made->name) : node.name;
-      // The face that lies on the print bed (mitcad#731).
-      if (!body.printBedFace.isEmpty()) {
-        tip += QLatin1Char('\n') + tr("Print bed face: %1").arg(printBedText(snapshot, body));
-      }
-      QTreeWidgetItem* row = addRow(into, node, QStringLiteral("body"), tip);
-      gray(row, drawn);
-      // Bindings (mitcad#809).
-      if (body.bound()) {
-        QStringList lines;
-        if (!body.appearanceExpr.isEmpty()) {
-          lines << tr("Appearance = %1").arg(body.appearanceExpr);
-        }
-        if (!body.materialExpr.isEmpty()) {
-          lines << tr("Material = %1").arg(body.materialExpr);
-        }
-        if (!body.visibleWhen.isEmpty()) {
-          lines << tr("Shown when %1").arg(body.visibleWhen);
-        }
-        for (auto face = body.faceAppearanceExprs.begin(); face != body.faceAppearanceExprs.end(); ++face) {
-          lines << tr("Appearance of face %1 = %2").arg(face.key(), face.value().toString());
-        }
-        const int count = static_cast<int>(lines.size()); // one line per bound property
-        lines << body.warnings;
-        markBound(row, m_nodes.value(row).path, lines, count);
-      }
-      // Its light bulb follows the condition (mitcad#863).
-      if (!body.visibleWhen.isEmpty()) {
-        markConditionBulb(row, m_nodes.value(row).path, body.visible,
-                          conditionBulbTip(node.name, body.visible, body.visibleWhen,
-                                           snapshot.conditionParts(body.visibleWhen)),
-                          true);
-      }
-      addSheetRows(row, snapshot, node, drawn);
+    for (const QString& uid : std::as_const(looseBodies)) {
+      addBodyRow(bodyFolders.value(snapshot.bodies.value(uid).folder, bodies), uid);
     }
+  }
+  if (!envelope.isEmpty()) {
+    return;
   }
 
   // The features with the sketches they use (mitcad#1699), while Show used
@@ -2665,24 +2868,31 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
   }
 
   // Sketches and construction geometry: features of the component before
-  // the marker.
+  // the marker, but those in a construction set (mitcad#2514).
   for (const bool sketches : {true, false}) {
     QVector<const DocumentSnapshot::Feature*> features;
+    bool held = false;
     for (const DocumentSnapshot::Feature& feature : snapshot.features) {
       if (feature.component == component && feature.isActive() &&
           (sketches ? feature.isAnySketch() && !users.contains(feature.uid) : feature.isConstruction())) {
-        features.append(&feature);
+        if (setOf.contains(feature.uid)) {
+          held = true;
+        } else {
+          features.append(&feature);
+        }
       }
     }
-    if (features.isEmpty()) {
+    // The folder's eye is its own (mitcad#1771): off, it hides everything
+    // of its kind, the rows' own light bulbs as they are.
+    const bool folderOn = snapshot.folderShown(
+        component, sketches ? DocumentSnapshot::Folder::Sketches : DocumentSnapshot::Folder::Construction);
+    // Everything in sets: the folder stays while its eye is off, so that
+    // it can be turned on again.
+    if (features.isEmpty() && !(held && !folderOn)) {
       continue;
     }
     folder.type = sketches ? BrowserNode::Type::Sketches : BrowserNode::Type::Construction;
     folder.name = sketches ? tr("Sketches") : tr("Construction");
-    // The folder's eye is its own (mitcad#1771): off, it hides everything
-    // in it, the rows' own light bulbs as they are.
-    const bool folderOn = snapshot.folderShown(
-        component, sketches ? DocumentSnapshot::Folder::Sketches : DocumentSnapshot::Folder::Construction);
     folder.visible = folderOn;
     bool anyShown = false;
     for (const DocumentSnapshot::Feature* feature : features) {
@@ -3134,13 +3344,24 @@ void BrowserPanel::addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot
     } else {
       notValid = tr("Flat Pattern of %1 is invalid: %2").arg(body.name, why);
     }
-    QTreeWidgetItem* flatRow = addRow(
-        bodyRow, item, QStringLiteral("flat-pattern"),
-        valid ? tr("Flat Pattern of %1: %2 mm2, %n bend(s); the light bulb shows it flat", nullptr,
-                   pattern.value(QStringLiteral("bends")).toInt())
-                    .arg(body.name)
-                    .arg(pattern.value(QStringLiteral("area")).toDouble(), 0, 'f', 2)
-              : notValid);
+    // A pattern laid flat by triangulation says how approximate it is
+    // (mitcad#2442).
+    const QJsonObject approximation = pattern.value(QStringLiteral("approximation")).toObject();
+    const QString shownValid =
+        approximation.isEmpty()
+            ? tr("Flat Pattern of %1: %2 mm2, %n bend(s); the light bulb shows it flat", nullptr,
+                 pattern.value(QStringLiteral("bends")).toInt())
+                  .arg(body.name)
+                  .arg(pattern.value(QStringLiteral("area")).toDouble(), 0, 'f', 2)
+            : tr("Flat Pattern of %1: %2 mm2, approximate: %n triangle(s), lengths along its edges within %3 mm "
+                 "and across it within %4 mm of the faces'; the light bulb shows it flat",
+                 nullptr, approximation.value(QStringLiteral("triangles")).toInt())
+                  .arg(body.name)
+                  .arg(pattern.value(QStringLiteral("area")).toDouble(), 0, 'f', 2)
+                  .arg(approximation.value(QStringLiteral("edges")).toDouble(), 0, 'f', 3)
+                  .arg(approximation.value(QStringLiteral("across")).toDouble(), 0, 'f', 3);
+    QTreeWidgetItem* flatRow =
+        addRow(bodyRow, item, QStringLiteral("flat-pattern"), valid ? shownValid : notValid);
     if (!valid) {
       setNameRole(flatRow, ColorRole::ErrorText);
     } else if (!shown) {
@@ -3492,8 +3713,10 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
       m_hiddenWith = occurrence.name;
       m_hiddenParents.append(occurrence.path);
     }
-    addComponentRows(item, snapshot, occurrence.component, occurrence.path, visible, uses);
-    place(item, occurrence.children, visible, occurrence.path, occurrence.component);
+    addComponentRows(item, snapshot, occurrence.component, occurrence.path, visible, uses, occurrence.envelopeBody);
+    if (occurrence.envelopeBody.isEmpty()) {
+      place(item, occurrence.children, visible, occurrence.path, occurrence.component);
+    }
     m_hiddenWith = hiddenWith;
     m_hiddenParents = hiddenParents;
   };
@@ -3739,8 +3962,34 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
         setNameRole(setupItem, ColorRole::TextHidden);
       }
       QStringList states;
-      for (const QJsonValue& entry : operations) {
-        const QJsonObject operation = entry.toObject();
+      // A lathe setup's blocks of manual G-code (mitcad#2506) among its
+      // operations where the program writes them, after the operation each
+      // follows (or first), as manual code in their tooltip.
+      const QJsonArray manual =
+          setup.value(QStringLiteral("lathe")).toObject().value(QStringLiteral("manual_code")).toArray();
+      const QVector<int> manualPlaces = mitcad::cam::manualPlacesInOrder(setup);
+      const auto addManual = [&](int after) {
+        for (int b = 0; b < manualPlaces.size(); ++b) {
+          if (manualPlaces.at(b) != after) {
+            continue;
+          }
+          BrowserNode block;
+          block.type = BrowserNode::Type::CamManualCode;
+          block.component = rootNode.uid;
+          block.uid = QStringLiteral("%1:%2").arg(row.uid).arg(b);
+          block.name = manual.at(b).toObject().value(QStringLiteral("name")).toString();
+          if (block.name.isEmpty()) {
+            block.name = tr("Manual G-code");
+          }
+          block.camSetup = row.uid;
+          addRow(setupItem, block, QStringLiteral("cnc-post"),
+                 tr("%1: manual G-code, written as it is; neither simulated nor read back").arg(block.name));
+          states << QStringLiteral("%1 manual").arg(block.name);
+        }
+      };
+      addManual(0);
+      for (int at = 0; at < operations.size(); ++at) {
+        const QJsonObject operation = operations.at(at).toObject();
         BrowserNode op;
         op.type = BrowserNode::Type::CamOperation;
         op.component = rootNode.uid;
@@ -3773,6 +4022,7 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
         states << (problem.isEmpty() ? QStringLiteral("%1 %2").arg(op.name, op.camState)
                                      : QStringLiteral("%1 %2 (%3)").arg(op.name, op.camState,
                                                                        operation.value(QStringLiteral("problem")).toString()));
+        addManual(at + 1);
       }
       logged << QStringLiteral("%1 [%2]").arg(row.name, states.join(QStringLiteral(", ")));
     }
@@ -3951,9 +4201,12 @@ void BrowserPanel::styleAnalysisRow(QTreeWidgetItem* item, const QJsonObject& an
   const QString name = analysis.value(QStringLiteral("name")).toString();
   const QString type = analysis.value(QStringLiteral("type")).toString();
   const QString error = mitcad::modelMessage(analysis.value(QStringLiteral("error")).toString());
-  const QString kind = type == QStringLiteral("print")   ? tr("Print Analysis")
+  const QString kind = isSurfaceAnalysis(type)           ? surfaceAnalysisTitle(type) // mitcad#2517
+                       : type == QStringLiteral("print") ? tr("Print Analysis")
                        : type == QStringLiteral("draft") ? tr("Draft Analysis")
                        : type == QStringLiteral("point_cloud_deviation") ? tr("Point Cloud Deviation") // mitcad#2240
+                       : type == QStringLiteral("min_radius")            ? tr("Minimum Radius")        // mitcad#2518
+                       : type == QStringLiteral("minimum_distance")      ? tr("Minimum Distance")      // mitcad#2519
                                                                          : tr("Section Analysis");
   const QIcon icon = themeIcon(analysisIcon(type));
   // A plane that cannot be found stays the error it is (mitcad#1230).
@@ -4689,6 +4942,13 @@ void BrowserPanel::logLayout() {
   };
   lines << QStringLiteral("Browser controls: activate %1, eye %2")
                .arg(placeWord(m_activatePlace), placeWord(m_eyePlace));
+  // The rows' spacing and the height it gives them (mitcad#2513).
+  const auto spacingWord = [](BrowserRowSpacing spacing) {
+    return spacing == BrowserRowSpacing::Compact       ? QStringLiteral("compact")
+           : spacing == BrowserRowSpacing::Comfortable ? QStringLiteral("comfortable")
+                                                       : QStringLiteral("standard");
+  };
+  lines << QStringLiteral("Browser row spacing %1: rows %2 px high").arg(spacingWord(m_rowSpacing)).arg(rowHeight());
   if (m_activatePlace == BrowserControlPlace::Right || m_eyePlace == BrowserControlPlace::Right) {
     place(QStringLiteral("Browser right edge"), QRect(viewport.right(), viewport.top(), 1, viewport.height()));
   }

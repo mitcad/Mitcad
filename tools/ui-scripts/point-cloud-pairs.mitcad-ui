@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: MIT
+# Point pairs and the crop box of the point cloud tools (mitcad#2565), the
+# shared input script of tools/ui-point-cloud-pairs-test.sh (Linux),
+# tools/ui-windows-point-cloud-pairs-test.ps1 (Windows) and
+# tools/ui-macos-point-cloud-pairs-test.sh (macOS), on point-cloud-pairs.json
+# saved as point-cloud-pairs.mitcad in the work folder: a block 20 x 20 x 10
+# mm from the origin (Body1) and the point cloud Scan, 306 points on the
+# block's faces turned 30 degrees about Z and moved 20 mm along X.
+#   1. Align Point Cloud with the Start Point Pairs: three pairs clicked in
+#      the view, each a shown point of Scan's top face, then where it
+#      belongs on Body1's top face; a wrong second point taken back by
+#      Backspace. The pairs give the start, Best Fit refines it: the panel
+#      states the remaining deviation (RMS within 0.01 mm) and the pairs'
+#      distance; OK moves the cloud back onto the block, one undo step.
+#   2. Filter Point Cloud with the Crop Keep Inside Box, Outliers None: the
+#      box starts round the cloud, its X To handle dragged, then its six
+#      values typed (X -1 to 9, Y -1 to 21, Z -1 to 11): OK keeps the 140
+#      points inside it as Scan Filtered.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+expect-ever '^Browser Root/Point Clouds/Scan at ' 30
+expect-ever '^Point clouds drawn: Scan 306 points$' 30
+
+# --- 1. Scan aligned onto Body1 by three point pairs and the best fit.
+mark
+context-menu-logged '^Browser Root/Point Clouds/Scan at ' 'Align Point Cloud'
+wait-log '^Command Align Point Cloud started' 20
+wait-idle 60
+qt-choice input_start 'Point Pairs'
+wait-log '^Align Point Cloud: Start = Point Pairs' 20
+wait-log '^Inspect Align Point Cloud: failed: Click a point of the cloud, then where it belongs on Body1; three pairs or more[.]$' 30
+wait-idle 60
+# The panel grew by the Point Pairs row: the points in the free area.
+command view.fit
+wait-idle
+capture-undo-depth before_align
+
+# The first pair: a point of the cloud, then where it belongs on the block.
+mark
+click-view-point 21.464102,5.464102,10
+wait-log '^Align Point Cloud points: 1 [(]Scan at 21[.]464, 5[.]464, 10[.]000[)]$' 30
+wait-log '^Inspect Align Point Cloud: failed: Click where that point belongs on Body1[.]$' 30
+wait-idle 60
+mark
+click-view-point 4,4,10
+wait-log '^Align Point Cloud points: 2$' 30
+wait-log '^Inspect Align Point Cloud: failed: 1 of 3 point pairs picked: ' 30
+wait-idle 60
+
+# The second pair, its second point first clicked in the wrong place and
+# taken back by Backspace.
+mark
+click-view-point 31.856406,11.464102,10
+wait-log '^Align Point Cloud points: 3 [(]Scan at 31[.]856, 11[.]464, 10[.]000[)]$' 30
+wait-idle 60
+mark
+click-view-point 10,10,10
+wait-log '^Align Point Cloud points: 4$' 30
+wait-idle 60
+mark
+focus-main
+key BackSpace
+wait-log '^Align Point Cloud: Backspace taken' 20
+wait-log '^Align Point Cloud points: 3$' 20
+wait-idle 60
+mark
+click-view-point 16,4,10
+wait-log '^Align Point Cloud points: 4$' 30
+wait-idle 60
+
+# The third pair: the start, refined by the best fit.
+mark
+click-view-point 25.856406,21.856406,10
+wait-log '^Align Point Cloud points: 5 [(]Scan at 25[.]856, 21[.]856, 10[.]000[)]$' 30
+wait-idle 60
+mark
+click-view-point 16,16,10
+wait-log '^Align Point Cloud points: 6$' 30
+wait-log '^Inspect Align Point Cloud: Scan to Body1: RMS 0[.]00[0-9] mm, mean 0[.]00[0-9] mm, max [0-9.]+ mm, 306 of 306 points, [0-9]+ rounds(, settled)?, pairs RMS [0-9.]+ mm$' 120
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/point-cloud-pairs-aligned.png'
+mark
+button '^OK$'
+wait-log '^Aligned point cloud Scan to Body1: RMS 0[.]00[0-9] mm, .*, pairs RMS [0-9.]+ mm$' 120
+wait-idle 60
+expect-undo-depth ${before_align} 1
+# The cloud lies on the block again: its box is the block's.
+capture-model-number scan_low_x '{"query":"point_clouds"}' 0.bounds.0.0
+capture-model-number scan_high_x '{"query":"point_clouds"}' 0.bounds.1.0
+capture-model-number scan_high_y '{"query":"point_clouds"}' 0.bounds.1.1
+capture-model-number scan_high_z '{"query":"point_clouds"}' 0.bounds.1.2
+expect-near ${scan_low_x} 0 0 0.01
+expect-near ${scan_high_x} 20 0 0.01
+expect-near ${scan_high_y} 20 0 0.01
+expect-near ${scan_high_z} 10 0 0.01
+
+# --- 2. The points inside a box kept.
+mark
+context-menu-logged '^Browser Root/Point Clouds/Scan at ' 'Filter Point Cloud'
+wait-log '^Command Filter Point Cloud started' 20
+wait-idle 60
+qt-choice input_outliers 'None'
+wait-log '^Filter Point Cloud: Outliers = None' 20
+qt-choice input_crop 'Keep Inside Box'
+wait-log '^Filter Point Cloud: Crop = Keep Inside Box' 20
+wait-idle 60
+# The box starts round the cloud, a little larger.
+expect-input-text box_x_min '^-0[.][0-9]+ mm$'
+expect-input-text box_x_max '^20[.][0-9]+ mm$'
+expect-input-text box_z_max '^10[.][0-9]+ mm$'
+wait-log '^Manipulator Filter Point Cloud box_x_max at ' 20
+focus-main
+mark
+drag-from '^Manipulator Filter Point Cloud box_x_max at ' 60 0
+wait-log '^Manipulator Filter Point Cloud box_x_max dragged to [0-9-]' 30
+wait-idle 60
+type-in '^Panel Filter Point Cloud input box_x_min at ' '-1'
+type-in '^Panel Filter Point Cloud input box_x_max at ' '9'
+type-in '^Panel Filter Point Cloud input box_y_min at ' '-1'
+type-in '^Panel Filter Point Cloud input box_y_max at ' '21'
+type-in '^Panel Filter Point Cloud input box_z_min at ' '-1'
+type-in '^Panel Filter Point Cloud input box_z_max at ' '11'
+wait-idle 60
+capture-undo-depth before_filter
+mark
+button '^OK$'
+wait-log '^Filtered point cloud Scan: outliers none, cropped by a box from -1[.]000,-1[.]000,-1[.]000 to 9[.]000,21[.]000,11[.]000, inside kept$' 30
+wait-log '^Point clouds drawn: Scan Filtered 140 points$' 30
+expect-ever '^Browser Root/Point Clouds/Scan Filtered at ' 30
+wait-idle 60
+expect-undo-depth ${before_filter} 1
+screenshot-view '${MITCAD_TEST_WORK}/point-cloud-pairs-box.png'
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

@@ -33,9 +33,12 @@
 #include "WindowManager.hpp"
 #include "framework/AppSettings.hpp"
 #include "framework/CommandRegistry.hpp"
+#include "framework/Diagnostics.hpp"
 #include "framework/FloatingLayout.hpp"
+#include "framework/PaintWatch.hpp"
 #include "framework/Ribbon.hpp"
 #include "framework/TestSync.hpp"
+#include "framework/TitleBar.hpp"
 #include "files/Autosave.hpp"
 #include "files/FileFormats.hpp"
 #include "files/ProjectIndicator.hpp"
@@ -185,6 +188,36 @@ void MainWindow::createStartPage() {
   // the repository README.md names, the tag v<version>).
   host.releaseUrl = QStringLiteral("https://github.com/mitcad/Mitcad/releases/tag/v%1").arg(host.version);
   m_startPage = new StartPage(m_viewer, std::move(host));
+  if (m_paintWatch != nullptr) {
+    m_paintWatch->watch(m_startPage, QStringLiteral("Start page"));
+  }
+}
+
+void MainWindow::watchOverlayPaints() {
+#ifdef Q_OS_LINUX
+  if (m_nativeUi || m_paintWatch != nullptr) {
+    return;
+  }
+  // A headless test's view never draws: a paint counts as presented.
+  m_paintWatch = new PaintWatch(headlessUiTest() ? nullptr : m_viewer, this);
+  m_paintWatch->watch(m_floating != nullptr ? static_cast<QWidget*>(m_ribbon) : m_dockedPanel,
+                      QStringLiteral("toolbar panel"));
+  m_paintWatch->watch(m_titleRow, QStringLiteral("title row"));
+  if (m_startPage != nullptr) {
+    m_paintWatch->watch(m_startPage, QStringLiteral("Start page"));
+  }
+  if (m_floating != nullptr) {
+    // The Floating layout's other rows and cards (the notices, the
+    // Browser's card, the navigation bar, ...), by their object names.
+    for (QWidget* child : m_floating->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
+      if (child == m_viewer) {
+        continue;
+      }
+      m_paintWatch->watch(child, child->objectName().isEmpty() ? QString::fromLatin1(child->metaObject()->className())
+                                                               : child->objectName());
+    }
+  }
+#endif
 }
 
 bool MainWindow::startPageShown() const { return m_startPage != nullptr && !m_startPage->isHidden(); }
@@ -250,6 +283,10 @@ void MainWindow::updateStartPage(const QString& tab) {
   applyToolbarPanelHidden();
   if (!start) {
     logToolbarPanelAfterStart();
+    // Painted and presented, not only placed (PaintWatch, mitcad#2031).
+    if (m_paintWatch != nullptr) {
+      m_paintWatch->arm(QStringLiteral("after the Start page was left"));
+    }
   }
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeWindow) {

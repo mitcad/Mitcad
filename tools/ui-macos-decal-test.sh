@@ -26,7 +26,7 @@ printf '%s' "$png" | base64 -d > "$MITCAD_TEST_WORK/decal.png" 2> /dev/null ||
   printf '%s' "$png" | base64 -D > "$MITCAD_TEST_WORK/decal.png" || exit 1
 "$cli" run "$here/ui-scripts/decal.json" --save "$MITCAD_TEST_WORK/decal.mitcad" || exit 1
 MITCAD_TEST_INPUT=$here/ui-scripts/decal.mitcad-ui MITCAD_TEST_STEP_MS=100 \
-  ui_run_app decal --ui=qt --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/decal.mitcad"
+  ui_run_app decal --ui=qt --no-recovery --no-mcp --no-native-dialogs --open "$MITCAD_TEST_WORK/decal.mitcad"
 ui_expect_log 'Decals drawn: Decal1 20.0 x 10.0 mm on a plane turned 90 deg flipped 100%' 'the decal turned and flipped'
 ui_expect_log 'Decal2 15.0 x 7.5 mm on a cylinder 100%' 'the decal on the rod'
 ui_expect_log '^TestDriver: done' 'Decals (mitcad#2244): every step of the script'

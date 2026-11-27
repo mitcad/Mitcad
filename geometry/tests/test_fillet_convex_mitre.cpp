@@ -74,6 +74,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -436,7 +437,7 @@ void test_reported_body() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_convex_mitre) {
   test::guarded("test_vertical_edge_into_the_mitre", test::test_vertical_edge_into_the_mitre);
   test::guarded("test_top_mitre_alone", test::test_top_mitre_alone);
   test::guarded("test_corner_face_named", test::test_corner_face_named);

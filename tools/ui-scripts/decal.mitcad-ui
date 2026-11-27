@@ -10,8 +10,11 @@
 #      part red in the view, its transparent quarter showing the top.
 #   2. Edited from its row: turned 90 degrees and flipped, the red and the
 #      transparent parts where the turn and the flip put them.
-#   3. A decal on the rod's side, 15 mm wide around it: drawn on a
-#      cylinder in pieces, its red part red on the side.
+#   3. A decal on the rod's side, 15 mm wide around it, its image chosen
+#      with Choose Image... in Qt's own file dialog (mitcad#2474: taken at
+#      once, the panel's "Choose an image file." gone; the runners start
+#      the app with --no-native-dialogs): drawn on a cylinder in pieces,
+#      its red part red on the side.
 #   4. The plate on the box's top shown: the decal under it is hidden.
 #   5. Undo takes the plate's light bulb, the rod's decal and the edit
 #      back, one step each.
@@ -83,7 +86,24 @@ wait-log '^Command Decal started' 30
 wait-idle
 click-pick 'face F2\.b0/F2:side0'
 wait-log '^Decal Face: 1 face' 30
-type-in '^Panel Decal input file at ' '${MITCAD_TEST_WORK}/decal.png'
+wait-log '^Panel Decal error: Choose an image file[.]$' 30
+wait-idle
+# The image chosen with Choose Image... in the file dialog (mitcad#2474):
+# the panel takes it at once, its message goes.
+mark
+click-logged '^Panel Decal action choose[.]0 at '
+focus-dialog '^Insert Decal$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/decal.png"
+sleep 300
+key Return
+focus-main
+wait-log '^Decal file chosen: decal[.]png$' 20
+wait-log '^Decal Image: .*decal[.]png$' 10
+wait-log '^Panel Decal message: error gone: Choose an image file[.]$' 30
+expect-input-text file '.*decal[.]png$'
+wait-idle
+expect-no-log '^Panel Decal error: '
 type-in '^Panel Decal input x at ' '0'
 type-in '^Panel Decal input y at ' '15'
 type-in '^Panel Decal input width at ' '15'

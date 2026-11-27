@@ -266,8 +266,10 @@ int turnTests() {
   // Symmetric and two sides have no direction to turn; Intersect, New
   // Body and New Component are never turned.
   state.operationChosen("cut", 0);
-  check(!state.turnWaiting(), "a symmetric or two-sided Cut waits for nothing");
-  check(state.operationPreviewed(false, true) == Turn::Keep, "and its failure stays");
+  state.observeDirection(0);
+  check(state.operationPreviewed(false, true) == Turn::Keep,
+        "a symmetric or two-sided Cut's preview without a direction keeps its failure");
+  check(!state.turnWaiting(), "and then waits for nothing");
   state.operationChosen("intersect", 1);
   check(!state.turnWaiting(), "Intersect is never turned");
   state.operationChosen("new_body", 1);
@@ -294,6 +296,33 @@ int turnTests() {
   check(state.turnWaiting(), "Operation chosen again while turned: the new choice waits for its own preview");
   state.observeDirection(1);
   check(state.operationPreviewed(true, std::nullopt) == Turn::Keep, "and stays when it works");
+
+  // A new Extrude starts at zero (mitcad#2481): a Cut or Join chosen
+  // before any distance takes the first direction as its own.
+  state.start(true, false);
+  state.disable();
+  state.operationChosen("cut", 0);
+  check(state.turnWaiting(), "Cut chosen at zero waits for a direction");
+  state.observeDirection(0);
+  check(state.turnWaiting(), "still zero: it keeps waiting");
+  state.observeDirection(1); // the first distance typed, out of the block
+  check(!state.flipWaiting(), "the first direction is no flip of the user's (mitcad#2216)");
+  check(state.operationPreviewed(false, true) == Turn::Turn,
+        "the Cut that misses its first way, flip_would_cut: turned, as when chosen with a distance");
+  state.observeDirection(-1);
+  check(state.operationPreviewed(true, std::nullopt) == Turn::Taken, "the turned Cut works: it stays");
+  state.start(true, false);
+  state.disable();
+  state.operationChosen("join", 0);
+  state.observeDirection(-1); // dragged from zero into the block
+  check(state.operationPreviewed(true, std::nullopt) == Turn::Keep, "a Join that works its first way stays");
+  check(!state.turnWaiting() && !state.flipWaiting(), "and nothing waits");
+  // The automatic choice itself: zero arms nothing, the first direction is
+  // no flip.
+  state.start(true, false);
+  state.observeDirection(0);
+  state.observeDirection(-1);
+  check(!state.flipWaiting() && !state.turnWaiting(), "the first distance of an automatic Extrude flips nothing");
 
   // Preferences › General › Extrude starts with: New Body (mitcad#2164)
   // does not change the rule.

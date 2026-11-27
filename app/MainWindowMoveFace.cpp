@@ -90,7 +90,7 @@ QString MainWindow::moveFaceCard(const SelectionItem& item) const {
       feature != nullptr ? feature->name : item.owner,
       static_cast<int>(def.value(QStringLiteral("faces")).toArray().size()),
       body == m_snapshot.bodies.cend() || body->name.isEmpty() ? bodyUid : body->name,
-      def.value(QStringLiteral("transform")).toObject(), value);
+      cmd::moveFaceMotion(def), value);
   if (summary != m_loggedMoveFaceCard) {
     m_loggedMoveFaceCard = summary;
     qDebug().noquote() << QStringLiteral("Move Face card: %1").arg(summary);

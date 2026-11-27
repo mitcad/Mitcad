@@ -249,6 +249,20 @@ pub use tutorial_bridge::{TUTORIAL_QUERIES, tutorial_query};
 // The drawing book: drawings of the design and of its linked designs
 // printed as one job (mitcad#2448).
 mod drawing_book;
+// Construction sets: named Browser groups of a component that collect new
+// sketches, construction geometry and surface bodies (mitcad#2514).
+mod construction_sets;
+// Minimum Distance analyses: the smallest distance between two selections
+// (mitcad#2519).
+mod min_distance;
+// Continuity Analysis: the continuity across bodies' edges, the
+// edge_continuity query (mitcad#2521).
+mod continuity;
+// Surface quality analyses: Zebra, Curvature Map, Isocurve Analysis and
+// Environment Map (mitcad#2517).
+mod surface_quality;
+// Curvature combs of sketch curves and edges (mitcad#2520).
+mod curvature_comb;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -310,6 +324,8 @@ pub mod prelude {
     pub(crate) use super::print::PrintOps;
     // Draft Analysis (mitcad#2166).
     pub(crate) use super::print::DraftOps;
+    // Minimum Radius (mitcad#2518).
+    pub(crate) use super::print::MinRadiusOps;
     pub(crate) use super::print_profiles::PrintProfilesCrateOps;
     pub(crate) use super::print_profiles::PrintProfilesOps;
     pub(crate) use super::properties::PropertiesCrateOps;
@@ -364,6 +380,8 @@ pub mod prelude {
     pub(crate) use super::drawing_flat::DrawingFlatOps;
     // Weld symbols proposed from BUILD's joints (mitcad#2350).
     pub(crate) use super::drawing_welds::DrawingWeldsOps;
+    // Surface quality analyses (mitcad#2517).
+    pub(crate) use super::surface_quality::SurfaceOps;
 }
 
 use std::fmt;
@@ -720,6 +738,9 @@ named_enum! {
             up: [f64; 3],
             #[serde(default)]
             perspective: bool,
+            /// Perspective with Orthographic Faces (mitcad#2473).
+            #[serde(default)]
+            orthographic_faces: bool,
             height: f64,
             /// Replace a view of the same name instead of refusing.
             #[serde(default)]
@@ -1360,7 +1381,8 @@ named_enum! {
         "comment_attachment" => CommentAttachment(comments::AttachmentQuery),
         // The top-level fields of the design file a newer MitCad wrote
         // and this build did not read, and whether saving to `path` drops
-        // them (mitcad#1132).
+        // them (mitcad#1132); with the CAM section that could not be read
+        // (mitcad#2581).
         "unknown_fields" => UnknownFields {
             #[serde(default)]
             path: Option<String>,
@@ -1569,6 +1591,36 @@ named_enum! {
             base: Option<String>,
         },
         "drawing_book_sheets" => DrawingBookSheets(drawing_book::SheetsQuery),
+        // A point cloud's alignment worked out, the cloud left where it is
+        // (mitcad#2516, `point_clouds.rs`).
+        "point_cloud_alignment" => PointCloudAlignment(Box<point_clouds::AlignFields>),
+        // A lathe tool as `cam_tool_put` would keep it, with its insert's
+        // back angle and outline, for the tool editor (mitcad#2502,
+        // `cam.rs`); nothing is kept.
+        "cam_tool_shape" => CamToolShape(cam::ToolShapeQuery),
+        // Minimum Radius: the smallest radius of curvature of faces and
+        // those under a limit (mitcad#2518, `print.rs`).
+        "min_radius_analysis" => MinRadiusAnalysis(print::MinRadiusQuery),
+        // The design's construction sets with their members (mitcad#2514,
+        // `construction_sets.rs`).
+        "construction_sets" => ConstructionSets,
+        // Minimum Distance: the smallest distance between two selections,
+        // a kept analysis' or a definition's (mitcad#2519,
+        // `min_distance.rs`).
+        "minimum_distance" => MinimumDistance(min_distance::MinimumDistanceQuery),
+        // Continuity Analysis: the gap, angle and curvature difference
+        // across bodies' edges (mitcad#2521, `continuity.rs`).
+        "edge_continuity" => EdgeContinuity(continuity::ContinuityQuery),
+        // Surface quality analyses: a Zebra's stripes, a Curvature Map's
+        // values, an Isocurve Analysis' curves or an Environment Map's mesh
+        // (mitcad#2517, `surface_quality.rs`).
+        "surface_analysis" => SurfaceAnalysis(Box<surface_quality::SurfaceQuery>),
+        // Curvature combs of sketch curves and edges with their inflection
+        // points (mitcad#2520, `curvature_comb.rs`).
+        "curvature_comb" => CurvatureComb(curvature_comb::CombQuery),
+        // A cut sheet's cutting paths and what keeps it from being cut
+        // (mitcad#2553, `cut_sheets/cutting.rs`).
+        "cut_sheet_cutting" => CutSheetCutting(cut_sheets::cutting::CuttingQuery),
     }
 }
 
@@ -1577,27 +1629,35 @@ fn names(names: &[String]) -> Value {
 }
 
 /// The `unknown_fields` query (mitcad#1132): the top-level fields of the
-/// design file the document was read from that this build did not read,
-/// with that file; with `path`, only those saving to `path` drops (none
-/// for another file). `message` says it in words when there are any.
+/// design file the document was read from that this build did not read
+/// (those a newer MitCad wrote, and `cam` when it could not be read,
+/// mitcad#2581), with that file; with `path`, only those saving to `path`
+/// drops (none for another file). `unreadable` names the known ones among
+/// them that could not be read, with why; `message` says it in words when
+/// there are any.
 fn unknown_fields_json<K: Kernel>(doc: &Document<K>, path: Option<&str>) -> Value {
     let unknown = doc.unknown_fields();
     let (fields, message) = match path {
-        Some(path) => {
-            let fields = doc.fields_dropped_by_saving(std::path::Path::new(path));
-            let message = mitcad_model::file::dropped_fields_warning(&fields);
-            (fields, message)
+        Some(path) => (
+            doc.fields_dropped_by_saving(std::path::Path::new(path)),
+            unknown.dropping_warning(),
+        ),
+        None => (unknown.not_read(), Some(unknown.warnings().join("\n"))),
+    };
+    let unreadable: Vec<Value> = match &unknown.unreadable_cam {
+        Some(reason) if fields.iter().any(|f| f == "cam") => {
+            vec![json!({"field": "cam", "reason": reason})]
         }
-        None => {
-            let message = mitcad_model::file::unknown_fields_warning(&unknown.fields);
-            (unknown.fields, message)
-        }
+        _ => Vec::new(),
     };
     let file = unknown.file.map(|f| f.display().to_string());
     let any = !fields.is_empty();
     let mut value = json!({"fields": fields, "file": file});
     if any {
-        value["message"] = json!(message);
+        value["unreadable"] = json!(unreadable);
+        if let Some(message) = message {
+            value["message"] = json!(message);
+        }
     }
     value
 }
@@ -2442,6 +2502,24 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             // The drawing book (mitcad#2448).
             Query::DrawingBook { base } => drawing_book::book_json(self, base.as_deref()),
             Query::DrawingBookSheets(query) => drawing_book::sheets_json(self, &query)?,
+            // A point cloud's alignment (mitcad#2516).
+            Query::PointCloudAlignment(fields) => point_clouds::alignment_json(self, &fields)?,
+            // A lathe tool's insert and holder (mitcad#2502).
+            Query::CamToolShape(query) => cam::tool_shape(self, &query)?,
+            // Minimum Radius (mitcad#2518).
+            Query::MinRadiusAnalysis(query) => self.min_radius_analysis_json(&query)?,
+            // Construction sets (mitcad#2514).
+            Query::ConstructionSets => construction_sets::sets_json(self),
+            // Minimum Distance (mitcad#2519).
+            Query::MinimumDistance(query) => min_distance::minimum_distance_json(self, &query)?,
+            // Continuity Analysis (mitcad#2521).
+            Query::EdgeContinuity(query) => continuity::query(self, &query)?,
+            // Surface quality analyses (mitcad#2517).
+            Query::SurfaceAnalysis(query) => self.surface_analysis_json(&query)?,
+            // Curvature combs (mitcad#2520).
+            Query::CurvatureComb(query) => curvature_comb::query(self, &query)?,
+            // A cut sheet's cutting paths (mitcad#2553).
+            Query::CutSheetCutting(query) => cut_sheets::cutting::cutting_query(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -3269,6 +3347,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 target,
                 up,
                 perspective,
+                orthographic_faces,
                 height,
                 replace,
             } => {
@@ -3278,6 +3357,7 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     target,
                     up,
                     perspective,
+                    orthographic_faces,
                     height,
                 };
                 json!({"name": self.add_named_view(view, replace)?})
@@ -3578,10 +3658,18 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         }
         // An Intersection Curve's curve as the `feature_curves` query gives
         // the finished one (mitcad#1496): the view draws it as the preview.
+        // Curves apart (an Isoparametric Curve's, mitcad#2522) also as
+        // `polylines`.
         if let Some(curve) = self.preview_curve() {
-            value["curve"] = json!({
-                "points": mitcad_model::features::intersection_curve::curve_polyline(&curve)
-            });
+            let mut drawn = json!({});
+            feature_curves::add_polylines(&mut drawn, &curve);
+            value["curve"] = drawn;
+        }
+        // A Split Body's pieces before it kept some, each with a point for
+        // its dot and what keeps it (mitcad#2504): the panel's Pieces.
+        let choices = self.preview_piece_choices();
+        if !choices.is_empty() {
+            value["piece_choices"] = json!(choices);
         }
         if let Some(choice) = auto {
             value["auto_operation"] =
@@ -4271,7 +4359,7 @@ fn inline_face_rules(value: &Value) -> Option<Value> {
     let def = value.get("def")?;
     if !matches!(
         def.get("type").and_then(Value::as_str),
-        Some("sheet_face" | "sheet_contour" | "sheet_convert")
+        Some("sheet_face" | "sheet_contour" | "sheet_convert" | "sheet_lofted_flange")
     ) {
         return None;
     }

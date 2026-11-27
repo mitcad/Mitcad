@@ -59,8 +59,9 @@ pub mod ffi {
             from: &BlendEndData,
             to: &BlendEndData,
         ) -> Result<SharedPtr<Shape>>;
-        /// A surface filling a loop of curves (`fill`, the loop in `u`) or
-        /// through a network.
+        /// A surface filling a loop of curves (`fill`, the loop in `u`,
+        /// running through the sketch curves of `guides`, mitcad#2526) or
+        /// through a network (`guides` empty).
         fn boundary_surface(
             feature: &str,
             bodies: &ShapeList,
@@ -68,6 +69,7 @@ pub mod ffi {
             fill: bool,
             u: &[BoundaryData],
             v: &[BoundaryData],
+            guides: &[BoundaryData],
         ) -> Result<SharedPtr<Shape>>;
         /// The body's face (its only one when `face` is empty) rebuilt
         /// against the target's chain.

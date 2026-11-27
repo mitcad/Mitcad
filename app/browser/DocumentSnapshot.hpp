@@ -89,10 +89,11 @@ struct DocumentSnapshot {
     bool isSpatialSketch() const { return type == QStringLiteral("spatial_sketch"); }
     bool isAnySketch() const { return isSketch() || isSpatialSketch(); }
     // A feature whose output is a 3D curve that paths, Project and the view
-    // take: an Intersection Curve (mitcad#1405) or a Helix Curve
-    // (mitcad#1777).
+    // take: an Intersection Curve (mitcad#1405), a Helix Curve
+    // (mitcad#1777) or an Isoparametric Curve (mitcad#2522).
     static bool makesCurve(const QString& featureType) {
-      return featureType == QStringLiteral("intersection_curve") || featureType == QStringLiteral("helix_curve");
+      return featureType == QStringLiteral("intersection_curve") || featureType == QStringLiteral("helix_curve") ||
+             featureType == QStringLiteral("isoparametric_curve");
     }
     bool makesCurve() const { return makesCurve(type); }
     // Construction planes, axes and points, the curve features
@@ -138,6 +139,9 @@ struct DocumentSnapshot {
     // Its component's joints move in its parent's solve, for it alone
     // (mitcad#1793).
     bool flexible = false;
+    // A linked tree presents this envelope for this occurrence alone.
+    double envelope = 0;
+    QString envelopeBody;
     // Where it places its component in the design: 4 rows of 4 numbers.
     QJsonArray world;
     QVector<Occurrence> children;
@@ -164,8 +168,7 @@ struct DocumentSnapshot {
     // The link's path as the design saves it (mitcad#1416); empty when not
     // linked.
     QString link;
-    // A whole design linked with its components, joints and grounding,
-    // read only (mitcad#2209): not shown by its envelope, no chosen parts.
+    // A design linked with its components, joints and grounding, read only.
     bool linkTree = false;
     // A component of such a design: the linked component it is part of
     // (read only like it); empty for any other component.
@@ -279,6 +282,16 @@ struct DocumentSnapshot {
   // the face is not there), and one by name (an empty object when none).
   QJsonArray decals;
   QJsonObject decal(const QString& name) const;
+  // Construction sets (mitcad#2514): the `construction_sets` query's sets
+  // (name, component, component_name, active, members: each with its
+  // kind, `feature` or `body`, live name, type, `exists` and `active`), in
+  // the order they were added; those of a component; the set an item of a
+  // component is in (its `feature` or `body` uid; empty when none); the
+  // active set's name (empty when none).
+  QJsonArray constructionSets;
+  QJsonArray constructionSetsOf(const QString& component) const;
+  QString constructionSetOf(const QString& component, const QString& item) const;
+  QString activeConstructionSet() const;
   // CAM (mitcad#1013): the `cam_setups` query's setups (each with its
   // operations and their states, its work frame) and the design's
   // machines; empty when the design has none. A setup's `visible` is its

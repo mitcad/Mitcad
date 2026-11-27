@@ -363,13 +363,34 @@ impl Builder<'_> {
         Some(n as usize)
     }
 
-    /// A hole's points (its key point inputs, component space, cm).
+    /// A hole's points (its key point inputs, component space, cm). A
+    /// board's hole (mitcad#2493) leaves out the key point of its own part
+    /// ([`board_hole_far_point`]).
     pub(super) fn hole_points(&self, it: &TimelineEntry) -> Vec<Vec3> {
+        let far = board_hole_far_point(self.seg, it);
         self.item_inputs(it)
             .into_iter()
+            .filter(|&i| Some(i) != far)
             .filter_map(|i| key_point(self.seg, i).map(|(p, _)| p))
             .collect()
     }
+}
+
+/// The key point of a board hole's own part (mitcad#2493,
+/// [`PCB_HOLE`]): the first reference after its object header, a key point
+/// on the board's other face (the far end of the hole, the hole's own
+/// point on the face it starts from being among the hole record's inputs),
+/// which the item's input list repeats at its end. `None` for other items.
+pub(super) fn board_hole_far_point(seg: &Segment, it: &TimelineEntry) -> Option<u64> {
+    if it.class != PCB_HOLE {
+        return None;
+    }
+    let d = seg.data_of(it.id);
+    let (_, first) = seg
+        .refs_in(d, super::super::stream::header_end(d)?, d.len())
+        .into_iter()
+        .next()?;
+    (seg.guid_of(first.id) == Some(KEY_POINT)).then_some(first.id)
 }
 
 /// Fills a mirror's detail map with its objects and plane.

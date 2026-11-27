@@ -938,6 +938,16 @@ pub fn kernel_failure(error: &str) -> bool {
         // (A taper that closes the whole profile, which the kernel said as
         // "the taper failed: …" before mitcad#1851.)
         || error.starts_with(KernelError::TAPER_CLOSES_PROFILE)
+        // The kernel's offset of a body with faces moved that leaves it
+        // open, and a delete of faces whose neighbours do not close the gap
+        // (`geometry/src/faceops.cpp`): an offset and a delete of the
+        // reported package (mitcad#2557) failed so on bodies whose measures
+        // are the file's state's, where no retry ran; tried again on the
+        // state's own bodies (`--retry-bodies replace`), they tell the
+        // kernel's failure from what the bodies carry.
+        || error.contains("moved gave no shape")
+        || error.contains("the body rebuilt around them does not close up")
+        || error.contains("the neighbouring faces do not close the gap")
 }
 
 /// The note of a modelling item whose operation in the file's history left
@@ -1779,6 +1789,13 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
             .unwrap_or_default();
         self.captures = captures::read(self.dump, &self.components, self.doc.assembly(), &outer);
         self.report.components.positions_inside = self.captures.inside.clone();
+        // The levels inside those components where the paths the file
+        // stores through them put them, after the captured positions
+        // (mitcad#2492).
+        if let Some(s) = self.sources {
+            let more = references::inside_positions(self.dump, &self.components, s, &outer);
+            self.report.components.positions_inside.extend(more);
+        }
         let captures = &self.captures;
         components::assign_items(
             self.dump,
@@ -2607,7 +2624,12 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         if let Ok(value) = serde_json::to_value(item) {
             components::references(&value, &mut wanted);
         }
-        wanted.retain(|i| *i < index && self.sketches.contains_key(i));
+        // The sketches replayed before it: those of earlier items, and a
+        // loose sketch given right before it with a larger index
+        // (mitcad#2493).
+        wanted.retain(|i| {
+            (*i < index || self.captures.is_loose_sketch(*i)) && self.sketches.contains_key(i)
+        });
         if wanted.is_empty()
             && let Some(last) = self.sketches.keys().filter(|k| **k < index).max()
         {

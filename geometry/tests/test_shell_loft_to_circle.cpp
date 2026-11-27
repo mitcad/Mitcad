@@ -53,6 +53,7 @@
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -518,7 +519,7 @@ int check_parts(const std::vector<std::string>& names) {
 
 // Without arguments every part runs, in one process; with a part's name
 // only that part; --check-parts NAME... checks the ctests' list of parts.
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(shell_loft_to_circle) {
   const std::vector<std::string> args(argv + 1, argv + argc);
   if (!args.empty() && args[0] == "--check-parts") {
     return test::check_parts(std::vector<std::string>(args.begin() + 1, args.end()));

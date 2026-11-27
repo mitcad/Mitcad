@@ -30,7 +30,10 @@ pub struct TurnPlacement {
 /// zones and of both chucks where the sub-spindle holds the part (pulled
 /// back as the hand-over leaves it, [`super::HandOver::held_z`]), their
 /// places in `at` where the view draws them (the main spindle's work
-/// coordinates where the part was, [`super::HandOver::main_point`]).
+/// coordinates where the part was, [`super::HandOver::main_point`]). The
+/// main spindle's part-off the hand-over grips before
+/// ([`TurningProgram::hand_over_at`]) at both spindles' speeds: the
+/// sub-spindle turns with the main spindle through it (mitcad#2527).
 ///
 /// The sub-spindle's body and the zones moving with it (mitcad#2392,
 /// [`sub_spindle_hits`]): every operation's tool clear of them where the
@@ -53,10 +56,11 @@ pub fn check_lathe(
     };
     let main_speeds = [machine.spindle.min_rpm, machine.spindle.max_rpm];
     let sub_speeds = lathe.sub_spindle.speeds(main_speeds);
+    let grip_at = program.hand_over_at();
     // The hand-over: the sub-spindle's jaws' face where it grips and where
     // it pulls the part back to, in its travel; the synchronized speed
     // within both spindles' (mitcad#2375).
-    if let (Some(h), Some(index)) = (&program.hand_over, program.hand_over_at()) {
+    if let (Some(h), Some(index)) = (&program.hand_over, grip_at) {
         let name = &program.operations[index].name;
         if let Some([lo, hi]) = lathe.sub_spindle.travel {
             let beyond = [h.grip_z, h.grip_z + h.withdraw].into_iter().find(|z| {
@@ -117,25 +121,32 @@ pub fn check_lathe(
             }
             continue;
         }
-        let speeds = if op.sub { sub_speeds } else { main_speeds };
-        match op.spindle {
-            TurnSpindle::Css { max_rpm, .. } if max_rpm > speeds[1] => {
-                let message = if op.sub {
+        // The spindles an operation turns: the sub-spindle's operations on
+        // it; the main spindle's part-off under the hand-over on both, the
+        // sub-spindle gripping before it and turning with the main spindle
+        // through it (mitcad#2527); else the main spindle.
+        let over = |speeds: [f64; 2]| match op.spindle {
+            TurnSpindle::Css { max_rpm, .. } => max_rpm > speeds[1],
+            TurnSpindle::Rpm { rpm } => rpm < speeds[0] || rpm > speeds[1],
+        };
+        let main_over = !op.sub && over(main_speeds);
+        let sub_over = (op.sub || Some(i) == grip_at) && over(sub_speeds);
+        if main_over || sub_over {
+            let message = match (op.spindle, !main_over) {
+                (TurnSpindle::Css { .. }, true) => {
                     format!("{name}: the spindle limit is above what the sub-spindle can do.")
-                } else {
+                }
+                (TurnSpindle::Css { .. }, false) => {
                     format!("{name}: the spindle limit is above what the spindle can do.")
-                };
-                say(message, None);
-            }
-            TurnSpindle::Rpm { rpm } if rpm < speeds[0] || rpm > speeds[1] => {
-                let message = if op.sub {
+                }
+                (TurnSpindle::Rpm { .. }, true) => {
                     format!("{name}: the spindle speed is outside what the sub-spindle can do.")
-                } else {
+                }
+                (TurnSpindle::Rpm { .. }, false) => {
                     format!("{name}: the spindle speed is outside what the spindle can do.")
-                };
-                say(message, None);
-            }
-            _ => {}
+                }
+            };
+            say(message, None);
         }
         // A point's main spindle work Z where the part is as it cuts, and
         // where the view draws it.
@@ -676,6 +687,10 @@ pub struct ProgramCheck {
     /// (`G83`, `G87`) are listed in `cycles`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub live_moves: Vec<LiveRead>,
+    /// The manual blocks (mitcad#2506): the lines (1-based) of the
+    /// comments that open and close each, the lines between not read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manual: Vec<[usize; 2]>,
 }
 
 /// How a live tool's block was read.
@@ -882,11 +897,58 @@ pub fn check_program_as(
     let mut on_plane = false;
     let mut tilted = false;
     let mut at_y: Option<f64> = None;
+    // Manual code (mitcad#2506): the line of the comment that opened the
+    // block being passed over.
+    let begin = format!("({}", super::MANUAL_BEGIN);
+    let end = format!("({})", super::MANUAL_END);
+    let mut manual_from: Option<usize> = None;
     for (i, raw) in lines.iter().enumerate() {
         let n = i + 1;
         let l = raw.trim();
         if l.is_empty() {
             continue;
+        }
+        // A manual block is not read; after it nothing is known but what
+        // the program says again, as at its start: the units, the modes,
+        // the spindle (stopped) and its limit, where the tool is.
+        if let Some(from) = manual_from {
+            if l == end {
+                check.manual.push([from, n]);
+                manual_from = None;
+                motion = None;
+                per_rev = false;
+                css = false;
+                limit = false;
+                feed = None;
+                at = [None, None];
+                scale = 1.0;
+                units = false;
+                diameter = !lcnc;
+                per_min = false;
+                main_running = false;
+                plane = 18;
+                polar = false;
+                cylindrical = false;
+                drilling = None;
+                at_c = None;
+                on_plane = false;
+                tilted = false;
+                at_y = None;
+            }
+            continue;
+        }
+        if l.starts_with(&begin) {
+            if pending.is_some() || skip_to.is_some() {
+                return Err(fail(n, "manual code inside a cycle".to_owned()));
+            }
+            manual_from = Some(n);
+            continue;
+        }
+        if l == end {
+            return Err(fail(
+                n,
+                "the end of manual code that did not begin".to_owned(),
+            ));
         }
         if l == "%" {
             tape += 1;
@@ -1051,7 +1113,21 @@ pub fn check_program_as(
                         return Err(fail(n, "G71 needs a feed".to_owned()));
                     }
                     let u = num('U')?.unwrap_or(0.0);
-                    let end = check_contour(&lines, &labels, p as u32, q as u32, Some(u < 0.0), n)?;
+                    // The side from the contour against where the cycle
+                    // starts, as the post tells it: U is 0 with no stock
+                    // to leave, inside too (mitcad#2527). The start as an
+                    // X word: a diameter in the program's units.
+                    let Some(start) = at[0] else {
+                        return Err(fail(n, "G71 from where the tool is not known".to_owned()));
+                    };
+                    let end = check_contour(
+                        &lines,
+                        &labels,
+                        p as u32,
+                        q as u32,
+                        Some((2.0 * start / scale, u)),
+                        n,
+                    )?;
                     if end.0 != i + 1 {
                         return Err(fail(n, "the contour's blocks must follow G71".to_owned()));
                     }
@@ -1667,6 +1743,9 @@ pub fn check_program_as(
     if pending.is_some() {
         return Err(CamError::new("The program ends in the middle of a cycle."));
     }
+    if manual_from.is_some() {
+        return Err(CamError::new("The program ends inside manual code."));
+    }
     if polar || cylindrical {
         return Err(CamError::new(
             "The program ends in polar or cylindrical interpolation.",
@@ -1686,15 +1765,17 @@ pub fn check_program_as(
 }
 
 /// Checks the blocks `p` to `q` a cycle runs and gives their lines
-/// (0-based): for G71 (`rough` with the side, `Some(inside)`) the first
-/// moves in X alone and X runs one way, out from the axis or towards it
-/// inside.
+/// (0-based): for G71 (`rough`: the X word where the cycle starts and the
+/// cycle's U) the first moves in X alone and X runs one way, out from the
+/// axis or towards it inside, and U, the allowance, is not on the other
+/// side. The side is the contour's: inside when its first block goes away
+/// from the axis (mitcad#2527).
 fn check_contour(
     lines: &[&str],
     labels: &[(u32, usize)],
     p: u32,
     q: u32,
-    rough: Option<bool>,
+    rough: Option<(f64, f64)>,
     n: usize,
 ) -> Result<(usize, usize), CamError> {
     let fail = |what: &str| CamError::new(format!("Line {n}: {what}."));
@@ -1705,9 +1786,20 @@ fn check_contour(
     if b < a {
         return Err(fail("the cycle's blocks are not where it runs them"));
     }
-    let Some(inside) = rough else {
+    let Some((start_x, u)) = rough else {
         return Ok((a, b));
     };
+    let first = words(lines[a]).map_err(|e| CamError::new(format!("Line {}: {e}.", a + 1)))?;
+    let inside = first
+        .iter()
+        .find(|(c, _)| *c == 'X')
+        .and_then(|(_, v)| word_value(v))
+        .is_some_and(|x| x > start_x + 1e-9);
+    if (inside && u > 0.0) || (!inside && u < 0.0) {
+        return Err(fail(
+            "G71's allowance (U) is on the other side of its contour",
+        ));
+    }
     let mut last_x: Option<f64> = None;
     for (k, l) in lines[a..=b].iter().enumerate() {
         let ws = words(l).map_err(|e| CamError::new(format!("Line {}: {e}.", a + k + 1)))?;

@@ -56,6 +56,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -289,7 +290,7 @@ void test_chamfer_across_a_valley_over_a_narrow_strip(double bend) {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(chamfer_crease_strip) {
   for (const double kink : {2.0, 4.0}) {
     test::guarded("test_chamfer_across_a_slight_valley_of_the_tip",
                   [&] { test::test_chamfer_across_a_slight_valley_of_the_tip(kink); });

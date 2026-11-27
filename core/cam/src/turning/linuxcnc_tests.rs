@@ -18,6 +18,7 @@ fn tool(number: u32, offset: u32, name: &str, kind: TurningToolKind) -> TurningT
         kind,
         nose_radius: 0.4,
         max_depth: 4.0,
+        back_angle: None,
     }
 }
 
@@ -340,6 +341,7 @@ fn canned_cycles_are_written_as_moves() {
             allowance_z: 0.1,
             clearance: 2.0,
             feed: 0.25,
+            plunge: 0.0,
         },
         &rougher,
     )
@@ -350,6 +352,8 @@ fn canned_cycles_are_written_as_moves() {
             side: TurnSide::Outside,
             clearance: 2.0,
             feed: 0.1,
+            plunge: 0.0,
+            roughed: false,
         },
         &rougher,
     )

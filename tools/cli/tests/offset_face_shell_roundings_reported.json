@@ -1,0 +1,47 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Offset Face on the inside of a shelled block with rounded edges (mitcad#2457, GitHub mitcad/Mitcad#678), on the reported design (opened with --open, never committed; tools/cli/offset-face-shell-roundings-reported-test.cmake). Extrude81 (F326) is a D-shaped block, a 35 mm half circle on a 70 x 37.9 mm rectangle, 15 mm high; Fillet12 (F327) rounds its top edges with 14.99 mm, Shell1 (F366) hollows it 2 mm inside, open at its flat side; SplitBody2 (F371) keeps the top, F371.b0, cut 0.01 mm below where the roundings end. Inside, the roundings are a torus along the half circle (major radius 20.01, minor 12.99) and two cylinders of radius 12.99 along the straight sides, all tangent to the inner top plane at z = 56.2 and meeting the sloped faces below them (a plane on each side, a swept band under the torus) at 56.7 degrees. Offset Face moves them 2 mm out of the material, into the hollow."},
+
+  {"comment": "One straight rounding: it continues smoothly into the torus and the top plane, which stay, so those seams become steps, and the sloped plane below it is trimmed along its own surface to its new position: a valid body 1183.865 mm3 larger."},
+  {"cmd": "add_feature", "def": {"type": "offset_face", "body": "F371.b0",
+    "faces": ["F366:offset(F327:fillet(E{F326:side(c7[c3,c10])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))"],
+    "distance": 2}},
+  {"expect": {"feature": "F457", "status": "ok"}},
+  {"expect": {"body": "F371.b0", "volume": 15698.1197, "tolerance": 1e-6,
+    "has_face": "F366:offset(F327:fillet(E{F326:side(c7[c3,c10])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))"}},
+
+  {"comment": "The torus alone, which the report's application crashed on: its seams with the straight roundings and the top plane become steps, the swept band below it is trimmed to its new position (radius 10.99)."},
+  {"cmd": "edit_feature", "uid": "F457", "def": {"type": "offset_face", "body": "F371.b0",
+    "faces": ["F366:offset(F327:fillet(E{F326:side(c3[c4,c7])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))"],
+    "distance": 2}},
+  {"expect": {"feature": "F457", "status": "ok"}},
+  {"expect": {"body": "F371.b0", "volume": 17158.012, "tolerance": 1e-5,
+    "has_face": "F366:offset(F327:fillet(E{F326:side(c3[c4,c7])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))"}},
+
+  {"comment": "The three faces the report moved without trouble: a straight rounding, the top plane and the other straight rounding; the torus stays, its seams with them become steps."},
+  {"cmd": "edit_feature", "uid": "F457", "def": {"type": "offset_face", "body": "F371.b0",
+    "faces": ["F366:offset(F327:fillet(E{F326:side(c7[c3,c10])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))",
+              "F366:offset(F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]}))",
+              "F366:offset(F327:fillet(E{F326:side(c4[c3,c10])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))"],
+    "distance": 2}},
+  {"expect": {"feature": "F457", "status": "ok"}},
+  {"expect": {"body": "F371.b0", "volume": 21170.706, "tolerance": 1e-5}},
+
+  {"comment": "All four (the top plane, the torus and both straight roundings): no face that stays continues smoothly from them, so they move as whole faces by the geometry kernel's offset of the body, which rebuilds every face of the body. Before OCCT port patch 2457 its rebuilt faces left gaps at one front corner, far from the moved faces: the face of a spindle torus there (major radius 0.6, minor 1.4, the end of a rounded bead) was enlarged past the torus' apex and its offset met its neighbours' a second time; the kernel then gave no shape while it reported success (the report's crash). The patch stops the enlarged face at the apex and the body closes up; with port patch 2418 (in this chain before it) the tangent edge between the sloped plane and the swept band beside the moved straight rounding on the c7 side, which patch 2457 alone left out of tolerance, comes out right too. A valid body of 23801.198 mm3 (the sum of the four moves), its faces keeping their names."},
+  {"cmd": "edit_feature", "uid": "F457", "def": {"type": "offset_face", "body": "F371.b0",
+    "faces": ["F366:offset(F327:fillet(E{F326:side(c7[c3,c10])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))",
+              "F366:offset(F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]}))",
+              "F366:offset(F327:fillet(E{F326:side(c4[c3,c10])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))",
+              "F366:offset(F327:fillet(E{F326:side(c3[c4,c7])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))"],
+    "distance": 2}},
+  {"expect": {"feature": "F457", "status": "ok"}},
+  {"expect": {"body": "F371.b0", "volume": 23801.198, "tolerance": 1e-5,
+    "has_face": "F366:offset(F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]}))"}},
+  {"expect": {"body": "F371.b0", "has_face": "F366:offset(F327:fillet(E{F326:side(c3[c4,c7])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))"}},
+
+  {"comment": "Tangent Chain on: the torus alone grows to the four faces it is joined to smoothly, and they move together: the same body."},
+  {"cmd": "edit_feature", "uid": "F457", "def": {"type": "offset_face", "body": "F371.b0",
+    "faces": ["F366:offset(F327:fillet(E{F326:side(c3[c4,c7])|F326:start(r{c3[c4,c7],c4[c3,c10],c7[c3,c10],c10[c7,c4]})}))"],
+    "distance": 2, "tangent_chain": true}},
+  {"expect": {"feature": "F457", "status": "ok"}},
+  {"expect": {"body": "F371.b0", "volume": 23801.198, "tolerance": 1e-5}}
+]

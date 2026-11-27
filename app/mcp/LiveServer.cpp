@@ -20,6 +20,7 @@
 #include <QList>
 #include <QPointer>
 #include <QSettings>
+#include <QScopedValueRollback>
 #include <QStringList>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -114,6 +115,9 @@ struct LiveServer::State {
   bool published = false;
   QString unavailable;
   bool handling = false;
+  // A request is being refused busy while another call runs (mitcad#2540,
+  // refuseCompeting).
+  bool refusingBusy = false;
   quint64 connections = 0;
   std::vector<std::shared_ptr<Client>> clients;
   struct Comments {
@@ -536,7 +540,11 @@ struct LiveServer::State {
     // Clicks, keys and dialogs for viewing (mitcad#1735): only in a run
     // started with --mcp-folder, and never for the chat's own connection.
     client.session->set_mcp_input_tools(runAgentFoldersGiven() && client.chat.isEmpty());
-    refreshComments();
+    // (Not for a request refused busy while another call runs, mitcad#2540:
+    // nothing else is read then.)
+    if (!refusingBusy) {
+      refreshComments();
+    }
     try {
       const std::string planText(client.session->prepare_mcp(rust::Str(message.constData(), size_t(message.size()))));
       const auto plan = QJsonDocument::fromJson(QByteArray::fromStdString(planText)).object();
@@ -580,6 +588,13 @@ struct LiveServer::State {
       // Bind an omitted handle before a user approval can change the active window.
       if (!arguments.contains(QStringLiteral("document"))) {
         if (MainWindow* target = documentWindow(client)) arguments.insert(QStringLiteral("document"), target->mcpDocumentId());
+      }
+      if (refusingBusy) {
+        // A model request to a design that computes for another call
+        // (mitcad#2540, competingCall): its window refuses it at once as
+        // busy, with when to retry, before anything runs.
+        runTool(client, tool, arguments);
+        return;
       }
       if (!client.chat.isEmpty()) {
         // The chat's own connection (mitcad#947): its approvals first.
@@ -626,9 +641,59 @@ struct LiveServer::State {
     }
   }
 
+  // The next line of a client while another call runs (mitcad#2540): true
+  // for a model request (model_query, model_command) to a design whose
+  // model computes, the other call's job or another one. Read from the
+  // socket when no whole line is waiting. A client whose own call runs
+  // keeps its lines for that call's cancellation (takeCancellation).
+  bool competingCall(Client& client) {
+    if (!connected(client) || !client.initialized || client.waiting || !client.running.isUndefined()) {
+      return false;
+    }
+    if (!client.input.contains('\n') && client.input.size() <= kMaxFrameBytes &&
+        client.socket->bytesAvailable() > 0) {
+      client.input += client.socket->read(kMaxFrameBytes + 1 - client.input.size());
+    }
+    const qsizetype newline = client.input.indexOf('\n');
+    if (newline < 0 || newline > kMaxFrameBytes) {
+      return false;
+    }
+    const QJsonObject request = QJsonDocument::fromJson(client.input.left(newline)).object();
+    if (request.value(QStringLiteral("method")).toString() != QStringLiteral("tools/call") ||
+        !request.contains(QStringLiteral("id"))) {
+      return false;
+    }
+    const QJsonObject params = request.value(QStringLiteral("params")).toObject();
+    const QString tool = params.value(QStringLiteral("name")).toString();
+    if (tool != QStringLiteral("model_query") && tool != QStringLiteral("model_command")) {
+      return false;
+    }
+    const MainWindow* target = documentWindow(client, params.value(QStringLiteral("arguments")).toObject());
+    return target != nullptr && target->modelBusy();
+  }
+
+  // While a call runs (a model job's progress loop: a long analysis query,
+  // a recompute), another client's model requests to a design that
+  // computes are answered at once as busy with when to retry, as the
+  // window answers them (mitcad#2540): they do not wait minutes for the
+  // call to end. Its other requests, and those after them, wait for the
+  // call to end as before (drain runs again then).
+  void refuseCompeting(const std::shared_ptr<Client>& client) {
+    for (int refused = 0; refused < 32 && competingCall(*client); ++refused) {
+      const qsizetype newline = client->input.indexOf('\n');
+      const QByteArray message = client->input.left(newline);
+      client->input.remove(0, newline + 1);
+      const QScopedValueRollback<bool> refusing(refusingBusy, true);
+      frame(client, message);
+    }
+  }
+
   void drain(const std::shared_ptr<Client>& client) {
-    if (!client->socket || client->socket->state() != QAbstractSocket::ConnectedState ||
-        (handling && client->authenticated) || client->waiting) {
+    if (!client->socket || client->socket->state() != QAbstractSocket::ConnectedState || client->waiting) {
+      return;
+    }
+    if (handling && client->authenticated) {
+      refuseCompeting(client);
       return;
     }
     const bool alreadyHandling = handling;

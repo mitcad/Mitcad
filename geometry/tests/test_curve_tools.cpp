@@ -40,6 +40,7 @@
 #include "mitcad/geometry/intersection_curve.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad/geometry/surface_sweeps.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -320,7 +321,7 @@ void test_missing_face_refused() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(curve_tools) {
   test::guarded("growing helix lies on its cone", test_growing_helix_lies_on_its_cone);
   test::guarded("helix of a line is a helicoid", test_helix_of_a_line_is_a_helicoid);
   test::guarded("helicoid and cylinder meet in a helix", test_helicoid_and_cylinder_meet_in_a_helix);

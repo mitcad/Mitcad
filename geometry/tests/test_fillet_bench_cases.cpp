@@ -84,6 +84,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -569,7 +570,7 @@ void test_chamfer_octahedron_all_edges() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_bench_cases) {
   test::guarded("fillet/l-block-inside-consumed", test::test_fillet_l_block_inside_consumed);
   test::guarded("fillet/round-swallowing-a-tiny-face", test::test_fillet_round_swallowing_a_tiny_face);
   test::guarded("fillet/slab-half-round", test::test_fillet_slab_half_round);

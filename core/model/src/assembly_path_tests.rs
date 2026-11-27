@@ -6,8 +6,9 @@
 //! `tools/cli/tests/assembly_path.json`.
 
 use std::f64::consts::FRAC_PI_2;
+use std::time::Duration;
 
-use crate::assembly_path::{MOST_HALVINGS, Motion, PathSettings, Probe, search};
+use crate::assembly_path::{Limit, MOST_HALVINGS, Motion, PathSettings, Probe, search};
 
 /// A point at `t` against solid intervals: its distance to the nearest,
 /// and whether it lies strictly inside one.
@@ -28,7 +29,7 @@ fn against(walls: &[(f64, f64)]) -> impl FnMut(f64) -> Result<Probe, String> + '
             };
             clearance = clearance.min(distance);
         }
-        Ok(Probe { clearance, overlap })
+        Ok(Probe::new(clearance, overlap))
     }
 }
 
@@ -38,6 +39,8 @@ fn slide(length: f64, steps: usize) -> PathSettings {
         steps,
         tolerance: 0.001,
         speed: 1.0,
+        most_probes: None,
+        time_limit: None,
     }
 }
 
@@ -45,13 +48,7 @@ fn slide(length: f64, steps: usize) -> PathSettings {
 fn a_clear_path_reports_its_clearance_and_is_certified() {
     // A peg 0.1 mm from its hole's wall all the way.
     let settings = slide(10.0, 10);
-    let found = search(&settings, |_| {
-        Ok::<_, String>(Probe {
-            clearance: 0.1,
-            overlap: false,
-        })
-    })
-    .unwrap();
+    let found = search(&settings, |_| Ok::<_, String>(Probe::new(0.1, false))).unwrap();
     assert!(found.hit.is_none());
     assert!(!found.touches_at_end);
     assert!(found.certified);
@@ -164,12 +161,14 @@ fn a_turn_finds_the_angle_to_the_resolution_of_its_reach() {
         steps: 10,
         tolerance: 0.001,
         speed: reach,
+        most_probes: None,
+        time_limit: None,
     };
     let found = search(&settings, |angle| {
-        Ok::<_, String>(Probe {
-            clearance: (reach * (contact - angle)).max(0.0),
-            overlap: angle > contact,
-        })
+        Ok::<_, String>(Probe::new(
+            (reach * (contact - angle)).max(0.0),
+            angle > contact,
+        ))
     })
     .unwrap();
     let hit = found.hit.unwrap();
@@ -203,7 +202,152 @@ fn settings_out_of_range_are_refused() {
         .check()
         .is_err()
     );
+    assert!(
+        PathSettings {
+            most_probes: Some(0),
+            ..slide(10.0, 10)
+        }
+        .check()
+        .is_err()
+    );
     assert!(slide(10.0, 10).check().is_ok());
+}
+
+/// A bracket flush against its neighbours (mitcad#2577) slid along them:
+/// it touches them all the way (clearance 0, no overlap), and the nearest
+/// other body is `apart` mm away. As contacts (`contacts`) or, as the
+/// search measured them before, among the others.
+fn flush(apart: f64, contacts: bool) -> impl FnMut(f64) -> Result<Probe, String> {
+    move |_| {
+        Ok(if contacts {
+            Probe {
+                clearance: apart,
+                overlap: false,
+                contact: 0.0,
+            }
+        } else {
+            Probe::new(0.0, false)
+        })
+    }
+}
+
+#[test]
+fn a_body_flush_against_its_contacts_is_not_halved_and_answers_as_the_full_search() {
+    // 20 steps of 1 mm along the faces it touches, the next body 5 mm off.
+    let settings = slide(20.0, 20);
+    let full = search(&settings, flush(5.0, false)).unwrap();
+    let found = search(&settings, flush(5.0, true)).unwrap();
+    // The full search halves every step to its limit: 8 positions a step.
+    assert_eq!(full.probes, 20 * (1 << MOST_HALVINGS) + 1);
+    // As contacts: each step once, nothing else.
+    assert_eq!(found.probes, 21);
+    // The same answer: no hit, not certified (no clearance rules a span out
+    // where the body touches), the minimum 0 at the start.
+    assert!(full.hit.is_none() && found.hit.is_none());
+    assert!(!full.certified && !found.certified);
+    assert_eq!(found.min_clearance, full.min_clearance);
+    let min = found.min_clearance.unwrap();
+    assert_eq!((min.at, min.clearance), (0.0, 0.0));
+    assert!(!found.touches_at_end && found.stopped.is_none());
+    assert_eq!(found.steps.len(), 21);
+    assert!(found.steps.iter().all(|s| s.clearance == 0.0));
+}
+
+#[test]
+fn a_contact_the_body_runs_into_is_hit_at_its_face() {
+    // Flush along a neighbour that has a step at 5.5 mm: overlapping past
+    // it. The others are 5 mm off.
+    let settings = slide(10.0, 10);
+    let found = search(&settings, |t| {
+        Ok::<_, String>(Probe {
+            clearance: 5.0,
+            overlap: t > 5.5,
+            contact: 0.0,
+        })
+    })
+    .unwrap();
+    let hit = found.hit.unwrap();
+    assert!(hit.clear <= 5.5 && hit.clear >= 5.5 - 0.001, "{hit:?}");
+    assert_eq!(hit.step, 6);
+    assert!(!found.certified);
+}
+
+#[test]
+fn a_contact_the_body_leaves_is_ruled_out_by_its_clearance() {
+    // A lug resting on a rim lifted off it: the contact's clearance grows
+    // with the motion, which rules every span out.
+    let settings = slide(5.0, 5);
+    let found = search(&settings, |t| {
+        Ok::<_, String>(Probe {
+            clearance: f64::INFINITY,
+            overlap: false,
+            contact: t,
+        })
+    })
+    .unwrap();
+    assert!(found.hit.is_none());
+    assert!(found.certified);
+    assert_eq!(found.probes, 6);
+    assert_eq!(found.min_clearance.unwrap().clearance, 0.0);
+}
+
+#[test]
+fn a_contact_does_not_stop_the_halving_for_the_others() {
+    // Flush along its contacts, past a wall of another body 0.02 mm thick
+    // at 3.30 mm: the others' clearances still lead to it.
+    let walls = [(3.30, 3.32)];
+    let mut others = against(&walls);
+    let found = search(&slide(10.0, 40), |t| {
+        let other = others(t)?;
+        Ok::<_, String>(Probe {
+            contact: 0.0,
+            ..other
+        })
+    })
+    .unwrap();
+    let hit = found.hit.unwrap();
+    assert!(hit.clear <= 3.3 && hit.clear >= 3.3 - 0.001, "{hit:?}");
+}
+
+#[test]
+fn the_probe_limit_stops_the_search_with_a_partial_answer() {
+    // 10 mm from everything: one position a step. Five positions: the
+    // start and steps 1 to 4.
+    let settings = PathSettings {
+        most_probes: Some(5),
+        ..slide(10.0, 10)
+    };
+    let found = search(&settings, |_| Ok::<_, String>(Probe::new(10.0, false))).unwrap();
+    let stopped = found.stopped.unwrap();
+    assert_eq!(stopped.limit, Limit::Probes);
+    assert_eq!(stopped.checked_to, 4.0);
+    assert_eq!(found.probes, 5);
+    assert!(!found.certified);
+    assert!(found.hit.is_none() && !found.touches_at_end);
+    assert_eq!(found.steps.len(), 5);
+    let min = found.min_clearance.unwrap();
+    assert_eq!((min.at, min.clearance), (0.0, 10.0));
+    // Without the limit the same path is certified.
+    let whole = search(&slide(10.0, 10), |_| {
+        Ok::<_, String>(Probe::new(10.0, false))
+    })
+    .unwrap();
+    assert!(whole.certified && whole.stopped.is_none());
+}
+
+#[test]
+fn the_time_limit_stops_the_search_after_the_start() {
+    let settings = PathSettings {
+        time_limit: Some(Duration::ZERO),
+        ..slide(10.0, 10)
+    };
+    let found = search(&settings, |_| Ok::<_, String>(Probe::new(10.0, false))).unwrap();
+    let stopped = found.stopped.unwrap();
+    assert_eq!(stopped.limit, Limit::Time);
+    assert_eq!(stopped.checked_to, 0.0);
+    assert_eq!(found.probes, 1);
+    assert_eq!(found.steps.len(), 1);
+    assert!(!found.certified);
 }
 
 #[test]

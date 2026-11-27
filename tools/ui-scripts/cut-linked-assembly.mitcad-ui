@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: MIT
-# Extrude Cut in an assembly on a linked part (mitcad#2131), on
-# holder.mitcad of cut-linked-assembly-holder.json: plate.mitcad (a block of
-# 20 x 20 x 10 mm, 4000 mm3) linked as plate:1, and in the root Sketch1 with
-# a 12 x 4 mm square inside the block.
+# Extrude Cut, Revolve Cut and Hole in an assembly on a linked part
+# (mitcad#2131, mitcad#2160), on holder.mitcad of
+# cut-linked-assembly-holder.json: plate.mitcad (a block of 20 x 20 x 10 mm,
+# 4000 mm3) linked as plate:1, in the root Sketch1 on XZ a 2 x 40 mm
+# rectangle beside the Z axis and Sketch2 on XY a 12 x 4 mm square inside
+# the block.
 #   1. Extrude with the square, 50 mm, Cut: Affected components lists
 #      plate:1, left out of the automatic scope as a linked component but
 #      checkable; the block is not cut.
@@ -12,8 +14,15 @@
 #   3. OK adds the cut: plate:1 is machined (its Browser row says so), the
 #      linked block itself keeps its 4000 mm3; Undo and Redo take the one
 #      step back and forth.
-#   4. Saved: the wrapper checks the file with cut-linked-assembly-check.json
-#      (3520 mm3 shown) and the part's file as it was written.
+#   4. Revolve with the rectangle about the Z axis (its Browser row), Cut:
+#      the same list in the Revolve panel, plate:1 machinable here; checked,
+#      machined here; OK adds the cut in one undo step.
+#   5. A Hole through plate:1 made in the assembly (a model command), edited:
+#      the Hole panel's list shows plate:1 machined here; unchecked and
+#      checked again, OK keeps it.
+#   6. Saved: the wrapper checks the file with cut-linked-assembly-check.json
+#      (the three cuts on plate:1, 3362.920 mm3 shown) and the part's file as
+#      it was written.
 # Run by tools/ui-cut-linked-assembly-test.sh (Linux),
 # tools/ui-windows-cut-linked-assembly-test.ps1 (Windows) and
 # tools/ui-macos-cut-linked-assembly-test.sh (macOS).
@@ -70,7 +79,72 @@ command edit.redo
 wait-log '^Browser machined Root/plate:1$' 20
 wait-idle
 
-# 4. Saved for the wrapper's checks.
+# 4. Revolve Cut through plate:1's corner (mitcad#2160): the same list.
+mark
+command solid.revolve
+expect-log '^Command Revolve started'
+wait-log '^Revolve Profiles: 1 profile' 20
+wait-idle
+mark
+click-logged '^Panel Revolve input axis at '
+click-logged '^Browser arrow Root/Origin at '
+wait-idle 60
+expect-log '^Browser Root/Origin/Z at ' 10
+click-logged '^Browser Root/Origin/Z at '
+wait-log '^Revolve Axis: 1 axis' 20
+wait-log '^Preview Revolve: ' 30
+wait-idle
+mark
+click-logged '^Panel Revolve input operation at '
+key Home Down Down Return
+expect-ever 'Revolve: Operation = Cut'
+wait-log '^Cut target C1@O1: machinable here, unchecked, intersects' 30
+expect-log '^Preview Revolve: failed: No eligible components intersect the cut'
+wait-log '^Cut target check C1@O1 at '
+mark
+click-logged '^Cut target check C1@O1 at '
+wait-log '^Cut target C1@O1 checked: explicit scope with it$'
+wait-log '^Cut target C1@O1: eligible, checked, intersects, machined here$' 30
+wait-log '^Preview Revolve: ok' 30
+expect-no-log '^Preview Revolve: failed'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Added revolve \(Cut\), full turn' 30
+wait-idle
+expect-model-bodies 1 4000
+expect-undo-depth ${start} 2
+
+# 5. A Hole through plate:1 made in the assembly, edited in its panel
+# (mitcad#2160): 4 mm across, up from XY at (10, 14) through the block.
+mark
+model-command '{"cmd":"add_feature","def":{"type":"hole","placement":{"type":"plane","plane":"xy","points":[[10,14,0]]},"diameter":4,"flat":true,"extent":{"type":"through_all"},"flip":true,"cut_scope":{"context":{"component":"C0","occurrence":""},"targets":{"type":"explicit","included":[{"component":"C1","occurrence":"O1"}]}}}}'
+wait-idle 60
+expect-model-bodies 1 4000
+mark
+dblclick-logged '^Timeline Hole1 at '
+wait-log '^Editing F6 with Hole' 30
+wait-log '^Cut target C1@O1: eligible, checked, intersects, machined here$' 30
+wait-log '^Preview Hole: ok' 30
+wait-log '^Cut target check C1@O1 at '
+wait-idle
+mark
+click-logged '^Cut target check C1@O1 at '
+wait-log '^Cut target C1@O1: [a-z ]+, unchecked, ' 30
+wait-log '^Cut target check C1@O1 at '
+wait-idle
+mark
+click-logged '^Cut target check C1@O1 at '
+wait-log '^Cut target C1@O1: eligible, checked, intersects, machined here$' 30
+wait-log '^Preview Hole: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited F6' 30
+wait-idle
+expect-model-bodies 1 4000
+
+# 6. Saved for the wrapper's checks.
 mark
 command file.save
 wait-log '^Saved .*holder[.]mitcad$'

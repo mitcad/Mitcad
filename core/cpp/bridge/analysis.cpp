@@ -941,7 +941,11 @@ AnalysisSeparation analysis_between(const geometry::Shape& a, rust::Str a_name,
   return guarded("distance between", [&] {
     const Selected first = select(a, std::string(a_name));
     const Selected second = select(b, std::string(b_name));
-    const analysis::Distance distance = analysis::min_distance(first.shape, second.shape);
+    // Stopped when the job's monitor is cancelled (mitcad#2577: an assembly
+    // path's probe in a model job, Kernel::interruptible); stops nothing
+    // otherwise.
+    geometry::CancelRange stop;
+    const analysis::Distance distance = analysis::min_distance(first.shape, second.shape, stop.range());
     AnalysisSeparation result{};
     result.distance = distance.value;
     result.on_a = xyz(distance.on_a);
@@ -1021,7 +1025,11 @@ std::unique_ptr<AnalysisInterferences> analysis_interferences(const ShapeList& b
   analysis::InterferenceOptions options;
   options.min_volume = min_volume;
   return guarded("interference", [&] {
-    return std::make_unique<AnalysisInterferences>(analysis::interferences(occt(bodies), options));
+    // Stopped when the job's monitor is cancelled (mitcad#2540: a live MCP
+    // query in a model job, Kernel::interruptible), between pairs and
+    // inside a pair's boolean.
+    geometry::CancelRange stop;
+    return std::make_unique<AnalysisInterferences>(analysis::interferences(occt(bodies), options, stop.range()));
   });
 }
 
@@ -1083,7 +1091,8 @@ std::unique_ptr<AnalysisClips> analysis_detach_all(const ShapeList& shapes,
 }
 
 AnalysisComparison analysis_compare_step(const ShapeList& bodies, rust::Str path,
-                                         rust::Str step_body, std::size_t samples, double fuzzy) {
+                                         rust::Str step_body, std::size_t samples, double fuzzy,
+                                         double seconds, double booleans_above) {
   return guarded("comparison with a STEP file", [&] {
     const std::vector<TopoDS_Shape> mine = occt(bodies);
     if (mine.empty()) {
@@ -1119,6 +1128,11 @@ AnalysisComparison analysis_compare_step(const ShapeList& bodies, rust::Str path
     analysis::CompareOptions options;
     options.samples = samples;
     options.fuzzy = fuzzy;
+    // The caller's time limit and its leave-out of the volume booleans
+    // (mitcad#2534: without them a body against its coincident mirror image
+    // spent minutes in the booleans the query asked to leave out).
+    options.seconds = seconds;
+    options.booleans_above = booleans_above;
     const analysis::Comparison c = analysis::compare(compound(mine), compound(theirs), options);
     result.volume_a = c.volume_a;
     result.volume_b = c.volume_b;

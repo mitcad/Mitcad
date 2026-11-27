@@ -71,6 +71,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -294,7 +295,7 @@ void test_lean_in_seam_on_a_side() {
 
 // With the argument "lean-in" only the lean-in cases run (their own ctest,
 // geometry.offset_loft_circle_seam_lean_in); without it the others.
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(offset_loft_circle_seam) {
   if (argc > 1 && std::string(argv[1]) == "lean-in") {
     test::guarded("test_lean_in_seam_on_a_side", test::test_lean_in_seam_on_a_side);
   } else {

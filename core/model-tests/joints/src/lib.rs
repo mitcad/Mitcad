@@ -30,3 +30,5 @@ mod earlier_joint_kept_tests;
 mod explode_tests;
 // Exploded views that follow the design, and Measure on them (mitcad#2328).
 mod explode_follow_2328_tests;
+// Explode views follow bodies moved into an existing component (mitcad#2572).
+mod explode_destination_2572_tests;

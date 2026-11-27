@@ -107,7 +107,7 @@ project_menu="New Project | Open Project | Open from Cloud | - | Sync | Check fo
 project_menu="$project_menu | - | Project Settings | - | Web Viewer | Update Web Viewer"
 file_menu="New Design | Open | Open from Project | Open Recent > | Open Read-Only | Close | - | Save | Save As"
 file_menu="$file_menu | Save to Project | Save with Description"
-file_menu="$file_menu | Version History | Design Properties | - | Project > [$project_menu] | - | Import | Export | Export Timeline as Script | Export Snapshot | Create Drawing | Export Drawing | - | Drawing Book | - | Recover Designs"
+file_menu="$file_menu | Version History | Design Properties | - | Project > [$project_menu] | - | Import | Export | Export Timeline as Script | Export Snapshot | Export Turntable | Create Drawing | Export Drawing | - | Drawing Book | - | Recover Designs"
 file_menu="$file_menu | - | Exit"
 ui_mark
 ui_step "file menu (Alt+F)"              ui_key alt+f

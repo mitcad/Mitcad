@@ -49,7 +49,10 @@ enum class NewFeatureOperation { Automatic, NewBody };
 // direction it turned, so that its own flip is no direction flip of the
 // user's (above): a flipped Cut that fails never becomes Join. A preview
 // that works is never turned; the user's own Flip, distance sign,
-// Direction, Operation, Objects or targets end a waiting turn.
+// Direction, Operation, Objects or targets end a waiting turn. Chosen
+// while the tool has no direction yet (a new Extrude starts at zero,
+// mitcad#2481), the choice's direction is the first one the distance
+// gives, and its preview may turn it as above.
 class AutoOperationPolicy {
 public:
   // What the session does with the preview of a flip.
@@ -86,9 +89,18 @@ public:
   // automatic choice is off makes a flip pending; flipped back before its
   // preview came, none is. Any other direction than the one a waiting turn
   // (mitcad#2283) expects is the user's own and ends the turn: the
-  // turn's own flip was kept as the direction already.
+  // turn's own flip was kept as the direction already. A hand choice made
+  // before the tool had a direction (a new Extrude at zero, mitcad#2481)
+  // takes the first one as its own: its turn waits from then on.
   void observeDirection(int direction) {
     if (!m_flips) {
+      return;
+    }
+    if (m_turn == Turn::Waiting) {
+      if (direction != 0) {
+        m_turn = Turn::Pending;
+        m_direction = direction;
+      }
       return;
     }
     if (m_turn != Turn::None && direction != m_direction) {
@@ -159,16 +171,24 @@ public:
   // The user chose `operation` by hand while the tool goes `direction`
   // (CommandDef::toolDirection; 0 for two sides or a symmetric extrusion):
   // a new feature's Cut or Join of one side waits for its preview. Any
-  // other operation, an edit and no direction wait for nothing.
+  // other operation and an edit wait for nothing. Without a direction yet
+  // (a distance still zero, mitcad#2481; also two sides or symmetric) it
+  // waits for the first direction `observeDirection` sees; a preview made
+  // without one (two sides, symmetric) ends the wait unturned.
   void operationChosen(const std::string& operation, int direction) {
     m_turn = Turn::None;
-    if (!m_flips || direction == 0 || (operation != "cut" && operation != "join")) {
+    if (!m_flips || (operation != "cut" && operation != "join")) {
+      return;
+    }
+    if (direction == 0) {
+      m_turn = Turn::Waiting;
       return;
     }
     m_turn = Turn::Pending;
     m_direction = direction;
   }
-  // A turn waits for the hand choice's preview or the turned one's.
+  // A turn waits for the hand choice's direction, its preview or the
+  // turned one's.
   bool turnWaiting() const { return m_turn != Turn::None; }
 
   // The preview came back: whether it works, and the model's answer
@@ -195,7 +215,7 @@ public:
 
 private:
   enum class Flip { None, Pending, Trying };
-  enum class Turn { None, Pending, Trying };
+  enum class Turn { None, Waiting, Pending, Trying };
   bool m_active = false;
   bool m_offByPreference = false;
   bool m_flips = false;

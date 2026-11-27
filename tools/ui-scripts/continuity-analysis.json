@@ -1,0 +1,14 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Continuity Analysis' part (mitcad#2521, tools/ui-scripts/continuity-analysis.mitcad-ui): a 40 x 30 x 20 mm box (F2.b0, Body1), its upright edge at (40, 0) rounded 4 mm tangent (Fillet1, F3) and its upright edge at (0, 30) rounded 4 mm curvature continuous (Fillet2, F4)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"], "radius": 4}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0", "sets": [
+    {"edges": ["E{F2:side(c3[c2,c4])|F2:side(c4[c3,c1])}"], "size": {"type": "constant", "radius": 4},
+     "continuity": "curvature"}]}}
+]

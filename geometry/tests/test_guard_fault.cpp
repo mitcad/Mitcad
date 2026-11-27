@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "mitcad/geometry/guard.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -117,7 +118,7 @@ int crash_and_go_on(bool destructor) {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+MITCAD_BUNDLED_TEST_ARGS(guard_fault) {
   const std::string mode = argc == 2 ? argv[1] : "";
   if (mode != "body" && mode != "destructor" && mode != "destructor-thread") {
     std::fprintf(stderr, "usage: test_guard_fault body|destructor|destructor-thread\n");

@@ -56,6 +56,12 @@ public static class PreferencesTestWindow {
         RECT r;
         return GetWindowRect(hwnd, out r) ? r.Bottom - r.Top : 0;
     }
+
+    // The window's outer width (0 when it is not known).
+    public static int Width(IntPtr hwnd) {
+        RECT r;
+        return GetWindowRect(hwnd, out r) ? r.Right - r.Left : 0;
+    }
 }
 '@
 
@@ -215,9 +221,16 @@ function Page-Fills([string]$Page, [string]$Key, [string]$Line, [string]$Shot, [
   $low = Page-Layout 'lowest' $Line
   Page-Shot $Shot 'min' $low[1]
   $lowOuter = [PreferencesTestWindow]::Height($dialog)
+  # Taller at the lowest window's own width: the logged frame leaves out
+  # Windows' invisible resize borders, so a resize to it made the window
+  # 14 pixels narrower than the lowest one, and Navigation's last line,
+  # wrapped to two lines there since mitcad#2561's inset, took 16 of the
+  # pixels the check expects the table to take.
+  $lowOuterWidth = [PreferencesTestWindow]::Width($dialog)
+  if ($lowOuterWidth -le 0) { Ui-Fail "Preferences' width is not known" }
   Ui-Mark
   Ui-Step 'Preferences 160 pixels taller'  {
-    if (-not [PreferencesTestWindow]::Resize($dialog, $frameWidth, $lowOuter + 160)) { Ui-Fail 'Preferences was not resized' }
+    if (-not [PreferencesTestWindow]::Resize($dialog, $lowOuterWidth, $lowOuter + 160)) { Ui-Fail 'Preferences was not resized' }
   }
   if ([PreferencesTestWindow]::Height($dialog) -le $lowOuter) {
     Ui-Fail "Preferences stays $lowOuter pixels high (outer) when asked for $($lowOuter + 160)"

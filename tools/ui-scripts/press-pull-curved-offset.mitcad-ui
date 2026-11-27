@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: MIT
+# Press Pull's Offset on a curved face (mitcad#2509, the arrow of
+# mitcad#2478), the shared input script of
+# tools/ui-press-pull-curved-offset-test.sh (Linux),
+# tools/ui-windows-press-pull-curved-offset-test.ps1 (Windows) and
+# tools/ui-macos-press-pull-curved-offset-test.sh (macOS), on the design
+# tools/ui-scripts/press-pull-curved-offset.json makes: a circle of radius
+# 10 extruded 10 mm with a taper of -3 degrees (Body1), a cone narrowing
+# upwards, its side F2:side(c2). Its volume pi h (R^2 + R r + r^2) / 3,
+# R = 10, r = 10 - 10 tan 3 deg, h = 10.
+#   1. Press Pull on the side: Offset's arrow starts on the face half way
+#      up (the middle of the face's parameters: z = 5, on the -x side at the
+#      radius there, 10 - 5 tan 3 deg) and points along the face's outward
+#      normal there (out by cos 3 deg, up by sin 3 deg).
+#   2. Seen from above, the arrow dragged outwards: the preview is ok and
+#      OK commits the offset, a body that grew; Undo takes it back.
+#   3. The dragged distance typed: the same offset, the same volume; Undo.
+#   4. 0.5 mm typed: the radius at every height grows by 0.5 / cos 3 deg,
+#      the grown frustum's volume.
+wait-idle
+window-resize 1400 990
+capture-model-number volume0 '{"query":"properties"}' total.volume
+expect-near ${volume0} 2979.824966 0 0.001
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+
+# --- 1. The arrow on the curved face.
+mark
+command solid.press_pull
+expect-log '^Command Press Pull started'
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F2:side'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+wait-log '^Handle world Press Pull distance: origin ' 30
+capture hx '^Handle world Press Pull distance: origin ([^,]+),'
+capture hy '^Handle world Press Pull distance: origin [^,]+,([^,]+),'
+capture hz '^Handle world Press Pull distance: origin [^,]+,[^,]+,([^,]+), knob'
+expect-near ${hx} -9.737961 0 0.001
+expect-near ${hy} 0 0 0.001
+expect-near ${hz} 5 0 0.001
+capture nx '^Arrow direction Press Pull distance: ([^,]+),'
+capture nz '^Arrow direction Press Pull distance: [^,]+,[^,]+,([^,]+)$'
+expect-near ${nx} -0.999 0 0.0015
+expect-near ${nz} 0.052 0 0.0015
+
+# --- 2. Seen from above, the arrow (pointing -x, to the left) dragged out.
+mark
+command view.top
+wait-idle
+command view.fit
+wait-idle
+wait-log '^Manipulator Press Pull distance at ' 30
+mark
+drag-from '^Manipulator Press Pull distance at ' -80 -40
+wait-log '^Manipulator Press Pull distance dragged to ' 30
+capture dragged '^Manipulator Press Pull distance dragged to (.+)$'
+expect-less 0 ${dragged}
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+expect-no-log '^Preview Press Pull: failed'
+mark
+button '^OK$'
+wait-log '^Press Pull made offset face, distance ' 30
+wait-idle
+capture-model-number volume_dragged '{"query":"properties"}' total.volume
+expect-less ${volume0} ${volume_dragged}
+mark
+command edit.undo
+wait-idle
+capture-model-number volume_undone '{"query":"properties"}' total.volume
+expect-near ${volume_undone} 2979.824966 0 0.001
+
+# --- 3. The dragged distance typed: the same offset.
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+mark
+command solid.press_pull
+expect-log '^Command Press Pull started'
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F2:side'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+type-in '^Panel Press Pull input distance at ' '${dragged}'
+wait-idle
+expect-no-log '^Preview Press Pull: failed'
+mark
+button '^OK$'
+wait-log '^Press Pull made offset face, distance ' 30
+wait-idle
+capture-model-number volume_typed '{"query":"properties"}' total.volume
+expect-near ${volume_typed} ${volume_dragged} 1e-9 0.000001
+mark
+command edit.undo
+wait-idle
+capture-model-number volume_undone2 '{"query":"properties"}' total.volume
+expect-near ${volume_undone2} 2979.824966 0 0.001
+
+# --- 4. 0.5 mm typed: the grown frustum.
+mark
+command solid.press_pull
+expect-log '^Command Press Pull started'
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F2:side'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+type-in '^Panel Press Pull input distance at ' '0.5'
+wait-idle
+expect-no-log '^Preview Press Pull: failed'
+mark
+button '^OK$'
+wait-log '^Press Pull made offset face, distance 0.5' 30
+wait-idle
+capture-model-number volume_half '{"query":"properties"}' total.volume
+expect-near ${volume_half} 3294.047428 1e-6 0.001
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -179,7 +179,7 @@ QJsonObject MainWindow::mcpDocumentInfo() const {
   return info;
 }
 
-QJsonObject MainWindow::mcpQuery(const QJsonObject& request) const {
+QJsonObject MainWindow::mcpQuery(const QJsonObject& request) {
   Q_ASSERT(QThread::currentThread() == thread());
   // Read-only: also with a sketch or command open, during drags and
   // dialogs; refused only while the model computes (mitcad#265).
@@ -189,7 +189,37 @@ QJsonObject MainWindow::mcpQuery(const QJsonObject& request) const {
   // design's project (mitcad#2224).
   const QJsonObject checked = parseObject(validate_mcp_query(
       rustStr(compactJson(request)), mcp::agentsMayUsePrintLibraries(), rustStr(projectFolder().toUtf8())));
-  return {{QStringLiteral("document"), m_mcpDocumentId}, {QStringLiteral("result"), query(checked)}};
+  const rust::String named = mcp_query_job(rustStr(compactJson(checked)));
+  const QString job = QString::fromUtf8(named.data(), static_cast<qsizetype>(named.size()));
+  if (job.isEmpty()) {
+    return {{QStringLiteral("document"), m_mcpDocumentId}, {QStringLiteral("result"), query(checked)}};
+  }
+  // A long analysis (mitcad#2540: whole-design interference, an assembly
+  // path of a body flush against its neighbours ran for minutes on the UI
+  // thread) runs as a model job, as the application's own analyses do:
+  // the window draws meanwhile and shows the progress with its Cancel; the
+  // client's notifications/cancelled cancels it too (LiveServer), and the
+  // call then answers "the computation was canceled" (ComputationCancelled).
+  // Other model requests to the design are answered busy while it runs
+  // (mcpRefuseBusy: the design is computing). Not a step of a sketch or a
+  // command open in the window: it only reads.
+  qInfo().noquote() << QStringLiteral("MCP: an agent's %1 query runs as a job").arg(job);
+  const QJsonObject answer = jobQuery(checked, mcpQueryStage(job));
+  return {{QStringLiteral("document"), m_mcpDocumentId}, {QStringLiteral("result"), answer}};
+}
+
+QString MainWindow::mcpQueryStage(const QString& job) {
+  // What the progress shows while an agent's analysis runs (mitcad#2540).
+  if (job == QStringLiteral("interference")) {
+    return tr("Checking the bodies for interference");
+  }
+  if (job == QStringLiteral("assembly_path")) {
+    return tr("Checking the path of the body");
+  }
+  if (job == QStringLiteral("contact_check")) {
+    return tr("Checking the contacts of the joints");
+  }
+  return tr("Analysing the design");
 }
 
 QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {

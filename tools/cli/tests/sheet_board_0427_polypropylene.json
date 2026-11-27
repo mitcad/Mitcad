@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Board (mitcad#2226): the FEFCO 0427 folder of 4 mm corrugated polypropylene (crease deduction 0.4, crease radius 0.5: each crease develops 8.6), inside 160 x 90 x 60: its rules F1, blank (sketch F2), creases (sketch F3), Face F4 and Folds F5 to F22. A script of its own beside sheet_board_0427 (mitcad#2495): each box's eighteen Folds take minutes to build, and the round trip builds each box twice."},
+  {"cmd": "add_standard_box", "style": "fefco_0427", "length": 160, "width": 90, "height": 60, "board": "polypropylene_4", "radius": 0.5},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"feature": "F22", "status": "ok", "bodies": 1}},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"},
+    "result": {"status": "valid", "bounds": {"min": [-63.8, -137], "max": [318.2, 322.2]}}}},
+  {"cmd": "export_die_line", "body": "F4.b0", "path": "sheet_board_0427_polypropylene.dxf"}
+]

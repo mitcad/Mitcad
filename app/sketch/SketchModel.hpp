@@ -233,6 +233,10 @@ struct ProjectionData {
   QStringList entities;
   bool stale = false; // it did not follow its source all the way (kept, lost, unfollowed, stale)
   bool section = false; // section curves: where the sketch's plane cuts the source face (mitcad#389)
+  // The face's outline the sketch got when it was made (mitcad#2197), and
+  // its curves chosen to bound profiles (Profile Boundary, mitcad#2551).
+  bool automatic = false;
+  QStringList boundaries;
   // Its source edge is gone and these could have taken its place, none
   // alone (mitcad#1794): Project Again asks which.
   std::vector<SuccessorData> candidates;
@@ -349,6 +353,11 @@ public:
   const OffsetData* offsetOf(const QString& curve) const;
   // The formulas of an equation curve (mitcad#2237); null for another.
   const EquationData* equationOf(const QString& curve) const;
+  // A curve of the face's outline the sketch got when it was made
+  // (mitcad#2197), and whether it is chosen to bound profiles (Profile
+  // Boundary, mitcad#2551).
+  bool automaticCurve(const QString& curve) const;
+  bool profileBoundary(const QString& curve) const;
   const ConstraintData* constraint(const QString& id) const;
   const DimensionData* dimension(const QString& id) const;
   std::optional<V2> pointAt(const QString& id) const;

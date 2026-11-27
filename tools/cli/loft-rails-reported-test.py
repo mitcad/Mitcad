@@ -12,8 +12,9 @@ Loft2 with Keep), saves the design and checks each loft on it:
   across the YZ plane as a body of its own (Mirror), that body is exported
   to STEP and `compare_step` measures the largest distance between the
   two bodies' surfaces (sampled both ways, exact distances; the volume
-  booleans of the two coincident bodies, which took five minutes each, are
-  left out with `booleans_above`);
+  booleans of the two coincident bodies, which took minutes each, are
+  left out with `booleans_above`: until mitcad#2534 the kernel dropped
+  that option and ran them anyway, most of the test's time);
 - both rails lie on it: six points along each of the rails' curves are
   within 1e-4 mm of the body and not inside it (`measure`: `inside` is
   false for a point within 1e-3 mm of the boundary). A construction point
@@ -21,7 +22,13 @@ Loft2 with Keep), saves the design and checks each loft on it:
   worked out here: the rails' sketch is exported to DXF (`mitcad-cli
   export-sketch`), each spline evaluated from its control points and
   knots (a line from its ends as the design stores them), placed by the
-  sketch's frame, and added as fixed construction points.
+  sketch's frame, and added as fixed construction points;
+- each rail is the side's outermost line at and between all sections
+  within 1e-4 mm (mitcad#2374, mitcad#2533): the body exported as .brep,
+  `--probe` (test_probe_loft_outermost) cuts it every millimetre between
+  the end sections and compares the section's outermost x on either side
+  with its x in the rails' plane y = 0 (left out with a note without
+  `--probe`).
 
 `--case reported` opens the reporters' designs, each in an archive under
 MITCAD_MITCAD_REPORTED found by its content id (the first 8 hex digits of
@@ -30,7 +37,9 @@ its SHA-256), the design in it by its own, unpacked into the work folder
 
 - GitHub #607 (`github-607/`): the design's own Loft1 (two rounded
   rectangles to a circle, two mirrored spline rails, Merge) builds, is its
-  own mirror image in x and both rails lie on it, as above;
+  own mirror image in x, both rails lie on it, and each is the side's
+  outermost line within 1e-4 mm from the rectangle at the bottom to the
+  circle, as above;
 - GitHub #610 (`github-610/`): the design has the sections and the rails
   but no loft. Each rail is a chain of a spline and a line (c1 then c27,
   c15 then c28); the first spline meets its line with one tangent, the
@@ -42,6 +51,7 @@ its SHA-256), the design in it by its own, unpacked into the work folder
   other, so the body is not checked against its mirror.
 
   python3 loft-rails-reported-test.py --cli <mitcad-cli> --work <folder> --case forum|reported
+                                      [--probe <test_probe_loft_outermost>]
 """
 
 import argparse
@@ -60,7 +70,15 @@ SKIP = "loft rails reported: skipped"
 VERBOSE = False
 
 MIRROR = 1e-6  # mm, the body against its mirror image
-ON_RAIL = 1e-4  # mm, a rail's point off the body
+# mm, a rail's point off the body; also how far the side may stand out
+# beyond a rail, at and between all sections (mitcad#2374, mitcad#2533:
+# before the loft blended neighbouring sections, its interpolation along
+# the loft put #607's side 0.108 mm beyond between its rectangles, and the
+# four-section bottle's 0.315 mm).
+ON_RAIL = 1e-4
+# --probe: test_probe_loft_outermost (mitcad#2374); without it the
+# outermost check is left out with a note.
+PROBE = None
 SAME_POINT = 1e-3  # mm, a spline's end against its stored fit point (which spline is which)
 SAMPLES = 5  # pieces along each rail curve (a measure of a point against a lofted body takes about a second)
 COMPARED = 400  # points sampled on each side of the mirror comparison
@@ -169,6 +187,10 @@ def run(cli, work, case, steps, design=None, save=None):
         report, _ = json.JSONDecoder().raw_decode(out[start:])
     except ValueError as error:
         fail(f"{case}: the report is not JSON ({error}):\n{out}")
+    # With --timings (--verbose) the CLI wraps the report with the
+    # recompute times: {"report": …, "recompute_times": …}.
+    if VERBOSE and isinstance(report, dict) and "report" in report and "timeline" not in report:
+        report = report["report"]
     return report
 
 
@@ -339,6 +361,34 @@ def on_body_steps(uids, body, points, what):
     return steps
 
 
+def export_steps(work, case, body):
+    """Steps that export `body` as .brep for the outermost check; its path."""
+    path = os.path.join(work, f"{case}-{body}.brep")
+    return [{"cmd": "export", "path": path, "bodies": [body]}], path
+
+
+def check_outermost(case, brep, z0, z1, most):
+    """How far the side stands out beyond the rails (mitcad#2374): the
+    body's level sections every millimetre between z0 and z1 stand out
+    beyond the rails' plane y = 0 by at most `most` on either side
+    (test_probe_loft_outermost --most)."""
+    if PROBE is None:
+        print(f"note {case}: the outermost check is left out (no --probe)")
+        return
+    steps = int(round(z1 - z0))
+    started = time.monotonic()
+    done = subprocess.run([PROBE, brep, str(z0), str(z1), str(steps), "--most", str(most)],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if VERBOSE:
+        print(f"time {case} outermost, z {z0:g} to {z1:g}: {time.monotonic() - started:.1f} s")
+    summary = [line for line in done.stdout.splitlines() if line.startswith(("most beyond", "FAIL"))]
+    for line in summary:
+        print(f"  {case}, z {z0:g} to {z1:g}: {line}")
+    if done.returncode != 0:
+        fail(f"{case}: between z = {z0:g} and {z1:g} the side stands out beyond a rail by more than {most} mm "
+             f"({done.returncode}):\n{done.stdout}{done.stderr}")
+
+
 def loft_status(report, uid):
     for feature in report["timeline"]["features"]:
         if feature["uid"] == uid:
@@ -358,13 +408,20 @@ def forum(cli, work, scripts):
     rails = {curve: rail_points(cli, work, "forum", design, stored, "F8", [curve]) for curve in ("c13", "c14")}
     uids = Uids(stored)
     checks = []
+    exported = {}
     for body in ("F9.b0", "F10.b0"):
         checks += mirror_steps(uids, work, "forum", body)
         for curve, points in rails.items():
             checks += on_body_steps(uids, body, points, f"the rail {curve}")
+        steps, exported[body] = export_steps(work, "forum", body)
+        checks += steps
     run(cli, work, "forum-checks", checks, design)
+    for body, brep in exported.items():
+        # Each rail the side's outermost line at and between the sections
+        # (mitcad#2533; the geometry suite's four-section case).
+        check_outermost(f"forum {body}", brep, 0.0, 230.0, ON_RAIL)
     print("ok   the four-section bottle builds with Merge and with Keep, each its own mirror image in x "
-          f"within {MIRROR} mm, both rails on it within {ON_RAIL} mm")
+          f"within {MIRROR} mm, both rails on it and its outermost lines within {ON_RAIL} mm")
 
 
 def reported_607(cli, work):
@@ -383,9 +440,14 @@ def reported_607(cli, work):
     for rail in loft["rails"]:
         points = rail_points(cli, work, "607", design, stored, rail["sketch"], rail["curves"])
         steps += on_body_steps(uids, body, points, f"the rail {', '.join(rail['curves'])}")
+    exported, brep = export_steps(work, "607", body)
+    steps += exported
     run(cli, work, "607", steps, design)
+    # The sections at z = 0, 100 and 200: each rail is the side's outermost
+    # line at and between them within the rail tolerance (mitcad#2533).
+    check_outermost("#607", brep, 0.0, 200.0, ON_RAIL)
     print(f"ok   #607's {loft['name']} builds, its own mirror image in x within {MIRROR} mm, "
-          f"both rails on it within {ON_RAIL} mm")
+          f"both rails on it and its outermost lines within {ON_RAIL} mm")
     return True
 
 
@@ -442,9 +504,11 @@ def main():
     parser.add_argument("--case", choices=["forum", "reported"], required=True)
     parser.add_argument("--verbose", action="store_true",
                         help="print each run's time, its steps of a second or more and the loft bends' trace")
+    parser.add_argument("--probe", help="test_probe_loft_outermost, for the outermost check (mitcad#2374)")
     options = parser.parse_args()
-    global VERBOSE
+    global VERBOSE, PROBE
     VERBOSE = options.verbose
+    PROBE = options.probe
     work = os.path.abspath(options.work)
     os.makedirs(work, exist_ok=True)
     if options.case == "forum":

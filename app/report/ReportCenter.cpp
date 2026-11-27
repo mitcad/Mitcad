@@ -151,7 +151,8 @@ void ReportCenter::registerCommands(CommandRegistry& registry) {
   feedback.mode = CommandDef::Mode::Any;
   feedback.tooltip = tr("Report a problem or suggest an improvement");
   feedback.keywords = {QStringLiteral("bug"), QStringLiteral("report"), QStringLiteral("issue"),
-                       QStringLiteral("wish"), QStringLiteral("problem"), QStringLiteral("feedback")};
+                       QStringLiteral("tweak"), QStringLiteral("feature"), QStringLiteral("problem"),
+                       QStringLiteral("feedback")};
   feedback.duringCommands = true;
   feedback.run = [this] { sendFeedback(); };
   registry.add(feedback);
@@ -253,9 +254,7 @@ void ReportCenter::sendFeedback() {
   const auto preview = [this, &form](const report::Feedback& feedback) {
     report::Report report;
     const QString summary = feedback.summary.isEmpty() ? tr("Feedback") : feedback.summary;
-    report.title = feedback.kind == QStringLiteral("bug")    ? QStringLiteral("Bug: ") + summary
-                   : feedback.kind == QStringLiteral("wish") ? QStringLiteral("Wish: ") + summary
-                                                             : summary;
+    report.title = report::feedbackTitle(feedback.kind, summary);
     report.sections << report::Section{QStringLiteral("description"), QStringLiteral("Description"),
                                        feedback.description, true, false, true};
     if (!feedback.contact.isEmpty()) {

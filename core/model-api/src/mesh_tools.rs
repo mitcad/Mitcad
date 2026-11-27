@@ -131,8 +131,10 @@ impl<K: Kernel> MeshToolsOps<K> for Document<K> {
             )
             .map_err(|e| ApiError(format!("the mesh's triangles: {e}")))?;
         // Corners stored apart (an STL file's) joined first.
-        let stats = mitcad_model::mesh_tools::mesh_stats(&mitcad_model::mesh_tools::joined(&mesh));
-        Ok(json!({
+        let joined = mitcad_model::mesh_tools::joined(&mesh);
+        let stats = mitcad_model::mesh_tools::mesh_stats(&joined);
+        let closed = stats.open_edges == 0 && stats.non_manifold_edges == 0;
+        let mut result = json!({
             "body": query.body.to_string(),
             "vertices": stats.vertices,
             "triangles": stats.triangles,
@@ -140,8 +142,13 @@ impl<K: Kernel> MeshToolsOps<K> for Document<K> {
             "non_manifold_edges": stats.non_manifold_edges,
             "holes": stats.holes,
             "area": stats.area,
-            "closed": stats.open_edges == 0 && stats.non_manifold_edges == 0,
-        }))
+            "closed": closed,
+        });
+        // The enclosed volume of a closed mesh (mitcad#2515).
+        if closed {
+            result["volume"] = json!(mitcad_model::mesh_tools::volume(&joined));
+        }
+        Ok(result)
     }
 }
 
@@ -184,6 +191,8 @@ mod tests {
         assert_eq!(stats["vertices"], 8);
         assert_eq!(stats["holes"], 0);
         assert_eq!(stats["closed"], true);
+        // The mock kernel's 10 mm box (mitcad#2515).
+        assert!((stats["volume"].as_f64().unwrap() - 1000.0).abs() < 1e-9);
     }
 
     #[test]

@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# The overlay layer's fallback (mitcad#2406) on paint-layer-fallback.json's
+# Sketch1 (a 30 x 20 rectangle from the origin, its width and height
+# dimensioned), with MITCAD_TEST_PAINT_LAYER_FAILURE set by the wrapper
+# (gl-error or slow-frame) and MITCAD_TEST_PAINT_LAYER_WHY the reason it
+# expects (a regular expression):
+#   1. Sketch1 edited and fitted: the sketch overlay's pictures fail in the
+#      view's overlay layer (gl-error: at its first upload, as BGRA, and
+#      again as RGBA; slow-frame: at its second), and the log says that the
+#      paint layers are widgets over the view for the rest of the session,
+#      and why.
+#   2. The widget draws the sketch: its paints log the pixels they drew.
+#   3. A line drawn with the Line tool inside the rectangle: the widget
+#      paints it (a paint that drew other pixels).
+#   4. An orbit (Shift + middle drag): the navigation's line counts the
+#      sketch overlay's paints as a widget over the view and names the
+#      widget (sketchOverlay) among the widgets repainted.
+# Run by tools/ui-paint-layer-fallback-test.sh (Linux, both modes),
+# tools/ui-windows-paint-layer-fallback-test.ps1 (Windows) and
+# tools/ui-macos-paint-layer-fallback-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+
+# 1. The failure path, and the line saying why.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+command view.fit
+wait-idle
+wait-log '^View paint layers drawn as widgets over the view for the rest of the session: sketch overlay: ${MITCAD_TEST_PAINT_LAYER_WHY}'
+expect-log '\(MITCAD_TEST_PAINT_LAYER_FAILURE=${MITCAD_TEST_PAINT_LAYER_FAILURE}\)$'
+
+# 2. The widget draws the sketch.
+wait-log '^View paint layer .sketch overlay. painted as a widget over the view: [0-9]+ x [0-9]+, [1-9][0-9]* pixel\(s\) drawn$'
+screenshot '${MITCAD_TEST_WORK}/paint-layer-fallback-sketch.png'
+
+# 3. A line drawn with the Line tool, painted by the widget.
+mark
+key l
+wait-log '^Sketch tool Line'
+mark
+sketch-click 6 4
+sketch-click 14 15
+wait-log '^Added line '
+wait-log '^View paint layer .sketch overlay. painted as a widget over the view: [0-9]+ x [0-9]+, [1-9][0-9]* pixel\(s\) drawn$'
+key Escape
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/paint-layer-fallback-line.png'
+
+# 4. An orbit: the widget follows the camera.
+mark
+drag 40 60 70 45 middle shift
+wait-log '^View navigation: [0-9]+ frame\(s\), [1-9][0-9]* repaint\(s\) of widgets over the view \([^)]*sketchOverlay[^)]*\), sketch overlay painted [1-9][0-9]* time\(s\) as a widget over the view'
+expect-no-log 'sketch overlay painted [0-9]+ time\(s\) by the view'
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'OCCT view event failed|TestDriver: FAIL'

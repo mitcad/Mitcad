@@ -12,6 +12,11 @@
 //! patch of two each way, a Gordon surface through more). Each curve is a
 //! chain of sketch curves, a chain of a body's edges (named, or free edges
 //! of openings) or a point. The bodies are not changed.
+//!
+//! A loop may have `guides` (mitcad#2526): sketch curves inside it that
+//! the filled face runs through (a bowl's depth inside its rim). The loop
+//! alone bounds the face; the guides neither bound nor split it, and each
+//! of their curves is a guide of its own (they need not join).
 
 use std::marker::PhantomData;
 
@@ -50,6 +55,10 @@ pub struct BoundarySurfaceDef<P = ParamId> {
     /// The network's curves crossing `u`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub v: Vec<BoundaryCurveRef>,
+    /// A loop's guide curves inside it (mitcad#2526): sketch curves the
+    /// face runs through, neither bounding nor splitting it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<BoundaryCurveRef>,
     #[serde(skip)]
     pub values: PhantomData<P>,
 }
@@ -98,12 +107,17 @@ impl<P> BoundarySurfaceDef<P> {
             boundary: clone,
             u: clone,
             v: clone,
+            guides: clone,
             values: phantom,
         }
     }
 
     fn all(&self) -> impl Iterator<Item = &BoundaryCurveRef> {
-        self.boundary.iter().chain(&self.u).chain(&self.v)
+        self.boundary
+            .iter()
+            .chain(&self.u)
+            .chain(&self.v)
+            .chain(&self.guides)
     }
 }
 
@@ -175,6 +189,37 @@ impl FeatureInfo for BoundarySurfaceDef {
     }
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        if !self.guides.is_empty() && self.boundary.is_empty() {
+            return Err(
+                "guide curves are for a boundary loop; a network runs through its curves"
+                    .to_owned(),
+            );
+        }
+        for guide in &self.guides {
+            if guide.sketch.is_none() || guide.body.is_some() || guide.point.is_some() {
+                return Err("a guide curve of a boundary loop is sketch curves".to_owned());
+            }
+            if guide.curves.is_empty() {
+                return Err("a guide curve of a boundary loop needs its curves".to_owned());
+            }
+            if !guide.continuity.is_g0() {
+                return Err(
+                    "a guide curve has no continuity: the surface runs through it".to_owned(),
+                );
+            }
+            for curve in &guide.curves {
+                if self
+                    .boundary
+                    .iter()
+                    .any(|b| b.sketch == guide.sketch && b.curves.contains(curve))
+                {
+                    return Err(format!(
+                        "{} is both a boundary curve and a guide curve of the loop",
+                        curve.curve_name()
+                    ));
+                }
+            }
+        }
         if !self.boundary.is_empty() {
             if !self.u.is_empty() || !self.v.is_empty() {
                 return Err(
@@ -289,6 +334,28 @@ fn read_loop<K: Kernel>(
             })
         })
         .collect()
+}
+
+/// A loop's guide curves read (mitcad#2526): each entry's sketch curves
+/// as they are listed, not joined (each curve is a guide of its own), on
+/// its sketch's plane; a guide has no continuity.
+fn read_guide<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    guide: &BoundaryCurveRef,
+) -> Result<Read<K::Shape>, String> {
+    let curves = guide
+        .sketch_curves()
+        .ok_or("a guide curve of a boundary loop is sketch curves")?;
+    let (frame, pieces) = curves.curves(ctx)?;
+    if pieces.is_empty() {
+        return Err("a guide curve of a boundary loop needs its curves".to_owned());
+    }
+    Ok(Read::Curves {
+        chain: pieces,
+        origin: frame.origin,
+        normal: frame.normal(),
+        continuity: PatchContinuity::G0,
+    })
 }
 
 /// The curves grouped into the runs they make, joined at their ends, in
@@ -582,17 +649,30 @@ impl<K: Kernel> Evaluate<K> for BoundarySurfaceDef {
         let boundary = loop_order(boundary, &sketches)?;
         let u = read_all(ctx, &self.u)?;
         let v = read_all(ctx, &self.v)?;
-        let (boundary_openings, u_openings, v_openings) =
-            (openings_of(&boundary), openings_of(&u), openings_of(&v));
+        let guides = self
+            .guides
+            .iter()
+            .map(|g| read_guide(ctx, g))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (boundary_openings, u_openings, v_openings, guide_openings) = (
+            openings_of(&boundary),
+            openings_of(&u),
+            openings_of(&v),
+            openings_of(&guides),
+        );
         let boundary = curves_of(&boundary, &boundary_openings);
         let u = curves_of(&u, &u_openings);
         let v = curves_of(&v, &v_openings);
+        let guides = curves_of(&guides, &guide_openings);
         let spec = BoundarySpec {
             feature: ctx.uid,
             curves: if boundary.is_empty() {
                 BoundaryCurves::Network { u: &u, v: &v }
             } else {
-                BoundaryCurves::Loop(&boundary)
+                BoundaryCurves::Loop {
+                    boundary: &boundary,
+                    guides: &guides,
+                }
             },
         };
         let surface = ctx

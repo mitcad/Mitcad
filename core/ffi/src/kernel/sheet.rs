@@ -78,6 +78,13 @@ pub mod ffi {
         cone: bool,
         half_angle: f64,
         neutral_depth: f64,
+        /// An oblique conical panel (mitcad#2491): `origin` its front
+        /// cone's apex, `centre` and `circle_radius` its circle, `x_axis`
+        /// and `y_axis` the radial start and the angular direction in the
+        /// circle's plane.
+        oblique: bool,
+        centre: [f64; 3],
+        circle_radius: f64,
     }
     struct SheetMember {
         domain: SheetDomain,
@@ -160,6 +167,13 @@ pub mod ffi {
     /// `SheetFaceDevelopment`).
     struct SheetDevelopedFace {
         cone: bool,
+        /// An oblique cone (mitcad#2491): `origin` its apex, `centre` and
+        /// `circle_radius` its circle, `plate` whether the body is a plate
+        /// behind it.
+        oblique: bool,
+        centre: [f64; 3],
+        circle_radius: f64,
+        plate: bool,
         origin: [f64; 3],
         axis: [f64; 3],
         radial_start: [f64; 3],
@@ -317,6 +331,16 @@ fn port_side(b: &BoundaryPieceRef, s: ParamSpan, a: AxialMap) -> ffi::SheetPortS
 }
 
 pub fn shape(spec: &SheetShapeSpec<'_>) -> Result<SheetGeometry<SharedPtr<Shape>>, KernelError> {
+    // A Lofted Flange's chart (mitcad#2512) is built by its feature.
+    if spec
+        .patches
+        .iter()
+        .any(|p| matches!(p.embedding, SheetEmbedding::Lofted(_)))
+    {
+        return Err(KernelError::failed(
+            "a lofted flange's transition is not rebuilt by the sheet construction",
+        ));
+    }
     let patches: Vec<_> = spec
         .patches
         .iter()
@@ -337,6 +361,9 @@ pub fn shape(spec: &SheetShapeSpec<'_>) -> Result<SheetGeometry<SharedPtr<Shape>
                 cone: false,
                 half_angle: 0.,
                 neutral_depth: 0.,
+                oblique: false,
+                centre: [0.; 3],
+                circle_radius: 0.,
             };
             match &p.embedding {
                 SheetEmbedding::Plane {
@@ -373,6 +400,19 @@ pub fn shape(spec: &SheetShapeSpec<'_>) -> Result<SheetGeometry<SharedPtr<Shape>
                     output.angle_extent = c.angle_extent;
                     output.inner_is_front = c.inner_is_front;
                 }
+                SheetEmbedding::ObliqueCone(c) => {
+                    output.oblique = true;
+                    output.origin = c.apex;
+                    output.centre = c.centre;
+                    output.circle_radius = c.radius;
+                    output.x_axis = c.radial_start;
+                    output.y_axis = c.angular_direction;
+                    output.neutral_depth = c.neutral_depth;
+                    output.angle_extent = c.angle_extent;
+                    output.inner_is_front = c.inner_is_front;
+                }
+                // Refused above (mitcad#2512).
+                SheetEmbedding::Lofted(_) => {}
             }
             output
         })
@@ -693,6 +733,11 @@ pub fn face_development(
     let developed = ffi::sheet_face_development(occt(shape)?, &names, neutral_depth, thickness)
         .map_err(failed)?;
     Ok(SheetFaceDevelopment {
+        oblique: developed.oblique.then_some(ObliqueCircle {
+            centre: developed.centre,
+            radius: developed.circle_radius,
+            plate: developed.plate,
+        }),
         origin: developed.origin,
         axis: developed.axis,
         radial_start: developed.radial_start,
@@ -702,7 +747,7 @@ pub fn face_development(
         } else {
             developed.neutral_radius
         },
-        half_angle: if developed.cone {
+        half_angle: if developed.cone && !developed.oblique {
             developed.half_angle
         } else {
             0.0

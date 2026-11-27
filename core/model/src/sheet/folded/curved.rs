@@ -33,6 +33,23 @@
 //! - A face that bends two ways (a sphere, a torus, most spline faces) is
 //!   refused naming it: no development lays it flat without stretching.
 //!
+//! - Mitred elbows and eccentric cones (mitcad#2491): an oblique cut (an
+//!   edge that is no generator and no circle, its wall a plane) is
+//!   developed where its plane meets the neutral surface; a face whose
+//!   straight lines meet at one apex over a circle (an eccentric cone,
+//!   stored as a spline or a ruled loft) is the picked face alone on an
+//!   [`ObliqueConeEmbedding`], developed by its generators, its plate
+//!   checked by the kernel, its halves and seam strips cut in the frames
+//!   of its generators.
+//! - One-body elbows and cones of several faces (mitcad#2559): a picked
+//!   cylinder or cone that meets other curved faces at mitre joints (edges
+//!   in a plane between faces whose axes are at an angle) is a gore of an
+//!   elbow modelled as one body: the body is split at the joints' planes
+//!   and every gore converts as a sheet of its own (the picked one keeps
+//!   the body, the others become bodies of the feature). The faces next to
+//!   an oblique cone's picked face that lie on the same cone are part of
+//!   its panel.
+//!
 //! The Flat Pattern of such a sheet is its chart, laid in the plane that
 //! touches the face's front at the chart's first boundary point.
 //!
@@ -48,8 +65,9 @@ use crate::datum::SurfaceGeometry;
 use crate::features::face_refs::kernel_error;
 use crate::features::sheet::{Allowance, SheetRulesDef};
 use crate::features::sheet_convert::SheetConvertDef;
+use crate::kernel::ToolInput;
 use crate::notice::NoticePlace;
-use crate::topo::{FaceName, TopoName};
+use crate::topo::{EdgeName, FaceName, TopoName};
 
 use mitcad_vec3::Vec3 as V3;
 
@@ -60,6 +78,11 @@ const SEAM: u32 = 960_000;
 const HALVES: u32 = 970_000;
 /// Edges of the faces' union that come from none of them.
 const UNITED: u32 = 975_000;
+
+/// A cylinder's chart cut across its spline edges holds its material this
+/// far (mm) within its angle on either side (mitcad#2491): the cut ends lie
+/// within the trim's tolerance of the cut. It moves no material.
+const CHART_MARGIN: f64 = 1e-4;
 
 /// A face that bends two ways at least this much (its Gaussian curvature
 /// times the square of its size) cannot be laid flat; below it, it is flat
@@ -74,15 +97,23 @@ const BENDS_TWO_WAYS: f64 = 1e-6;
 /// face's surface within 1e-5 mm.
 const RECOGNITION: f64 = 1e-4;
 
+/// Two curved faces meet at a mitre joint when their axes are at least this
+/// far from parallel (the sine of the angle between them), the least angle
+/// at which the kernel reads a cut as oblique (mitcad#2491, mitcad#2559).
+const MITRE_SINE: f64 = 1e-3;
+
 /// The curved panel of a sheet (a cylindrical or conical panel), if any.
 pub(crate) fn curved_panel(state: &SheetState) -> Option<PanelId> {
     state
         .charts
         .iter()
         .find_map(|p| match (p.domain, &p.embedding) {
-            (SheetDomainRef::Panel(id), SheetEmbedding::Cylinder(_) | SheetEmbedding::Cone(_)) => {
-                Some(id)
-            }
+            (
+                SheetDomainRef::Panel(id),
+                SheetEmbedding::Cylinder(_)
+                | SheetEmbedding::Cone(_)
+                | SheetEmbedding::ObliqueCone(_),
+            ) => Some(id),
             _ => None,
         })
 }
@@ -173,7 +204,7 @@ pub(super) fn not_flat<K: Kernel>(
 
 /// The K-factor a rolled face develops by: the rules' own, the middle for a
 /// kerf bend's rules. Measured fold allowances do not apply to rolling.
-fn rolled_k(rules: &SheetRulesDef<f64>) -> Result<f64, String> {
+pub(super) fn rolled_k(rules: &SheetRulesDef<f64>) -> Result<f64, String> {
     match &rules.allowance {
         Allowance::KFactor { k } => Ok(*k),
         Allowance::KerfBend { .. } => Ok(0.5),
@@ -272,7 +303,7 @@ fn reach(patch: &SheetPatch) -> Result<[f64; 2], String> {
         for i in 0..=32 {
             let p = edge.curve.point(t0 + (t1 - t0) * f64::from(i) / 32.0)?;
             let value = match patch.embedding {
-                SheetEmbedding::Cone(_) => p[0].hypot(p[1]),
+                SheetEmbedding::Cone(_) | SheetEmbedding::ObliqueCone(_) => p[0].hypot(p[1]),
                 _ => p[1],
             };
             out = [out[0].min(value), out[1].max(value)];
@@ -335,6 +366,16 @@ fn trimmed<K: Kernel>(
     Ok(out)
 }
 
+/// The margin (mm along a cylinder's chart) round the material of a
+/// cylinder's chart cut by the plate check's halves or the seam's strips:
+/// 0 for a cone's (its chart is read within a window).
+fn cylinder_margin(patch: &SheetPatch) -> f64 {
+    match patch.embedding {
+        SheetEmbedding::Cylinder(_) => CHART_MARGIN,
+        _ => 0.0,
+    }
+}
+
 /// The closed face's chart (a full turn, from angle 0 to `full`) in two
 /// halves, each rebased to start at 0: charts of less than a turn that the
 /// kernel builds.
@@ -365,9 +406,14 @@ fn halves<K: Kernel>(
     };
     let one = trimmed(ctx, base, patch, &[(first, Isometry2::IDENTITY)])?;
     let other = trimmed(ctx, base, patch, &[(second, Isometry2::IDENTITY)])?;
+    // A cylinder's halves with a margin round their material: the cut ends
+    // of spline edges lie within the trim's tolerance of the cut, not on
+    // it, and the kernel holds a cylinder's material within its angle
+    // (mitcad#2491).
+    let m = cylinder_margin(patch);
     Ok(vec![
-        rebased(&one, 0.0, middle),
-        rebased(&other, middle, middle),
+        rebased(&one, -m, middle + 2.0 * m),
+        rebased(&other, middle - m, middle + 2.0 * m),
     ])
 }
 
@@ -445,9 +491,150 @@ fn opened<K: Kernel>(
                 patch,
                 &[(start, Isometry2::IDENTITY), (end, Isometry2::IDENTITY)],
             )?;
-            Ok(rebased(&open, gap / 2.0, full - gap))
+            // The margin of the halves: the strips cut the spline edges too.
+            let m = cylinder_margin(patch);
+            Ok(rebased(&open, gap / 2.0 - m, full - gap + 2.0 * m))
         }
     }
+}
+
+/// An oblique cone's chart started at the angle `theta` round its circle,
+/// its material `extent` round from there (mitcad#2491).
+fn rebased_oblique(
+    patch: &SheetPatch,
+    cone: &ObliqueConeEmbedding,
+    theta: f64,
+    extent: f64,
+    thickness: f64,
+) -> SheetPatch {
+    let (embedding, map) = cone.rebased(theta, extent, thickness);
+    SheetPatch {
+        domain: patch.domain,
+        regions: mapped_regions(&patch.regions, map),
+        embedding: SheetEmbedding::ObliqueCone(embedding),
+    }
+}
+
+/// The angle where an oblique cone's development reaches `phi`.
+fn angle_at(development: &ObliqueDevelopment, phi: f64) -> f64 {
+    let (mut lo, mut hi) = (development.first(), development.last());
+    for _ in 0..64 {
+        let mid = (lo + hi) / 2.0;
+        if development.phi(mid) < phi {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+/// A closed oblique cone's chart (once round, mitcad#2491) in two halves
+/// cut along the generator halfway round its developed angle, each
+/// rebased to start at its own end: charts of less than a turn that the
+/// kernel builds. The cuts are wedges in the frame of that generator (its
+/// development starts from a point of its own near the chart's origin).
+fn oblique_halves<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    base: &SheetState,
+    patch: &SheetPatch,
+    cone: &ObliqueConeEmbedding,
+    thickness: f64,
+) -> Result<Vec<SheetPatch>, String> {
+    let development = cone.development(thickness);
+    let turn = std::f64::consts::TAU;
+    let full = development.phi(turn);
+    let middle = angle_at(&development, full / 2.0);
+    let frame = development.frame(middle);
+    let to_middle = inverse_isometry(frame);
+    let [_, high] = reach(patch)?;
+    let past = (turn - full) / 4.0;
+    let radius = 2.0 * (high + norm2(frame.origin)) + 1.0;
+    let uid = ctx.uid;
+    let after = wedge(uid, HALVES, 0.0, full / 2.0 + past, radius)?;
+    let before = wedge(uid, HALVES + 4, -(full / 2.0 + past), 0.0, radius)?;
+    let one = trimmed(ctx, base, patch, &[(after, to_middle)])?;
+    let other = trimmed(ctx, base, patch, &[(before, to_middle)])?;
+    Ok(vec![
+        rebased_oblique(&one, cone, 0.0, middle, thickness),
+        rebased_oblique(&other, cone, middle, turn - middle, thickness),
+    ])
+}
+
+fn norm2(p: [f64; 2]) -> f64 {
+    p[0].hypot(p[1])
+}
+
+/// A closed oblique cone's chart opened at its seam (mitcad#2491): as a
+/// cone's, the strips along the seam's generator in its frame at the start
+/// and at the end of the turn; the material rebased to start where the
+/// strip leaves it at its far end.
+fn oblique_opened<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    base: &SheetState,
+    patch: &SheetPatch,
+    cone: &ObliqueConeEmbedding,
+    gap: f64,
+    thickness: f64,
+) -> Result<SheetPatch, String> {
+    let [low, high] = reach(patch)?;
+    let development = cone.development(thickness);
+    let turn = std::f64::consts::TAU;
+    let full = development.phi(turn);
+    if gap >= low {
+        return Err(
+            "the corner gap is wider than the cone's face is near its apex: make it smaller".into(),
+        );
+    }
+    let uid = ctx.uid;
+    let near = (low * low - gap * gap / 4.0).max(0.0).sqrt() / 2.0;
+    let free = turn - full;
+    let across = (gap / 2.0).min(near * free.min(std::f64::consts::FRAC_PI_2).sin() / 4.0);
+    let start = polygon(
+        uid,
+        SEAM,
+        &[
+            [near, -across],
+            [high + 1.0, -across],
+            [high + 1.0, gap / 2.0],
+            [near, gap / 2.0],
+        ],
+    )?;
+    let end = polygon(
+        uid,
+        SEAM + 4,
+        &[
+            [near, -gap / 2.0],
+            [high + 1.0, -gap / 2.0],
+            [high + 1.0, across],
+            [near, across],
+        ],
+    )?;
+    let end_frame = development.frame(turn);
+    let open = trimmed(
+        ctx,
+        base,
+        patch,
+        &[
+            (start, Isometry2::IDENTITY),
+            (end, inverse_isometry(end_frame)),
+        ],
+    )?;
+    // The strips' far corners: where the material starts and ends round
+    // the circle.
+    let first = development
+        .inverse([high + 1.0, gap / 2.0])
+        .map(|(theta, _)| theta);
+    let last = development
+        .inverse(end_frame.point([high + 1.0, -gap / 2.0]))
+        .map(|(theta, _)| theta);
+    let (Some(first), Some(last)) = (first, last) else {
+        return Err("the cone's face could not be opened at its seam".into());
+    };
+    if last <= first || last.is_nan() || first.is_nan() {
+        return Err("the cone's face could not be opened at its seam".into());
+    }
+    Ok(rebased_oblique(&open, cone, first, last - first, thickness))
 }
 
 /// The developed faces as one material: their regions united where they
@@ -630,6 +817,304 @@ fn plate_faces<K: Kernel>(
     Ok(meets.iter().all(|m| m[0] && m[1]))
 }
 
+/// The faces each named edge of the body joins, by their names.
+fn edge_faces<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    shape: &K::Shape,
+) -> Result<Vec<(EdgeName, [String; 2])>, String> {
+    let mut out = Vec::new();
+    for info in ctx.kernel.edges(shape).map_err(kernel_error)? {
+        let Some(name) = info.name else { continue };
+        let Ok(TopoName::Edge(edge)) = name.parse::<TopoName>() else {
+            continue;
+        };
+        let faces = edge.faces().clone().map(|f| f.to_string());
+        out.push((edge, faces));
+    }
+    Ok(out)
+}
+
+/// The faces of the body on the picked face's oblique cone (mitcad#2559):
+/// from the picked face across shared edges, every neighbour that is no
+/// plane, cylinder or cone and that the kernel develops together with the
+/// faces found so far as one oblique cone (its points on the same
+/// generators within 1e-5 mm). An eccentric frustum whose side the kernel
+/// stores as several faces is one panel.
+fn oblique_fronts<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    shape: &K::Shape,
+    name: &FaceName,
+) -> Result<Vec<FaceName>, String> {
+    let picked = name.to_string();
+    let faces = face_surfaces(ctx, shape)?;
+    let mut held: Vec<Vec<String>> = vec![
+        faces
+            .iter()
+            .find(|(names, _)| names.contains(&picked))
+            .map_or_else(|| vec![picked.clone()], |(names, _)| names.clone()),
+    ];
+    let candidates: Vec<(Vec<String>, FaceName)> = faces
+        .into_iter()
+        .filter(|(names, geometry)| {
+            !names.contains(&picked)
+                && !matches!(
+                    geometry,
+                    SurfaceGeometry::Plane { .. }
+                        | SurfaceGeometry::Cylinder { .. }
+                        | SurfaceGeometry::Cone { .. }
+                )
+        })
+        .filter_map(|(names, _)| {
+            let face = names.first()?.parse::<FaceName>().ok()?;
+            Some((names, face))
+        })
+        .collect();
+    let mut fronts = vec![name.clone()];
+    if candidates.is_empty() {
+        return Ok(fronts);
+    }
+    let joins = edge_faces(ctx, shape)?;
+    let mut taken = vec![false; candidates.len()];
+    loop {
+        let mut grown = false;
+        for (k, (names, face)) in candidates.iter().enumerate() {
+            if taken[k] {
+                continue;
+            }
+            let meets = joins.iter().any(|(_, [a, b])| {
+                (names.contains(a) && held.iter().any(|h| h.contains(b)))
+                    || (names.contains(b) && held.iter().any(|h| h.contains(a)))
+            });
+            if !meets {
+                continue;
+            }
+            let mut trial = fronts.clone();
+            trial.push(face.clone());
+            let on_cone = ctx
+                .kernel
+                .sheet_face_development(shape, &trial, 0.0, 1.0)
+                .is_ok_and(|d| d.oblique.is_some());
+            if on_cone {
+                fronts = trial;
+                held.push(names.clone());
+                taken[k] = true;
+                grown = true;
+            }
+        }
+        if !grown {
+            return Ok(fronts);
+        }
+    }
+}
+
+/// The plane of a mitre joint (mitcad#2559): through `origin`, `normal` a
+/// unit vector.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct JointPlane {
+    origin: V3,
+    normal: V3,
+}
+
+impl JointPlane {
+    fn same(&self, other: &JointPlane) -> bool {
+        norm(cross(self.normal, other.normal)) <= RECOGNITION
+            && dot(sub(other.origin, self.origin), self.normal).abs() <= RECOGNITION
+    }
+}
+
+/// The plane the points lie in: their least-squares plane when every point
+/// lies within `tolerance` of it and they do not lie on one line (a
+/// straight edge between two faces is no mitre joint).
+fn plane_of(points: &[V3], tolerance: f64) -> Option<JointPlane> {
+    if points.len() < 3 {
+        return None;
+    }
+    let (mean, scatter) = crate::mesh_tools::scatter(points);
+    let (_, axes) = crate::mesh_tools::symmetric_eigen(scatter);
+    let normal = axes[0];
+    let (mut off, mut across) = (0.0_f64, 0.0_f64);
+    for p in points {
+        let d = sub(*p, mean);
+        off = off.max(dot(d, normal).abs());
+        across = across.max(dot(d, axes[1]).abs());
+    }
+    (off <= tolerance && across > 100.0 * tolerance).then_some(JointPlane {
+        origin: mean,
+        normal,
+    })
+}
+
+/// A gore of an elbow modelled as one body: its piece of the body, the face
+/// of it that is its panel's front, and whether that is the picked face.
+struct Gore<S> {
+    shape: S,
+    front: FaceName,
+    picked: bool,
+}
+
+/// The gores of a mitred elbow modelled as one body (mitcad#2559): the
+/// picked face's cylinder or cone meets other cylinders or cones at mitre
+/// joints, edges in a plane between curved faces whose axes are at an
+/// angle. The faces reached from the picked face across joint after joint
+/// are the gores' fronts; the body is split at every joint's plane, and
+/// each piece must hold one front. None when the picked face meets no
+/// mitre joint.
+fn mitred_gores<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    shape: &K::Shape,
+    name: &FaceName,
+) -> Result<Option<Vec<Gore<K::Shape>>>, String> {
+    let faces = face_surfaces(ctx, shape)?;
+    let picked = name.to_string();
+    let Some(start) = faces.iter().position(|(names, _)| names.contains(&picked)) else {
+        return Ok(None);
+    };
+    let axis_of = |k: usize| match faces[k].1 {
+        SurfaceGeometry::Cylinder { axis, .. } | SurfaceGeometry::Cone { axis, .. } => Some(axis),
+        _ => None,
+    };
+    if axis_of(start).is_none() {
+        return Ok(None);
+    }
+    let index_of = |n: &str| {
+        faces
+            .iter()
+            .position(|(names, _)| names.iter().any(|m| m == n))
+    };
+    // Edges between two curved faces whose axes are at an angle.
+    let mut joints: Vec<(usize, usize, EdgeName)> = Vec::new();
+    for (edge, [a, b]) in edge_faces(ctx, shape)? {
+        let (Some(i), Some(j)) = (index_of(&a), index_of(&b)) else {
+            continue;
+        };
+        let (Some(p), Some(q)) = (axis_of(i), axis_of(j)) else {
+            continue;
+        };
+        if i == j || norm(cross(p, q)) < MITRE_SINE || joints.iter().any(|(_, _, e)| *e == edge) {
+            continue;
+        }
+        joints.push((i, j, edge));
+    }
+    if !joints.iter().any(|(i, j, _)| *i == start || *j == start) {
+        return Ok(None);
+    }
+    // From the picked face across the joints whose edges lie in a plane.
+    let mut fronts = vec![start];
+    let mut planes: Vec<JointPlane> = Vec::new();
+    let mut next = 0;
+    while next < fronts.len() {
+        let face = fronts[next];
+        next += 1;
+        for (i, j, edge) in &joints {
+            let other = if *i == face {
+                *j
+            } else if *j == face {
+                *i
+            } else {
+                continue;
+            };
+            if fronts.contains(&other) {
+                continue;
+            }
+            let points: Vec<V3> = ctx
+                .kernel
+                .edge_polylines(shape, std::slice::from_ref(edge), &[], 1e-3, 0.05)
+                .map_err(kernel_error)?
+                .into_iter()
+                .flatten()
+                .collect();
+            let Some(plane) = plane_of(&points, RECOGNITION) else {
+                continue;
+            };
+            if !planes.iter().any(|p| p.same(&plane)) {
+                planes.push(plane);
+            }
+            fronts.push(other);
+        }
+    }
+    if planes.is_empty() {
+        return Ok(None);
+    }
+    let mut names = vec![name.clone()];
+    for &f in &fronts[1..] {
+        let front = faces[f]
+            .0
+            .first()
+            .and_then(|n| n.parse::<FaceName>().ok())
+            .ok_or_else(|| "a segment of the elbow has no face name".to_owned())?;
+        names.push(front);
+    }
+    // The body split at every joint's plane; a plane that does not divide a
+    // piece (it lies beyond that piece's segments) leaves it as it is.
+    let mut pieces = vec![shape.clone()];
+    let mut refused = None;
+    for plane in &planes {
+        let tool = ToolInput::Plane {
+            origin: plane.origin,
+            normal: plane.normal,
+        };
+        let mut split = Vec::new();
+        for piece in pieces {
+            match ctx.kernel.split_body(ctx.uid, &piece, &tool, true) {
+                Ok(parts) if parts.len() > 1 => split.extend(parts),
+                Ok(_) => split.push(piece),
+                Err(e) => {
+                    refused = Some(kernel_error(e));
+                    split.push(piece);
+                }
+            }
+        }
+        pieces = split;
+    }
+    let not_cut = |count: usize| {
+        let (segments, joints) = (names.len(), planes.len());
+        let named = match &refused {
+            Some(e) => format!(
+                "the body of face {picked} could not be split into its {segments} segments at \
+                 the planes of its {joints} mitre joints ({count} pieces; a split failed: {e})"
+            ),
+            None => format!(
+                "the body of face {picked} could not be split into its {segments} segments at \
+                 the planes of its {joints} mitre joints ({count} pieces)"
+            ),
+        };
+        placed_at(
+            vec![NoticePlace::face(picked.clone())],
+            "the elbow could not be cut into its segments at its mitre joints: the plane of a \
+             joint also crosses another part of the body; split the body into its segments \
+             first and convert each",
+            named,
+        )
+    };
+    let count = pieces.len();
+    let mut held = vec![0_usize; names.len()];
+    let mut gores = Vec::new();
+    for piece in pieces {
+        let inside: Vec<usize> = (0..names.len())
+            .filter(|&k| {
+                ctx.kernel
+                    .count_faces(&piece, &names[k])
+                    .is_ok_and(|n| n > 0)
+            })
+            .collect();
+        let &[k] = inside.as_slice() else {
+            return Err(not_cut(count));
+        };
+        held[k] += 1;
+        gores.push(Gore {
+            shape: piece,
+            front: names[k].clone(),
+            picked: k == 0,
+        });
+    }
+    if held.iter().any(|&n| n != 1) {
+        return Err(not_cut(count));
+    }
+    Ok(Some(gores))
+}
+
+/// Convert to Sheet Metal of a curved face: its panel, or every gore of a
+/// mitred elbow modelled as one body (mitcad#2559).
 pub(super) fn convert<K: Kernel>(
     d: &SheetConvertDef<f64>,
     ctx: &mut EvalContext<'_, K>,
@@ -639,12 +1124,114 @@ pub(super) fn convert<K: Kernel>(
     base: SheetState,
     rules: &SheetRulesDef<f64>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
+    if let Some(gores) = mitred_gores(ctx, shape, name)? {
+        return convert_gores(d, ctx, gores, base, rules);
+    }
+    let front = Front {
+        shape,
+        name,
+        surface,
+        slot: 0,
+    };
+    let state = sheet_of(d, ctx, front, base, rules)?;
+    publish(ctx, state, rules, None)
+}
+
+/// Each gore of a mitred elbow converted as a sheet of its own
+/// (mitcad#2559): the picked face's gore keeps the body, every other gore
+/// becomes a body of the feature in the body's component, in the order of
+/// their faces' names, its panel the next slot.
+fn convert_gores<K: Kernel>(
+    d: &SheetConvertDef<f64>,
+    ctx: &mut EvalContext<'_, K>,
+    mut gores: Vec<Gore<K::Shape>>,
+    base: SheetState,
+    rules: &SheetRulesDef<f64>,
+) -> Result<FeatureOutput<K::Shape>, String> {
+    gores.sort_by_key(|g| (!g.picked, g.front.to_string()));
+    let mut output = FeatureOutput::default();
+    for (index, gore) in gores.iter().enumerate() {
+        let surface = ctx
+            .kernel
+            .face_geometry(&gore.shape, &gore.front)
+            .map_err(kernel_error)?;
+        let slot = u32::try_from(index).map_err(|_| "the elbow has too many segments")?;
+        let body = if gore.picked {
+            base.body
+        } else {
+            BodyUid::new(ctx.uid, slot - 1)
+        };
+        let front = Front {
+            shape: &gore.shape,
+            name: &gore.front,
+            surface: &surface,
+            slot,
+        };
+        let state = sheet_of(
+            d,
+            ctx,
+            front,
+            SheetState {
+                body,
+                ..base.clone()
+            },
+            rules,
+        )?;
+        let one = publish(ctx, state, rules, None)?;
+        output.changes.extend(one.changes);
+        output.sheets.extend(one.sheets);
+        if !gore.picked {
+            output.owners.insert(body, base.owner);
+        }
+    }
+    Ok(output)
+}
+
+/// The face a curved panel is developed from: the body (or a gore of it),
+/// the face, its surface and the panel's slot.
+struct Front<'a, S> {
+    shape: &'a S,
+    name: &'a FaceName,
+    surface: &'a SurfaceGeometry,
+    slot: u32,
+}
+
+/// The sheet of one curved panel: the face of `front` developed at the
+/// neutral surface, the body checked to be a plate behind it.
+fn sheet_of<K: Kernel>(
+    d: &SheetConvertDef<f64>,
+    ctx: &mut EvalContext<'_, K>,
+    front: Front<'_, K::Shape>,
+    base: SheetState,
+    rules: &SheetRulesDef<f64>,
+) -> Result<SheetState, String> {
+    let Front {
+        shape,
+        name,
+        surface,
+        slot: panel_slot,
+    } = front;
     let places = vec![NoticePlace::face(name.to_string())];
     let cone = match surface {
         SurfaceGeometry::Cylinder { .. } => false,
         SurfaceGeometry::Cone { .. } => true,
-        other => return Err(not_flat(ctx, shape, name, other)),
+        // An oblique (eccentric) cone, stored as a spline or a ruled
+        // surface (mitcad#2491): the kernel recognises it.
+        other => {
+            let oblique = ctx
+                .kernel
+                .sheet_face_development(shape, std::slice::from_ref(name), 0.0, 1.0)
+                .is_ok_and(|d| d.oblique.is_some());
+            if !oblique {
+                return Err(not_flat(ctx, shape, name, other));
+            }
+            false
+        }
     };
+    let oblique = !matches!(
+        surface,
+        SurfaceGeometry::Cylinder { .. } | SurfaceGeometry::Cone { .. }
+    );
     if let Some(edge) = d.bends.first().or(d.rips.first()) {
         return Err(placed_at(
             vec![NoticePlace::edge(edge.to_string())],
@@ -660,14 +1247,20 @@ pub(super) fn convert<K: Kernel>(
     // Every face of the body on the picked face's surface is part of the
     // panel: a cylinder or cone split into pieces (the edges a loft's
     // sections leave on a neck extruded from its end) is one sheet.
+    // An oblique cone is the picked face (every piece of its name) and the
+    // faces next to it on the same cone (mitcad#2559).
     let picked = name.to_string();
     let mut fronts: Vec<FaceName> = vec![name.clone()];
-    for (names, geometry) in face_surfaces(ctx, shape)? {
-        if names.contains(&picked) || !on_back(surface, &geometry, 0.0) {
-            continue;
-        }
-        if let Some(Ok(face)) = names.first().map(|n| n.parse::<FaceName>()) {
-            fronts.push(face);
+    if oblique {
+        fronts = oblique_fronts(ctx, shape, name)?;
+    } else {
+        for (names, geometry) in face_surfaces(ctx, shape)? {
+            if names.contains(&picked) || !on_back(surface, &geometry, 0.0) {
+                continue;
+            }
+            if let Some(Ok(face)) = names.first().map(|n| n.parse::<FaceName>()) {
+                fronts.push(face);
+            }
         }
     }
     let developed = ctx
@@ -684,13 +1277,24 @@ pub(super) fn convert<K: Kernel>(
                 format!("face {name} could not be developed: {e}"),
             )
         })?;
-    if cone != (developed.half_angle > 0.0) {
+    if cone != (developed.half_angle > 0.0) || oblique != developed.oblique.is_some() {
         return Err("the face's development is of another surface than the face's".into());
     }
     let full_turn = std::f64::consts::TAU;
     let closed = developed.closed;
     let inner_is_front = developed.inner_is_front;
-    let embedding = if cone {
+    let embedding = if let Some(circle) = developed.oblique {
+        SheetEmbedding::ObliqueCone(ObliqueConeEmbedding {
+            apex: developed.origin,
+            centre: circle.centre,
+            radius: circle.radius,
+            radial_start: developed.radial_start,
+            angular_direction: developed.angular_direction,
+            neutral_depth: k * t,
+            angle_extent: developed.turn,
+            inner_is_front,
+        })
+    } else if cone {
         SheetEmbedding::Cone(ConeEmbedding {
             apex: developed.origin,
             axis: developed.axis,
@@ -737,7 +1341,7 @@ pub(super) fn convert<K: Kernel>(
     }
     let panel = PanelId {
         feature: uid,
-        slot: 0,
+        slot: panel_slot,
     };
     let mut regions = united(ctx, SheetDomainRef::Panel(panel), pieces)?;
     if regions.len() != 1 {
@@ -762,7 +1366,13 @@ pub(super) fn convert<K: Kernel>(
         embedding,
     };
     // The plate check: the sheet of the whole face against the body.
-    let pieces = if closed {
+    let skew = match &whole.embedding {
+        SheetEmbedding::ObliqueCone(c) => Some(c.clone()),
+        _ => None,
+    };
+    let pieces = if let (true, Some(c)) = (closed, &skew) {
+        oblique_halves(ctx, &base, &whole, c, t)?
+    } else if closed {
         halves(ctx, &base, &whole, full)?
     } else {
         vec![whole.clone()]
@@ -805,7 +1415,12 @@ pub(super) fn convert<K: Kernel>(
         // The surface the thickness behind the face, away from the axis
         // for an inner face and towards it for an outer one.
         let back = if inner_is_front { t } else { -t };
-        if !plate_faces(ctx, shape, &fronts, surface, back)? {
+        // An oblique cone's plate is checked by the kernel (mitcad#2491).
+        let plate = match developed.oblique {
+            Some(circle) => circle.plate,
+            None => plate_faces(ctx, shape, &fronts, surface, back)?,
+        };
+        if !plate {
             return Err(placed_at(
                 places,
                 format!(
@@ -841,13 +1456,19 @@ pub(super) fn convert<K: Kernel>(
                 ),
             ));
         }
-        opened(ctx, &base, &whole, full, gap)?
+        match &skew {
+            Some(c) => oblique_opened(ctx, &base, &whole, c, gap, t)?,
+            None => opened(ctx, &base, &whole, full, gap)?,
+        }
+    } else if skew.is_some() {
+        // Its chart starts at the faces' least angle already.
+        whole.clone()
     } else {
         rebased(&whole, 0.0, full * developed.turn / full_turn)
     };
     let mut state = base;
     state.charts = vec![sheet];
-    publish(ctx, state, rules, None)
+    Ok(state)
 }
 
 /// The front's model point and the chart's unit directions there, with the
@@ -874,7 +1495,11 @@ fn tangent_frame(embedding: &SheetEmbedding, p: [f64; 2], thickness: f64) -> Opt
             };
             Some([c.point(p, 0.0, thickness), x, y, f])
         }
-        SheetEmbedding::Plane { .. } => None,
+        // An oblique cone's (mitcad#2491): along and across its generator.
+        SheetEmbedding::ObliqueCone(c) => c.tangent(p, thickness),
+        // A Lofted Flange's chart is laid flat by its own module
+        // (mitcad#2512).
+        SheetEmbedding::Plane { .. } | SheetEmbedding::Lofted(_) => None,
     }
 }
 
@@ -889,7 +1514,10 @@ pub(crate) fn developed(
 ) -> Option<Result<SheetState, String>> {
     let domain = SheetDomainRef::Panel(panel);
     let patch = state.charts.iter().find(|p| p.domain == domain)?;
-    if matches!(patch.embedding, SheetEmbedding::Plane { .. }) {
+    if matches!(
+        patch.embedding,
+        SheetEmbedding::Plane { .. } | SheetEmbedding::Lofted(_)
+    ) {
         return None;
     }
     Some((|| {

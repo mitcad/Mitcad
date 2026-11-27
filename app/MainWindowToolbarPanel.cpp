@@ -24,6 +24,7 @@
 //   Toolbar panel hidden (kept setting)     a window set up with it hidden
 //   Toolbar panel reveal band at x,y: wxh   the band's middle, as it moves
 //   Toolbar panel revealed at top edge: panel x,y wxh
+//   Toolbar panel placed again over the view: panel x,y wxh   Docked, the window resized
 //   Toolbar panel hidden again (the pointer left it)
 //   Toolbar panel kept (command panel Measure open)
 //   Toolbar panel released (command Measure ended)
@@ -64,6 +65,20 @@ bool hiddenSetting() { return QSettings().value(kHiddenKey, false).toBool(); }
 // The Docked layout's top bar holder (createDockedTopBar), whose column
 // holds the title row and, under it, the panel.
 const QString kDockedHolder = QStringLiteral("dockedTopBar");
+
+// The Docked panel revealed: out of the top bar, over the view's top, as
+// wide as the holder, down to the gap the bar keeps below it. False when
+// it was there already.
+bool placeOverView(QWidget* window, const QWidget* holder, QWidget* panel) {
+  const QPoint at = holder->mapTo(window, QPoint(0, holder->height()));
+  const int height = panel->sizeHint().height() + panel::kGap;
+  const QRect place(at, QSize(holder->width(), height));
+  if (panel->geometry() == place) {
+    return false;
+  }
+  panel->setGeometry(place);
+  return true;
+}
 
 } // namespace
 
@@ -112,6 +127,27 @@ void MainWindow::setUpToolbarPanelHiding() {
     hooks.canReveal = [this] { return m_toolbarPanelHidden && !startPageShown() && isVisible(); };
     hooks.reveal = [this] { revealToolbarPanel(); };
     hooks.conceal = [this](const QString& how) { concealToolbarPanel(how); };
+    // Docked: the panel over the view follows the window's width (made
+    // narrower, its right part and its » menu were cut off until the
+    // pointer left it, mitcad#2527); the Floating row is placed again by
+    // every layout. Not while it takes its room in the top bar for a
+    // command (keepToolbarPanelFor).
+    hooks.place = [this] {
+      QWidget* panel = toolbarPanelWidget();
+      if ((m_floating != nullptr && m_titleRow != nullptr) || m_toolbarPanelRoom || panel == nullptr ||
+          panel->parentWidget() != this) {
+        return;
+      }
+      const auto* holder = findChild<QWidget*>(kDockedHolder);
+      if (holder != nullptr && placeOverView(this, holder, panel)) {
+        const QPoint at = panel->mapTo(window(), QPoint(0, 0));
+        qInfo().noquote() << QStringLiteral("Toolbar panel placed again over the view: panel %1,%2 %3x%4")
+                                 .arg(at.x())
+                                 .arg(at.y())
+                                 .arg(panel->width())
+                                 .arg(panel->height());
+      }
+    };
     m_toolbarPanelReveal = new ToolbarPanelReveal(bandParent, std::move(hooks));
     m_toolbarPanelReveal->watch(m_viewer);
     m_toolbarPanelReveal->watch(m_titleRow);
@@ -120,6 +156,10 @@ void MainWindow::setUpToolbarPanelHiding() {
     }
     if (auto* bar = findChild<QToolBar*>(QStringLiteral("ribbonToolbar"), Qt::FindDirectChildrenOnly)) {
       m_toolbarPanelReveal->watch(bar);
+    }
+    // The revealed Docked panel's width and place (hooks.place).
+    if (auto* holder = findChild<QWidget*>(kDockedHolder)) {
+      m_toolbarPanelReveal->watch(holder);
     }
     if (m_floating == nullptr && m_dockedPanel != nullptr) {
       // The Docked top bar's line ("view top N") again once the view has
@@ -233,12 +273,11 @@ void MainWindow::revealToolbarPanel() {
   } else if (auto* holder = findChild<QWidget*>(kDockedHolder)) {
     // Out of the top bar, over the view's top: the view keeps its place.
     // On the window's color, as under the top bar, down to the gap the bar
-    // keeps below it.
-    const QPoint at = holder->mapTo(this, QPoint(0, holder->height()));
+    // keeps below it; placed again as the window is resized (the reveal's
+    // place hook, setUpToolbarPanelHiding).
     panel->setParent(this);
     panel->setAutoFillBackground(true);
-    const int height = panel->sizeHint().height() + panel::kGap;
-    panel->setGeometry(QRect(at, QSize(holder->width(), height)));
+    placeOverView(this, holder, panel);
     panel->show();
     panel->raise();
   }

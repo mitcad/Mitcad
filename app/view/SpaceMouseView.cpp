@@ -18,6 +18,7 @@
 #include <Standard_Failure.hxx>
 #include <gp_Pnt.hxx>
 
+#include "FaceProjection.hpp"
 #include "SpaceMouseCamera.hpp"
 
 namespace mitcad {
@@ -82,6 +83,13 @@ void OcctViewer::endSpaceMouse() {
                                    settings.lockHorizon ? QStringLiteral(", horizon locked") : QString());
   }
   m_spaceMouseTiming = SpaceMouseTiming();
+  // At rest, Perspective with Orthographic Faces gives the camera its
+  // projection again (mitcad#2473): orthographic where it looks along a
+  // face.
+  if (m_orthographicFaces) {
+    followFacesInView();
+    requestFrame();
+  }
 }
 
 void OcctViewer::stepSpaceMouse() {
@@ -106,6 +114,13 @@ void OcctViewer::stepSpaceMouse() {
     const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
     if (m_spaceMouseTiming.frames == 0) {
       AbortViewAnimation(); // the device takes over from an animated move
+      // Perspective with Orthographic Faces (mitcad#2473): the motion runs
+      // in perspective, the height at the target kept (followFaces keeps it
+      // so while the motion's frames last; endSpaceMouse lets the face rule
+      // apply again).
+      if (m_orthographicFaces && !m_anaglyph) {
+        mitcad::setProjectionKeepingHeight(*camera, false);
+      }
       m_spaceMouseStartScale = camera->Scale();
     }
     SpaceMouseStyle style;

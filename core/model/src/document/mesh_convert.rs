@@ -19,15 +19,17 @@ use crate::ids::{BodyUid, ComponentUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::recompute::FeatureStatus;
 
-/// The mesh body a new feature hides: a faceted Convert Mesh's, or a mesh
-/// edit's (mitcad#1871: Decimate, Repair, Remove Region, Segment, Fit
-/// Surface).
-pub(super) fn hidden_mesh(def: &FeatureDef<ValueInput>) -> Option<BodyUid> {
-    match def {
-        FeatureDef::MeshConvert(convert) => convert.replaced_mesh(),
-        // The mesh edits of reverse engineering (mitcad#1871).
-        other => crate::features::mesh_tools::edited_mesh(other),
-    }
+/// The mesh bodies a new feature hides: a faceted Convert Mesh's, or a
+/// mesh edit's (mitcad#1871: Decimate, Repair, Remove Region, Segment, Fit
+/// Surface; mitcad#2515: Smooth, Combine's target and tools, Offset and
+/// Shell, Align's moved mesh, Plane Cut). None when it hides none.
+pub(super) fn hidden_mesh(def: &FeatureDef<ValueInput>) -> Option<Vec<BodyUid>> {
+    let meshes = match def {
+        FeatureDef::MeshConvert(convert) => convert.replaced_mesh().into_iter().collect(),
+        // The mesh edits of reverse engineering (mitcad#1871, mitcad#2515).
+        other => crate::features::mesh_tools::edited_meshes(other),
+    };
+    (!meshes.is_empty()).then_some(meshes)
 }
 
 impl DocState {
@@ -37,22 +39,22 @@ impl DocState {
     pub(super) fn mesh_replaced_by(&self, uid: BodyUid) -> Option<&FeatureEntry> {
         self.features.iter().map(|f| &**f).find(|f| match &f.def {
             FeatureDef::MeshConvert(convert) => convert.replaced_mesh() == Some(uid),
-            other => crate::features::mesh_tools::edited_mesh(other) == Some(uid),
+            other => crate::features::mesh_tools::edited_meshes(other).contains(&uid),
         })
     }
 }
 
 impl<K: Kernel> Document<K> {
-    /// Adds a feature that hides `mesh` (see the module docs) to
-    /// `component`, at the marker or at `position` (at most the marker,
-    /// which stays after the feature it was after).
+    /// Adds a feature that hides the mesh bodies `meshes` (see the module
+    /// docs) to `component`, at the marker or at `position` (at most the
+    /// marker, which stays after the feature it was after).
     pub(super) fn add_hiding_mesh(
         &mut self,
         def: &FeatureDef<ValueInput>,
         name: Option<&str>,
         component: ComponentUid,
         position: Option<usize>,
-        mesh: BodyUid,
+        meshes: Vec<BodyUid>,
     ) -> Result<Added, ModelError> {
         let marker = self.state.marker;
         let added_uid: Cell<Option<FeatureUid>> = Cell::new(None);
@@ -65,15 +67,18 @@ impl<K: Kernel> Document<K> {
                 if position.is_some() {
                     state.marker = marker + 1;
                 }
-                let mut attributes = state
-                    .body_attributes
-                    .get(&mesh)
-                    .cloned()
-                    .unwrap_or_default();
-                // A Show When condition stays (mitcad#1157): the feature
-                // keeps it from showing the body (`mesh_replaced_by`).
-                attributes.visible = false;
-                state.body_attributes.insert(mesh, attributes);
+                for &mesh in &meshes {
+                    let mut attributes = state
+                        .body_attributes
+                        .get(&mesh)
+                        .cloned()
+                        .unwrap_or_default();
+                    // A Show When condition stays (mitcad#1157): the
+                    // feature keeps it from showing the body
+                    // (`mesh_replaced_by`).
+                    attributes.visible = false;
+                    state.body_attributes.insert(mesh, attributes);
+                }
                 added_uid.set(Some(added.uid));
                 Ok((format!("Add {}", added.name), added))
             },

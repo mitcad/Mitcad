@@ -344,7 +344,7 @@ Nothing changes for a rounding whose contacts do not turn back.
   there. Building the file's loft would be a new surface construction,
   left to the owner's decision. `cli.wavy_fillet_reported` keeps its
   named difference.
-- Probe: `test_fillet_wave_crests --probe` prints, for 2.5, 2.9, 3, 5 and
+- Probe: `test_geometry_fillet_t_z fillet_wave_crests --probe` prints, for 2.5, 2.9, 3, 5 and
   8.5, what OCCT's own fillet of the band's upper top edge gives (done,
   failure, each contour's status and computed surfaces, the volume) with
   the walk traced (the folds found, the guide's splits, each piece walked,

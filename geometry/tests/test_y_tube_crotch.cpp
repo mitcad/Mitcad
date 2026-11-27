@@ -98,6 +98,7 @@
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/transform.hpp"
 #include "mitcad/geometry/user_error.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -1251,7 +1252,7 @@ int probe_first() {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(y_tube_crotch) {
   // A crash inside OCCT is an operation's error, not the end of the run.
   mitcad::geometry::catch_occt_crashes();
   if (argc > 1 && std::strcmp(argv[1], "--probe") == 0) {

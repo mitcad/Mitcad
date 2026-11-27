@@ -22,6 +22,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/geometry.hpp"
 #include "mitcad/geometry/repeated_parts.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -171,7 +172,7 @@ void test_tolerance_must_be_positive() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(repeated_parts) {
   test::guarded("copies of a pinwheel and a propeller", test_copies_of_a_pinwheel_and_a_propeller);
   test::guarded("tolerance must be positive", test_tolerance_must_be_positive);
   if (test::failures != 0) {

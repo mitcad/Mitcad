@@ -1,0 +1,486 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: in the arc join, a wall whose edges to a rounding vanishing beside a
+removed face are a chain is extended to the removed face as one section
+(mitcad#2535).
+
+GitHub #645's loft with its top rounded 2 mm, shelled 3 mm with the top
+open and Rounded corners (the arc join): the rounding along the slot's near
+round end and the crease's sliver vanish (patch 2494), and the wall across
+them has 21 edges to them, the top 35. ToContext (patch 2463) extended the
+wall to the top along the one wall edge each top edge was paired with
+first (four of the 21 were left out), ExtentFace gave each extended edge
+the whole section of the wall with the top, and the vertices between them
+had no place on it: the third top edge got a section of no length as its
+image, and ContextIntByArc's OrientSection raised Standard_ConstructionError.
+
+ToContext now extends the kept face along every edge paired across with
+the removed face's edge (KeptFacesAcrossToCap). ExtentFace takes a run of
+two or more consecutive edges of a wire that are across vanishing faces and
+are extended to the same face as one edge from the run's first vertex to
+its last (RunsToOneStop): one section, bounded where the edges beside the
+run meet it, the image of every edge of the run. ToContext binds that
+section to the face and as the image of one of the removed face's edges
+across once, and ContextIntByArc stores it on the removed face once.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2535.
+
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+index 768725a7..5c99bad9 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+@@ -2167,6 +2167,7 @@ void BRepOffset_Inter3d::ContextIntByArc(
+       return;
+     }
+     const TopoDS_Face& CF = TopoDS::Face(ContextFaces(j));
++    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aStoredOnCap;
+     for (exp.Init(CF.Oriented(TopAbs_FORWARD), TopAbs_EDGE); exp.More(); exp.Next())
+     {
+       const TopoDS_Edge& E = TopoDS::Edge(exp.Current());
+@@ -2249,15 +2250,20 @@ void BRepOffset_Inter3d::ContextIntByArc(
+       //      LInt2.Clear();
+       //      StoreInter3d(CF,OF1,myTouched,NewEdges,InterDone,myAsDes,
+       //                   LInt1,LInt2);
+-      LInt1.Clear();
+-      LInt1.Append(OE);
+-      LInt2.Clear();
+-      TopAbs_Orientation anOri1, anOri2;
+-      BRepOffset_Tool::OrientSection(OE, CF, OF1, anOri1, anOri2);
+-      //    if (mySide == TopAbs_OUT);
+-      anOri1 = TopAbs::Reverse(anOri1);
+-      LInt1.First().Orientation(anOri1);
+-      Store(CF, OF1, LInt1, LInt2);
++      // (mitcad#2535) a section standing for a run of the cap's edges is
++      // stored once
++      if (aStoredOnCap.Add(OE))
++      {
++        LInt1.Clear();
++        LInt1.Append(OE);
++        LInt2.Clear();
++        TopAbs_Orientation anOri1, anOri2;
++        BRepOffset_Tool::OrientSection(OE, CF, OF1, anOri1, anOri2);
++        //    if (mySide == TopAbs_OUT);
++        anOri1 = TopAbs::Reverse(anOri1);
++        LInt1.First().Orientation(anOri1);
++        Store(CF, OF1, LInt1, LInt2);
++      }
+ 
+       //------------------------------------------------------
+       // Processing of offsets on the ancestors of vertices.
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index b1ec675d..cabca10d 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -345,18 +345,20 @@ static bool IsEdgeToVanished(const BRepOffset_Analyse&
+   return false;
+ }
+ 
+-//! The kept face across faces whose offset vanishes from the edge theE of
++//! The kept faces across faces whose offset vanishes from the edge theE of
+ //! the removed face theCap (theAcross: face A, its edge, face B, its edge),
+-//! and its edge to them; a null face where there is none (mitcad#2463).
+-static TopoDS_Face KeptFaceAcrossToCap(const NCollection_List<TopoDS_Shape>* theAcross,
+-                                       const TopoDS_Shape&                   theCap,
+-                                       const TopoDS_Shape&                   theE,
+-                                       TopoDS_Edge&                          theEdge)
++//! and their edges to them, appended to theFacesAndEdges as pairs (face,
++//! edge): one per pair across that holds theE (mitcad#2463; mitcad#2535:
++//! every one, where a rounding's sides are chains of edges paired edge by
++//! edge).
++static void KeptFacesAcrossToCap(const NCollection_List<TopoDS_Shape>* theAcross,
++                                 const TopoDS_Shape&                   theCap,
++                                 const TopoDS_Shape&                   theE,
++                                 NCollection_List<TopoDS_Shape>&       theFacesAndEdges)
+ {
+-  theEdge.Nullify();
+   if (!theAcross)
+   {
+-    return TopoDS_Face();
++    return;
+   }
+   for (NCollection_List<TopoDS_Shape>::Iterator it(*theAcross); it.More();)
+   {
+@@ -365,13 +367,13 @@ static TopoDS_Face KeptFaceAcrossToCap(const NCollection_List<TopoDS_Shape>* the
+     {
+       if (!it.More())
+       {
+-        return TopoDS_Face();
++        return;
+       }
+       aF[k] = it.Value();
+       it.Next();
+       if (!it.More())
+       {
+-        return TopoDS_Face();
++        return;
+       }
+       aE[k] = it.Value();
+       it.Next();
+@@ -380,12 +382,12 @@ static TopoDS_Face KeptFaceAcrossToCap(const NCollection_List<TopoDS_Shape>* the
+     {
+       if (aF[k].IsSame(theCap) && aE[k].IsSame(theE) && !aF[1 - k].IsSame(theCap))
+       {
+-        theEdge = TopoDS::Edge(aE[1 - k]);
+-        return TopoDS::Face(aF[1 - k]);
++        theFacesAndEdges.Append(aF[1 - k]);
++        theFacesAndEdges.Append(aE[1 - k]);
++        break;
+       }
+     }
+   }
+-  return TopoDS_Face();
+ }
+ 
+ //! Whether the section theS of a kept face's offset with the removed face
+@@ -3375,6 +3377,10 @@ void BRepOffset_MakeOffset::ToContext(
+   // extended to the cap, by that edge of the cap and by the cap (mitcad#2463).
+   NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aCapEdgeOfAcross;
+   NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aCapOfAcross;
++  // Those offset edges, extended in runs to one section (ExtentFace), and
++  // the sections already bound (mitcad#2535).
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aRunEdges;
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aSectionsBound;
+   NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>            FacesToBuild;
+   NCollection_List<TopoDS_Shape>::Iterator                                 itl;
+   TopExp_Explorer                                                          exp;
+@@ -3421,16 +3427,25 @@ void BRepOffset_MakeOffset::ToContext(
+           if (theVanished && theVanished->Contains(itl.Value()))
+           {
+             // a face whose offset vanishes: the kept face across it is
+-            // extended to the cap instead (mitcad#2463)
+-            TopoDS_Edge       aEAcross;
+-            const TopoDS_Face aFAcross = KeptFaceAcrossToCap(theAcross, CF, E, aEAcross);
+-            if (!aFAcross.IsNull() && MapSF.IsBound(aFAcross))
++            // extended to the cap instead (mitcad#2463), along each of its
++            // edges across from E (mitcad#2535)
++            NCollection_List<TopoDS_Shape> aAcrossE;
++            KeptFacesAcrossToCap(theAcross, CF, E, aAcrossE);
++            for (NCollection_List<TopoDS_Shape>::Iterator aItA(aAcrossE); aItA.More(); aItA.Next())
+             {
++              const TopoDS_Shape& aFAcross = aItA.Value();
++              aItA.Next();
++              const TopoDS_Shape& aEAcross = aItA.Value();
++              if (!MapSF.IsBound(aFAcross))
++              {
++                continue;
++              }
+               const TopoDS_Shape& aOEAcross = MapSF(aFAcross).Generated(aEAcross);
+               FacesToBuild.Add(aFAcross);
+               MEF.Bind(aOEAcross, CF);
+               aCapEdgeOfAcross.Bind(aOEAcross, E);
+               aCapOfAcross.Bind(aOEAcross, CF);
++              aRunEdges.Add(aOEAcross);
+             }
+             continue;
+           }
+@@ -3475,7 +3490,7 @@ void BRepOffset_MakeOffset::ToContext(
+     BRepOffset_Offset   BOF;
+     BOF = MapSF(S);
+     F   = TopoDS::Face(BOF.Face());
+-    BRepOffset_Tool::ExtentFace(F, Created, MEF, Side, myTol, NF);
++    BRepOffset_Tool::ExtentFace(F, Created, MEF, Side, myTol, NF, &aRunEdges);
+     MapSF.UnBind(S);
+     //--------------
+     // MAJ SD.
+@@ -3509,6 +3524,12 @@ void BRepOffset_MakeOffset::ToContext(
+           {
+             NE.Orientation(Or);
+           }
++          if (!aSectionsBound.Add(NE))
++          {
++            // (mitcad#2535) another edge of a run extended as one: the
++            // section bounds the face and stands for a cap's edge once
++            continue;
++          }
+           myAsDes->Add(NF, NE);
+           const TopoDS_Shape& aCapE = aCapEdgeOfAcross(OE);
+           if (myInitOffsetEdge.HasImage(aCapE))
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+index 43cd62ad..bcec7741 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -6101,6 +6101,169 @@ void BRepOffset_Tool::BuildNeighbour(
+   }
+ }
+ 
++//=======================================================================
++// function : RunsToOneStop
++// purpose  : A kept face across faces whose offset vanishes beside a
++//           removed face (mitcad#2535): where its edges to them are a
++//           chain (a rounding whose side other faces cut into many edges),
++//           the face extended to the removed face meets it in one section,
++//           which each of those edges cannot be bounded on alone (their
++//           sections are the same curve, so their common vertices have no
++//           image on it). Each run of two or more consecutive edges of the
++//           wire theW of theF that are in theRunEdges and are to be
++//           extended to the same face (theToBuild) is replaced in theNewW
++//           by one edge from the run's first vertex to its last, a straight
++//           segment in 3D and in theF's parameters (only its ends are
++//           used). theRuns: that edge -> the run's edges as oriented in the
++//           wire, in their order; theRefs: that edge -> the run's middle
++//           edge (the reference of the intersection). False where there is
++//           no such run; the wire is then unchanged.
++//=======================================================================
++static bool RunsToOneStop(
++  const TopoDS_Wire&                                                         theW,
++  const TopoDS_Face&                                                         theF,
++  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>&  theToBuild,
++  const NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& theConst,
++  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>&             theRunEdges,
++  TopoDS_Wire&                                                               theNewW,
++  NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>& theRuns,
++  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& theRefs)
++{
++  // the edges in their order along the wire, as oriented in it
++  NCollection_Sequence<TopoDS_Edge> aEdges;
++  const TopoDS_Wire                 aWF = TopoDS::Wire(theW.Oriented(TopAbs_FORWARD));
++  BRepTools_WireExplorer aWExp(aWF, TopoDS::Face(theF.Oriented(TopAbs_FORWARD)));
++  for (; aWExp.More(); aWExp.Next())
++  {
++    aEdges.Append(aWExp.Current());
++  }
++  int aNbInWire = 0;
++  for (TopoDS_Iterator aIt(aWF); aIt.More(); aIt.Next())
++  {
++    ++aNbInWire;
++  }
++  const int aNb = aEdges.Length();
++  if (aNb < 3 || aNb != aNbInWire)
++  {
++    return false;
++  }
++  // the face each edge is to be extended to, where it may join a run
++  NCollection_Array1<TopoDS_Shape> aStop(1, aNb);
++  for (int i = 1; i <= aNb; ++i)
++  {
++    const TopoDS_Edge& aE = aEdges(i);
++    if (theRunEdges.Contains(aE) && theToBuild.IsBound(aE) && !theConst.IsBound(aE)
++        && !BRep_Tool::Degenerated(aE))
++    {
++      aStop(i) = theToBuild(aE);
++    }
++  }
++  auto inSameRun = [&](const int i, const int j) {
++    return !aStop(i).IsNull() && !aStop(j).IsNull() && aStop(i).IsSame(aStop(j));
++  };
++  // a start outside any run (none where the whole wire is one run)
++  int aStart = 0;
++  for (int i = 1; i <= aNb && aStart == 0; ++i)
++  {
++    if (!inSameRun(i, i == 1 ? aNb : i - 1))
++    {
++      aStart = i;
++    }
++  }
++  if (aStart == 0)
++  {
++    return false;
++  }
++  BRep_Builder                    aB;
++  NCollection_Sequence<TopoDS_Shape> aNewEdges;
++  for (int k = 0; k < aNb;)
++  {
++    const int                         i0 = (aStart - 1 + k) % aNb + 1;
++    NCollection_Sequence<TopoDS_Edge> aRun;
++    aRun.Append(aEdges(i0));
++    ++k;
++    while (k < aNb)
++    {
++      const int i = (aStart - 1 + k) % aNb + 1;
++      if (!inSameRun(i, i == 1 ? aNb : i - 1))
++      {
++        break;
++      }
++      aRun.Append(aEdges(i));
++      ++k;
++    }
++    TopoDS_Edge aRunEdge;
++    if (aRun.Length() >= 2 && !aStop(i0).IsNull())
++    {
++      const TopoDS_Edge&  aFirst = aRun.First();
++      const TopoDS_Edge&  aLast  = aRun.Last();
++      const TopoDS_Vertex aVS    = TopExp::FirstVertex(aFirst, true);
++      const TopoDS_Vertex aVE    = TopExp::LastVertex(aLast, true);
++      double              aF1, aL1, aF2, aL2;
++      const occ::handle<Geom2d_Curve> aC1 = BRep_Tool::CurveOnSurface(aFirst, theF, aF1, aL1);
++      const occ::handle<Geom2d_Curve> aC2 = BRep_Tool::CurveOnSurface(aLast, theF, aF2, aL2);
++      if (!aVS.IsNull() && !aVE.IsNull() && !aVS.IsSame(aVE) && !aC1.IsNull() && !aC2.IsNull())
++      {
++        const gp_Pnt   aPS = BRep_Tool::Pnt(aVS);
++        const gp_Pnt   aPE = BRep_Tool::Pnt(aVE);
++        const gp_Pnt2d aUVS =
++          aC1->Value(aFirst.Orientation() == TopAbs_REVERSED ? aL1 : aF1);
++        const gp_Pnt2d aUVE = aC2->Value(aLast.Orientation() == TopAbs_REVERSED ? aF2 : aL2);
++        if (aPS.Distance(aPE) > Precision::Confusion()
++            && aUVS.Distance(aUVE) > Precision::PConfusion())
++        {
++          NCollection_Array1<double> aKnots(1, 2);
++          NCollection_Array1<int>    aMults(1, 2);
++          aKnots(1) = 0.;
++          aKnots(2) = 1.;
++          aMults(1) = 2;
++          aMults(2) = 2;
++          NCollection_Array1<gp_Pnt> aPoles(1, 2);
++          aPoles(1) = aPS;
++          aPoles(2) = aPE;
++          NCollection_Array1<gp_Pnt2d> aPoles2d(1, 2);
++          aPoles2d(1)        = aUVS;
++          aPoles2d(2)        = aUVE;
++          const double aTol = std::max(BRep_Tool::Tolerance(aFirst), BRep_Tool::Tolerance(aLast));
++          aB.MakeEdge(aRunEdge, new Geom_BSplineCurve(aPoles, aKnots, aMults, 1), aTol);
++          aB.UpdateEdge(aRunEdge, new Geom2d_BSplineCurve(aPoles2d, aKnots, aMults, 1), theF, aTol);
++          aB.Add(aRunEdge, aVS.Oriented(TopAbs_FORWARD));
++          aB.Add(aRunEdge, aVE.Oriented(TopAbs_REVERSED));
++          aB.Range(aRunEdge, 0., 1.);
++          NCollection_List<TopoDS_Shape> aL;
++          for (int j = 1; j <= aRun.Length(); ++j)
++          {
++            aL.Append(aRun(j));
++          }
++          theRuns.Bind(aRunEdge, aL);
++          theRefs.Bind(aRunEdge, aRun((aRun.Length() + 1) / 2));
++          theToBuild.Bind(aRunEdge, aStop(i0));
++          aNewEdges.Append(aRunEdge.Oriented(TopAbs_FORWARD));
++        }
++      }
++    }
++    if (aRunEdge.IsNull())
++    {
++      for (int j = 1; j <= aRun.Length(); ++j)
++      {
++        aNewEdges.Append(aRun(j));
++      }
++    }
++  }
++  if (theRuns.IsEmpty())
++  {
++    return false;
++  }
++  aB.MakeWire(theNewW);
++  for (int j = 1; j <= aNewEdges.Length(); ++j)
++  {
++    aB.Add(theNewW, aNewEdges(j));
++  }
++  theNewW.Closed(theW.Closed());
++  theNewW.Orientation(theW.Orientation());
++  return true;
++}
++
+ //=================================================================================================
+ 
+ void BRepOffset_Tool::ExtentFace(
+@@ -6109,7 +6272,8 @@ void BRepOffset_Tool::ExtentFace(
+   NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& ToBuild,
+   const TopAbs_State                                                        Side,
+   const double                                                              TolConf,
+-  TopoDS_Face&                                                              NF)
++  TopoDS_Face&                                                              NF,
++  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>*             theRunEdges)
+ {
+ 
+   TopExp_Explorer                                                          exp, exp2;
+@@ -6191,21 +6355,18 @@ void BRepOffset_Tool::ExtentFace(
+ 
+   for (exp.Init(F.Oriented(TopAbs_FORWARD), TopAbs_WIRE); exp.More(); exp.Next())
+   {
+-    const TopoDS_Wire& W = TopoDS::Wire(exp.Current());
++    const TopoDS_Wire& aW0 = TopoDS::Wire(exp.Current());
+     NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+       MVE; // Vertex -> Edges incidentes.
+     NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> NOnV1;
+     NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> NOnV2;
+ 
+-    MapVertexEdges(W, MVE);
+-    BuildNeighbour(W, F, NOnV1, NOnV2);
+-
+     NCollection_List<TopoDS_Shape> LInt1, LInt2;
+     TopoDS_Face                    StopFace;
+     //------------------------------------------------
+     // Construction edges
+     //------------------------------------------------
+-    for (exp2.Init(W.Oriented(TopAbs_FORWARD), TopAbs_EDGE); exp2.More(); exp2.Next())
++    for (exp2.Init(aW0.Oriented(TopAbs_FORWARD), TopAbs_EDGE); exp2.More(); exp2.Next())
+     {
+       const TopoDS_Edge& E = TopoDS::Edge(exp2.Current());
+       if (ConstShapes.IsBound(E))
+@@ -6230,6 +6391,21 @@ void BRepOffset_Tool::ExtentFace(
+       }
+     }
+ 
++    // (mitcad#2535) A run of edges across faces whose offset vanishes, to
++    // be extended to one face, is extended as one edge.
++    NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> aRuns;
++    NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aRunRefs;
++    TopoDS_Wire                                                              W = aW0;
++    TopoDS_Wire                                                              aRunW;
++    if (theRunEdges != nullptr
++        && RunsToOneStop(aW0, F, ToBuild, ConstShapes, *theRunEdges, aRunW, aRuns, aRunRefs))
++    {
++      W = aRunW;
++    }
++
++    MapVertexEdges(W, MVE);
++    BuildNeighbour(W, F, NOnV1, NOnV2);
++
+     for (exp2.Init(W.Oriented(TopAbs_FORWARD), TopAbs_EDGE); exp2.More(); exp2.Next())
+     {
+       const TopoDS_Edge& E = TopoDS::Edge(exp2.Current());
+@@ -6241,7 +6417,9 @@ void BRepOffset_Tool::ExtentFace(
+       {
+         EnLargeFace(TopoDS::Face(ToBuild(E)), StopFace, false);
+         TopoDS_Face NullFace;
+-        BRepOffset_Tool::Inter3D(EF, StopFace, LInt1, LInt2, Side, E, NullFace, NullFace);
++        // a run's middle edge stands for it in choosing the section
++        const TopoDS_Edge& aRef = aRunRefs.IsBound(E) ? TopoDS::Edge(aRunRefs(E)) : E;
++        BRepOffset_Tool::Inter3D(EF, StopFace, LInt1, LInt2, Side, aRef, NullFace, NullFace);
+         // No intersection, it may happen for example for a chosen (non-offsetted) planar face and
+         // its neighbour offsetted cylindrical face, if the offset is directed so that
+         // the radius of the cylinder becomes smaller.
+@@ -6642,6 +6820,28 @@ void BRepOffset_Tool::ExtentFace(
+       B.Add(NW, NE);
+     }
+     B.Add(NF, NW.Oriented(W.Orientation()));
++    // (mitcad#2535) Each edge of a run has the run's edge as its image,
++    // oriented to its own parameter: the run's edge runs along the wire.
++    for (NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>::
++           Iterator aItR(aRuns);
++         aItR.More();
++         aItR.Next())
++    {
++      const TopoDS_Shape& aRunE = aItR.Key();
++      ToBuild.UnBind(aRunE);
++      if (!ConstShapes.IsBound(aRunE))
++      {
++        continue;
++      }
++      const TopoDS_Shape aImage = ConstShapes(aRunE);
++      ConstShapes.UnBind(aRunE);
++      for (NCollection_List<TopoDS_Shape>::Iterator aItE(aItR.Value()); aItE.More(); aItE.Next())
++      {
++        const TopoDS_Shape& aE = aItE.Value();
++        ConstShapes.Bind(aE,
++                         aE.Orientation() == TopAbs_REVERSED ? aImage.Reversed() : aImage);
++      }
++    }
+   }
+   NF.Orientation(F.Orientation());
+   BRepTools::Update(NF); // Maj des UVPoints
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.hxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.hxx
+index dc999272..6b9de72c 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.hxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.hxx
+@@ -170,7 +170,11 @@ public:
+     NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& ToBuild,
+     const TopAbs_State                                                        Side,
+     const double                                                              TolConf,
+-    TopoDS_Face&                                                              NF);
++    TopoDS_Face&                                                              NF,
++    // theRunEdges: edges of F across faces whose offset vanishes; a run of
++    // two or more consecutive ones extended to the same face is extended as
++    // one edge, its section the image of each (mitcad#2535).
++    const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>*             theRunEdges = nullptr);
+ 
+   //! Via the wire explorer store in <NOnV1> for
+   //! an Edge <E> of <W> his Edge neighbour on the first

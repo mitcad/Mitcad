@@ -5,7 +5,7 @@
 # tools/ui-units-inch-test.sh on Linux: the shared steps
 # tools/ui-scripts/units-inch.mitcad-ui on the design in inches that
 # mitcad-cli makes (tools/cli/tests/units_inch.json): the Browser's
-# sheet-rules row in inches, Extrude's default distance as 0.5 in, Measure's
+# sheet-rules row in inches, a new Extrude's distance as 0 in, Measure's
 # area and distances in inches; the layout grid in inches (mitcad#1210):
 # Grid Settings' fixed spacing, the automatic inch series when zooming, and
 # the metric grid after the design is set to mm.

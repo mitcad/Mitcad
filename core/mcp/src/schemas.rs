@@ -44,6 +44,9 @@ mod explode;
 // The drawing book (mitcad#2448).
 mod drawing_book;
 
+// Construction sets (mitcad#2514).
+mod construction_sets;
+
 /// A family's module: its commands with a schema, in the reference's
 /// order, and its schemas as [`spec`] writes them.
 type Family = (&'static [&'static str], fn(&str) -> Option<Value>);
@@ -65,6 +68,7 @@ const FAMILIES: &[Family] = &[
     (flex::COMMANDS, flex::spec),
     (explode::COMMANDS, explode::spec),
     (drawing_book::COMMANDS, drawing_book::spec),
+    (construction_sets::COMMANDS, construction_sets::spec),
 ];
 
 /// The JSON Schema dialect of the schemas.

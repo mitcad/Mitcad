@@ -43,6 +43,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -158,7 +159,7 @@ void test_key_rounded_up_to_end_walls() { round_the_key(5.0, 2.2, 6.5); }
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_narrow_cut) {
   test::guarded("test_key_rounded_over_its_side_in_a_hollow", test::test_key_rounded_over_its_side_in_a_hollow);
   test::guarded("test_key_rounded_over_a_lower_side", test::test_key_rounded_over_a_lower_side);
   test::guarded("test_key_rounded_up_to_end_walls", test::test_key_rounded_up_to_end_walls);

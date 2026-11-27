@@ -4,7 +4,11 @@
 //! commands `insert_point_cloud`, `move_point_cloud`, `place_point_cloud`,
 //! `set_point_cloud_visible`, `rename_point_cloud` and
 //! `delete_point_cloud`, and the queries `point_clouds`,
-//! `point_cloud_points` and `point_cloud_deviation`.
+//! `point_cloud_points` and `point_cloud_deviation`. The point cloud tools
+//! (mitcad#2516, `mitcad_model::point_cloud_tools`; commands.md "Point
+//! cloud tools"): `align_point_cloud` with its query
+//! `point_cloud_alignment`, `filter_point_cloud` and
+//! `reconstruct_point_cloud`.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -15,10 +19,16 @@ use mitcad_model::features::OccurrencePath;
 use mitcad_model::ids::BodyUid;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::point_cloud_files::DEFAULT_MAX_POINTS;
+use mitcad_model::point_cloud_tools::filter::{
+    ByRadius, CropBox, CropLasso, FilterOptions, Smooth, Statistical,
+};
+use mitcad_model::point_cloud_tools::matching::FitOptions;
+use mitcad_model::point_cloud_tools::reconstruct::{self, ReconstructOptions};
 use mitcad_model::topo::FaceName;
 use mitcad_model::transform::Transform;
 use mitcad_model::{
-    CloudInsert, CloudSource, DEFAULT_DEVIATION_TOLERANCE, DEFAULT_MAX_SAMPLES, DEFAULT_WORST,
+    AlignSettings, AlignStart, AlignTarget, CloudFilter, CloudInsert, CloudSource,
+    DEFAULT_ALIGN_SAMPLES, DEFAULT_DEVIATION_TOLERANCE, DEFAULT_MAX_SAMPLES, DEFAULT_WORST,
     Document, PointCloudDeviation,
 };
 
@@ -89,7 +99,270 @@ named_enum! {
         "delete_point_cloud" => Delete {
             name: String,
         },
+        // The point cloud tools (mitcad#2516): moved onto a body, a mesh
+        // body or another cloud; filtered into a new cloud; rebuilt as a
+        // mesh body.
+        "align_point_cloud" => Align(Box<AlignFields>),
+        "filter_point_cloud" => Filter(Box<FilterFields>),
+        "reconstruct_point_cloud" => Reconstruct {
+            name: String,
+            #[serde(default = "default_detail")]
+            detail: usize,
+            #[serde(default = "default_normal_neighbours", rename = "neighbors")]
+            neighbours: usize,
+        },
     }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_detail() -> usize {
+    reconstruct::DEFAULT_DETAIL
+}
+
+fn default_normal_neighbours() -> usize {
+    reconstruct::DEFAULT_NEIGHBOURS
+}
+
+fn default_iterations() -> usize {
+    FitOptions::default().max_iterations
+}
+
+fn default_align_samples() -> usize {
+    DEFAULT_ALIGN_SAMPLES
+}
+
+fn default_outlier_neighbours() -> usize {
+    16
+}
+
+fn default_ratio() -> f64 {
+    2.0
+}
+
+fn default_radius_neighbours() -> usize {
+    4
+}
+
+fn default_passes() -> usize {
+    1
+}
+
+/// A picked point pair: a point on the cloud and its place on the target,
+/// in the design's coordinates.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PairField {
+    cloud: [f64; 3],
+    target: [f64; 3],
+}
+
+/// A box: its lowest and highest corner, in the design's coordinates.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BoxField {
+    min: [f64; 3],
+    max: [f64; 3],
+    /// Keeps the points inside (a crop's; the default) or outside.
+    #[serde(default = "default_true")]
+    inside: bool,
+}
+
+/// The fields of `align_point_cloud` and of the `point_cloud_alignment`
+/// query.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AlignFields {
+    /// The cloud aligned.
+    name: String,
+    /// The target: a body (`body`, with some of its faces in `faces`), or
+    /// another cloud (`target_cloud`).
+    #[serde(default)]
+    body: Option<BodyUid>,
+    #[serde(default)]
+    faces: Vec<FaceName>,
+    #[serde(default)]
+    target_cloud: Option<String>,
+    /// `placed` (the default) or `shape`; `pairs` with `pairs`.
+    #[serde(default)]
+    start: Option<String>,
+    #[serde(default)]
+    pairs: Vec<PairField>,
+    #[serde(default = "default_true")]
+    best_fit: bool,
+    #[serde(default)]
+    region: Option<BoxField>,
+    #[serde(default)]
+    max_distance: Option<f64>,
+    #[serde(default = "default_iterations")]
+    max_iterations: usize,
+    #[serde(default = "default_align_samples")]
+    max_samples: usize,
+}
+
+/// Statistical outliers' settings.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StatisticalField {
+    #[serde(default = "default_outlier_neighbours", rename = "neighbors")]
+    neighbours: usize,
+    #[serde(default = "default_ratio")]
+    ratio: f64,
+}
+
+/// Outliers by radius.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RadiusField {
+    radius: f64,
+    #[serde(default = "default_radius_neighbours", rename = "neighbors")]
+    neighbours: usize,
+}
+
+/// Noise smoothing.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SmoothField {
+    #[serde(default = "default_outlier_neighbours", rename = "neighbors")]
+    neighbours: usize,
+    #[serde(default = "default_passes")]
+    passes: usize,
+}
+
+/// A lasso: a polygon on a plane facing the viewer (`normal`), in the
+/// design's coordinates.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LassoField {
+    normal: [f64; 3],
+    points: Vec<[f64; 3]>,
+    #[serde(default = "default_true")]
+    inside: bool,
+}
+
+/// The fields of `filter_point_cloud`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FilterFields {
+    name: String,
+    #[serde(default)]
+    new_name: Option<String>,
+    #[serde(default)]
+    keep_shown: bool,
+    #[serde(default)]
+    statistical: Option<StatisticalField>,
+    #[serde(default)]
+    radius: Option<RadiusField>,
+    #[serde(default)]
+    smooth: Option<SmoothField>,
+    #[serde(default)]
+    crop_box: Option<BoxField>,
+    #[serde(default)]
+    lasso: Option<LassoField>,
+}
+
+/// An alignment's settings of its fields; refused in words for a target
+/// that is not one or a start that does not fit the pairs.
+fn align_settings(fields: &AlignFields) -> Result<AlignSettings, ApiError> {
+    let target = match (&fields.body, &fields.target_cloud) {
+        (Some(body), None) => AlignTarget::Body {
+            body: *body,
+            faces: fields.faces.clone(),
+        },
+        (None, Some(cloud)) => {
+            if !fields.faces.is_empty() {
+                return Err(ApiError(
+                    "faces are a body's: give them with `body`, not with `target_cloud`".to_owned(),
+                ));
+            }
+            AlignTarget::Cloud(cloud.clone())
+        }
+        _ => {
+            return Err(ApiError(
+                "give what the cloud is aligned to: a `body` or a `target_cloud`, one of them"
+                    .to_owned(),
+            ));
+        }
+    };
+    let start = match (fields.start.as_deref(), fields.pairs.is_empty()) {
+        (None | Some("pairs"), false) => AlignStart::Pairs(
+            fields
+                .pairs
+                .iter()
+                .map(|pair| (pair.cloud, pair.target))
+                .collect(),
+        ),
+        (None | Some("placed"), true) => AlignStart::Placed,
+        (Some("shape"), true) => AlignStart::Shape,
+        (Some("pairs"), true) => {
+            return Err(ApiError(
+                "a start by point pairs needs the `pairs`".to_owned(),
+            ));
+        }
+        (Some("placed" | "shape"), false) => {
+            return Err(ApiError(
+                "point pairs give the start: leave `start` out or make it `pairs`".to_owned(),
+            ));
+        }
+        (Some(other), _) => {
+            return Err(ApiError(format!(
+                "the start must be placed, shape or pairs, got {other}"
+            )));
+        }
+    };
+    Ok(AlignSettings {
+        start,
+        best_fit: fields.best_fit,
+        region: fields.region.as_ref().map(|r| (r.min, r.max)),
+        max_distance: fields.max_distance,
+        max_iterations: fields.max_iterations,
+        max_samples: fields.max_samples,
+        ..AlignSettings::new(target)
+    })
+}
+
+/// A filter's settings of its fields.
+fn filter_settings(fields: &FilterFields) -> CloudFilter {
+    CloudFilter {
+        options: FilterOptions {
+            crop_box: fields.crop_box.as_ref().map(|b| CropBox {
+                min: b.min,
+                max: b.max,
+                keep_inside: b.inside,
+            }),
+            lasso: fields.lasso.as_ref().map(|l| CropLasso {
+                normal: l.normal,
+                points: l.points.clone(),
+                keep_inside: l.inside,
+            }),
+            statistical: fields.statistical.as_ref().map(|s| Statistical {
+                neighbours: s.neighbours,
+                ratio: s.ratio,
+            }),
+            radius: fields.radius.as_ref().map(|r| ByRadius {
+                radius: r.radius,
+                neighbours: r.neighbours,
+            }),
+            smooth: fields.smooth.as_ref().map(|s| Smooth {
+                neighbours: s.neighbours,
+                passes: s.passes,
+            }),
+        },
+        name: fields.new_name.clone(),
+        keep_shown: fields.keep_shown,
+    }
+}
+
+/// The `point_cloud_alignment` query: the motion and the remaining
+/// deviation, the cloud left where it is.
+pub(crate) fn alignment_json<K: Kernel>(
+    doc: &Document<K>,
+    fields: &AlignFields,
+) -> Result<Value, ApiError> {
+    let settings = align_settings(fields)?;
+    Ok(doc.point_cloud_alignment(&fields.name, &settings)?.json())
 }
 
 /// Millimetres per unit, by its name.
@@ -219,6 +492,22 @@ pub(crate) fn run<K: Kernel>(
         PointCloudCommand::Delete { name } => {
             doc.delete_point_cloud(&name)?;
             json!({})
+        }
+        PointCloudCommand::Align(fields) => {
+            let settings = align_settings(&fields)?;
+            doc.align_point_cloud(&fields.name, &settings)?.json()
+        }
+        PointCloudCommand::Filter(fields) => {
+            let settings = filter_settings(&fields);
+            doc.filter_point_cloud(&fields.name, &settings)?.json()
+        }
+        PointCloudCommand::Reconstruct {
+            name,
+            detail,
+            neighbours,
+        } => {
+            let options = ReconstructOptions { detail, neighbours };
+            doc.reconstruct_point_cloud(&name, &options)?.json()
         }
     })
 }

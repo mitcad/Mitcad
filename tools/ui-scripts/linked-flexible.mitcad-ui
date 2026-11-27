@@ -35,5 +35,41 @@ wait-log '^Dragged Key:1 to [(].*[)]: Joint1 tx -?[0-9.]+ mm in Slider:1$' 30
 wait-idle 30
 wait-log '^Body F2[.]b0 in O1/O2 at ${base:re}$' 30
 expect-no-log '^Body F3[.]b0 in O1/O3 at ${key:re}$'
+
+# Show just this occurrence by its envelope, then recover its linked tree.
+mark
+context-menu-logged '^Browser Root/Slider:1 at ' 'Show as Envelope'
+focus-dialog '^Show as Envelope$' 20
+key ctrl+a
+type 5
+key Return
+wait-log '^Shown Slider:1 as its envelope: detail size 5 mm, 1 body' 60
+wait-idle
+wait-log '^Body F[0-9]+[.]b0 in O1 at ' 30
+expect-no-log '^Body F3[.]b0 in O1/O3 at '
+screenshot '${MITCAD_TEST_WORK}/linked-envelope.png'
+mark
+context-menu-logged '^Browser Root/Slider:1 at ' 'Show in Full'
+wait-log '^Shown Slider:1 in full: 2 body' 60
+wait-idle
+wait-log '^Body F3[.]b0 in O1/O3 at ' 30
+context-menu-logged '^Browser Root/Slider:1 at ' cancel
+expect-log '^Context menu checked: (.* [|] )?Flexible'
+screenshot '${MITCAD_TEST_WORK}/linked-full.png'
+
+# Keep the Key alone. The design's slider no longer has both endpoints.
+mark
+context-menu-logged '^Browser Root/Slider:1 at ' 'Choose Linked Parts'
+wait-log '^Choose Parts opened: linked-flexible-source[.]mitcad, 2 rows$' 30
+focus-dialog '^Choose Linked Parts$' 20
+key Down
+key Space
+wait-log '^Choose Parts: ticked Key:1$' 20
+screenshot-dialog '${MITCAD_TEST_WORK}/choose-linked-parts.png'
+button '^OK$'
+wait-log '^Choose Linked Parts of C[0-9]+: Key:1; 1 bodies$' 30
+wait-idle
+expect-model-bodies 1 2000
+screenshot '${MITCAD_TEST_WORK}/linked-part.png'
 expect-never 'Recompute failed'
 expect-never 'TestDriver: FAIL'

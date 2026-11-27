@@ -4,7 +4,8 @@
 # default), on a new design:
 #   1. Turned off in Preferences › Sketch (OK): logged and saved.
 #   2. Sketch1: a 20 x 10 rectangle on XY, shown after Finish Sketch.
-#   3. Extrude it (the profile preselected, 10 mm): Sketch1 is still shown.
+#   3. Extrude it (the profile preselected, 10 mm typed: a new Extrude
+#      starts at 0 mm, mitcad#2481): Sketch1 is still shown.
 #   4. Turned on again: logged and saved.
 #   5. Sketch2: a 20 x 10 rectangle on XY beside the first; Extrude it:
 #      Sketch2 hides, and Sketch1 stays shown.
@@ -62,6 +63,7 @@ mark
 command solid.extrude
 expect-log '^Command Extrude started'
 wait-log '^Extrude Profiles: 1 profile ' 20
+type-in '^Panel Extrude input distance at ' '10 mm'
 wait-log '^Preview Extrude: ok' 30
 wait-idle
 mark
@@ -116,6 +118,7 @@ mark
 command solid.extrude
 expect-log '^Command Extrude started'
 wait-log '^Extrude Profiles: 1 profile ' 20
+type-in '^Panel Extrude input distance at ' '10 mm'
 wait-log '^Preview Extrude: ok' 30
 wait-idle
 mark

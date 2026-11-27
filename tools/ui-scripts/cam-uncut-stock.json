@@ -1,0 +1,50 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The uncut stock's UI test (mitcad#2569): a 40 x 30 block 10 high (F1.b0) milled on a router, its stock 10 mm round it and 5 mm above and below (Setup 1, a box from (-10, -10, -5) to (50, 40, 15)); a tube 30 mm across and 20 high round (160, 15) with a 12 mm hole through it (F2.b0, the hole cut by F3) turned on a lathe about the design's Z, its stock a bar 40 mm across and 50 long from 1 mm in front of the part's face with an 8 mm bore (Setup 2, from Z -29 to 21), with Turn Facing and Turn Roughing (not generated)."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": 40, "width": 30, "height": 10,
+    "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [160, 15], "diameter": 30, "height": 20,
+    "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [160, 15], "diameter": 12, "height": 50,
+    "symmetric": true, "operation": "cut"}},
+  {"cmd": "cam_machine_put", "machine": {
+    "id": "router",
+    "machine": {
+      "name": "Bench router",
+      "controller": "grbl",
+      "travel": {"min": [0, 0, -120], "max": [600, 400, 0]},
+      "spindle": {"min_rpm": 8000, "max_rpm": 24000, "spin_up_seconds": 2, "nose_diameter": 50, "nose_length": 80},
+      "max_feed": 5000,
+      "rapid_feed": 6000,
+      "tool_changer": {"kind": "manual"}
+    },
+    "tools": {"tools": [
+      {"number": 1, "name": "6 mm flat end mill", "shape": {"kind": "flat"}, "diameter": 6,
+       "flute_length": 18, "length": 25, "cutting": {"spindle_rpm": 18000, "feed": 1200, "plunge_feed": 300}}
+    ]}
+  }},
+  {"cmd": "cam_machine_put", "machine": {
+    "id": "lathe",
+    "machine": {
+      "name": "Lathe",
+      "controller": "fanuc_turning",
+      "travel": {"min": [-5, 0, -300], "max": [150, 0, 200]},
+      "spindle": {"min_rpm": 50, "max_rpm": 3000, "nose_diameter": 0, "nose_length": 0},
+      "max_feed": 5000,
+      "rapid_feed": 20000,
+      "lathe": {"turret_stations": 8, "chuck_diameter": 160, "chuck_length": 50}
+    },
+    "tools": {"tools": [
+      {"number": 1, "name": "Turning", "shape": {"kind": "turning", "nose_radius": 0.4},
+       "diameter": 20, "flute_length": 3, "length": 30}
+    ]}
+  }},
+  {"cmd": "cam_setup_add", "setup": {"bodies": ["F1.b0"], "machine": "router",
+    "stock": {"kind": "around_bodies", "side": 10, "top": 5, "bottom": 5}}},
+  {"cmd": "cam_setup_add", "setup": {"bodies": ["F2.b0"], "machine": "lathe",
+    "stock": {"kind": "around_bodies", "top": 1},
+    "lathe": {"stock_diameter": 40, "stock_length": 50, "stock_bore": 8}}},
+  {"cmd": "cam_operation_add", "setup": 2, "operation": {"kind": {"type": "turn_face"}, "tool": 1}},
+  {"cmd": "cam_operation_add", "setup": 2,
+    "operation": {"kind": {"type": "turn_rough", "side": "outside"}, "tool": 1, "stock_to_leave": 0.2}}
+]

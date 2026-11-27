@@ -13,6 +13,7 @@
 #include <QTimer>
 #include <QtLogging>
 
+#include <exception>
 #include <utility>
 
 #include "commands/Commands.hpp"
@@ -261,11 +262,32 @@ void MainWindow::exportFlatPattern(const QString& body) {
     return;
   }
   rememberDialogFolder(DialogGroup::Export, path);
+  // A pattern laid flat by triangulation (mitcad#2442): its fold lines on
+  // the bend layers too, when asked for.
+  bool approximate = false;
+  try {
+    for (const QJsonValue& value : queryArray(QStringLiteral("sheet_bodies"))) {
+      const QJsonObject sheet = value.toObject();
+      if (sheet.value(QStringLiteral("body")).toString() == body) {
+        approximate = sheet.value(QStringLiteral("flat_pattern"))
+                          .toObject()
+                          .value(QStringLiteral("approximation"))
+                          .isObject();
+      }
+    }
+  } catch (const std::exception&) {
+  }
+  const bool folds =
+      approximate && sheetQuestion(this, tr("Export Flat Pattern"),
+                                   tr("The flat pattern of %1 is laid flat by triangulation. Write the lines it "
+                                      "folds along too, on the bend layers?")
+                                       .arg(name)) == QMessageBox::Yes;
   QJsonObject result;
   if (!runCommand({{QStringLiteral("cmd"), QStringLiteral("export_flat_pattern_dxf")},
                    {QStringLiteral("body"), body},
                    {QStringLiteral("path"), path},
-                   {QStringLiteral("units"), unit}},
+                   {QStringLiteral("units"), unit},
+                   {QStringLiteral("folds"), folds}},
                   &result)) {
     sheetWarning(this, tr("Export Flat Pattern"), tr("Could not export:\n%1").arg(m_lastError));
     qInfo().noquote() << QStringLiteral("Export of the flat pattern of %1 refused: %2").arg(name, m_lastError);

@@ -64,6 +64,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -331,7 +332,7 @@ void test_foot_corner(bool wall) {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_linked_ends) {
   try {
     for (const bool wall : {false, true}) {
       for (const double h : {1.5, 2.0, 3.0}) {

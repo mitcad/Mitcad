@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -15,6 +16,7 @@
 
 #include "bridge/sweeps.hpp"
 #include "mitcad/geometry/intersection_curve.hpp"
+#include "mitcad/geometry/iso_curve.hpp"
 #include "mitcad_bridge/kernel/intersection_curve.h"
 
 namespace mitcad::bridge {
@@ -157,6 +159,29 @@ rust::Vec<CrossingCurve> shape_section(const ShapeList& first, rust::Slice<const
                                        rust::Slice<const std::size_t> second_counts) {
   return converted(geometry::shape_section(section_side(first, first_faces, first_counts),
                                            section_side(second, second_faces, second_counts)));
+}
+
+rust::Vec<CrossingCurve> iso_curves(const geometry::Shape& shape, rust::Str face, bool hold_u,
+                                    rust::Slice<const double> fractions, rust::Slice<const double> through,
+                                    rust::Vec<std::size_t>& curves) {
+  std::optional<gp_Pnt> point;
+  if (through.size() == 3) {
+    point = gp_Pnt(through[0], through[1], through[2]);
+  } else if (!through.empty()) {
+    throw std::invalid_argument("the point of an isoparametric curve needs three coordinates");
+  }
+  const std::vector<double> places(fractions.begin(), fractions.end());
+  const std::vector<geometry::IsoCurve> found =
+      geometry::iso_curves(shape, std::string(face), hold_u ? geometry::IsoParameter::U : geometry::IsoParameter::V,
+                           places, point);
+  rust::Vec<CrossingCurve> result;
+  for (std::size_t i = 0; i < found.size(); ++i) {
+    for (const geometry::ModelCurve& piece : found[i].pieces) {
+      result.push_back(convert(piece));
+      curves.push_back(i);
+    }
+  }
+  return result;
 }
 
 } // namespace mitcad::bridge

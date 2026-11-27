@@ -754,6 +754,10 @@ private:
   void showCancelledPreview(const QByteArray& key);
   void runInspection();
   void acceptInspection(const Inspection& result);
+  // The inspection's model job was cancelled (its progress Cancel; the
+  // window's own job, mitcad#2577, or the native window's): no result, and
+  // a change of an input inspects again.
+  void showCancelledInspection();
   // The inspection's later measurement (Inspection::laterQuery, mitcad#438),
   // asked of the host; its answer updates the panel unless the inputs
   // changed or a newer one was asked for.

@@ -1,0 +1,57 @@
+[
+  {"comment": "Isoparametric Curve (mitcad#2522). The parameter h = 20; Cylinder1 (F1): 20 mm diameter, h high on XY about the Z axis, its side face F1:side0."},
+  {"cmd": "add_parameter", "name": "h", "value": 20},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [0, 0], "diameter": 20, "height": "h", "operation": "new_body"}},
+  {"expect": {"feature": "Cylinder1", "status": "ok", "body": "F1.b0", "has_face": "F1:side0"}},
+
+  {"comment": "IsoparametricCurve1 (F2): the u curve a quarter of the way round the side face, a line along the axis 20 long. Pipe1 (F3), 2 mm along it: V = pi 1^2 20."},
+  {"cmd": "add_feature", "def": {"type": "isoparametric_curve", "face": {"body": "F1.b0", "face": "F1:side0"},
+    "position": 0.25}},
+  {"expect": {"feature": "IsoparametricCurve1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature_curves"}, "result": [{"name": "IsoparametricCurve1"}]}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"feature": "F2"}, "size": 2, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 62.83185307179586, "tolerance": 1e-6}},
+
+  {"comment": "IsoparametricCurve2 (F4): the v curve halfway up, a circle of radius 10 about the axis. Pipe2 (F5), 2 mm round it: a torus, V = 2 pi^2 10 1^2."},
+  {"cmd": "add_feature", "def": {"type": "isoparametric_curve", "face": {"body": "F1.b0", "face": "F1:side0"},
+    "direction": "v", "position": 0.5}},
+  {"expect": {"feature": "IsoparametricCurve2", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"feature": "F4"}, "size": 2, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe2", "status": "ok", "body": "F5.b0", "volume": 197.39208802178717, "tolerance": 1e-5}},
+
+  {"expect": {"body": "F5.b0", "min": [-11, -11, 9], "max": [11, 11, 11], "tolerance": 1e-3}},
+
+  {"comment": "IsoparametricCurve3 (F6): three v curves evenly spaced, three circles at heights 5, 10 and 15."},
+  {"cmd": "add_feature", "def": {"type": "isoparametric_curve", "face": {"body": "F1.b0", "face": "F1:side0"},
+    "direction": "v", "count": 3}},
+  {"expect": {"feature": "IsoparametricCurve3", "status": "ok"}},
+  {"expect": {"query": {"query": "feature_curves"}, "some": {"name": "IsoparametricCurve3"}}},
+
+  {"comment": "h = 30: the curves follow the taller face. Pipe1 along the u curve 30 long, V = pi 1^2 30; Pipe2 round the circle now at z 15, the same torus."},
+  {"cmd": "set_parameter", "name": "h", "value": 30},
+  {"expect": {"feature": "IsoparametricCurve1", "status": "ok"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 94.24777960769379, "tolerance": 1e-6}},
+  {"expect": {"feature": "Pipe2", "status": "ok", "body": "F5.b0", "volume": 197.39208802178717, "tolerance": 1e-5}},
+  {"expect": {"body": "F5.b0", "min": [-11, -11, 14], "max": [11, 11, 16], "tolerance": 1e-3}},
+
+  {"comment": "A face of a component placed by an occurrence (mitcad#2554). Drum (C1, Drum:1 = O1) turned 30 degrees about Z and moved 50 mm along X: Cylinder2 (F7) in it, 20 mm diameter and 20 high about Drum's Z axis, its side face F7:side0. The root's IsoparametricCurve4 (F8) takes the face linked from Drum:1, At Point clicked at (0, 10, 5) in Drum, where the view's click gives it: the u line through that place, in the design from (45, 10 cos 30, 0) to (45, 10 cos 30, 20), within 1e-6 mm (the relative tolerance 2e-8 of coordinates up to 45)."},
+  {"cmd": "create_component", "name": "Drum",
+    "transform": {"translation": [50, 0, 0], "rotation": {"axis": [0, 0, 1], "angle": 0.5235987755982988}}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [0, 0], "diameter": 20, "height": 20, "operation": "new_body"}},
+  {"expect": {"feature": "F7", "status": "ok", "body": "F7.b0", "has_face": "F7:side0"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "add_feature", "def": {"type": "isoparametric_curve", "face": {"body": "F7.b0", "face": "F7:side0"},
+    "point": [0, 10, 5], "links": {"F7.b0": {"source": "O1"}}}},
+  {"expect": {"feature": "F8", "status": "ok"}},
+  {"expect": {"query": {"query": "feature_curves"}, "tolerance": 2e-8,
+    "some": {"uid": "F8", "points": [[45, 8.660254037844386, 0], [45, 8.660254037844386, 20]]}}},
+
+  {"comment": "Drum:1 moves to (20, 30, 5) and turns 90 degrees about Z: the clicked place is at (10, 30, 10) in the design, and the curve follows the face, from (10, 30, 5) to (10, 30, 25)."},
+  {"cmd": "set_occurrence_transform", "occurrence": "O1",
+    "transform": {"translation": [20, 30, 5], "rotation": {"axis": [0, 0, 1], "angle": 1.5707963267948966}}},
+  {"expect": {"feature": "F8", "status": "ok"}},
+  {"expect": {"query": {"query": "feature_curves"}, "tolerance": 2e-8,
+    "some": {"uid": "F8", "points": [[10, 30, 5], [10, 30, 25]]}}}
+]

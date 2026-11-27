@@ -26,9 +26,9 @@ target_link_libraries(mitcad_geometry_analysis
   PRIVATE TKG2d TKGeomBase TKGeomAlgo TKTopAlgo TKPrim TKBO mitcad_warnings)
 
 if(BUILD_TESTING)
-  add_executable(test_geometry_analysis tests/test_analysis.cpp)
-  target_link_libraries(test_geometry_analysis PRIVATE mitcad_geometry_analysis TKG3d TKGeomBase
-                                                       TKGeomAlgo TKTopAlgo TKPrim TKBO TKFillet
-                                                       mitcad_warnings)
-  add_test(NAME geometry.analysis COMMAND test_geometry_analysis)
+  # A test of the geometry's base bundle (geometry/CMakeLists.txt, mitcad#2497).
+  target_sources(test_geometry_base PRIVATE tests/test_analysis.cpp)
+  target_link_libraries(test_geometry_base PRIVATE mitcad_geometry_analysis TKG3d TKGeomBase TKGeomAlgo TKTopAlgo
+                                                   TKPrim TKBO TKFillet)
+  add_test(NAME geometry.analysis COMMAND test_geometry_base geometry_analysis)
 endif()

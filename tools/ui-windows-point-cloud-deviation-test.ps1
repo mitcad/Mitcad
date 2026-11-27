@@ -7,7 +7,9 @@
 # tools/ui-scripts/point-cloud-deviation.mitcad-ui on the block mitcad-cli
 # makes in the work folder (tools/ui-scripts/point-cloud-deviation.json) and
 # the scan written here beside it (16 points 0.5 mm above the block's top,
-# 16 points 0.3 mm above its bottom). Insert > Point Cloud reads the scan;
+# 16 points 0.3 mm above its bottom). Insert > Point Cloud reads the scan,
+# chosen with Choose File... (mitcad#2474: no message left, OK available
+# at once);
 # Inspect > Point Cloud Deviation gives the statistics and colours the
 # points, a point's tooltip its distance; the top face only, then 11 of the
 # 32 points measured, the others dimmed (mitcad#2265); OK keeps it as
@@ -46,6 +48,7 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "point cloud deviation driver failed (exit code $exitCode)"
 }
+Ui-ExpectLog 'Panel Point Cloud message: error gone: Choose a point cloud file.' 'the file chosen in the dialog clears the message'
 Ui-ExpectLog 'Point clouds drawn: PointCloud1 32 points' 'the scan inserted and drawn'
 Ui-ExpectLog '32 of 32 points, signed, mean 0.100 mm, mean absolute 0.400 mm' 'the statistics'
 Ui-ExpectLog 'deviation 32 point(s)' 'the colour map drawn'

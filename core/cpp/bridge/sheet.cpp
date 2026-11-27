@@ -82,7 +82,19 @@ std::unique_ptr<SheetShapeResult> sheet_shape(rust::Slice<const SheetPatchInput>
   for (const auto& p : patches) {
     unit_axis(p.x_axis); unit_axis(p.y_axis);
     geometry::SheetPatch patch{input(p.domain), regions(p.regions), {}};
-    if (p.cone) {
+    if (p.oblique) {
+      // An oblique conical panel (mitcad#2491).
+      geometry::ObliqueConeEmbedding oblique;
+      oblique.apex = gp_Pnt(p.origin[0], p.origin[1], p.origin[2]);
+      oblique.centre = gp_Pnt(p.centre[0], p.centre[1], p.centre[2]);
+      oblique.radius = p.circle_radius;
+      oblique.radial_start = gp_Dir(p.x_axis[0], p.x_axis[1], p.x_axis[2]);
+      oblique.angular_direction = gp_Dir(p.y_axis[0], p.y_axis[1], p.y_axis[2]);
+      oblique.neutral_depth = p.neutral_depth;
+      oblique.angle_extent = p.angle_extent;
+      oblique.inner_is_front = p.inner_is_front;
+      patch.embedding = oblique;
+    } else if (p.cone) {
       unit_axis(p.axis);
       geometry::ConeEmbedding cone;
       cone.apex = gp_Pnt(p.origin[0], p.origin[1], p.origin[2]);
@@ -193,6 +205,10 @@ SheetDevelopedFace sheet_face_development(const geometry::Shape& shape, rust::Sl
   const auto point = [](const gp_XYZ& p) { return std::array<double, 3>{p.X(), p.Y(), p.Z()}; };
   SheetDevelopedFace result;
   result.cone = developed.cone;
+  result.oblique = developed.oblique;
+  result.centre = point(developed.centre.XYZ());
+  result.circle_radius = developed.circle_radius;
+  result.plate = developed.plate;
   result.origin = point(developed.origin.XYZ());
   result.axis = point(developed.axis.XYZ());
   result.radial_start = point(developed.radial_start.XYZ());

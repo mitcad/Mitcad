@@ -178,6 +178,9 @@ impl SketchEdit<'_> {
             projection
                 .entities
                 .retain(|r| !converting.contains(&r.uid()));
+            // A converted curve is the user's: no longer chosen as a
+            // boundary of the outline (mitcad#2551).
+            projection.keep_listed_boundaries();
             let lost = projection.entities.len() < before;
             if lost && !projection.entities.is_empty() && !projection.by_geometry {
                 out.unfollowing.push(projection.source.to_string());

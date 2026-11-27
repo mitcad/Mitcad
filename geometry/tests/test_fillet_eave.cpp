@@ -50,6 +50,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -384,7 +385,7 @@ void test_tip_corner_of_three() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_eave) {
   test::guarded("test_eave_long_edges", test::test_eave_long_edges);
   test::guarded("test_eave_all_edges", test::test_eave_all_edges);
   test::guarded("test_end_face_strip_and_eave_end", test::test_end_face_strip_and_eave_end);

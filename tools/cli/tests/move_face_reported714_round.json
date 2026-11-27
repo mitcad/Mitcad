@@ -1,0 +1,26 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub mitcad/Mitcad#714 (mitcad#2568), the reporter's round boss, opened by cli.move_face_reported (move-face-reported-test.cmake): a plate 86.99 x 81.87 x 10 (Extrude1 F2, Body1), on it a round boss of radius 6.109 joined to it, 20 high and tapered by -1 degree (Extrude2 F4), its top rim chamfered by 1 (Chamfer1 F6). The geometry of cli.move_face_boss_slides, so its volume and centres of mass (the plate's, the cone frustum's less the chamfer's ring)."},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 73420.313230, "tolerance": 2e-5, "faces": 9,
+    "has_face": "F6:chamfer(E{F4:end(r{c9})|F4:side(c9)})"}},
+  {"expect": {"body": "Body1", "center": [16.977345, 9.773592, 5.440602], "tolerance": 0.002}},
+
+  {"comment": "The report: the wall, the top chamfer and the cap moved by Free Move (12.4, 0, 0) mm, all angles zero (MoveFace1 F7). Previewed, then committed: one body of the same volume and 9 faces, each moved face found by its name; the centre of mass 12.4 times the boss's share along x; the boss's foot a circle of the sketch's radius about the axis moved 12.4 along x, none left where it was. In 0.74.0 the preview failed (\"Geom2d_TrimmedCurve::U1 == U2\")."},
+  {"preview": {"cmd": "add_feature", "def": {"type": "move_face", "body": "F2.b0",
+    "faces": ["F4:side(c9)", "F6:chamfer(E{F4:end(r{c9})|F4:side(c9)})", "F4:end(r{c9})"],
+    "transform": {"type": "free", "matrix": [[1, 0, 0, 12.4], [0, 1, 0, 0], [0, 0, 1, 0]]}}}},
+  {"cmd": "add_feature", "def": {"type": "move_face", "body": "F2.b0",
+    "faces": ["F4:side(c9)", "F6:chamfer(E{F4:end(r{c9})|F4:side(c9)})", "F4:end(r{c9})"],
+    "transform": {"type": "free", "matrix": [[1, 0, 0, 12.4], [0, 1, 0, 0], [0, 0, 1, 0]]}}},
+  {"expect": {"feature": "MoveFace1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 73420.313230, "tolerance": 2e-5, "faces": 9,
+    "has_face": "F4:side(c9)"}},
+  {"expect": {"body": "Body1", "has_face": "F6:chamfer(E{F4:end(r{c9})|F4:side(c9)})"}},
+  {"expect": {"body": "Body1", "has_face": "F4:end(r{c9})"}},
+  {"expect": {"body": "Body1", "center": [17.348319, 9.773592, 5.440602], "tolerance": 0.002}},
+  {"expect": {"query": {"query": "edges", "body": "F2.b0", "geometry": true},
+    "some": {"curve": "circle", "radius": 6.1092218818673905, "center": [27.991566009963376, 16.477507825563762, 10]},
+    "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "edges", "body": "F2.b0", "geometry": true},
+    "none": {"curve": "circle", "center": [15.591566009963376, 16.477507825563762, 10]},
+    "tolerance": 1e-6}}
+]

@@ -35,10 +35,12 @@ key=${3-}
 # shellcheck source=tools/dev-env/versions.sh
 . "$repo/tools/dev-env/versions.sh"
 
-case "$(uname -s)" in
-  Linux) platform=linux-x64 ;;
-  Darwin) platform=macos-arm64 ;;
-  *) echo "browser-package.sh: Linux and macOS only (Windows: browser-package.ps1)" >&2; exit 1 ;;
+# The platform names of the automatic updates (app/update/UpdateSettings.cpp).
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) platform=linux-x64 ;;
+  Linux-aarch64) platform=linux-arm64 ;;
+  Darwin-*) platform=macos-arm64 ;;
+  *) echo "browser-package.sh: Linux (x86-64, aarch64) and macOS only (Windows: browser-package.ps1)" >&2; exit 1 ;;
 esac
 abi=$(sed -n 's/.*constexpr int kComponentBrowserAbi = \([0-9]*\);.*/\1/p' "$repo/app/webbrowser/ComponentBrowserHost.hpp")
 [ -n "$abi" ] || { echo "browser-package.sh: no kComponentBrowserAbi in ComponentBrowserHost.hpp" >&2; exit 1; }

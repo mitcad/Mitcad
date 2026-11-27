@@ -25,6 +25,7 @@
 #include "mitcad/geometry/guard.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "rust/cxx.h"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -54,7 +55,7 @@ bool fails_as(const char* operation, Query query) {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+MITCAD_BUNDLED_TEST_ARGS(analysis_crash) {
   const std::string which = argc == 2 ? argv[1] : "";
   if (which != "boundary-distances" && which != "points-inside") {
     std::fprintf(stderr, "usage: test_analysis_crash boundary-distances|points-inside\n");

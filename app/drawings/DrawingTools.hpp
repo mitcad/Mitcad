@@ -407,4 +407,13 @@ QJsonObject weldOf(const QHash<QString, QString>& options);
 // A weld symbol's fields as the panel shows them.
 QHash<QString, QString> weldFields(const QJsonObject& weld);
 
+// The same warning more than once (a view's bodies gone from the design,
+// one warning each; GitHub mitcad/Mitcad#694: 141 of them) as one, in the
+// order the texts first came, with how many times it came.
+struct RepeatedText {
+  QString text;
+  int count = 0;
+};
+QVector<RepeatedText> repeatedTexts(const QStringList& texts);
+
 } // namespace mitcad::drawings

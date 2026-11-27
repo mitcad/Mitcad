@@ -34,7 +34,7 @@ python3 core/f3d/tools/smbh_compare.py <test_brep_import --history output>
 
 `ctest` runs, all skipped when the corpus is missing:
 
-- `core.f3d` (Rust, `core/f3d/tests/corpus.rs`): every entry
+- `core.f3d` (Rust, `core/f3d/tests/read/corpus.rs`): every entry
   decompresses, every blob parses completely, at least 99.5 % of the
   bodies convert without issues, every display scene parses without
   issues and every vertex lies in its face's box, every `.smbh` history

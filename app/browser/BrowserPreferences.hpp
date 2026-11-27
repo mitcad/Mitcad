@@ -3,6 +3,8 @@
 
 // The Browser's preferences (mitcad#1699).
 
+#include <algorithm>
+
 #include <QObject>
 #include <QString>
 
@@ -57,6 +59,46 @@ TimelinePresentation timelinePresentation();
 // when it changed; Restore Defaults saves Strip.
 void setTimelinePresentation(TimelinePresentation presentation);
 
+// The room of the Browser's rows (mitcad#2513, GitHub mitcad/Mitcad#675,
+// Preferences > Display > Browser row spacing): Standard, the default, the
+// height each layout always had (Floating's sidebar rows, the Docked
+// panel's rows); Compact shows more rows in a short panel; Comfortable
+// gives roomier rows, easier to read and to click. Every window's Browser
+// follows a change at once (BrowserPanel::setRowSpacing).
+enum class BrowserRowSpacing { Compact, Standard, Comfortable };
+// The choice's settings value ("compact", "standard", "comfortable") and
+// back; an unknown value is Standard.
+QString browserRowSpacingId(BrowserRowSpacing spacing);
+BrowserRowSpacing browserRowSpacingFromId(const QString& id);
+// The saved choice (settings "browser/rowSpacing"), Standard without one.
+BrowserRowSpacing browserRowSpacing();
+// Saves the choice and tells every window's Browser (rowSpacingChanged)
+// when it changed; Restore Defaults saves Standard.
+void setBrowserRowSpacing(BrowserRowSpacing spacing);
+
+// A Browser row's height with `spacing` (inline: the panel's unit tests do
+// not link BrowserPreferences.cpp). `standard` is the layout's own least
+// row height (26 px for Floating's rows, panel::kRowHeight for Docked's),
+// `content` the height the style gives the row's icon and name, `least`
+// the least that keeps the icon, the name and the controls whole with a
+// little air (the selection's band and the Rows background's box are inset
+// from the row). Standard is the height as it always was, the larger of
+// `standard` and `content`; Compact a fifth less, never below `content` or
+// `least`; Comfortable a quarter more. Larger interface, text or icon sizes
+// raise `content` and `least`, so that every spacing keeps the row whole.
+inline int spacedBrowserRowHeight(BrowserRowSpacing spacing, int standard, int content, int least) {
+  const int base = std::max(standard, content);
+  switch (spacing) {
+  case BrowserRowSpacing::Compact:
+    return std::max({content, least, base - base / 5});
+  case BrowserRowSpacing::Comfortable:
+    return base + base / 4;
+  case BrowserRowSpacing::Standard:
+    break;
+  }
+  return base;
+}
+
 // Tells the windows' Browsers that the preference changed.
 class BrowserPreferencesNotifier : public QObject {
   Q_OBJECT
@@ -72,6 +114,9 @@ signals:
   // The timeline's presentation changed (mitcad#2427): Strip or History
   // list, read again with timelinePresentation().
   void timelinePresentationChanged();
+  // The rows' spacing changed (mitcad#2513), read again with
+  // browserRowSpacing().
+  void rowSpacingChanged();
 };
 
 } // namespace mitcad

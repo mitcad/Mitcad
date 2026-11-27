@@ -42,6 +42,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -269,7 +270,7 @@ void test_valleys_rounded_through_the_nodes() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_tube_node) {
   test::guarded("test_valleys_rounded_through_the_nodes", test::test_valleys_rounded_through_the_nodes);
   if (test::failures == 0) {
     std::puts("test_fillet_tube_node: all checks passed");

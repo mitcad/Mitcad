@@ -57,6 +57,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -274,7 +275,7 @@ void test_radius_too_large() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_knife_edge) {
   test::guarded("reported_knife_edge", test::test_reported_knife_edge);
   test::guarded("two_cylinders", test::test_two_cylinders);
   test::guarded("with_ordinary_edges", test::test_with_ordinary_edges);

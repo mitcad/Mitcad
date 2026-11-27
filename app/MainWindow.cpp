@@ -93,6 +93,7 @@
 #include "browser/FeatureStatus.hpp"
 #include "commands/Commands.hpp"
 #include "commands/ProfilePicks.hpp"
+#include "commands/SurfaceAnalysis.hpp"
 #include "drawings/DrawingTools.hpp"
 #include "files/Autosave.hpp"
 #include "files/FileFormats.hpp"
@@ -145,6 +146,7 @@
 #include "framework/ShortcutDialog.hpp"
 #include "framework/Theme.hpp"
 #include "framework/Diagnostics.hpp"
+#include "framework/PaintWatch.hpp"
 #include "framework/TestSync.hpp"
 #include "framework/WindowStyle.hpp"
 #include "library/PartPicker.hpp"
@@ -826,6 +828,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
                       }});
   m_viewController =
       new ViewController(*m_viewer, *m_registry, *this, [this] { lookAtSelection(); }, this);
+  m_viewController->currentSelection = [this] { return m_selection; }; // Export Turntable's axis (mitcad#2523)
   m_viewController->gridSnapChanged = [this](bool on, double step) {
     m_sketch->setGridSnap(on);
     m_sketch->setGridStep(step);
@@ -1155,6 +1158,9 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
       m_floating->addTopRow(card, {}, bars);
     }
   }
+  // The session log says whether the widgets over the view reach the
+  // screen (mitcad#2031).
+  watchOverlayPaints();
 }
 
 MainWindow::~MainWindow() {
@@ -1223,6 +1229,10 @@ void MainWindow::present() {
   show();
   // Its frame within the screen once it is known (mitcad#1556).
   if (!shownBefore) capNewWindowToScreen(this);
+  // Whether its widgets reach the screen (mitcad#2031, PaintWatch).
+  if (!shownBefore && m_paintWatch != nullptr) {
+    m_paintWatch->arm(QStringLiteral("after the window was shown"));
+  }
   mac::enableDocumentWindowTabs(this, [this](bool visible) { setDocumentVisible(visible); });
 }
 
@@ -1713,6 +1723,9 @@ void MainWindow::registerCommands() {
   registerExplodeCommands();
   // Finish Edit in Place (mitcad#2321).
   registerEditInPlaceCommands();
+  // Surface › Construct: New Construction Set and Deactivate Construction
+  // Set (mitcad#2514).
+  registerConstructionSetCommands();
 }
 
 void MainWindow::showDiagnostics() {
@@ -3716,6 +3729,12 @@ void MainWindow::editAnalysis(const QString& name) {
                           : type == QStringLiteral("draft") ? QStringLiteral("inspect.draft_analysis")
                           // mitcad#2240
                           : type == QStringLiteral("point_cloud_deviation") ? QStringLiteral("inspect.point_cloud_deviation")
+                          // mitcad#2518
+                          : type == QStringLiteral("min_radius") ? QStringLiteral("inspect.min_radius")
+                          // mitcad#2519
+                          : type == QStringLiteral("minimum_distance") ? QStringLiteral("inspect.minimum_distance")
+                          // The surface quality analyses (mitcad#2517).
+                          : isSurfaceAnalysis(type) ? surfaceAnalysisCommand(type)
                                                             : QString();
   const CommandDef* def = command.isEmpty() ? nullptr : m_registry->find(command);
   if (analysis.isEmpty() || def == nullptr) {
@@ -4875,7 +4894,7 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
         for (const QJsonValue& value : curves) {
           const QJsonObject curve = value.toObject();
           if (curve.value(QStringLiteral("uid")).toString() == item.owner) {
-            return polylineShape(curve.value(QStringLiteral("points")).toArray());
+            return featureCurveShape(curve);
           }
         }
         return TopoDS_Shape();
@@ -6057,7 +6076,8 @@ void MainWindow::showDatums() {
   }
   // Intersection Curves (mitcad#1405): their curves drawn as lines, with
   // the construction geometry's light bulbs; a click picks the feature, which
-  // a path input takes.
+  // a path input takes. An Isoparametric Curve's curves apart are drawn each
+  // as a line of its own (featureCurveShape, mitcad#2522).
   const QJsonArray curves = query({{QStringLiteral("query"), QStringLiteral("feature_curves")}}).toArray();
   for (const QJsonValue& value : curves) {
     const QJsonObject curve = value.toObject();
@@ -6069,7 +6089,7 @@ void MainWindow::showDatums() {
     if (feature != nullptr && m_snapshot.kindHidden(*feature)) {
       continue;
     }
-    DatumDisplay display{uid, SelectKind::Feature, polylineShape(curve.value(QStringLiteral("points")).toArray())};
+    DatumDisplay display{uid, SelectKind::Feature, featureCurveShape(curve)};
     display.occurrence = placingOccurrence(uid);
     // Picked as the curve (mitcad#1417): the sketch's Project and Intersect,
     // Rib and Web take it, not other features.
@@ -6288,7 +6308,7 @@ void MainWindow::setConstructionHidden(bool hidden) {
 }
 
 bool MainWindow::logPickPlaces(SelectFilter filter, bool again) {
-  if (!(filter & (SelectKind::Face | SelectKind::Edge | SelectKind::Vertex | SelectKind::Profile)) ||
+  if (!(filter & (SelectKind::Face | SelectKind::Edge | SelectKind::Vertex | SelectKind::Profile | SelectKind::Body)) ||
       !qEnvironmentVariableIsSet("MITCAD_LOG_PICKS")) {
     m_pickPlacesDeferred = false;
     return false;
@@ -6298,8 +6318,9 @@ bool MainWindow::logPickPlaces(SelectFilter filter, bool again) {
     return false;
   }
   m_pickPlacesDeferred = false;
-  // Where a click picks each face, edge, vertex and profile the input
-  // takes, for UI tests (only on request: every item is tried in the view).
+  // Where a click picks each face, edge, vertex, profile and body the
+  // input takes, for UI tests (only on request: every item is tried in the
+  // view); a body once, as "Pick body F3.b0/ at x,y" (mitcad#2544).
   // The points are clear of the cards over the view as they are now.
   const std::vector<std::pair<SelectionItem, QPoint>> places = m_viewer->pickPoints(filter);
   if (again && places.empty()) {
@@ -7841,6 +7862,11 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
       // Projected geometry into ordinary sketch geometry (mitcad#257).
       if (m_sketch->selectionHasProjected()) {
         add(m_registry->action(QStringLiteral("sketch.convert_projected")));
+      }
+      // Curves of the face's outline the sketch got when it was made bound
+      // profiles, or no longer (mitcad#2551).
+      if (m_sketch->selectionHasAutomatic()) {
+        add(m_registry->action(QStringLiteral("sketch.profile_boundary")));
       }
       // Inactive constraints and dimensions (mitcad#721): Activate applies
       // them where the sketch then solves; active ones can be set aside.

@@ -45,6 +45,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/profile.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -311,7 +312,7 @@ void test_one_feature_equals_two() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_stacked_step) {
   test::guarded("test_kernel_alone", test::test_kernel_alone);
   test::guarded("test_one_feature_equals_two", test::test_one_feature_equals_two);
   if (test::failures != 0) {

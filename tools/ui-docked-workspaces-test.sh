@@ -6,6 +6,7 @@
 # check-all sources: app/framework/TitleBar.cpp app/framework/BoostButton.cpp app/agent/MainWindowChat.cpp
 # check-all sources: app/framework/WindowStyle.cpp app/DocumentFrame.cpp app/projects/MainWindowProjectsPanel.cpp
 # check-all sources: app/render/RenderWorkspace.cpp tools/cli
+# check-all sources: app/framework/PaintWatch.cpp app/framework/GraphicsEnvironment.cpp app/main.cpp
 # check-all sources: tools/ui-scripts/docked-workspaces.mitcad-ui tools/ui-scripts/workspaces.json
 # The Docked layout of Windows and Linux (mitcad#2082, GitHub
 # mitcad/Mitcad#476) through the real UI, the shared input script
@@ -74,5 +75,6 @@ ui_expect_log 'TestDriver: done' "the Docked workspaces"
 grep -qE '^Toolbar panel after the Start page: shown at [0-9]+,[0-9]+ [0-9]+x[0-9]+ [(]Docked; the window exposed, ' "$UI_LOG" ||
   ui_fail "the toolbar panel not shown in an exposed window after the Start page: $(grep '^Toolbar panel after the Start page: ' "$UI_LOG" | tail -1)"
 echo "ok   the toolbar panel shown in the exposed window after the Start page"
+ui_expect_toolbar_panel_painted
 grep -E '^(Docked top bar: |Ribbon workspace: |Drawing docks |TestDriver: dock )' "$UI_LOG" | sed 's/^/     /'
 ui_finish 'UI Docked workspaces test'

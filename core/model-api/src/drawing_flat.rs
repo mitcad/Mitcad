@@ -316,6 +316,28 @@ impl<K: Kernel> DrawingFlatOps<K> for Document<K> {
                 });
             }
         }
+        // A Lofted Flange's facet lines (mitcad#2512): thin, as edges
+        // between faces that meet smoothly.
+        if s.flat
+            && let Ok(pattern) = self.flat_pattern_of(s.body)
+            && let Ok(pattern) = &*pattern
+        {
+            let frame = &pattern.frame;
+            let at = |p: [f64; 2]| {
+                let local: Vec3 = std::array::from_fn(|i| {
+                    frame.origin[i] + p[0] * frame.x_axis[i] + p[1] * frame.y_axis[i]
+                });
+                spec.project(s.transform.apply_point(local))
+            };
+            for line in &pattern.facet_lines {
+                edges.push(ViewEdge {
+                    visible: true,
+                    kind: ViewEdgeKind::Smooth,
+                    curve: ViewCurve::Line(at(line.start), at(line.end)),
+                    source: None,
+                });
+            }
+        }
         Ok((edges, written))
     }
 

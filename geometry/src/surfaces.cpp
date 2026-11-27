@@ -17,6 +17,7 @@
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepGProp_Face.hxx>
 #include <BRepLib.hxx>
@@ -543,10 +544,32 @@ ShapePtr offset_sheet(const Shape& sheet, double distance) {
   throw std::runtime_error("thicken failed; the surface could not be offset by half the thickness");
 }
 
+// The surface's inner knots of its full degree lowered by one where it is
+// smooth across them all the same (mitcad#2584): a B-spline through
+// stations with their tangents (a die formed transition's ruled patches,
+// cubic with each inner knot three times) is continuous in its first
+// derivative but C0 by its knots, which the kernel's offset refuses. Only
+// knots it is smooth across within a rounding go; the surface and its
+// parameters stay as they were.
+void lower_smooth_knots(const occ::handle<Geom_BSplineSurface>& surface) {
+  constexpr double kSmooth = 1.0e-9;
+  for (int k = surface->NbUKnots() - 1; k >= 2; --k) {
+    if (surface->UMultiplicity(k) >= surface->UDegree()) {
+      surface->RemoveUKnot(k, surface->UDegree() - 1, kSmooth);
+    }
+  }
+  for (int k = surface->NbVKnots() - 1; k >= 2; --k) {
+    if (surface->VMultiplicity(k) >= surface->VDegree()) {
+      surface->RemoveVKnot(k, surface->VDegree() - 1, kSmooth);
+    }
+  }
+}
+
 // The surface of a face over the face's own range: a B-spline (or an
-// offset of one) segmented there; null when it is not one or the segment
-// is no smoother than the whole.
-occ::handle<Geom_Surface> own_range(const TopoDS_Face& face) {
+// offset of one) segmented there, with its knots it is smooth across
+// lowered when `lower`; null when it is not one or the segment is no
+// smoother than the whole.
+occ::handle<Geom_Surface> own_range(const TopoDS_Face& face, bool lower) {
   const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
   if (surface.IsNull() || surface->Continuity() != GeomAbs_C0) {
     return {};
@@ -580,6 +603,9 @@ occ::handle<Geom_Surface> own_range(const TopoDS_Face& face) {
   }
   const occ::handle<Geom_BSplineSurface> segment = occ::down_cast<Geom_BSplineSurface>(spline->Copy());
   segment->Segment(u0, u1, v0, v1);
+  if (lower) {
+    lower_smooth_knots(segment);
+  }
   occ::handle<Geom_Surface> result(segment);
   if (!offset.IsNull()) {
     result = new Geom_OffsetSurface(segment, offset->Offset());
@@ -595,11 +621,11 @@ occ::handle<Geom_Surface> own_range(const TopoDS_Face& face) {
 // only where they meet (mitcad#2141); their offset (the half wall of a
 // symmetric thicken, mitcad#2143) is a C0 surface as a whole, smooth over
 // each face.
-ShapePtr on_own_ranges(const Shape& sheet) {
+ShapePtr on_own_ranges(const Shape& sheet, bool lower = false) {
   std::vector<occ::handle<Geom_Surface>> ranges;
   bool any = false;
   for (int i = 0; i < sheet.face_count(); ++i) {
-    ranges.push_back(own_range(sheet.face(i)));
+    ranges.push_back(own_range(sheet.face(i), lower));
     any = any || !ranges.back().IsNull();
   }
   if (!any) {
@@ -686,6 +712,15 @@ ShapePtr split_at_creases(const Shape& sheet) {
   return std::make_shared<Shape>(split, faces);
 }
 
+// OCCT's thick offset of the sheet by `d` with the join `join`; the sheet
+// is written into.
+std::unique_ptr<BRepOffset_MakeOffset> offset_of(const Shape& sheet, double d, GeomAbs_JoinType join) {
+  auto maker = std::make_unique<BRepOffset_MakeOffset>();
+  maker->Initialize(offset_input(sheet.occt()), d, kTolerance, BRepOffset_Skin, false, false, join, true);
+  detail::interruptible([&](const Message_ProgressRange& range) { maker->MakeOffsetShape(range); });
+  return maker;
+}
+
 // The solid between the sheet and its offset by `wall` along the faces'
 // normals (against them when negative), named as thicken() says.
 ShapePtr thick_solid(const std::string& feature, const Shape& sheet, double wall) {
@@ -697,23 +732,35 @@ ShapePtr thick_solid(const std::string& feature, const Shape& sheet, double wall
   // is made the other way when it took the other.
   for (const double d : {wall, -wall}) {
     // OCCT's offset writes into its input.
-    const ShapePtr copy = detail::working_copy(sheet);
-    BRepOffset_MakeOffset maker;
-    maker.Initialize(offset_input(copy->occt()), d, kTolerance, BRepOffset_Skin, false, false,
-                     GeomAbs_Intersection, true);
-    detail::interruptible([&](const Message_ProgressRange& range) { maker.MakeOffsetShape(range); });
-    if (!maker.IsDone()) {
+    ShapePtr copy = detail::working_copy(sheet);
+    std::unique_ptr<BRepOffset_MakeOffset> maker = offset_of(*copy, d, GeomAbs_Intersection);
+    if (!maker->IsDone()) {
       throw std::runtime_error("thicken failed; the surface could not be thickened (a face may be "
                                "more tightly curved than the thickness, or the faces meet at an "
                                "inside corner the wall crosses)");
     }
-    const TopoDS_Shape result = maker.Shape();
+    // Faces meeting at a crease that fades into a tangency along their
+    // edge (a die formed transition's bands, sharp at a rectangle's corner
+    // and smooth at the circle, mitcad#2584): the extended faces' walls
+    // meet at no angle there and the intersection join can leave no solid
+    // or one that is not sound; then the arc join, rounding the crease on
+    // the outside instead, where it gives a sound solid.
+    if (!TopExp_Explorer(maker->Shape(), TopAbs_SOLID).More() || !BRepCheck_Analyzer(maker->Shape()).IsValid()) {
+      ShapePtr arc_copy = detail::working_copy(sheet);
+      std::unique_ptr<BRepOffset_MakeOffset> arc = offset_of(*arc_copy, d, GeomAbs_Arc);
+      if (arc->IsDone() && TopExp_Explorer(arc->Shape(), TopAbs_SOLID).More() &&
+          BRepCheck_Analyzer(arc->Shape()).IsValid()) {
+        maker = std::move(arc);
+        copy = arc_copy;
+      }
+    }
+    const TopoDS_Shape result = maker->Shape();
     if (!TopExp_Explorer(result, TopAbs_SOLID).More()) {
       throw std::runtime_error("thicken failed; the thickened surface does not close");
     }
     NCollection_List<TopoDS_Shape> arguments;
     arguments.Append(copy->occt());
-    const BRepTools_History history(arguments, maker);
+    const BRepTools_History history(arguments, *maker);
     detail::FaceNamer namer(result);
     bool checked = false;
     bool right_side = true;
@@ -1072,7 +1119,10 @@ ShapePtr thicken(const std::string& feature, const Shape& sheet, double thicknes
   }
   return detail::run("thicken", [&] {
     if (!symmetric) {
-      return thick_solid(feature, sheet, thickness);
+      // Faces C0 by their knots alone made smooth (mitcad#2584); the
+      // offset refuses C0 faces.
+      const ShapePtr smooth = on_own_ranges(sheet, true);
+      return thick_solid(feature, smooth ? *smooth : sheet, thickness);
     }
     // Half the wall behind the faces, then the whole wall from there.
     const double half = std::abs(thickness) / 2;

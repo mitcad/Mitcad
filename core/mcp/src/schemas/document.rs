@@ -233,10 +233,107 @@ fn analysis_def() -> Value {
         "required": ["type", "cloud", "body"],
         "additionalProperties": false
     });
+    // Minimum Radius (mitcad#2518).
+    let min_radius = json!({
+        "type": "object",
+        "description": "The smallest radius of curvature of the faces (one over the largest principal curvature) and where it is, and with a limit the faces under it; the numbers come from the min_radius_analysis query",
+        "properties": {
+            "type": {"const": "min_radius"},
+            "bodies": {"type": "array", "items": {"type": "string"}, "description": "Bodies whose every face is analysed (uids, F2.b0)"},
+            "faces": {"type": "array", "items": {"type": "object"}, "description": "Faces analysed besides the bodies' ({\"body\": \"F2.b0\", \"face\": \"F2:side0\"}); a body or a face is needed"},
+            "limit": positive("Faces whose smallest radius is under this are marked, mm; left out: none")
+        },
+        "required": ["type"],
+        "additionalProperties": false
+    });
+    // Minimum Distance (mitcad#2519).
+    let pick = json!({
+        "type": "object",
+        "description": "A body ({\"body\"}), a face, edge or vertex of it ({\"body\", \"face\"}), or a component as placed ({\"occurrence\"} alone: every body in it); a body's occurrence when its component is placed more than once",
+        "properties": {
+            "body": text("The body (uid, F2.b0)"),
+            "face": text("A face of the body (F2:top)"),
+            "edge": text("An edge of the body"),
+            "vertex": text("A vertex of the body"),
+            "occurrence": text("The occurrence, a path from the root (O1/O4): the body's, or alone a component's")
+        },
+        "additionalProperties": false
+    });
+    let distance = json!({
+        "type": "object",
+        "description": "The smallest distance between two selections, measured again whenever the model changes; with a clearance, whether they come closer than it (the minimum_distance query gives the distance and the closest points)",
+        "properties": {
+            "type": {"const": "minimum_distance"},
+            "first": {"type": "array", "minItems": 1, "items": pick.clone(), "description": "The first selection's picks"},
+            "second": {"type": "array", "minItems": 1, "items": pick, "description": "The second selection's picks"},
+            "clearance": positive("Closer than this, mm, the pair is marked; left out: no clearance checked")
+        },
+        "required": ["type", "first", "second"],
+        "additionalProperties": false
+    });
+    // Surface quality analyses (mitcad#2517): on bodies (all their faces)
+    // or on faces of bodies; the values come from the surface_analysis
+    // query.
+    let bodies = || json!({"type": "array", "items": {"type": "string"}, "description": "Bodies analysed whole (uids, F2.b0)"});
+    let faces = || json!({"type": "array", "items": {"type": "object"}, "description": "Faces of other bodies, each {\"body\": \"F2.b0\", \"face\": \"F2:top\"}; a body or a face is needed"});
+    let zebra = json!({
+        "type": "object",
+        "description": "Zebra: stripes of equal light from a direction over the faces; they jump where faces meet at an angle, kink where faces are only tangent and run on smoothly where faces are curvature continuous",
+        "properties": {
+            "type": {"const": "zebra"},
+            "bodies": bodies(),
+            "faces": faces(),
+            "direction": json!({"type": ["string", "object", "null"], "description": "Where the stripes come from: a plane's normal or a line's direction, as a draft analysis' pull; null: the design's +Z"}),
+            "occurrence": text("The direction reference's occurrence, a path from the root (O1/O4)"),
+            "stripes": {"type": "integer", "minimum": 2, "maximum": 200, "default": 12, "description": "Stripes over the half turn from the direction to its reverse (their density)"},
+            "width": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.5, "description": "The dark share of each stripe"}
+        },
+        "required": ["type"],
+        "additionalProperties": false
+    });
+    let curvature = json!({
+        "type": "object",
+        "description": "Curvature Map: the faces colored by their curvature, positive where a face bulges outwards, negative where it is hollow",
+        "properties": {
+            "type": {"const": "curvature"},
+            "bodies": bodies(),
+            "faces": faces(),
+            "kind": {"enum": ["gaussian", "mean", "maximum", "minimum"], "default": "gaussian", "description": "Gaussian (1/mm^2), mean, largest or smallest principal curvature (1/mm)"},
+            "limit": positive("The colors' full strength at this value either way, in the kind's unit; left out: the largest magnitude found")
+        },
+        "required": ["type"],
+        "additionalProperties": false
+    });
+    let isocurve = json!({
+        "type": "object",
+        "description": "Isocurve Analysis: the faces' u and v iso curves, optionally colored by the surface's curvature along them",
+        "properties": {
+            "type": {"const": "isocurve"},
+            "bodies": bodies(),
+            "faces": faces(),
+            "count": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10, "description": "Curves of each parameter per face (their density)"},
+            "curvature": flag(false, "Each curve colored by the normal curvature along it"),
+            "limit": positive("With curvature: the colors' full strength at this curvature either way, 1/mm; left out: the largest magnitude found")
+        },
+        "required": ["type"],
+        "additionalProperties": false
+    });
+    let environment = json!({
+        "type": "object",
+        "description": "Environment Map: a picture of surroundings reflected in the faces as the view turns, to judge their smoothness",
+        "properties": {
+            "type": {"const": "environment"},
+            "bodies": bodies(),
+            "faces": faces(),
+            "image": text("The picture's file; left out: the application's own studio picture")
+        },
+        "required": ["type"],
+        "additionalProperties": false
+    });
     json!({
         "type": "object",
-        "description": "What the analysis is, by its type: section, print, draft or point_cloud_deviation",
-        "oneOf": [section, print, draft, deviation]
+        "description": "What the analysis is, by its type: section, print, draft, point_cloud_deviation, min_radius, minimum_distance, zebra, curvature, isocurve or environment",
+        "oneOf": [section, print, draft, deviation, min_radius, distance, zebra, curvature, isocurve, environment]
     })
 }
 
@@ -370,6 +467,7 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "target": point3("What it looks at, mm"),
                 "up": point3("Its up direction"),
                 "perspective": flag(false, "A perspective view (else orthographic)"),
+                "orthographic_faces": flag(false, "Perspective with Orthographic Faces: orthographic while the view looks along a face direction"),
                 "height": {"type": "number", "exclusiveMinimum": 0, "description": "The height the view shows, mm"},
                 "replace": flag(false, "Replace a view of the same name instead of refusing")
             },
@@ -496,20 +594,23 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "rename_group", "name": "Base", "new_name": "Housing"}]
         }),
         "add_analysis" => json!({
-            "description": "Adds a section, print, draft or point cloud deviation analysis, shown (the others hidden); no geometry changes. Result: name.",
+            "description": "Adds a section, print, draft, point cloud deviation, minimum radius, minimum distance, zebra, curvature, isocurve or environment analysis, shown (the others hidden); no geometry changes. Result: name.",
             "properties": {
                 "def": analysis_def(),
-                "name": text("Its name; the next free Section<n>, Print<n>, Draft<n> or Deviation<n> when left out")
+                "name": text("Its name; the next free Section<n>, Print<n>, Draft<n>, Deviation<n>, MinRadius<n>, MinDistance<n>, Zebra<n>, Curvature<n>, Isocurves<n> or Environment<n> when left out")
             },
             "required": ["def"],
             "examples": [
                 {"cmd": "add_analysis", "def": {"type": "section", "plane": "xz", "offset": 10}},
                 {"cmd": "add_analysis", "name": "Print1", "def": {"type": "print", "bodies": ["F2.b0"], "overhang": {"angle": 50}}},
-                {"cmd": "add_analysis", "def": {"type": "draft", "bodies": ["F2.b0"], "pull": "xy", "angle": 2}}
+                {"cmd": "add_analysis", "def": {"type": "draft", "bodies": ["F2.b0"], "pull": "xy", "angle": 2}},
+                {"cmd": "add_analysis", "def": {"type": "min_radius", "bodies": ["F2.b0"], "limit": 3}},
+                {"cmd": "add_analysis", "def": {"type": "minimum_distance", "first": [{"body": "F2.b0"}], "second": [{"occurrence": "O1"}], "clearance": 2}},
+                {"cmd": "add_analysis", "def": {"type": "curvature", "bodies": ["F2.b0"], "kind": "mean"}}
             ]
         }),
         "edit_analysis" => json!({
-            "description": "Replaces an analysis' definition (section, print or draft).",
+            "description": "Replaces an analysis' definition (any type add_analysis takes).",
             "properties": {
                 "name": analysis(),
                 "def": analysis_def(),

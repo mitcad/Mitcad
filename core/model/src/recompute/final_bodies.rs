@@ -261,6 +261,7 @@ pub(crate) fn writes(
         | D::Placeholder(_)
         | D::IntersectionCurve(_)
         | D::HelixCurve(_)
+        | D::IsoparametricCurve(_)
         | D::SpatialSketch(_)
         | D::CoordinateSystem(_) => Writes::Nothing,
         _ if entry.def.active_cut_scope().is_some() => Writes::All,

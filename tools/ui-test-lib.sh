@@ -1589,3 +1589,25 @@ ui_save_if_changed() {
   ui_key ctrl+s
   ui_expect_new "Saved $1" "saved"
 }
+
+# ui_expect_toolbar_panel_painted: after a run that left the Start page
+# (mitcad#2031, app/framework/PaintWatch.hpp), the session log says the
+# toolbar panel was painted and the window presented a frame with it: a
+# "Paint check after the Start page was left:" line with the toolbar panel
+# among "painted and presented" and nothing "not painted" or "not
+# presented"; and the start-up's "Graphics environment:" line.
+ui_expect_toolbar_panel_painted() {
+  local line presented found=""
+  grep -q '^Graphics environment: session ' "$UI_LOG" || ui_fail "no Graphics environment: line at the start"
+  while IFS= read -r line; do
+    [[ $line == *"painted and presented: "* ]] || continue
+    presented=${line#*painted and presented: }
+    presented=${presented%%;*}
+    if [[ $presented == *"toolbar panel"* && $line != *"not painted"* && $line != *"not presented"* ]]; then
+      found=$line
+    fi
+  done < <(grep '^Paint check after the Start page was left: ' "$UI_LOG")
+  [ -n "$found" ] ||
+    ui_fail "the toolbar panel not painted and presented after the Start page: $(grep '^Paint check after the Start page was left: ' "$UI_LOG" | tail -1)"
+  echo "ok   the toolbar panel painted and presented after the Start page"
+}

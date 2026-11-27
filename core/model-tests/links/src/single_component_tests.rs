@@ -10,7 +10,8 @@
 //! its whole structure on the next update, with a line saying so, and the
 //! parent's joints and picks on its parts follow them to the same parts
 //! and geometry (mitcad#2441), a Pattern at Points of such a part too,
-//! with the same copies at the same points (mitcad#2466).
+//! with the same copies at the same points (mitcad#2466), and decals on
+//! their faces (mitcad#2527).
 
 use std::path::{Path, PathBuf};
 
@@ -667,5 +668,106 @@ fn a_pattern_at_points_on_a_part_inside_follows_when_the_link_comes_back_whole()
     for ((uid, at), (was, was_at)) in after.iter().zip(&before) {
         assert_eq!(uid, was, "the same copy");
         assert_near(*at, *was_at, "the copy after the update");
+    }
+}
+
+/// A 24-bit BMP file of 4 x 2 grey pixels, base64.
+fn bmp_data() -> String {
+    let (width, height) = (4u32, 2u32);
+    let row = (width * 3).div_ceil(4) * 4;
+    let pixels = row * height;
+    let mut bytes = b"BM".to_vec();
+    bytes.extend_from_slice(&(54 + pixels).to_le_bytes());
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&54u32.to_le_bytes());
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&height.to_le_bytes());
+    bytes.extend_from_slice(&[1, 0, 24, 0]);
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&pixels.to_le_bytes());
+    bytes.extend_from_slice(&4000u32.to_le_bytes());
+    bytes.extend_from_slice(&4000u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 8]);
+    bytes.resize(bytes.len() + pixels as usize, 0x80);
+    mitcad_model::internal::base64::encode(&bytes)
+}
+
+/// The `decals` query.
+fn decals(doc: &Document<MockKernel>) -> Vec<Value> {
+    let reply = doc.query(&json!({"query": "decals"}).to_string()).unwrap();
+    serde_json::from_str::<Value>(&reply)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// mitcad#2527: decals of the parent on a face of the link's own body and
+/// on one of a part inside it follow when the link comes back whole, as
+/// the sketches on those faces do: their paths name the parts through
+/// Component1:1, and they lie where they lay.
+#[test]
+fn decals_on_the_link_s_parts_follow_when_the_link_comes_back_whole() {
+    let mut source = one_component_with_key();
+    let dir = saved("2527-decals", &source);
+    let mut doc = Document::new(MockKernel::default());
+    let (made, occurrence) = insert(&mut doc, &dir, true);
+    let key = named(&doc, "Key:1");
+    let key_component = doc.assembly().occurrence(key).unwrap().component;
+    let own_body = doc.component_bodies(made)[0];
+    let key_body = doc.component_bodies(key_component)[0];
+    let own_face = top_face(&doc, own_body);
+    let key_face = top_face(&doc, key_body);
+    let through_key = format!("{occurrence}/{key}");
+    for (name, body, face, path) in [
+        ("Own", own_body, &own_face, occurrence.to_string()),
+        ("Key", key_body, &key_face, through_key.clone()),
+    ] {
+        run(
+            &mut doc,
+            json!({"cmd": "insert_decal", "data": bmp_data(), "name": name,
+                   "face": {"body": body, "face": face}, "occurrence": path,
+                   "center": [5, 5], "width": 4}),
+        );
+    }
+    let before = decals(&doc);
+    assert_eq!(before.len(), 2);
+    for decal in &before {
+        assert!(decal.get("error").is_none(), "{decal}");
+    }
+    assert_eq!(before[0]["occurrence"], json!(occurrence.to_string()));
+    assert_eq!(before[1]["occurrence"], json!(through_key));
+
+    // A second component in the design's root: the whole structure comes
+    // in (`open_top`).
+    source.activate_component(ComponentUid::ROOT).unwrap();
+    source
+        .create_component(Some("Second"), Transform::IDENTITY, true)
+        .unwrap();
+    block(&mut source);
+    write_part(&dir, &source);
+    run(
+        &mut doc,
+        json!({"cmd": "update_link", "component": "part", "base": base(&dir)}),
+    );
+    let first = named(&doc, "Component1:1");
+    let after = decals(&doc);
+    assert_eq!(after.len(), 2);
+    assert_eq!(
+        after[0]["occurrence"],
+        json!(format!("{occurrence}/{first}")),
+        "{}",
+        after[0]
+    );
+    assert_eq!(
+        after[1]["occurrence"],
+        json!(format!("{occurrence}/{first}/{key}")),
+        "{}",
+        after[1]
+    );
+    for (decal, was) in after.iter().zip(&before) {
+        assert!(decal.get("error").is_none(), "{decal}");
+        assert_alike(&decal["corners"], &was["corners"], "the decal's corners");
     }
 }

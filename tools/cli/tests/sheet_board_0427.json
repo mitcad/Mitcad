@@ -17,12 +17,5 @@
   {"expect": {"feature": "F22", "status": "ok", "bodies": 1}},
   {"expect": {"query": {"query": "flat_pattern", "body": "F4.b0"},
     "result": {"status": "valid", "bounds": {"min": [-122, -248], "max": [645.6, 569.6]}}}},
-
-  {"comment": "Then of 4 mm corrugated polypropylene (crease deduction 0.4: each crease develops 8.6), inside 160 x 90 x 60: its rules F23, Face F26 and Folds F27 to F44, a second sheet body."},
-  {"cmd": "add_standard_box", "style": "fefco_0427", "length": 160, "width": 90, "height": 60, "board": "polypropylene_4", "radius": 0.5},
-  {"expect": {"feature": "F26", "status": "ok"}},
-  {"expect": {"feature": "F44", "status": "ok", "bodies": 2}},
-  {"expect": {"query": {"query": "flat_pattern", "body": "F26.b0"},
-    "result": {"status": "valid", "bounds": {"min": [-63.8, -137], "max": [318.2, 322.2]}}}},
-  {"cmd": "export_die_line", "body": "F26.b0", "path": "sheet_board_0427_polypropylene.dxf"}
+  {"comment": "The box of corrugated polypropylene is sheet_board_0427_polypropylene, a script of its own (mitcad#2495)."}
 ]

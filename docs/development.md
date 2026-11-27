@@ -432,8 +432,8 @@ the feature recompute times separately from process wall time and peak
 resident memory (`/usr/bin/time -l` on macOS reports the latter in bytes).
 The CLI's `--timings` report does not measure viewport meshing or display.
 `MITCAD_TEST_ONLY` selects `guarded` geometry tests by a name substring,
-and in the geometry tests that are executables of their own the test
-functions by their whole names (`geometry/tests/test_only.hpp`, a
+and in the geometry's bundled tests (`test_geometry_<bundle> <test>`) the
+test functions by their whole names (`geometry/tests/test_only.hpp`, a
 comma-separated list, mitcad#2310);
 `test_geometry --part <name>` runs one part of the suite (`--list` names
 them; each is the ctest `geometry.suite.<name>`, mitcad#832). The long
@@ -572,6 +572,14 @@ shipped.
 | appimagetool 1.9.1 | `install-appimage-tools.sh`, `~/appimage-tools` | https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage | `ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0` |
 | ISPC 1.31.0 (compiles Open Image Denoise) | `build-cycles.sh`, `<prefix>/src` | https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.tar.gz | `d74089c835e10fd7e2c4b9225ced38b87d1fb53d35c7ceabd48cdf035da11b11` |
 | ISPC 1.31.0 for Apple Silicon (compiles Open Image Denoise) | `build-cycles-macos.sh`, `<prefix>/src` | https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-macOS.arm64.tar.gz | `eac8009da38d41074d0adcf1fad4a3412fc9644a81ee5a49efeb07eac505b6ec` |
+| sccache 0.18.0 for Linux aarch64 | `setup-user.sh`, `~/.local/bin` | https://github.com/mozilla/sccache/releases/download/v0.18.0/sccache-v0.18.0-aarch64-unknown-linux-musl.tar.gz | `2b3284d5da3b46a47dc4229e75bb7b88ac4aa99c8d754fb7d2f84997e5a4354a` |
+| linuxdeploy 1-alpha-20251107-1 for aarch64 | `install-appimage-tools.sh`, `~/appimage-tools` | https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-aarch64.AppImage | `620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff` |
+| linuxdeploy-plugin-qt for aarch64, continuous build of 22 August 2026 | `install-appimage-tools.sh`, `~/appimage-tools` | https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage | `d5b5a9020065cefda8c7af7c9500f686b23640eac50c88201a81752c6ee2e49c` |
+| appimagetool 1.9.1 for aarch64 | `install-appimage-tools.sh`, `~/appimage-tools` | https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-aarch64.AppImage | `f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158` |
+| ISPC 1.31.0 for Linux aarch64 (compiles Open Image Denoise) | `build-cycles.sh`, `<prefix>/src` | https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.aarch64.tar.gz | `660ccac47ff7e0980b89b00a3ebd70201acf55f9e816c127fc28e868ab456193` |
+
+The aarch64 rows are for [Linux on 64-bit ARM](#linux-on-64-bit-arm-aarch64);
+the scripts pick the row of the machine's architecture (`uname -m`).
 
 `build-cycles.sh --cuda` (mitcad#50; `setup-user.sh` passes it unless
 `MITCAD_RENDER_CUDA=0`) fetches the CUDA compiler's
@@ -633,7 +641,9 @@ files as a `.zip`. The installer script is our own,
   with the Start menu shortcut, the `.mitcad` file type with Explorer's
   thumbnail handler `mitcad-thumbnails.dll` (mitcad#1695,
   [filetype.nsh](../packaging/windows/filetype.nsh): its COM class in the
-  64-bit view) and the uninstall entry under `HKCU`; no administrator
+  64-bit view), MitCad under Open with for the files it imports
+  (`OpenWithProgids` naming `Mitcad.Import`, mitcad#2527; their defaults
+  stay) and the uninstall entry under `HKCU`; no administrator
   rights, so no UAC prompt;
 - **for all users:** into `Program Files\Mitcad`, registered under `HKLM`
   (32-bit view, as earlier releases). Only this choice asks for elevation:
@@ -756,7 +766,8 @@ licence texts of compiled-in Rust crates.
 
 ## Linux AppImage
 
-`Mitcad-<version>-x86_64.AppImage`, built in the distro:
+`Mitcad-<version>-x86_64.AppImage` (`Mitcad-<version>-aarch64.AppImage`
+on [64-bit ARM](#linux-on-64-bit-arm-aarch64)), built in the distro:
 
 ```bash
 tools/dev-env/install-appimage-tools.sh            # once
@@ -828,7 +839,9 @@ host builds it in an Ubuntu 24.04 build root
 it with `--appimage-extract-and-run`.
 
 At each start the AppImage writes its desktop file (`Exec` = the
-AppImage, `StartupWMClass=Mitcad`, `TryExec`, `X-AppImage-Name` and
+AppImage with `%f`, `MimeType=` with the types of the files MitCad opens
+so that file managers offer it for them, mitcad#2527,
+`StartupWMClass=Mitcad`, `TryExec`, `X-AppImage-Name` and
 `X-AppImage-Version` for AppImage managers, merged into an entry already
 there so that a manager's own keys stay, mitcad#2413) and icons into
 `$XDG_DATA_HOME` if they differ, so docks show the icon, and with them
@@ -837,7 +850,8 @@ the file managers' thumbnails of designs (mitcad#1539): the bundled
 copied to `$XDG_DATA_HOME/mitcad/bin`, its entry
 (`thumbnailers/mitcad.thumbnailer`, from
 [packaging/linux/mitcad.thumbnailer](../packaging/linux/mitcad.thumbnailer))
-running that copy and the MIME type `application/x-mitcad`
+running that copy and the MIME type `application/x-mitcad` with the
+import types shared-mime-info lacks
 (`mime/packages/mitcad.xml`, then `update-mime-database`)
 ([app/framework/DesktopEntry.cpp](../app/framework/DesktopEntry.cpp)). No
 GTK is bundled, so it uses the `xdgdesktopportal` platform theme unless
@@ -870,7 +884,13 @@ Then it runs the AppImage with an empty environment, renders with its
 render worker when it has one, checks the bundled `mitcad-cli` as
 assistants start it (`cli --version`; the chat panel's bridge; the
 command Connect AI Assistant registers, run with `mcp --list-instances`,
-lists the running window), and updates it to itself from a locally
+lists the running window), checks that the built-in woods and panels
+show their textures (mitcad#2358: `cli run` lists each look with its
+three images, those of `core/model-base/textures`, and the AppImage's
+view draws a board in Wood - Birch with its texture; the extracted
+`mitcad-cli` reads them from `usr/share/mitcad/textures`, shown by an
+image changed there, not from the source tree the build machine also
+has), and updates it to itself from a locally
 signed manifest, over the bundled OpenSSL: the log line
 `Update check: TLS OpenSSL <version> …` names the bundled libcrypto's
 version, and the running MitCad has loaded libssl and libcrypto from the
@@ -878,6 +898,41 @@ AppImage only. That last step needs a build with the update test hooks
 (`-DMITCAD_UPDATE_TEST_HOOKS=ON`, on in the debug presets); a release's
 AppImage, without them, is checked to ignore the update tests' variables
 instead ([updates.md](updates.md#the-test-hooks)).
+
+### Linux on 64-bit ARM (aarch64)
+
+The same tree builds on an aarch64 Linux machine (Ubuntu 24.04 for arm64,
+glibc 2.39, the same floor as x86-64), natively: there is no cross
+build. The release's `Mitcad-<version>-aarch64.AppImage` is built on
+GitHub's `ubuntu-24.04-arm` runners. What differs from x86-64, each
+picked by the machine's architecture (`uname -m`, CMake's
+`CMAKE_SYSTEM_PROCESSOR`); x86-64 builds are unchanged:
+
+- vcpkg's triplet `arm64-linux-dynamic` (vcpkg's community triplet, the
+  same settings as `x64-linux-dynamic`): the Linux presets name
+  `x64-linux-dynamic`, and `CMakeLists.txt` takes the arm64 one on an
+  aarch64 machine, so `linux-debug`, `linux-release` and the `dev` preset
+  of `setup-user.sh` build there unchanged. vcpkg's tool uses the system's
+  CMake and Ninja there (`VCPKG_FORCE_SYSTEM_BINARIES`, set by
+  `CMakeLists.txt`, `setup-user.sh` and `build-cycles.sh` when unset).
+- The render worker's libraries (`build-cycles.sh`): Cycles' CPU device
+  only (`--cuda` and `--optix` are refused; `setup-user.sh` leaves CUDA
+  out), Cycles' SSE code through sse2neon (`vcpkg.json`'s dependency on
+  arm64, `SSE2NEON_INCLUDE_DIR`), ISPC's `linux.aarch64` release for Open
+  Image Denoise.
+- Qt's `linux_arm64` build (`~/Qt/<version>/gcc_arm64`), sccache's
+  aarch64 build.
+- CEF's `linuxarm64` distribution (`fetch-cef.sh`, `CEF_LINUXARM64_SHA1`);
+  `app/webbrowser/CMakeLists.txt` sets CEF's `PROJECT_ARCH` to `arm64`,
+  which CEF's CMake files would otherwise take for x86-64 (`-m64
+  -march=x86-64`). The web browser component's platform is `linux-arm64`.
+- The AppImage tools' aarch64 builds and runtime
+  (`install-appimage-tools.sh`, `~/appimage-tools/runtime-aarch64`);
+  `make-appimage.sh` packs with `ARCH=aarch64`.
+- The automatic updates name the platform `linux-arm64`
+  ([app/update/UpdateSettings.cpp](../app/update/UpdateSettings.cpp)): the
+  release's manifest signs the aarch64 AppImage as that asset, and
+  `appimage-test.sh` signs and expects it so on aarch64.
 
 ## The web browser component
 
@@ -983,6 +1038,8 @@ Run in the isolated environments:
   test binaries in one cargo run (`cargo test --no-run`, one lock on the
   target directory, the crates compiled in parallel), and the tests run
   the binaries directly, at the same time (`core/cargo-tests.cmake`;
+  an integration test binary, a group of test files, runs each of its
+  tests in a process of its own, [adding a Rust test](#adding-a-rust-test);
   on Windows each run has `TMP` and `TEMP` in a folder of its own under
   `%LOCALAPPDATA%\mitcad-tests`, removed when it passes, as Storage Sense
   deletes the empty folders of git repositories just made in the
@@ -1140,7 +1197,8 @@ over 3 MB anyway). `write_seeds` takes another folder as its argument.
 
 Beside the fuzz targets, the readers have unit tests of damaged input:
 every cut of a synthetic file, a wrong signature, and lengths or counts
-declared beyond what the file holds, in `tests/malformed.rs` of the
+declared beyond what the file holds, in the test module `malformed.rs`
+(`tests/<group>/malformed.rs`) of the
 `zip`, `cfb`, `dxf`, `rvt`, `ipt`, `dwg`, `ifc`, `freecad` and
 `solidcraft` crates and in the 3MF reader's
 `cut_packages_and_other_files_are_refused`; the design file's are
@@ -1178,6 +1236,36 @@ merge. These tests now register themselves, each in a file of its own
   runs the registered entry points in the order of their names, so an
   entry point must not depend on another one having run before it. The
   application's own sources still go in `app/CMakeLists.txt`.
+- **A C++ test of a test bundle** (mitcad#2497,
+  `cmake/TestBundles.cmake`): the C++ tests that used to be programs of
+  their own are linked a few tens at a time into one program per subject,
+  linked as the application is (the static `mitcad_geometry` and the rest),
+  and each ctest runs one test of it in a process of its own:
+  `test_geometry_<bundle> <test> [arguments]`. The geometry's bundles are
+  `sheet`, `surfaces`, `base`, `booleans`, `loft_shell`, `chamfer` and the
+  fillets' `fillet_a_e`, `fillet_f_n`, `fillet_o_s` and `fillet_t_z` (by
+  the first letter after `fillet_`), listed with their subjects in
+  `geometry/CMakeLists.txt`; the app has `test_app_view` and
+  `test_app_services`, the bridge `test_core_bridge`. A new test is the
+  file `geometry/tests/test_<name>.cpp` whose entry point is
+  `MITCAD_BUNDLED_TEST(<name>) { … return status; }` (or
+  `MITCAD_BUNDLED_TEST_ARGS(<name>)` with main's `argc` and `argv`;
+  `#include "bundled_test.hpp"`, `tools/test-bundle/`) in place of `main`,
+  and its registration `geometry/tests/bundled/test_<name>.cmake`:
+  `target_sources(test_geometry_<bundle> PRIVATE tests/test_<name>.cpp)`,
+  any library it needs beyond the bundle's with `target_link_libraries`,
+  and its `add_test(NAME geometry.<name> COMMAND test_geometry_<bundle>
+  <name> …)` with its properties; likewise `app/tests/bundled/<stem>.cmake`
+  and `core/tests/bundled/<stem>.cmake`. The name is unique in its bundle
+  (a C++ identifier); `<bundle> --list` lists a bundle's tests and a ctest
+  whose name the bundle lacks fails. A test that starts itself again in a
+  child process passes its name first (`preview_meshing` does). Programs
+  that tools or UI test scripts run by name (`test_exchange`,
+  `test_f3d_import`, `test_brep_import`, `test_face_profiles`,
+  `test_gltf_export`, `test_chat_agent`, `test_assistant_client`) and the
+  platforms' own tests stay programs of their own. A bundle that grows past
+  about 30 tests is split, to stay well within the Windows linker's limits
+  (LNK1140).
 
 A file name is the test's name (without `app.`) or the test file's stem,
 so a test is found by its name. Linux UI tests are scripts
@@ -1200,6 +1288,51 @@ merge into the target branch (`tools/translations-update.cmake`, the
 target `update_translations`, [translations.md](translations.md)), so that
 two branches' new texts do not conflict in the same files; only a
 translation's own work (filling in `<translation>` entries) edits them.
+
+### Adding a Rust test
+
+A crate's integration tests are a few test binaries grouped by subject,
+not one binary per file (mitcad#2496): every binary links the crate with
+all its dependencies and their debug information, and a binary per file
+took tens of gigabytes and relinked them all at each change. A group is a
+folder `tests/<group>/` whose `main.rs` declares the folder's files as
+modules (`mod <file>;`, in the order of the names); Cargo builds it as the
+test binary `<group>` (`cargo test -p <crate> --test <group> -- <file>::`
+runs one file's tests). The groups are subjects: `read` (a reader on its
+corpus and on damaged files), the solver's `planar`, `rigid` and
+`spatial`, the DXF crate's `files`, and `limits` apart, as it counts the
+memory with an allocator of its own.
+
+- **A new test in a file that exists:** nothing to register.
+- **A new test file:** put it into the group of its subject and add its
+  `mod <file>;` to the group's `main.rs`. A group that grows large (a few
+  thousand lines and more of slow-compiling tests) is split into two by
+  subject. A new group is a new folder with its `main.rs`; Cargo finds it
+  without an entry in `Cargo.toml`.
+- Not `tests/<name>.rs`: Cargo builds it as a binary of its own.
+  `repo.rust-test-groups` (`tools/rust-test-groups`) fails on such a file,
+  and on a file in a `tests` folder (also a library's `src/.../tests/`)
+  that no `mod` declaration reaches, which Cargo would never build or run
+  without a word. Helpers shared by a group's files are a module of the
+  group (`crate::common` in the solver's `planar`).
+- **Each test stands alone.** The ctests run every test of an integration
+  test binary in a process of its own (`core/cargo-tests.cmake`: the
+  binary's `--list`, then each test by its exact name), so a test may not
+  rely on another test's setup, and its environment, working folder and
+  statics are its own. Under plain `cargo test` the files of a group share
+  one process, so a test that changes the process's state (an environment
+  variable, the working folder, a global allocator) belongs in a group of
+  its own. Scratch files go to a folder named after the test
+  (`CARGO_TARGET_TMPDIR`, or the system's temporary folder with the
+  process id).
+
+The ctest names stay one per crate (`core.<crate>`, parts as
+`core.vcs.<part>`), whatever its binaries are. To compare two builds'
+tests (a regrouping must keep every test): `cmake -DLIST=<build>/core/cargo-test/tests-debug.tsv
+-P core/cargo-tests.cmake -- names <file>` writes a build's tests, and
+`tools/rust-test-groups/check-rust-test-groups.py --compare <before>
+<after>` matches a test `<test>` of a former binary `<file>` with the
+test `<file>::<test>` of its group, and prints the binaries' counts.
 
 ### The test runner (mitcad-testrun)
 
@@ -1336,11 +1469,11 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 
 | Variable | Effect |
 |---|---|
-| `MITCAD_LOG_PICKS=1`, `MITCAD_LOG_VOLUMES=1`, `MITCAD_LOG_TIMING=1` | Log pick positions, body volumes after changes, step durations. |
-| `MITCAD_MESH_TRACE=1` | Log the view's display meshings (faces kept, reused, meshed, BRepMesh's phases, the slowest faces, planes the final tier triangulated again after Delabella, mitcad#644) and, on standard error, any meshing a presentation does on the UI thread (mitcad#635; also `test_preview_meshing --bench`). |
+| `MITCAD_LOG_PICKS=1`, `MITCAD_LOG_VOLUMES=1`, `MITCAD_LOG_TIMING=1` | Log pick positions, body volumes after changes, step durations. With `MITCAD_LOG_TIMING` the model also writes, on standard error, each evaluated feature's time (`Timing evaluate F4 SheetFlange1: 85.20 ms`, in the app and `mitcad-cli`) and each sheet construction's phases (`Timing sheet chart shape: 9 charts, 58 faces, faces …, sew …, valid …, collisions …, names …, fuse …, apart …, total … ms`, mitcad#2444). |
+| `MITCAD_MESH_TRACE=1` | Log the view's display meshings (faces kept, reused, meshed, BRepMesh's phases, the slowest faces, planes the final tier triangulated again after Delabella, mitcad#644) and, on standard error, any meshing a presentation does on the UI thread (mitcad#635; also `test_app_view preview_meshing --bench`). |
 | `MITCAD_SETTINGS_DIR` | Settings as an INI file in this folder. |
 | `MITCAD_AUTOSAVE_DIR`, `MITCAD_TEST_AUTOSAVE_SECONDS` | Recovery folder and autosave interval. |
-| `MITCAD_TEST_RECOMPUTE_DELAY_MS=n[,job=m...]` | Every feature computed in a job takes n ms longer (`400,undo=800`), to exercise the progress dialog. |
+| `MITCAD_TEST_RECOMPUTE_DELAY_MS=n[,job=m...]` | Every feature computed in a job takes n ms longer (`400,undo=800`), to exercise the progress dialog. A live MCP query run as a job (mitcad#2540) is its job by the query's name: `interference=15000` makes the interference check, `assembly_path=…` each probe of an assembly path that long, ending early on a cancel. |
 | `MITCAD_COMPUTE_INLINE=1` | Jobs on the UI thread, for a debugger. |
 | `MITCAD_TEST_OCCT_CRASH=<operation>` | That kernel operation (e.g. `fillet`, or Section Analysis' `clip` and `section`) crashes like an access violation in OCCT; also in `mitcad-cli`. |
 | `MITCAD_TEST_KERNEL_HANG=<seconds>` | Every kernel call that may not return (fillets, chamfers, shells and offsets, sweeps, lofts, healing: `core/ffi/src/kernel/abandon.rs`, mitcad#1922) first waits that long, deaf to any cancel and limit, as a call that does not return; with `MITCAD_KERNEL_TIME_LIMIT=<seconds>` (0: none, 300 by default) it is given up at that limit (mitcad#1917; `cli.kernel_time_limit`, `tools/ui-kernel-cancel-test.sh`). |
@@ -1385,9 +1518,10 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_CARGO_SWEEP=0`, `MITCAD_CARGO_JOB_MIB` | The crates' test builds (`core.cargo_build*`): no sweep of stale units after the build; MiB of available memory per cargo job instead of 2560 ([the crates' test builds](#the-crates-test-builds-sweep-jobs-debug-information)). |
 | `MITCAD_TEST_PRINT_PDF=<file>` | File › Print (mitcad#1089) shows no system print dialog: it prints to this PDF file through `QPrinter` (`printing::askPrinter`, logged `Print dialog skipped (test): printing to <file>`): `tools/ui-paper-print-test.sh`, `app.ui-windows-paper-print`, the print steps of `tools/ui-drawings-test.sh` and `tools/ui-build-test.sh`. |
 | `MITCAD_TEST_BUILD_UPGRADE_REFUSED=1` | `build_upgrade` refuses a design with BUILD connectors of the first placing rule, as a refused edit would: opening such a design still works, with a warning (`cli.build_upgrade_refused`, mitcad#1151). |
+| `MITCAD_TEST_PAINT_LAYER_FAILURE=gl-error\|slow-frame` | The 3D view's overlay layer fails (mitcad#2406, `app/view/ViewPaintLayer.hpp`): `gl-error` reports `GL_OUT_OF_MEMORY` after every texture upload of a paint layer (the BGRA one, then the RGBA one), `slow-frame` counts every upload and draw as taking 5 s; the paint layers (sketch mode's overlay, the dimensions shown outside sketch mode) are then widgets over the view for the session, and every widget paint whose drawing changed logs the pixels it drew (`tools/ui-paint-layer-fallback-test.sh`, `app.ui-windows-paint-layer-fallback`, `app.ui-macos-paint-layer-fallback`). |
 | `MITCAD_TEST_GL_FAILURE=init\|reconnect\|throw` | The 3D view's attach to the graphics card fails (mitcad#2125, `OcctViewer::initializeGL`): `init` its first attach sees a driver that answers no GL version, as after a driver reset; `reconnect` the attaches after it; `throw` makes those throw `Standard_NullObject` where OCCT's `OpenGl_Context::Init` did. While it is set, a move of the view to another window, or a screen change of its window (the TestDriver's `screen-change`, which tells every shown window that its screen changed), counts as Qt making its surface again on every platform; `throw` also makes Component from Web's screen change (`CefView::screenChanged`) throw, which it catches and logs once. It is read at every attach: the TestDriver's `unset-env MITCAD_TEST_GL_FAILURE` (or `set-env NAME VALUE`, for `MITCAD_TEST_*` variables only) ends the failure while the app runs (`tools/ui-gl-failure-test.sh`, `app.ui-windows-gl-failure`). On Linux through EGL, `start` makes the first start's graphics check fail for every EGL context of Qt's (mitcad#2292, `framework/GraphicsStart.hpp`): MitCad then starts again in the same process on X11 with GLX, where the window draws and the 3D view draws in its own EGL context, read back into the window; `start-view` does the same and makes the 3D view's own EGL context fail in every start, so that the window draws and the 3D view says it cannot start (`tools/ui-gl-start-failure-test.sh`). |
 | `MITCAD_SHELL_TRACE=1` | Shell prints `shell trace:` lines on standard error (mitcad#2050, `geometry/src/shell_cavity.cpp`): why the geometry kernel's offset failed, what the cavity it falls back on found (the plates, thin faces and faces under removed ones), each step of it that failed (an inward offset with its `BRepOffset_Error` code, a thin part or rounding that could not be taken away, a kept face the cavity cut into) and a refused result, for a design whose Shell fails. |
-| `MITCAD_SHELL_DUMP=<folder>` | Shell writes the geometry kernel's thick-solid input and result as `shell-<stamp>-<n>-thick-input.brep` and `shell-<stamp>-<n>-thick-result.brep` (the stamp per process) into the folder (mitcad#2462, `geometry/src/shell_cavity.cpp`), so that a failing or invalid result can be taken apart in DRAW or the OCCT lab; with `MITCAD_SHELL_TRACE` the trace names the files. |
+| `MITCAD_SHELL_DUMP=<folder>` | Shell writes the geometry kernel's thick-solid input and result as `shell-<stamp>-<n>-thick-input.brep` and `shell-<stamp>-<n>-thick-result.brep` (the stamp per process) into the folder (mitcad#2462, `geometry/src/shell_cavity.cpp`), and where it falls back on the cavity, that route's input and its result before the result's check as `…-cavity-input.brep` and `…-cavity-result.brep` (mitcad#2494, `geometry/src/faceops.cpp`), so that a failing or invalid result can be taken apart in DRAW or the OCCT lab; with `MITCAD_SHELL_TRACE` the trace names the files. |
 | `MITCAD_TEST_3DXWARE=1` | Windows: the 3DxWare runtime's stand-in (mitcad#2152, `app/platform/windows/SpaceMouse3DxWare.cpp`) loads in place of the installed `siappdll.dll` and reports one device, `Test 3D mouse`, so the 3D mouse's backend asks for MitCad's window at the moment a real driver start does; it opens the device only for a window and sends no events (`app.ui-windows-space-mouse-3dxware`). |
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
@@ -1442,6 +1576,15 @@ visibly on a desktop in use.
   `UI_SCREEN_WIDTH` and splits the display with `xrandr --setmonitor`
   (`ui-orbit-screens-test.sh`; where xrandr is not installed it prints
   `skipped: xrandr missing` and passes).
+- Native Wayland (mitcad#2489): `ui-sketch-idle-memory-wayland-test.sh`
+  starts a headless Weston of its own (`weston --backend=headless`, its
+  socket in the test's folder under `build/`, no `DISPLAY`) and the app
+  with `MITCAD_WAYLAND=1` and Mesa's software renderer. A headless
+  compositor has no input devices, so the in-process test driver
+  (`MITCAD_TEST_INPUT`, `app/framework/TestDriver.hpp`) gives the input;
+  xdotool does not reach a Wayland client. Without `weston` the test
+  notes so and passes. `--trace` runs its long trace, the RSS and the
+  system's available memory sampled into `build/sketch-idle-wayland-*.tsv`.
 - The app runs without gdb: gdb loads the debug build's symbols (about
   1 GB) at every start, and the app's crash handler logs a crash's signal
   and stack itself. `UI_GDB=1` starts it under gdb for gdb's backtrace.
@@ -1455,6 +1598,14 @@ visibly on a desktop in use.
 - Leave a mode by its own control when Esc does several things in turn:
   in a drawing Esc ends the tool, then clears the selection, then closes
   the drawing, so the tests close it with Close Drawing.
+- Under `set -o pipefail`, never pipe a program's output into `grep -q`:
+  grep leaves at its first match, the program's next write meets the
+  closed pipe, it dies of SIGPIPE and the check fails although the line
+  is there. `git log` writes each commit as it goes, and git 2.43 (the
+  Linux release build's) lost this race about every second run
+  (mitcad#2601). Read the output whole and search it afterwards:
+  `subjects=$(git -C "$dir" log --format=%s)`, then
+  `grep -qxF "$subject" <<< "$subjects"`.
 
 ### Windows UI tests
 
@@ -1624,7 +1775,7 @@ are skipped without it:
 - `MITCAD_F3D_CORPUS` (default `~/f3d-corpus`): `.f3d`/`.f3z` files,
   searched recursively. ctests `f3d.corpus_occt`, `f3d.corpus_meshes`,
   `f3d.corpus_import`, `f3d.corpus_timeline` (debug builds sample every
-  n-th file), `core/f3d/tests/corpus.rs`, `design_corpus.rs`, and the
+  n-th file), `core/f3d/tests/read/corpus.rs`, `design_corpus.rs`, and the
   `.f3d` part of `ui-import-test.sh` (`MITCAD_F3D_UI_PART`, else the
   smallest part).
 - `MITCAD_F3D_DESIGN_REF` (default `~/f3d-design-ref`): an independent
@@ -1633,7 +1784,7 @@ are skipped without it:
 - `MITCAD_F3D_MODELS` (default `~/f3d-models`): reference models
   `<id>/<id>.f3d` with external dumps `<id>/<id>.json`
   ([SCHEMA.md](../core/import/SCHEMA.md)). ctest `f3d.models_loft` and
-  `core/f3d/tests/design_models.rs`.
+  `core/f3d/tests/read/design_models.rs`.
 
 Full corpus runs need a release build: `test_f3d_import --corpus [dir]
 [--reports DIR] [--time-limit S]` ([core/import/README.md](../core/import/README.md))
@@ -1683,7 +1834,7 @@ Real `.ipt` part files are never committed. `MITCAD_IPT_CORPUS` (a
 the ctest `ipt.corpus` (`tools/cli/ipt-corpus.cmake`: every file imported
 with `mitcad-cli import-ipt`, compared with a STEP file of the same part
 next to it, `<name>.stp`, within 1e-6 or the limit the folder's
-`references.tsv` gives the file), `core/ipt/tests/corpus.rs` and a step
+`references.tsv` gives the file), `core/ipt/tests/read/corpus.rs` and a step
 of `ui-import-test.sh` (the smallest file). Files run as the other corpus
 tests do (the options above). The assembly tests `iam.corpus` and
 `iam.corpus_reorient` read `MITCAD_IAM_CORPUS`, or `MITCAD_IPT_CORPUS` when
@@ -1799,7 +1950,7 @@ in the distro only:
   `freecad.corpus_designs` (`tools/cli/fcstd-designs.cmake`) checks single
   documents, found by their content ids under those folders and their
   parent folders, against their expectations (no fallback, the volume).
-  `core/freecad/tests/sketch_corpus.rs` compares every
+  `core/freecad/tests/read/sketch_corpus.rs` compares every
   sketch with FreeCAD's reading. Example:
   `MITCAD_FCSTD_CORPUS=~/fcstd-models:~/fcstd-examples ctest -R freecad`.
 - `MITCAD_GEOMETRY_CASES` (a folder): geometry kernel cases made of
@@ -1864,11 +2015,29 @@ in the distro only:
   ctest `cli.drawing_tangent_edges_reported`
   (`tools/cli/drawing-tangent-edges-test.cmake`) writes the drawing of
   `github-177-…` and its body as a `.brep` file, which
-  `test_drawing --tangent-edges` projects in seven views: no line along a
+  `test_geometry_surfaces drawing --tangent-edges` projects in seven views: no line along a
   tangent edge or a seam with Tangent Edges off, exact and polygonal, thin
   ones with it on, every other sharp line still drawn, the body unchanged
   (mitcad#1438); skipped with a message without it. A synthetic filleted
   block in `geometry.drawing` runs the same checks without the file.
+  ctest `cli.drawing_tube_reported`
+  (`tools/cli/drawing-tube-reported-test.cmake`) unpacks the archive in
+  `github-686/` (a drawing of a filleted tube), writes its drawing with
+  the drawing trace on, lists its body's edges (`test_geometry_surfaces drawing --edges`:
+  the faces' surfaces, the continuity stored and found) and runs
+  `test_geometry_surfaces drawing --tangent-edges` on it, which also checks the hidden edges
+  (none along a tangent edge with Tangent Edges off, seen or hidden, every
+  other edge drawn whole with it on; exact, on the quick path as a 1:1 view
+  takes it, and polygonal) and that no seam is drawn (mitcad#2447); the
+  archive and the design are found by their content ids. A synthetic bent
+  tube and the design's shape without its shell (a Y of two bent tubes
+  with a free-form fillet at the crotch) in `geometry.drawing` run those
+  checks without the file; there a polygonal line along a tangent edge
+  counts as the outline only where the faces are near square to the view,
+  nowhere else (no allowance next to a fillet's tips since mitcad#2510),
+  and the polygonal views leave out no line of the exact views that the
+  polygonal algorithm draws by itself (the outline kept where it crosses a
+  tangent edge or runs along one up to a fillet's tip).
   ctest `cli.thread_fit_reported` (`tools/cli/thread-fit-reported-test.cmake`)
   finds a design by its content id in the folder's project subsets (the
   folder may hold them in subfolders, each with its `.mitcad/` store),
@@ -1910,6 +2079,21 @@ in the distro only:
   new end edge parallel to the picked one (mitcad#2056); skipped with a
   message without it. `geometry.surface_modelling` covers the same
   outlines on synthetic faces without the file.
+  ctest `cli.extend_rounded_rim_reported`
+  (`tools/cli/extend-rounded-rim-reported-test.py`) finds the archive in
+  `github-689/` by its content id, unpacks the design in it (a thin cover
+  whose top, rounds, corners and walls drafted 15 degrees are offset 5 mm
+  outwards into one surface body by OffsetSurface1) into the build folder,
+  and extends that body Natural 5 mm with `mitcad-cli run` (the preview,
+  then the command committed), at the end of OffsetSurface1: the whole
+  rounded rim (Whole Opening on), one curved corner edge alone and one
+  straight side alone. Read through `mitcad-cli mcp --read-only`, each is
+  one surface body of the same faces whose area grows by its strips along
+  the walls' rulings; the whole rim's eight free edges lie on the new level
+  (the strips joined), and with one edge alone the other seven stay where
+  they were (mitcad#2525); skipped with a message without it.
+  `geometry.surface_modelling` covers rims trimmed inside their surfaces
+  on synthetic faces, with OCCT's checker, without the file.
   ctest `cli.replace_face_tilted_round_reported`
   (`tools/cli/replace-face-tilted-round-reported-test.cmake`) finds the
   archive in `github-643/` by its content id, unpacks it into the build
@@ -1920,6 +2104,20 @@ in the distro only:
   (mitcad#2382); skipped with a message without it.
   `geometry.suite.faceops` (`test_replace_tilted_round_top`) covers a pin's
   round top onto planes above, across and below it without the file.
+  ctest `cli.replace_face_shell_rim_reported`
+  (`tools/cli/replace-face-shell-rim-reported-test.cmake`) finds the
+  archive in `github-717/` by its content id, unpacks it into the build
+  folder and runs `replace_face_shell_rim_reported.json` and
+  `replace_face_shell_rim_lifted_reported.json` on the design in it: a
+  shelled cup's inner ceiling onto its rim 3 mm below, and the rim onto
+  the ceiling, each previewed and built with the tangent chain, the wall
+  between them gone and the two joined at the target's level
+  (mitcad#2541); skipped with a message without it. When a script fails,
+  the design's face and edge names (`mitcad-cli info --names`) are
+  written to `names.txt` in that build folder, for a pick the design
+  does not have.
+  `geometry.suite.faceops` (`test_replace_past_a_wall`) covers a recess's
+  ceiling and a block's rim, and a pocket's floor, without the file.
   ctest `cli.draft_neutral_plane_reported`
   (`tools/cli/draft-neutral-plane-reported-test.cmake`) finds the archive
   in `github-622/` by its content id, unpacks it into the build folder and
@@ -1934,7 +2132,7 @@ in the distro only:
   same on synthetic bodies without the file (mitcad#2351).
   ctest `core.bridge` (`core/tests/test_bridge.cpp`,
   `test_reported_screw_joint_keeps_earlier_joint`; alone:
-  `test_bridge screw-joint-530`) opens the design in `github-530/`
+  `test_core_bridge bridge screw-joint-530`) opens the design in `github-530/`
   (found by its size and its occurrences) and previews, then adds, a
   Rigid joint from an unjoined screw's mount frame to holes of the sled
   an earlier rigid joint holds a board on: the sled stays in the box,
@@ -1966,6 +2164,33 @@ in the distro only:
   `mitcad-model` (`split_profile`, an outside and a bore fillet, and a
   fillet roughed, finished, posted and simulated) cover it without the
   file.
+  ctest `cli.turn_outline_chain_reported`
+  (`tools/cli/turn-outline-chain-reported-test.py`) finds the archive in
+  `github-704/` by its content id, unpacks the design in it (a revolved
+  spear whose section samples a spline into pieces shorter than the CAM
+  outlines' 0.001 mm join tolerance) into the build folder and opens it
+  through `mitcad-cli mcp --read-only` (its lathe names a controller of
+  the reporter's own build, which MitCad keeps and does not post for):
+  Setup 1's turning profile, about
+  its saved spindle axis, runs from the tip at work Z 0 to the base at
+  Z -255 in one chain, and Turn Roughing 1's feed moves cover that whole
+  span (mitcad#2531; with the first end found within the tolerance, before
+  mitcad#2499, the profile ran only from Z -212.8 to -255); skipped with a
+  message without it. The outline tests of `mitcad-model`
+  (`core/model/src/cam/outline.rs`, pieces shorter than the tolerance in
+  reversed and shuffled order) cover the rule without the file.
+  ctest `cli.drawing_hidden_dashes_reported`
+  (`tools/cli/drawing-hidden-dashes-reported-test.cmake`) finds the
+  archive in `github-695/` by its content id, unpacks it into the build
+  folder, and writes the design's drawing as SVG, what File › Print
+  prints: every hidden edge with the hidden pen (0.18 mm, 3 mm dashes
+  1 mm apart, round caps) in the views that may show them (not the
+  isometric one), no dashed circle element, the visible outlines
+  continuous; with the base view's Hidden Edges cleared, no hidden edge
+  in any view (mitcad#2477); skipped with a message without it. The
+  app.unit tests `drawingSheetViewTests` (the screen's dashes at every
+  zoom) and `paperPrintTests` (a hidden edge printed) and the SVG
+  writer's tests of `mitcad-model-drawing` cover it without the file.
 
 ### SolidCraft designs
 
@@ -1978,7 +2203,7 @@ list of folders) points at real ones: ctest `solidcraft.corpus`
 `mitcad-cli import-solidcraft` and checks one with `<name>.expected.json`
 next to it (SolidCraft's `solidcraft-cli eval` of it) against it; a folder's
 `known.txt` (file name, a tab, the reason) lists files allowed to fail
-their check. `core/solidcraft/tests/corpus.rs` reads every file. Skipped
+their check. `core/solidcraft/tests/read/corpus.rs` reads every file. Skipped
 without the variable.
 
 ### Designs of earlier versions
@@ -2189,7 +2414,8 @@ whose fixtures it sets up). `FULL_ONLY` tests (`app.appimage`,
 `--only` (`--only ctest:core.model`) always runs; `--only ctest:<name>`
 without `ctest` runs only the tests named. ctest still brings in the
 fixtures a test needs (`core.cargo_build` before a crate's test), and
-the tests run in one ctest call, in parallel. `check-logs/ctest-plan.tsv`
+the tests run in one call of the test runner (or ctest), in parallel,
+named in a file rather than one expression (mitcad#2579). `check-logs/ctest-plan.tsv`
 lists each test's decision; `tools/ctest-fingerprints.py plan ...
 --explain <test>` prints what a fingerprint is made of, and
 `tools/check-all.sh --dry-run` lists the ctests, the corpus and the UI
@@ -2380,7 +2606,18 @@ FAILED:`), which the table's `ctest:<name>` rows, the passes kept for
 `~/.mitcad/test-profiles.json`. When the runner is not built or does not
 finish (it cannot list the tests, it stops), the step runs as
 `ctest -j` in a test slot instead (its output kept as
-`check-logs/<step>.testrun.log`).
+`check-logs/<step>.testrun.log`); a runner that started and did not
+finish is a failing row of its own (`ctest: mitcad-testrun`, `FAIL(exit
+N)`) beside the fallback's, so the check never passes on it. The ctest
+step gives the plan's tests by name, one a line in
+`check-logs/ctest-run.txt`: the runner reads it with `--tests-from`, the
+fallback with ctest's `--tests-from-file` (CMake 3.29 or later), never as
+one `-R` expression, which ctest refuses past about 1400 names
+(`Expression too big`; bundle-dev-175 and 176 ran none of their planned
+tests that way and the step said `ok`, mitcad#2579). A ctest step with
+tests to run that runs none fails: the runner refuses a list that names
+none of the build tree's tests, an empty `results.tsv` is `FAIL(no tests
+ran)`, and the fallback runs with `--no-tests=error`.
 
 The UI tests, and the ctest and corpus steps without the runner, hold one
 of two machine-wide slots (`flock` on `MITCAD_TEST_LOCK`, default
@@ -2857,6 +3094,12 @@ rebuild); a patch header that has a `Test:` paragraph again is reported.
 - ccache (GPL-3.0-or-later) and sccache (MPL-2.0) are development tools
   invoked as separate processes. Neither is linked into or shipped with
   MitCad, and neither adds a Cargo or native library dependency.
+- FFmpeg (LGPL-2.1 or GPL, by how it was built; its codecs' patents)
+  makes Export Turntable's video (mitcad#2523, app/COMMANDS.md "Export
+  Turntable"): the user's own `ffmpeg` program, run as a separate
+  process on PNG files MitCad writes. It is not linked into or shipped
+  with MitCad and adds no dependency; without it the turntable saves PNG
+  frames only.
 - Native libraries built from source and linked statically: QtKeychain
   (BSD-3-Clause, `cmake/Keychain.cmake`); its licence text goes into the
   packages and the third-party notices name it. `tools/check-dependencies.sh`

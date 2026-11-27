@@ -1073,6 +1073,56 @@ QVector<InputDef> printShapeInputs() {
   };
 }
 
+// A hole across components (mitcad#2160): made in a component that has
+// components placed in it, the hole cuts across them with a scope, as an
+// extrusion's cut (mitcad#200), which the Affected components list edits;
+// it may drill an occurrence of a linked or multiply placed component there
+// only (mitcad#2131). The components that have components in them, kept
+// when the panel opens.
+const QString kCutAssemblies = QStringLiteral("cut_assemblies");
+// An edited hole that has a scope keeps it, wherever its component is.
+const QString kScopeStored = QStringLiteral("cut_scope_stored");
+
+// The component the hole goes into: where the placement goes (a pick may
+// activate the picked body's component, mitcad#1634), else its scope's.
+QString holeComponent(const CommandState& state) {
+  const QString placed = placedComponent(state).first;
+  return placed.isEmpty() ? state.object(QStringLiteral("cut_scope"))
+                                .value(QStringLiteral("context"))
+                                .toObject()
+                                .value(QStringLiteral("component"))
+                                .toString(QStringLiteral("C0"))
+                          : placed;
+}
+
+// Whether the hole cuts with its scope: not one saved with Objects to Cut or
+// without a scope (its own component's bodies), not in a component without
+// components (a part: its own bodies, as before), and not one whose thread
+// the model cuts as a solid of its own (modelled or tapering), which it
+// refuses with a scope.
+bool holeScoped(const CommandState& state) {
+  if (state.object(QStringLiteral("cut_scope")).isEmpty() || state.checked(QStringLiteral("cut_scope_legacy"))) {
+    return false;
+  }
+  if (state.choice(QStringLiteral("tap")) == QStringLiteral("tapped") &&
+      (state.checked(QStringLiteral("modeled")) || tapers(state))) {
+    return false;
+  }
+  return state.checked(kScopeStored) ||
+         state.object(kCutAssemblies).value(QStringLiteral("components")).toArray().contains(
+             QJsonValue(holeComponent(state)));
+}
+
+// The components that have components in them, for holeScoped.
+void keepAssemblies(CommandState& state, const CommandContext& model) {
+  try {
+    const QJsonObject components = model.queryObject({{QStringLiteral("query"), QStringLiteral("components")}});
+    state.setObject(kCutAssemblies, {{QStringLiteral("components"), assemblyComponents(components)}});
+  } catch (const std::exception&) {
+    state.setObject(kCutAssemblies, {});
+  }
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -1279,12 +1329,23 @@ CommandDef holeCommand(const CommandContext& context) {
   def.inputs += {
       selectionInput(QStringLiteral("objects"), QObject::tr("Objects to Cut"), SelectKind::Body, 0, 0)
           .withoutMeshes()
-          .withTooltip(QObject::tr("The bodies the holes cut; none: every body they reach")),
+          .withTooltip(QObject::tr("The bodies the holes cut; none: every body they reach"))
+          .withVisible([](const CommandState& s) { return !holeScoped(s); }),
   };
+  // Across the components of an assembly (mitcad#2160): the Affected
+  // components list in place of Objects to Cut.
+  def.inputs.append(cutTargetsInput(holeScoped));
   def.enabled = [&context] { return hasBodies(context); };
 
   def.init = [place](CommandState& state, const CommandContext& model) {
     initPlace(state, model, place);
+    // A new hole's automatic scope, and what the view hides now
+    // (mitcad#475); it cuts with it in an assembly (holeScoped).
+    initializeCutScope(state, model);
+    keepAssemblies(state, model);
+  };
+  def.previewReported = [](QJsonObject& report, CommandState& state) {
+    return cutTargetsReported(report, state, holeScoped(state), QStringLiteral("Hole"));
   };
 
   def.build = [place](const CommandState& state, const CommandContext& model) {
@@ -1416,8 +1477,26 @@ CommandDef holeCommand(const CommandContext& context) {
     if (state.checked(QStringLiteral("flip"))) {
       result.def.insert(QStringLiteral("flip"), true);
     }
+    // Across components (mitcad#2160): the scope in the hole's component,
+    // seen where the placement is (the first place it is seen otherwise);
+    // else the bodies picked, or every body of its own component.
     const Selection& objects = state.items(QStringLiteral("objects"));
-    if (!objects.isEmpty()) {
+    if (holeScoped(state)) {
+      QJsonObject scope = state.object(QStringLiteral("cut_scope"));
+      if (state.checked(QStringLiteral("cut_context_from_profile"))) {
+        const auto [component, seen] = placedComponent(state);
+        const QString own = holeComponent(state);
+        QString path = component == own ? seen : QString();
+        if (path.isEmpty() && own != QStringLiteral("C0")) {
+          path = firstOccurrencePath(
+              model.queryObject({{QStringLiteral("query"), QStringLiteral("components")}}), own);
+        }
+        scope.insert(QStringLiteral("context"),
+                     QJsonObject{{QStringLiteral("component"), own}, {QStringLiteral("occurrence"), path}});
+      }
+      scope.remove(QStringLiteral("initialize_on_cut"));
+      result.def.insert(QStringLiteral("cut_scope"), scope);
+    } else if (!objects.isEmpty()) {
       result.def.insert(QStringLiteral("participants"), bodyUids(objects));
     }
     return result;
@@ -1544,6 +1623,11 @@ CommandDef holeCommand(const CommandContext& context) {
     markLoaded(feature, state, context);
     state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
     state.setItems(QStringLiteral("objects"), bodiesOf(feature.value(QStringLiteral("participants")).toArray()));
+    // Its scope across components (mitcad#2160), kept wherever its component
+    // is; a hole saved without one cuts its own component's bodies.
+    loadCutScope(feature, state, context, true);
+    state.setChecked(kScopeStored, !state.object(QStringLiteral("cut_scope")).isEmpty());
+    keepAssemblies(state, context);
   };
 
   // Holes at sketch coordinates or partial threads have no inputs (a

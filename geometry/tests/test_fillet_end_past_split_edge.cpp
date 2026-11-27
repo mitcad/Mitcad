@@ -51,6 +51,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -172,7 +173,7 @@ void test_end_past_split_edge() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_end_past_split_edge) {
   test::guarded("end_past_split_edge", test::test_end_past_split_edge);
   if (test::failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", test::failures);

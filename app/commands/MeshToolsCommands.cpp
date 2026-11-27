@@ -21,9 +21,11 @@
 
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
+#include "MeshToolsSupport.hpp"
 
 namespace mitcad::cmd {
-namespace {
+// Shared with MeshShapeCommands.cpp (mitcad#2515, MeshToolsSupport.hpp).
+namespace meshtools {
 
 // A mesh body, or a face of one (the view picks a mesh body's triangles as
 // its face).
@@ -88,7 +90,9 @@ QJsonArray pointJson(const gp_Pnt& p) {
   return QJsonArray{p.X(), p.Y(), p.Z()};
 }
 
-} // namespace
+} // namespace meshtools
+
+using namespace meshtools;
 
 // Mesh Section -------------------------------------------------------------
 

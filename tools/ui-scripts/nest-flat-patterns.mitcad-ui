@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: MIT
+# Nest Flat Patterns and the plasma cutting program (mitcad#2553,
+# mitcad#2570; app/COMMANDS.md "Nest Flat Patterns and the cutting
+# program") on nest-flat-patterns.json (Bracket 40 x 20 with an 8 mm round
+# hole, Plate 30 x 10 placed twice, both of sheet metal):
+#   1. Nest Flat Patterns…: both components checked, the Bracket once and
+#      the Plate twice, onto a new 200 x 100 cut sheet 6 mm apart with a
+#      kerf of 1.5: parts 1 (Bracket, its box 6..46 x 6..26), 2 (Plate,
+#      52..82 x 6..16) and 3 (Plate, 88..118 x 6..16); the cut sheet opens.
+#   2. Part 2 dragged onto the Bracket: the overlap is said in words, and
+#      Cutting Program… says why it cannot be cut and offers no Save.
+#   3. Part 2 dragged back: Show Cutting Paths draws the four loops (the
+#      Bracket's hole and outline, the Plates' outlines), and Cutting
+#      Program… writes the program (its hole as G3 arcs: the test's shell
+#      script reads the file).
+# Run by tools/ui-nest-flat-patterns-test.sh (Linux), which gives the
+# folder for the files in MITCAD_TEST_WORK.
+expect-ever 'View area'
+wait-idle
+
+# 1. The Flat Patterns nested onto a new cut sheet.
+mark
+command make.nest_flat_patterns
+focus-dialog '^Nest Flat Patterns$'
+expect-log '^Nest Flat Patterns dialog opened: 2 part\(s\)$'
+expect-widget-property nestPart1 checked true
+expect-widget-property nestPart2 checked true
+expect-widget-property nestCopies1 value 1
+expect-widget-property nestCopies2 value 2
+expect-widget-property nestCutSheet currentText 'New Cut Sheet'
+focus-widget nestWidth
+key Ctrl+a
+type '200'
+key Tab
+focus-widget nestHeight
+key Ctrl+a
+type '100'
+key Tab
+focus-widget nestGap
+key Ctrl+a
+type '6'
+key Tab
+focus-widget nestKerf
+key Ctrl+a
+type '1.5'
+key Tab
+expect-widget-property nestWidth value 200
+expect-widget-property nestHeight value 100
+expect-widget-property nestGap value 6
+expect-widget-property nestKerf value 1.5
+mark
+button '.*' nestFlatPatternsOk
+wait-log '^Nest Flat Patterns: 3 part\(s\) on CutSheet1, 0 warning\(s\)$' 60
+expect-dialog-gone '^Nest Flat Patterns$'
+focus-main
+wait-log '^Drawing sheet drawn: 3 views,' 60
+wait-idle
+
+# 2. Part 2 onto the Bracket: refused in words.
+mark
+drawing-sheet-pointer press 67 11
+drawing-sheet-pointer move 60 14
+drawing-sheet-pointer move 46 20
+drawing-sheet-pointer release 46 20
+wait-log '^Drawing view 2 dragged by ' 30
+wait-log '^Cut sheet warnings: .*overlaps part 2' 60
+wait-idle
+mark
+command cut_sheet.post
+focus-dialog '^Cutting Program$'
+expect-log '^Cutting program check: Two components overlap: move them apart[.]$'
+expect-widget-property cutProgramState text 'Two components overlap: move them apart.'
+expect-widget-property cutProgramSave enabled false
+key Escape
+expect-dialog-gone '^Cutting Program$'
+focus-main
+
+# 3. Part 2 back beside the others: the paths drawn and the program
+# written.
+mark
+drawing-sheet-pointer press 55 20
+drawing-sheet-pointer move 62 17
+drawing-sheet-pointer move 76 11
+drawing-sheet-pointer release 76 11
+wait-log '^Drawing view 2 dragged by ' 30
+wait-log '^Cut sheet warnings: none$' 60
+wait-idle
+mark
+command cut_sheet.cutting_paths
+wait-log '^Cut sheet cutting paths: on$'
+wait-log '^Cut sheet cutting: ready, 4 cuts, 1 holes$' 60
+wait-log '^Drawing cutting paths drawn: 4 loops$' 60
+wait-idle
+mark
+command cut_sheet.post
+focus-dialog '^Cutting Program$'
+expect-log '^Cutting program check: ready$'
+expect-widget-property cutProgramSave enabled true
+button '.*' cutProgramSave
+focus-dialog '^Save Cutting Program$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/sheet.nc"
+key Return
+wait-log '^Cutting program written .*sheet[.]nc: cut sheet CutSheet1, 4 cuts, [1-9][0-9]* lines$' 30
+expect-file "${MITCAD_TEST_WORK}/sheet.nc"
+focus-main
+expect-never 'cannot be cut yet'

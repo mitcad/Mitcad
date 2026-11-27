@@ -548,7 +548,16 @@ fn turn_fields(
             some(&mut trim.direction);
             trim.keep.iter_mut().for_each(v);
         }
-        FeatureDef::SplitBody(split) => some(&mut split.direction),
+        FeatureDef::SplitBody(split) => {
+            some(&mut split.direction);
+            // The points that keep pieces (mitcad#2504); a side of the
+            // plane turns with the plane.
+            for keep in &mut split.keep {
+                if let crate::features::split_body::KeepPiece::Point(p) = keep {
+                    v(p);
+                }
+            }
+        }
         FeatureDef::SplitFace(split) => some(&mut split.direction),
         // A loft's constant binormal frame along its centre line (mitcad#543).
         FeatureDef::Loft(loft) => {
@@ -593,6 +602,23 @@ fn turn_fields(
         FeatureDef::Flex(flex) => {
             for node in &mut flex.nodes {
                 v(&mut node.at);
+            }
+        }
+        // An Isoparametric Curve's At Point point (mitcad#2571), in the
+        // coordinates of its face's body: the feature's component, or with
+        // a link (mitcad#2554) the linked component, which turns unless it
+        // is linked from another file.
+        FeatureDef::IsoparametricCurve(iso) => {
+            if let Some(point) = &mut iso.point {
+                let link = match &iso.face {
+                    GeomRef::Face { body, .. } => iso.links.get(body),
+                    _ => None,
+                };
+                let turn = match link {
+                    Some(link) => ctx.of(link.source_component(ctx.assembly)?),
+                    None => turn,
+                };
+                *point = turn.vector(*point);
             }
         }
         _ => {}
@@ -840,6 +866,39 @@ pub(crate) fn turn_analysis(def: &mut AnalysisDef, ctx: &Turned<'_>) -> bool {
         // A cloud by its name, a body and its faces by their names
         // (mitcad#2240): the cloud turns with its component.
         AnalysisDef::PointCloudDeviation(_) => false,
+        // Bodies and faces by their names (mitcad#2518), which a turn
+        // keeps.
+        AnalysisDef::MinRadius(_) => false,
+        // Bodies, their faces, edges and vertices by their names and
+        // components by their occurrences (mitcad#2519): a turn keeps them.
+        AnalysisDef::MinimumDistance(_) => false,
+        // A Zebra's direction (mitcad#2517) turns as Draft Analysis' pull.
+        AnalysisDef::Zebra(zebra) => {
+            if zebra.direction.is_none() {
+                let z = GeomRef::Origin(OriginDatum::Z);
+                let turned = ctx.of(ComponentUid::ROOT).reference(&z);
+                if turned == z {
+                    return false;
+                }
+                zebra.direction = Some(turned);
+                return true;
+            }
+            let Some(direction) = &mut zebra.direction else {
+                return false;
+            };
+            let component = match &zebra.occurrence {
+                Some(path) => ctx
+                    .end(ComponentUid::ROOT, path)
+                    .unwrap_or(ComponentUid::ROOT),
+                None => ComponentUid::ROOT,
+            };
+            let turned = ctx.of(component).reference(direction);
+            let changed = turned != *direction;
+            *direction = turned;
+            changed
+        }
+        // Bodies and faces by their names (mitcad#2517): nothing turns.
+        AnalysisDef::Curvature(_) | AnalysisDef::Isocurve(_) | AnalysisDef::Environment(_) => false,
     }
 }
 

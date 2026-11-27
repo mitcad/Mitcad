@@ -550,42 +550,6 @@ impl<K: Kernel> Document<K> {
                         );
                     }
                 }
-                FeatureDef::Extrude(extrude) => {
-                    if let Some(scope) = extrude.cut_scope.as_mut() {
-                        let mut dropped = Vec::new();
-                        match &mut scope.targets {
-                            TargetScope::Automatic {
-                                excluded,
-                                excluded_bodies,
-                            } => {
-                                excluded.retain(|t| !is_outside(&t.occurrence.0));
-                                excluded_bodies.retain(|b| !is_outside(&b.occurrence.0));
-                            }
-                            TargetScope::Explicit {
-                                included,
-                                excluded_bodies,
-                            } => {
-                                included.retain(|t| {
-                                    let kept = !is_outside(&t.occurrence.0);
-                                    if !kept {
-                                        dropped.push(t.occurrence.0.clone());
-                                    }
-                                    kept
-                                });
-                                excluded_bodies.retain(|b| !is_outside(&b.occurrence.0));
-                            }
-                        }
-                        for target in dropped {
-                            note(
-                                references,
-                                &entry,
-                                CutKind::CutTarget,
-                                a.path_name(&target),
-                                false,
-                            );
-                        }
-                    }
-                }
                 // A Flex item's nodes on geometry outside (mitcad#1713):
                 // free nodes where they are.
                 FeatureDef::Flex(flex) => {
@@ -631,7 +595,58 @@ impl<K: Kernel> Document<K> {
                         );
                     }
                 }
+                // An Isoparametric Curve on a face outside (mitcad#2554): its
+                // body becomes a frozen copy in the curve's coordinates, and
+                // the picked point, in the linked body's coordinates, moves
+                // there with it.
+                FeatureDef::IsoparametricCurve(iso) => {
+                    if let (Some(point), GeomRef::Face { body, .. }) = (&mut iso.point, &iso.face)
+                        && let Some((_, link)) = bodies.iter().find(|(b, _)| b == body)
+                    {
+                        *point = self
+                            .frozen_transform(entry.component, link)?
+                            .apply_point(*point);
+                    }
+                }
                 _ => {}
+            }
+            // The cut targets outside of an Extrude's, a Revolve's or a
+            // Hole's cut scope (mitcad#2131, mitcad#2160) are left out.
+            if let Some(Some(scope)) = def.cut_scope_mut() {
+                let mut dropped = Vec::new();
+                match &mut scope.targets {
+                    TargetScope::Automatic {
+                        excluded,
+                        excluded_bodies,
+                    } => {
+                        excluded.retain(|t| !is_outside(&t.occurrence.0));
+                        excluded_bodies.retain(|b| !is_outside(&b.occurrence.0));
+                    }
+                    TargetScope::Explicit {
+                        included,
+                        excluded_bodies,
+                    } => {
+                        included.retain(|t| {
+                            let kept = !is_outside(&t.occurrence.0);
+                            if !kept {
+                                dropped.push(t.occurrence.0.clone());
+                            }
+                            kept
+                        });
+                        excluded_bodies.retain(|b| !is_outside(&b.occurrence.0));
+                    }
+                }
+                // Where it lay against occurrences outside goes with them.
+                scope.frames.retain(|f| !is_outside(&f.occurrence.0));
+                for target in dropped {
+                    note(
+                        references,
+                        &entry,
+                        CutKind::CutTarget,
+                        a.path_name(&target),
+                        false,
+                    );
+                }
             }
             self.freeze_points(&entry, &mut def, is_outside, references);
             // The renames of this feature, and of the copies made for it by
@@ -1011,27 +1026,7 @@ impl<K: Kernel> Document<K> {
         })?;
         let transform = match fixed {
             Some(transform) => transform,
-            None => {
-                let assembly = &self.state.assembly;
-                let mut placement = |o| self.placement(o).unwrap_or(Transform::IDENTITY);
-                let plain = link
-                    .transform(assembly, component, &mut placement)
-                    .map_err(invalid)?;
-                // Inside flexible occurrences where they have it, as the
-                // consumer's recompute sees it (mitcad#1805).
-                let flexed = &self.result.joints.flexed;
-                link.target_path(assembly, component)
-                    .ok()
-                    .and_then(|target| {
-                        crate::links::flexed_transform(
-                            &link.source.0,
-                            &target,
-                            &mut placement,
-                            &mut |prefix, o| crate::joints::flexed_step(flexed, prefix, o),
-                        )
-                    })
-                    .unwrap_or(plain)
-            }
+            None => self.frozen_transform(component, link)?,
         };
         let shape = if transform.is_identity() {
             shape.clone()
@@ -1041,6 +1036,36 @@ impl<K: Kernel> Document<K> {
                 .map_err(|e| invalid(format!("cannot freeze {name}: {e}")))?
         };
         Ok((body, shape, name))
+    }
+
+    /// The link's move from the linked component's coordinates into
+    /// `component`'s by the placements now, as a frozen copy of the linked
+    /// body is moved ([`Self::frozen_shape`]).
+    fn frozen_transform(
+        &self,
+        component: ComponentUid,
+        link: &OccurrenceLink,
+    ) -> Result<Transform, ModelError> {
+        let assembly = &self.state.assembly;
+        let mut placement = |o| self.placement(o).unwrap_or(Transform::IDENTITY);
+        let plain = link
+            .transform(assembly, component, &mut placement)
+            .map_err(invalid)?;
+        // Inside flexible occurrences where they have it, as the
+        // consumer's recompute sees it (mitcad#1805).
+        let flexed = &self.result.joints.flexed;
+        Ok(link
+            .target_path(assembly, component)
+            .ok()
+            .and_then(|target| {
+                crate::links::flexed_transform(
+                    &link.source.0,
+                    &target,
+                    &mut placement,
+                    &mut |prefix, o| crate::joints::flexed_step(flexed, prefix, o),
+                )
+            })
+            .unwrap_or(plain))
     }
 
     /// Adds a base feature of `component` holding `shapes` to `state`,
@@ -1638,6 +1663,7 @@ fn relink(
         FeatureDef::Extrude(x) => rekey(&mut x.object_links),
         FeatureDef::Revolve(r) => rekey(&mut r.object_links),
         FeatureDef::Sweep(s) => rekey(&mut s.body_links),
+        FeatureDef::IsoparametricCurve(i) => rekey(&mut i.links),
         FeatureDef::SplitBody(s) => rekey(&mut s.tool_links),
         FeatureDef::Derive(d) => rekey(&mut d.links),
         FeatureDef::Combine(c) => {
@@ -1751,6 +1777,7 @@ fn take_outside_bodies(
             take_links(&mut revolve.object_links, outside, &mut bodies);
         }
         FeatureDef::Sweep(sweep) => take_links(&mut sweep.body_links, outside, &mut bodies),
+        FeatureDef::IsoparametricCurve(iso) => take_links(&mut iso.links, outside, &mut bodies),
         FeatureDef::SplitBody(split) => take_links(&mut split.tool_links, outside, &mut bodies),
         FeatureDef::Derive(derive) => take_links(&mut derive.links, outside, &mut bodies),
         FeatureDef::Combine(combine) => {

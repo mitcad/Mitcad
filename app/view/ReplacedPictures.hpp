@@ -6,7 +6,11 @@ namespace mitcad {
 // The pictures a ViewPaintLayer replaced whose textures OCCT still holds
 // (mitcad#2437), and when the view must draw a full frame to let them go.
 //
-// Each picture has a texture of its own of the view's size (19 MB at
+// Since mitcad#2406 a layer keeps one texture while it is shown and OCCT
+// updates its pixels for each picture, so a texture is let go only when
+// the layer is hidden or turns into a widget over the view; the counting
+// below stays for those. Before that, each picture had a texture of its
+// own of the view's size (19 MB at
 // 1440 x 838 points on a screen of pixel ratio 2). When a picture is
 // replaced, OCCT queues its texture for release (OpenGl_Context::
 // ReleaseResource, delayed) and releases it at the start of the second full

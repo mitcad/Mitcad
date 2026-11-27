@@ -183,6 +183,7 @@ private:
   double m_dragStart = 0.0; // the value when the drag began
   double m_dragStep = 0.0;  // an arrow: the step it rounds to, fixed when the drag began
   QPointF m_grab;           // an arrow: the cursor from the handle then
+  bool m_firstMove = false; // the drag's first move is still to come (logged, mitcad#2508)
   double m_angleLast = 0.0; // a ring: the cursor's last angle
   double m_turned = 0.0;    // and how far it turned since the drag began
   std::optional<double> m_visualValue;

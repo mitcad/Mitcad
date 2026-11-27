@@ -518,7 +518,7 @@ päätä", never "napsauta keskipiste".
 | render environment | renderöintiympäristö | light: valo; point, spot, area light: pistevalo, kohdevalo, pintavalo; sun: aurinko; ground: maa; exposure: valotus; samples: näytteet; denoise: kohinanpoisto; scene: kohtaus; render worker: renderöintiprosessi |
 | motion study | liiketutkimus | key: avainkohta; step: askel |
 | update | päivitys | release: julkaisu; pre-release: esijulkaisu; release notes: julkaisutiedot; channel: kanava |
-| report (to the developers) | raportti | feedback: palaute; bug report: virheraportti; issue form: ilmoituslomake; debug log: vianetsintäloki |
+| report (to the developers) | raportti | feedback: palaute; bug report: virheraportti; the report kinds Bug, Tweak, Feature: Virhe, Muutos, Uusi toiminto; issue form: ilmoituslomake; debug log: vianetsintäloki |
 | render | renderöidä | |
 | print (3D) | 3D-tulostus | slicer: viipaloija; print bed: tulostusalusta |
 | printer, process (3D print) | tulostin, prosessi | plate: alusta; print value: tulostusarvo; nozzle: suutin; filament: filamentti; purge volumes: huuhtelutilavuudet |

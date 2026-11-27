@@ -2172,7 +2172,11 @@ pub fn section_spec(plane: &CutPlane, hidden: bool, smooth: bool, exact: bool) -
 
 /// The unit normal of a plane given by any normal.
 pub fn cut_plane(origin: Vec3, normal: Vec3) -> Option<CutPlane> {
-    unit(normal).map(|normal| CutPlane { origin, normal })
+    unit(normal).map(|normal| CutPlane {
+        origin,
+        normal,
+        bound: None,
+    })
 }
 
 #[cfg(test)]

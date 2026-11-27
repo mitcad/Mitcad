@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Export Turntable (mitcad#2523) for tools/ui-scripts/turntable.mitcad-ui: a block 80 x 40 x 20 about the origin (Box1, F1, F1.b0), longer than wide so that each frame of the turn shows it otherwise."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [-40, -20], "length": 80, "width": 40, "height": 20, "operation": "new_body"}},
+  {"expect": {"body": "F1.b0", "volume": 64000}}
+]

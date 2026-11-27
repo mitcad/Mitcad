@@ -132,6 +132,24 @@ pub(crate) fn station(embedding: &SheetEmbedding, u: f64, thickness: f64) -> Sta
                 },
             }
         }
+        // An oblique conical panel (mitcad#2491): the same from its
+        // generators; NaN off its chart.
+        SheetEmbedding::ObliqueCone(c) => {
+            let [origin, x, y, f] = c.tangent([u, 0.0], thickness).unwrap_or([[f64::NAN; 3]; 4]);
+            Station { origin, x, y, f }
+        }
+        // A Lofted Flange (mitcad#2512): the plane touching its first
+        // ruling.
+        SheetEmbedding::Lofted(l) => {
+            let (frame, sign) = super::lofted::tangent_frame(l)
+                .unwrap_or((SketchFrame::XY, MaterialParity::Positive));
+            Station {
+                origin: frame.point([u, 0.0]),
+                x: frame.x_axis,
+                y: frame.y_axis,
+                f: scale(frame.normal(), sign.sign()),
+            }
+        }
     }
 }
 
@@ -146,6 +164,13 @@ pub(crate) fn chart_point(
     // A cone's chart is its development (mitcad#2435), not a station's.
     if let SheetEmbedding::Cone(c) = embedding {
         return c.point(p, depth, thickness);
+    }
+    if let SheetEmbedding::ObliqueCone(c) = embedding {
+        return c.point(p, depth, thickness);
+    }
+    // A Lofted Flange's chart (mitcad#2512): between its rulings.
+    if let SheetEmbedding::Lofted(l) = embedding {
+        return super::lofted::chart_point(l, p, depth);
     }
     // On a cylinder, f is the signed radial direction: depth changes the radius.
     let s = station(embedding, p[0], thickness);
@@ -194,6 +219,13 @@ pub(crate) fn chart_coordinates(
             Some(([phi.max(0.0) * c.neutral_radius, v], depth))
         }
         SheetEmbedding::Cone(c) => c.coordinates(point, thickness),
+        SheetEmbedding::ObliqueCone(c) => c.coordinates(point, thickness),
+        // On a Lofted Flange's transition: over its rulings' triangles
+        // (mitcad#2560), the one nearest the middle of the material.
+        SheetEmbedding::Lofted(l) => {
+            super::lofted::located(l, point, thickness / 2.0, 2.0 * thickness + 1e-3)
+                .map(|at| (at.chart, at.depth))
+        }
     }
 }
 

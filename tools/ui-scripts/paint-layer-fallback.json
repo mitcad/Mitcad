@@ -1,0 +1,6 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for the overlay layer's fallback (mitcad#2406): a 30 x 20 rectangle from the origin, its width and height dimensioned."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":30,"height":20}
+]

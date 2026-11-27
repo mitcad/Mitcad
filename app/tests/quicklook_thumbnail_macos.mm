@@ -21,7 +21,7 @@
 //     present, and it and the application are signed, the extension with
 //     the App Sandbox.
 // The C ABI underneath is tested on designs the model saved
-// (core/thumbnailer/tests/capi.rs).
+// (core/thumbnailer/tests/thumbnail/capi.rs).
 //
 //   test_quicklook_thumbnail --work <dir> [--appex <MitCadThumbnails.appex>]
 

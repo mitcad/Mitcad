@@ -51,6 +51,7 @@
 #include "render/RenderDevice.hpp"
 #include "render/RenderScene.hpp"
 #include "render/RenderWorkerChoice.hpp"
+#include "render/ShownScene.hpp"
 #include "view/MeasurementDrawing.hpp"
 
 #include "../framework/Dialogs.hpp"
@@ -789,41 +790,12 @@ void RenderImagePanel::renderScene() {
     }
     return;
   }
-  std::vector<render::SceneBody> bodies;
-  const std::vector<BodyDisplay> shown = m_viewer.shownBodies();
-  std::vector<const Appearance*> looks;
-  for (const BodyDisplay& body : shown) {
-    render::SceneBody scene;
-    scene.name = body.occurrence.empty() ? body.uid : body.uid + "@" + body.occurrence;
-    scene.shape = body.shape->occt();
-    scene.placement = body.placement.Transformation();
-    scene.appearance = body.appearance;
-    scene.transparent = body.transparent; // mitcad#1093
-    looks.push_back(&body.appearance);
-    for (const BodyDisplay::FaceLook& look : body.faceLooks) {
-      scene.faces.push_back({look.faces, look.appearance});
-      looks.push_back(&look.appearance);
-    }
-    bodies.push_back(std::move(scene));
-  }
-  // Textures whose images are missing show their base colour (mitcad#53);
-  // missing maps are left out (mitcad#314).
-  const QStringList missing = render::missingTextures(looks);
+  // The shown bodies and decals (render/ShownScene.cpp, shared with Export
+  // Turntable's rendered frames, mitcad#2523).
   const QString scenePath = m_dir->filePath(QStringLiteral("scene.glb"));
-  render::SceneUpdate scene = render::sceneOf(bodies);
-  // Decals (mitcad#2244): what the view draws on the faces, as bodies of
-  // their own, their images beside the scene's file.
-  for (render::DecalBody& decal :
-       render::decalBodies(m_viewer.drawnDecals(), m_viewer.drawnDecalImages(), m_dir->path())) {
-    const bool held = std::any_of(scene.meshes.begin(), scene.meshes.end(),
-                                  [&decal](const auto& known) { return known.first == decal.body.mesh; });
-    if (!held) {
-      scene.meshes.emplace_back(decal.body.mesh, std::move(decal.mesh));
-    }
-    scene.bodies.push_back(std::move(decal.body));
-  }
+  render::ShownScene written;
   std::string error;
-  if (!render::writeSceneFile(scene, QDir::toNativeSeparators(scenePath).toStdString(), error)) {
+  if (!render::writeShownScene(m_viewer, m_dir->path(), scenePath, written, error)) {
     setRendering(false);
     m_message->setText(tr("The scene cannot be written: %1.").arg(QString::fromStdString(error)));
     if (!m_batchShot.isEmpty()) {
@@ -876,11 +848,11 @@ void RenderImagePanel::renderScene() {
                              .arg(size.height())
                              .arg(output.value(QStringLiteral("samples")).toInt())
                              .arg(m_imageFormat, cameraName)
-                             .arg(bodies.size())
+                             .arg(written.bodies)
                              .arg(m_job->processId());
   }
-  if (!missing.isEmpty()) {
-    const QString text = missing.join(QStringLiteral("; "));
+  if (!written.missingTextures.isEmpty()) {
+    const QString text = written.missingTextures.join(QStringLiteral("; "));
     qWarning().noquote() << QStringLiteral("Render image textures not drawn: %1").arg(text);
     m_message->setText(tr("A texture image is not drawn (%1).").arg(text));
   }

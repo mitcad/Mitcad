@@ -3420,6 +3420,7 @@ mod tests {
             gaps: Vec::new(),
             invalidated: None,
             blockers: Vec::new(),
+            approximation: None,
         }
     }
     fn domain(slot: u32) -> SheetDomainRef {

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// MITCAD_TEST_ONLY for the geometry tests that are executables of their own
-// and call their test functions from main() without check.hpp's guarded():
+// MITCAD_TEST_ONLY for the geometry's bundled tests (once executables of
+// their own, mitcad#2497) that call their test functions from their entry
+// point without check.hpp's guarded():
 // with it set, only the test functions it names run, so that a function can
 // be run alone (tools/occt-port-proof.py runs each test function a port
 // patch's Test paragraph names alone, mitcad#2310). The value is a test

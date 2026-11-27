@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <vector>
 
+#include <Message_ProgressRange.hxx>
+
 #include "mitcad/analysis/common.hpp"
 
 namespace mitcad::analysis {
@@ -30,8 +32,11 @@ struct Interference {
 
 // Every pair of bodies whose solids overlap by more than `min_volume`.
 // Pairs with disjoint bounding boxes are skipped without a boolean.
-// Throws Error when the boolean operation of a pair fails.
+// Throws Error when the boolean operation of a pair fails, and when
+// `range`'s user break stops the check (a cancelled model job, mitcad#2540:
+// it is asked before each pair and inside each pair's boolean).
 std::vector<Interference> interferences(const std::vector<TopoDS_Shape>& bodies,
-                                        const InterferenceOptions& options = {});
+                                        const InterferenceOptions& options = {},
+                                        const Message_ProgressRange& range = Message_ProgressRange());
 
 } // namespace mitcad::analysis

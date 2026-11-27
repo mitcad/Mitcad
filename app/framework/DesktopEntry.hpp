@@ -16,8 +16,11 @@ namespace mitcad {
 // AppImage's thumbnailer, copied out of it (its folder goes away when
 // MitCad closes) to mitcad/bin/ in the data folder, its freedesktop entry
 // (thumbnailers/mitcad.thumbnailer) running that copy, and the .mitcad
-// MIME type (mime/packages/mitcad.xml), after which the MIME database is
-// updated.
+// MIME type with the import types the system lacks
+// (mime/packages/mitcad.xml), after which the MIME database is updated.
+// The bundled desktop file's Exec takes the file (%f) and its MimeType
+// lists those types, so that file managers open them in MitCad
+// (mitcad#2527).
 
 // The bundled desktop file with Exec running the program (the bundled
 // Exec's arguments after it), TryExec naming it, X-AppImage-Name (the

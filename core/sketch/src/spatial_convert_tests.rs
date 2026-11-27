@@ -312,6 +312,7 @@ fn linked_projections_keep_following_their_sources() {
             after: None,
             outline: false,
             automatic: false,
+            boundaries: Vec::new(),
         });
     }
     let converted = spatial_from_planar(&planar, None).unwrap();
@@ -456,6 +457,7 @@ fn what_a_3d_sketch_has_no_form_for_is_kept() {
         after: None,
         outline: false,
         automatic: false,
+        boundaries: Vec::new(),
     });
     let converted = spatial_from_planar(&planar, None).unwrap();
     let def = &converted.def;

@@ -80,6 +80,12 @@
 #include <QtGlobal>
 #include <QtLogging>
 
+#if defined(Q_OS_MACOS)
+#include <mach/mach.h>
+#elif defined(Q_OS_LINUX)
+#include <unistd.h>
+#endif
+
 #include "../platform/MacChrome.hpp"
 #include "../platform/MacTestApplication.hpp"
 #include "../platform/NativeTestInput.hpp"
@@ -191,6 +197,11 @@ const TestDriver::StepSpec kSpecs[] = {
     {"set", 2, 2, TestDriver::kPlain},
     {"expect-near", 2, 4, TestDriver::kPlain},
     {"expect-less", 2, 2, TestDriver::kPlain},
+    // The process's memory footprint (mitcad#2452, mitcad#2485): `capture-
+    // footprint <name>` stores it in MB and logs it; `expect-footprint-within
+    // <name> <MB>` fails when it grew more than that since the capture.
+    {"capture-footprint", 1, 1, TestDriver::kPlain},
+    {"expect-footprint-within", 2, 2, TestDriver::kPlain},
     {"wait-idle", 0, 1, TestDriver::kPlain},
     {"sleep", 1, 1, TestDriver::kPlain},
     {"screenshot", 1, 1, TestDriver::kIdle},
@@ -206,6 +217,9 @@ const TestDriver::StepSpec kSpecs[] = {
     // The wheel over a logged place without the model-idle gate: a panel's
     // value field while its preview computes (mitcad#1407).
     {"wheel-logged-now", 2, 3, TestDriver::kPlain},
+    // An entry of the open popup menu without the model-idle gate: chosen
+    // while a job computes the model (mitcad#2500, hold-model-job).
+    {"popup-now", 1, 1, TestDriver::kPlain},
 };
 
 // Splits a script line into words, as a shell does (see TestDriver.hpp).
@@ -325,6 +339,30 @@ bool parseMouseOptions(const QStringList& args, int from, Qt::MouseButton& butto
 } // namespace testdriver
 
 namespace {
+
+// The process's memory as the system counts it against the installed RAM
+// (mitcad#2452, mitcad#2485): on macOS the physical footprint, which holds
+// the graphics memory on Apple silicon and is what the memory guard reads;
+// on Linux the resident set. In MB; negative where it is not known.
+double processFootprintMb() {
+#if defined(Q_OS_MACOS)
+  task_vm_info_data_t info{};
+  mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) {
+    return -1;
+  }
+  return static_cast<double>(info.phys_footprint) / (1024.0 * 1024.0);
+#elif defined(Q_OS_LINUX)
+  QFile statm(QStringLiteral("/proc/self/statm"));
+  if (!statm.open(QIODevice::ReadOnly)) return -1;
+  const QList<QByteArray> fields = statm.readAll().simplified().split(' ');
+  bool ok = false;
+  const double pages = fields.size() > 1 ? fields.at(1).toDouble(&ok) : 0;
+  return ok ? pages * static_cast<double>(sysconf(_SC_PAGESIZE)) / (1024.0 * 1024.0) : -1;
+#else
+  return -1;
+#endif
+}
 
 int keyFromName(const QString& name) {
   static const QHash<QString, int> names = {
@@ -2534,7 +2572,7 @@ void TestDriver::run(const Step& step) {
           }
           qDebug().noquote() << QStringLiteral("TestDriver: row menu of %1").arg(id);
         });
-  } else if (name == QLatin1String("popup")) {
+  } else if (name == QLatin1String("popup") || name == QLatin1String("popup-now")) {
     const QString entry = a.at(0);
     // "Sub/Item" opens the submenu Sub and chooses Item in it (Material ▸
     // More…, mitcad#1046); a whole entry with a slash still matches first.
@@ -2591,7 +2629,7 @@ void TestDriver::run(const Step& step) {
           return false;
         },
         6, QStringLiteral("no entry '%1' in an open menu").arg(entry),
-        [this, rest, line, found] {
+        [this, rest, line, found, name] {
           QMenu* menu = found->data();
           QAction* action = qobject_cast<QAction*>(m_found.data());
           if (menu == nullptr || action == nullptr) {
@@ -2620,7 +2658,7 @@ void TestDriver::run(const Step& step) {
             m_submenu = action->menu();
             m_inSubmenu = true;
             const QString next = *rest;
-            queue([this, line, next] { run(Step{line, {}, QStringLiteral("popup"), {next}}); });
+            queue([this, line, next, name] { run(Step{line, {}, name, {next}}); });
             return;
           }
           // As the keyboard does: the entry current, then Return.
@@ -2813,6 +2851,26 @@ void TestDriver::run(const Step& step) {
         [this, variable, value] { m_vars.insert(variable, *value); });
   } else if (name == QLatin1String("set")) {
     m_vars.insert(a.at(0), a.at(1));
+  } else if (name == QLatin1String("capture-footprint") || name == QLatin1String("expect-footprint-within")) {
+    const double now = processFootprintMb();
+    if (now < 0) { fail(line, QStringLiteral("the process footprint is not known on this system")); return; }
+    if (name == QLatin1String("capture-footprint")) {
+      m_vars.insert(a.at(0), QString::number(now, 'f', 1));
+      qDebug().noquote() << QStringLiteral("TestDriver: footprint %1 %2 MB").arg(a.at(0)).arg(now, 0, 'f', 1);
+      return;
+    }
+    double limit = 0;
+    if (!m_vars.contains(a.at(0)) || !toNumber(a.at(1), limit)) {
+      fail(line, QStringLiteral("expect-footprint-within <captured name> <MB>")); return;
+    }
+    const double before = m_vars.value(a.at(0)).toDouble();
+    qDebug().noquote() << QStringLiteral("TestDriver: footprint %1 MB, %2 MB since %3")
+                              .arg(now, 0, 'f', 1).arg(now - before, 0, 'f', 1).arg(a.at(0));
+    if (now - before > limit) {
+      fail(line, QStringLiteral("the footprint grew %1 MB since %2 (%3 to %4 MB), more than %5 MB")
+                     .arg(now - before, 0, 'f', 1).arg(a.at(0)).arg(before, 0, 'f', 1).arg(now, 0, 'f', 1)
+                     .arg(limit, 0, 'f', 0));
+    }
   } else if (name == QLatin1String("expect-less")) {
     double smaller = 0;
     double larger = 0;

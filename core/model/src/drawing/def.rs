@@ -477,6 +477,13 @@ pub enum ViewKind {
         /// The cut faces hatched.
         #[serde(default = "yes", skip_serializing_if = "is_true")]
         hatch: bool,
+        /// Limited to its line (mitcad#2479): only what lies on the
+        /// normal side within `span` along the line goes, and only that
+        /// stretch of the plane is cut and hatched; its mark on the parent
+        /// runs along `span`. False (files from before it): the section of
+        /// the whole plane, marked across the whole parent.
+        #[serde(default, skip_serializing_if = "is_false")]
+        bounded: bool,
     },
     Detail {
         parent: u32,
@@ -1413,6 +1420,19 @@ impl DrawingSheet {
             })
     }
 
+    /// Why a view draws no hidden edges whatever its style's Hidden Edges
+    /// (mitcad#2447): an isometric view and a section never do, and a
+    /// detail of one neither. None when the style decides.
+    pub fn no_hidden_lines(&self, id: u32) -> Option<NoHiddenLines> {
+        let (toward_eye, _) = self.axes(id).ok()?;
+        let seen = self
+            .lineage(id)
+            .ok()?
+            .into_iter()
+            .find(|v| !matches!(v.kind, ViewKind::Detail { .. }))?;
+        no_hidden_lines(toward_eye, seen)
+    }
+
     /// The view spec of a view in its own style: a section's with its
     /// plane, a detail's as the view it enlarges looks (a detail of a
     /// section is cut by the section's plane).
@@ -1426,23 +1446,41 @@ impl DrawingSheet {
             .find(|v| !matches!(v.kind, ViewKind::Detail { .. }))
             .ok_or_else(|| format!("view {id} enlarges no view"))?;
         let section = match &seen.kind {
-            ViewKind::Section { origin, normal, .. } => Some(super::CutPlane {
-                origin: *origin,
-                normal: *normal,
-            }),
+            ViewKind::Section {
+                parent,
+                origin,
+                normal,
+                span,
+                bounded,
+                ..
+            } => {
+                // A section limited to its line: the strip of the plane
+                // along the line on its parent (mitcad#2479), the line
+                // running as `section_plane` measures `span`.
+                let bound = match (*bounded, parent, span) {
+                    (true, Some(parent), Some([from, to])) => {
+                        let (parent_eye, _) = self.axes(*parent)?;
+                        unit(cross(*normal, parent_eye)).map(|along| super::CutBound {
+                            along,
+                            from: *from,
+                            to: *to,
+                        })
+                    }
+                    _ => None,
+                };
+                Some(super::CutPlane {
+                    origin: *origin,
+                    normal: *normal,
+                    bound,
+                })
+            }
             _ => None,
         };
-        // An isometric view (however it is turned, mitcad#729) and a
-        // section show no hidden edges.
-        let pictorial = StandardView::isometric_eye(toward_eye)
-            || matches!(
-                seen.kind,
-                ViewKind::Projected { side, .. } if side.is_corner()
-            );
+        let no_hidden = no_hidden_lines(toward_eye, seen);
         Ok(ViewSpec {
             toward_eye,
             x_axis,
-            hidden: style.hidden_lines && !pictorial && section.is_none(),
+            hidden: style.hidden_lines && no_hidden.is_none(),
             smooth: style.tangent_edges,
             exact: !style.polygonal,
             quick: true,
@@ -1559,8 +1597,14 @@ impl DrawingSheet {
                     normal,
                     span,
                     letter,
+                    bounded,
                     ..
                 } => {
+                    if *bounded && (parent.is_none() || span.is_none()) {
+                        return Err(format!(
+                            "{at}: a section limited to its line has its line on a parent view"
+                        ));
+                    }
                     let length = dot(*normal, *normal).sqrt();
                     if !(origin.iter().all(|v| v.is_finite()) && (length - 1.0).abs() < 1e-6) {
                         return Err(format!(
@@ -1658,6 +1702,38 @@ fn check_letter(letter: &str) -> Result<(), String> {
         Err("a section or detail is named by a letter".to_owned())
     } else {
         Ok(())
+    }
+}
+
+/// Why a view draws no hidden edges whatever its style (mitcad#2447): the
+/// `drawing` query's `no_hidden_lines`, which the application shows on the
+/// view's Hidden Edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoHiddenLines {
+    /// An isometric view, however it is turned (mitcad#729), or a
+    /// projected view from a corner of its parent.
+    Isometric,
+    /// A section view: what is cut away is gone, the rest drawn as seen.
+    Section,
+}
+
+impl NoHiddenLines {
+    pub fn key(self) -> &'static str {
+        match self {
+            NoHiddenLines::Isometric => "isometric",
+            NoHiddenLines::Section => "section",
+        }
+    }
+}
+
+/// [`DrawingSheet::no_hidden_lines`] of a view looking towards
+/// `toward_eye` that shows `seen` (itself, or the view a detail enlarges).
+fn no_hidden_lines(toward_eye: Vec3, seen: &DrawingView) -> Option<NoHiddenLines> {
+    match &seen.kind {
+        ViewKind::Section { .. } => Some(NoHiddenLines::Section),
+        ViewKind::Projected { side, .. } if side.is_corner() => Some(NoHiddenLines::Isometric),
+        _ if StandardView::isometric_eye(toward_eye) => Some(NoHiddenLines::Isometric),
+        _ => None,
     }
 }
 

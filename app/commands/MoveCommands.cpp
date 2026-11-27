@@ -1316,7 +1316,25 @@ const Choices kMoveFaceTypes = {{QStringLiteral("free"), QStringLiteral("Free Mo
                                 {QStringLiteral("along"), QStringLiteral("Translate Along")},
                                 {QStringLiteral("rotate"), QStringLiteral("Rotate")},
                                 {QStringLiteral("point_to_point"), QStringLiteral("Point to Point")},
-                                {QStringLiteral("point_to_position"), QStringLiteral("Point to Position")}};
+                                {QStringLiteral("point_to_position"), QStringLiteral("Point to Position")},
+                                {QStringLiteral("to_object"), QStringLiteral("To Object")}};
+
+// Move Face's To Object (mitcad#2548): the faces along their normal up to
+// a picked object, the model's `to_object` (objectOf's object).
+const QString kToObject = QStringLiteral("to_object");
+
+bool movesToObject(const CommandState& state) { return state.choice(QStringLiteral("type")) == kToObject; }
+
+// The object input: a plane, a flat face, a body, a point (a vertex, a
+// sketch or construction point) or a straight line, as an extent's object,
+// without the extent's Extend and Body Extent choices (a face stands for
+// its plane; a body for its first flat face in front of the faces).
+InputDef moveFaceObjectInput() {
+  return objectInputs(QString(), movesToObject, true)
+      .first()
+      .withTooltip(QObject::tr("A flat face, plane, vertex, point, line or body: the faces move along their "
+                               "normal to its level"));
+}
 
 // A definition's faces as items of its body.
 Selection movedFacesOf(const QJsonObject& feature, const CommandContext& context) {
@@ -1332,6 +1350,12 @@ Selection movedFacesOf(const QJsonObject& feature, const CommandContext& context
 // The motion as the panel has it, its values as numbers (mm, radians),
 // for the summary; empty while it is not complete.
 QJsonObject shownMotion(const CommandState& state, const CommandContext& context) {
+  if (movesToObject(state)) {
+    if (state.items(QStringLiteral("object")).isEmpty()) {
+      return QJsonObject();
+    }
+    return {{QStringLiteral("type"), kToObject}, {QStringLiteral("object"), objectOf(state, QString())}};
+  }
   Built error;
   QJsonObject transform = transformOf(state, context, error);
   if (!error.error.isEmpty()) {
@@ -1384,8 +1408,10 @@ CommandDef moveFaceCommand(const CommandContext& context) {
           .withoutMeshes()
           .withTooltip(QObject::tr("Faces of one body; they move together")),
   };
-  // The motion, as Move/Copy's, with Translate Along.
-  def.inputs << motionInputs(kMoveFaceTypes, true) << pivotInput() << moveComponentInput();
+  // The motion, as Move/Copy's, with Translate Along, and To Object
+  // (mitcad#2548).
+  def.inputs << motionInputs(kMoveFaceTypes, true) << moveFaceObjectInput() << pivotInput()
+             << moveComponentInput();
   def.enabled = [&context] { return hasBodies(context); };
   def.init = [](CommandState& state, const CommandContext& context) { initMoveComponent(state, context); };
   def.build = [](const CommandState& state, const CommandContext& context) {
@@ -1393,6 +1419,17 @@ CommandDef moveFaceCommand(const CommandContext& context) {
     const Selection& faces = state.items(QStringLiteral("faces"));
     const QString body = oneBody(faces, result, QStringLiteral("faces"));
     if (body.isEmpty()) {
+      return result;
+    }
+    if (movesToObject(state)) {
+      // Up to the object: no motion of its own (the model's `to_object`).
+      if (state.items(QStringLiteral("object")).isEmpty()) {
+        return Built::failure(QObject::tr("Select the object the faces move up to."), QStringLiteral("object"));
+      }
+      result.def = {{QStringLiteral("type"), QStringLiteral("move_face")},
+                    {QStringLiteral("body"), body},
+                    {QStringLiteral("faces"), names(faces, SelectKind::Face)},
+                    {kToObject, objectOf(state, QString())}};
       return result;
     }
     const QJsonObject transform = transformOf(state, context, result);
@@ -1409,11 +1446,19 @@ CommandDef moveFaceCommand(const CommandContext& context) {
   // a free move turns about their middle.
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
     state.setItems(QStringLiteral("faces"), movedFacesOf(feature, context));
+    if (feature.contains(kToObject)) {
+      state.setChoice(QStringLiteral("type"), kToObject);
+      loadObject(feature.value(kToObject).toObject(), state, QString(), context);
+      return;
+    }
     loadTransform(feature.value(QStringLiteral("transform")).toObject(), state, feature, context);
   };
   // A free move's handles where the feature finds the faces (mitcad#1583).
   def.rolledBack = splitFreeMoveRolledBack;
   def.canEdit = [&context](const QJsonObject& feature) {
+    if (feature.contains(kToObject)) {
+      return objectShowable(feature.value(kToObject).toObject(), context);
+    }
     return transformEditable(feature.value(QStringLiteral("transform")).toObject(), context, true);
   };
   // Rotate's ring, and so the angle a drag of it gives, about the axis the

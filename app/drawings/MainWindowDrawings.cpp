@@ -479,6 +479,32 @@ void MainWindow::registerDrawingCommands() {
           m_drawingWorkspace->addRevision();
         }
       });
+  // A cut sheet's nesting, cutting paths and plasma program (mitcad#2553),
+  // on its CUT SHEET tab.
+  add(QStringLiteral("cut_sheet.nest"), tr("Nest Components…"), QStringLiteral("cell-grid"),
+      tr("Places the components in rows on the sheet, a spacing apart"), QStringLiteral("cut"), [this] {
+        if (drawingOpen()) {
+          m_drawingWorkspace->nestParts();
+        }
+      });
+  add(QStringLiteral("cut_sheet.cutting_paths"), tr("Show Cutting Paths"), QStringLiteral("cnc-contour"),
+      tr("Draws the torch's paths, lead-ins and cutting order over the sheet"), QStringLiteral("cut"), [this] {
+        if (!drawingOpen()) {
+          return;
+        }
+        const bool on = !m_drawingWorkspace->cuttingPaths();
+        m_drawingWorkspace->setCuttingPaths(on);
+        if (QAction* action = m_registry->action(QStringLiteral("cut_sheet.cutting_paths"))) {
+          action->setCheckable(true);
+          action->setChecked(on);
+        }
+      });
+  add(QStringLiteral("cut_sheet.post"), tr("Cutting Program…"), QStringLiteral("cnc-post"),
+      tr("Writes the sheet's plasma cutting program as G-code for grbl"), QStringLiteral("cut"), [this] {
+        if (drawingOpen()) {
+          m_drawingWorkspace->postCuttingProgram();
+        }
+      });
 }
 
 void MainWindow::openDrawing(const QString& uid) {

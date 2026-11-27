@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Isoparametric Curve (mitcad#2522) for tools/ui-scripts/isoparametric-curve.mitcad-ui: the parameter h = 20 and a cylinder of 20 mm diameter, h high on XY about the Z axis (Cylinder1, F1, F1.b0), its side face F1:side0."},
+  {"cmd": "add_parameter", "name": "h", "value": 20},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [0, 0], "diameter": 20, "height": "h", "operation": "new_body"}},
+  {"expect": {"feature": "Cylinder1", "status": "ok", "body": "F1.b0", "has_face": "F1:side0"}}
+]

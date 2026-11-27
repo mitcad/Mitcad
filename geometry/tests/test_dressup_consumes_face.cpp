@@ -141,6 +141,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/user_error.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -1551,7 +1552,7 @@ void run_freeform() {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(dressup_consumes_face) {
   std::string part;
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::strcmp(argv[i], "--part") == 0) {

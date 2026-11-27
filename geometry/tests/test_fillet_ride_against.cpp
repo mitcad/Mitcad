@@ -38,6 +38,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -156,7 +157,7 @@ void test_rims_turning_opposite_ways_upper_first() { round_both_rims(false); }
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_ride_against) {
   test::guarded("test_rims_turning_opposite_ways_lower_first", test::test_rims_turning_opposite_ways_lower_first);
   test::guarded("test_rims_turning_opposite_ways_upper_first", test::test_rims_turning_opposite_ways_upper_first);
   if (test::failures == 0) {

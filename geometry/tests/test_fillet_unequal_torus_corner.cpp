@@ -40,6 +40,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -238,7 +239,7 @@ void test_box_corner_walked_as_before() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_unequal_torus_corner) {
   test::guarded("test_feet_round_a_rounded_block_edge", test::test_feet_round_a_rounded_block_edge);
   test::guarded("test_feet_within_the_tolerance_walked_as_before",
                 test::test_feet_within_the_tolerance_walked_as_before);

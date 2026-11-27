@@ -650,7 +650,7 @@ finds.
   `tools/cli/tests/shell_reported641.json` (ctest `cli.shell_reported`,
   from `MITCAD_MITCAD_REPORTED`). In the OCCT lab, the case
   2384-loft-mirror-join (MitCad's loft and its mirror image as B-rep
-  files, written by `test_mirror_loft_join --write`): without the patch the
+  files, written by `test_geometry_booleans mirror_loft_join --write`): without the patch the
   section of the two sides has 4 edges and ends 0.004288 mm from
   (0, -170, 315), and the fuse has 3 faces, the loft's volume and x from
   -171.9; with it 5 edges ending on both points, and the fuse 5 faces,

@@ -30,6 +30,11 @@ gp_Vec vectorOf(const QJsonValue& xyz);
 // a preview's `curve`, mitcad#1496) as a wire; null for fewer than two
 // points.
 TopoDS_Shape polylineShape(const QJsonArray& points);
+// A curve feature's curve as the `feature_curves` query or a preview's
+// `curve` gives it: its `polylines` as a compound of wires when it has
+// them (an Isoparametric Curve's curves apart, mitcad#2522), else its
+// `points` (polylineShape); null without two points.
+TopoDS_Shape featureCurveShape(const QJsonObject& curve);
 
 // A placement of the model's queries: 3 or 4 rows of 4 numbers.
 gp_Trsf trsfOf(const QJsonArray& rows);

@@ -547,4 +547,17 @@ IssueLink issueLink(const QString& tracker, const QString& title, const QString&
   return link;
 }
 
+QString feedbackTitle(const QString& kind, const QString& summary) {
+  if (kind == QLatin1String("bug")) {
+    return QStringLiteral("Bug: ") + summary;
+  }
+  if (kind == QLatin1String("tweak")) {
+    return QStringLiteral("Tweak: ") + summary;
+  }
+  if (kind == QLatin1String("feature")) {
+    return QStringLiteral("Feature: ") + summary;
+  }
+  return summary;
+}
+
 } // namespace mitcad::report

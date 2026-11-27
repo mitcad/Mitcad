@@ -179,4 +179,9 @@ struct IssueLink {
 IssueLink issueLink(const QString& tracker, const QString& title, const QString& body,
                     int maxLength = kMaxUrlLength);
 
+// The issue title of Help › Send Feedback (mitcad#2563): the report kind's
+// prefix, in English as the issue tracker sorts by it ("Bug: ", "Tweak: ",
+// "Feature: "), then the summary; the summary alone for another kind.
+QString feedbackTitle(const QString& kind, const QString& summary);
+
 } // namespace mitcad::report

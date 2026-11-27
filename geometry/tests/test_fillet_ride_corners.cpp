@@ -49,6 +49,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -351,7 +352,7 @@ void test_slab_end_face_pair() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_ride_corners) {
   test::guarded("test_plate_end_face_rims", test::test_plate_end_face_rims);
   test::guarded("test_plate_end_face_rims_and_corners", test::test_plate_end_face_rims_and_corners);
   test::guarded("test_plate_all_edges", test::test_plate_all_edges);

@@ -20,6 +20,7 @@
 
 #include "check.hpp"
 #include "mitcad/geometry/sheet_trim.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -354,7 +355,7 @@ void exposed_tear_clearance() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(sheet_bend_graph) {
   enable_input_checks(true);
   test::guarded("sheet Z partial opening and changed material mask", partial_open_cut_refold);
   test::guarded("sheet reverse signs and stationary branch", reversed_sign_and_stationary_branch);

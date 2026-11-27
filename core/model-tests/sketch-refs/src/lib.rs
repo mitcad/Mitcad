@@ -57,3 +57,6 @@ mod own_area_profiles_2197_tests;
 // A 3D sketch created on a planar face keeps the frame it was placed with
 // when the face leans the other way (mitcad#2465).
 mod spatial_face_frame_2465_tests;
+// Circles of the automatic face outline chosen to bound profiles: holes in
+// an inset of the outline (mitcad#2551).
+mod profile_boundary_2551_tests;

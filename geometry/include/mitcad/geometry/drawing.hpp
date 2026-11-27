@@ -44,6 +44,17 @@ struct DrawingSection {
   gp_Dir normal;
 };
 
+// A section limited to the line drawn on its parent view (mitcad#2479):
+// only what lies on the plane's normal side with its distance from the
+// plane's origin along `along` (in the plane: the line's direction)
+// between `from` and `to` goes, and only that part of the plane is cut
+// (analysis::clip_within, analysis::section_within).
+struct DrawingSectionBound {
+  gp_Dir along;
+  double from = 0.0;
+  double to = 0.0;
+};
+
 struct DrawingViewSpec {
   gp_Dir toward_eye{0.0, 0.0, 1.0};
   // At right angles to toward_eye.
@@ -70,6 +81,9 @@ struct DrawingViewSpec {
   // when it is not slow on them together.
   bool quick = false;
   std::optional<DrawingSection> section;
+  // With `section`: the part of the plane the section is limited to; the
+  // whole plane without it.
+  std::optional<DrawingSectionBound> section_bound;
   // The largest distance of a polyline from the curve it stands for.
   double deflection = 0.01;
   // How far the polygonal algorithm's drawn lines may lie from the edges

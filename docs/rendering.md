@@ -1310,6 +1310,11 @@ Decisions and limits:
 - Measured on the machine below: 320 x 240 with 8 samples about 0.2 s,
   the test scene at 640 x 480 with 64 samples 2.8 s (with adaptive
   sampling 33 samples were enough for most pixels).
+- Export Turntable's Rendered frames (mitcad#2523, app/COMMANDS.md
+  "Export Turntable") are final renders too: the shown bodies written
+  once as the scene (`render::writeShownScene`, which Render Image also
+  uses), then one batch job a frame through the turned camera, PNG of the
+  frame's size and opaque, the render settings' samples and film.
 
 ## Devices
 
@@ -1495,7 +1500,8 @@ cmake --preset dev
   of them, and `tools/check-all.sh` runs the render tests only when
   their sources change (their fingerprints follow the `mitcad-render`
   target, and the render UI tests declare `app/render`).
-- `tools/dev-env/build-cycles.sh [prefix]` (Linux x86-64; Windows:
+- `tools/dev-env/build-cycles.sh [prefix]` (Linux x86-64, and aarch64
+  with the CPU device only, [development.md](development.md#linux-on-64-bit-arm-aarch64); Windows:
   [build-cycles.ps1](#windows); Apple Silicon:
   [build-cycles-macos.sh](#macos)) installs
   the manifest's libraries into the prefix, downloads ISPC (a build tool) and

@@ -27,9 +27,33 @@ use super::geometry::{
     Curve2, P2, add, cross, dist, dot, norm, polygon_area, polygon_centroid, polygon_contains,
     scale, sub,
 };
-use super::intersect::intersections;
+use super::intersect::intersections_with_contact;
 use crate::profile::{ProfileLoop, ProfileRegion, ProfileSegment, SegmentGeometry};
 use crate::topo::{CurveId, RegionKey, SegmentKey};
+
+/// The smallest tolerance of the arrangement (mm): intersections within
+/// it, split points within ten of it one vertex, pieces within a hundred
+/// of it degenerate. (Not below 1e-6 mm: the solved positions of imported
+/// designs differ by that much where lines were meant to coincide.) A
+/// sketch over 1 m across has a larger tolerance by its size.
+const FLOOR: f64 = 1e-6;
+
+/// The least distance (mm) within which a curve's end lies on another
+/// curve and meets it: the resolution of the `.f3d` designs' own geometry
+/// (the import's `EDGE_TOLERANCE`), whose stored sketches are solved only
+/// that far, and the gap the profile faces heal (`geometry/src/profile.cpp`,
+/// `kHealGap`). In mitcad#2557 a ring cut by 32 radial lines, patterned
+/// about a centre 1.06e-6 mm off the circle they end on, had four lines
+/// end 1.0–1.1e-6 mm short of it, which a contact of 1e-6 mm left
+/// dangling: 28 pieces of the ring where the file's sketch has 32.
+///
+/// Only the contact takes it, not the arrangement's [`FLOOR`]: points
+/// merge within ten tolerances, so a floor of 1e-5 mm made points up to
+/// 1e-4 mm apart one vertex while the pieces' curves keep their own ends,
+/// and a profile loop of such pieces has gaps over the 1e-5 mm the profile
+/// heals (mitcad#2567: "it does not connect to the previous segment of its
+/// loop", and regions of other designs that changed).
+pub(crate) const RESOLUTION: f64 = 1e-5;
 
 /// A curve that bounds profiles.
 #[derive(Debug, Clone, PartialEq)]
@@ -163,9 +187,7 @@ pub fn regions_and_layout(curves: &[RegionCurve]) -> (Vec<Region>, Layout) {
         }
     }
     let size = dist(min, max).max(1.0);
-    // (Not below 1e-6 mm: the solved positions of imported designs differ
-    // by that much where lines were meant to coincide.)
-    let tol = (1e-9 * size).max(1e-6);
+    let tol = (1e-9 * size).max(FLOOR);
     let mut arrangement = Arrangement::new(curves, bounds, tol);
     arrangement.clean();
     arrangement.regions()
@@ -471,6 +493,9 @@ impl<'a> Arrangement<'a> {
             }
         }
         let reach = 10.0 * tol;
+        // A curve's end meets another curve within the designs' resolution
+        // (`RESOLUTION`), and no closer than the arrangement's tolerance.
+        let contact = tol.max(RESOLUTION);
         for i in 0..n {
             for j in i + 1..n {
                 let (a, b) = (bounds[i], bounds[j]);
@@ -483,7 +508,7 @@ impl<'a> Arrangement<'a> {
                     continue;
                 }
                 let (ci, cj) = (&curves[i].curve, &curves[j].curve);
-                for hit in intersections(ci, cj, tol) {
+                for hit in intersections_with_contact(ci, cj, tol, contact) {
                     let (end_i, end_j) = (is_end(ci, hit.ta), is_end(cj, hit.tb));
                     // The exact end point of whichever curve ends there.
                     let point = if end_i {

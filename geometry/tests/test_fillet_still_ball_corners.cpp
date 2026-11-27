@@ -68,6 +68,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -417,7 +418,7 @@ void test_reported_body() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_still_ball_corners) {
   test::guarded("test_d_block", test::test_d_block);
   test::guarded("test_reported_body", test::test_reported_body);
   if (test::failures == 0) {

@@ -14,7 +14,7 @@
 //! whose standard build has no M7.
 //!
 //! The output of both is run through grbl's and grblHAL's own code in
-//! `core/cam/tests/controller_sim.rs` (ctests `core.cam_grbl_sim`,
+//! `core/cam/tests/sim/controller_sim.rs` (ctests `core.cam_grbl_sim`,
 //! `core.cam_grblhal_sim`).
 
 use super::{CycleStyle, Job, Output, PostProcessor, ToolChange, change_message};

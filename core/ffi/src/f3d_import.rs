@@ -48,8 +48,40 @@ use crate::kernel::exchange::ffi::{
 };
 use crate::kernel::{OcctKernel, Shape};
 
-/// Faces, edges, vertices and the rounded sum of the vertices of a body.
-type BodyKey = (usize, usize, usize, [i64; 3]);
+/// Faces, edges, vertices, the rounded sum of the vertices of a body and
+/// the sum of their squared coordinates ([`body_key`]).
+type BodyKey = (usize, usize, usize, [i64; 3], [i64; 3]);
+
+/// What tells a body of a blob from the others: its numbers of faces,
+/// edges and vertices, the sum of its vertices and the sum of their
+/// squared coordinates (each coordinate rounded to 0.1 µm first, summed
+/// as integers, so the order of the vertices does not matter).
+///
+/// The sum alone does not tell apart two bodies of the same topology and
+/// height that are both symmetric about their origin in the plane
+/// (mitcad#2556: the electronics packages of a board, a 1.1 by 0.6 mm
+/// capacitor and a 1.7 by 0.95 mm resistor, both 0.6 mm high, have the
+/// same counts and the vertex sum (0, 0, 16.8) mm), so the history blob of
+/// one was linked to the other's component and their bodies swapped. The
+/// squares tell their extents apart (9.05 against 23.44 mm² in x).
+fn body_key(body: &mitcad_asm::brep::Body) -> BodyKey {
+    let mut sum = [0.0; 3];
+    let mut squares = [0i64; 3];
+    for vertex in &body.vertices {
+        for ((s, q), p) in sum.iter_mut().zip(squares.iter_mut()).zip(vertex.point) {
+            *s += p;
+            let r = (p * 1e4).round() as i64;
+            *q = q.wrapping_add(r.wrapping_mul(r));
+        }
+    }
+    (
+        body.faces.len(),
+        body.edges.len(),
+        body.vertices.len(),
+        sum.map(|s| (s * 1e4).round() as i64),
+        squares,
+    )
+}
 
 /// The largest distance (mm) from an edge's end to its vertex that a body
 /// of a history state may have and still be built.
@@ -850,22 +882,9 @@ impl StoredFile {
         );
     }
 
-    /// What tells a body of a blob from the others: its numbers of faces,
-    /// edges and vertices and the sum of its vertices.
+    /// What tells a body of a blob from the others ([`body_key`]).
     fn body_key(&self, v: usize) -> BodyKey {
-        let body = &self.body(v).body;
-        let mut sum = [0.0; 3];
-        for vertex in &body.vertices {
-            for (s, p) in sum.iter_mut().zip(vertex.point) {
-                *s += p;
-            }
-        }
-        (
-            body.faces.len(),
-            body.edges.len(),
-            body.vertices.len(),
-            sum.map(|s| (s * 1e4).round() as i64),
-        )
+        body_key(&self.body(v).body)
     }
 
     /// The solids of components stored only in `.smb` blobs (no history
@@ -3555,6 +3574,43 @@ mod tests {
         ] {
             assert_eq!(import(json).own_start_seconds(), 30.0);
         }
+    }
+
+    /// Two bodies of the same topology and height, both symmetric about
+    /// their origin in the plane, have the same vertex sum; the key tells
+    /// them apart by their squared coordinates (mitcad#2556: a capacitor's
+    /// and a resistor's package bodies, whose history blobs were linked to
+    /// each other's components), and is the same for one body whatever the
+    /// order of its vertices.
+    #[test]
+    fn the_body_key_tells_symmetric_bodies_of_one_height_apart() {
+        fn block(x: f64, y: f64, height: f64) -> mitcad_asm::brep::Body {
+            let mut body = mitcad_asm::brep::Body::default();
+            for z in [0.0, height] {
+                for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                    body.vertices.push(mitcad_asm::brep::Vertex {
+                        point: [sx * x / 2.0, sy * y / 2.0, z],
+                        tolerance: 1e-6,
+                    });
+                }
+            }
+            body
+        }
+        let capacitor = block(1.1, 0.6, 0.6);
+        let resistor = block(1.7, 0.95, 0.6);
+        let (c, r) = (body_key(&capacitor), body_key(&resistor));
+        // The counts and the vertex sum alone are the same.
+        assert_eq!((c.0, c.1, c.2, c.3), (r.0, r.1, r.2, r.3));
+        assert_ne!(c, r);
+        let mut reordered = capacitor.clone();
+        reordered.vertices.reverse();
+        assert_eq!(body_key(&reordered), c);
+        // Moved, it is another body.
+        let mut moved = capacitor.clone();
+        for vertex in &mut moved.vertices {
+            vertex.point[0] += 2.0;
+        }
+        assert_ne!(body_key(&moved), c);
     }
 
     /// An item changed its blob where its operation did, or where the

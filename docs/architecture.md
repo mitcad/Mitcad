@@ -196,7 +196,12 @@ design in a project.
   item (`flat_patterns`, saved in the design file), evaluated on demand at
   the marker from the body's sheet state with its own cache; it is never a
   body. Copies of components copy the items of their bodies, and design
-  diffs list them. See
+  diffs list them. A sheet laid flat approximately by triangulation
+  (Convert to Sheet Metal's `development: triangulated`, mitcad#2442) is
+  the one exception to "the kernel only reconstructs": its state's one
+  chart is the pattern (with `approximation`: its deviations and fold
+  lines), its folded body the body as it was, and sheet features refuse it
+  (`folded::read`). See
   [sheet-metal.md](sheet-metal.md).
 - **Cancellation:** a recompute reports progress to a `RecomputeMonitor`
   and stops between features when cancelled. Commands, undo, redo and
@@ -353,6 +358,18 @@ design in a project.
   their sheets are drawn for printing on each design read from its file
   and evaluated on a forked kernel (`core/model-api/src/drawing_book.rs`),
   so the book never copies a drawing and printing changes no design.
+- **Construction sets** (mitcad#2514, `document/construction_sets.rs`):
+  named Browser groups of a component's sketches, construction features
+  and bodies in the definition state, by uid, at most one of them active
+  and only in the active component. Their commands are undo steps that
+  recompute nothing. After every edit, in the same step,
+  `DocState::prune_construction_sets` drops what was deleted or moved to
+  another component, and `DocState::gather_into_active_set` adds to the
+  active set the sketches and construction features the edit made in its
+  component and the surface bodies (by `Kernel::body_kind`) that appeared
+  at the marker from a feature the edit added or changed, so that undo
+  and redo take an item and its membership together. The Browser lists the
+  items' own rows under their set instead of their usual folders.
 - **Parameters:** name, expression (`d1 * 2 + 5 mm`), unit, comment,
   kind (model or user), evaluated in dependency order; cycles and unit
   mismatches are errors. Internal units are mm and radians. Input accepts
@@ -644,7 +661,23 @@ design in a project.
   a section's plane) and an angle; each triangle of the same meshes is
   classed by its draft in Rust (`print_analysis::drafts`, the
   `draft_analysis` query), and the app draws the classes with Print
-  Analysis' overlay.
+  Analysis' overlay. Minimum radius analyses (mitcad#2518) are kept the
+  same way with their bodies, faces and a radius limit; each face's
+  largest principal curvature and its place come from the kernel on the
+  exact surface (`Kernel::face_curvatures`, OCCT's `BRepLProp_SLProps` on
+  a refined grid inside the face, `core/cpp/bridge/min_radius.cpp`), the
+  smallest radius and the faces under the limit are chosen in Rust (the
+  `min_radius_analysis` query), and the app draws them with Print
+  Analysis' marker and thin-wall triangles. Minimum distances
+  (mitcad#2519) are kept the same way with two selections of picks (bodies, their faces, edges and vertices by
+  name, components by their occurrences) and an optional clearance; the
+  `minimum_distance` query (`api/min_distance.rs`) orders the pairs of
+  picks by their placed boxes in Rust and measures them with the kernel's
+  exact `measure_between` (through `AnalysisOps::pick_separation`, as the
+  `measure` query places two selections) until no box is nearer than the
+  distance found, keeping each pair's result by the picks' key of the
+  measurement objects; the app draws the line between the closest points
+  with Print Analysis' overlay. No kernel method of its own.
 - **Point clouds and Point Cloud Deviation** (mitcad#2240;
   `core/model/src/point_cloud_files.rs`,
   `core/model/src/document/point_clouds.rs`, `api/point_clouds.rs`): a
@@ -667,7 +700,47 @@ design in a project.
   measure stay drawn, dimmed (mitcad#2265). A cloud's occurrence path
   follows its component to another parent (`DocState::follow`). The
   `.serp` and `.solidcraft` imports map their files' clouds to these
-  items.
+  items. The point cloud tools (mitcad#2516;
+  `core/model/src/point_cloud_tools`, `document/point_cloud_tools.rs`)
+  are Rust of our own on plain points: a k-d tree, rigid matching (Horn's
+  closed form for point pairs, a rough start by the main axes, iterative
+  closest points against a `Target`: another cloud, a mesh's triangles in
+  a tree of their boxes, or a body's exact faces through
+  `Kernel::boundary_nearest`; the matching a mesh Align shares), the
+  filters, and the reconstruction (normals by local covariance oriented
+  along a minimum spanning tree, a signed distance from their tangent
+  planes on a grid, marching tetrahedra). Align changes the cloud's
+  placement, Filter adds a cloud, Reconstruct adds a base feature holding
+  the mesh body (`Kernel::triangle_body`).
+- **Continuity Analysis** (mitcad#2521; `api/continuity.rs`,
+  `geometry/src/edge_continuity.cpp`): an inspection that keeps nothing.
+  The `edge_continuity` query takes each body where it is placed and asks
+  the new `Kernel::edge_continuity` family, which samples each edge on
+  the exact geometry through its curves on both faces (OCCT's
+  `BRepLProp_SLProps`): the gap, the angle between the normals and the
+  difference of the normal curvatures across, and the class each edge
+  reaches (G0, G1, G2) within the tolerances. The answer carries each
+  edge's sampled points in design coordinates; the app draws them as
+  polylines in the classes' colour roles beside the command's preview
+  (`OcctViewer::setPreviewEdges`).
+- **Surface quality analyses** (mitcad#2517;
+  `core/model/src/document/surface_analyses.rs`,
+  `core/model/src/surface_analysis.rs`, `api/surface_quality.rs`): Zebra,
+  Curvature Map, Isocurve Analysis and Environment Map are four more
+  analysis types kept as Draft Analysis is, on bodies or on faces of
+  bodies (face references that follow the model). The kernel gives the
+  faces' mesh with each vertex's outward normal and exact principal
+  curvatures from the fundamental forms (`Kernel::surface_samples`) and
+  their u and v iso curves trimmed to the faces with the normal curvature
+  along them (`Kernel::face_isocurves`; `cpp/bridge/surface_quality.cpp`);
+  Rust works out the Zebra's stripes (isophotes from a direction, each
+  triangle cut along the stripes' borders) and the curvature values, in
+  the `surface_analysis` query, kept in the print cache. The app draws
+  them with Print Analysis' overlay and legend: the stripes and the
+  vertex-colored triangles unlit, the curves as lines; an Environment
+  Map's faces go in a layer of their own, the only one that takes the
+  view's environment texture (OCCT's sphere-mapped reflection by the
+  camera's direction), set to the picture only while one is shown.
 - **Image references** (mitcad#782;
   `core/model/src/document/image_references.rs`,
   `core/model-base/src/image_header.rs`, `api/image_references.rs`):
@@ -737,7 +810,10 @@ design in a project.
   (`app/view/MeasurementDrawing`, `MeasurementOverlay`, which also takes
   clicks and drags on the texts and lines), in snapshots rendered
   offscreen at a larger size (`OcctViewer::snapshot`, OCCT's
-  `V3d_View::ToPixMap`; all, or one group) and over Render Image's image;
+  `V3d_View::ToPixMap`; all, or one group; File › Export Turntable's frames,
+  mitcad#2523, through a turned camera by `OcctViewer::snapshotFrom`,
+  without annotations, made into a video by the user's FFmpeg program)
+  and over Render Image's image;
   the Annotations window lists and edits them (`app/view/AnnotationsWindow`).
   Since mitcad#902 hole callouts (`api/hole_callouts.rs`) are annotations
   whose text the model writes from the hole's feature with the exported
@@ -845,7 +921,13 @@ design in a project.
   model; a sheet keeps a copy of its template, and its fields are filled
   in from the design (properties, materials, the mass from the bodies'
   volumes) whenever it is drawn. A drawing's revisions are rows of the
-  drawing itself. A cut sheet (mitcad#853, `drawing/cut_sheet_def.rs`,
+  drawing itself. Its notes, texts and title block fields may refer to
+  the design's parameters as `{param:Name}` (mitcad#2483,
+  `drawing/parameter_text.rs`): only the reference is stored, the value
+  is filled in whenever the sheet is drawn, a rename rewrites the
+  references with the configurations' (`Document::apply_inner`), and a
+  reference to a parameter the design lacks stays as written with a
+  warning. A cut sheet (mitcad#853, `drawing/cut_sheet_def.rs`,
   `core/model-drawing/src/cut_sheet.rs`, `api/cut_sheets.rs`) is a
   drawing of its own kind: its parts are bodies seen along a planar
   face's normal at 1:1, their outlines the bodies' silhouettes worked out
@@ -853,7 +935,13 @@ design in a project.
   bounds classified by segment crossings through the body), written as
   DXF and SVG for cutting; B-spline edges come through the projection
   as B-splines (`ViewCurve::Spline`) and are written as the curves they
-  are (`core/model-drawing/src/bspline.rs`).
+  are (`core/model-drawing/src/bspline.rs`). Its plasma program
+  (mitcad#2553, `api/cut_sheets/cutting.rs`, `core/cam/src/sheet_cut.rs`)
+  takes the parts' loops moved half the kerf off the material once, as
+  the exports do, orders them in the `mitcad-cam` crate (each loop after
+  the loops inside it), adds lead-ins in the scrap and writes grbl 1.1
+  G-code for a plasma torch; the layout's problems are found first and
+  refuse the program.
 - **Parameters as CSV** (mitcad#666, `core/model/src/parameters_csv.rs`,
   `document/parameters_csv.rs`, `api/parameters_csv.rs`): MitCad's
   parameter table and the `.f3d` application's parameter table CSV are
@@ -1018,7 +1106,9 @@ design in a project.
   says so in the command's warnings); an occurrence moved to another
   parent, or bodies moved into a new component, are followed in the same
   undo step (`DocState::follow_explode_moved` from `DocState::follow`,
-  `follow_explode_into`, mitcad#2328), pruned only when they leave the
+  `follow_explode_into`, mitcad#2328; bodies moved to an explicit
+  destination by `follow_explode_destination`, mitcad#2572), pruned only
+  when they leave the
   view's component. Drawing views apply an explode's offsets to their
   `Shown` bodies before projecting and add its trail lines as
   `ViewEdgeKind::Trail` edges (thin phantom); the animated USDZ export
@@ -1058,7 +1148,13 @@ design in a project.
 - **Plastic part features** (mitcad#459, `core/model/src/features/plastic.rs`):
   Boss, Snap Fit and Rest are built in the model from the kernel's
   extrusions, booleans and fillets; Lip and Groove from the band along a
-  rim face's loop (`Kernel::rim_band`, `geometry/src/plastic.cpp`). A
+  rim face's loop (`Kernel::rim_band`, `geometry/src/plastic.cpp`). Since
+  mitcad#2511 the band's wall along the loop can follow the faces beside
+  it (a ruled loft between the loop moved along their tangents at its two
+  ends) and its other wall can lean (the existing tapered prism of the
+  loop's offset); the band is then the one wall's solid less the other's.
+  A boss's ribs up to a wall are the kernel's rib (`Kernel::rib`, Extend
+  Ends and End Offset), stopped at the post by its run-on copy. A
   plastic rule is a timeline feature that changes no body; the features
   that name it read its parameters and its result (`Read::Output`), so
   an edit of the rule computes them again
@@ -1181,7 +1277,11 @@ design in a project.
   so placements changed later (joints, drags) do not move the removed
   material on the part. The `extrude_scope::assembly_key` read covers the
   machined map, so a cut is evaluated again when an earlier one machines
-  differently.
+  differently. Copies (copy and paste, Save Component as Design) rewrite
+  the scope of any of the three through `FeatureDef::stored_cut_scope` and
+  `cut_scope_mut`, frames included (`CopyReferences::cut_scope`,
+  mitcad#2160); the app's panels share one set of scope state helpers
+  (`app/commands/CommandSupport.cpp`).
 - **Extrude of a body face** (mitcad#535, `features/extrude.rs`): an
   extrusion's profile may be a planar face of a body (`profile_face`)
   instead of sketch regions: the face is found by its topological name on
@@ -1514,7 +1614,10 @@ the `Shape` type.
   triangulated while another thread computes with it (OCCT stores the
   triangulation in its faces).
 - Boolean results get coplanar faces and collinear edges merged, unless
-  the merge breaks a result OCCT's checker accepted. Edges the operation
+  the merge breaks a result OCCT's checker accepted or fails on it (OCCT's
+  merge of B-spline faces trims a surface that closes on itself past its
+  bounds, mitcad#2538); the result then keeps the faces as the operation
+  left them. Edges the operation
   leaves inside a face of its result, bounding no face (an edge of one
   operand lying on a face of the other, which OCCT's fuse keeps as an
   internal edge), are taken out of it (mitcad#1371): a later fillet over
@@ -1997,7 +2100,10 @@ the `Shape` type.
   surfaces itself (`geometry/src/skin.hpp`: interpolation with end
   derivatives, Gordon surfaces). Lofts with end conditions or rails
   (`loft_skin.cpp`), asymmetric and curvature-continuous fillets
-  (`blend.cpp`) and setback/blend corners (`corner.cpp`) are built so;
+  (`blend.cpp`), setback/blend corners (`corner.cpp`) and the
+  curvature-continuous corners where G2 roundings meet (`g2_corner.cpp`,
+  mitcad#2332: polynomial Boolean-sum patches from the faces' and the
+  roundings' second-order data, fitted exactly as B-splines) are built so;
   free lofts stay OCCT's through-sections, except two sections (ruled
   or smooth, mitcad#2191) that both run on smoothly through matched
   vertices where OCCT's faces would meet at a crease: their faces' edges are eased so that the faces are tangent
@@ -3093,18 +3199,30 @@ it and compares the two.
   by OCCT in the view's overlay layer (`app/view/ViewPaintLayer`,
   mitcad#2296), not by widgets over the view: Qt repaints such a widget
   after every frame and composes the window under the view again, which
-  capped sketch mode near 30 frames a second. Each picture is a texture
-  of its own; OCCT lets a replaced picture's texture go only at the second
-  full frame after it, and a frame in which only the picture changed is an
-  immediate one, so the view draws a full frame once a layer replaced two
-  pictures since the last one (`app/view/ReplacedPictures.hpp`,
-  mitcad#2437: while Sketch Dimension's value followed the pointer, the
-  textures took gigabytes, which on Apple silicon count in the process's
-  footprint, and the memory guard refused the dimension). The rule holds
+  capped sketch mode near 30 frames a second. A layer keeps one texture
+  while it is shown and OCCT updates its pixels for each picture
+  (mitcad#2406; before, each picture was a texture of its own). OCCT lets
+  a texture go only at the second full frame after it, and a frame in
+  which only the picture changed is an immediate one, so the view draws a
+  full frame once a layer let two textures go since the last one
+  (`app/view/ReplacedPictures.hpp`, mitcad#2437: while Sketch Dimension's
+  value followed the pointer, the per-picture textures took gigabytes,
+  which on Apple silicon count in the process's footprint, and the memory
+  guard refused the dimension). The texture's upload and draw are checked
+  for GL errors and timed in OCCT's frame; where they fail (a GL error, a
+  refused texture, a view larger than the driver's largest texture, more
+  than a second), every layer is drawn as a widget over its view for the
+  rest of the session, as before 0.72, and the log says why (mitcad#2406,
+  old Intel graphics on Windows stopped refreshing the window; the logs
+  and the fallback: `app/COMMANDS.md`). The rule holds
   for every repaint, also those of a sketch left alone: nothing repaints
   an idle sketch, but each pointer move shows another place over the
   badge and paints the overlay again (mitcad#2453,
-  `tools/ui-sketch-idle-memory-test.sh`).
+  `tools/ui-sketch-idle-memory-test.sh`). Native Wayland
+  (`MITCAD_WAYLAND=1`) behaves the same (mitcad#2489,
+  `tools/ui-sketch-idle-memory-wayland-test.sh` in a headless Weston:
+  no frame while the sketch is left alone, one overlay paint per move
+  that shows another place, the RSS flat at rest).
   Tools use a custom cursor (`app/framework/Cursors`). Body edges and
   vertices in the sketch plane, which the Dimension tool picks and the
   drawing tools snap to (mitcad#1967), come from the model's `plane_geometry` query (the
@@ -3266,7 +3384,12 @@ it and compares the two.
   owns the document; candidate probes also call model-backed command filters.
   Queries run on the UI thread between jobs; reads during a job
   are refused (`ModelBusy`), and deferred work waits for idle
-  (`MainWindow::whenIdle`). What the UI must know at once during a job it
+  (`MainWindow::whenIdle`). A user's sketch edit that comes during a job
+  (Delete, Make Driven from a menu open as the job began) waits for it
+  and checks its sketch, selection and dimension again
+  (`SketchController::waitForModel`), and a sketch action (`SketchOp`)
+  refuses rather than let `ModelBusy` out of a menu's or a key's handler,
+  which ends the application on macOS (mitcad#2500). What the UI must know at once during a job it
   takes from what it showed last instead: the length unit a value box
   gives a typed number when Enter closes it while a preview computes
   (`MainWindow::lengthUnit`, from the snapshot, mitcad#888), whether the
@@ -4075,7 +4198,19 @@ it and compares the two.
   alpha decides whether the widgets over the view can show), the view's
   context and the surface it draws into, and the widgets shown over the
   view (mitcad#2031, for a session whose widgets over the view did not
-  show). An OCCT built for
+  show). Whether they reach the screen is logged too
+  (`framework/PaintWatch.hpp`, Linux): when the window first shows and when
+  the Start page is left, the toolbar panel, the title row, the Start page
+  and the Floating layout's rows and cards that are shown are repainted;
+  each one's first paint (`Painted:`, its place and device pixel ratio),
+  the next frame the window presents with them (the view's
+  `QOpenGLWidget::frameSwapped`, `Frame presented with:`) and the round's
+  result (`Paint check …: painted and presented: …; not painted: …`) go to
+  the log, for a native Wayland desktop that allows no screenshot of the
+  window. The start-up's `Graphics environment:` line
+  (`framework/GraphicsEnvironment.hpp`) names the session, the graphics
+  cards the kernel lists and the render offload and Qt scaling variables
+  set (a hybrid laptop's NVIDIA offload). An OCCT built for
   GLX keeps the earlier way: X11 everywhere, a GLX context with a hidden
   helper window (a core profile makes OCCT read Qt's pbuffer and crash).
   Windows: WGL, the window of Qt's offscreen surface. macOS: a
@@ -5210,11 +5345,15 @@ expressions). Formats: [libraries.md](libraries.md).
   `document/link_tree.rs`): a linked design that has components comes in
   as read-only components of its own (`ExternalLink::tree` records what
   was made for which of the design's uids), with its joints, as-built
-  joints and rigid groups on fixed frames and number values, so that the
+  joints, rigid groups and supported constraints and motion links on
+  fixed geometry and number values, so that the
   linked occurrence can be flexible like a copy. `DocState::editable`
   refuses those components (`Assembly::linked_in`); `update_links`
-  updates them in place, keeping the joints' uids. Designs without
-  components, chosen parts and links saved before keep the flat form.
+  updates them in place, keeping the joints' uids. Parts chosen on a link
+  that has a tree prune that tree. Per-occurrence envelopes override the
+  traversal's shown bodies and keep the assembly graph intact
+  (mitcad#2252). Designs without components, links initially inserted
+  with chosen parts and links saved before keep the flat form.
   A design whose root holds nothing but one component (a new design's
   root and Component1, mitcad#2429) is inserted, copied or linked, as that
   component: `link_tree::single_component` finds it, a copy copies it by
@@ -5225,7 +5364,12 @@ expressions). Formats: [libraries.md](libraries.md).
   takes its base feature and joints as they are, and the holder's
   references follow with the rewrites of Reparent Occurrence
   (`reparent::follow_moved_down`) and Move History into Component
-  (`move_features::follow_into`), mitcad#2441.
+  (`move_features::follow_into`), mitcad#2441; the read finds what was
+  made for Component1's parts in the linked component itself
+  (`PriorOccurrences::opened`). Such a link's chosen parts keep their
+  paths from the design's root (the selection starts below the one
+  component), and its envelopes are made in that component's
+  coordinates.
 - **Edit in Place** (mitcad#2321, `document/edit_in_place.rs`,
   `app/files/MainWindowEditInPlace.cpp`): a linked component's design is
   edited in its own document inside the holder's window. The window's

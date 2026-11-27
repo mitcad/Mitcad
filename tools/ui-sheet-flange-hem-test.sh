@@ -193,9 +193,12 @@ edit_hem
 ui_step "Form: Double"                     ui_choose_text "Panel Hem input form" "Double"
 ui_sync
 panel_input_shown Hem setback || ui_fail "Setback is hidden for a double hem"
+# The mark before Own Bend Radius: the field already shows the radius typed,
+# so typing it changes nothing and the preview counted is the one Own Bend
+# Radius starts, which may end before the typing (mitcad#2444 made it fast).
+ui_mark
 ui_step "Own Bend Radius"                  ui_click_logged "Panel Hem input custom_radius"
 ui_sync
-ui_mark
 ui_step "Bend Radius 1"                    ui_type_in "Panel Hem input radius" "1"
 ui_expect_new "Preview Hem: ok" "the double hem previewed"
 ok_edited

@@ -30,6 +30,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/form.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -156,7 +157,7 @@ void test_open_and_broken_patches_are_refused() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(form) {
   test::guarded("patches close into a named solid", test_patches_close_into_a_named_solid);
   test::guarded("a fillet and a hole on the solid", test_a_fillet_and_a_hole_on_the_solid);
   test::guarded("five patches are a sheet", test_five_patches_are_a_sheet);

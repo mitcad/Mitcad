@@ -20,6 +20,7 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
@@ -366,9 +367,6 @@ std::vector<gp_Pnt> decalBorder(const QJsonObject& outline) {
 } // namespace
 
 CommandDef MainWindow::decalCommand() {
-  // The file chosen with Choose Image…, taken into the File input when the
-  // panel shows its inputs again (modelChanged).
-  auto chosen = std::make_shared<QString>();
   CommandDef def;
   def.id = kDecalId;
   def.name = tr("Decal");
@@ -386,14 +384,18 @@ CommandDef MainWindow::decalCommand() {
       noteInput(
           QStringLiteral("choose"),
           [](const CommandState&) { return InputNote{QString(), {tr("Choose Image…")}, {}}; },
-          [this, chosen](int, const CommandState&, const CommandContext&) {
+          [this](int, const CommandState&, const CommandContext&) {
             const QString filter = imageFileFilter();
             const QString path =
                 dialogOpenFileName(this, tr("Insert Decal"), dialogFolder(DialogGroup::Import), filter);
             if (!path.isEmpty()) {
               rememberDialogFolder(DialogGroup::Import, path);
-              *chosen = path;
               qDebug().noquote() << QStringLiteral("Decal file chosen: %1").arg(QFileInfo(path).fileName());
+              // Into Image as if typed (mitcad#2474): the panel is evaluated
+              // again at once, its message, preview and OK follow the file.
+              if (!chooseInCommand(kDecalId, QStringLiteral("file"), QDir::toNativeSeparators(path))) {
+                qInfo().noquote() << QStringLiteral("Decal: the file chosen was not taken");
+              }
             }
           })
           .withFieldColumn()
@@ -483,12 +485,6 @@ CommandDef MainWindow::decalCommand() {
   def.ended = [this, open](bool) {
     *open = false;
     setDecalPanel(std::nullopt);
-  };
-  def.modelChanged = [chosen](CommandState& state, const CommandContext&) {
-    if (!chosen->isEmpty()) {
-      state.setText(QStringLiteral("file"), *chosen);
-      chosen->clear();
-    }
   };
   def.build = [](const CommandState& state, const CommandContext&) -> Built {
     const Selection& face = state.items(QStringLiteral("face"));

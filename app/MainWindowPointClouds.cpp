@@ -6,15 +6,16 @@
 // (view/PointCloudView.cpp), asked of the model again only when a cloud's
 // entry changes. Of a cloud that a shown Point Cloud Deviation colours the
 // deviation draws the measured points (MainWindowPrintAnalysis.cpp) and
-// the window the others, dimmed (mitcad#2265).
+// the window the others, dimmed (mitcad#2265). The point cloud tools
+// (mitcad#2516, commands/PointCloudTools.cpp) are registered here too.
 #include "MainWindow.hpp"
 
 #include <cmath>
 #include <exception>
-#include <memory>
 #include <utility>
 #include <vector>
 
+#include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -23,6 +24,7 @@
 #include <QtMath>
 
 #include "commands/CommandSupport.hpp"
+#include "commands/PointCloudTools.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/DialogFolders.hpp"
 #include "framework/Dialogs.hpp"
@@ -68,7 +70,6 @@ void keepNames(CommandState& state, const CommandContext& context) {
 
 void MainWindow::registerPointCloudCommands() {
   // Insert > Point Cloud: the file, its unit and the most points kept.
-  auto chosen = std::make_shared<QString>();
   CommandDef insert;
   insert.id = kInsertCloudId;
   insert.name = tr("Point Cloud");
@@ -83,14 +84,18 @@ void MainWindow::registerPointCloudCommands() {
       noteInput(
           QStringLiteral("choose"),
           [](const CommandState&) { return InputNote{QString(), {tr("Choose File…")}, {}}; },
-          [this, chosen](int, const CommandState&, const CommandContext&) {
+          [this](int, const CommandState&, const CommandContext&) {
             const QString path = dialogOpenFileName(
                 this, tr("Insert Point Cloud"), dialogFolder(DialogGroup::Import),
                 tr("Point clouds (*.ply *.xyz *.pts *.csv *.txt);;All files (*)"));
             if (!path.isEmpty()) {
               rememberDialogFolder(DialogGroup::Import, path);
-              *chosen = path;
               qDebug().noquote() << QStringLiteral("Point Cloud file chosen: %1").arg(QFileInfo(path).fileName());
+              // Into File as if typed (mitcad#2474): the panel is evaluated
+              // again at once, its message and OK follow the file.
+              if (!chooseInCommand(kInsertCloudId, QStringLiteral("file"), QDir::toNativeSeparators(path))) {
+                qInfo().noquote() << QStringLiteral("Point Cloud: the file chosen was not taken");
+              }
             }
           })
           .withFieldColumn(),
@@ -98,12 +103,6 @@ void MainWindow::registerPointCloudCommands() {
           .withTooltip(tr("The length unit the file's numbers are in: point cloud files do not say")),
       valueInput(QStringLiteral("max_points"), tr("Most Points"), ValueKind::Unitless, QStringLiteral("2000000"))
           .withTooltip(tr("A file with more points is thinned evenly to this many, with a warning")),
-  };
-  insert.modelChanged = [chosen](CommandState& state, const CommandContext&) {
-    if (!chosen->isEmpty()) {
-      state.setText(QStringLiteral("file"), *chosen);
-      chosen->clear();
-    }
   };
   insert.build = [](const CommandState& state, const CommandContext&) -> Built {
     const QString file = state.text(QStringLiteral("file")).trimmed();
@@ -184,6 +183,26 @@ void MainWindow::registerPointCloudCommands() {
     return QStringLiteral("Moved point cloud %1").arg(state.choice(QStringLiteral("cloud")));
   };
   m_registry->add(move);
+
+  // The point cloud tools (mitcad#2516): each starts with the cloud whose
+  // Browser row opened it, taken once.
+  const ChosenCloud chosen = [this] { return std::exchange(m_pointCloudForTool, QString()); };
+  m_registry->add(pointCloudAlignCommand(*this, chosen));
+  m_registry->add(pointCloudFilterCommand(chosen));
+  m_registry->add(pointCloudReconstructCommand(chosen));
+}
+
+void MainWindow::startPointCloudTool(const QString& command, const QString& name) {
+  if (m_mode != Mode::Idle || !canChangeModel()) {
+    return;
+  }
+  const CommandDef* def = m_registry->find(command);
+  if (def == nullptr) {
+    return;
+  }
+  m_pointCloudForTool = name;
+  startFeatureCommand(*def);
+  m_pointCloudForTool.clear();
 }
 
 void MainWindow::movePointCloud(const QString& name) {

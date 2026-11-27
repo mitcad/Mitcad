@@ -51,6 +51,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/user_error.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -295,7 +296,7 @@ void test_corner_and_face_refused() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_full_round) {
   test::guarded("test_full_round", test::test_full_round);
   test::guarded("test_full_round_follows_the_bevel", test::test_full_round_follows_the_bevel);
   test::guarded("test_tapered_face_refused", test::test_tapered_face_refused);

@@ -790,6 +790,9 @@ impl<K: Kernel> Document<K> {
     pub fn activate_component_on_open(&mut self, uid: ComponentUid) -> Result<(), ModelError> {
         self.state.editable(uid)?;
         self.state.assembly.active = uid;
+        // An active construction set of another component is not any more
+        // (mitcad#2514).
+        self.state.prune_construction_sets();
         Ok(())
     }
 
@@ -1475,7 +1478,7 @@ impl<K: Kernel> Document<K> {
             // components beside them (mitcad#2209); or its one component's
             // bodies and the components placed in it (mitcad#2429).
             let origin = CopySource::Document(resolved.parent());
-            let mut read = self.design_tree(&source, path, &origin, single.as_ref())?;
+            let mut read = self.design_tree(&source, path, &origin, None, None, single.as_ref())?;
             let bodies = std::mem::take(&mut read.root);
             let looks = std::mem::take(&mut read.root_looks);
             let mounts = std::mem::take(&mut read.mounts);

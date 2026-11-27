@@ -83,6 +83,7 @@
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/profile.hpp"
 #include "../src/cutouts.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -635,7 +636,7 @@ void probe_mitcad(const Shape& body, double r) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(probe_end_face_dressup) {
   const ShapePtr body = rounded_block();
   std::printf("rounded block: volume %.9f, %d faces, valid %d\n", volume_of(body->occt()), body->face_count(),
               BRepCheck_Analyzer(body->occt()).IsValid() ? 1 : 0);

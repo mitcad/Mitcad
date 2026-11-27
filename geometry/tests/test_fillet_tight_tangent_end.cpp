@@ -65,6 +65,7 @@
 #include <TopoDS_Compound.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -364,7 +365,7 @@ void test_end_faces_as_stored() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_tight_tangent_end) {
   test::guarded("test_ends_cut_by_the_rims", test::test_ends_cut_by_the_rims);
   test::guarded("test_end_faces_as_stored", test::test_end_faces_as_stored);
   if (test::failures == 0) {

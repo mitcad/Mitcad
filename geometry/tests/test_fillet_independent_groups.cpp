@@ -36,6 +36,7 @@
 #include "check.hpp"
 #include "mitcad/analysis/properties.hpp"
 #include "mitcad/geometry/dressup.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -154,7 +155,7 @@ void test_ribs_rounded_together_as_each_alone() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_independent_groups) {
   test::guarded("test_ribs_rounded_together_as_each_alone", test::test_ribs_rounded_together_as_each_alone);
   if (test::failures == 0) {
     std::printf("test_fillet_independent_groups: all tests passed\n");

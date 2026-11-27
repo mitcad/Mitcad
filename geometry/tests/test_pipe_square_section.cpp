@@ -69,6 +69,7 @@
 #include "mitcad/geometry/intersection_curve.hpp"
 #include "mitcad/geometry/path_sweep.hpp"
 #include "mitcad/geometry/sketch_ref.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -838,7 +839,7 @@ void test_plane_by_points() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(pipe_square_section) {
   test::guarded("bent path", test::test_bent_path);
   test::guarded("nearly planar path", test::test_nearly_planar_path);
   test::guarded("bent path in pieces", test::test_bent_path_in_pieces);

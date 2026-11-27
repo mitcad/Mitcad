@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include <BRepAdaptor_CompCurve.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -476,7 +478,88 @@ void join_within_model_tolerance(const std::vector<TopoDS_Wire>& wires) {
   }
 }
 
-ShapePtr fill(const std::string& feature, const std::vector<BoundaryCurve>& loop) {
+// --- A loop's guide curves (mitcad#2526)
+
+// An edge of a guide curve and how agents read it: "guide curve 2 (c5)"
+// (1-based, in the order given).
+struct GuideEdge {
+  TopoDS_Edge edge;
+  std::string label;
+};
+
+// A length for agents: "0.0345 mm".
+std::string gap_text(double value) {
+  std::ostringstream out;
+  out << std::setprecision(4) << value << " mm";
+  return out.str();
+}
+
+// The edges of the guides, each curve made an edge of its own (the
+// curves of a guide need not join).
+std::vector<GuideEdge> guide_edges(const std::vector<BoundaryCurve>& guides) {
+  std::vector<GuideEdge> edges;
+  for (std::size_t i = 0; i < guides.size(); ++i) {
+    for (const PathCurve& piece : guides[i].curves) {
+      const TopoDS_Wire wire = detail::path_wire(Path{piece});
+      std::string label = "guide curve " + std::to_string(i + 1);
+      if (!piece.name.empty()) {
+        label += " (" + piece.name + ")";
+      }
+      for (const TopoDS_Edge& edge : wire_edges(wire)) {
+        edges.push_back({edge, label});
+      }
+    }
+  }
+  return edges;
+}
+
+// Refuses a guided fill whose face does not run through a guide within
+// kGuideTolerance (points along each guide measured to the face, its
+// trimmed extent: a guide outside the loop is missed too) or lies farther
+// than that from the loop (`loop_gap`, the largest gap of an edge of the
+// face from its surface).
+void check_guided(const TopoDS_Face& face, const std::vector<GuideEdge>& guides, double loop_gap) {
+  if (loop_gap > kGuideTolerance) {
+    throw std::invalid_argument(
+        placed_error("boundary surface: the surface through the guide curves does not follow the loop closely "
+                     "enough",
+                     "boundary surface: the face through the guide curves lies " + gap_text(loop_gap) +
+                         " off the loop's curves, more than " + gap_text(kGuideTolerance)));
+  }
+  constexpr int kSteps = 24;
+  for (const GuideEdge& guide : guides) {
+    const BRepAdaptor_Curve curve(guide.edge);
+    const double first = curve.FirstParameter();
+    const double last = curve.LastParameter();
+    double worst = 0.0;
+    gp_Pnt at;
+    std::vector<ErrorPlace> places;
+    for (int i = 0; i <= kSteps; ++i) {
+      const gp_Pnt p = curve.Value(first + (last - first) * i / kSteps);
+      if (i % 3 == 0) {
+        places.push_back(point_place(p));
+      }
+      BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(p).Vertex(), face);
+      const double gap = distance.IsDone() ? distance.Value() : std::numeric_limits<double>::infinity();
+      if (gap > worst) {
+        worst = gap;
+        at = p;
+      }
+    }
+    if (worst > kGuideTolerance) {
+      // The farthest point is the last place (painted), not words.
+      places.push_back(point_place(at));
+      throw std::invalid_argument(placed_error(
+          "boundary surface: the surface does not run through a guide curve (a guide must lie inside the loop)",
+          "boundary surface: the face runs " + gap_text(worst) + " off " + guide.label + " at its farthest, more than " +
+              gap_text(kGuideTolerance) + " (a guide must lie inside the loop)",
+          places));
+    }
+  }
+}
+
+ShapePtr fill(const std::string& feature, const std::vector<BoundaryCurve>& loop,
+              const std::vector<BoundaryCurve>& guides) {
   BRepOffsetAPI_MakeFilling filling(3, 15, 2, false, 1.0e-5, 1.0e-4, 1.0e-2, 0.1, 8, 9);
   std::vector<Chain> chains; // their copies stay while the filling runs
   chains.reserve(loop.size());
@@ -520,11 +603,20 @@ ShapePtr fill(const std::string& feature, const std::vector<BoundaryCurve>& loop
     }
     }
   }
+  // The guides (mitcad#2526): curves the plate runs through, not bounds,
+  // so the face's edges stay the loop's and no guide splits it.
+  const std::vector<GuideEdge> guided = guide_edges(guides);
+  for (const GuideEdge& guide : guided) {
+    filling.Add(guide.edge, GeomAbs_C0, false);
+  }
   detail::build(filling);
   if (!filling.IsDone()) {
-    throw std::runtime_error("boundary surface: the loop could not be filled");
+    throw std::runtime_error(guided.empty() ? "boundary surface: the loop could not be filled"
+                                            : "boundary surface: the loop could not be filled through its guide "
+                                              "curves");
   }
   const TopoDS_Face face = TopoDS::Face(filling.Shape());
+  double loop_gap = 0.0;
   // Filling sets its first tolerance from the plate constraint error
   // before the plate is approximated by the final B-spline surface. On
   // that surface an edge's pcurve can be farther from its 3D curve.
@@ -546,6 +638,7 @@ ShapePtr fill(const std::string& feature, const std::vector<BoundaryCurve>& loop
     if (!gap) {
       throw std::runtime_error("boundary surface: the distance from an edge to the filled face could not be checked");
     }
+    loop_gap = std::max(loop_gap, *gap);
     if (*gap > BRep_Tool::Tolerance(edge)) {
       // Allow for one modelling precision unit when the check is repeated.
       builder.UpdateEdge(edge, *gap + Precision::Confusion());
@@ -554,6 +647,9 @@ ShapePtr fill(const std::string& feature, const std::vector<BoundaryCurve>& loop
   BRepLib::UpdateTolerances(face);
   if (!BRepCheck_Analyzer(face, true, false, true).IsValid()) {
     throw std::runtime_error("boundary surface: the filled face is not valid");
+  }
+  if (!guided.empty()) {
+    check_guided(face, guided, loop_gap);
   }
   return one_face(feature, "boundary", face);
 }
@@ -1324,11 +1420,17 @@ ShapePtr blend_surface(const std::string& feature, const BlendEnd& from, const B
   return detail::run("blend surface", [&] { return blend(feature, from, to); });
 }
 
-ShapePtr boundary_fill(const std::string& feature, const std::vector<BoundaryCurve>& loop) {
+ShapePtr boundary_fill(const std::string& feature, const std::vector<BoundaryCurve>& loop,
+                       const std::vector<BoundaryCurve>& guides) {
   if (loop.empty()) {
     throw std::invalid_argument("boundary surface: a boundary loop needs its curves");
   }
-  return detail::run("boundary surface", [&] { return fill(feature, loop); });
+  for (const BoundaryCurve& guide : guides) {
+    if (guide.kind != BoundaryCurve::Kind::Curves || guide.curves.empty()) {
+      throw std::invalid_argument("boundary surface: a guide curve of a boundary loop is sketch curves");
+    }
+  }
+  return detail::run("boundary surface", [&] { return fill(feature, loop, guides); });
 }
 
 ShapePtr boundary_network(const std::string& feature, const std::vector<BoundaryCurve>& u,

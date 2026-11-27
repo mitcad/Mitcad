@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Plastic Feature's lip and boss options of mitcad#2511 (tools/ui-plastic-drafts-test.sh and its Windows and macOS twins): an 80 x 50 x 30 box (Box1 F1, Body1 F1.b0) shelled 6 thick through its top (Shell1 F2): 57984 mm3, its rim F2:offset_cap(F1:top) wide enough to click; a 60 x 60 x 3 plate from (100, 0) (Box2 F3, Body2 F3.b0) with a wall 10 thick along its far edge, 15 above it (Box3 F4, joined): 19800 mm3."},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[0,0],"length":80,"width":50,"height":30,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"shell","body":"F1.b0","faces":["F1:top"],"inside":6}},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[100,0],"length":60,"width":60,"height":3,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[100,50],"length":60,"width":10,"height":18,"operation":"join","participants":["F3.b0"]}},
+  {"expect":{"bodies":2}},
+  {"expect":{"body":"F1.b0","volume":57984,"tolerance":1e-9}},
+  {"expect":{"body":"F3.b0","volume":19800,"tolerance":1e-9}}
+]

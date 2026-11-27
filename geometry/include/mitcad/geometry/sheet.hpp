@@ -87,10 +87,33 @@ struct ConeEmbedding {
   bool inner_is_front = true;
 };
 
+// An oblique (eccentric) conical panel (mitcad#2491): the cone of the lines
+// from `apex` through the circle about `centre` of `radius` in the plane of
+// radial_start and angular_direction (at right angles), the angle round
+// the circle from radial_start towards angular_direction. `apex` is the
+// front surface's; the material lies along the cone's normals from it,
+// thickness deep, away from the cone's inside when inner_is_front and
+// towards it otherwise. The chart is the development of the neutral
+// surface (neutral_depth from the inner one) by its generators
+// (sheet_oblique_cone.hpp): chart(theta, rho) = base(theta) + rho
+// (cos phi, sin phi), rho along the generator from the apex. The material
+// lies within the angles [-w, angle_extent + w], w = pi - angle_extent / 2
+// (angle_extent less than a turn). Not joined by ports.
+struct ObliqueConeEmbedding {
+  gp_Pnt apex;
+  gp_Pnt centre;
+  double radius = 0;
+  gp_Dir radial_start{1, 0, 0};
+  gp_Dir angular_direction{0, 1, 0};
+  double neutral_depth = 0;
+  double angle_extent = 0;
+  bool inner_is_front = true;
+};
+
 struct SheetPatch {
   SheetDomainRef domain;
   std::vector<MaterialRegion> regions;
-  std::variant<PlaneEmbedding, CylinderEmbedding, ConeEmbedding> embedding;
+  std::variant<PlaneEmbedding, CylinderEmbedding, ConeEmbedding, ObliqueConeEmbedding> embedding;
 };
 
 struct ShapePortSide {

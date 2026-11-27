@@ -47,6 +47,7 @@
 
 #include "browser/BrowserController.hpp"
 #include "browser/BrowserPanel.hpp"
+#include "drawings/NestFlatPatternsDialog.hpp"
 #include "framework/Command.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/DialogFolders.hpp"
@@ -395,6 +396,118 @@ void MainWindow::registerMakeCommands() {
     return !picked.isEmpty() && exportFaceDxf(picked.first());
   };
   m_registry->add(face);
+
+  // Nest Flat Patterns… (Laser, mitcad#2553): the sheet-metal parts'
+  // Flat Patterns with their copies onto a cut sheet, nested; the cut
+  // sheet opens, where they are moved and turned and the plasma program
+  // written.
+  CommandDef nest;
+  nest.id = QStringLiteral("make.nest_flat_patterns");
+  nest.name = tr("Nest Flat Patterns…");
+  nest.icon = QStringLiteral("cell-grid");
+  nest.tooltip = tr("Lays the sheet-metal components' Flat Patterns out on a cut sheet for cutting");
+  nest.keywords = {QStringLiteral("nest"),   QStringLiteral("nesting"), QStringLiteral("cut sheet"),
+                   QStringLiteral("plasma"), QStringLiteral("laser"),   QStringLiteral("flat pattern"),
+                   QStringLiteral("gcode"),  QStringLiteral("sheet metal")};
+  nest.kind = CommandDef::Kind::Action;
+  nest.mode = CommandDef::Mode::Model;
+  nest.run = [this] { nestFlatPatterns(); };
+  m_registry->add(nest);
+}
+
+void MainWindow::nestFlatPatterns() {
+  if (m_mode != Mode::Idle || !canChangeModel()) {
+    showError(changeBlockedReason());
+    return;
+  }
+  QJsonArray rows;
+  QList<drawings::NestCutSheet> cutSheets;
+  try {
+    rows = queryObject({{QStringLiteral("query"), QStringLiteral("sheet_metal_list")}})
+               .value(QStringLiteral("rows"))
+               .toArray();
+    for (const QJsonValue& value : queryArray(QStringLiteral("drawings"))) {
+      const QJsonObject drawing = value.toObject();
+      if (drawing.value(QStringLiteral("kind")).toString() != QStringLiteral("cut_sheet")) {
+        continue;
+      }
+      const QString uid = drawing.value(QStringLiteral("drawing")).toVariant().toString();
+      const QJsonObject cut = queryObject({{QStringLiteral("query"), QStringLiteral("drawing")},
+                                           {QStringLiteral("drawing"), uid},
+                                           {QStringLiteral("geometry"), false}});
+      cutSheets.append({uid, drawing.value(QStringLiteral("name")).toString(),
+                        cut.value(QStringLiteral("width")).toDouble(), cut.value(QStringLiteral("height")).toDouble(),
+                        cut.value(QStringLiteral("kerf")).toDouble()});
+    }
+  } catch (const std::exception& e) {
+    showError(mitcad::modelMessage(QString::fromUtf8(e.what())));
+    return;
+  }
+  if (rows.isEmpty()) {
+    showError(tr("The design has no sheet-metal component to nest."));
+    return;
+  }
+  QStringList selected;
+  for (const QJsonValue& body : selectedModelBodies()) {
+    selected << (body.isObject() ? body.toObject().value(QStringLiteral("body")).toString() : body.toString());
+  }
+  const std::optional<drawings::NestChoice> choice = drawings::askNestFlatPatterns(this, rows, cutSheets, selected);
+  if (!choice) {
+    return;
+  }
+  QString uid = choice->cutSheet;
+  if (uid.isEmpty()) {
+    QJsonObject result;
+    if (!runCommand({{QStringLiteral("cmd"), QStringLiteral("add_cut_sheet")},
+                     {QStringLiteral("flat"), true},
+                     {QStringLiteral("nest"), true},
+                     {QStringLiteral("width"), choice->width},
+                     {QStringLiteral("height"), choice->height},
+                     {QStringLiteral("gap"), choice->gap},
+                     {QStringLiteral("kerf"), choice->kerf},
+                     {QStringLiteral("bodies"), choice->bodies}},
+                    &result)) {
+      showError(mitcad::modelMessage(m_lastError));
+      return;
+    }
+    uid = result.value(QStringLiteral("drawing")).toVariant().toString();
+  } else {
+    // The material and kerf, the parts added and every part nested again:
+    // one undo step.
+    const QJsonArray commands{QJsonObject{{QStringLiteral("cmd"), QStringLiteral("edit_cut_sheet")},
+                                          {QStringLiteral("drawing"), uid},
+                                          {QStringLiteral("width"), choice->width},
+                                          {QStringLiteral("height"), choice->height},
+                                          {QStringLiteral("kerf"), choice->kerf}},
+                              QJsonObject{{QStringLiteral("cmd"), QStringLiteral("add_cut_sheet_parts")},
+                                          {QStringLiteral("drawing"), uid},
+                                          {QStringLiteral("flat"), true},
+                                          {QStringLiteral("bodies"), choice->bodies}},
+                              QJsonObject{{QStringLiteral("cmd"), QStringLiteral("nest_cut_sheet")},
+                                          {QStringLiteral("drawing"), uid},
+                                          {QStringLiteral("gap"), choice->gap}}};
+    if (!runCommands(commands, tr("Nest Flat Patterns"))) {
+      showError(mitcad::modelMessage(m_lastError));
+      return;
+    }
+  }
+  QJsonObject sheet;
+  try {
+    sheet = queryObject({{QStringLiteral("query"), QStringLiteral("cut_sheet")},
+                         {QStringLiteral("drawing"), uid},
+                         {QStringLiteral("geometry"), false}});
+  } catch (const std::exception&) {
+  }
+  const QString name = sheet.value(QStringLiteral("name")).toString(uid);
+  const int warnings = static_cast<int>(sheet.value(QStringLiteral("warnings")).toArray().size());
+  qInfo().noquote() << QStringLiteral("Nest Flat Patterns: %1 part(s) on %2, %3 warning(s)")
+                           .arg(choice->count)
+                           .arg(name)
+                           .arg(warnings);
+  openDrawing(uid);
+  if (warnings == 0) {
+    showHint(tr("%n Flat Pattern(s) nested on %1.", nullptr, choice->count).arg(name));
+  }
 }
 
 bool MainWindow::exportFaceDxf(const SelectionItem& face) {

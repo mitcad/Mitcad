@@ -52,6 +52,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/profile.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -535,7 +536,7 @@ void test_other_fillet_after_the_rounding_reaching_past_its_contact() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_narrow_face_tangent_beyond) {
   test::guarded("test_rounding_over_the_round_face", test::test_rounding_over_the_round_face);
   test::guarded("test_rounding_ending_on_the_start_and_the_cut_face",
                 test::test_rounding_ending_on_the_start_and_the_cut_face);

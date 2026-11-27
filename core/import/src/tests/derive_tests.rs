@@ -73,6 +73,7 @@ fn a_derive_copies_the_body_of_another_document_where_it_puts_it() {
             name: "Block".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &entities,
+            object_guids: None,
         },
     )]);
     let mut doc = Document::new(MockKernel::default());

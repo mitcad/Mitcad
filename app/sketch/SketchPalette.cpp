@@ -303,6 +303,21 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
                       "pointer"));
   m_profiles = check(tr("Show profiles"), QStringLiteral("paletteProfiles"),
                      tr("Shade the closed regions, which Extrude and Revolve take"));
+  // Curvature comb (mitcad#2520) on Show profiles' row: the settings take
+  // no taller a section for it, so that the Create buttons below stay in
+  // sight in a 1024x768 window (as Line extensions' row, mitcad#2035).
+  m_comb = check(tr("Curvature comb"), QStringLiteral("paletteCurvatureComb"),
+                 tr("Comb the selected curves, else the splines, with their inflection points"));
+  {
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    optionLayout->removeWidget(m_profiles);
+    optionLayout->removeWidget(m_comb);
+    row->addWidget(m_profiles);
+    row->addWidget(m_comb);
+    row->addStretch(1);
+    optionLayout->addLayout(row);
+  }
   m_hideAbove = check(tr("Hide Above Sketch"), QStringLiteral("paletteHideAbove"),
                       tr("Cut the bodies at the sketch plane and hide what is in front of it, "
                          "as Section Analysis does"));
@@ -363,6 +378,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   connect(m_constraints, &QCheckBox::toggled, &m_c, &SketchController::setShowConstraints);
   connect(m_points, &QCheckBox::toggled, &m_c, &SketchController::setShowPoints);
   connect(m_profiles, &QCheckBox::toggled, &m_c, &SketchController::setShowProfiles);
+  connect(m_comb, &QCheckBox::toggled, &m_c, &SketchController::setShowCurvatureComb);
   connect(m_hideAbove, &QCheckBox::toggled, &m_c, &SketchController::setHideAbove);
   connect(m_dimensionText, qOverload<int>(&QComboBox::currentIndexChanged), &m_c, [this](int index) {
     m_c.setDimensionTextMode(static_cast<SketchController::DimensionText>(index));
@@ -843,6 +859,7 @@ void SketchPalette::refresh() {
   set(m_constraints, m_c.showConstraints());
   set(m_points, m_c.showPoints());
   set(m_profiles, m_c.showProfiles());
+  set(m_comb, m_c.showCurvatureComb());
   set(m_hideAbove, m_c.hideAbove());
   {
     const QSignalBlocker block(m_dimensionText);
@@ -989,7 +1006,7 @@ bool SketchPalette::eventFilter(QObject* watched, QEvent* event) {
 
 void SketchPalette::logLayout() const {
   for (const QCheckBox* box :
-       {m_construction, m_signed, m_grid, m_extensions, m_dimensions, m_constraints, m_points, m_profiles,
+       {m_construction, m_signed, m_grid, m_extensions, m_dimensions, m_constraints, m_points, m_profiles, m_comb,
         m_hideAbove, m_spatial}) {
     // The box's indicator: a click there toggles it whatever the width of
     // the label, which a click on the widget's middle may miss.
@@ -1025,8 +1042,8 @@ void SketchPalette::logLayout() const {
   // palette's against its own: a row laid out below its hint overlaps the
   // next one (mitcad#470). Line extensions shares Snap to grid's row
   // (mitcad#2035), so that row is logged once, by its grid box.
-  // Cancel Sketch shares Finish Sketch's row (mitcad#2225): not a row of
-  // its own.
+  // Cancel Sketch shares Finish Sketch's row (mitcad#2225), and Curvature
+  // comb Show profiles' row (mitcad#2520): not rows of their own.
   for (const QWidget* row : std::initializer_list<const QWidget*>{
            m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_points, m_profiles, m_hideAbove, m_spatial,
            m_dimensionText, m_finish}) {
@@ -1098,7 +1115,7 @@ void SketchPalette::logRows() const {
   }
   for (const QWidget* row : std::initializer_list<const QWidget*>{
            m_construction, m_signed, m_grid, m_extensions, m_dimensions, m_constraints, m_points, m_profiles,
-           m_hideAbove, m_spatial, m_snapLabel, m_dimensionLabel, m_dimensionText, m_lookAt, m_projectAgain,
+           m_comb, m_hideAbove, m_spatial, m_snapLabel, m_dimensionLabel, m_dimensionText, m_lookAt, m_projectAgain,
            m_cleanUp, m_autoFirst, m_autoLast, m_status, m_showUnconstrained}) {
     check(row, view);
   }

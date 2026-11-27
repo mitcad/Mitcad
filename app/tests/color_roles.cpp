@@ -63,7 +63,10 @@ void tableTests() {
     CHECK_ROLE(names.insert(name).second, roles[i]);
     CHECK_ROLE(themeColor(roles[i], false).isValid() && themeColor(roles[i], true).isValid(), roles[i]);
   }
-  CHECK(roles.back() == ColorRole::FormulaBracket);
+  // Every role of the enum has its row: the table is as long as the enum
+  // (its end marker, not the last role's name, which every branch adding a
+  // role would have to change).
+  CHECK(roles.size() == static_cast<std::size_t>(ColorRole::Count));
   // A palette's lightness picks the value; the 3D view's by its background.
   QPalette night;
   night.setColor(QPalette::Window, QColor(0x14, 0x15, 0x18));
@@ -283,6 +286,11 @@ void reservedHueTests() {
       ColorRole::Support,     ColorRole::DiscordFill,
       ColorRole::DeviationInside, ColorRole::DeviationNeutral, ColorRole::DeviationOutside,
       ColorRole::DeviationUnmeasured,
+      ColorRole::ContinuityNone, ColorRole::ContinuityG0, ColorRole::ContinuityG1, ColorRole::ContinuityG2,
+      // mitcad#2517
+      ColorRole::ZebraDark, ColorRole::ZebraLight, ColorRole::CurvatureConcave, ColorRole::CurvatureFlat,
+      ColorRole::CurvatureConvex, ColorRole::Isocurve, ColorRole::EnvironmentSky, ColorRole::EnvironmentFloor,
+      ColorRole::EnvironmentLight,
   };
   for (const ColorRole role : domain) {
     for (const bool dark : {false, true}) {
@@ -335,6 +343,54 @@ void reservedHueTests() {
     CHECK(dark ? unmeasured.lightnessF() < neutral.lightnessF() - 0.1
                : unmeasured.lightnessF() > neutral.lightnessF() + 0.1);
   }
+  // Continuity Analysis' classes (mitcad#2521): each at least 30° in hue
+  // from the next and from any other, on either background.
+  for (const bool dark : {false, true}) {
+    const ColorRole classes[] = {ColorRole::ContinuityNone, ColorRole::ContinuityG0, ColorRole::ContinuityG1,
+                                 ColorRole::ContinuityG2};
+    for (std::size_t i = 0; i < 4; ++i) {
+      for (std::size_t j = i + 1; j < 4; ++j) {
+        CHECK_ROLE(hueDistance(themeColor(classes[i], dark), themeColor(classes[j], dark)) >= 30.0, classes[j]);
+      }
+    }
+  }
+  // The surface quality analyses (mitcad#2517): the same on either
+  // background (baked into what is drawn); a Zebra's stripes far apart in
+  // lightness; a Curvature Map's ends far apart in hue, its middle grey.
+  for (const ColorRole role : {ColorRole::ZebraDark, ColorRole::ZebraLight, ColorRole::CurvatureConcave,
+                               ColorRole::CurvatureFlat, ColorRole::CurvatureConvex, ColorRole::Isocurve,
+                               ColorRole::EnvironmentSky, ColorRole::EnvironmentFloor, ColorRole::EnvironmentLight}) {
+    CHECK_ROLE(viewColor(role, true) == viewColor(role, false), role);
+  }
+  CHECK(contrastRatio(themeColor(ColorRole::ZebraLight, false), themeColor(ColorRole::ZebraDark, false)) >= 10.0);
+  CHECK(hueDistance(themeColor(ColorRole::CurvatureConcave, false), themeColor(ColorRole::CurvatureConvex, false)) >=
+        60.0);
+  CHECK(themeColor(ColorRole::CurvatureFlat, false).hsvSaturationF() < 0.2);
+}
+
+// The uncut stock's outline (mitcad#2569): at least 3:1 on every view
+// background of its tone (the presets' tops and bottoms) and over one or
+// two of the stock's see-through faces there (CamStock at a quarter, the
+// uncut stock's transparency 0.75); in the stock's own grey, so neither a
+// status hue nor the body's edges' colour.
+void camStockEdgeTests() {
+  const std::vector<QColor> light = {QColor(0xf7, 0xf8, 0xfa), QColor(0xdf, 0xe3, 0xea), QColor(0xfc, 0xfc, 0xff),
+                                     QColor(0xde, 0xe3, 0xeb), QColor(0xff, 0xff, 0xff)};
+  const std::vector<QColor> dark = {QColor(0x3b, 0x42, 0x4d), QColor(0x1c, 0x20, 0x27)};
+  for (const bool tone : {false, true}) {
+    const QColor edge = viewColor(ColorRole::CamStockEdge, tone);
+    QColor face = viewColor(ColorRole::CamStock, tone);
+    face.setAlphaF(0.25f);
+    for (const QColor& view : tone ? dark : light) {
+      const QColor oneFace = over(face, view);
+      const QColor twoFaces = over(face, oneFace);
+      check(contrastRatio(edge, view) >= 3.0, "contrastRatio(edge, view) >= 3.0", __LINE__, view.name());
+      check(contrastRatio(edge, oneFace) >= 3.0, "contrastRatio(edge, oneFace) >= 3.0", __LINE__, view.name());
+      check(contrastRatio(edge, twoFaces) >= 3.0, "contrastRatio(edge, twoFaces) >= 3.0", __LINE__, view.name());
+    }
+    CHECK(edge.hsvSaturationF() < 0.35);
+    CHECK(edge != viewColor(ColorRole::Edge, tone));
+  }
 }
 
 } // namespace
@@ -348,6 +404,7 @@ int colorRoleTests() {
   discordPillTests();
   formulaSyntaxTests();
   reservedHueTests();
+  camStockEdgeTests();
   return failures;
 }
 MITCAD_UNIT_TEST(colorRoleTests);

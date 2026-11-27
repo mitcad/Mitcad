@@ -5,11 +5,15 @@
 // component, 90° off the profiles the view showed. Extrude's arrow takes
 // the normal through the occurrence's `world` placement of the
 // `components` query, nested and oblique ones too (a synthetic design).
+// A click's point on a body of a placed component goes into the design
+// the same way (mitcad#2566: Align Point Cloud's point pairs).
 #include "UnitTests.hpp"
 #include "commands/SketchNormal.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -29,6 +33,7 @@ void check(bool condition, const char* expression, int line) {
 
 #define CHECK(expr) check((expr), #expr, __LINE__)
 
+using mitcad::cmd::clickInDesign;
 using mitcad::cmd::occurrenceWorldIn;
 using mitcad::cmd::sketchNormalInDesign;
 
@@ -119,12 +124,35 @@ void worldTests() {
   CHECK(!occurrenceWorldIn(tree, QStringLiteral("O1/O9")).has_value());
 }
 
+// A click on a body of a placed component (mitcad#2566): the view gives
+// where it hit in the component's coordinates; Align Point Cloud's pairs
+// take it into the design through the occurrence it was clicked in.
+void clickTests() {
+  const QJsonArray tree = occurrences();
+  const std::array<double, 3> at{1, 2, 3};
+  // In the root the point is the design's.
+  const std::optional<gp_Pnt> root = clickInDesign(at, tree, QString());
+  CHECK(root && root->Distance(gp_Pnt(1, 2, 3)) < 1e-9);
+  // Brace:1 turned a quarter about X and raised 100: (x, z, 100 - y).
+  const std::optional<gp_Pnt> brace = clickInDesign(at, tree, QStringLiteral("O1"));
+  CHECK(brace && brace->Distance(gp_Pnt(1, 3, 98)) < 1e-9);
+  // Nested and oblique: the nested occurrence's own world placement.
+  const double h = std::sqrt(0.5);
+  const std::optional<gp_Pnt> bracket = clickInDesign(at, tree, QStringLiteral("O1/O4"));
+  CHECK(bracket && bracket->Distance(gp_Pnt(h * 1 + h * 3 + 5, h * 1 - h * 3 + 6, 2 + 107)) < 1e-9);
+  // An occurrence that is not there: no point, rather than one in the
+  // component's coordinates taken for the design's.
+  CHECK(!clickInDesign(at, tree, QStringLiteral("O9")));
+  CHECK(!clickInDesign(at, QJsonArray(), QStringLiteral("O1")));
+}
+
 } // namespace
 
 int sketchNormalTests() {
   failures = 0;
   normalTests();
   worldTests();
+  clickTests();
   if (failures == 0) {
     std::printf("sketch normal tests passed\n");
   }

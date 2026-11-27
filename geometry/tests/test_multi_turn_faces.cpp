@@ -54,6 +54,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/brep_import.hpp"
 #include "mitcad/geometry/query.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -726,7 +727,7 @@ void test_merge_after_a_cut_across_a_multi_turn_thread() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(multi_turn_faces) {
   test::guarded("cut across a thread whose faces run many turns", test_cut_across_a_thread_whose_faces_run_many_turns);
   test::guarded("cross hole through a thread whose edges run many turns",
                 test_cross_hole_through_a_thread_whose_edges_run_many_turns);

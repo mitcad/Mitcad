@@ -19,7 +19,8 @@
 //! (mitcad#2443): each entry's faces get its `inside` and `outside` in
 //! place of the shell's, a side it leaves out keeps the shell's. The kernel
 //! offsets each face by its own thickness; faces that meet smoothly (and in
-//! a rounded shell, faces a rounding joins) take one thickness: with the
+//! a rounded shell, faces joined by a rounding that cannot run from one
+//! thickness to the other, mitcad#2488) take one thickness: with the
 //! tangent chain the faces tangent to one take its thickness, and a face
 //! joined so to one of another thickness is refused, both painted. Where
 //! the walls around a face cannot meet its own thickness, the shell fails

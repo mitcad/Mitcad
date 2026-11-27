@@ -201,8 +201,14 @@ pub enum BoundaryCurve<'a, S> {
 /// The curves a boundary surface runs through.
 #[derive(Debug, Clone, Copy)]
 pub enum BoundaryCurves<'a, S> {
-    /// A closed loop of boundaries, in order, filled.
-    Loop(&'a [BoundaryCurve<'a, S>]),
+    /// A closed loop of boundaries, in order, filled; the face runs through
+    /// the `guides` inside it (mitcad#2526: chains of sketch curves, each
+    /// curve a guide of its own, none for a plain fill), which neither
+    /// bound nor split it.
+    Loop {
+        boundary: &'a [BoundaryCurve<'a, S>],
+        guides: &'a [BoundaryCurve<'a, S>],
+    },
     /// Curves one way (`u`, two or more, lofted through in order) and
     /// curves crossing them (`v`, none or two or more): a Coons patch of
     /// two each way, a Gordon surface through more.

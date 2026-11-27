@@ -2,7 +2,8 @@
 #pragma once
 
 // C++ half of core/ffi/src/kernel/intersection_curve.rs (mitcad#1405; the
-// curve tools' helices and sections of shapes, mitcad#1777).
+// curve tools' helices and sections of shapes, mitcad#1777; isoparametric
+// curves, mitcad#2522).
 
 #include <array>
 #include <cstddef>
@@ -34,5 +35,13 @@ rust::Vec<CrossingCurve> shape_section(const ShapeList& first, rust::Slice<const
                                        rust::Slice<const std::size_t> first_counts, const ShapeList& second,
                                        rust::Slice<const rust::String> second_faces,
                                        rust::Slice<const std::size_t> second_counts);
+
+// The isoparametric curves of a face (mitcad#2522, geometry::iso_curves):
+// holding u (`hold_u`) or v, at each of `fractions`, or through the face's
+// point nearest `through` (three values; none: the fractions). The pieces
+// of all curves in order; `curves` gets the index of each piece's curve.
+rust::Vec<CrossingCurve> iso_curves(const geometry::Shape& shape, rust::Str face, bool hold_u,
+                                    rust::Slice<const double> fractions, rust::Slice<const double> through,
+                                    rust::Vec<std::size_t>& curves);
 
 } // namespace mitcad::bridge

@@ -216,9 +216,18 @@ FeedbackDialog::FeedbackDialog(const QImage& screenshot, bool designOpen,
 
   auto* form = new QFormLayout;
   m_kind = new QComboBox(this);
-  m_kind->addItem(tr("Bug report"), QStringLiteral("bug"));
-  m_kind->addItem(tr("Wish"), QStringLiteral("wish"));
-  m_kind->addItem(tr("Other"), QStringLiteral("other"));
+  // The report kinds (mitcad#2563), as the issue tracker sorts reports:
+  // each with its definition as the tooltip of its row and, once chosen,
+  // of the box.
+  m_kind->addItem(tr("Bug"), QStringLiteral("bug"));
+  m_kind->setItemData(0, tr("Something is broken"), Qt::ToolTipRole);
+  m_kind->addItem(tr("Tweak"), QStringLiteral("tweak"));
+  m_kind->setItemData(1, tr("Changes how an existing tool works"), Qt::ToolTipRole);
+  m_kind->addItem(tr("Feature"), QStringLiteral("feature"));
+  m_kind->setItemData(2, tr("Makes a wholly new tool in MitCad"), Qt::ToolTipRole);
+  const auto showDefinition = [this] { m_kind->setToolTip(m_kind->currentData(Qt::ToolTipRole).toString()); };
+  connect(m_kind, &QComboBox::currentIndexChanged, this, showDefinition);
+  showDefinition();
   form->addRow(tr("&Kind:"), m_kind);
   m_summary = new QLineEdit(this);
   m_summary->setPlaceholderText(tr("A short title"));

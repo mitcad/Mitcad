@@ -70,4 +70,13 @@ std::optional<gp_Dir> sketchNormalInDesign(const QJsonObject& frame, const QJson
   return normal;
 }
 
+std::optional<gp_Pnt> clickInDesign(const std::array<double, 3>& at, const QJsonArray& occurrences,
+                                    const QString& path) {
+  const std::optional<gp_Trsf> world = occurrenceWorldIn(occurrences, path);
+  if (!world) {
+    return std::nullopt;
+  }
+  return gp_Pnt(at[0], at[1], at[2]).Transformed(*world);
+}
+
 } // namespace mitcad::cmd

@@ -50,6 +50,12 @@ pub struct TurningTool {
     /// How deep the insert can cut in one pass (radius, mm); a grooving
     /// insert's reach.
     pub max_depth: f64,
+    /// A turning tool's or boring bar's back angle (degrees from the Z
+    /// axis, mitcad#2503): how steeply its trailing edge rises behind the
+    /// nose, from its insert and holder. Unknown (`None`), the simulation
+    /// takes the edge behind the nose as flat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back_angle: Option<f64>,
 }
 
 impl TurningTool {
@@ -107,6 +113,13 @@ impl TurningTool {
         }
         if !(self.max_depth.is_finite() && self.max_depth > 0.0) {
             return Err(format!("Tool {n} needs a depth of cut above zero."));
+        }
+        if let Some(b) = self.back_angle
+            && !(b.is_finite() && (0.0..90.0).contains(&b))
+        {
+            return Err(format!(
+                "Tool {n}'s back angle must be from 0 to 90 degrees."
+            ));
         }
         match self.kind {
             TurningToolKind::Boring { bar_diameter } => {

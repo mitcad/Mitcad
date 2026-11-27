@@ -260,6 +260,65 @@ std::vector<double> HermiteInterpolation::solve(const std::vector<double>& value
   return poles;
 }
 
+BlendInterpolation::BlendInterpolation(std::vector<double> parameters, int start, int end)
+    : m_parameters(std::move(parameters)), m_start(start), m_end(end) {
+  const std::size_t n = m_parameters.size();
+  if (n < 2 || start < 0 || start > 2 || end < 0 || end > 2) {
+    throw std::invalid_argument("an interpolation needs two or more points");
+  }
+  for (std::size_t i = 1; i < n; ++i) {
+    if (!(m_parameters[i] > m_parameters[i - 1])) {
+      throw std::invalid_argument("the parameters of an interpolation must increase");
+    }
+  }
+  m_degree = start == 2 || end == 2 ? 5 : 3;
+  const int count = static_cast<int>(n);
+  m_knots.Resize(1, count, false);
+  m_mults.Resize(1, count, false);
+  for (int i = 0; i < count; ++i) {
+    m_knots(i + 1) = m_parameters[static_cast<std::size_t>(i)];
+    m_mults(i + 1) = i > 0 && i + 1 < count ? m_degree : m_degree + 1;
+  }
+}
+
+std::vector<double> BlendInterpolation::solve(const std::vector<double>& values, const std::vector<double>& start,
+                                              const std::vector<double>& end) const {
+  const std::size_t n = m_parameters.size();
+  if (values.size() != n || start.size() != static_cast<std::size_t>(m_start) ||
+      end.size() != static_cast<std::size_t>(m_end)) {
+    throw std::invalid_argument("the interpolation conditions do not match its basis");
+  }
+  const std::size_t p = static_cast<std::size_t>(m_degree);
+  std::vector<double> poles(p * (n - 1) + 1);
+  for (std::size_t i = 0; i + 1 < n; ++i) {
+    // The span's Hermite data: the values at either end and the
+    // derivatives there, zero but at the blend's ends.
+    const double span = m_parameters[i + 1] - m_parameters[i];
+    const double a = values[i];
+    const double b = values[i + 1];
+    const double da = i == 0 && !start.empty() ? start[0] : 0.0;
+    const double sa = i == 0 && start.size() > 1 ? start[1] : 0.0;
+    const double db = i + 2 == n && !end.empty() ? end[0] : 0.0;
+    const double sb = i + 2 == n && end.size() > 1 ? end[1] : 0.0;
+    double* piece = poles.data() + p * i;
+    if (p == 3) {
+      piece[0] = a;
+      piece[1] = a + da * span / 3.0;
+      piece[2] = b - db * span / 3.0;
+      piece[3] = b;
+    } else {
+      const double square = span * span;
+      piece[0] = a;
+      piece[1] = a + da * span / 5.0;
+      piece[2] = a + 2.0 * da * span / 5.0 + sa * square / 20.0;
+      piece[3] = b - 2.0 * db * span / 5.0 + sb * square / 20.0;
+      piece[4] = b - db * span / 5.0;
+      piece[5] = b;
+    }
+  }
+  return poles;
+}
+
 occ::handle<Geom_BSplineCurve> interpolate_with_ends(const std::vector<gp_Pnt>& points,
                                                      const std::vector<double>& parameters,
                                                      const EndDerivatives& start,

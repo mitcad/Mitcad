@@ -118,6 +118,7 @@
 #include <gp_Pnt.hxx>
 
 #include "test_only.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -852,7 +853,7 @@ void test_whole_fillet1() {
 
 // Each test function runs where MITCAD_TEST_ONLY names it, or without it
 // (test_only.hpp).
-int main() {
+MITCAD_BUNDLED_TEST(fillet_top_chains) {
   using test_only::selected;
   try {
     if (selected("test_reported_body")) {

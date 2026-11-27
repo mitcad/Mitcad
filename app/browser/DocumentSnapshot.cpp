@@ -37,6 +37,8 @@ QVector<DocumentSnapshot::Occurrence> occurrencesOf(const QJsonArray& values) {
     occurrence.visible = o.value(QStringLiteral("visible")).toBool(true);
     occurrence.transparent = o.value(QStringLiteral("transparent")).toBool();
     occurrence.flexible = o.value(QStringLiteral("flexible")).toBool();
+    occurrence.envelope = o.value(QStringLiteral("envelope")).toDouble();
+    occurrence.envelopeBody = text(o, "envelope_body");
     occurrence.world = o.value(QStringLiteral("world")).toArray();
     occurrence.children = occurrencesOf(o.value(QStringLiteral("children")).toArray());
     occurrence.name = text(o, "name");
@@ -189,6 +191,11 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     snapshot.explodeViews = model.queryArray(QStringLiteral("explode_views"));
   } catch (const std::exception&) {
   }
+  // Construction sets (mitcad#2514).
+  try {
+    snapshot.constructionSets = model.queryArray(QStringLiteral("construction_sets"));
+  } catch (const std::exception&) {
+  }
   // CAM setups with their operations' states (mitcad#1013): a model
   // without CAM has none.
   try {
@@ -252,7 +259,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
                                           snapshot.measurements, snapshot.drawings, snapshot.imageReferences,
                                           snapshot.centerOfMass, snapshot.camSetups,
                                           snapshot.camMachines, snapshot.selectionSets, snapshot.pointClouds,
-                                          snapshot.decals, snapshot.explodeViews})
+                                          snapshot.decals, snapshot.explodeViews, snapshot.constructionSets})
                      .toJson(QJsonDocument::Compact);
   // The values Show When conditions use (mitcad#863): a parameter changed
   // without changing what is shown still changes the light bulbs' tooltips.
@@ -723,6 +730,42 @@ QJsonArray DocumentSnapshot::explodeViewsOf(const QString& component) const {
   return out;
 }
 
+QJsonArray DocumentSnapshot::constructionSetsOf(const QString& component) const {
+  QJsonArray out;
+  for (const QJsonValue& value : constructionSets) {
+    if (value.toObject().value(QStringLiteral("component")).toString() == component) {
+      out.append(value);
+    }
+  }
+  return out;
+}
+
+QString DocumentSnapshot::constructionSetOf(const QString& component, const QString& item) const {
+  for (const QJsonValue& value : constructionSets) {
+    const QJsonObject set = value.toObject();
+    if (set.value(QStringLiteral("component")).toString() != component) {
+      continue;
+    }
+    for (const QJsonValue& member : set.value(QStringLiteral("members")).toArray()) {
+      const QJsonObject m = member.toObject();
+      if (m.value(QStringLiteral("feature")).toString() == item || m.value(QStringLiteral("body")).toString() == item) {
+        return set.value(QStringLiteral("name")).toString();
+      }
+    }
+  }
+  return QString();
+}
+
+QString DocumentSnapshot::activeConstructionSet() const {
+  for (const QJsonValue& value : constructionSets) {
+    const QJsonObject set = value.toObject();
+    if (set.value(QStringLiteral("active")).toBool()) {
+      return set.value(QStringLiteral("name")).toString();
+    }
+  }
+  return QString();
+}
+
 QJsonObject DocumentSnapshot::explodeView(const QString& name) const {
   for (const QJsonValue& value : explodeViews) {
     if (value.toObject().value(QStringLiteral("name")).toString() == name) {
@@ -809,6 +852,7 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("intersection_curve"), QStringLiteral("sketch-intersect")},
       {QStringLiteral("coordinate_system"), QStringLiteral("coordinate-system")},
       {QStringLiteral("helix_curve"), QStringLiteral("helix")},
+      {QStringLiteral("isoparametric_curve"), QStringLiteral("isoparametric-curve")},
       {QStringLiteral("base"), QStringLiteral("base-feature")},
       {QStringLiteral("rectangular_pattern"), QStringLiteral("rectangular-pattern")},
       {QStringLiteral("circular_pattern"), QStringLiteral("circular-pattern")},
@@ -856,6 +900,8 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("sheet_cut"), QStringLiteral("sheet-cut")},
       {QStringLiteral("sheet_corner_relief"), QStringLiteral("sheet-corner-relief")},
       {QStringLiteral("sheet_convert"), QStringLiteral("sheet-convert")},
+      // Lofted Flange (mitcad#2512).
+      {QStringLiteral("sheet_lofted_flange"), QStringLiteral("sheet-lofted-flange")},
       // Motion links (mitcad#466).
       {QStringLiteral("motion_link"), QStringLiteral("motion-link")},
       // Emboss (mitcad#458).

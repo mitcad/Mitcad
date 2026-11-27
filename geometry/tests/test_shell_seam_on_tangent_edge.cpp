@@ -45,6 +45,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/faceops.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -233,7 +234,7 @@ void test_wall_thicker_than_the_rims() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(shell_seam_on_tangent_edge) {
   test::guarded("test_seam_on_tangent_line", test::test_seam_on_tangent_line);
   test::guarded("test_wall_thicker_than_the_rims", test::test_wall_thicker_than_the_rims);
   if (test::failures == 0) {

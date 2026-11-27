@@ -21,6 +21,7 @@
 //! it then agree.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use mitcad_dump::{Dump, OccurrenceNode};
 use mitcad_model::assembly::{Assembly, Occurrence, inverse, matrix_rows};
@@ -59,6 +60,13 @@ pub struct Referenced<'a, K: Kernel> {
     /// ([`DesignReport::body_entities`]), which a design that derives them
     /// names (mitcad#324).
     pub entity_bodies: &'a BTreeMap<u64, BodyUid>,
+    /// Its occurrences by their object ids in its file, with those of the
+    /// documents it copies in turn (its import's
+    /// [`crate::components::ComponentReport::object_guids`]): the paths a
+    /// design stores through it name the levels deeper than its own
+    /// occurrences so (mitcad#2528). None: only its own levels are
+    /// resolved.
+    pub object_guids: Option<Arc<ObjectGuids>>,
 }
 
 /// A component filled from another document.
@@ -865,6 +873,295 @@ pub(crate) fn outer_placements<K: Kernel>(
         }
     }
     out
+}
+
+/// The timeline index the positions [`inside_positions`] makes take: after
+/// every item of the timeline, as the placements they come from are where
+/// the file leaves the occurrences at its end (and no item's report entry
+/// is theirs).
+pub const INSIDE_PLACEMENTS_INDEX: i64 = i64::MAX / 2;
+
+/// The placements the design stores for paths that go on inside
+/// occurrences of components of other documents (`_f3d.inside_placements`,
+/// mitcad#1892) as positions inside them, which place the copied
+/// occurrences inside as the captured positions inside do (mitcad#2492).
+/// A design places the levels inside a copy otherwise than the other
+/// document does itself (an assembly whose parts the other document leaves
+/// where it inserted them and the design moved with its joints; an
+/// assembly that turns a lift arm of a shell it places), and the file
+/// keeps where only in those paths: before, they gave only the outer
+/// occurrence's own placement ([`outer_placements`]), so the levels inside
+/// stayed where the other document has them.
+///
+/// Each path's last placement (in the root component) is the position;
+/// its levels are named by the GUIDs the other document's import gives
+/// the occurrences its object ids name (each level placed in the one
+/// before). A path whose last level is where the other document has it
+/// already, given the outer occurrence's own last placement, makes none.
+/// `outer` are the placements [`outer_placements`] worked out.
+pub fn inside_positions<K: Kernel>(
+    dump: &Dump,
+    components: &crate::components::Components,
+    sources: &HashMap<String, Referenced<'_, K>>,
+    outer: &HashMap<u64, Steps>,
+) -> Vec<crate::captures::InsidePosition> {
+    let mut out = Vec::new();
+    // (node, the design's occurrences down to it).
+    let mut nodes: Vec<(&OccurrenceNode, Vec<OccurrenceUid>)> = dump
+        .occurrences
+        .iter()
+        .flatten()
+        .map(|n| (n, Vec::new()))
+        .collect();
+    while let Some((node, above)) = nodes.pop() {
+        let Some(f3d) = node.f3d.as_ref() else {
+            continue;
+        };
+        let Some(uid) = f3d.object_id.and_then(|id| components.occurrence(id)) else {
+            continue;
+        };
+        let mut path = above;
+        path.push(uid);
+        nodes.extend(node.children.iter().flatten().map(|c| (c, path.clone())));
+        let (Some(id), Some(inside)) = (f3d.object_id, f3d.inside_placements.as_ref()) else {
+            continue;
+        };
+        let Some(source) = f3d.external_document.as_ref().and_then(|d| sources.get(d)) else {
+            continue;
+        };
+        // The outer occurrence's own last placement in the root, where the
+        // file gives one: worked out from the paths, else its own steps,
+        // else (at the top) its stored transform.
+        let own = outer
+            .get(&id)
+            .and_then(|s| s.last().map(|(_, t)| *t))
+            .or_else(|| {
+                f3d.placements
+                    .iter()
+                    .flatten()
+                    .next_back()
+                    .and_then(|s| crate::components::transform(s.transform.as_ref()?))
+            })
+            .or_else(|| {
+                (path.len() == 1)
+                    .then(|| {
+                        node.transform
+                            .as_ref()
+                            .and_then(crate::components::transform)
+                    })
+                    .flatten()
+            });
+        // (Whether the other document has it there already, the position.)
+        let mut paths: Vec<(bool, crate::captures::InsidePosition)> = Vec::new();
+        for p in inside {
+            let inner = p.inner.as_deref().unwrap_or_default();
+            let Some(guids) = inner_guids(source, inner) else {
+                continue;
+            };
+            let Some(last) = p
+                .placements
+                .iter()
+                .flatten()
+                .next_back()
+                .and_then(|s| crate::components::transform(s.transform.as_ref()?))
+            else {
+                continue;
+            };
+            // (A path on into the documents the other one copies has no
+            // object ids of its own beyond the first of them: its GUIDs
+            // name the levels, mitcad#2528.)
+            let default = inner_placement(source, inner).or_else(|| guid_placement(source, &guids));
+            let there = matches!((own, default), (Some(own), Some(d)) if same_within(&own.after(&d), &last));
+            paths.push((
+                there,
+                crate::captures::InsidePosition {
+                    index: INSIDE_PLACEMENTS_INDEX,
+                    outer: path.clone(),
+                    inner: guids,
+                    placement: last,
+                },
+            ));
+        }
+        // A path whose last level is where the other document has it makes
+        // none, unless a level above it moves: then the levels below would
+        // move with it, away from where the file has them (mitcad#2528: the
+        // board inside the electronics stack, placed again by the top
+        // design, took its printed circuit component, which the stack's own
+        // paths had left where the file has it, 10.8 mm away).
+        let moved: Vec<Vec<String>> = paths
+            .iter()
+            .filter(|(there, _)| !there)
+            .map(|(_, p)| p.inner.clone())
+            .collect();
+        out.extend(paths.into_iter().filter_map(|(there, p)| {
+            let below_moved = moved
+                .iter()
+                .any(|m| m.len() < p.inner.len() && p.inner.starts_with(m));
+            (!there || below_moved).then_some(p)
+        }));
+    }
+    out
+}
+
+/// The placement in the other document's root component of the path of
+/// its occurrences named by `guids` (from the outermost down, each placed
+/// in the one before), as its import has them, also inside the copies of
+/// the documents it copies; None where a level is not found
+/// (mitcad#2528).
+fn guid_placement<K: Kernel>(source: &Referenced<'_, K>, guids: &[String]) -> Option<Transform> {
+    let assembly = source.document.assembly();
+    let mut placement = Transform::IDENTITY;
+    let mut parent = ComponentUid::ROOT;
+    for g in guids {
+        let o = inside_occurrence(assembly, source.occurrence_guids, g, parent)?;
+        placement = placement.after(&o.transform);
+        parent = o.component;
+    }
+    Some(placement)
+}
+
+/// The GUIDs the other document's import gives the occurrences of the
+/// path `inner` (object ids in its file, each placed in the one before):
+/// for each, the GUID that names the fewest occurrences (of equal ones the
+/// first in order); None where a level is not one of its occurrences, not
+/// placed in the level before, or has no GUID.
+///
+/// A path goes on past a level whose component the other document filled
+/// from a third document (the board inside the electronics stack, the
+/// bearings inside the lift system inside the shell): the levels after it
+/// are object ids in that document's file, named by the GUIDs its import
+/// gives them ([`ObjectGuids`], `source.object_guids`), and so on down
+/// (mitcad#2528). Before, such a path was not resolved, so the levels
+/// more than one document deep stayed where the documents in between had
+/// them.
+fn inner_guids<K: Kernel>(source: &Referenced<'_, K>, inner: &[u64]) -> Option<Vec<String>> {
+    if inner.is_empty() {
+        return None;
+    }
+    let assembly = source.document.assembly();
+    let mut parent = ComponentUid::ROOT;
+    let mut out = Vec::new();
+    let mut levels = inner.iter();
+    // The levels in the other document itself, up to one filled from a
+    // third document.
+    let mut deeper: Option<Arc<ObjectGuids>> = None;
+    for id in levels.by_ref() {
+        let uid = *source.occurrence_objects.get(id)?;
+        let o = assembly.occurrence(uid)?;
+        if o.parent != parent {
+            return None;
+        }
+        out.push(fewest_guid(source.occurrence_guids, uid)?);
+        parent = o.component;
+        deeper = source
+            .object_guids
+            .as_ref()
+            .and_then(|t| t.occurrences.get(id))
+            .and_then(|level| level.inside.clone());
+        if deeper.is_some() {
+            break;
+        }
+    }
+    // The levels in the documents the copies come from.
+    for id in levels {
+        let (guid, inside) = {
+            let level = deeper.as_ref()?.occurrences.get(id)?;
+            (level.guid.clone(), level.inside.clone())
+        };
+        out.push(guid);
+        if inside.is_some() {
+            deeper = inside;
+        }
+    }
+    Some(out)
+}
+
+/// The GUID of `guids` that names the occurrence `uid` and the fewest
+/// others (of equal ones the first in order).
+fn fewest_guid(guids: &HashMap<String, Vec<OccurrenceUid>>, uid: OccurrenceUid) -> Option<String> {
+    guids
+        .iter()
+        .filter(|(_, list)| list.contains(&uid))
+        .min_by(|a, b| a.1.len().cmp(&b.1.len()).then_with(|| a.0.cmp(b.0)))
+        .map(|(guid, _)| guid.clone())
+}
+
+/// A document's occurrences by their object ids in its file, as a design
+/// that inserts it names the levels of the paths it stores through it
+/// (mitcad#2528): for each, the GUID its import names it by (the one that
+/// names the fewest occurrences, as [`inner_guids`] takes it) and, where
+/// its component was filled from another document, that document's in
+/// turn. A path through a copy names the levels inside the documents the
+/// copy copies by their own files' object ids.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ObjectGuids {
+    pub occurrences: HashMap<u64, ObjectGuid>,
+}
+
+/// One occurrence of [`ObjectGuids`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectGuid {
+    pub guid: String,
+    /// The document its component was filled from, where it was.
+    pub inside: Option<Arc<ObjectGuids>>,
+}
+
+/// The [`ObjectGuids`] of the design `doc` once its components of other
+/// documents are filled (`components`, its import's report; `sources`, the
+/// documents it was filled from): each occurrence its file names by an
+/// object id, with the GUID and the filled document's own.
+pub fn object_guids<K: Kernel>(
+    doc: &Document<K>,
+    components: &crate::components::ComponentReport,
+    sources: Option<&HashMap<String, Referenced<'_, K>>>,
+) -> ObjectGuids {
+    let assembly = doc.assembly();
+    // The filled components by the documents they were filled from.
+    let documents: HashMap<ComponentUid, &str> = components
+        .inserted
+        .iter()
+        .filter(|i| components.filled.contains(&i.component))
+        .map(|i| (i.component, i.document.as_str()))
+        .collect();
+    // Each occurrence's GUID: the one naming the fewest occurrences.
+    let mut named: HashMap<OccurrenceUid, (usize, &String)> = HashMap::new();
+    for (guid, list) in &components.occurrence_guids {
+        for o in list {
+            let better = named
+                .get(o)
+                .is_none_or(|(n, g)| (list.len(), guid) < (*n, *g));
+            if better {
+                named.insert(*o, (list.len(), guid));
+            }
+        }
+    }
+    let mut out = ObjectGuids::default();
+    for (&id, &uid) in &components.occurrence_objects {
+        let Some((_, guid)) = named.get(&uid) else {
+            continue;
+        };
+        let inside = assembly
+            .occurrence(uid)
+            .and_then(|o| documents.get(&o.component))
+            .and_then(|d| sources?.get(*d)?.object_guids.clone());
+        out.occurrences.insert(
+            id,
+            ObjectGuid {
+                guid: (*guid).clone(),
+                inside,
+            },
+        );
+    }
+    out
+}
+
+/// Whether two placements (mm) are the same within the files' rounding
+/// (as the decoder compares placements: 1e-5 in the rotation, 5 µm).
+fn same_within(a: &Transform, b: &Transform) -> bool {
+    (0..3).all(|r| {
+        (0..3).all(|c| (a.linear[r][c] - b.linear[r][c]).abs() <= 1e-5)
+            && (a.translation[r] - b.translation[r]).abs() <= 5e-3
+    })
 }
 
 /// The placement in the other document's root component of the path of

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <array>
 #include <exception>
 #include <map>
@@ -34,10 +35,12 @@
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffset_Analyse.hxx>
 #include <BRepOffset_MakeOffset.hxx>
+#include <BRepOffset_Offset.hxx>
 #include <ChFiDS_TypeOfConcavity.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <Geom2d_Curve.hxx>
+#include <Geom2d_Line.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_History.hxx>
 #include <BRep_Builder.hxx>
@@ -45,6 +48,8 @@
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom_BSplineSurface.hxx>
+#include <Geom_Curve.hxx>
+#include <Geom_Line.hxx>
 #include <Geom_Surface.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_IndexedDataMap.hxx>
@@ -70,6 +75,7 @@
 #include <gp_Trsf.hxx>
 #include <gp_Sphere.hxx>
 #include <gp_Torus.hxx>
+#include <gp_Dir2d.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec2d.hxx>
 
@@ -360,22 +366,15 @@ using FaceOffsets = std::map<int, double>;
 
 // The faces of the body other than `face` that the geometry kernel's
 // offset gives the offset of `face` (BRepOffset_MakeOffset::
-// UpdateFaceOffset): those that meet it smoothly, and with `rounded` (an
-// offset with rounded joins) those a rounding joins to it (along convex
-// edges for an offset out of the material, concave ones into it), and so
-// on from them; found by the kernel's own analysis of the faces it offsets.
-std::vector<int> offset_together(const Shape& body, const BRepOffset_Analyse& analyse, int face, double offset,
-                                 bool rounded) {
+// UpdateFaceOffset): those that meet it smoothly, and so on from them;
+// found by the kernel's own analysis of the faces it offsets.
+std::vector<int> offset_together(const Shape& body, const BRepOffset_Analyse& analyse, int face) {
   BRep_Builder builder;
   TopoDS_Compound group;
   builder.MakeCompound(group);
   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
   seen.Add(body.face(face));
-  if (rounded) {
-    analyse.AddFaces(body.face(face), group, seen, ChFiDS_Tangential, offset < 0.0 ? ChFiDS_Concave : ChFiDS_Convex);
-  } else {
-    analyse.AddFaces(body.face(face), group, seen, ChFiDS_Tangential);
-  }
+  analyse.AddFaces(body.face(face), group, seen, ChFiDS_Tangential);
   std::vector<int> faces;
   for (TopExp_Explorer it(group, TopAbs_FACE); it.More(); it.Next()) {
     const int f = body.face_index(it.Current());
@@ -386,13 +385,93 @@ std::vector<int> offset_together(const Shape& body, const BRepOffset_Analyse& an
   return faces;
 }
 
+// A face the rounded offset gives the offset of another (rounded_together),
+// and how: across a rounding along an edge (`corner` false) or round a
+// corner of roundings.
+struct RoundedTogether {
+  int face = -1;
+  bool corner = false;
+};
+
+// The faces of the body other than `face` that the geometry kernel's offset
+// with rounded joins gives the offset of `face` (BRepOffset_MakeOffset::
+// UpdateFaceOffset with OCCT port patch 2488, mitcad#2488): those that meet
+// it smoothly, those a rounding joins to it (along convex edges for an offset
+// `offset` out of the material, concave ones into it) where the rounding
+// cannot run from one thickness to another (BRepOffset_Offset::JoinsOffsets:
+// other than along a straight edge where neither wall turns, or along a
+// circle about whose axis both walls turn), those round a corner of roundings
+// that cannot (other than three walls square to each other), and so on from
+// them.
+std::vector<RoundedTogether> rounded_together(const Shape& body, const BRepOffset_Analyse& analyse, int face,
+                                              double offset) {
+  const ChFiDS_TypeOfConcavity rounding = offset < 0.0 ? ChFiDS_Concave : ChFiDS_Convex;
+  std::vector<RoundedTogether> found;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> corners;
+  std::vector<TopoDS_Face> queue{body.face(face)};
+  seen.Add(body.face(face));
+  const auto add = [&](const TopoDS_Shape& f, bool corner) {
+    if (!seen.Add(f)) {
+      return;
+    }
+    queue.push_back(TopoDS::Face(f));
+    const int index = body.face_index(f);
+    if (index >= 0 && index != face) {
+      found.push_back({index, corner});
+    }
+  };
+  for (std::size_t next = 0; next < queue.size(); ++next) {
+    const TopoDS_Face current = queue[next];
+    if (const NCollection_List<TopoDS_Shape>* edges = analyse.Descendants(current)) {
+      for (const TopoDS_Shape& e : *edges) {
+        const NCollection_List<BRepOffset_Interval>& types = analyse.Type(TopoDS::Edge(e));
+        const NCollection_List<TopoDS_Shape>& faces = analyse.Ancestors(e);
+        if (types.IsEmpty() || faces.Extent() != 2) {
+          continue;
+        }
+        const ChFiDS_TypeOfConcavity type = types.First().Type();
+        if (type == ChFiDS_Tangential ||
+            (type == rounding && !BRepOffset_Offset::JoinsOffsets(TopoDS::Edge(e), TopoDS::Face(faces.First()),
+                                                                  TopoDS::Face(faces.Last())))) {
+          add(faces.First().IsSame(current) ? faces.Last() : faces.First(), false);
+        }
+      }
+    }
+    for (TopExp_Explorer v(current, TopAbs_VERTEX); v.More(); v.Next()) {
+      if (!corners.Add(v.Current()) || !analyse.HasAncestor(v.Current())) {
+        continue;
+      }
+      NCollection_List<TopoDS_Shape> edges;
+      analyse.Edges(TopoDS::Vertex(v.Current()), rounding, edges);
+      if (edges.Extent() < 3 || edges.Extent() != analyse.Ancestors(v.Current()).Extent()) {
+        continue;
+      }
+      NCollection_List<TopoDS_Shape> faces;
+      for (const TopoDS_Shape& e : edges) {
+        for (const TopoDS_Shape& f : analyse.Ancestors(e)) {
+          faces.Append(f);
+        }
+      }
+      if (!BRepOffset_Offset::JoinsOffsets(TopoDS::Vertex(v.Current()), faces)) {
+        for (const TopoDS_Shape& f : faces) {
+          add(f, true);
+        }
+      }
+    }
+  }
+  return found;
+}
+
 // Checks the offsets of their own (`own`, of the body's faces other than
 // the `removed` ones; the rest are offset by `offset`) against the faces the
-// geometry kernel offsets as one (offset_together): it would give them all
-// one of their offsets. With `tangent_chain` a face that meets one with an
-// offset of its own smoothly takes that offset (added to `own`); a face that
-// meets it so with another offset, or (in a `rounded` offset) is joined to
-// it by a rounding with another offset, is refused, both faces painted.
+// geometry kernel offsets as one (offset_together, rounded_together): it
+// would give them all one of their offsets. With `tangent_chain` a face that
+// meets one with an offset of its own smoothly takes that offset (added to
+// `own`); a face that meets it so with another offset, or (in a `rounded`
+// offset) is joined to it with another offset by a rounding that cannot run
+// from one thickness to the other, is refused, both faces painted. Where a
+// rounding can (mitcad#2488), the kernel builds it between the two offsets.
 void spread_own_offsets(const Shape& body, const std::set<int>& removed, double offset, bool rounded,
                         bool tangent_chain, FaceOffsets& own) {
   if (own.empty()) {
@@ -425,7 +504,7 @@ void spread_own_offsets(const Shape& body, const std::set<int>& removed, double 
   };
   const FaceOffsets given = own;
   for (const auto& [face, distance] : given) {
-    for (const int other : offset_together(body, analyse, face, distance, false)) {
+    for (const int other : offset_together(body, analyse, face)) {
       if (!differ(value(other), distance)) {
         continue;
       }
@@ -446,13 +525,20 @@ void spread_own_offsets(const Shape& body, const std::set<int>& removed, double 
     return;
   }
   for (const auto& [face, distance] : FaceOffsets(own)) {
-    for (const int other : offset_together(body, analyse, face, distance, true)) {
-      if (differ(value(other), distance)) {
-        refuse(face, other,
-               "shell failed; a rounding of the wall would join a face with its own thickness to a face of "
-               "another thickness, and the geometry kernel rounds only walls of one thickness: give them one "
-               "thickness or choose the Sharp shell type");
+    for (const RoundedTogether& other : rounded_together(body, analyse, face, offset)) {
+      if (!differ(value(other.face), distance)) {
+        continue;
       }
+      refuse(face, other.face,
+             other.corner
+                 ? "shell failed; a rounded corner of the wall would join a face with its own thickness to a "
+                   "face of another thickness, and the geometry kernel rounds a corner between walls of "
+                   "different thicknesses only where three walls meet square to each other: give them one "
+                   "thickness or choose the Sharp shell type"
+                 : "shell failed; a rounding of the wall would join a face with its own thickness to a face of "
+                   "another thickness, and the geometry kernel rounds between walls of different thicknesses "
+                   "only along a straight edge where neither wall turns or along a circle about whose axis both "
+                   "walls turn: give them one thickness or choose the Sharp shell type");
     }
   }
 }
@@ -573,6 +659,38 @@ std::pair<double, double> span_without_end_slivers(const NCollection_Array1<doub
   return {from, to};
 }
 
+// The face (taken forward) put on `surface`, a surface with the same
+// parameters as its own over the face (a piece of it, or the same surface
+// in another form), in place (the callers' working copies): its edges'
+// curves on it carried over as they are, the same parameters, so the same
+// curves.
+void put_on_same_parameters(const TopoDS_Face& face, const occ::handle<Geom_Surface>& surface,
+                            const TopLoc_Location& location, BRep_Builder& builder) {
+  for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
+    const TopoDS_Edge edge = TopoDS::Edge(e.Current());
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom2d_Curve> curve = BRep_Tool::CurveOnSurface(edge, face, first, last);
+    if (curve.IsNull()) {
+      continue;
+    }
+    const double tolerance = BRep_Tool::Tolerance(edge);
+    if (BRep_Tool::IsClosed(edge, face)) {
+      const occ::handle<Geom2d_Curve> other =
+          BRep_Tool::CurveOnSurface(TopoDS::Edge(edge.Reversed()), face, first, last);
+      if (edge.Orientation() == TopAbs_REVERSED) {
+        builder.UpdateEdge(edge, other, curve, surface, location, tolerance);
+      } else {
+        builder.UpdateEdge(edge, curve, other, surface, location, tolerance);
+      }
+    } else {
+      builder.UpdateEdge(edge, curve, surface, location, tolerance);
+    }
+    builder.Range(edge, surface, location, first, last);
+  }
+  builder.UpdateFace(face, surface, location, BRep_Tool::Tolerance(face));
+}
+
 // Each face of the shape on a B-spline surface with a sliver span at one of
 // the face's ends, put on the surface's piece without it, with its edges'
 // curves on it; in place (the callers' working copies). The offset evaluates
@@ -615,31 +733,7 @@ void cut_end_slivers(const TopoDS_Shape& shape) {
     } catch (const Standard_Failure&) {
       continue;
     }
-    // The edges' curves on the face, carried over to the piece: the same
-    // parameters, so the same curves.
-    for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
-      const TopoDS_Edge edge = TopoDS::Edge(e.Current());
-      double first = 0.0;
-      double last = 0.0;
-      const occ::handle<Geom2d_Curve> curve = BRep_Tool::CurveOnSurface(edge, face, first, last);
-      if (curve.IsNull()) {
-        continue;
-      }
-      const double tolerance = BRep_Tool::Tolerance(edge);
-      if (BRep_Tool::IsClosed(edge, face)) {
-        const occ::handle<Geom2d_Curve> other =
-            BRep_Tool::CurveOnSurface(TopoDS::Edge(edge.Reversed()), face, first, last);
-        if (edge.Orientation() == TopAbs_REVERSED) {
-          builder.UpdateEdge(edge, other, curve, piece, location, tolerance);
-        } else {
-          builder.UpdateEdge(edge, curve, other, piece, location, tolerance);
-        }
-      } else {
-        builder.UpdateEdge(edge, curve, piece, location, tolerance);
-      }
-      builder.Range(edge, piece, location, first, last);
-    }
-    builder.UpdateFace(face, piece, location, BRep_Tool::Tolerance(face));
+    put_on_same_parameters(face, piece, location, builder);
   }
 }
 
@@ -718,6 +812,77 @@ ShapePtr split_at_creases(const Shape& body, std::set<int>& removed, FaceOffsets
   return out;
 }
 
+// Why a shell inside cannot open a removed face, in words, where the wall is
+// exactly as thick as a convex circular rounding beside the face, tangent to
+// it (mitcad#2494): the rounding's offset is its axis, and the offset of the
+// face beyond the rounding meets the removed face's plane on the face's edge
+// itself, a rim of no width, which the geometry kernel's thick solid cannot
+// build (a box with its top edges rounded 2 mm, shelled 2 mm with the top
+// open). Empty where there is no such rounding.
+std::string rim_of_no_width(const Shape& body, const std::set<int>& removed, double offset) {
+  if (offset >= 0.0) {
+    return {};
+  }
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of_edge;
+  TopExp::MapShapesAndAncestors(body.occt(), TopAbs_EDGE, TopAbs_FACE, faces_of_edge);
+  for (const int f : removed) {
+    const TopoDS_Face& face = body.face(f);
+    for (TopExp_Explorer edges(face, TopAbs_EDGE); edges.More(); edges.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(edges.Current());
+      const NCollection_List<TopoDS_Shape>* beside = faces_of_edge.Seek(edge);
+      if (beside == nullptr || BRep_Tool::Degenerated(edge)) {
+        continue;
+      }
+      for (const TopoDS_Shape& other : *beside) {
+        const int g = body.face_index(other);
+        if (other.IsSame(face) || g < 0 || removed.count(g) > 0 ||
+            BRep_Tool::Continuity(edge, face, TopoDS::Face(other)) < GeomAbs_G1) {
+          continue;
+        }
+        const BRepAdaptor_Surface surface(TopoDS::Face(other));
+        if (surface.GetType() != GeomAbs_Cylinder) {
+          continue;
+        }
+        const gp_Cylinder cylinder = surface.Cylinder();
+        if (std::abs(cylinder.Radius() + offset) > 1e-4) {
+          continue;
+        }
+        // Convex: the face's outward normal points away from the axis.
+        double u1 = 0.0, u2 = 0.0, v1 = 0.0, v2 = 0.0;
+        BRepTools::UVBounds(TopoDS::Face(other), u1, u2, v1, v2);
+        gp_Pnt point;
+        gp_Vec du, dv;
+        surface.D1(0.5 * (u1 + u2), 0.5 * (v1 + v2), point, du, dv);
+        gp_Vec normal = du.Crossed(dv);
+        if (other.Orientation() == TopAbs_REVERSED) {
+          normal.Reverse();
+        }
+        const gp_Ax1 axis = cylinder.Axis();
+        gp_Vec radial(axis.Location(), point);
+        radial -= gp_Vec(axis.Direction()) * radial.Dot(gp_Vec(axis.Direction()));
+        if (normal.Dot(radial) <= 0.0) {
+          continue;
+        }
+        char radius[32];
+        std::snprintf(radius, sizeof radius, "%g", cylinder.Radius());
+        // The words for the person; the rounding and the removed face are
+        // the error's places, named in its detail.
+        const std::string said = std::string("shell failed; the wall is exactly as thick as a rounding beside "
+                                             "the removed face (radius ") +
+                                 radius +
+                                 " mm): the inside of the wall would meet that face on its own edge, in a rim "
+                                 "of no width, which cannot be built; make the wall thinner or thicker than the "
+                                 "rounding";
+        const std::string rounding = detail::primary_name(body, g);
+        const std::string top = detail::primary_name(body, f);
+        return placed_error(said, said + " (the rounding " + rounding + ", the removed face " + top + ")",
+                            {face_place(rounding), face_place(top)});
+      }
+    }
+  }
+  return {};
+}
+
 // The wall between the body's surface and its offset by `offset` (negative
 // inside), with the removed faces open. The outside of the wall keeps the
 // face names; the inside is offset(<face>). The faces of `own_offsets` (of
@@ -750,7 +915,8 @@ ShapePtr thick_solid(const std::string& feature, const Shape& input, const std::
     });
   });
   if (!maker.IsDone()) {
-    throw std::runtime_error(offset_failure(maker.MakeOffset()));
+    const std::string rim = rim_of_no_width(body, removed, offset);
+    throw std::runtime_error(rim.empty() ? offset_failure(maker.MakeOffset()) : rim);
   }
   detail::shell_dump("thick-result", maker.Shape());
   const TopoDS_Shape result = single_solid(maker.Shape(), "the shell");
@@ -1020,8 +1186,10 @@ ShapePtr cavity_shell(const std::string& feature, const Shape& input, const std:
   std::set<int> removed = removed_faces;
   const ShapePtr split = split_at_creases(*copy, removed);
   const Shape& body = split ? *split : *copy;
+  detail::shell_dump("cavity-input", body.occt());
   ShapePtr result = detail::shell_by_cavity(feature, body, removed, inside, join, outer ? *outer : body);
   if (result) {
+    detail::shell_dump("cavity-result", result->occt());
     try {
       check_result(result, "the shell");
     } catch (const std::runtime_error& error) {
@@ -1479,6 +1647,202 @@ std::pair<double, double> extent_along(const TopoDS_Face& face, const gp_Dir& up
   return {zmin, zmax};
 }
 
+// Whether the curve runs straight from its point at `first` to its point at
+// `last` at a constant speed (a line, or a degree-1 Bezier or B-spline
+// curve): its quarter points within `tolerance` of the segment's.
+bool runs_straight(const occ::handle<Geom_Curve>& curve, double first, double last, double tolerance) {
+  const gp_Pnt a = curve->Value(first);
+  const gp_Pnt b = curve->Value(last);
+  for (int k = 1; k < 4; ++k) {
+    const double s = k / 4.0;
+    const gp_Pnt expected(a.XYZ() * (1.0 - s) + b.XYZ() * s);
+    if (curve->Value(first + s * (last - first)).Distance(expected) > tolerance) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool runs_straight(const occ::handle<Geom2d_Curve>& curve, double first, double last, double tolerance) {
+  const gp_Pnt2d a = curve->Value(first);
+  const gp_Pnt2d b = curve->Value(last);
+  for (int k = 1; k < 4; ++k) {
+    const double s = k / 4.0;
+    const gp_Pnt2d expected(a.XY() * (1.0 - s) + b.XY() * s);
+    if (curve->Value(first + s * (last - first)).Distance(expected) > tolerance) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// (mitcad#2478, GitHub mitcad/Mitcad#697) The seams of a face that run
+// straight but are stored as other curves given the lines they are, in 3D
+// and on the face, by length, in place (the working copy's edges; the
+// geometry they shared with the input is replaced, not changed). A loft
+// between two coaxial circles has a cone whose seam is a degree-1 Bezier
+// curve over [0, 1] in 3D and on the cone: offset, the cone's seam must be
+// extended or trimmed to the caps' new edges, and the geometry kernel's
+// offset came out with that seam's two sides as two edges, an open shell
+// that it dropped (BRepOffset_Tool::Deboucle3D) for a null result, whatever
+// the distance. The same seam as a line offsets as a primitive cone's does.
+// Only where the face's parameters run at the curve's length along it (a
+// cone's or a cylinder's ruling, a plane), so that one parameter serves
+// both; other seams stay as they are.
+void straight_seams_as_lines(const TopoDS_Face& placed) {
+  // Forward: the curves read as the builder stores them, the first for the
+  // edge forward (BRep_Tool::CurveOnSurface turns the edge round on a
+  // reversed face, BRep_Builder::UpdateEdge does not; a tapered
+  // extrusion's cone is a reversed face).
+  const TopoDS_Face face = TopoDS::Face(placed.Oriented(TopAbs_FORWARD));
+  constexpr double kStraight = 1.0e-9;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
+  BRep_Builder builder;
+  for (TopExp_Explorer edges(face, TopAbs_EDGE); edges.More(); edges.Next()) {
+    const TopoDS_Edge edge = TopoDS::Edge(edges.Current().Oriented(TopAbs_FORWARD));
+    if (!seen.Add(edge) || BRep_Tool::Degenerated(edge) || !BRepTools::IsReallyClosed(edge, face)) {
+      continue;
+    }
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, first, last);
+    double first1 = 0.0;
+    double last1 = 0.0;
+    double first2 = 0.0;
+    double last2 = 0.0;
+    const occ::handle<Geom2d_Curve> forward = BRep_Tool::CurveOnSurface(edge, face, first1, last1);
+    const occ::handle<Geom2d_Curve> reversed =
+        BRep_Tool::CurveOnSurface(TopoDS::Edge(edge.Reversed()), face, first2, last2);
+    if (curve.IsNull() || forward.IsNull() || reversed.IsNull() || !(last > first) || first1 != first ||
+        last1 != last || first2 != first || last2 != last) {
+      continue;
+    }
+    if (curve->IsKind(STANDARD_TYPE(Geom_Line)) && forward->IsKind(STANDARD_TYPE(Geom2d_Line)) &&
+        reversed->IsKind(STANDARD_TYPE(Geom2d_Line))) {
+      continue; // a line already
+    }
+    const gp_Pnt a = curve->Value(first);
+    const gp_Pnt b = curve->Value(last);
+    const double length = a.Distance(b);
+    const double straight = kStraight * std::max(1.0, length);
+    if (!(length > Precision::Confusion()) || !runs_straight(curve, first, last, straight)) {
+      continue;
+    }
+    const gp_Pnt2d p1 = forward->Value(first);
+    const gp_Pnt2d q1 = forward->Value(last);
+    const gp_Pnt2d p2 = reversed->Value(first);
+    const gp_Pnt2d q2 = reversed->Value(last);
+    // On the face at the curve's length: the same parameter in 3D and on it.
+    if (std::abs(p1.Distance(q1) - length) > straight || std::abs(p2.Distance(q2) - length) > straight ||
+        !runs_straight(forward, first, last, straight) || !runs_straight(reversed, first, last, straight)) {
+      continue;
+    }
+    const double tolerance = BRep_Tool::Tolerance(edge);
+    builder.UpdateEdge(edge, new Geom_Line(a, gp_Dir(gp_Vec(a, b))), tolerance);
+    builder.UpdateEdge(edge, new Geom2d_Line(p1, gp_Dir2d(gp_Vec2d(p1, q1))),
+                       new Geom2d_Line(p2, gp_Dir2d(gp_Vec2d(p2, q2))), face, tolerance);
+    builder.Range(edge, 0.0, length);
+    builder.SameRange(edge, true);
+    builder.SameParameter(edge, true);
+  }
+}
+
+// (mitcad#2509, GitHub mitcad/Mitcad#697) The B-spline surface with each
+// knot that repeats as often as its degree (a crease by its knots, which
+// makes the surface only C0 continuous to the kernel) repeated once less
+// where the surface is continuous in its first derivative there all the
+// same (in its homogeneous coordinates, within 1e-9 mm, so the same
+// surface with the same parameters); null when no knot changed or a crease
+// stays. The sides of a loft through four or more sections are piecewise
+// cubic Hermite surfaces, their inner knots three times over though the
+// pieces meet with one tangent (skin.hpp, HermiteInterpolation): the
+// geometry kernel's offset refuses any C0 surface of the body
+// (BRepOffset_C0Geometry, in BRepOffset_MakeOffset's check of its input),
+// and Offset Face on such a side said "the neighbouring faces cannot follow
+// the moved faces".
+occ::handle<Geom_BSplineSurface> without_false_creases(const occ::handle<Geom_BSplineSurface>& surface) {
+  constexpr double kSame = 1.0e-9;
+  const occ::handle<Geom_BSplineSurface> smoothed = occ::down_cast<Geom_BSplineSurface>(surface->Copy());
+  bool changed = false;
+  try {
+    for (const bool along_u : {true, false}) {
+      const int degree = along_u ? smoothed->UDegree() : smoothed->VDegree();
+      const bool periodic = along_u ? smoothed->IsUPeriodic() : smoothed->IsVPeriodic();
+      const int first = along_u ? smoothed->FirstUKnotIndex() : smoothed->FirstVKnotIndex();
+      const int last = along_u ? smoothed->LastUKnotIndex() : smoothed->LastVKnotIndex();
+      if (degree < 2) {
+        continue;
+      }
+      // The inner knots; of a periodic surface every knot but the last,
+      // which is the first one again.
+      for (int k = periodic ? first : first + 1; k < last; ++k) {
+        const int times = along_u ? smoothed->UMultiplicity(k) : smoothed->VMultiplicity(k);
+        if (times < degree) {
+          continue;
+        }
+        const bool lowered = along_u ? smoothed->RemoveUKnot(k, degree - 1, kSame)
+                                     : smoothed->RemoveVKnot(k, degree - 1, kSame);
+        changed = changed || lowered;
+      }
+    }
+  } catch (const Standard_Failure&) {
+    return occ::handle<Geom_BSplineSurface>();
+  }
+  if (!changed || smoothed->Continuity() == GeomAbs_C0) {
+    return occ::handle<Geom_BSplineSurface>();
+  }
+  return smoothed;
+}
+
+// Each face of the shape on a B-spline surface that is C0 only by its knots
+// put on the same surface with those knots once less (without_false_creases),
+// its edges' curves on it carried over; in place (the working copy). Faces
+// with a true crease stay as they are.
+void lower_false_creases(const TopoDS_Shape& shape) {
+  BRep_Builder builder;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> done;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    const TopoDS_Face face = TopoDS::Face(it.Current().Oriented(TopAbs_FORWARD));
+    if (!done.Add(face.Located(TopLoc_Location()))) {
+      continue;
+    }
+    TopLoc_Location location;
+    const occ::handle<Geom_BSplineSurface> spline =
+        occ::down_cast<Geom_BSplineSurface>(BRep_Tool::Surface(face, location));
+    if (spline.IsNull() || spline->Continuity() != GeomAbs_C0) {
+      continue;
+    }
+    if (const occ::handle<Geom_BSplineSurface> smoothed = without_false_creases(spline)) {
+      put_on_same_parameters(face, smoothed, location, builder);
+    }
+  }
+}
+
+// The words of a refusal of the kernel's offset of the body for a face
+// whose surface has a crease inside it (BRepOffset_C0Geometry), which no
+// knot removal smoothed: the faces with one as its places.
+std::string creased_faces_error(const Shape& body) {
+  std::string names;
+  std::vector<ErrorPlace> places;
+  for (int i = 0; i < body.face_count(); ++i) {
+    const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(body.face(i));
+    if (surface.IsNull() || surface->Continuity() != GeomAbs_C0) {
+      continue;
+    }
+    const std::string name = detail::primary_name(body, i);
+    if (!name.empty()) {
+      names += (names.empty() ? "" : ", ") + name;
+      places.push_back(face_place(name));
+    }
+  }
+  return placed_error(
+      "the neighbouring faces cannot follow the moved faces: a face of the body has a crease inside it (its "
+      "surface is continuous only in position there), which the geometry kernel's offset does not take",
+      "the kernel's offset refuses the body: the surface of " + (names.empty() ? std::string("a face") : names) +
+          " is only C0 continuous inside the face (BRepOffset_C0Geometry)",
+      places);
+}
+
 // Moves each face by its own offset; the other faces stay on their surfaces.
 // `except` are faces not to carry the names of.
 detail::FaceNamer move_faces(const Shape& input, const std::vector<std::pair<int, double>>& moves,
@@ -1486,6 +1850,11 @@ detail::FaceNamer move_faces(const Shape& input, const std::vector<std::pair<int
   // OCCT's offset widens the tolerances of its input's sub-shapes.
   const ShapePtr copy = detail::working_copy(input);
   const Shape& body = *copy;
+  for (const auto& move : moves) {
+    straight_seams_as_lines(body.face(move.first));
+  }
+  // The kernel checks every face of the body, not only the moved ones.
+  lower_false_creases(body.occt());
   BRepOffset_MakeOffset maker;
   maker.Initialize(offset_input(body.occt()), 0.0, kTolerance, BRepOffset_Skin, false, false,
                    GeomAbs_Intersection, false, false);
@@ -1493,6 +1862,35 @@ detail::FaceNamer move_faces(const Shape& input, const std::vector<std::pair<int
     maker.SetOffsetOnFace(body.face(face), distance);
   }
   detail::interruptible([&](const Message_ProgressRange& range) { maker.MakeOffsetShape(range); });
+  // The kernel's offset rebuilds every face of the body, also those far from
+  // the moved ones. Where its rebuilt faces leave gaps anywhere on the body,
+  // its last step drops the shell that does not close up: OCCT port patch
+  // 2457 makes that an error (BRepOffset_UnknownError) where the kernel
+  // reported success with no shape at all (mitcad#2457, GitHub #678: a
+  // shelled block's inner roundings moved 2 mm, the gaps at a corner of
+  // small blends far from them). Either is said in words; an empty result
+  // is not read.
+  if ((!maker.IsDone() && maker.Error() == BRepOffset_UnknownError) ||
+      (maker.IsDone() && maker.Shape().IsNull())) {
+    std::string names;
+    std::vector<ErrorPlace> places;
+    for (const auto& [face, distance] : moves) {
+      (void)distance;
+      const std::string name = detail::primary_name(body, face);
+      names += (names.empty() ? "" : ", ") + name;
+      places.push_back(face_place(name));
+    }
+    throw std::runtime_error(placed_error(
+        "the faces cannot be moved: the body rebuilt around them does not close up (the geometry "
+        "kernel's offset leaves gaps between the body's faces)",
+        "the kernel's offset of the body with " + names +
+            " moved gave no shape: its rebuilt faces leave free edges and the shell that does not "
+            "close up was dropped",
+        places));
+  }
+  if (!maker.IsDone() && maker.Error() == BRepOffset_C0Geometry) {
+    throw std::runtime_error(creased_faces_error(body));
+  }
   if (!maker.IsDone()) {
     throw std::runtime_error("the neighbouring faces cannot follow the moved faces");
   }
@@ -2138,6 +2536,64 @@ bool reaches_far_side(const Shape& body, int face, double distance) {
   return swept - inside > 1.0e-6 * swept;
 }
 
+// How far a face beside a moved one may reach past the moved face's new
+// place and still count as passed over (passes_over_neighbour): the
+// rounding of positions the earlier features computed, far below any wall
+// a design has.
+constexpr double kPassedOver = 1.0e-4;
+
+// True when a planar face, moved its distance along its normal, passes over
+// a face beside it (mitcad#2541, GitHub #717): a face that stays, shares an
+// edge with the moved face and lies wholly between the face's place and
+// its new one along the normal. Such a face shrinks to nothing (the 3 mm
+// wall between a shell's inner ceiling and the rim below it when either
+// goes onto the other's plane, a pocket's walls when its floor goes onto
+// the top) or would have to turn inside out. The geometry kernel's offset
+// extends and shortens the faces beside the moved ones along their
+// surfaces but never removes one: on the reported shelled body it stopped
+// with an internal lookup failure ("NCollection_DataMap::Find"). The region
+// between the faces and the target is added or removed instead
+// (replace_by_slab), which takes the face passed over with it.
+bool passes_over_neighbour(const Shape& body, const std::vector<std::pair<int, double>>& moves) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+      ancestors;
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_EDGE, TopAbs_FACE, ancestors);
+  const auto is_moved = [&moves](int g) {
+    return std::any_of(moves.begin(), moves.end(), [g](const auto& move) { return move.first == g; });
+  };
+  for (const auto& move : moves) {
+    const int face = move.first;
+    const double distance = move.second;
+    const std::optional<gp_Pln> plane = detail::face_plane(body.face(face));
+    if (!plane || !(std::abs(distance) > kPassedOver)) {
+      continue;
+    }
+    const gp_Dir normal = plane->Axis().Direction();
+    const double level = gp_Vec(plane->Location().XYZ()).Dot(gp_Vec(normal));
+    // The span the face sweeps along its normal.
+    const double low = std::min(level, level + distance) - kPassedOver;
+    const double high = std::max(level, level + distance) + kPassedOver;
+    for (TopExp_Explorer it(body.face(face), TopAbs_EDGE); it.More(); it.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+      if (BRep_Tool::Degenerated(edge) || !ancestors.Contains(edge)) {
+        continue;
+      }
+      for (const TopoDS_Shape& other : ancestors.FindFromKey(edge)) {
+        const int g = body.face_index(other);
+        if (g < 0 || is_moved(g)) {
+          continue;
+        }
+        const std::pair<double, double> extent = extent_along(TopoDS::Face(other), normal);
+        // A wall (not a face in the moved face's plane) within the span.
+        if (extent.second - extent.first > kPassedOver && extent.first >= low && extent.second <= high) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 ShapePtr offset_faces(const std::string& feature, const Shape& body,
@@ -2166,16 +2622,51 @@ ShapePtr offset_faces(const std::string& feature, const Shape& body,
       check_result(result, "the offset");
       return result;
     }
-    std::vector<std::pair<int, double>> moves;
-    for (int f : chosen) {
-      moves.emplace_back(f, distance);
+    // Planar faces in one plane (mitcad#2548): onto the level of another
+    // planar face of the body where they end within detail::kPlanarLevel
+    // of it, and across the body's other faces where the offset of the
+    // body cannot follow (a raised block's end offset flush with the side
+    // of the base under it, or past it), as Move Face's.
+    std::optional<gp_Pln> plane;
+    bool lands = false;
+    double exact = distance;
+    if (const std::optional<gp_Pln> own = detail::face_plane(body.face(chosen.front()))) {
+      const gp_Vec outward(own->Axis().Direction());
+      plane = detail::movable_plane(body, chosen, outward * distance);
+      if (plane) {
+        if (const std::optional<gp_Vec> landed = detail::landing_motion(body, chosen, *plane, outward * distance)) {
+          exact = landed->Dot(outward);
+          lands = true;
+        }
+      }
     }
-    NCollection_List<TopoDS_Shape> moved;
-    detail::FaceNamer namer = move_faces(body, moves, {}, moved);
-    namer.finish();
-    ShapePtr result = namer.shape();
-    check_result(result, "the offset");
-    return result;
+    const auto own = [&] {
+      std::vector<std::pair<int, double>> moves;
+      for (int f : chosen) {
+        moves.emplace_back(f, exact);
+      }
+      NCollection_List<TopoDS_Shape> moved;
+      detail::FaceNamer namer = move_faces(body, moves, {}, moved);
+      namer.finish();
+      ShapePtr result = namer.shape();
+      check_result(result, "the offset");
+      return result;
+    };
+    if (!plane) {
+      return own();
+    }
+    // The offset of the body keeps its topology; where the faces'
+    // boundaries meet or cross other faces, the region they sweep is added
+    // or removed and the faces around are trimmed where they meet. Faces
+    // that land on another face's level may join it: there that comes
+    // first. Where neither works, the offset's own reason.
+    const auto across = [&] {
+      ShapePtr result = detail::move_planar_faces(body, chosen, *plane,
+                                                  gp_Vec(plane->Axis().Direction()) * exact, feature);
+      check_result(result, "the offset");
+      return result;
+    };
+    return lands ? detail::first_of(across, own, 1) : detail::first_of(own, across, 0);
   });
 }
 
@@ -2305,10 +2796,13 @@ ShapePtr replace_faces(const std::string& feature, const Shape& body,
     // A face moved into the material up to the body's far side or past it
     // (a pocket's floor onto the outside face under it, or beyond): the
     // region between the faces and the target is removed, so the wall
-    // between goes and the opening is open (mitcad#2381).
-    if (!tilted && std::any_of(moves.begin(), moves.end(), [&](const auto& move) {
-          return reaches_far_side(body, move.first, move.second);
-        })) {
+    // between goes and the opening is open (mitcad#2381). The same region
+    // where a face moves over a face beside it, which shrinks to nothing
+    // and goes with the region (mitcad#2541).
+    if (!tilted && (passes_over_neighbour(body, moves) ||
+                    std::any_of(moves.begin(), moves.end(), [&](const auto& move) {
+                      return reaches_far_side(body, move.first, move.second);
+                    }))) {
       ShapePtr through = detail::replace_by_slab(body, chosen, target, name);
       check_result(through, "replacing faces");
       return through;

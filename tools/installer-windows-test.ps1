@@ -5,8 +5,9 @@
 # folder is given). For each it installs the NSIS installer of a build
 # directory silently into a folder of its own and checks the registration
 # of that scope (the uninstall entry, installation.ini, the .mitcad file
-# type and its thumbnail handler, mitcad#1695, the Start menu shortcut)
-# and none in the other scope.
+# type and its thumbnail handler, mitcad#1695, MitCad under Open with for
+# the files it imports, mitcad#2555, the Start menu shortcut) and none in
+# the other scope.
 #   0. the installer runs as the user: its manifest asks for no elevation
 #      (asInvoker), so a per-user installation and its updates have no UAC
 #      prompt; only /AllUsers elevates (which session 0 cannot show: the
@@ -211,6 +212,44 @@ function Test-Registered([string]$In, [string]$Install, [string]$When) {
   $shortcut = Join-Path $startMenu[$In] 'MitCad\MitCad.lnk'
   if (Test-Path $shortcut) { Pass "${When}: Start menu shortcut $shortcut" } else { Fail "${When}: no $shortcut" }
   Test-ThumbnailHandler $In $Install $When
+  Test-OpenWith $In $Install $When
+}
+
+# MitCad under Explorer's Open with for the files it imports (mitcad#2527,
+# mitcad#2555): the extensions of packaging\windows\filetype.nsh's
+# MitcadImportExtensions, read from it so that the test follows the list.
+# Each one's OpenWithProgids has the empty string value Mitcad.Import in
+# the scope's Software\Classes, whose open command runs the installed
+# mitcad.exe --open; the extension's own default is not made MitCad's.
+$importExtensions = @(Select-String -Path (Join-Path $PSScriptRoot '..\packaging\windows\filetype.nsh') `
+    -Pattern '^\s*!insertmacro\s+\$\{OPERATION\}\s+(\S+)\s*$' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+function Test-OpenWith([string]$In, [string]$Install, [string]$When) {
+  $classes = "$($hive[$In])\Software\Classes"
+  if ($importExtensions.Count -lt 10 -or $importExtensions -notcontains 'step') {
+    Fail "${When}: the import extensions of filetype.nsh were not read (found: $($importExtensions -join ', '))"
+    return
+  }
+  $command = Get-Default "$classes\Mitcad.Import\shell\open\command"
+  if ($command -and $command.Contains("$Install\bin\mitcad.exe") -and $command.Contains('--open')) {
+    Pass "${When}: Mitcad.Import opens with $command ($($hive[$In]))"
+  } else { Fail "${When}: the Mitcad.Import command in $classes is '$command'" }
+  $missing = @()
+  $taken = @()
+  foreach ($extension in $importExtensions) {
+    $key = Get-Item "$classes\.$extension\OpenWithProgids" -ErrorAction SilentlyContinue
+    if (-not $key -or $key.GetValueNames() -notcontains 'Mitcad.Import' -or
+        $key.GetValueKind('Mitcad.Import') -ne [Microsoft.Win32.RegistryValueKind]::String -or
+        $key.GetValue('Mitcad.Import') -ne '') {
+      $missing += ".$extension"
+    }
+    $default = Get-Default "$classes\.$extension"
+    if ($default -eq 'Mitcad.Import' -or $default -eq 'Mitcad.Project') { $taken += ".$extension" }
+  }
+  if ($missing.Count -eq 0) {
+    Pass "${When}: MitCad is under Open with for $($importExtensions.Count) import extensions ($($hive[$In]))"
+  } else { Fail "${When}: no Open with value Mitcad.Import in $classes for $($missing -join ', ')" }
+  if ($taken.Count -eq 0) { Pass "${When}: the import extensions' own defaults are not MitCad's" }
+  else { Fail "${When}: the default of $($taken -join ', ') in $classes was made MitCad's" }
 }
 
 # Explorer's thumbnails of designs (mitcad#1695): the thumbnail handler
@@ -253,10 +292,18 @@ function Test-Unregistered([string]$In, [string]$Install) {
   if (Test-Path (Join-Path $Install 'installation.ini')) { Fail 'installation.ini remains' } else { Pass 'installation.ini removed' }
   $classes = "$($hive[$In])\Software\Classes"
   $left = @($uninstallKeys[$In] + $vendorKeys[$In] + "$classes\.mitcad", "$classes\Mitcad.Project",
-            "$classes\CLSID\{3A94966B-4167-4E3A-81FA-E3F4B2233496}" |
+            "$classes\Mitcad.Import", "$classes\CLSID\{3A94966B-4167-4E3A-81FA-E3F4B2233496}" |
     Where-Object { Test-Path $_ })
   if ($left.Count -eq 0) { Pass "no registry key of the installation left in $($hive[$In])" }
   else { Fail "left in the registry: $($left -join ', ')" }
+  # The Open with values go; the OpenWithProgids keys, which other programs
+  # may share, stay (mitcad#2555).
+  $openWith = @($importExtensions | Where-Object {
+      $key = Get-Item "$classes\.$_\OpenWithProgids" -ErrorAction SilentlyContinue
+      $key -and $key.GetValueNames() -contains 'Mitcad.Import'
+    } | ForEach-Object { ".$_" })
+  if ($openWith.Count -eq 0) { Pass "no Open with value Mitcad.Import left in $($hive[$In])" }
+  else { Fail "Open with values Mitcad.Import left in $classes for $($openWith -join ', ')" }
   $folder = Join-Path $startMenu[$In] 'MitCad'
   if (Test-Path $folder) { Fail "the Start menu folder $folder remains" } else { Pass 'Start menu folder removed' }
 }

@@ -1056,6 +1056,7 @@ fn follow_references(
             }
             FeatureDef::Combine(c) => c.has_links(),
             FeatureDef::Sweep(s) => !s.body_links.is_empty(),
+            FeatureDef::IsoparametricCurve(i) => !i.links.is_empty(),
             FeatureDef::SplitBody(s) => !s.tool_links.is_empty(),
             FeatureDef::Extrude(x) => !x.object_links.is_empty(),
             FeatureDef::Revolve(r) => !r.object_links.is_empty(),
@@ -1100,6 +1101,13 @@ fn follow_references(
             }
             FeatureDef::Sweep(sweep) => {
                 for (body, link) in &mut sweep.body_links {
+                    follow(link, &BTreeSet::from([body.feature]), own);
+                }
+            }
+            // An Isoparametric Curve on another component's face
+            // (mitcad#2554), as a sweep's.
+            FeatureDef::IsoparametricCurve(iso) => {
+                for (body, link) in &mut iso.links {
                     follow(link, &BTreeSet::from([body.feature]), own);
                 }
             }

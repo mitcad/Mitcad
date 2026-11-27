@@ -35,6 +35,8 @@
 #include <QTemporaryDir>
 #include <QTimer>
 
+#include "bundled_test.hpp"
+
 using mitcad::agent::ApiAgent;
 using mitcad::agent::ChatAgent;
 using mitcad::agent::ChatNotifier;
@@ -288,7 +290,7 @@ int turnEnds(const QList<QJsonObject>& events) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(api_agent) {
   QCoreApplication application(argc, argv);
   QCoreApplication::setOrganizationName(QStringLiteral("MitcadTest"));
   QCoreApplication::setApplicationName(QStringLiteral("api_agent"));

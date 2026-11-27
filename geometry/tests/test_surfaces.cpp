@@ -27,6 +27,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/input_check.hpp"
 #include "mitcad/geometry/surfaces.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -271,7 +272,7 @@ void test_surfaces_are_thickened() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(surfaces) {
   mitcad::geometry::enable_input_checks(true);
   test::guarded("test_regions_are_patched_into_surface_bodies", test::test_regions_are_patched_into_surface_bodies);
   test::guarded("test_an_open_box_is_stitched_patched_and_closed",

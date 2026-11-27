@@ -387,6 +387,21 @@ const std::vector<RoleEntry>& roleTable() {
       // between the neutral one and the view's background, so the whole
       // cloud stays in sight without reading as within tolerance.
       MITCAD_ROLE(DeviationUnmeasured, hex(0xcfcfcf), hex(0x6e6e6e), View, DeviationUnmeasured),
+      // Surface quality analyses (mitcad#2517): a Zebra's near black and
+      // near white stripes; a Curvature Map's blue hollow, grey flat and
+      // magenta bulging ends, none of the status hues, far apart in hue;
+      // dark blue iso curves over the faces; the studio picture's pale sky,
+      // dark floor and white lights. The same on either background: the
+      // colors are baked into the vertices and the picture.
+      MITCAD_SAME(ZebraDark, hex(0x1d2126), View),
+      MITCAD_SAME(ZebraLight, hex(0xf3f5f8), View),
+      MITCAD_SAME(CurvatureConcave, hex(0x3366b3), View),
+      MITCAD_SAME(CurvatureFlat, hex(0xb0b4ba), View),
+      MITCAD_SAME(CurvatureConvex, hex(0xc2408f), View),
+      MITCAD_SAME(Isocurve, hex(0x1b2a4a), View),
+      MITCAD_SAME(EnvironmentSky, hex(0xc9d8ea), View),
+      MITCAD_SAME(EnvironmentFloor, hex(0x3a3f46), View),
+      MITCAD_SAME(EnvironmentLight, hex(0xffffff), View),
       // The Boost development pill (mitcad#1990): an outline and a rocket in
       // a warm pink, the label in the window's text; it fills with a
       // translucent tint of the pink only under the pointer. At least 3:1
@@ -409,6 +424,19 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_ROLE(FormulaString, hex(0x505d00), hex(0xc8d46a), Text, FormulaString),
       MITCAD_ROLE(FormulaLine, hex(0xdde3ec), hex(0x23272e), Fill, Text),
       MITCAD_ROLE(FormulaBracket, hex(0xd3e2f7), hex(0x2b3b55), Fill, Text),
+      // Continuity Analysis' classes (mitcad#2521): magenta where the faces
+      // do not touch, violet G0, blue G1, teal G2, by the view's
+      // background; none of the status hues, each far in hue from the next.
+      MITCAD_ROLE(ContinuityNone, hex(0xb5179e), hex(0xe27ad3), View, ContinuityNone),
+      MITCAD_ROLE(ContinuityG0, hex(0x7b4fd0), hex(0xb398f2), View, ContinuityG0),
+      MITCAD_ROLE(ContinuityG1, hex(0x2166ac), hex(0x6b9be0), View, ContinuityG1),
+      MITCAD_ROLE(ContinuityG2, hex(0x00897b), hex(0x4dd0c0), View, ContinuityG2),
+      // The uncut stock's outline (mitcad#2569): the stock's own warm grey,
+      // darker on a light background and lighter on a dark one, at least
+      // 3:1 on every view background and over two of the stock's
+      // see-through faces (HiddenEdge's one grey-blue read 1.2:1 to 2:1 on
+      // the light ones).
+      MITCAD_ROLE(CamStockEdge, hex(0x5c5650), hex(0xc8c2b9), View, CamStockEdge),
   };
   return table;
 }

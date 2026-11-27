@@ -47,6 +47,15 @@ elseif(APPLE)
   set(mitcad_browser_platform macos-arm64)
   set(mitcad_cef_platform macosarm64)
   set(mitcad_cef_base "$ENV{HOME}/cef")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  # Linux on 64-bit ARM: CEF's linuxarm64 distribution; the platform is the
+  # automatic updates' name of this build (app/update/UpdateSettings.cpp).
+  set(mitcad_browser_platform linux-arm64)
+  set(mitcad_cef_platform linuxarm64)
+  set(mitcad_cef_base "$ENV{HOME}/cef")
+  # CEF's cef_variables.cmake takes a Linux aarch64 machine for x86-64 (it
+  # knows ARM by the name arm64 only) and would add -m64 -march=x86-64.
+  set(PROJECT_ARCH arm64)
 else()
   set(mitcad_browser_platform linux-x64)
   set(mitcad_cef_platform linux64)

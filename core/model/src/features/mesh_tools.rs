@@ -41,22 +41,23 @@ use crate::mesh_tools::segment::{RegionKind, segment};
 use crate::mesh_tools::submesh;
 use crate::parameters::ParamId;
 
-/// The mesh body a mesh edit makes its new bodies of, which adding it
-/// hides (`document/mesh_convert.rs`); None for other features.
-pub fn edited_mesh<P>(def: &super::FeatureDef<P>) -> Option<BodyUid> {
+/// The mesh bodies a mesh edit makes its new bodies of, which adding it
+/// hides (`document/mesh_convert.rs`); none for other features.
+pub fn edited_meshes<P>(def: &super::FeatureDef<P>) -> Vec<BodyUid> {
     use super::FeatureDef as F;
     match def {
-        F::MeshDecimate(d) => Some(d.body),
-        F::MeshRepair(d) => Some(d.body),
-        F::MeshRemove(d) => Some(d.body),
-        F::MeshSegment(d) => Some(d.body),
-        F::MeshFitSurface(d) => Some(d.body),
-        _ => None,
+        F::MeshDecimate(d) => vec![d.body],
+        F::MeshRepair(d) => vec![d.body],
+        F::MeshRemove(d) => vec![d.body],
+        F::MeshSegment(d) => vec![d.body],
+        F::MeshFitSurface(d) => vec![d.body],
+        // Smooth, Combine, Offset and Shell, Align, Plane Cut (mitcad#2515).
+        other => super::mesh_shape_tools::edited_meshes(other),
     }
 }
 
 /// A mesh body's triangles as they are stored.
-const AS_STORED: MeshTolerance = MeshTolerance {
+pub(super) const AS_STORED: MeshTolerance = MeshTolerance {
     deviation: 0.01,
     angle: 0.1,
     face_triangles: 0,
@@ -65,7 +66,7 @@ const AS_STORED: MeshTolerance = MeshTolerance {
 
 /// The mesh body's triangles as stored; refused, in words, for a body of
 /// another kind.
-fn stored_mesh_of<K: Kernel>(
+pub(super) fn stored_mesh_of<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     body: BodyUid,
     tool: &str,
@@ -93,7 +94,7 @@ fn stored_mesh_of<K: Kernel>(
 
 /// The mesh body's triangles with their shared corners joined
 /// ([`crate::mesh_tools::joined`]).
-fn mesh_of<K: Kernel>(
+pub(super) fn mesh_of<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     body: BodyUid,
     tool: &str,
@@ -106,7 +107,7 @@ fn mesh_of<K: Kernel>(
 }
 
 /// A new mesh body of the triangles, its face `<feature>:import(<face>)`.
-fn mesh_body<K: Kernel>(
+pub(super) fn mesh_body<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     mesh: &TriangleMesh,
     face: u32,
@@ -123,14 +124,20 @@ fn mesh_body<K: Kernel>(
 }
 
 /// One new body.
-fn one_body<S>(ctx_uid: BodyUid, shape: S) -> FeatureOutput<S> {
+pub(super) fn one_body<S>(ctx_uid: BodyUid, shape: S) -> FeatureOutput<S> {
     FeatureOutput {
         changes: vec![BodyChange::Set(ctx_uid, shape)],
         ..FeatureOutput::default()
     }
 }
 
-fn check_range(what: &str, value: f64, min: f64, max: f64, unit: &str) -> Result<(), String> {
+pub(super) fn check_range(
+    what: &str,
+    value: f64,
+    min: f64,
+    max: f64,
+    unit: &str,
+) -> Result<(), String> {
     if value.is_finite() && value > min && value <= max {
         Ok(())
     } else {
@@ -140,7 +147,7 @@ fn check_range(what: &str, value: f64, min: f64, max: f64, unit: &str) -> Result
     }
 }
 
-fn check_angle(what: &str, value: f64, max_degrees: f64) -> Result<(), String> {
+pub(super) fn check_angle(what: &str, value: f64, max_degrees: f64) -> Result<(), String> {
     if value.is_finite() && value > 0.0 && value <= max_degrees.to_radians() + 1e-12 {
         Ok(())
     } else {
@@ -151,7 +158,7 @@ fn check_angle(what: &str, value: f64, max_degrees: f64) -> Result<(), String> {
     }
 }
 
-fn plural(n: usize, one: &str, many: &str) -> String {
+pub(super) fn plural(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
         format!("1 {one}")
     } else {

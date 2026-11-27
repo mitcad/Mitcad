@@ -56,6 +56,9 @@ use mitcad_model_drawing::def::{Drawing, DrawingSheet, DrawingUid, Subject, Subj
 use mitcad_model_drawing::{P2, ViewSpec, section_axes};
 use mitcad_vec3::{dot, unit_div as unit};
 
+// The cutting paths and the plasma program (mitcad#2553).
+pub(super) mod cutting;
+
 fn yes() -> bool {
     true
 }
@@ -108,6 +111,14 @@ pub(super) struct AddCutSheetCommand {
     /// The parts placed by nesting (mitcad#1939).
     #[serde(default)]
     nest: bool,
+    /// The room between nested parts and from the sheet's edges, mm
+    /// (mitcad#2553); 5 when left out.
+    #[serde(default)]
+    gap: Option<f64>,
+    /// The plasma torch's settings (mitcad#2553); the defaults when left
+    /// out.
+    #[serde(default)]
+    cutting: Option<mitcad_cam::sheet_cut::PlasmaSettings>,
 }
 
 /// `edit_cut_sheet`: its name and its material's size.
@@ -124,6 +135,10 @@ pub(super) struct EditCutSheetCommand {
     /// The cutting beam's width, 0 for none (mitcad#1939).
     #[serde(default)]
     kerf: Option<f64>,
+    /// The plasma torch's settings that change (mitcad#2553); the others
+    /// stay.
+    #[serde(default)]
+    cutting: Option<serde_json::Map<String, Value>>,
 }
 
 /// `add_cut_sheet_parts`: bodies as parts, each `count` times.
@@ -228,6 +243,8 @@ named_enum! {
             #[serde(default)]
             gap: Option<f64>,
         },
+        // The plasma program written to a file (mitcad#2553).
+        "post_cut_sheet" => Post(Box<cutting::PostCutSheetCommand>),
     }
 }
 
@@ -397,8 +414,14 @@ pub(super) trait CutSheetsOps<K: Kernel> {
     fn cut_sheet_json(&self, query: &CutSheetQuery) -> Result<Value, ApiError>;
 
     /// The `drawing` query of a cut sheet: its sheet with its parts as
-    /// views (`type` `part`) and their outlines as groups.
-    fn cut_sheet_drawing_json(&self, drawing: &Drawing, geometry: bool) -> Value;
+    /// views (`type` `part`) and their outlines as groups; with
+    /// `cutting_paths` its cutting paths too (mitcad#2553).
+    fn cut_sheet_drawing_json(
+        &self,
+        drawing: &Drawing,
+        geometry: bool,
+        cutting_paths: bool,
+    ) -> Value;
 
     /// A part moved, turned or seen along another face.
     fn edit_cut_part(
@@ -458,6 +481,25 @@ trait CutSheetsLocal<K: Kernel> {
 }
 
 /// A kerf as a cut sheet keeps it: none for 0 (mitcad#1939).
+/// The room between nested parts as given, or the default (mitcad#2553).
+fn check_gap(gap: Option<f64>) -> Result<f64, ApiError> {
+    let gap = gap.unwrap_or(GAP);
+    if !gap.is_finite() || gap < 0.0 {
+        return Err(ApiError(format!("the gap must not be negative, got {gap}")));
+    }
+    Ok(gap)
+}
+
+/// Torch settings as given, if they can cut (mitcad#2553).
+fn check_cutting(
+    cutting: Option<mitcad_cam::sheet_cut::PlasmaSettings>,
+) -> Result<Option<mitcad_cam::sheet_cut::PlasmaSettings>, ApiError> {
+    if let Some(settings) = &cutting {
+        settings.check().map_err(|e| ApiError(e.message))?;
+    }
+    Ok(cutting)
+}
+
 fn check_kerf(kerf: Option<f64>) -> Result<Option<f64>, ApiError> {
     match kerf {
         None => Ok(None),
@@ -986,15 +1028,17 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                         height,
                         parts: Vec::new(),
                         kerf: check_kerf(c.kerf)?,
+                        cutting: check_cutting(c.cutting.clone())?,
                     }),
                 };
+                let gap = check_gap(c.gap)?;
                 let parts = self.new_parts(&drawing, &c.bodies, None, c.count, None, c.flat)?;
                 let ids: Vec<u32> = parts.iter().map(|p| p.id).collect();
                 if let Some(cut) = &mut drawing.cut_sheet {
                     cut.parts = parts;
                 }
                 if c.nest {
-                    nest_parts(self, &mut drawing, GAP)?;
+                    nest_parts(self, &mut drawing, gap)?;
                 }
                 let uid = self.add_drawing(drawing)?;
                 let added = self.find_drawing(&uid.to_string())?.clone();
@@ -1019,8 +1063,23 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 if c.kerf.is_some() {
                     cut.kerf = check_kerf(c.kerf)?;
                 }
+                if let Some(changes) = &c.cutting {
+                    let mut value = json!(cut.cutting.clone().unwrap_or_default());
+                    if let Some(fields) = value.as_object_mut() {
+                        for (key, field) in changes {
+                            fields.insert(key.clone(), field.clone());
+                        }
+                    }
+                    let settings = serde_json::from_value(value)
+                        .map_err(|e| ApiError(format!("the cutting settings: {e}")))?;
+                    cut.cutting = check_cutting(Some(settings))?;
+                }
                 changed.cut_sheet = Some(cut);
-                let label = if c.width.is_none() && c.height.is_none() && c.kerf.is_none() {
+                let label = if c.width.is_none()
+                    && c.height.is_none()
+                    && c.kerf.is_none()
+                    && c.cutting.is_none()
+                {
                     format!("Rename {}", old.name)
                 } else {
                     format!("Edit {}", old.name)
@@ -1075,12 +1134,10 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 &|_: &str| Ok(()),
             ),
             CutSheetCommand::ExportFace(c) => self.export_face_dxf(&c),
+            CutSheetCommand::Post(c) => cutting::post(self, &c),
             CutSheetCommand::Nest { drawing, gap } => {
                 let (old, _) = self.find_cut_sheet(&drawing)?;
-                let gap = gap.unwrap_or(GAP);
-                if !gap.is_finite() || gap < 0.0 {
-                    return Err(ApiError(format!("the gap must not be negative, got {gap}")));
-                }
+                let gap = check_gap(gap)?;
                 let mut changed = old.clone();
                 nest_parts(self, &mut changed, gap)?;
                 self.set_drawing(old.uid, format!("Nest the parts of {}", old.name), changed)?;
@@ -1299,7 +1356,12 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
         }))
     }
 
-    fn cut_sheet_drawing_json(&self, drawing: &Drawing, geometry: bool) -> Value {
+    fn cut_sheet_drawing_json(
+        &self,
+        drawing: &Drawing,
+        geometry: bool,
+        cutting_paths: bool,
+    ) -> Value {
         let empty = CutSheet::default();
         let cut = drawing.cut_sheet.as_ref().unwrap_or(&empty);
         let layout = self.lay_out(drawing);
@@ -1350,16 +1412,18 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
             "annotations": [],
             "title_fields": [],
         });
+        // The cutting paths over the parts (mitcad#2553).
+        let paths =
+            cutting_paths.then(|| cutting::cutting(&layout, cut, &cutting::settings_of(cut, None)));
         if geometry {
-            sheet["groups"] = groups_json(&cut_sheet::sheet(
-                cut.width,
-                cut.height,
-                &drawing.name,
-                &placed,
-            ));
+            let mut drawn = cut_sheet::sheet(cut.width, cut.height, &drawing.name, &placed);
+            if let Some(paths) = &paths {
+                drawn.groups.extend(cutting::cutting_groups(paths));
+            }
+            sheet["groups"] = groups_json(&drawn);
             sheet["pens"] = pens_json();
         }
-        json!({
+        let mut answer = json!({
             "drawing": drawing.uid,
             "name": drawing.name,
             "component": drawing.component,
@@ -1368,6 +1432,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
             "width": cut.width,
             "height": cut.height,
             "kerf": cut.kerf.unwrap_or(0.0),
+            "cutting": cutting::settings_of(cut, None),
             "sheet": 0,
             "sheets": [sheet],
             "revisions": [],
@@ -1375,7 +1440,11 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
             "datum_letters": [],
             "decimals": null,
             "text_height": null,
-        })
+        });
+        if let Some(paths) = &paths {
+            answer["cutting_paths"] = cutting::cutting_json(drawing, paths, false);
+        }
+        answer
     }
 }
 

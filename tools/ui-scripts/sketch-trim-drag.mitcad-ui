@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: MIT
+# Trim's drag (mitcad#2524, GitHub mitcad/Mitcad#657) on
+# sketch-trim-drag.json's Sketch1 (two framing points at (-40, -30) and
+# (40, 30); horizontal lines from x = -25 to 25 at y = 10 and y = -10;
+# vertical lines from y = -20 to 20 at x = -16, -4 and 12):
+#   1. A press on the vertical line at x = -4, moved across the one at
+#      x = 12: the sweep shows two pieces and trims nothing while the
+#      button is held; Esc drops it, and the release trims nothing.
+#   2. A drag from empty space across the three vertical lines between the
+#      horizontal ones, back over the last and across it again: three
+#      pieces shown, the last counted once, all three trimmed at the
+#      release as one undo step; one Undo brings all three back.
+#   3. A plain click trims one piece.
+#   4. With Trim ended, a left drag from empty space selects with a window.
+# The wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation. Every press, move and release stays within x -30..30 mm,
+# y -25..25 mm (the free part of the view after the fit also in session
+# 0's 1024x768 window on Windows) and clear of the sketch's axes. Run by
+# tools/ui-sketch-trim-drag-test.sh (Linux, which also checks the
+# captured sketches), tools/ui-windows-sketch-trim-drag-test.ps1
+# (Windows) and tools/ui-macos-sketch-trim-drag-test.sh (macOS).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+capture-undo-depth baseline
+
+# 1. A drag that starts on a curve: nothing trimmed until the release, and
+#    Esc drops it.
+mark
+command sketch.trim
+wait-log '^Sketch tool Trim$'
+mark
+sketch-pointer press -4 4
+sketch-pointer move 2 4
+sketch-pointer move 6 4
+wait-log '^Trim drag started at '
+wait-log '^Trim drag crosses c[0-9]+: 1 pieces$'
+sketch-pointer move 16 4
+wait-log '^Trim drag crosses c[0-9]+: 2 pieces$'
+wait-idle
+expect-no-log '^Trimmed '
+expect-undo-depth ${baseline} 0
+screenshot '${MITCAD_TEST_WORK}/sketch-trim-drag-held.png'
+key Escape
+wait-log '^Trim drag cancelled: 2 pieces not trimmed$'
+sketch-pointer release 20 4
+wait-idle
+expect-no-log '^Trimmed |^Trim drag trimmed '
+expect-undo-depth ${baseline} 0
+capture-sketch F1 '${MITCAD_TEST_WORK}/trim-drag-cancelled.json'
+
+# 2. A drag from empty space across three pieces: previewed, then trimmed
+#    at the release as one undo step, which one Undo takes back.
+mark
+sketch-pointer press -22 3
+sketch-pointer move -19 3
+sketch-pointer move -10 3
+sketch-pointer move 4 3
+sketch-pointer move 16 3
+wait-log '^Trim drag crosses c[0-9]+: 3 pieces$'
+wait-idle
+expect-no-log '^Trimmed '
+screenshot '${MITCAD_TEST_WORK}/sketch-trim-drag-preview.png'
+sketch-pointer move 8 3
+sketch-pointer move 16 3
+sketch-pointer release 22 3
+wait-log '^Trim drag trimmed 3 of 3 pieces as one step$'
+expect-no-log 'Trim drag crosses c[0-9]+: 4 pieces'
+expect-undo-depth ${baseline} 1
+capture-sketch F1 '${MITCAD_TEST_WORK}/trim-drag-trimmed.json'
+screenshot '${MITCAD_TEST_WORK}/sketch-trim-drag-trimmed.png'
+key Escape
+wait-idle
+command edit.undo
+wait-idle
+expect-undo-depth ${baseline} 0
+capture-sketch F1 '${MITCAD_TEST_WORK}/trim-drag-undone.json'
+
+# 3. A plain click still trims the one piece under it.
+mark
+command sketch.trim
+wait-log '^Sketch tool Trim$'
+mark
+sketch-click -4 5
+wait-log '^Trimmed c[0-9]+ at '
+wait-idle
+expect-no-log '^Trim drag'
+expect-undo-depth ${baseline} 1
+capture-sketch F1 '${MITCAD_TEST_WORK}/trim-click.json'
+key Escape
+wait-idle
+
+# 4. Trim ended: a left drag from empty space is a window selection again.
+mark
+sketch-drag -28 -23 28 23
+wait-log '^Selected: 6 sketch curves' 10
+wait-idle
+expect-no-log '^Trim drag|^Trimmed '
+expect-undo-depth ${baseline} 1
+screenshot '${MITCAD_TEST_WORK}/sketch-trim-drag-window.png'
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'pieces were not trimmed|Trim drag trimmed none|TestDriver: FAIL'

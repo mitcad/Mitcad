@@ -1,0 +1,42 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Nesting Flat Patterns and cutting them with a plasma torch on grbl 1.1 (mitcad#2553) through OCCT. Two sheet-metal parts: the L of drawing_flat_pattern_view.json (t = 2, r = 3, K = 0.3, a 35 x 20 Face with a 4 mm through hole and a 90 degree Flange: its blank 50.654866776461628 x 20 with one bend line) and a flat 30 x 15 plate with a 6 mm hole. The L twice and the plate once go onto a 300 x 200 cut sheet as Flat Patterns, nested 6 mm apart, with a kerf of 1.5 mm: the parts 1 and 2 (the L) and 3 (the plate), each one outer boundary and one hole, the L's bend line on it. Cut: six loops, each part's hole before its outer boundary, the bend lines left out; the program written. A kerf of 5 mm is wider than the L's 4 mm hole: the two L parts cannot be cut and the program is refused."},
+  {"cmd": "add_feature", "def": {"type": "sheet_rules", "thickness": 2, "bend_radius": 3, "allowance": {"type": "k_factor", "k": 0.3}, "reference_side": "back", "bend_relief": {"type": "rectangular", "width": 2, "depth": 3}, "corner_relief": {"type": "round", "width": 2, "depth": 3}}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F2", "corner": [-30, 0], "width": 35, "height": 20},
+  {"cmd": "sketch.add_circle", "sketch": "F2", "center": [-15, 10], "diameter": 4},
+  {"cmd": "add_feature", "def": {"type": "sheet_face", "rules": "F1", "profiles": [{"sketch": "F2", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"cmd": "add_feature", "def": {"type": "sheet_flange", "body": "F3.b0", "boundary": {"panel": {"feature": "F3", "slot": 0}, "curve": {"type": "sketch", "sketch": "F2", "segment": "c2[c1,c3]"}}, "angle": 1.5707963267948966, "length": {"mode": "tangent", "value": 15}, "position": "inside", "offsets": {"start": 0, "end": 0}}},
+  {"expect": {"feature": "F4", "status": "ok", "bodies": 1}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F5", "corner": [0, 40], "width": 30, "height": 15},
+  {"cmd": "sketch.add_circle", "sketch": "F5", "center": [15, 47.5], "diameter": 6},
+  {"cmd": "add_feature", "def": {"type": "sheet_face", "rules": "F1", "profiles": [{"sketch": "F5", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"expect": {"feature": "F6", "status": "ok", "bodies": 2}},
+  {"cmd": "add_cut_sheet", "flat": true, "width": 300, "height": 200, "kerf": 1.5, "nest": true, "gap": 6,
+   "bodies": [{"body": "F3.b0", "count": 2}, {"body": "F6.b0", "count": 1}]},
+  {"expect": {"query": {"query": "cut_sheet", "drawing": "CutSheet1", "geometry": false}, "result": {
+    "warnings": [],
+    "parts": [
+      {"id": 1, "flat": true, "outer": 1, "inner": 1, "bends": 1, "size": [50.654866776461628, 20]},
+      {"id": 2, "flat": true, "outer": 1, "inner": 1, "bends": 1, "size": [50.654866776461628, 20]},
+      {"id": 3, "flat": true, "outer": 1, "inner": 1, "bends": 0, "size": [30, 15]}]}}},
+  {"comment": "The cutting paths: each part's hole before its outer boundary, the parts from the work zero along the row; the bend lines are not cut."},
+  {"expect": {"query": {"query": "cut_sheet_cutting", "drawing": "CutSheet1", "geometry": false}, "result": {
+    "ready": true, "problems": [], "process": "plasma", "controller": "grbl 1.1", "kerf": 1.5,
+    "pierces": 6, "holes": 3, "left_out": {"bend_lines": 2, "marks": 0},
+    "cuts": [
+      {"order": 1, "part": 1, "outer": false},
+      {"order": 2, "part": 1, "outer": true},
+      {"order": 3, "part": 2, "outer": false},
+      {"order": 4, "part": 2, "outer": true},
+      {"order": 5, "part": 3, "outer": false},
+      {"order": 6, "part": 3, "outer": true}]}}},
+  {"cmd": "post_cut_sheet", "drawing": "CutSheet1", "path": "cut-sheet-cutting.nc"},
+  {"comment": "A kerf of 5 mm: the L's 4 mm hole is narrower, the plate's 6 mm hole is not."},
+  {"cmd": "edit_cut_sheet", "drawing": "CutSheet1", "kerf": 5},
+  {"expect": {"query": {"query": "cut_sheet_cutting", "drawing": "CutSheet1", "geometry": false}, "result": {
+    "ready": false,
+    "problems": [
+      {"message": "A component has a hole or notch narrower than the kerf: the torch cannot cut it to size. Make it wider or the kerf smaller.", "parts": [1]},
+      {"message": "A component has a hole or notch narrower than the kerf: the torch cannot cut it to size. Make it wider or the kerf smaller.", "parts": [2]}]}}}
+]

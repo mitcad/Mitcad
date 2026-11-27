@@ -236,6 +236,11 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> axisOf(const SelectionItem& item,
 // design: moved by the occurrences the profiles are seen at (mitcad#958).
 std::optional<std::pair<gp_Pnt, gp_Dir>> profileNormal(const Selection& profiles,
                                                        const CommandContext& context);
+// Where a face's offset handle starts and its way out of the material
+// there: a planar face's middle and normal (frameOf), on a curved face a
+// point inside it and its normal there (geometry::face_inner_point,
+// mitcad#2478: a taper's or a loft's side). None for other items.
+std::optional<std::pair<gp_Pnt, gp_Dir>> faceNormal(const SelectionItem& item, const CommandContext& context);
 // An arrow manipulator along a direction from a point.
 Manipulator arrow(const gp_Pnt& origin, const gp_Dir& direction, double base = 0.0);
 // The size of the items an arrow works on, its Manipulator::scale
@@ -337,6 +342,38 @@ bool keptPathReversed(const CommandState& state, const QString& id);
 bool planeCurveTakes(const SelectionItem& item, const CommandContext& context);
 // Why a click on a 3D sketch's curve is not taken; empty when it is.
 QString planeCurveRefusal(const SelectionItem& item, const CommandContext& context);
+
+// --- Assembly cut scopes (mitcad#200; Revolve and Hole since mitcad#2160):
+// the Affected components list of Extrude, Revolve (Operation Cut) and
+// Hole, and the state behind it: `cut_scope` (the scope the list edits),
+// `cut_scope_chosen` (a deliberate choice: Cut picked, a row checked, a
+// stored scope), `cut_scope_legacy` (a cut of its own component's bodies,
+// as saved before scopes, or with bodies picked), `cut_context_from_profile`,
+// `cut_view` (what the view hid when the panel opened, mitcad#475) and
+// `cut_owner` (an edited feature's component).
+
+// A new automatic scope in the cut's component (`cut_owner`, else the
+// active one), and what the view hides now.
+void initializeCutScope(CommandState& state, const CommandContext& model);
+// The Affected components list (`cut_scope`), shown while `shown` holds; a
+// change in it is a deliberate choice.
+InputDef cutTargetsInput(std::function<bool(const CommandState&)> shown);
+// A preview's targets against what the view hid when the panel opened
+// (excludeHiddenCutTargets), for a feature that cuts now (`cutting`): true
+// when the scope changed, logged as "<command>: hidden targets start
+// unchecked: ...".
+bool cutTargetsReported(QJsonObject& report, CommandState& state, bool cutting, const QString& command);
+// An edited feature's stored scope into the state (no snapshot of the view:
+// its choices stay), and its component as `cut_owner`. `cutting`: the
+// feature cuts, so that one without a scope is a legacy cut of its own
+// component's bodies, as one with `participants` (`objects`) is.
+void loadCutScope(const QJsonObject& feature, CommandState& state, const CommandContext& context, bool cutting);
+// The first occurrence path where `component` is placed, from the
+// `components` query (empty for the root, or when it is placed nowhere).
+QString firstOccurrencePath(const QJsonObject& components, const QString& component);
+// The components that have components placed in them (assemblies; "C0"
+// for the root), from the `components` query.
+QJsonArray assemblyComponents(const QJsonObject& components);
 
 // --- A loft's end conditions (mitcad#2345; SweepCommands.cpp), shared by
 // Loft and Surface Loft: Start and End Condition with the choices the

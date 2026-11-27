@@ -1,0 +1,42 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub mitcad/Mitcad#731 (mitcad#2568), the reporter's design as in move_face_reported731_move.json: the raised block's end at x = -17.8, the plate's side at x = -26.475684. Press Pull Straight on the end, no taper, out of the material by the distances of Move Face: clearly past the plate's side (12), flush (8.675684), short of it (8.675) and just past it (8.676). Each previewed, then committed (PressPull1 F9): one body, the volume the plate's and the block's section (189.050917) times its new length, the end where it was moved to, keeping its name."},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 74588.887721127, "tolerance": 1e-8}},
+
+  {"preview": {"cmd": "add_feature", "def": {"type": "press_pull", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "continue": "straight", "distance": 12}}},
+  {"cmd": "add_feature", "def": {"type": "press_pull", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "continue": "straight", "distance": 12}},
+  {"expect": {"feature": "PressPull1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 76857.498720490, "tolerance": 1e-8}},
+  {"expect": {"body": "Body1", "bbox": {"min": [-29.8, -31.370348135798103, 0], "max": [60.51584888607866, 50.50403565124944, 30.16561020382312]}, "tolerance": 1e-6}},
+  {"expect": {"body": "Body1", "has_face": "F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+  {"expect": {"body": "Body1", "has_face": "F2:side(c4[c3,c1])"}},
+
+  {"preview": {"cmd": "edit_feature", "uid": "F9", "def": {"type": "press_pull", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "continue": "straight", "distance": 8.675684}}},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "press_pull", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "continue": "straight", "distance": 8.675684}},
+  {"expect": {"feature": "PressPull1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 76229.033733577, "tolerance": 1e-8}},
+  {"expect": {"body": "Body1", "bbox": {"min": [-26.475683887659404, -31.370348135798103, 0], "max": [60.51584888607866, 50.50403565124944, 30.16561020382312]}, "tolerance": 1e-6}},
+  {"expect": {"body": "Body1", "has_face": "F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+  {"expect": {"body": "Body1", "has_face": "F2:side(c4[c3,c1])"}},
+
+  {"preview": {"cmd": "edit_feature", "uid": "F9", "def": {"type": "press_pull", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "continue": "straight", "distance": 8.675}}},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "press_pull", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "continue": "straight", "distance": 8.675}},
+  {"expect": {"feature": "PressPull1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 76228.904422750, "tolerance": 1e-8}},
+  {"expect": {"body": "Body1", "bbox": {"min": [-26.475683887659404, -31.370348135798103, 0], "max": [60.51584888607866, 50.50403565124944, 30.16561020382312]}, "tolerance": 1e-6}},
+  {"expect": {"body": "Body1", "has_face": "F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+
+  {"preview": {"cmd": "edit_feature", "uid": "F9", "def": {"type": "press_pull", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "continue": "straight", "distance": 8.676}}},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "press_pull", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "continue": "straight", "distance": 8.676}},
+  {"expect": {"feature": "PressPull1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 76229.093473667, "tolerance": 1e-8}},
+  {"expect": {"body": "Body1", "bbox": {"min": [-26.476, -31.370348135798103, 0], "max": [60.51584888607866, 50.50403565124944, 30.16561020382312]}, "tolerance": 1e-6}},
+  {"expect": {"body": "Body1", "has_face": "F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}}
+]

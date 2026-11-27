@@ -45,6 +45,7 @@
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/sketch_ref.hpp"
 #include "mitcad/geometry/surface_offsets.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -622,7 +623,7 @@ void test_free_edge_chains() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(loft_perpendicular) {
   test::guarded("circle on a plane", test::test_circle_on_a_plane);
   test::guarded("rim on a cylinder", test::test_rim_on_a_cylinder);
   test::guarded("rim on a freeform face", test::test_rim_on_a_freeform_face);

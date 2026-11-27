@@ -15,7 +15,8 @@
 # block) and back.mitcad (linking assembly.mitcad); the app opens
 # assembly.mitcad. The script drags bracket.mitcad onto the cube's top face
 # (Linked, at the face's point, one undo step), again while Extrude is open
-# (it waits, then Copy), and back.mitcad and assembly.mitcad (refused).
+# (it waits, the camera turns, then Copy, still at the drop's point,
+# mitcad#2527), and back.mitcad and assembly.mitcad (refused).
 #
 # git's configuration and HOME are the test's own. Runs headless on Xvfb
 # (see ui-test-lib.sh).

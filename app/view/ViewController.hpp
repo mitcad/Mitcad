@@ -42,6 +42,20 @@ struct ViewSettings {
 
   VisualStyle style = VisualStyle::ShadedVisibleEdges;
   bool perspective = false;
+  // Perspective with Orthographic Faces (mitcad#2473,
+  // `view/orthographicFaces` beside `view/perspective`, which is true with
+  // it): perspective, orthographic while the camera looks along a face.
+  bool orthographicFaces = false;
+  // The camera's projection these choose (View › Camera, Preferences).
+  CameraProjection projection() const {
+    return !perspective         ? CameraProjection::Orthographic
+           : orthographicFaces ? CameraProjection::PerspectiveOrthographicFaces
+                               : CameraProjection::Perspective;
+  }
+  void setProjection(CameraProjection projection) {
+    perspective = projection != CameraProjection::Orthographic;
+    orthographicFaces = projection == CameraProjection::PerspectiveOrthographicFaces;
+  }
   bool componentColors = false;
   // Follow System on every platform (mitcad#2145; macOS only before): a
   // dark window never sits over a light view by default, also after
@@ -222,6 +236,14 @@ public:
   // size with the shown measurements once the model is idle, and writes
   // the image; logs "Snapshot saved <path>: <w> x <h>, …".
   void exportSnapshot();
+  // File › Export Turntable (mitcad#2523, view/TurntableExport.cpp): asks
+  // for the file, the axis, the turn, the frames and the style
+  // (TurntableDialog), then writes the frames through the turned camera
+  // and the video by the FFmpeg program; logs "Turntable frame <i> of <n>:
+  // …" and "Turntable video saved <path>: <n> frames, <w> x <h> …".
+  void exportTurntable();
+  // The window's selection (Export Turntable's selected axis).
+  std::function<Selection()> currentSelection;
 
 signals:
   // Camera/background changed outside the non-modal Settings window.
@@ -240,6 +262,10 @@ private:
   void apply();
   void setStyle(VisualStyle style);
   void setPerspective(bool perspective);
+  // View › Camera's choice (mitcad#2473): applied, saved and logged
+  // ("Camera orthographic", "Camera perspective", "Camera perspective with
+  // orthographic faces"); Orthographic ends Anaglyph 3D.
+  void setProjection(CameraProjection projection);
   // Anaglyph 3D (mitcad#1449): the view in red/cyan stereo, in perspective
   // while on; the rendered view is left and not offered meanwhile.
   void setAnaglyph(bool on);

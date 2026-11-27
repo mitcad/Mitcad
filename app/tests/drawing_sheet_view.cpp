@@ -6,7 +6,9 @@
 // painted again for a zoom (mitcad#759); a section's line's and a break's
 // clicks snapped to points, a section's second to 45 degrees, Shift as
 // clicked (mitcad#1362); the hover's and the picks' marks as wide as the
-// line they mark at two zooms (mitcad#1618).
+// line they mark at two zooms (mitcad#1618); hidden-edge dashes painted
+// where the paper has them at every zoom, the one-pixel minimum too
+// (mitcad#2477).
 #include "UnitTests.hpp"
 #include "drawings/DrawingSheetView.hpp"
 
@@ -22,7 +24,10 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPen>
 #include <QPixmap>
+#include <QPoint>
 #include <QPointF>
 #include <QVector>
 #include <QWheelEvent>
@@ -90,6 +95,194 @@ void mouse(QWidget& widget, QEvent::Type type, const QPointF& at, Qt::MouseButto
 }
 
 bool closeTo(const QPointF& a, const QPointF& b) { return std::abs(a.x() - b.x()) < 1e-6 && std::abs(a.y() - b.y()) < 1e-6; }
+
+// The pens' table as the `drawing` query gives it (core/model-drawing's
+// Pen table): the hidden edges' narrow dashed line, a narrow chain line
+// and a wide continuous one.
+QJsonObject penTable() {
+  return {{QStringLiteral("hidden"),
+           QJsonObject{{QStringLiteral("width"), 0.18}, {QStringLiteral("dashes"), QJsonArray{3.0, 1.0}}}},
+          {QStringLiteral("chain"),
+           QJsonObject{{QStringLiteral("width"), 0.18}, {QStringLiteral("dashes"), QJsonArray{12.0, 1.5, 0.5, 1.5}}}},
+          {QStringLiteral("thick"), QJsonObject{{QStringLiteral("width"), 0.35}}}};
+}
+
+// The stretches of a line from 0 to `length` (sheet mm) a pen paints with
+// its round caps: each dash of its pattern (in its widths, from its
+// offset) whose middle is on the line, and half its width more at each
+// end.
+QVector<QPointF> paintedDashes(const QPen& pen, double length) {
+  QVector<QPointF> out;
+  const double width = pen.widthF();
+  const QVector<qreal> pattern = pen.dashPattern();
+  double period = 0.0;
+  for (const qreal d : pattern) {
+    period += d * width;
+  }
+  if (period <= 0.0) {
+    return out;
+  }
+  const double offset = pen.dashOffset() * width;
+  for (double from = -std::ceil(offset / period + 1.0) * period - offset; from < length + period; from += period) {
+    double at = from;
+    for (int i = 0; i + 1 < pattern.size(); i += 2) {
+      const double end = at + pattern[i] * width;
+      const double middle = (at + end) / 2.0;
+      if (middle >= 0.0 && middle < length) {
+        out.append(QPointF(at - width / 2.0, end + width / 2.0));
+      }
+      at = end + pattern[i + 1] * width;
+    }
+  }
+  return out;
+}
+
+bool sameDashes(const QVector<QPointF>& a, const QVector<QPointF>& b, double tolerance) {
+  if (a.size() != b.size()) {
+    return false;
+  }
+  for (int i = 0; i < a.size(); ++i) {
+    if (std::abs(a[i].x() - b[i].x()) > tolerance || std::abs(a[i].y() - b[i].y()) > tolerance) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The runs of ink along row `y` of an image: each run's first and last
+// pixel.
+QVector<QPoint> inkRuns(const QImage& image, int y) {
+  QVector<QPoint> runs;
+  int start = -1;
+  for (int x = 0; x < image.width(); ++x) {
+    const bool ink = qGray(image.pixel(x, y)) < 160;
+    if (ink && start < 0) {
+      start = x;
+    } else if (!ink && start >= 0) {
+      runs.append(QPoint(start, x - 1));
+      start = -1;
+    }
+  }
+  if (start >= 0) {
+    runs.append(QPoint(start, image.width() - 1));
+  }
+  return runs;
+}
+
+// Hidden-edge dashes on the screen (mitcad#2477, GitHub #695): the pen
+// widened to a pixel kept its pattern in widths of the pen's own width, so
+// that its dashes grew with it, the farther out the sheet was zoomed the
+// longer (at 2 px/mm a 3 mm dash 8.3 mm long). Now each painted dash, its
+// caps included, covers on the sheet what it covers on paper, at every
+// zoom.
+void sheetPenTests() {
+  using mitcad::drawings::DrawingSheetView;
+  const QJsonObject pens = penTable();
+  // Zoomed in: the pen of the table, its pattern in its widths.
+  const QPen own = DrawingSheetView::sheetPen(pens, QStringLiteral("hidden"), 50.0);
+  CHECK(std::abs(own.widthF() - 0.18) < 1e-12);
+  CHECK(own.style() == Qt::CustomDashLine);
+  CHECK(own.capStyle() == Qt::RoundCap);
+  CHECK(own.dashPattern().size() == 2);
+  if (own.dashPattern().size() == 2) {
+    CHECK(std::abs(own.dashPattern()[0] * 0.18 - 3.0) < 1e-9);
+    CHECK(std::abs(own.dashPattern()[1] * 0.18 - 1.0) < 1e-9);
+  }
+  // On paper: 3 mm dashes 4 mm apart, 0.09 mm of cap at each end.
+  const QVector<QPointF> paper = paintedDashes(own, 40.0);
+  CHECK(paper.size() == 10);
+  if (!paper.isEmpty()) {
+    CHECK(std::abs(paper.first().x() + 0.09) < 1e-9 && std::abs(paper.first().y() - 3.09) < 1e-9);
+  }
+  // Out to where the one-pixel minimum applies, and farther: wider, the
+  // same stretches painted.
+  for (const double zoom : {5.0, 3.0, 2.0, 1.0, 0.5}) {
+    const QPen pen = DrawingSheetView::sheetPen(pens, QStringLiteral("hidden"), zoom);
+    CHECK(std::abs(pen.widthF() - std::max(0.18, 1.0 / zoom)) < 1e-12);
+    CHECK(pen.capStyle() == Qt::RoundCap);
+    if (!sameDashes(paintedDashes(pen, 40.0), paper, 1e-9)) {
+      std::fprintf(stderr, "drawing_sheet_view.cpp: hidden dashes at %g px/mm not those on paper\n", zoom);
+      ++failures;
+    }
+  }
+  // A chain line at 0.5 px/mm (2 mm wide): its long dashes kept, its
+  // 0.5 mm dot, shorter than the widening, a dot at the same middle; the
+  // period (15.5 mm) kept.
+  const QPen chainOwn = DrawingSheetView::sheetPen(pens, QStringLiteral("chain"), 50.0);
+  const QPen chain = DrawingSheetView::sheetPen(pens, QStringLiteral("chain"), 0.5);
+  const QVector<QPointF> chainPaper = paintedDashes(chainOwn, 60.0);
+  const QVector<QPointF> chainScreen = paintedDashes(chain, 60.0);
+  CHECK(chainPaper.size() == chainScreen.size());
+  for (int i = 0; i < std::min(chainPaper.size(), chainScreen.size()); ++i) {
+    const QPointF a = chainPaper[i];
+    const QPointF b = chainScreen[i];
+    if (a.y() - a.x() > 2.0) { // a long dash: the same stretch
+      CHECK(std::abs(a.x() - b.x()) < 1e-6 && std::abs(a.y() - b.y()) < 1e-6);
+    } else { // the dot: the same middle, the pen's width across
+      CHECK(std::abs((a.x() + a.y()) - (b.x() + b.y())) < 1e-6);
+      CHECK(std::abs((b.y() - b.x()) - 2.0) < 1e-3);
+    }
+  }
+  // A continuous pen: only wider.
+  const QPen thick = DrawingSheetView::sheetPen(pens, QStringLiteral("thick"), 1.0);
+  CHECK(thick.style() == Qt::SolidLine && std::abs(thick.widthF() - 1.0) < 1e-12);
+
+  // Painted: a hidden edge 39.5 mm long at 3 and 2 px/mm (where the pixel
+  // minimum applies) shows its 10 dashes, each's middle within 1.5 px of
+  // where it is on paper (1.5 mm + 4 mm steps from the line's start). It
+  // ends in the middle of a gap: Qt's one-pixel lines paint the pixel that
+  // holds their end point, and a line exactly 10 periods long (40 mm) had
+  // the next dash start inside that pixel (0.08 mm past the end at 3 px/mm,
+  // 0.16 mm at 2), painted as an 11th dash one pixel long.
+  for (const double zoom : {3.0, 2.0}) {
+    const QPen pen = DrawingSheetView::sheetPen(pens, QStringLiteral("hidden"), zoom);
+    QImage image(static_cast<int>(std::ceil(50.0 * zoom)), 20, QImage::Format_RGB32);
+    image.fill(Qt::white);
+    {
+      QPainter painter(&image);
+      painter.translate(5.0 * zoom, 10.5);
+      painter.scale(zoom, -zoom);
+      painter.setPen(pen);
+      painter.drawLine(QPointF(0.0, 0.0), QPointF(39.5, 0.0));
+    }
+    // The row the line is painted on: the one with the most ink.
+    int row = 0;
+    int most = -1;
+    for (int y = 0; y < image.height(); ++y) {
+      int ink = 0;
+      for (int x = 0; x < image.width(); ++x) {
+        ink += qGray(image.pixel(x, y)) < 160 ? 1 : 0;
+      }
+      if (ink > most) {
+        most = ink;
+        row = y;
+      }
+    }
+    const QVector<QPoint> runs = inkRuns(image, row);
+    CHECK(runs.size() == 10);
+    if (runs.size() != 10) {
+      std::fprintf(stderr, "drawing_sheet_view.cpp: %d dashes painted at %g px/mm, 10 expected\n",
+                   static_cast<int>(runs.size()), zoom);
+      // Where they are (pixels; the line from 5 mm to 44.5 mm), and the pen.
+      for (const QPoint& run : runs) {
+        std::fprintf(stderr, "drawing_sheet_view.cpp:   run %d..%d px (%.3f..%.3f mm from the line's start)\n",
+                     run.x(), run.y(), run.x() / zoom - 5.0, (run.y() + 1) / zoom - 5.0);
+      }
+      QString dashes;
+      for (const qreal d : pen.dashPattern()) {
+        dashes += QStringLiteral(" %1").arg(d * pen.widthF(), 0, 'f', 4);
+      }
+      std::fprintf(stderr, "drawing_sheet_view.cpp:   pen %.4f mm, dashes (mm)%s, offset %.4f mm, row %d\n",
+                   pen.widthF(), qPrintable(dashes), pen.dashOffset() * pen.widthF(), row);
+      continue;
+    }
+    for (int i = 0; i < 10; ++i) {
+      const double middle = (runs[i].x() + runs[i].y() + 1) / 2.0;
+      const double expected = (5.0 + 1.5 + 4.0 * i) * zoom;
+      CHECK(std::abs(middle - expected) <= 1.5);
+    }
+  }
+}
 
 } // namespace
 
@@ -309,6 +502,8 @@ int drawingSheetViewTests() {
     CHECK(closeTo(got[4].points[1], QPointF(51.0, 55.0)));
   }
   sheet.setPick(SheetPick::None, false);
+
+  sheetPenTests();
   return failures;
 }
 MITCAD_UNIT_TEST(drawingSheetViewTests);

@@ -215,8 +215,8 @@ ui_step "extrude (E)"                      ui_key e
 ui_mark
 ui_step "pick the top face"                ui_click_pick "face F1.b0/F1:top"
 ui_expect_new "Manipulator Extrude distance at" "Extrude has an arrow"
-# The default distance (10 mm, the cube's height) puts the arrow above the
-# framed view; 1 mm brings it back over the cube.
+# A new Extrude starts at 0 mm with no preview (mitcad#2481); 1 mm gives
+# it one, the arrow over the cube, before the drag.
 ui_mark
 ui_step "distance 1"                       ui_type_in "Panel Extrude input distance" "1"
 ui_expect_new "Manipulator Extrude distance at" "the arrow over the cube"

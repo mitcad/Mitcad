@@ -47,6 +47,8 @@
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 
+#include "bundled_test.hpp"
+
 namespace {
 
 int failures = 0;
@@ -142,7 +144,7 @@ double rim_rounded(const TopoDS_Shape& block, double radius) {
 
 }  // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_ball_beyond_support) {
   try {
     const TopoDS_Shape block = drafted_block(3.0);
     double before = 0.0;

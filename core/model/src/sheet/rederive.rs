@@ -180,6 +180,15 @@ impl From<&str> for Failure {
 /// is the face's development, which an ordinary feature's faces do not
 /// give back.
 fn curved_refusal(state: &SheetState) -> Result<(), Failure> {
+    // A Lofted Flange's chart (mitcad#2512) is re-derived by its own module
+    // (holes and cuts, mitcad#2560), not as planar charts are.
+    if super::folded::lofted::lofted_panel(state).is_some() {
+        return Err(Failure::Reason(
+            "a lofted flange's sheet follows holes and cuts made by ordinary features, not \
+             other changes"
+                .into(),
+        ));
+    }
     match super::folded::curved::curved_panel(state) {
         Some(_) => Err(Failure::Reason(
             "a cylindrical or conical sheet's development does not follow ordinary features: \
@@ -227,6 +236,25 @@ fn adapted<K: Kernel>(
     body: BodyUid,
     shape: &K::Shape,
 ) -> Result<Derived<K::Shape>, Failure> {
+    // A Lofted Flange's sheet follows holes and cuts through its thickness
+    // (mitcad#2560); sheet features refuse it, so it is read here.
+    if let Ok(state) = ctx.require_sheet(body)
+        && super::folded::lofted::lofted_panel(&state).is_some()
+    {
+        use super::folded::lofted::Refused;
+        let thickness = ctx.sheet_rules(state.rules)?.value.thickness;
+        let before = ctx.body(body)?;
+        let state = super::folded::lofted::rederived(ctx, state, thickness, &before, shape)
+            .map_err(|r| match r {
+                Refused::Unsupported => Failure::Unsupported,
+                Refused::Because(reason) => Failure::Reason(reason),
+            })?;
+        return Ok(Derived {
+            state,
+            shape: None,
+            warning: None,
+        });
+    }
     let (state, rules) = read(ctx, body)?;
     let before = ctx.body(body)?;
     curved_refusal(&state)?;

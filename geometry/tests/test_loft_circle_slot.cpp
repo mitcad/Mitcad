@@ -73,6 +73,7 @@
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad/geometry/surfaces.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -532,7 +533,7 @@ void test_ticket_loft_against_occt() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(loft_circle_slot) {
   test::guarded("test_shells_of_the_ticket_loft", test::test_shells_of_the_ticket_loft);
   test::guarded("test_shell_of_the_owner_loft", test::test_shell_of_the_owner_loft);
   test::guarded("test_shells_of_the_ruled_ticket_loft", test::test_shells_of_the_ruled_ticket_loft);

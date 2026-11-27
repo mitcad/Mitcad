@@ -178,6 +178,16 @@ fn rigid_inverse(t: &Transform) -> Transform {
     }
 }
 
+/// Whether `step` moves every one of `bodies` lying at `path` below its
+/// view's component: with an occurrence the path leads through, or as
+/// bodies of the component itself when the path is empty.
+fn moves_all(step: &ExplodeStep, path: &[OccurrenceUid], bodies: &[BodyUid]) -> bool {
+    step.occurrences
+        .iter()
+        .any(|o| !o.is_empty() && path.starts_with(&o.0))
+        || (path.is_empty() && !bodies.is_empty() && bodies.iter().all(|b| step.bodies.contains(b)))
+}
+
 /// A box's centre and its diagonal.
 fn centre_and_size(min: Vec3, max: Vec3) -> (Vec3, f64) {
     (scale(add(min, max), 0.5), norm(sub(max, min)))
@@ -293,6 +303,79 @@ impl DocState {
                         && path_component(assembly, component, &axis.occurrence.0) == Ok(source)
                     {
                         axis.occurrence.0.push(occurrence);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Explode views follow bodies moved to a chosen destination (Move
+    /// Features into a Component with an explicit destination,
+    /// mitcad#2572): the source and the destination each have one
+    /// placement in the design, `from` and `to` their paths from the root.
+    /// In a view whose component holds both, a step that moved every one
+    /// of the bodies (as bodies of the view's component, or with an
+    /// occurrence they lay in) moves them where they are now: as bodies of
+    /// the view's component when that is the destination, else with the
+    /// destination's occurrence, with all it places (a step cannot move
+    /// part of an occurrence). A step that moved only some of them, or a
+    /// view whose component does not hold the destination, keeps what it
+    /// had and reports the bodies it no longer finds. A direction's or
+    /// axis' geometry of the moved features, read in the source, is read in
+    /// the destination.
+    pub(crate) fn follow_explode_destination(
+        &mut self,
+        features: &BTreeSet<FeatureUid>,
+        bodies: &[BodyUid],
+        from: &[OccurrenceUid],
+        to: &[OccurrenceUid],
+    ) {
+        let assembly = &self.assembly;
+        for view in &mut self.explode_views {
+            // The view's component's placement above the source: the
+            // source's path is its only one, so the view's component has
+            // one at most that leads to it.
+            let places = assembly.paths_to(view.component);
+            let below = |path: &[OccurrenceUid]| {
+                places
+                    .iter()
+                    .find_map(|place| path.strip_prefix(place.as_slice()))
+                    .map(<[OccurrenceUid]>::to_vec)
+            };
+            let Some(source) = below(from) else {
+                continue;
+            };
+            let target = below(to);
+            for step in &mut view.steps {
+                if let Some(target) = &target
+                    && moves_all(step, &source, bodies)
+                {
+                    if source.is_empty() {
+                        step.bodies.retain(|b| !bodies.contains(b));
+                    }
+                    if !moves_all(step, target, bodies) {
+                        if target.is_empty() {
+                            for body in bodies {
+                                if !step.bodies.contains(body) {
+                                    step.bodies.push(*body);
+                                }
+                            }
+                        } else {
+                            step.occurrences.push(OccurrencePath(target.clone()));
+                        }
+                    }
+                }
+                for axis in [&mut step.direction, &mut step.axis].into_iter().flatten() {
+                    let Some(geometry) = &axis.geometry else {
+                        continue;
+                    };
+                    let mut references = References::default();
+                    geometry.add_to(&mut references);
+                    if let Some(target) = &target
+                        && axis.occurrence.0 == source
+                        && references.features.iter().any(|f| features.contains(f))
+                    {
+                        axis.occurrence.0.clone_from(target);
                     }
                 }
             }

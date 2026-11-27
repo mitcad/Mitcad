@@ -142,6 +142,39 @@ fn named_views_must_be_cameras() {
     assert!(error.to_string().contains("views[0]"), "{error}");
 }
 
+/// Perspective with Orthographic Faces (mitcad#2473): a named view saves
+/// the mode beside the projection it was in, and the file keeps it; a view
+/// without it has no such field.
+#[test]
+fn named_views_save_perspective_with_orthographic_faces() {
+    let mut doc = Document::new(MockKernel::default());
+    let mut front = camera("Front", 120.0);
+    front["eye"] = json!([0, -400, 0]);
+    front["orthographic_faces"] = json!(true);
+    command(&mut doc, front);
+    let mut corner = camera("Corner", 90.0);
+    corner["perspective"] = json!(true);
+    corner["orthographic_faces"] = json!(true);
+    command(&mut doc, corner);
+    command(&mut doc, camera("Plain", 50.0));
+    let views = query(&doc, json!({"query": "named_views"}));
+    assert_eq!(views[0]["orthographic_faces"], true);
+    assert_eq!(views[0].get("perspective"), None);
+    assert_eq!(views[1]["orthographic_faces"], true);
+    assert_eq!(views[1]["perspective"], true);
+    assert_eq!(views[2].get("orthographic_faces"), None);
+
+    let saved = doc.to_json();
+    assert!(saved.contains("\"orthographic_faces\""), "{saved}");
+    let loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(
+        query(&loaded, json!({"query": "named_views"})),
+        views,
+        "the mode comes back with the file"
+    );
+    assert_eq!(loaded.to_json(), saved);
+}
+
 /// A 60 x 40 rectangle of lines whose corners meet within rounding, a
 /// circle, an arc, an ellipse, a spline and a text, in centimetres.
 const DRAWING: &str = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n5\n0\nENDSEC\n\

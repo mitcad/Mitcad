@@ -39,6 +39,7 @@
 #include "../src/blend_surfaces.hpp"
 #include "mitcad/geometry/brep_import.hpp"
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -315,7 +316,7 @@ void a_spine_off_the_supports_is_refused() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(blend_surfaces) {
   try {
     test::guarded("between_two_planes", between_two_planes);
     test::guarded("between_a_plane_and_a_circle", between_a_plane_and_a_circle);

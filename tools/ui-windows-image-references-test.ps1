@@ -8,9 +8,10 @@
 # pixels per metre (0.25 mm each). The command search cannot open in
 # session 0: Image Reference (F8) and Calibrate Image Reference (F9) come
 # from shortcuts of the test's.
-#   1. Image Reference on the plate's top face, the file's path typed,
-#      Opacity 40: Image1 drawn 50 x 25 mm, 40 % opaque, behind the bodies,
-#      in the browser's Images folder.
+#   1. Image Reference on the plate's top face, the file chosen with
+#      Choose Image... in the file dialog (mitcad#2474: the panel's "Choose
+#      an image file." goes at once), Opacity 40: Image1 drawn 50 x 25 mm,
+#      40 % opaque, behind the bodies, in the browser's Images folder.
 #   2. Calibrate: two clicks a tenth in from the image's left and right
 #      edges (160 pixels apart), 80 typed: drawn 100 mm wide.
 #   3. Its row double-clicked: Opacity 70 and Through Bodies in its panel.
@@ -109,8 +110,25 @@ Ui-Step 'Image Reference (F8)'           { Ui-Key 'F8' }
 Ui-ExpectNew 'Command Image Reference started' 'the panel opened'
 Ui-Step 'click the plate''s top'         { Ui-ClickPick 'face F1.b0/F1:top' }
 Ui-ExpectNew 'Image Reference Plane: 1 face' 'the face picked'
-Ui-Step 'the image''s file'              { Ui-TypeIn 'Panel Image Reference input file' $image }
-Ui-Step 'opacity 40'                     { Ui-TypeIn 'Panel Image Reference input opacity' '40' }
+Ui-ExpectNew 'Panel Image Reference error: Choose an image file.' 'the panel asks for the file'
+# Chosen in the file dialog (mitcad#2474): the panel takes it at once.
+Ui-Mark
+Ui-Step 'Choose Image...'                { Ui-ClickLogged 'Panel Image Reference action choose.0' }
+Ui-Step 'the image''s file in the dialog' {
+  Ui-FocusDialog '^Insert Image Reference$'
+  Ui-Key 'ctrl+a'
+  Ui-Type $image
+  Start-Sleep -Milliseconds 300
+  Ui-Key 'Return'
+  Ui-FocusMain
+}
+Ui-ExpectNew 'Image Reference file chosen: plan.bmp' 'the file chosen in the dialog'
+Ui-ExpectNew "Image Reference Image: $image" 'the Image field takes it'
+Ui-ExpectNew 'Panel Image Reference message: error gone: Choose an image file.' 'the message gone at once'
+if (@(Ui-LogLines | Select-Object -Skip $script:UiMark | Where-Object { $_.StartsWith('Panel Image Reference error: ') }).Count -gt 0) {
+  Ui-Fail 'the panel still has an error after the file was chosen'
+}
+Ui-Step 'opacity 40'                    { Ui-TypeIn 'Panel Image Reference input opacity' '40' }
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Inserted image reference from plan.bmp' 'inserted' 30
 Ui-ExpectNew 'Image references drawn: Image1 50.0 x 25.0 mm 40% behind' 'drawn 50 x 25 mm, 40 % opaque, behind'

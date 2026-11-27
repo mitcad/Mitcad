@@ -98,6 +98,9 @@ pub struct FlatPattern<S> {
     pub area: f64,
     pub volume: f64,
     pub bends: Vec<FlatBend>,
+    /// A Lofted Flange's lines where its flat regions meet regions formed
+    /// smooth (mitcad#2512), drawn on their own layer.
+    pub facet_lines: Vec<FlatLine>,
     pub domains: Vec<FlatDomain>,
     /// The developed configuration the outline came from.
     pub developed: SheetState,
@@ -343,8 +346,10 @@ pub(crate) fn evaluate<K: Kernel>(
     let mut developed = state.clone();
     // A curved panel's chart is its development already: laid in the
     // plane touching it (mitcad#2435).
-    let fixed_embedding = match super::folded::curved::developed(&state, def.stationary, thickness)
-    {
+    // A Lofted Flange's chart likewise (mitcad#2512).
+    let curved_or_lofted = super::folded::curved::developed(&state, def.stationary, thickness)
+        .or_else(|| super::folded::lofted::developed(&state, def.stationary));
+    let fixed_embedding = match curved_or_lofted {
         Some(result) => {
             developed = result.map_err(invalid)?;
             developed
@@ -513,6 +518,62 @@ pub(crate) fn evaluate<K: Kernel>(
             },
         });
     }
+    // A Lofted Flange's folds between facets are its bend lines, the lines
+    // where its flat regions meet formed ones its facet lines
+    // (mitcad#2512).
+    let mut facet_lines = Vec::new();
+    for patch in &state.charts {
+        let SheetEmbedding::Lofted(lofted) = &patch.embedding else {
+            continue;
+        };
+        let map = view(front_maps[&patch.domain]);
+        let SheetDomainRef::Panel(panel) = patch.domain else {
+            continue;
+        };
+        let mut slot = 0;
+        for l in &lofted.lines {
+            let flat = FlatLine {
+                start: map.point(l.start),
+                end: map.point(l.end),
+            };
+            if !l.fold {
+                facet_lines.push(flat);
+                continue;
+            }
+            // A bend of the rules' radius (mitcad#2560): its allowance the
+            // arc at the K-factor from its inside, its tangent lines.
+            bends.push(FlatBend {
+                bend: BendId {
+                    feature: panel.feature,
+                    slot,
+                },
+                angle: l.angle,
+                radius: l.radius,
+                k_factor: lofted.k_factor,
+                allowance: if l.radius > 0.0 {
+                    l.angle.abs() * (l.radius + lofted.k_factor * thickness)
+                } else {
+                    0.0
+                },
+                direction: if l.inside_front == (def.reference_side == SheetReferenceSide::Front) {
+                    "up"
+                } else {
+                    "down"
+                },
+                centerlines: vec![flat],
+                tangents: l
+                    .tangents
+                    .iter()
+                    .map(|t| FlatLine {
+                        start: map.point(t[0]),
+                        end: map.point(t[1]),
+                    })
+                    .collect(),
+                slits: Vec::new(),
+            });
+            slot += 1;
+        }
+    }
     let geometry = kernel
         .sheet_shape(
             &SheetShapeSpec {
@@ -565,6 +626,7 @@ pub(crate) fn evaluate<K: Kernel>(
         area,
         volume,
         bends,
+        facet_lines,
         domains: domains
             .into_iter()
             .map(|d| FlatDomain {
@@ -594,7 +656,7 @@ impl<S> FlatPattern<S> {
 
     pub fn json(&self) -> Value {
         let (min, max) = self.bounds().unwrap_or(([f64::NAN; 2], [f64::NAN; 2]));
-        json!({
+        let mut value = json!({
             "body": self.body,
             "status": "valid",
             "sheet_version": self.sheet_version,
@@ -609,9 +671,31 @@ impl<S> FlatPattern<S> {
             "volume": self.volume,
             "bounds": {"min": min, "max": max},
             "bends": self.bends,
+            "facet_lines": self.facet_lines,
             "domains": self.domains,
             "diagnostics": [],
-        })
+        });
+        // A pattern laid flat by triangulation says how approximate it is
+        // (mitcad#2442).
+        if let Some(approximation) = self.approximation() {
+            value["approximation"] = approximation;
+        }
+        value
+    }
+
+    /// How a pattern laid flat by triangulation differs from its faces, with
+    /// its fold lines in flat coordinates (mitcad#2442); None for others.
+    pub fn approximation(&self) -> Option<Value> {
+        let to_flat = self
+            .domains
+            .iter()
+            .find(|d| d.domain == SheetDomainRef::Panel(self.def.stationary))
+            .map(|d| d.to_flat);
+        super::folded::triangulated::summary(
+            &self.developed,
+            to_flat,
+            self.def.reference_side == SheetReferenceSide::Back,
+        )
     }
 
     /// The flat position of a point of the body, or the body point of a flat
@@ -622,6 +706,15 @@ impl<S> FlatPattern<S> {
         flat: Option<[f64; 2]>,
         model: Option<[f64; 3]>,
     ) -> Result<Value, String> {
+        // A pattern laid flat by triangulation is no exact development of
+        // the body (mitcad#2442).
+        if self.developed.approximation.is_some() {
+            return Err(
+                "the pattern is laid flat approximately, by triangulation: its points have no \
+                 exact place on the body"
+                    .into(),
+            );
+        }
         let membership = |patch: &SheetPatch, uv: [f64; 2]| -> bool {
             patch.regions.iter().any(|r| contains(r, uv))
         };

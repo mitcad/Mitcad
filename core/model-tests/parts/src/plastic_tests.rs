@@ -6,6 +6,7 @@
 use serde_json::{Value, json};
 
 use mitcad_model::ids::{BodyUid, FeatureUid};
+use mitcad_model::notice::{FeatureError, NoticePlace};
 use mitcad_model::test_support::{Block, block, def};
 use mitcad_model::testing::MockKernel;
 use mitcad_model::topo::FaceName;
@@ -366,4 +367,316 @@ fn plastic_features_round_trip_through_the_design_file() {
             .all(|f| f["status"] == "ok"),
         "{timeline}"
     );
+}
+
+fn failure(doc: &Document<MockKernel>, uid: FeatureUid) -> FeatureError {
+    match status(doc, uid) {
+        FeatureStatus::Failed(error) => error,
+        other => panic!("expected a failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn lips_and_grooves_follow_the_face_beside_them_and_lean_one_side() {
+    // mitcad#2511.
+    let mut b = block();
+    let face = top(&b);
+    let rule = add(
+        &mut b.doc,
+        json!({"type": "plastic_rule", "rule_name": "ABS", "thickness": 1.5,
+               "draft_angle": "1.5 deg"}),
+    )
+    .unwrap();
+    // Following the face beside the edge, the lip starts at the rim face;
+    // its other side leans by its own draft, narrowing it as it rises.
+    let lip = add(
+        &mut b.doc,
+        json!({"type": "lip", "body": b.body, "face": face, "width": 1, "height": 2,
+               "tangent": true, "draft_angle": "3 deg"}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, lip), FeatureStatus::Ok);
+    assert_eq!(
+        specs(&b.doc).last().unwrap(),
+        &format!(
+            "rim_band {lip} on {face} inside width 1 free 0 from 0 to 2 tangent side_taper {}",
+            degrees(3.0)
+        )
+    );
+    // The side draft of the rule: a lip leans one way, a groove the other,
+    // so that a groove of a lip's draft takes the lip.
+    let lip2 = add(
+        &mut b.doc,
+        json!({"type": "lip", "body": b.body, "face": face, "width": 1, "height": 2,
+               "side_draft": true, "rule": rule}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, lip2), FeatureStatus::Ok);
+    assert_eq!(
+        specs(&b.doc).last().unwrap(),
+        &format!(
+            "rim_band {lip2} on {face} inside width 1 free 0 from -0.1 to 2 side_taper {}",
+            degrees(1.5)
+        )
+    );
+    let groove = add(
+        &mut b.doc,
+        json!({"type": "groove", "body": b.body, "face": face, "width": 1, "depth": 2,
+               "outside": true, "tangent": true, "side_draft": true, "rule": rule}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, groove), FeatureStatus::Ok);
+    assert_eq!(
+        specs(&b.doc).last().unwrap(),
+        &format!(
+            "rim_band {groove} on {face} outside width 1.1 free 1.1 from -2.1 to 0.1 tangent side_taper {}",
+            -degrees(1.5)
+        )
+    );
+    // The rule's draft below a draft of its own warns as the boss's does.
+    let low = add(
+        &mut b.doc,
+        json!({"type": "lip", "body": b.body, "face": face, "width": 1, "height": 2,
+               "draft_angle": "0.2 deg", "rule": rule}),
+    )
+    .unwrap();
+    let warnings = b.doc.warnings(low).join("; ");
+    assert!(warnings.contains("below the smallest draft"), "{warnings}");
+
+    // Refused in words: a draft that closes the lip before its top (when
+    // added), a side draft with neither an angle nor a rule.
+    let e = add(
+        &mut b.doc,
+        json!({"type": "lip", "body": b.body, "face": face, "width": 0.2, "height": 5,
+               "draft_angle": "10 deg"}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("the lip's draft closes it before its top"),
+        "{e}"
+    );
+    let e = add(
+        &mut b.doc,
+        json!({"type": "groove", "body": b.body, "face": face, "width": 0.2, "depth": 5,
+               "draft_angle": "10 deg"}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("the groove's draft closes it before its bottom"),
+        "{e}"
+    );
+    let bare = add(
+        &mut b.doc,
+        json!({"type": "lip", "body": b.body, "face": face, "width": 1, "height": 2,
+               "side_draft": true}),
+    )
+    .unwrap();
+    assert!(
+        error(&b.doc, bare).contains("needs a draft angle, or a plastic rule"),
+        "{}",
+        error(&b.doc, bare)
+    );
+    // The rule's draft known only when evaluated: a steep one closes the
+    // groove, refused with the rim face painted and named for agents only.
+    let steep = add(
+        &mut b.doc,
+        json!({"type": "plastic_rule", "rule_name": "Steep", "thickness": 1.5,
+               "draft_angle": "40 deg"}),
+    )
+    .unwrap();
+    let closed = add(
+        &mut b.doc,
+        json!({"type": "groove", "body": b.body, "face": face, "width": 1, "depth": 2,
+               "side_draft": true, "rule": steep}),
+    )
+    .unwrap();
+    let failed = failure(&b.doc, closed);
+    assert!(
+        failed
+            .message
+            .contains("the groove's draft closes it before its bottom"),
+        "{failed:?}"
+    );
+    assert!(!failed.message.contains(&face), "{failed:?}");
+    assert!(
+        failed.places.contains(&NoticePlace::Face {
+            body: Some(b.body.to_string()),
+            name: face.clone(),
+        }),
+        "{:?}",
+        failed.places
+    );
+}
+
+#[test]
+fn a_boss_drafts_its_ribs_and_hole_turns_its_ribs_and_ends_them_at_walls() {
+    // mitcad#2511.
+    let mut b = block();
+    let face = top(&b);
+    let rule = add(
+        &mut b.doc,
+        json!({"type": "plastic_rule", "rule_name": "ABS", "thickness": 1.5,
+               "draft_angle": "1.5 deg"}),
+    )
+    .unwrap();
+    let boss = add(
+        &mut b.doc,
+        json!({"type": "boss", "body": b.body, "face": face, "point": [30, 20, 20],
+               "diameter": 10, "height": 12, "hole_diameter": 4, "hole_draft": true,
+               "ribs": 3, "rib_thickness": 1.5, "rib_length": 6, "rib_angle": "30 deg",
+               "rib_draft_angle": "1 deg",
+               "rib_ends": [{"end": "wall", "short": 1}, {"end": "wall"}], "rule": rule}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, boss), FeatureStatus::Ok);
+    assert!(
+        b.doc.warnings(boss).is_empty(),
+        "{:?}",
+        b.doc.warnings(boss)
+    );
+    let specs = specs(&b.doc);
+    let has = |spec: String| assert!(specs.contains(&spec), "{spec} in {specs:?}");
+    // The post by the rule's draft, and run on past the ribs' tops for the
+    // ribs that end at a wall.
+    let post = -degrees(1.5);
+    has(format!(
+        "extrude {boss} along [0.0, 0.0, 1.0] from offset -0.5: distance 12.5 taper {post}"
+    ));
+    has(format!(
+        "extrude {boss} along [0.0, 0.0, 1.0] from offset -0.5: distance 13 taper {post}"
+    ));
+    // The ribs up to the wall: the kernel's rib from their top edges down
+    // to the face (To Next), their ends continued, the first 1 short; as
+    // thick at the face as asked, so thinner at the top by the draft.
+    let draft = degrees(1.0);
+    let top_thickness = 1.5 - 2.0 * 12.0 * draft.tan();
+    for (curve, offset) in [("c11", "-1"), ("c15", "0")] {
+        has(format!(
+            "rib {boss} chains {curve} thickness {top_thickness} Symmetric depth None flip true \
+             bodies 2 extend_ends offset {offset} draft {draft}"
+        ));
+    }
+    // The third rib to its length, leaning by its own draft.
+    has(format!(
+        "extrude {boss} along [0.0, 0.0, 1.0] from offset -0.5: distance 12.5 taper {}",
+        -draft
+    ));
+    // The hole by the rule's draft: as wide as asked at the top.
+    has(format!(
+        "extrude {boss} along [0.0, 0.0, 1.0] from offset 0: distance 12.5 taper {}",
+        degrees(1.5)
+    ));
+    let names = faces(&b.doc, b.body);
+    for face in [
+        format!("{boss}:rib0({boss}:side(c11))"),
+        format!("{boss}:rib1({boss}:side(c15))"),
+        format!("{boss}:side(c18[c21,c19])"),
+        format!("{boss}:side(c2)"),
+    ] {
+        assert!(names.contains(&face), "{face} in {names:?}");
+    }
+
+    // Refused in words when added: drafts that close the hole or the ribs,
+    // a negative distance short of the wall.
+    let base = json!({"type": "boss", "body": b.body, "face": face, "point": [30, 20, 20],
+                      "diameter": 10, "height": 12});
+    let refused = |changes: Value| {
+        let mut def = base.clone();
+        for (key, value) in changes.as_object().unwrap() {
+            def[key] = value.clone();
+        }
+        def
+    };
+    let e = add(
+        &mut b.doc,
+        refused(json!({"hole_diameter": 2, "hole_draft_angle": "10 deg"})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("the hole's draft closes it before its bottom"),
+        "{e}"
+    );
+    let e = add(
+        &mut b.doc,
+        refused(json!({"hole_diameter": 8, "hole_depth": 30, "hole_draft_angle": "-10 deg"})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("takes it through the boss's wall"), "{e}");
+    let e = add(
+        &mut b.doc,
+        refused(json!({"ribs": 2, "rib_thickness": 1, "rib_draft_angle": "5 deg"})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("the ribs' draft closes them before their tops"),
+        "{e}"
+    );
+    let e = add(
+        &mut b.doc,
+        refused(json!({"ribs": 2, "rib_ends": [{"end": "wall", "short": -1}]})),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("rib 1's distance short of the wall"), "{e}");
+    // The rule's draft asked for without a rule.
+    let bare = add(&mut b.doc, refused(json!({"ribs": 2, "rib_draft": true}))).unwrap();
+    assert!(
+        error(&b.doc, bare).contains("the ribs' draft needs a draft angle"),
+        "{}",
+        error(&b.doc, bare)
+    );
+}
+
+#[test]
+fn plastic_features_saved_before_the_new_options_are_built_as_before() {
+    // mitcad#2511: no new field is written for them, and the kernel gets
+    // what it got.
+    let mut b = block();
+    let face = top(&b);
+    let lip = add(
+        &mut b.doc,
+        json!({"type": "lip", "body": b.body, "face": face, "width": 1, "height": 2}),
+    )
+    .unwrap();
+    assert_eq!(
+        specs(&b.doc).last().unwrap(),
+        &format!("rim_band {lip} on {face} inside width 1 free 0 from -0.1 to 2")
+    );
+    let boss = add(
+        &mut b.doc,
+        json!({"type": "boss", "body": b.body, "face": face, "point": [30, 20, 20],
+               "diameter": 10, "height": 12, "hole_diameter": 4, "ribs": 2}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, boss), FeatureStatus::Ok);
+    let calls = b.doc.kernel().calls.borrow().clone();
+    assert_eq!(calls.get("rib"), None);
+    for uid in [lip, boss] {
+        let feature = query(&b.doc, json!({"query": "feature", "uid": uid}));
+        let keys: Vec<&String> = feature["def"].as_object().unwrap().keys().collect();
+        for new in [
+            "tangent",
+            "side_draft",
+            "draft_angle",
+            "rib_angle",
+            "rib_draft",
+            "rib_draft_angle",
+            "hole_draft",
+            "hole_draft_angle",
+            "rib_ends",
+        ] {
+            assert!(!keys.iter().any(|k| k.as_str() == new), "{new} in {keys:?}");
+        }
+    }
+    // And they open again as they were.
+    let text = b.doc.to_json();
+    let mut again = Document::from_json(&text, MockKernel::default()).unwrap();
+    again.recompute();
+    assert_eq!(status(&again, lip), FeatureStatus::Ok);
+    assert_eq!(status(&again, boss), FeatureStatus::Ok);
 }

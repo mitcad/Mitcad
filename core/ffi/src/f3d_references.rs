@@ -28,6 +28,9 @@ pub(crate) struct Imported {
     guids: HashMap<String, Vec<OccurrenceUid>>,
     /// Its occurrences by their object ids in its file.
     objects: HashMap<u64, OccurrenceUid>,
+    /// Those with their GUIDs and the documents filled in it in turn
+    /// ([`Referenced::object_guids`], mitcad#2528).
+    object_guids: Arc<mitcad_import::references::ObjectGuids>,
     /// Its bodies by the stored bodies they match
     /// ([`Referenced::stored_bodies`]).
     stored: HashMap<String, BodyUid>,
@@ -241,6 +244,7 @@ impl References {
                         name: l.name.clone(),
                         stored_bodies: &l.imported.stored,
                         entity_bodies: &l.imported.entities,
+                        object_guids: Some(l.imported.object_guids.clone()),
                     },
                 )
             })
@@ -626,6 +630,7 @@ fn import_reference(
         joints: d.joints.clone(),
         guids: d.components.occurrence_guids.clone(),
         objects: d.components.occurrence_objects.clone(),
+        object_guids: d.components.object_guids.clone(),
         stored,
         entities: d.body_entities.clone(),
         document,

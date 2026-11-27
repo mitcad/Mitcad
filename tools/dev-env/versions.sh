@@ -111,3 +111,13 @@ CEF_VERSION=156.0.27+ga10dae3+chromium-156.0.8078.88
 CEF_LINUX64_SHA1=1ccade9535dba5362f0c6adb05f9ae019e860af1
 CEF_MACOSARM64_SHA1=fe8d1915b99c5ad6ba00c4cc13f53af1ae289ff3
 CEF_WINDOWS64_SHA1=f3bac43e0e5a8ead78532bbc8f1de5c19f97d569
+
+# Linux on 64-bit ARM (aarch64; the release's AppImage is built on GitHub's
+# ARM runners): the aarch64 assets of the same releases as the x86-64 pins
+# above, with the digests the same sources publish (GitHub's release asset
+# digests; cef-builds' <archive>.sha1). build-cycles.sh,
+# install-appimage-tools.sh, setup-user.sh and fetch-cef.sh pick them by
+# `uname -m`. No CUDA there: Cycles has its CPU device only.
+ISPC_LINUX_AARCH64_SHA256=660ccac47ff7e0980b89b00a3ebd70201acf55f9e816c127fc28e868ab456193
+SCCACHE_LINUX_AARCH64_SHA256=2b3284d5da3b46a47dc4229e75bb7b88ac4aa99c8d754fb7d2f84997e5a4354a
+CEF_LINUXARM64_SHA1=95172fa9c463f1a0390dbe2d1d29387c5d6bb9a0

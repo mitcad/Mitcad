@@ -75,6 +75,7 @@
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/io/step.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -553,7 +554,7 @@ int probe_reported() {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(fillet_wave_crests) {
   if (argc > 1 && std::strcmp(argv[1], "--probe") == 0) {
     return test::probe();
   }

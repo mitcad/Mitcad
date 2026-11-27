@@ -222,6 +222,22 @@
 //                           until that colour has its blue channel above
 //                           its red, or lies nearer colour a than b (each
 //                           #rrggbb or a view colour role's name)
+//   capture-view-point-tint <var> <x,y,z> <beside x,y,z>  how much the
+//                           OCCT framebuffer's brightness (0 to 255) where
+//                           the first model point is differs from where the
+//                           second is (the background beside it): what a
+//                           see-through object does to what is behind it,
+//                           into ${var} (mitcad#2569)
+//   capture-view-edge-contrast <var> <beside x,y,z> <x,y,z>...  the
+//                           contrast ratio of the line drawn through the
+//                           model points with the framebuffer's colour at
+//                           the first one, the background: at each point
+//                           the pixel within 2 logical pixels most unlike
+//                           it, the highest ratio among them into ${var}
+//                           (mitcad#2569)
+//   expect-colors-near <#rrggbb> <#rrggbb> <most>  two colours (captured
+//                           ones as ${var}) off by at most that much, the
+//                           sum of the channels' differences (mitcad#2569)
 //   view-line-width <var> <least px> <regex>|sketch:<x>,<y> [<narrower var>]
 //                           wait until the line the OCCT framebuffer shows
 //                           at the view's pick point whose "Pick <kind>
@@ -448,6 +464,8 @@
 //                           whichever popup Qt reports active; "Rim: *"
 //                           chooses the first entry that starts with
 //                           "Rim: " when none is "Rim: *" (mitcad#1935)
+//   popup-now <entry>       popup without waiting for the model: the entry
+//                           chosen while a job computes it (mitcad#2500)
 //   expect-popup-entries <regex>  the open popup menu's shown entries,
 //                           joined with " | " ("Name (disabled)" for a
 //                           disabled one, no separators), match; logs
@@ -734,6 +752,11 @@
 //                           preview's refinement) until released, also
 //                           through a cancel: another job a panel's next
 //                           preview waits for (mitcad#2118)
+//   hold-model-job true|false start a job of the test's own ("test hold")
+//                           that holds the model until released (false):
+//                           a menu entry, a key or a queued call then
+//                           meets a busy model, with nothing to give way
+//                           (mitcad#2500)
 //   expect-native-history-wheel  mouse/trackpad history scrolling reaches
 //                           both endpoints without leaving the history strip
 //   test-manipulator-feedback check actual subpixel length/angle overlay

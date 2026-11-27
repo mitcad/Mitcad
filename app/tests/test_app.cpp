@@ -2190,11 +2190,21 @@ void reportLinkTests() {
                        "<sub>Sent from MitCad 0.1.0 · duplicate key `mitcad-0123456789ab`</sub>\n"));
   const QDateTime time(QDate(2026, 11, 13), QTime(14, 25, 1));
   CHECK(designZipName(QStringLiteral("Bug: Fillet fails"), time) == QStringLiteral("Bug-Fillet-fails-20261113-142501.zip"));
-  CHECK(designZipName(QStringLiteral("  ..Wish: a/b\\c  "), time) == QStringLiteral("Wish-a-b-c-20261113-142501.zip"));
+  CHECK(designZipName(QStringLiteral("  ..Tweak: a/b\\c  "), time) == QStringLiteral("Tweak-a-b-c-20261113-142501.zip"));
   CHECK(designZipName(QStringLiteral("§§ ¤"), time) == QStringLiteral("feedback-20261113-142501.zip"));
   CHECK(designZipName(QString(100, QLatin1Char('x')), time) ==
         QString(60, QLatin1Char('x')) + QStringLiteral("-20261113-142501.zip"));
   CHECK(kAttachmentLimit == 25000000);
+
+  // Send Feedback's issue title (mitcad#2563): the kind's prefix, as the
+  // issue tracker sorts reports into Bug, Tweak and Feature.
+  CHECK(feedbackTitle(QStringLiteral("bug"), QStringLiteral("Fillet fails")) == QStringLiteral("Bug: Fillet fails"));
+  CHECK(feedbackTitle(QStringLiteral("tweak"), QStringLiteral("Wider fillet handle")) ==
+        QStringLiteral("Tweak: Wider fillet handle"));
+  CHECK(feedbackTitle(QStringLiteral("feature"), QStringLiteral("Thread tool")) ==
+        QStringLiteral("Feature: Thread tool"));
+  CHECK(feedbackTitle(QStringLiteral("wish"), QStringLiteral("Old kind")) == QStringLiteral("Old kind"));
+  CHECK(feedbackTitle(QString(), QStringLiteral("Feedback")) == QStringLiteral("Feedback"));
 }
 
 // The addresses of Cloud projects (mitcad#89).

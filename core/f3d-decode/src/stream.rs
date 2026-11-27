@@ -512,6 +512,115 @@ pub struct ContextRef {
     pub end: usize,
 }
 
+/// A reference of the document's `RedirectionsStream.dat` (mitcad#2492):
+/// the role GUID that the design's older references into another document
+/// carry ([`Segment::redirect`]) and that document's URN.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Redirection {
+    /// The reference's `neutronRole` (lower case).
+    pub role: String,
+    /// The referenced design's `versionUrn` (`…?version=N`).
+    pub urn: String,
+}
+
+/// The references of a `RedirectionsStream.dat` (JSON): each reference's
+/// `neutronRole` with the `versionUrn` of the design whose
+/// `targetFileName` is the reference's `relativePath`. References without
+/// a role or a URN are left out; a stream that is no such JSON gives none.
+pub fn redirections(data: &[u8]) -> Vec<Redirection> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(data) else {
+        return Vec::new();
+    };
+    let text =
+        |v: &serde_json::Value, key: &str| v.get(key).and_then(|s| s.as_str()).map(str::to_owned);
+    let designs: HashMap<String, String> = v
+        .get("designs")
+        .and_then(|d| d.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|d| Some((text(d, "targetFileName")?, text(d, "versionUrn")?)))
+        .collect();
+    let mut out: Vec<Redirection> = Vec::new();
+    for r in v
+        .get("references")
+        .and_then(|r| r.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let role = r
+            .get("properties")
+            .and_then(|p| p.as_array())
+            .into_iter()
+            .flatten()
+            .find_map(|p| p.get("neutronRole")?.get("value")?.as_str());
+        let urn = text(r, "relativePath").and_then(|f| designs.get(&f).cloned());
+        if let (Some(role), Some(urn)) = (role, urn)
+            && is_guid(role.as_bytes())
+            && !out.iter().any(|x| x.role.eq_ignore_ascii_case(role))
+        {
+            out.push(Redirection {
+                role: role.to_lowercase(),
+                urn,
+            });
+        }
+    }
+    out
+}
+
+/// The older form of a reference's assembly context (mitcad#2492; designs
+/// written by builds up to 2.0.9305 and some objects of later ones) at `q`,
+/// after the object's id (and class): `01 | u32 0 | str16 document GUID |
+/// 00 | str8 class GUID | str16 role GUID | 00`, where the newer form has
+/// `01 | u64 key | 00 | str8 class GUID | 00`. The document GUID is the one
+/// the referenced file's `Manifest.dat` lists, the role GUID the one the
+/// design's `RedirectionsStream.dat` gives the referenced document (the
+/// first GUID of a newer design's external document). Returns the document
+/// GUID, the class GUID (upper case), the role GUID (lower case) and the
+/// end.
+fn older_context_at(d: &[u8], q: usize) -> Option<(String, String, String, usize)> {
+    if d.get(q) != Some(&1) || u32_at(d, q + 1) != Some(0) {
+        return None;
+    }
+    let document = utf16_guid_at(d, q + 5)?;
+    if d.get(q + 81) != Some(&0) || u32_at(d, q + 82) != Some(36) {
+        return None;
+    }
+    let class = slice(d, q + 86, q + 122);
+    if !is_guid(class) {
+        return None;
+    }
+    let role = utf16_guid_at(d, q + 122)?;
+    if d.get(q + 198) != Some(&0) {
+        return None;
+    }
+    Some((
+        document.to_lowercase(),
+        latin1(class).to_uppercase(),
+        role.to_lowercase(),
+        q + 199,
+    ))
+}
+
+/// The end of the older form of an assembly context at `q` (see
+/// [`older_context_at`]), for a reader that skips the reference without
+/// resolving its document (a joint state's occurrences, mitcad#2530).
+pub fn older_context_end(d: &[u8], q: usize) -> Option<usize> {
+    older_context_at(d, q).map(|(_, _, _, end)| end)
+}
+
+/// A `str16` of a GUID's 36 characters at `p`.
+fn utf16_guid_at(d: &[u8], p: usize) -> Option<String> {
+    if u32_at(d, p) != Some(36) {
+        return None;
+    }
+    let units = utf16_units(d.get(p + 4..p + 76)?);
+    let bytes: Vec<u8> = units
+        .iter()
+        .map(|&u| u8::try_from(u).unwrap_or(0))
+        .collect();
+    is_guid(&bytes).then(|| latin1(&bytes))
+}
+
 /// One object of the BulkStream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Object {
@@ -541,6 +650,9 @@ pub struct Segment {
     /// The transforms the input slots carry for their entities
     /// ([`super::decode::slot_contexts`]), read on first use.
     pub(crate) contexts: std::sync::OnceLock<HashMap<u64, [[f64; 4]; 4]>>,
+    /// The external document's key of each role GUID (lower case) that
+    /// older references into other documents carry ([`Segment::redirect`]).
+    roles: HashMap<String, u64>,
 }
 
 impl Segment {
@@ -588,7 +700,79 @@ impl Segment {
             by_guid,
             long_refs,
             contexts: std::sync::OnceLock::new(),
+            roles: HashMap::new(),
         }
+    }
+
+    /// Reads the older references into other documents (mitcad#2492):
+    /// designs written by builds up to 2.0.9305 keep no external documents
+    /// in the MetaStream's tail; their references carry the referenced
+    /// document's GUID and the role GUID that the document's
+    /// `RedirectionsStream.dat` (`redirections`) resolves to its URN
+    /// ([`older_context_at`]). Each role gets an external document: the
+    /// MetaStream's own one whose first GUID is the role (later designs
+    /// keep a few older references beside their external documents), else
+    /// a new one with the role's URN, the role as its first GUID, the
+    /// document's GUID as its last and a key made from the role. From then
+    /// on [`Segment::context_ref_at`] reads those references as references
+    /// through that key. A role neither names stays unread.
+    pub fn redirect(&mut self, redirections: &[Redirection]) {
+        // (role, document GUID) in the order the bulk has them.
+        let mut found: Vec<(String, String)> = Vec::new();
+        let d = &self.bulk;
+        let mut p = 0;
+        while p + 199 <= d.len() {
+            if d[p] == 1
+                && d[p + 1..p + 9] == [0, 0, 0, 0, 0x24, 0, 0, 0]
+                && let Some((document, _, role, end)) = older_context_at(d, p)
+            {
+                if !found.iter().any(|(r, _)| *r == role) {
+                    found.push((role, document));
+                }
+                p = end;
+                continue;
+            }
+            p += 1;
+        }
+        for (role, document) in found {
+            let key = if let Some(x) = self
+                .meta
+                .external
+                .iter()
+                .find(|x| x.guid_a.eq_ignore_ascii_case(&role))
+            {
+                x.key
+            } else if let Some(r) = redirections.iter().find(|r| r.role == role) {
+                let key = self.unused_key(&role);
+                self.meta.external.push(ExternalRef {
+                    key,
+                    guid_a: role.clone(),
+                    guid_b: String::new(),
+                    urn: r.urn.clone(),
+                    guid_c: document,
+                    value: 0,
+                });
+                key
+            } else {
+                continue;
+            };
+            self.roles.insert(role, key);
+        }
+    }
+
+    /// A key for a role's external document: the role GUID's first 16 hex
+    /// digits, unless an external document has it already.
+    fn unused_key(&self, role: &str) -> u64 {
+        let digits: String = role
+            .chars()
+            .filter(char::is_ascii_hexdigit)
+            .take(16)
+            .collect();
+        let mut key = u64::from_str_radix(&digits, 16).unwrap_or(1);
+        while self.meta.external.iter().any(|x| x.key == key) {
+            key = key.wrapping_add(1);
+        }
+        key
     }
 
     pub fn parse(meta: &[u8], bulk: Vec<u8>) -> Result<Segment, MetaError> {
@@ -781,7 +965,10 @@ impl Segment {
     /// assembly context (`01 id [str8 guid] 01 key 00 str8 guid 00`) whose
     /// key is one of the MetaStream's external documents (mitcad#196). The
     /// id is the object's in that document, so it is not looked up here:
-    /// the GUID after the key names its class (upper case).
+    /// the GUID after the key names its class (upper case). The older form
+    /// of the context (`01 u32 0 str16 GUID 00 str8 guid str16 role 00`,
+    /// mitcad#2492) is read through the key [`Segment::redirect`] gave its
+    /// role.
     pub fn context_ref_at(&self, d: &[u8], p: usize) -> Option<ContextRef> {
         if d.get(p) != Some(&1) {
             return None;
@@ -794,8 +981,16 @@ impl Segment {
             }
             q += 40;
         }
-        if d.get(q) != Some(&1) || d.get(q + 9..q + 14) != Some(&[0, 0x24, 0, 0, 0][..]) {
+        if d.get(q) != Some(&1) {
             return None;
+        }
+        if d.get(q + 9..q + 14) != Some(&[0, 0x24, 0, 0, 0][..]) {
+            if self.roles.is_empty() {
+                return None;
+            }
+            let (_, guid, role, end) = older_context_at(d, q)?;
+            let key = *self.roles.get(&role)?;
+            return Some(ContextRef { id, key, guid, end });
         }
         let key = u64_at(d, q + 1)?;
         if !self.meta.external.iter().any(|x| x.key == key) || d.get(q + 50) != Some(&0) {

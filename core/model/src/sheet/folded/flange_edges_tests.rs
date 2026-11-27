@@ -105,6 +105,7 @@ fn tray_corner(gap: bool) -> SheetState {
         },
         invalidated: None,
         blockers: Vec::new(),
+        approximation: None,
     }
 }
 

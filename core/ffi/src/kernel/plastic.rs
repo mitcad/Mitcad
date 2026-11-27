@@ -13,6 +13,10 @@ pub mod ffi {
         free: f64,
         start: f64,
         end: f64,
+        /// The side along the loop follows the faces beside it (mitcad#2511).
+        tangent: bool,
+        /// The other side's lean (radians, mitcad#2511).
+        side_taper: f64,
     }
 
     unsafe extern "C++" {

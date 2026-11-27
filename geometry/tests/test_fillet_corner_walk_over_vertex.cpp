@@ -52,6 +52,8 @@
 #include <TopoDS.hxx>
 #include <gp_Pnt.hxx>
 
+#include "bundled_test.hpp"
+
 namespace {
 
 int failures = 0;
@@ -163,7 +165,7 @@ void test_body(const char* file, const gp_Pnt& foot) {
 
 }  // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_corner_walk_over_vertex) {
   // 1801: the inner rim's corner walks over the rim's end vertex.
   test_body("bend-30.brep", gp_Pnt(-28.090465, 0.490321, 1.1));
   // 1802: the outer edge's walk starts on the rib side's edge with the tube.

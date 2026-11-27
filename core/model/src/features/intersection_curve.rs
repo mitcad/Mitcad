@@ -561,6 +561,32 @@ pub fn curve_polyline(curve: &[PathCurve]) -> Vec<Vec3> {
     points
 }
 
+/// The curve as polylines, one for each run of pieces that join end to
+/// start (within 1e-6 mm), as [`curve_polyline`] draws each run: the
+/// curves of an Isoparametric Curve that are apart (mitcad#2522: several
+/// curves, or one cut by a hole of its face) each a polyline of its own.
+pub fn curve_polylines(curve: &[PathCurve]) -> Vec<Vec<Vec3>> {
+    let mut runs: Vec<Vec<PathCurve>> = Vec::new();
+    let mut last_end: Option<Vec3> = None;
+    for piece in curve {
+        let Some((t0, t1)) = range(&piece.curve) else {
+            continue;
+        };
+        let (start, end) = (point(&piece.curve, t0), point(&piece.curve, t1));
+        let joins = last_end.is_some_and(|q| distance(q, start) <= 1e-6);
+        match runs.last_mut() {
+            Some(run) if joins => run.push(piece.clone()),
+            _ => runs.push(vec![piece.clone()]),
+        }
+        last_end = Some(end);
+    }
+    runs.iter()
+        .map(Vec::as_slice)
+        .map(curve_polyline)
+        .filter(|points| points.len() >= 2)
+        .collect()
+}
+
 /// Where a curve starts.
 fn start_of(curve: &Curve3) -> Option<Vec3> {
     range(curve).map(|(t0, _)| point(curve, t0))

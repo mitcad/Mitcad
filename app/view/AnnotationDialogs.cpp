@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <exception>
 #include <initializer_list>
 #include <optional>
 
@@ -34,6 +35,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
+#include "../drawings/ParameterInsert.hpp"
 
 namespace mitcad {
 namespace {
@@ -719,7 +721,8 @@ std::optional<QJsonValue> askAnnotationTolerance(QWidget* parent, const QJsonVal
   return std::nullopt;
 }
 
-std::optional<QString> askNoteText(QWidget* parent, const QString& what, const QString& current) {
+std::optional<QString> askNoteText(QWidget* parent, const QString& what, const QString& current,
+                                   const std::function<QJsonArray()>& parameters) {
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Note"));
   auto* layout = new QVBoxLayout(&dialog);
@@ -727,9 +730,26 @@ std::optional<QString> askNoteText(QWidget* parent, const QString& what, const Q
   layout->addLayout(form);
   form->addRow(QObject::tr("On:"), new QLabel(what, &dialog));
   auto* text = new QPlainTextEdit(current, &dialog);
+  text->setObjectName(QStringLiteral("noteText"));
   text->setTabChangesFocus(true);
   text->setFixedHeight(text->fontMetrics().lineSpacing() * 4 + 12);
   form->addRow(QObject::tr("&Text:"), text);
+  // A drawing's text (mitcad#2483): Insert Parameter… in its menu, and the
+  // parameters it refers to that the design lacks under it.
+  if (parameters) {
+    drawings::addInsertParameter(text, parameters);
+    QJsonArray known;
+    try {
+      known = parameters();
+    } catch (const std::exception&) {
+      // None known: nothing is named missing.
+    }
+    QLabel* missing = drawings::missingParametersLabel(QStringLiteral("noteMissingParameters"));
+    form->addRow(QString(), missing);
+    const auto update = [text, missing, known] { drawings::showMissingParameters(missing, text->toPlainText(), known); };
+    QObject::connect(text, &QPlainTextEdit::textChanged, &dialog, update);
+    update();
+  }
   const Buttons buttons = addButtons(dialog, layout);
   text->setFocus();
   qDebug().noquote() << QStringLiteral("Note dialog opened: %1").arg(what);

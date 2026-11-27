@@ -31,6 +31,8 @@
 #include <string>
 #include <vector>
 
+#include "bundled_test.hpp"
+
 namespace {
 
 struct Statement {
@@ -280,7 +282,7 @@ int self_test() {
 
 } // namespace
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(user_text_scan) {
   if (argc != 2) {
     std::cerr << "usage: test_user_text_scan DIR | --self-test\n";
     return 2;

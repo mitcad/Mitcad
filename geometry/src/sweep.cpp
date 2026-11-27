@@ -6,8 +6,10 @@
 #include <cmath>
 #include <cstdio>
 #include <exception>
+#include <initializer_list>
 #include <limits>
 #include <map>
+#include <new>
 #include <optional>
 #include <string>
 #include <stdexcept>
@@ -15,6 +17,7 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
@@ -45,6 +48,7 @@
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <ElSLib.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ExtremaCurveCurve.hxx>
 #include <GeomAdaptor_Curve.hxx>
@@ -72,6 +76,7 @@
 #include <gp_Cylinder.hxx>
 #include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 #include <gp_XYZ.hxx>
 
@@ -2759,6 +2764,156 @@ TopoDS_Compound start_walls(const Shape& sweep, const std::string& near, const T
   return walls;
 }
 
+// Walls along a straight sweep through the target's edges and through the
+// outlines of its cylindrical faces seen along the sweep, from behind the
+// sweep to past it (To Next, GitHub mitcad/Mitcad#674). They part the sweep
+// into columns over each of which every face of the target that the column
+// meets spans the whole column, so that each column's first piece ends at
+// the first face ahead of all of it. Without them the outside of the target
+// is one piece wherever it wraps round a body: under a body that lies
+// higher than its neighbour it joins the space above the neighbour, and the
+// sweep's far end with it. Edges along the sweep and walls that miss the
+// sweep are left out; the outlines of other curved faces are not walls.
+// These walls are long, through the target's own place: start_walls cuts
+// them back to where they cross the profile inside it, so that one along
+// the profile's own edge (a body's edge under the profile's outline) gives
+// no wall.
+TopoDS_Compound outline_walls(const Shape& sweep, const TopoDS_Shape& tool, const gp_Dir& along) {
+  BRep_Builder builder;
+  TopoDS_Compound walls;
+  builder.MakeCompound(walls);
+  const Bnd_Box around = bounds_of(sweep.occt());
+  Bnd_Box all = around;
+  BRepBndLib::Add(tool, all);
+  const double size = diagonal(all) + 1.0;
+  gp_Trsf back;
+  back.SetTranslation(gp_Vec(along) * -size);
+  const auto add_wall = [&](const TopoDS_Shape& edge) {
+    const TopoDS_Shape behind = BRepBuilderAPI_Transform(edge, back, true).Shape();
+    BRepPrimAPI_MakePrism wall(behind, gp_Vec(along) * (3.0 * size));
+    wall.Build();
+    if (!wall.IsDone()) {
+      throw std::runtime_error("the sweep could not be parted along the target's outline");
+    }
+    if (!around.IsOut(bounds_of(wall.Shape()))) {
+      builder.Add(walls, wall.Shape());
+    }
+  };
+  ShapeMap edges;
+  TopExp::MapShapes(tool, TopAbs_EDGE, edges);
+  for (int i = 1; i <= edges.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(edges(i));
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    const BRepAdaptor_Curve curve(edge);
+    if (curve.GetType() == GeomAbs_Line && curve.Line().Direction().IsParallel(along, 1.0e-9)) {
+      continue;
+    }
+    add_wall(edge);
+  }
+  // A cylinder seen across its axis: its outline runs along the two lines
+  // where its surface turns away from the sweep.
+  for (TopExp_Explorer f(tool, TopAbs_FACE); f.More(); f.Next()) {
+    const TopoDS_Face& face = TopoDS::Face(f.Current());
+    const BRepAdaptor_Surface surface(face);
+    if (surface.GetType() != GeomAbs_Cylinder) {
+      continue;
+    }
+    const gp_Cylinder cylinder = surface.Cylinder();
+    const gp_Vec across = gp_Vec(cylinder.Axis().Direction()).Crossed(gp_Vec(along));
+    if (across.Magnitude() < 1.0e-9) {
+      continue; // along its axis its edges are its outline
+    }
+    double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    for (const double side : {1.0, -1.0}) {
+      const gp_Pnt on = cylinder.Location().Translated(across.Normalized() * (side * cylinder.Radius()));
+      double u = 0, v = 0;
+      ElSLib::Parameters(cylinder, on, u, v);
+      while (u < u0 - Precision::PConfusion()) {
+        u += kTwoPi;
+      }
+      while (u > u0 + kTwoPi) {
+        u -= kTwoPi;
+      }
+      if (u > u1 + Precision::PConfusion()) {
+        continue;
+      }
+      const gp_Pnt from = ElSLib::Value(u, v0, cylinder);
+      const gp_Pnt to = ElSLib::Value(u, v1, cylinder);
+      if (from.Distance(to) <= Precision::Confusion()) {
+        continue;
+      }
+      add_wall(BRepBuilderAPI_MakeEdge(from, to).Edge());
+    }
+  }
+  return walls;
+}
+
+// The first pieces of each column along the sweep, up to the first crossing
+// of the target: the pieces at the start (with faces named `near`) nearest
+// to it, by their centres of mass along `along`. A closed surface (a
+// cylinder the sweep enters from outside) crosses the sweep twice, and what
+// lies beyond the first crossing is not the extrusion's.
+std::vector<ShapePtr> first_pieces(const std::vector<ShapePtr>& pieces, const std::vector<std::size_t>& column_of,
+                                   const std::string& near, const gp_Dir& along) {
+  std::vector<double> position;
+  for (const ShapePtr& piece : pieces) {
+    GProp_GProps props;
+    BRepGProp::VolumeProperties(piece->occt(), props);
+    position.push_back(along_of(props.CentreOfMass(), along));
+  }
+  std::vector<double> first(column_of.empty() ? 1 : *std::max_element(column_of.begin(), column_of.end()) + 1,
+                            std::numeric_limits<double>::infinity());
+  for (std::size_t i = 0; i < pieces.size(); ++i) {
+    if (count_named(*pieces[i], near) > 0) {
+      first[column_of[i]] = std::min(first[column_of[i]], position[i]);
+    }
+  }
+  std::vector<ShapePtr> kept;
+  for (std::size_t i = 0; i < pieces.size(); ++i) {
+    if (count_named(*pieces[i], near) > 0 && position[i] <= first[column_of[i]] + Precision::Confusion()) {
+      kept.push_back(pieces[i]);
+    }
+  }
+  return kept;
+}
+
+// The faces of `walls` with copies of the same face left out: two bodies'
+// edges over one line, or a body's top and bottom edges one above the
+// other, give the same wall twice (by its box and its centre).
+TopoDS_Compound distinct_walls(const std::vector<TopoDS_Shape>& walls) {
+  BRep_Builder builder;
+  TopoDS_Compound distinct;
+  builder.MakeCompound(distinct);
+  std::vector<std::pair<Bnd_Box, gp_Pnt>> kept;
+  for (const TopoDS_Shape& wall : walls) {
+    for (TopExp_Explorer f(wall, TopAbs_FACE); f.More(); f.Next()) {
+      const Bnd_Box box = bounds_of(f.Current());
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(f.Current(), props);
+      const gp_Pnt centre = props.CentreOfMass();
+      const double tolerance = 1.0e-6 * (1.0 + diagonal(box));
+      const bool copy = std::any_of(kept.begin(), kept.end(), [&](const std::pair<Bnd_Box, gp_Pnt>& other) {
+        return other.second.Distance(centre) <= tolerance &&
+               other.first.CornerMin().Distance(box.CornerMin()) <= tolerance &&
+               other.first.CornerMax().Distance(box.CornerMax()) <= tolerance;
+      });
+      if (!copy) {
+        kept.emplace_back(box, centre);
+        builder.Add(distinct, f.Current());
+      }
+    }
+  }
+  return distinct;
+}
+
+bool any_named(const std::vector<ShapePtr>& pieces, const std::string& name) {
+  return std::any_of(pieces.begin(), pieces.end(),
+                     [&name](const ShapePtr& piece) { return count_named(*piece, name) > 0; });
+}
+
 // The angle (0 to 2 pi) of a point about `axis` from `reference`, right
 // handed about the axis direction (mitcad#539: the order of a
 // revolution's pieces).
@@ -2793,6 +2948,122 @@ gp_Pnt centre_of_named(const Shape& shape, const std::string& name) {
 // unreached.
 constexpr const char* kNotAcross = "the target does not cut across the whole profile";
 
+// A point inside a face: of a grid over its parameters, the cell centre
+// inside it nearest to the parameters' middle, else that middle.
+gp_Pnt point_in(const TopoDS_Face& face) {
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  const BRepAdaptor_Surface surface(face);
+  const double um = 0.5 * (u0 + u1);
+  const double vm = 0.5 * (v0 + v1);
+  if (!(u1 > u0) || !(v1 > v0)) {
+    return surface.Value(um, vm);
+  }
+  BRepTopAdaptor_FClass2d inside(face, Precision::PConfusion());
+  constexpr int kCells = 9;
+  bool found = false;
+  double best_u = um;
+  double best_v = vm;
+  double closest = std::numeric_limits<double>::infinity();
+  for (int i = 0; i < kCells; ++i) {
+    for (int j = 0; j < kCells; ++j) {
+      const double u = u0 + (u1 - u0) * (i + 0.5) / kCells;
+      const double v = v0 + (v1 - v0) * (j + 0.5) / kCells;
+      const double off = (u - um) * (u - um) + (v - vm) * (v - vm);
+      if (off < closest && inside.Perform(gp_Pnt2d(u, v)) == TopAbs_IN) {
+        closest = off;
+        best_u = u;
+        best_v = v;
+        found = true;
+      }
+    }
+  }
+  return found ? surface.Value(best_u, best_v) : surface.Value(um, vm);
+}
+
+// True when the piece of the sweep and the solid share some volume (not
+// only a face): the piece runs into the solid.
+bool runs_into(const TopoDS_Shape& piece, const TopoDS_Shape& solid) {
+  BRepAlgoAPI_Common common;
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(piece);
+  NCollection_List<TopoDS_Shape> tools;
+  tools.Append(solid);
+  common.SetArguments(arguments);
+  common.SetTools(tools);
+  common.SetNonDestructive(true);
+  detail::build(common);
+  if (!common.IsDone() || common.HasErrors()) {
+    return false;
+  }
+  return volume_of(common.Shape()) > 1.0e-6 * (1.0 + volume_of(piece));
+}
+
+// The error of a target that leaves parts of the profile without an end
+// (GitHub mitcad/Mitcad#674, mitcad#2538), in words: a part that runs into
+// the target's body without meeting the target (the body's faces it meets
+// are not the target's: a face, or a face and the faces next to it, ends
+// the sweep at those faces only; up to the body it would end at the body's
+// first face), or one that passes beside the target. Each such part's
+// start is painted; the points go to the detail. `kept` holds the pieces up
+// to the first crossing, `near` names their start faces and `unreached`
+// the far end of the pieces that met nothing.
+std::string not_across_error(const std::vector<ShapePtr>& kept, const Target& target, const std::string& near,
+                             const std::string& unreached) {
+  try {
+    std::vector<ErrorPlace> places;
+    std::string starts;
+    bool into_body = false;
+    int parts = 0;
+    for (const ShapePtr& piece : kept) {
+      if (count_named(*piece, unreached) == 0) {
+        continue;
+      }
+      ++parts;
+      for (int i = 0; i < piece->face_count(); ++i) {
+        const NameList& names = piece->face_names(i);
+        if (std::find(names.begin(), names.end(), near) == names.end()) {
+          continue;
+        }
+        const gp_Pnt at = point_in(piece->face(i));
+        places.push_back(point_place(at));
+        starts += std::string(starts.empty() ? "" : ", ") + "(" + number_text(at.X()) + ", " +
+                  number_text(at.Y()) + ", " + number_text(at.Z()) + ")";
+      }
+      if (!into_body && target.kind != Target::Kind::Plane && target.body) {
+        into_body = runs_into(piece->occt(), target.body->occt());
+      }
+    }
+    if (parts == 0) {
+      return kNotAcross;
+    }
+    const std::string said =
+        std::string(kNotAcross) +
+        (into_body ? ": a part of the profile meets the target's body only at faces that are not the target; "
+                     "choose the body as the object, or leave that part out of the profile"
+                   : ": a part of the profile passes beside the target; leave that part out of the profile or "
+                     "choose another object");
+    // The message, then what agents read besides (scripts' error_contains
+    // and the log read the detail).
+    const std::string detail = said + " (" + std::to_string(parts) + (parts == 1 ? " part" : " parts") +
+                               " of the profile without an end, starting at " + starts + ")";
+    return placed_error(said, detail, places);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const Standard_OutOfMemory&) {
+    throw;
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (const Standard_Failure&) {
+    return kNotAcross;
+  } catch (const std::exception&) {
+    return kNotAcross;
+  }
+}
+
 } // namespace
 
 ShapePtr trimmed(const Shape& sweep, const Target& target, const TopoDS_Shape& tool,
@@ -2806,6 +3077,8 @@ ShapePtr trimmed(const Shape& sweep, const Target& target, const TopoDS_Shape& t
   for (const ShapePtr& piece : pieces) {
     near_faces += count_named(*piece, near);
   }
+  // The walls over the parts of the profile, when it is parted.
+  TopoDS_Compound part_walls;
   if (near_faces > count_named(sweep, near)) {
     // A plane that crosses the profile leaves its end undefined. Up to a
     // body (its first face) or a curved face that the profile starts
@@ -2818,6 +3091,7 @@ ShapePtr trimmed(const Shape& sweep, const Target& target, const TopoDS_Shape& t
       throw std::invalid_argument("the target crosses the profile where the sweep starts");
     }
     const TopoDS_Compound walls = start_walls(sweep, near, tool, along);
+    part_walls = walls;
     if (TopExp_Explorer(walls, TopAbs_FACE).More()) {
       pieces.clear();
       column_of.clear();
@@ -2863,37 +3137,78 @@ ShapePtr trimmed(const Shape& sweep, const Target& target, const TopoDS_Shape& t
       }
     }
   } else {
-    // Up to the first crossing of the target along the sweep: a closed
-    // surface (a cylinder the sweep enters from outside) crosses it twice,
-    // and what lies beyond the first crossing is not the extrusion's. Each
-    // column's pieces are taken in order along the sweep up to the first
-    // that the target bounds.
-    std::vector<double> position;
-    for (const ShapePtr& piece : pieces) {
-      GProp_GProps props;
-      BRepGProp::VolumeProperties(piece->occt(), props);
-      position.push_back(along_of(props.CentreOfMass(), along));
-    }
-    std::vector<double> first(column_of.empty() ? 1 : *std::max_element(column_of.begin(), column_of.end()) + 1,
-                              std::numeric_limits<double>::infinity());
-    for (std::size_t i = 0; i < pieces.size(); ++i) {
-      if (count_named(*pieces[i], near) > 0) {
-        first[column_of[i]] = std::min(first[column_of[i]], position[i]);
+    // Up to the first crossing of the target along the sweep: each column's
+    // pieces are taken in order along the sweep up to the first that the
+    // target bounds.
+    kept = first_pieces(pieces, column_of, near, along);
+    // Up to a body's first face, a piece that reaches the sweep's far end
+    // may have wrapped round a body whose outside joins the space ahead of
+    // another part of the profile (bodies at different heights, a body that
+    // overhangs; To Next, GitHub mitcad/Mitcad#674): the sweep parted again
+    // into columns along the body's outline, each column then ends at the
+    // first face ahead of it. A column that still reaches the far end meets
+    // no face at all.
+    const auto along_outline = [&]() -> std::vector<ShapePtr> {
+      std::vector<TopoDS_Shape> sets;
+      if (!part_walls.IsNull()) {
+        sets.push_back(part_walls);
       }
-    }
-    for (std::size_t i = 0; i < pieces.size(); ++i) {
-      if (count_named(*pieces[i], near) > 0 && position[i] <= first[column_of[i]] + Precision::Confusion()) {
-        kept.push_back(pieces[i]);
+      const TopoDS_Compound through_target = outline_walls(sweep, tool, along);
+      if (TopExp_Explorer(through_target, TopAbs_FACE).More()) {
+        sets.push_back(start_walls(sweep, near, through_target, along));
+      }
+      const TopoDS_Compound walls = distinct_walls(sets);
+      if (!TopExp_Explorer(walls, TopAbs_FACE).More()) {
+        return kept;
+      }
+      std::vector<ShapePtr> finer;
+      std::vector<std::size_t> finer_column;
+      std::size_t next_column = 0;
+      for (const ShapePtr& column : split_pieces(sweep, walls, far, "the sweep along the target's outline")) {
+        for (const ShapePtr& piece : split_pieces(*column, tool, far, "the sweep to its target")) {
+          finer.push_back(piece);
+          finer_column.push_back(next_column);
+        }
+        ++next_column;
+      }
+      return first_pieces(finer, finer_column, near, along);
+    };
+    if (target.kind == Target::Kind::Body && straight && any_named(kept, unreached)) {
+      kept = along_outline();
+    } else if (target.kind == Target::Kind::Face && !target.extend && straight && any_named(kept, unreached)) {
+      // Up to a face and the faces next to it (To Adjacent Faces) the same:
+      // where those faces leave a gap beside a part of the profile (a wall
+      // that continues a neighbour smoothly but is not next to the face
+      // itself), the space under the faces joins the space past them, and
+      // without the columns the whole profile, not only the part under the
+      // gap, would reach the far end (GitHub mitcad/Mitcad#674,
+      // mitcad#2538). Each column then ends at the first of those faces
+      // ahead of it, and the error names only the columns they leave
+      // without an end; where the columns cannot be made, the error names
+      // the whole sweep's parts.
+      try {
+        std::vector<ShapePtr> finer = along_outline();
+        if (!finer.empty()) {
+          kept = std::move(finer);
+        }
+      } catch (const Cancelled&) {
+        throw;
+      } catch (const Standard_OutOfMemory&) {
+        throw;
+      } catch (const std::bad_alloc&) {
+        throw;
+      } catch (const Standard_Failure&) {
+        // The columns could not be made: the whole sweep's parts stay.
+      } catch (const std::exception&) {
+        // As above.
       }
     }
   }
   if (kept.empty()) {
     throw std::invalid_argument("nothing of the sweep is left before the target");
   }
-  for (const ShapePtr& piece : kept) {
-    if (count_named(*piece, unreached) > 0) {
-      throw std::invalid_argument(kNotAcross);
-    }
+  if (any_named(kept, unreached)) {
+    throw std::invalid_argument(not_across_error(kept, target, near, unreached));
   }
   return fused(kept, "the sweep to its target");
 }
@@ -3072,7 +3387,9 @@ ShapePtr curved_start_side(const std::string& feature, const SweepFace& face, co
       return trimmed(*prism, start, translated(surface, gp_Vec(scan) * shift), scan, behind, names, unreached,
                      true);
     } catch (const std::invalid_argument& error) {
-      if (std::string(error.what()) != kNotAcross) {
+      // trimmed()'s error of a part without an end, which names that part
+      // after kNotAcross (mitcad#2538).
+      if (error_message(error.what()).rfind(kNotAcross, 0) != 0) {
         throw;
       }
       throw std::invalid_argument(

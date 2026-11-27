@@ -8,9 +8,10 @@
 #     has a word far wider than the panel, and the panel stays as wide as
 #     its page (wider, its right side with the fields and OK and Cancel
 #     would be cut off);
-#   - a distance of 0: the preview's error in the message, within the
-#     page's width; 10: the message hidden, its room given back; 0 again:
-#     the error shown again.
+#   - made Symmetric, a distance of -5: the preview's error in the
+#     message, within the page's width; 10: the message hidden, its room
+#     given back; -5 again: the error shown again. (A distance of 0 only
+#     waits for a distance, as a hint, mitcad#2481.)
 # Long words in the message itself and many lines of errors, bounded and
 # scrolling, are in the unit tests (app/tests/command_message.cpp).
 #
@@ -85,6 +86,14 @@ edit_extrude() {
   panel_fits "$1: the panel as it opens"
   ui_wait_idle
 
+  # Symmetric, so that a negative distance is the model's refusal (a
+  # distance of 0 only waits for a distance, as a hint, mitcad#2481).
+  ui_mark
+  ui_step "Symmetric"                        ui_choose_text "Panel Extrude input direction" "Symmetric"
+  ui_expect_new "Extrude: Direction = Symmetric" "Symmetric chosen"
+  ui_expect_new "Preview Extrude: ok" "the symmetric 20 mm previewed"
+  ui_wait_idle
+
   ui_mark
   ui_step "a long unknown name"              ui_type_in "Panel Extrude input distance" "$LONG"
   ui_expect_new "Extrude Distance: $LONG is invalid" "the name is refused, under the field"
@@ -92,8 +101,8 @@ edit_extrude() {
   panel_fits "$1: a long name in the note"
 
   ui_mark
-  ui_step "distance 0"                       ui_type_in "Panel Extrude input distance" "0"
-  ui_expect_new "Preview Extrude: failed" "a distance of 0 fails"
+  ui_step "distance -5"                      ui_type_in "Panel Extrude input distance" "-5"
+  ui_expect_new "Preview Extrude: failed" "a symmetric distance of -5 fails"
   fit_after "Preview Extrude: failed" "$MESSAGE_LINE"
   message_is shown "the preview's error in the message"
   panel_fits "$1: the preview's error"
@@ -107,8 +116,8 @@ edit_extrude() {
   panel_fits "$1: no message"
 
   ui_mark
-  ui_step "distance 0 again"                 ui_type_in "Panel Extrude input distance" "0"
-  ui_expect_new "Preview Extrude: failed" "0 fails again"
+  ui_step "distance -5 again"                ui_type_in "Panel Extrude input distance" "-5"
+  ui_expect_new "Preview Extrude: failed" "-5 fails again"
   fit_after "Preview Extrude: failed" "$MESSAGE_LINE"
   message_is shown "the error shown again"
   panel_fits "$1: the error again"

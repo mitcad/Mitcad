@@ -40,8 +40,8 @@ check "a folder without include/optix.h" "has no include/optix.h" --optix "$WORK
 check "a folder that is not there" "has no include/optix.h" --optix "$WORK/no-such-sdk"
 check "--optix without a folder" "--optix needs the folder of the OptiX SDK" --optix
 # A header in place (an empty file of the test's own, no SDK file): the
-# ordinary prefix is refused all the same. The script builds for x86-64
-# Linux only and says so first elsewhere.
+# ordinary prefix is refused all the same. OptiX is for x86-64 Linux only:
+# elsewhere the script says so first (on aarch64 Linux: no CUDA device).
 if [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]; then
   : > "$WORK/sdk/include/optix.h"
   check "the ordinary prefix (MITCAD_RENDER_DEPS)" "is the ordinary render prefix" --optix "$WORK/sdk" "$WORK/ordinary"

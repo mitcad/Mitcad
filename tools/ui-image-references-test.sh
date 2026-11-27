@@ -6,7 +6,9 @@
 # on a 60 x 60 x 3 plate and a 200 x 100 pixel grey BMP file that states
 # 4000 pixels per metre (0.25 mm each):
 #   - Insert > Image Reference (command search): the plate's top face
-#     picked, the file's path typed, Opacity 40: Image1 drawn 50 x 25 mm,
+#     picked, the file chosen with Choose Image... in Qt's own file dialog
+#     (mitcad#2474: the panel's "Choose an image file." goes at once),
+#     Opacity 40: Image1 drawn 50 x 25 mm,
 #     40 % opaque, behind the bodies, listed in the browser's Images
 #     folder.
 #   - Calibrate Image Reference: two clicks on the image's middle row, a
@@ -108,8 +110,8 @@ expect_drawn() {
 }
 
 ui_start_display
-ui_start_app --open "$WORK/plate.mitcad"
-ui_step "fit (F6)"                         ui_key F6
+ui_start_app --no-native-dialogs --open "$WORK/plate.mitcad"
+ui_step "fit (F6)"                        ui_key F6
 
 echo "--- Insert > Image Reference on the plate's top"
 ui_mark
@@ -117,8 +119,18 @@ ui_step "Image Reference"                  ui_command "Image Reference"
 ui_expect_new "Command Image Reference started" "the panel opened"
 ui_step "click the plate's top"            ui_click_pick "face F1.b0/F1:top"
 ui_expect_log "Image Reference Plane: 1 face" "the face picked"
-ui_step "the image's file"                 ui_type_in "Panel Image Reference input file" "$WORK/plan.bmp"
-ui_step "opacity 40"                       ui_type_in "Panel Image Reference input opacity" "40"
+ui_expect_new "Panel Image Reference error: Choose an image file." "the panel asks for the file"
+# Chosen in the file dialog (mitcad#2474): the panel takes it at once.
+ui_mark
+ui_step "Choose Image..."                  ui_click_logged "Panel Image Reference action choose.0"
+ui_type_path "Insert Image Reference" "$WORK/plan.bmp"
+ui_focus_main
+ui_expect_new "Image Reference file chosen: plan.bmp" "the file chosen in the dialog"
+ui_expect_new "Image Reference Image: $WORK/plan.bmp" "the Image field takes it"
+ui_expect_new "Panel Image Reference message: error gone: Choose an image file." "the message gone at once"
+grep -q "Panel Image Reference error: " < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "the panel still has an error after the file was chosen"
+ui_step "opacity 40"                    ui_type_in "Panel Image Reference input opacity" "40"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Inserted image reference from plan.bmp" "inserted"

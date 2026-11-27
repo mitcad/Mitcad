@@ -86,6 +86,7 @@
 #include <gp_Torus.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -569,7 +570,7 @@ void test_reported_body() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_tight_rim_corner) {
   test::guarded("test_tube_cut_face_rounded_past_its_rims", test::test_tube_cut_face_rounded_past_its_rims);
   test::guarded("test_block_bottom_past_corners_with_an_obtuse_wall",
                 test::test_block_bottom_past_corners_with_an_obtuse_wall);

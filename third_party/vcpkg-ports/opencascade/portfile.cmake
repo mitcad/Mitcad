@@ -383,6 +383,11 @@ vcpkg_from_github(
         2433-brepoffset-face-vanishing-beside-a-removed-face-closed-by-it.patch
         2463-brepoffset-arc-join-face-vanishing-beside-a-removed-face.patch
         2462-brepoffset-wall-strip-at-a-removed-face-met-tangentially.patch
+        2457-brepoffset-spindle-torus-enlarged-up-to-its-apexes-and-no-shape-reported.patch
+        2488-brepoffset-arc-join-tubes-and-corners-between-faces-of-different-offsets.patch
+        2494-brepoffset-rounding-of-chained-sides-vanishing-beside-a-removed-face.patch
+        2535-brepoffset-arc-join-wall-across-vanishing-faces-to-a-chain-of-cap-edges.patch
+        2542-brepoffset-crease-split-at-a-sphere-pole-cut-there.patch
 )
 
 # The compiler cache (docs/development.md, "The compiler cache of the vcpkg

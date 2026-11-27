@@ -901,6 +901,8 @@ pub fn referenced_occurrences(def: &FeatureDef) -> Vec<OccurrenceUid> {
         }
         // A Flex item's nodes on other components' geometry (mitcad#1713).
         FeatureDef::Flex(f) => f.links.values().chain(f.datum_links.values()).collect(),
+        // An Isoparametric Curve on another component's face (mitcad#2554).
+        FeatureDef::IsoparametricCurve(i) => i.links.values().collect(),
         _ => Vec::new(),
     };
     for link in links {
@@ -1486,8 +1488,35 @@ pub(crate) fn resolved_origin_frame<K: Kernel>(
     component: ComponentUid,
     origin: &JointOrigin,
 ) -> Result<Transform, String> {
+    let mut resolver = linked_origin_resolver(kernel, state, result, component, origin)?;
+    let mut local = origin_frame(&mut resolver, &origin.geometry)?;
+    if let Some(o) = &origin.frame_override {
+        local = apply_override(&local, o)?;
+    }
+    Ok(local)
+}
+
+/// Resolves the geometric kind as well as the frame of a linked constraint.
+pub(crate) fn resolved_constraint_geo<K: Kernel>(
+    kernel: &K,
+    state: &DocState,
+    result: &Recomputed<K::Shape>,
+    component: ComponentUid,
+    origin: &JointOrigin,
+) -> Result<crate::constraints::Geo, String> {
+    let mut resolver = linked_origin_resolver(kernel, state, result, component, origin)?;
+    crate::constraints::resolve_geo(&mut resolver, origin)
+}
+
+fn linked_origin_resolver<'a, K: Kernel>(
+    kernel: &'a K,
+    state: &'a DocState,
+    result: &'a Recomputed<K::Shape>,
+    component: ComponentUid,
+    origin: &JointOrigin,
+) -> Result<StepResolver<'a, K>, String> {
     let at = path_component(&state.assembly, component, &origin.occurrence.0)?;
-    let mut resolver = StepResolver {
+    Ok(StepResolver {
         kernel,
         assembly: &state.assembly,
         component: at,
@@ -1497,12 +1526,7 @@ pub(crate) fn resolved_origin_frame<K: Kernel>(
         features: &state.features,
         history: &result.results,
         renamed: Vec::new(),
-    };
-    let mut local = origin_frame(&mut resolver, &origin.geometry)?;
-    if let Some(o) = &origin.frame_override {
-        local = apply_override(&local, o)?;
-    }
-    Ok(local)
+    })
 }
 
 /// The value of an optional parameter, zero without one.

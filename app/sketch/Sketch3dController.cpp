@@ -687,8 +687,10 @@ void Sketch3dController::reload() {
   if (!m_paletteHover.isEmpty()) {
     setPaletteHover(m_paletteHover);
   }
-  // No anchor, chain or pending point stays on a point that went (an
-  // undo, an agent's command); the anchor follows its point's solve.
+  // No anchor, chain or pending point stays on a point or a curve that went
+  // (an undo, an agent's command); the anchor follows its point's solve. A
+  // click snapped On Curve or Midpoint names only its curve, whose relation
+  // the shape's commit would add (mitcad#2527).
   if (!m_anchorPoint.isEmpty()) {
     if (const Sketch3dPoint* anchor = m_model.point(m_anchorPoint)) {
       m_anchor = anchor->at;
@@ -700,7 +702,8 @@ void Sketch3dController::reload() {
   if (toolActive()) {
     const bool chainGone = !m_chainPoint.isEmpty() && m_model.point(m_chainPoint) == nullptr;
     const bool pendingGone = std::any_of(m_pending.begin(), m_pending.end(), [this](const PlacedPoint& p) {
-      return !p.snap.point.isEmpty() && m_model.point(p.snap.point) == nullptr;
+      return (!p.snap.point.isEmpty() && m_model.point(p.snap.point) == nullptr) ||
+             (!p.snap.curve.isEmpty() && m_model.curve(p.snap.curve) == nullptr);
     });
     if (chainGone || pendingGone) {
       m_pending.clear();

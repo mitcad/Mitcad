@@ -15,8 +15,10 @@
 #      drop inserts, Insert Component asks, Enter takes it linked (whole
 #      design); one undo step; the linked component at the point of the
 #      face, its Z along the face's normal.
-#   2. bracket.mitcad dropped while Extrude is open: it waits, said; after
-#      Cancel Insert Component asks and Copy inserts a copy at its point.
+#   2. bracket.mitcad dropped while Extrude is open: it waits, said; the
+#      camera turned to the bottom view; after Cancel Insert Component asks
+#      and Copy inserts a copy at the point of the drop (mitcad#2527: not
+#      at what is under the drop's pixel by then).
 #   3. back.mitcad (links this design) and assembly.mitcad (this design)
 #      dropped: refused in words, nothing asked, nothing inserted.
 wait-idle
@@ -71,6 +73,11 @@ wait-log '^Dropped bracket\.mitcad waits until Extrude is finished or canceled$'
 wait-idle
 expect-no-log '^Insert Component asked: '
 expect-undo-depth ${before} 1
+# The camera turned while it waits (mitcad#2527): seen from below, the
+# drop's pixel is no longer over the top face; the place worked out at the
+# drop still holds.
+command view.bottom
+wait-idle
 focus-main
 key Escape
 expect-log '^Command Extrude cancelled$' 20
@@ -93,8 +100,10 @@ expect-near ${x2} 4 0 0.5
 expect-near ${y2} 4 0 0.5
 expect-near ${z2} 20 0 0.01
 expect-near ${n2} 1 0 0.000001
+command view.home
+wait-idle
 
-# 3. A design that links this one, and this design itself: refused in
+# 3.A design that links this one, and this design itself: refused in
 # words in the message band, nothing asked, nothing inserted.
 mark
 drag-logged-to-view-point '^Projects row ${MITCAD_TEST_PROJECT}/back\.mitcad at ' 15,5,20

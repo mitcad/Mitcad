@@ -20,10 +20,10 @@ under `analysis/fillet-specs/`, as written by the generator:
 | Path | What it holds |
 |---|---|
 | `files.tsv` | each file run, once per content: content id (the first 8 hex digits of the file's SHA-256), the corpus variable, its path in that corpus |
-| `specs/<content id>/<design>.jsonl` | the import's dressup dump: one line per failed definition (item, feature name, definition, error, the history's states, the files) |
+| `specs/<content id>/<design>.jsonl` | the import's dressup dump: one line per failed definition (item, feature name, definition, error, the history's states, the files); since mitcad#2573 also the offsets, moves and deletes of faces the kernel failed, which the index leaves out |
 | `specs/<content id>/<design>/T<item>-<n>.shape` | the input body (`-before`, `-after`: the stored bodies of the history's states before and after the item nearest to it), in the kernel's stored-result bytes with the face names the definition refers to |
 | `reports/<content id>*.json` | the import's report of each design (the items' outcomes) |
-| `index.tsv` | one row per spec: id, corpus, content id, item, feature name, type, sizes, edges and faces selected, the error's class, the item's outcome in the import, the files, the signature distances, the states, the error |
+| `index.tsv` | one row per spec (a fillet or chamfer): id, corpus, content id, item, feature name, type, sizes, edges and faces selected, the error's class, the item's outcome in the import, the files, the signature distances, the states, the error |
 | `summary.txt` | the specs counted by class and outcome |
 | `results.tsv` | the last run of the specs again (below) |
 

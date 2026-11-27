@@ -8,6 +8,11 @@ use crate::transform::Transform;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+// Oblique (eccentric) conical panels (mitcad#2491).
+#[path = "sheet_oblique_cone.rs"]
+mod oblique_cone;
+pub use oblique_cone::*;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SheetDomainId {
     pub feature: FeatureUid,
@@ -422,6 +427,72 @@ pub enum SheetEmbedding {
     Cylinder(CylinderEmbedding),
     /// A conical panel (mitcad#2435).
     Cone(ConeEmbedding),
+    /// An oblique (eccentric) conical panel (mitcad#2491).
+    ObliqueCone(ObliqueConeEmbedding),
+    /// A Lofted Flange's transition (mitcad#2512).
+    Lofted(LoftedEmbedding),
+}
+
+/// A Lofted Flange's chart (mitcad#2512): the development of the
+/// transition's neutral surface, made of flat facets and of regions
+/// formed about corners and arcs, each laid flat in order from the first
+/// ruling. The feature builds the folded body itself; the sheet
+/// construction never takes this chart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoftedEmbedding {
+    /// The lines between the transition's regions on its neutral surface,
+    /// in order: where they lie in the body and in the chart.
+    pub rulings: Vec<LoftedRuling>,
+    /// The lines the Flat Pattern marks, in chart coordinates.
+    pub lines: Vec<LoftedLine>,
+    /// The neutral surface lies `neutral_depth` (K t, mm) from the profile
+    /// surface (the front) towards the back.
+    pub neutral_depth: f64,
+    /// The rules' K-factor the neutral surface follows.
+    pub k_factor: f64,
+    /// The regions between the facets are formed smooth (die formed), not
+    /// folded on a press brake.
+    pub die_formed: bool,
+}
+
+/// A line of a Lofted Flange's neutral surface from the first profile to
+/// the second: its ends in the body (`model`) and in the chart (`chart`),
+/// and the unit normal from the front towards the back there (on the
+/// region after it).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoftedRuling {
+    pub model: [[f64; 3]; 2],
+    pub chart: [[f64; 2]; 2],
+    pub front_to_back: [f64; 3],
+    /// How far behind the front `model` lies where that is not the
+    /// neutral depth: a bend of the rules' radius whose inside is on the
+    /// back develops at the K-factor from its inside (mitcad#2560).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<f64>,
+}
+
+/// A line a Lofted Flange's Flat Pattern marks: a fold between facets
+/// (`fold`, with its signed angle, positive towards the back, and whether
+/// its inside is on the front) or a line where a flat region meets a formed
+/// one (angle 0).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoftedLine {
+    pub start: [f64; 2],
+    pub end: [f64; 2],
+    pub fold: bool,
+    pub angle: f64,
+    pub inside_front: bool,
+    /// A fold made as a bend of this inside radius (mitcad#2560; 0: a
+    /// sharp fold): `start`-`end` is its centre line, `tangents` the lines
+    /// where it meets the facets beside it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub radius: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tangents: Vec<[[f64; 2]; 2]>,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 impl SheetEmbedding {
@@ -448,6 +519,26 @@ impl SheetEmbedding {
                 angular_direction: t.apply_vector(c.angular_direction),
                 ..c.clone()
             }),
+            Self::ObliqueCone(c) => Self::ObliqueCone(ObliqueConeEmbedding {
+                apex: t.apply_point(c.apex),
+                centre: t.apply_point(c.centre),
+                radial_start: t.apply_vector(c.radial_start),
+                angular_direction: t.apply_vector(c.angular_direction),
+                ..c.clone()
+            }),
+            Self::Lofted(l) => Self::Lofted(LoftedEmbedding {
+                rulings: l
+                    .rulings
+                    .iter()
+                    .map(|r| LoftedRuling {
+                        model: r.model.map(|p| t.apply_point(p)),
+                        chart: r.chart,
+                        front_to_back: t.apply_vector(r.front_to_back),
+                        depth: r.depth,
+                    })
+                    .collect(),
+                ..l.clone()
+            }),
         }
     }
 }
@@ -456,6 +547,13 @@ impl SheetEmbedding {
 /// ([`crate::kernel::Kernel::sheet_face_development`], mitcad#2435).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SheetFaceDevelopment {
+    /// An oblique (eccentric) cone (mitcad#2491): the circle its
+    /// generators run through, `origin` its apex (the faces' own),
+    /// `radial_start` and `angular_direction` in the circle's plane (`axis`
+    /// its normal), the angle round the circle; the chart the development
+    /// of its neutral surface by its generators
+    /// ([`ObliqueConeEmbedding`]). `half_angle` and `neutral_radius` are 0.
+    pub oblique: Option<ObliqueCircle>,
     /// A cylinder: a point of its axis; a cone: the apex of the neutral
     /// cone.
     pub origin: [f64; 3],
@@ -482,7 +580,10 @@ pub struct SheetFaceDevelopment {
     /// apex. A generator is a line and a circle round the axis a line (a
     /// cylinder's) or an arc about the apex (a cone's), from their exact
     /// ends; other edges are B-splines through their exact development,
-    /// within 1e-8 mm of it.
+    /// within 1e-8 mm of it. Such an edge whose face across it is a plane
+    /// meeting the generators (an oblique cut) is where that plane meets
+    /// the neutral surface, and a generator ending at it ends there
+    /// (mitcad#2491).
     pub faces: Vec<Vec<BoundedCurve2>>,
 }
 

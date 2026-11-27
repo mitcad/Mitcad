@@ -82,12 +82,14 @@ function Last-Line([string]$Text) {
   return "$(Ui-LogLines | Where-Object { $_.Contains($Text) } | Select-Object -Last 1)"
 }
 
-# Extrude, which takes the newest free profile (the square): its preview
-# computed with both blocks drawn.
+# Extrude, which takes the newest free profile (the square), 10 mm typed
+# (a new Extrude starts at 0 mm and builds nothing, mitcad#2481): its
+# preview computed with both blocks drawn.
 function Extrude-Square {
   Ui-Mark
   Ui-Step 'extrude (E)'                  { Ui-Key 'e' }
   Ui-ExpectNew 'Command Extrude started' 'Extrude started'
+  Ui-Step 'distance 10 mm'               { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
   Ui-ExpectNew 'Preview Extrude: ok' 'the square''s preview computed'
   Ui-ExpectNew 'Preview bodies: ' 'the preview drawn'
   if (-not (Last-Line 'Preview bodies: ').Contains('F2.b0 at')) { Ui-Fail 'the preview does not draw Body1' }
@@ -378,6 +380,8 @@ Write-Host '--- During Extrude: a component''s light bulb works, other browser a
 Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
 Ui-ExpectNew 'Command Extrude started' 'Extrude started'
+# A new Extrude starts at 0 mm and builds nothing yet (mitcad#2481).
+Ui-Step 'distance 10 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
 Ui-ExpectNew 'Preview Extrude: ok' 'the square''s preview computed'
 Ui-Mark
 Ui-Step 'hide Part:1'                    { Ui-ClickLogged 'Browser eye Root/Part:1' }

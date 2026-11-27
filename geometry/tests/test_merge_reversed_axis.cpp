@@ -30,6 +30,7 @@
 #include <gp_Trsf.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -117,7 +118,7 @@ void test_sector_ahead_with_its_axis_reversed() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(merge_reversed_axis) {
   test::guarded("sector_behind_with_its_axis_reversed", test_sector_behind_with_its_axis_reversed);
   test::guarded("sector_ahead_with_its_axis_reversed", test_sector_ahead_with_its_axis_reversed);
   if (test::failures > 0) {

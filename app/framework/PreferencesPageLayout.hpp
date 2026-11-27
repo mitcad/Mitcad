@@ -66,6 +66,22 @@ protected:
   }
 };
 
+// The inset of a Preferences group whose contents would otherwise run to
+// its frame (mitcad#2561, GitHub mitcad/Mitcad#738: Navigation's tabs,
+// whose controls stood against the group's border): the style's layout
+// margins, the ones a form in every other group keeps between its
+// controls and the frame. Under a group's title (`titled`: the dialog's
+// framed group) there is no top margin: the title already stands between
+// the frame and the contents there, and Navigation, the tallest page, keeps
+// the height the dialog must fit a 1366 x 768 screen with (mitcad#1751).
+// In the Settings window's pane (`titled` false) the group is a plain area,
+// inset on every side as the other pages' plain areas are.
+inline void insetPreferencesGroup(QLayout* layout, bool titled) {
+  QMargins inset = layout->contentsMargins();
+  if (titled) inset.setTop(0);
+  layout->setContentsMargins(inset);
+}
+
 // The page of the window's stack that holds `page` (the Preferences
 // dialog's or the Settings window's), or `page` itself outside one.
 inline QWidget* preferencesPageArea(QWidget* page) {

@@ -15,6 +15,12 @@ pub mod ffi {
         has_section: bool,
         section_origin: [f64; 3],
         section_normal: [f64; 3],
+        /// `CutPlane::bound` (mitcad#2479): the section limited to its
+        /// line, `section_along` from `section_from` to `section_to`.
+        has_section_bound: bool,
+        section_along: [f64; 3],
+        section_from: f64,
+        section_to: f64,
         deflection: f64,
         /// `ViewSpec::quick_deviation`; 0 when the view has no scale.
         quick_deviation: f64,
@@ -94,6 +100,11 @@ pub fn view(spec: &ViewSpec) -> ffi::DrawingView {
         Some(plane) => (true, plane.origin, plane.normal),
         None => (false, [0.0; 3], [0.0, 0.0, 1.0]),
     };
+    let (has_section_bound, section_along, section_from, section_to) =
+        match spec.section.and_then(|plane| plane.bound) {
+            Some(bound) => (true, bound.along, bound.from, bound.to),
+            None => (false, [1.0, 0.0, 0.0], 0.0, 0.0),
+        };
     ffi::DrawingView {
         toward_eye: spec.toward_eye,
         x_axis: spec.x_axis,
@@ -104,6 +115,10 @@ pub fn view(spec: &ViewSpec) -> ffi::DrawingView {
         has_section,
         section_origin,
         section_normal,
+        has_section_bound,
+        section_along,
+        section_from,
+        section_to,
         deflection: spec.deflection,
         quick_deviation: spec.quick_deviation().unwrap_or(0.0),
         quick_chord_angle: spec.quick_chord_angle(),

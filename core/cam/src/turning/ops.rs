@@ -7,7 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::profile::{PV, chain_moves, envelope, first_reach, piece_at, pieces, tool_path};
+use super::plunge::{depth_under, reach};
+use super::profile::{PV, Piece, chain_moves, envelope, first_reach, piece_at, pieces, tool_path};
 use super::tool::{TurningTool, TurningToolKind};
 use super::{PXZ, TurnCycle, TurnMove, TurnPart, TurnPath};
 use crate::CamError;
@@ -155,17 +156,18 @@ fn cycle_start(part: &TurnPart, side: TurnSide, clearance: f64) -> Result<PXZ, C
     }
 }
 
-/// The finished contour of a side for the tool (controlled point), with
-/// its way out of the material, and the profile a G71 or G70 cycle runs:
-/// a rapid in X alone from the start, then into the contour.
-fn finish_contour(
-    part: &TurnPart,
-    side: TurnSide,
-    tool: &TurningTool,
-    start: PXZ,
-    clearance: f64,
-) -> Result<Vec<PV>, CamError> {
-    let mut chain = envelope(&side_chain(part, side)?, side.inside());
+/// The finished contour of a side on the part, before the tool: the
+/// envelope, or with a `plunge` angle above zero the contour that goes
+/// down walls falling towards the chuck no steeper than that
+/// ([`reach`], mitcad#2503); in the bore up to where it meets the
+/// stock's own bore.
+fn side_contour(part: &TurnPart, side: TurnSide, plunge: f64) -> Result<Vec<PV>, CamError> {
+    let profile = side_chain(part, side)?;
+    let mut chain = if plunge > 0.0 {
+        reach(&profile, side.inside(), plunge)
+    } else {
+        envelope(&profile, side.inside())
+    };
     // In the bore, the contour ends where it meets the stock's own bore.
     if side == TurnSide::Inside
         && let Some(i) = chain
@@ -176,6 +178,26 @@ fn finish_contour(
         chain.truncate(i + 1);
         chain[i].bulge = 0.0;
     }
+    Ok(chain)
+}
+
+/// The finished contour of a side for the tool (controlled point), with
+/// its way out of the material, and the profile a G71 or G70 cycle runs:
+/// a rapid in X alone from the start, then into the contour. Roughing
+/// without a plunge bridges every undercut (`plunge` 0); finishing, and
+/// roughing that plunges (mitcad#2549), go into them as the plunge angle
+/// allows. `offset` leaves that much stock all round, a true offset of
+/// the contour (roughing into undercuts); 0 for the contour itself.
+fn finish_contour(
+    part: &TurnPart,
+    side: TurnSide,
+    tool: &TurningTool,
+    start: PXZ,
+    clearance: f64,
+    plunge: f64,
+    offset: f64,
+) -> Result<Vec<PV>, CamError> {
+    let mut chain = side_contour(part, side, plunge)?;
     // A contour that ends along Z goes on by the nose radius, so that the
     // nose clears the corner where the part ends (the stock beyond is
     // parted off or held).
@@ -196,7 +218,15 @@ fn finish_contour(
     if (last.x - out_x).abs() > 1e-9 {
         chain.push(PV::new(out_x, last.z));
     }
-    let path = tool_path(&chain, side.inside(), tool.nose_radius, 0.0, 0.0);
+    // With an offset: the path of a nose bigger by the offset, moved to
+    // the real nose's tip.
+    let path = tool_path(
+        &chain,
+        side.inside(),
+        tool.nose_radius + offset,
+        offset,
+        offset,
+    );
     if path.len() < 2 {
         return Err(err("The part's profile is too short to turn."));
     }
@@ -235,6 +265,14 @@ pub struct RoughOp {
     pub allowance_z: f64,
     pub clearance: f64,
     pub feed: f64,
+    /// Into undercuts as [`FinishOp::plunge`] (mitcad#2549, degrees from
+    /// the Z axis): 0 bridges every undercut (a G71); above zero the
+    /// passes go down into every pocket the contour at that angle has,
+    /// pocket by pocket, and the stock left is the larger of the two
+    /// allowances all round (a true offset of the contour), written as
+    /// moves.
+    #[serde(default)]
+    pub plunge: f64,
 }
 
 pub fn rough(part: &TurnPart, op: &RoughOp, tool: &TurningTool) -> Result<TurnPath, CamError> {
@@ -252,9 +290,15 @@ pub fn rough(part: &TurnPart, op: &RoughOp, tool: &TurningTool) -> Result<TurnPa
     if op.depth > tool.max_depth {
         return Err(err("The depth of cut is deeper than the insert can cut."));
     }
+    if !(op.plunge.is_finite() && (0.0..=90.0).contains(&op.plunge)) {
+        return Err(err("The plunge angle must be from 0 to 90 degrees."));
+    }
     let s = op.side.sign();
     let start = cycle_start(part, op.side, op.clearance)?;
-    let finish = finish_contour(part, op.side, tool, start, op.clearance)?;
+    if op.plunge > 0.0 {
+        return rough_pockets(part, op, tool, start);
+    }
+    let finish = finish_contour(part, op.side, tool, start, op.clearance, 0.0, 0.0)?;
     let contour: Vec<PV> = finish
         .iter()
         .map(|v| PV {
@@ -333,6 +377,17 @@ pub struct FinishOp {
     pub side: TurnSide,
     pub clearance: f64,
     pub feed: f64,
+    /// How steep a wall falling towards the chuck the contour goes down
+    /// (degrees from the Z axis, mitcad#2503): 0 bridges every undercut
+    /// (as roughing without a plunge does), 90 follows every wall.
+    #[serde(default)]
+    pub plunge: f64,
+    /// The roughings before the finish leave no more in its undercuts
+    /// than the insert cuts in one pass ([`too_deep_after`] found none
+    /// too deep, mitcad#2549): an undercut deeper than the insert's depth
+    /// of cut is not refused then.
+    #[serde(default)]
+    pub roughed: bool,
 }
 
 pub fn finish(part: &TurnPart, op: &FinishOp, tool: &TurningTool) -> Result<TurnPath, CamError> {
@@ -341,8 +396,19 @@ pub fn finish(part: &TurnPart, op: &FinishOp, tool: &TurningTool) -> Result<Turn
     if !(positive(op.clearance) && positive(op.feed)) {
         return Err(err("Finishing needs a clearance and a feed above zero."));
     }
+    if !(op.plunge.is_finite() && (0.0..=90.0).contains(&op.plunge)) {
+        return Err(err("The plunge angle must be from 0 to 90 degrees."));
+    }
     let start = cycle_start(part, op.side, op.clearance)?;
-    let contour = finish_contour(part, op.side, tool, start, op.clearance)?;
+    // Into an undercut the finish takes it all in one pass (roughing
+    // without a plunge bridges it): no deeper than the insert cuts, unless
+    // the roughings before it leave no more than that (mitcad#2549).
+    if !op.roughed
+        && let Some(deep) = too_deep(part, op, tool)?
+    {
+        return Err(err(deep.message()));
+    }
+    let contour = finish_contour(part, op.side, tool, start, op.clearance, op.plunge, 0.0)?;
     let profile = cycle_profile(&contour, start, op.feed);
     let mut moves = vec![TurnMove::Rapid { to: start }];
     moves.extend(profile.iter().copied());
@@ -361,6 +427,312 @@ pub fn finish(part: &TurnPart, op: &FinishOp, tool: &TurningTool) -> Result<Turn
             profile,
         }),
     })
+}
+
+/// An undercut a plunging finish would take deeper than its insert cuts
+/// (mitcad#2503): how deep it goes under the bridged contour (radius),
+/// the insert's depth of cut, and the deepest point of the contour (for
+/// the places a refusal is about; never in its message). With `roughed`
+/// (mitcad#2549) the depth is what the roughings before the finish leave
+/// there at the least ([`too_deep_after`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TooDeep {
+    pub depth: f64,
+    pub limit: f64,
+    pub at: PXZ,
+    pub roughed: bool,
+}
+
+fn round3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0 + 0.0
+}
+
+impl TooDeep {
+    /// What a person reads: how deep, by how much too deep and the
+    /// insert's limit, as lengths, and what to do; no place.
+    pub fn message(&self) -> String {
+        if self.roughed {
+            format!(
+                "After the roughing before it, {} mm (radius) is left in the undercut, {} mm more than the insert's depth of cut ({} mm): let the roughing plunge as far as the finish or leave less stock, or finish it with Don't plunge.",
+                round3(self.depth),
+                round3(self.depth - self.limit),
+                round3(self.limit)
+            )
+        } else {
+            format!(
+                "The undercut is {} mm deep (radius), {} mm deeper than the insert's depth of cut ({} mm): rough it first with a Turn Roughing that plunges, finish it with Don't plunge, or with an insert that cuts that deep.",
+                round3(self.depth),
+                round3(self.depth - self.limit),
+                round3(self.limit)
+            )
+        }
+    }
+
+    /// What agents and the log read: the same with where it is deepest
+    /// (work Z).
+    pub fn detail(&self) -> String {
+        if self.roughed {
+            format!(
+                "After the roughing before it, the undercut at Z {} has {} mm (radius) left, {} mm more than the insert's depth of cut ({} mm).",
+                round3(self.at[1]),
+                round3(self.depth),
+                round3(self.depth - self.limit),
+                round3(self.limit)
+            )
+        } else {
+            format!(
+                "The undercut at Z {} is {} mm deep (radius), {} mm deeper than the insert's depth of cut ({} mm).",
+                round3(self.at[1]),
+                round3(self.depth),
+                round3(self.depth - self.limit),
+                round3(self.limit)
+            )
+        }
+    }
+}
+
+/// Whether a finish plunging into undercuts goes deeper under the bridged
+/// contour than the tool's insert cuts in one pass, and where (none for
+/// Don't plunge or an undercut within the insert's depth of cut).
+pub fn too_deep(
+    part: &TurnPart,
+    op: &FinishOp,
+    tool: &TurningTool,
+) -> Result<Option<TooDeep>, CamError> {
+    if op.plunge <= 0.0 {
+        return Ok(None);
+    }
+    let bridged = side_contour(part, op.side, 0.0)?;
+    let reached = side_contour(part, op.side, op.plunge)?;
+    let (depth, at) = depth_under(&bridged, &reached, op.side.inside());
+    Ok((depth > tool.max_depth + 1e-6).then_some(TooDeep {
+        depth,
+        limit: tool.max_depth,
+        at,
+        roughed: false,
+    }))
+}
+
+/// [`too_deep`] after the roughings before the finish (mitcad#2549): the
+/// roughing operations and their tools, of any side and in any state;
+/// those of the finish's side that generate count. A roughing plunging at
+/// `angle` leaves, at a point of the finish's contour, the depth from it
+/// up to the roughing's own contour at that angle (along X, as
+/// [`too_deep`] measures it; zero where the roughing went at least as
+/// far), plus the larger of its two allowances (the stock it leaves all
+/// round), plus by how much its nose is bigger than the finishing
+/// insert's (what it leaves in the inside corners). The least any of them
+/// leaves counts; when that fits the finishing insert's depth of cut the
+/// finish is not too deep (none), else it is, the depth being what is
+/// left. Without a roughing that counts: [`too_deep`]'s answer.
+pub fn too_deep_after(
+    part: &TurnPart,
+    op: &FinishOp,
+    tool: &TurningTool,
+    roughings: &[(RoughOp, TurningTool)],
+) -> Result<Option<TooDeep>, CamError> {
+    let Some(deep) = too_deep(part, op, tool)? else {
+        return Ok(None);
+    };
+    let reached = side_contour(part, op.side, op.plunge)?;
+    let mut least: Option<TooDeep> = None;
+    for (rough_op, rough_tool) in roughings {
+        // Another side's, or one that fails: nothing is known of what it
+        // leaves.
+        if rough_op.side != op.side || rough(part, rough_op, rough_tool).is_err() {
+            continue;
+        }
+        let roughed = side_contour(part, op.side, rough_op.plunge)?;
+        let (under, at) = depth_under(&roughed, &reached, op.side.inside());
+        let left = under
+            + rough_op.allowance_x.max(rough_op.allowance_z)
+            + (rough_tool.nose_radius - tool.nose_radius).max(0.0);
+        if least.is_none_or(|l| left < l.depth) {
+            least = Some(TooDeep {
+                depth: left,
+                limit: tool.max_depth,
+                at: if under > 1e-9 { at } else { deep.at },
+                roughed: true,
+            });
+        }
+    }
+    Ok(match least {
+        Some(left) if left.depth <= tool.max_depth + 1e-6 => None,
+        Some(left) => Some(left),
+        None => Some(deep),
+    })
+}
+
+/// Roughing into undercuts (mitcad#2549): levels `depth` apart from the
+/// stock's surface down to the contour's deepest point, each cutting
+/// along Z wherever the contour is below it. The contour is the one at
+/// the plunge angle, offset all round by the larger of the two
+/// allowances (a true offset: a shift by the allowances would leave less
+/// than either on a wall falling towards the chuck). A pass in a pocket
+/// starts with a plunge in X where the contour falls through its level,
+/// down a wall no steeper than the plunge angle; the passes go depth
+/// first, each pocket to its bottom before the next, travelling only over
+/// stock already cut and backing off at 45 degrees no further than half
+/// the pass (clear of a pocket's far wall). Then once along the contour
+/// and back to the start. Written as moves: a G71 cannot plunge.
+fn rough_pockets(
+    part: &TurnPart,
+    op: &RoughOp,
+    tool: &TurningTool,
+    start: PXZ,
+) -> Result<TurnPath, CamError> {
+    let s = op.side.sign();
+    let leave = op.allowance_x.max(op.allowance_z);
+    let contour = finish_contour(part, op.side, tool, start, op.clearance, op.plunge, leave)?;
+    let surface = match op.side {
+        TurnSide::Outside => part.stock_radius,
+        TurnSide::Inside => part.stock_inner_radius,
+    };
+    // In front of the face the contour is open to its start's X.
+    let mut chain = vec![PV::new(contour[0].x, start[1])];
+    chain.extend(contour.iter().copied());
+    let ps = pieces(&chain);
+    // Pieces are monotone, so the deepest point is at an end of one.
+    let deepest = ps
+        .iter()
+        .flat_map(|p| [p.a[0], p.b[0]])
+        .fold(f64::INFINITY, |m, x| m.min(s * x))
+        * s;
+    let mut levels: Vec<(f64, Vec<[f64; 2]>)> = Vec::new();
+    loop {
+        let level = surface - s * op.depth * (levels.len() + 1) as f64;
+        if s * (level - deepest) <= 1e-9 {
+            break;
+        }
+        levels.push((level, spans_below(&ps, level, s)));
+        if levels.len() > 10_000 {
+            return Err(err("Roughing needs too many passes: take deeper cuts."));
+        }
+    }
+    let mut cut = Pockets {
+        levels: &levels,
+        s,
+        face: start[1],
+        retract: op.retract,
+        feed: op.feed,
+        moves: vec![TurnMove::Rapid { to: start }],
+    };
+    if let Some((_, top)) = levels.first() {
+        for &span in top {
+            cut.visit(0, span, start[0], start[0]);
+        }
+    }
+    let mut moves = cut.moves;
+    // Out over the cut stock, back in front of the face, once along the
+    // contour, then back to the start.
+    let at = moves.last().map(TurnMove::to).unwrap_or(start);
+    for to in [[start[0], at[1]], [start[0], start[1]]] {
+        if moves.last().map(TurnMove::to) != Some(to) {
+            moves.push(TurnMove::Rapid { to });
+        }
+    }
+    moves.extend(cycle_profile(&contour, start, op.feed));
+    let end = moves.last().map(TurnMove::to).unwrap_or(start);
+    moves.push(TurnMove::Rapid {
+        to: [end[0], start[1]],
+    });
+    moves.push(TurnMove::Rapid { to: start });
+    Ok(TurnPath { moves, cycle: None })
+}
+
+/// Where along Z (`[from, to]`, `from` towards the face) a chain is below
+/// `level` (past it into the material, `s` the side's sign).
+fn spans_below(ps: &[Piece], level: f64, s: f64) -> Vec<[f64; 2]> {
+    let below = |x: f64| s * (x - level) < -1e-9;
+    let mut out = Vec::new();
+    let mut from: Option<f64> = None;
+    for (i, p) in ps.iter().enumerate() {
+        let (a, b) = (below(p.a[0]), below(p.b[0]));
+        if i == 0 && a {
+            from = Some(p.a[1]);
+        }
+        if a != b {
+            let z = piece_at(p, 0, level).map_or(if b { p.a[1] } else { p.b[1] }, |q| q[1]);
+            if b {
+                from = Some(z);
+            } else if let Some(f) = from.take() {
+                out.push([f, z]);
+            }
+        }
+    }
+    if let (Some(f), Some(p)) = (from, ps.last()) {
+        out.push([f, p.b[1]]);
+    }
+    out.retain(|[f, t]| f - t > 1e-6);
+    out
+}
+
+/// The passes of [`rough_pockets`], depth first.
+struct Pockets<'a> {
+    levels: &'a [(f64, Vec<[f64; 2]>)],
+    s: f64,
+    /// The Z in front of the face the open passes start from.
+    face: f64,
+    retract: f64,
+    feed: f64,
+    moves: Vec<TurnMove>,
+}
+
+impl Pockets<'_> {
+    fn rapid(&mut self, to: PXZ) {
+        let at = self.moves.last().map(TurnMove::to);
+        if at.is_none_or(|a| (a[0] - to[0]).abs() > 1e-9 || (a[1] - to[1]).abs() > 1e-9) {
+            self.moves.push(TurnMove::Rapid { to });
+        }
+    }
+
+    fn line(&mut self, to: PXZ) {
+        self.moves.push(TurnMove::Line {
+            to,
+            feed: self.feed,
+        });
+    }
+
+    /// The pass along `span` of level `k`, then the passes below it.
+    /// `travel` is an X over cut stock all along the span (the level
+    /// above's after its retract), `above` the level above's X (where its
+    /// pass cut down to).
+    fn visit(&mut self, k: usize, [from, to]: [f64; 2], travel: f64, above: f64) {
+        let level = self.levels[k].0;
+        let s = self.s;
+        let at = self
+            .moves
+            .last()
+            .map(TurnMove::to)
+            .unwrap_or([travel, from]);
+        self.rapid([travel, at[1]]);
+        self.rapid([travel, from]);
+        if (from - self.face).abs() < 1e-9 {
+            // Open to the face: in at the level in front of it.
+            self.rapid([level, from]);
+        } else {
+            // In a pocket: down to the level where the contour falls
+            // through it.
+            self.rapid([above, from]);
+            self.line([level, from]);
+        }
+        self.line([level, to]);
+        // Back off at 45 degrees, no further than half the span (a
+        // pocket's far wall).
+        let r = self.retract.min((from - to) / 2.0);
+        let back = [level + s * r, to + r];
+        self.line(back);
+        if let Some((_, below)) = self.levels.get(k + 1) {
+            let inner: Vec<[f64; 2]> = below
+                .iter()
+                .copied()
+                .filter(|[f, t]| *f <= from + 1e-9 && *t >= to - 1e-9)
+                .collect();
+            for span in inner {
+                self.visit(k + 1, span, back[0], level);
+            }
+        }
+    }
 }
 
 /// The extreme X of a chain between two Z: the smallest when `min`.

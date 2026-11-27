@@ -28,3 +28,14 @@ mod draft_analysis_tests;
 mod point_cloud_tests;
 // Decals: images put on faces, following them (mitcad#2244).
 mod decal_tests;
+// Point cloud tools: align, filter, reconstruct (mitcad#2516).
+mod point_cloud_tools_tests;
+// Minimum Radius kept in the document and its query (mitcad#2518).
+mod min_radius_tests;
+// Minimum Distance kept in the document and its query (mitcad#2519).
+mod minimum_distance_tests;
+// Surface quality analyses: Zebra, Curvature Map, Isocurve Analysis and
+// Environment Map kept in the document and their query (mitcad#2517).
+mod surface_analysis_tests;
+// Curvature combs of sketch curves and edges (mitcad#2520).
+mod curvature_comb_tests;

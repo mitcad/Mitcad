@@ -51,6 +51,7 @@
 #include <TopoDS.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -222,7 +223,7 @@ void test_pieces_alike() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_end_reversed_faces) {
   test::guarded("test_pieces_alike", test::test_pieces_alike);
   if (test::failures == 0) {
     std::puts("test_fillet_end_reversed_faces: all checks passed");

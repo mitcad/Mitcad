@@ -98,6 +98,10 @@ pub struct Captures {
     /// the index of their item, whose point of the timeline they are at
     /// (their own indices come after the timeline's items).
     parts: HashMap<i64, i64>,
+    /// Loose sketches (sketches no sketch item holds, mitcad#2493), by
+    /// index: the index of the item that names them, whose point of the
+    /// timeline they are at.
+    loose_sketches: HashMap<i64, i64>,
     /// The occurrences of components of other documents whose placements
     /// were worked out from the paths inside them (mitcad#1892): the file
     /// keeps no placement of their own, so they are placed there even
@@ -114,9 +118,20 @@ impl Captures {
     }
 
     /// The point of the timeline of the item at `index`: its own index,
-    /// or for a part of an item in another component that item's.
+    /// or for a part of an item in another component that item's, and for
+    /// a loose sketch (mitcad#2493) the item's that names it.
     pub(crate) fn timeline_at(&self, index: i64) -> i64 {
-        self.parts.get(&index).copied().unwrap_or(index)
+        self.parts
+            .get(&index)
+            .or_else(|| self.loose_sketches.get(&index))
+            .copied()
+            .unwrap_or(index)
+    }
+
+    /// Whether the item at `index` is a loose sketch (mitcad#2493): given
+    /// before the item that names it, with a larger index.
+    pub(crate) fn is_loose_sketch(&self, index: i64) -> bool {
+        self.loose_sketches.contains_key(&index)
     }
 
     /// The indices of the parts of the item at `index` in other
@@ -193,12 +208,16 @@ impl Captures {
             return None;
         }
         let o = only_placement_anywhere(assembly, component)?;
-        let up = assembly
-            .occurrence(o)
-            .and_then(|x| self.parent_world_after(assembly, x.parent, index));
+        let x = assembly.occurrence(o)?;
         self.world_after(o, index).or_else(|| {
-            let local = self.final_placement(o, assembly.occurrence(o)?.transform);
-            Some(up.map_or(local, |u| u.after(&local)))
+            let local = self.final_placement(o, x.transform);
+            if x.parent.is_root() {
+                return Some(local);
+            }
+            // A level above placed several times has no one placement
+            // in the root (as `parent_world`, mitcad#2492).
+            self.parent_world_after(assembly, x.parent, index)
+                .map(|u| u.after(&local))
         })
     }
 
@@ -277,6 +296,12 @@ pub(crate) fn read(
     for (position, item) in dump.timeline_items().iter().enumerate() {
         if let (Some(index), Some(of)) = (item.index, item.f3d.as_ref().and_then(|f| f.part_of)) {
             out.parts.insert(index, of);
+        }
+        // A loose sketch (mitcad#2493) is at the point of the item that
+        // names it.
+        if let (Some(index), Some(of)) = (item.index, item.f3d.as_ref().and_then(|f| f.sketch_for))
+        {
+            out.loose_sketches.insert(index, of);
         }
         if item.object_type() != Some("Snapshot") {
             continue;
@@ -654,7 +679,14 @@ fn depth(assembly: &Assembly, occurrence: OccurrenceUid) -> usize {
 }
 
 /// The last placement in the root component of the (one) occurrence
-/// placing `component`; None for the root.
+/// placing `component`; None for the root, and None where a component
+/// on the way up is placed several times (no one placement in the root):
+/// before, such a level was taken for the root, so an occurrence two
+/// levels below a component placed several times was placed in its
+/// parent by its path's placement less its parent's local one only, the
+/// placement of the repeated level left in (mitcad#2492: the parts of a
+/// printed circuit board's sensor modules, placed six times, were off by
+/// the first module's placement turned by each module's own).
 fn parent_world(assembly: &Assembly, out: &Captures, component: ComponentUid) -> Option<Transform> {
     if component.is_root() {
         return None;
@@ -662,10 +694,10 @@ fn parent_world(assembly: &Assembly, out: &Captures, component: ComponentUid) ->
     let o = only_placement_anywhere(assembly, component)?;
     let x = assembly.occurrence(o)?;
     let local = out.final_placement(o, x.transform);
-    Some(match parent_world(assembly, out, x.parent) {
-        Some(up) => up.after(&local),
-        None => local,
-    })
+    if x.parent.is_root() {
+        return Some(local);
+    }
+    parent_world(assembly, out, x.parent).map(|up| up.after(&local))
 }
 
 /// The one occurrence placing `component` anywhere, if there is one.

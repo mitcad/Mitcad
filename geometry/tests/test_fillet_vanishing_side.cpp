@@ -51,6 +51,7 @@
 #include <TopoDS_Compound.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -230,7 +231,7 @@ void test_side_rounding_vanishes_with_the_earlier_rounding() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_vanishing_side) {
   test::guarded("test_side_rounding_vanishes_with_the_earlier_rounding",
                 test::test_side_rounding_vanishes_with_the_earlier_rounding);
   if (test::failures == 0) {

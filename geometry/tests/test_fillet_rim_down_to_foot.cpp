@@ -44,6 +44,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -156,7 +157,7 @@ void test_rim_rounded_down_to_the_foot() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_rim_down_to_foot) {
   test::guarded("test_rim_rounded_down_to_the_foot", test::test_rim_rounded_down_to_the_foot);
   if (test::failures == 0) {
     std::puts("test_fillet_rim_down_to_foot: all checks passed");

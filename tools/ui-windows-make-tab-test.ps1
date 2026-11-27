@@ -238,7 +238,7 @@ foreach ($id in 'make.printers', 'make.processes', 'make.plates', 'inspect.print
 Ui-Mark
 Ui-Step 'the Laser tab'                    { Ui-ClickTab 'MAKE_LASER' }
 Ui-ExpectNew 'Ribbon tab shown: MAKE_LASER' 'the Laser tab shown'
-foreach ($group in 'EXPORT', 'MATERIALS', 'ANNOTATE', 'INSPECT') {
+foreach ($group in 'NEST', 'EXPORT', 'MATERIALS', 'ANNOTATE', 'INSPECT') {
   Ui-ExpectNew "Ribbon MAKE_LASER/$group at" "its $group group"
 }
 Group-Menu 'MAKE_LASER/EXPORT' 'Export Flat Pattern... | Export Bend Table... | Export Face as DXF...'

@@ -884,6 +884,81 @@ fn an_occurrence_in_a_component_placed_twice_keeps_its_place_in_it() {
     assert!((x - 10.0).abs() < 1e-9, "{x} mm: {}", report.text());
 }
 
+/// An occurrence two levels below a component placed several times
+/// (mitcad#2492: the parts of a printed circuit board's sensor modules):
+/// Pad in Pin in Plate, Plate placed twice (5 cm and 20 cm along X), the
+/// file's placements only along the path through the first Plate (Pin at
+/// 6 cm, Pad at 8 cm in the root). Pad's placement in Pin is its step made
+/// relative to Pin along that path (2 cm), whatever it stores (0.5 cm).
+/// Before, the level placed twice was taken for the root, and Pad was
+/// placed at its root step less Pin's placement in Plate only (7 cm): the
+/// first Plate's placement stayed in.
+#[test]
+fn an_occurrence_below_a_component_placed_twice_keeps_its_place_in_its_parent() {
+    let mut value: Value = serde_json::to_value(assembly_dump(true)).unwrap();
+    let matrix = |x: f64| {
+        json!([
+            [1.0, 0.0, 0.0, x],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ])
+    };
+    let step = |index: i64, x: f64| json!([{"index": index, "object_id": 900 + index, "transform": matrix(x)}]);
+    value["components"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "Pad", "_f3d": {"object_id": 30}}));
+    for (k, (plate, x)) in [(11, 5.0), (12, 20.0)].into_iter().enumerate() {
+        let occurrence = &mut value["occurrences"][k];
+        occurrence["transform"] = matrix(x);
+        occurrence["isGrounded"] = json!(false);
+        occurrence["_f3d"]["object_id"] = json!(plate);
+        if k == 0 {
+            occurrence["_f3d"]["placements"] = step(0, x);
+        }
+        let pin = &mut occurrence["children"][0];
+        pin["_f3d"]["object_id"] = json!(21);
+        pin["children"] = json!([{"component": "Pad", "isReferencedComponent": false,
+                                  "_f3d": {"component_object": 30, "object_id": 31,
+                                           "local_transform": matrix(0.5)},
+                                  "children": []}]);
+        if k == 0 {
+            pin["_f3d"]["placements"] = step(1, x + 1.0);
+            pin["children"][0]["_f3d"]["placements"] = step(1, x + 3.0);
+        }
+    }
+    let dump = Dump::from_json(&value.to_string()).unwrap();
+    let mut doc = Document::new(MockKernel::default());
+    let report = import_design(
+        &mut doc,
+        &dump,
+        &mut ComponentHistory::default(),
+        &Options::default(),
+    );
+    let assembly = doc.assembly();
+    let placed = |name: &str| {
+        assembly
+            .occurrences
+            .iter()
+            .find(|o| assembly.occurrence_name(o.uid).starts_with(name))
+            .unwrap_or_else(|| panic!("the occurrence of {name}"))
+            .transform
+            .translation[0]
+    };
+    let text = report.text();
+    assert!(
+        (placed("Pin") - 10.0).abs() < 1e-9,
+        "{} mm: {text}",
+        placed("Pin")
+    );
+    assert!(
+        (placed("Pad") - 20.0).abs() < 1e-9,
+        "{} mm: {text}",
+        placed("Pad")
+    );
+}
+
 /// A construction plane offset from a face of another component's body,
 /// linked to it (mitcad#389), goes into the item's component, where its
 /// link's target leads: not into the face's component, whose coordinates

@@ -81,6 +81,8 @@
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
+#include "bundled_test.hpp"
+
 namespace {
 
 int failures = 0;
@@ -392,7 +394,7 @@ void test_reported_body() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_wall_run_on) {
   try {
     test_reported_body();
   } catch (const Standard_Failure& e) {

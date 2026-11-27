@@ -4,15 +4,21 @@
 //! stored occurrence placements check the frames, and the reference
 //! model with a ground item; no reference model has a joint)*.
 //!
-//! A joint ([`JOINT`], class versions 3 and 4) after its root part:
+//! A joint ([`JOINT`], class versions 3 to 5) after its root part:
 //!
 //! ```text
-//! u8 opposed | 2 bytes (version 3) or 10 bytes (version 4)
-//! 2 × side: ref geometry | 6 bytes (version 4) | u8 1 (no matrix) or
+//! u8 opposed | 2 bytes (version 3), 10 bytes (version 4) or 11 bytes
+//!              (version 5)
+//! 2 × side: ref geometry | 6 bytes (versions 4, 5) | u8 1 (no matrix) or
 //!           u8 0 + f64[16] frame | [str16 GUID (later writers)]
 //! u32 0 | refs alignAngle, alignOffsetZ, alignOffsetX, alignOffsetY
 //! 6 bytes | u32 2 | 2 × ref placement | ref state | ...
 //! ```
+//!
+//! *(Version 5: every joint of the reported assembly package's designs
+//! that have it, 56 in three designs, reads with the eleven bytes, its
+//! sides' frames and the placements' frames agreeing as in version 4; with
+//! ten, no side read, mitcad#2530.)*
 //!
 //! A side's geometry is a frame input ([`FRAME_INPUT`]: the frame and the
 //! key point and direction inputs it was built from, with the faces and
@@ -37,7 +43,21 @@
 //! (f64 at 23, 31, 39, whether enabled or not) and an axis code (u8 at
 //! 47), not the current value *(the joint test model, mitcad#81: its
 //! current values are only in the occurrences' placements and a captured
-//! position's parameters)*.
+//! position's parameters)*. An occurrence of the list may be a null
+//! reference (`00`) or one into another document in the older form of the
+//! context ([`older_context_end`]).
+//!
+//! Class version 4 (designs saved by builds up to 2.0.9305) has no type:
+//! `... | u8 f | [u32 if f = 1] | u32 ordinal | u8 | 6 × (u32 0, or u32 1 +
+//! 51-byte motion) | u32 placements`. The type follows from the slots
+//! filled ([`kind_of_slots`]), as the states with a type have them *(the
+//! corpora's states of class versions 5 and 6: none rigid or a rigid
+//! group, `rz` revolute, one slide a slider, `rz tz` cylindrical, `rz tx`
+//! pin-slot, `rz tx ty` planar, `rx ry rz` ball; the older states of the
+//! reported assembly package: revolutes, a slider and rigid ones,
+//! mitcad#2530)*. Without a type, an as-built joint without motions is a
+//! rigid group where it has more than two members (with two, a rigid
+//! as-built joint holds them the same way).
 //!
 //! An as-built joint ([`AS_BUILT_JOINT`]): `ref frame input or 00 | ref
 //! placement of the geometry | u32 n | n limit parameters | u32 c | c ×
@@ -68,7 +88,9 @@ use super::super::classes::*;
 use super::super::decode::{self, ParameterEntry, TimelineEntry};
 use super::super::ir::*;
 use super::super::recipe;
-use super::super::stream::{Segment, f64_at, f64s_at, header_end, str16_at, u32_at};
+use super::super::stream::{
+    Segment, f64_at, f64s_at, header_end, older_context_end, str16_at, u32_at,
+};
 use super::{Builder, edge_input, face_input, inputs_of, json_value, paramref, rigid_matrix};
 
 /// Occurrence and component objects by the GUIDs the occurrence paths
@@ -107,6 +129,39 @@ fn is_guid(s: &str) -> bool {
         })
 }
 
+/// The text keys of object data, in order, lower case: the `str16` values
+/// of 3 to 256 characters with a `|` and no control character. The parts
+/// a circuit board places are occurrences named by such a key (a library,
+/// a package and two numbers before the part's name), and the occurrence
+/// paths of other documents name them by it, not by a GUID (mitcad#2530:
+/// 367 of the 409 keys the reported assembly package's paths name are
+/// keys of its occurrences; the others' boards are not in the package).
+pub(crate) fn text_keys(d: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut p = 0;
+    while p + 4 < d.len() {
+        if u32_at(d, p).is_some_and(|n| (3..=256).contains(&n))
+            && let Some((s, e)) = str16_at(d, p)
+            && s.contains('|')
+            && !s.chars().any(char::is_control)
+        {
+            out.push(s.to_lowercase());
+            p = e;
+        } else {
+            p += 1;
+        }
+    }
+    out
+}
+
+/// What an occurrence object goes by in occurrence paths: its GUIDs, then
+/// its text keys ([`text_keys`]).
+pub(crate) fn occurrence_keys(d: &[u8]) -> Vec<String> {
+    let mut out = guid_strings(d);
+    out.extend(text_keys(d));
+    out
+}
+
 impl Guids {
     pub(super) fn new(seg: &Segment) -> Self {
         let mut out = Self::default();
@@ -115,7 +170,13 @@ impl Guids {
             (COMPONENT, &mut out.components),
         ] {
             for o in seg.objects_of(class) {
-                for g in guid_strings(seg.data(o)) {
+                let d = seg.data(o);
+                let keys = if class == OCCURRENCE {
+                    occurrence_keys(d)
+                } else {
+                    guid_strings(d)
+                };
+                for g in keys {
                     map.entry(g)
                         .and_modify(|v| {
                             if *v != Some(o.id) {
@@ -131,23 +192,67 @@ impl Guids {
 }
 
 /// One level of an occurrence path ([`CONTEXT_LEVEL`]).
-struct Level {
-    /// The GUIDs of the occurrences, from the outermost down: one for a
-    /// level in the file, several for a path inside a component of
-    /// another document *(captured positions of an inserted assembly's
-    /// parts)*, none for the component itself.
-    occurrences: Vec<String>,
+#[derive(Debug, PartialEq)]
+pub(crate) struct Level {
+    /// The GUIDs (or text keys, [`text_keys`]) of the occurrences, lower
+    /// case, from the outermost down: one for a level in the file, several
+    /// for a path inside a component of another document *(captured
+    /// positions of an inserted assembly's parts)*, none for the component
+    /// itself.
+    pub occurrences: Vec<String>,
     /// The GUID of the component the (first) occurrence sits in.
-    context: Option<String>,
+    pub context: Option<String>,
 }
 
-/// A level: `u32 n`, the GUIDs of `n` occurrences, of the document and
-/// the component the last one places, then of the document and the
-/// component the first one sits in.
-fn level(seg: &Segment, id: u64) -> Option<Level> {
+/// A level: `u32 n`, `n` occurrences, then the document and the component
+/// the last one places, 8 bytes, the document and the component the first
+/// one sits in, each a `str16`. An occurrence is a GUID, or the text key of
+/// a part a circuit board placed (mitcad#2530), and so may the component
+/// be; the documents and the component sat in are GUIDs. Read as laid out,
+/// else by the GUIDs it holds *(the levels of the reported assembly
+/// package and the corpora: where the GUIDs read a level, the layout reads
+/// the same; it also reads the 2270 and 26 levels the GUIDs did not, which
+/// were dropped and their paths cut short)*.
+pub(crate) fn level(seg: &Segment, id: u64) -> Option<Level> {
     let d = seg.data_of(id);
     let p = seg.root_part(d)?.end;
     let n = u32_at(d, p)? as usize;
+    laid_out_level(d, p + 4, n).or_else(|| guid_level(d, p, n))
+}
+
+/// A level as laid out ([`level`]), its `n` occurrences from `q`.
+fn laid_out_level(d: &[u8], mut q: usize, n: usize) -> Option<Level> {
+    if n > 64 {
+        return None;
+    }
+    let mut occurrences = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (s, e) = str16_at(d, q)?;
+        if s.is_empty() {
+            return None;
+        }
+        occurrences.push(s.to_lowercase());
+        q = e;
+    }
+    let mut fields = Vec::with_capacity(4);
+    for k in 0..4 {
+        if k == 2 {
+            q += 8;
+        }
+        let (s, e) = str16_at(d, q)?;
+        fields.push(s);
+        q = e;
+    }
+    (is_guid(&fields[0]) && is_guid(&fields[2]) && is_guid(&fields[3])).then(|| Level {
+        occurrences,
+        context: Some(fields[3].to_lowercase()),
+    })
+}
+
+/// A level by the GUIDs it holds after `p`: those of `n` occurrences, of
+/// the document and the component the last one places, then of the
+/// document and the component the first one sits in.
+fn guid_level(d: &[u8], p: usize, n: usize) -> Option<Level> {
     let g = guid_strings(&d[p..]);
     match n {
         0 if g.len() >= 3 => Some(Level {
@@ -168,16 +273,22 @@ fn matrix_at(d: &[u8], p: usize) -> Option<Mat4> {
     rigid_matrix(&d[p..p + 128])
 }
 
-/// The end of a reference at `p` that need not resolve (to a deleted
-/// object, or through an assembly context to another document).
+/// The end of a reference at `p` that need not resolve (a null reference,
+/// one to a deleted object, or one through an assembly context to another
+/// document, in the newer or the older form of the context).
 fn any_ref_end(seg: &Segment, d: &[u8], p: usize) -> Option<usize> {
     if let Some(r) = seg.ref_at(d, p) {
         return Some(r.end);
     }
-    if *d.get(p)? != 1 {
-        return None;
+    match *d.get(p)? {
+        0 => return Some(p + 1),
+        1 => {}
+        _ => return None,
     }
     let q = p + 9 + if seg.long_refs { 40 } else { 0 };
+    if let Some(end) = older_context_end(d, q) {
+        return Some(end);
+    }
     match d.get(q..q + 2)? {
         [0, 0] => Some(q + 2),
         [1, _] => Some(q + 51),
@@ -187,7 +298,7 @@ fn any_ref_end(seg: &Segment, d: &[u8], p: usize) -> Option<usize> {
 
 /// A joint's or as-built joint's state ([`JOINT_STATE`]).
 #[derive(Debug, PartialEq)]
-pub(super) struct JointState {
+pub(crate) struct JointState {
     /// The motion's type code.
     pub kind: u32,
     /// The free motions, in the order of [`MOTION_SLOTS`]: the slot's
@@ -195,11 +306,15 @@ pub(super) struct JointState {
     /// raw values, whether enabled or not).
     pub motions: Vec<Motion>,
     pub ordinal: u32,
+    /// The type was stored (class versions 5 and later); else it follows
+    /// from the slots filled, and a state without motions may be a rigid
+    /// group as well as a rigid joint.
+    pub typed: bool,
 }
 
 /// A free motion of a joint state.
 #[derive(Debug, PartialEq)]
-pub(super) struct Motion {
+pub(crate) struct Motion {
     /// `rx`, `ry`, `rz`, `tx`, `ty` or `tz`.
     pub motion: &'static str,
     pub axis: u8,
@@ -211,11 +326,14 @@ pub(super) struct Motion {
 /// z in the fourth to sixth, a ball's three turns in the first three)*.
 pub(super) const MOTION_SLOTS: [&str; 6] = ["rx", "ry", "rz", "tx", "ty", "tz"];
 
+/// A joint's or as-built joint's state, in the layout of its class version.
 pub(super) fn joint_state(seg: &Segment, id: u64) -> Option<JointState> {
     if seg.guid_of(id) != Some(JOINT_STATE) {
         return None;
     }
-    let d = seg.data_of(id);
+    let o = seg.object(id)?;
+    let typed = seg.version(o)? >= 5;
+    let d = seg.data(o);
     let mut p = header_end(d)?;
     if *d.get(p)? != 1 {
         return None;
@@ -233,6 +351,14 @@ pub(super) fn joint_state(seg: &Segment, id: u64) -> Option<JointState> {
         return None;
     }
     p += 1 + if f == 1 { 4 } else { 0 };
+    // Class version 4: the ordinal and a byte before the slots.
+    let ordinal = if typed {
+        None
+    } else {
+        let ordinal = u32_at(d, p)?;
+        p += 5;
+        Some(ordinal)
+    };
     let mut motions = Vec::new();
     for motion in MOTION_SLOTS {
         let present = u32_at(d, p)?;
@@ -254,8 +380,14 @@ pub(super) fn joint_state(seg: &Segment, id: u64) -> Option<JointState> {
             _ => return None,
         }
     }
-    let kind = u32_at(d, p)?;
-    let ordinal = u32_at(d, p + 4)?;
+    let (kind, ordinal) = match ordinal {
+        Some(ordinal) => {
+            // The placements' count closes the state.
+            u32_at(d, p)?;
+            (kind_of_slots(&motions)?, ordinal)
+        }
+        None => (u32_at(d, p)?, u32_at(d, p + 4)?),
+    };
     if kind > 64 {
         return None;
     }
@@ -263,6 +395,23 @@ pub(super) fn joint_state(seg: &Segment, id: u64) -> Option<JointState> {
         kind,
         motions,
         ordinal,
+        typed,
+    })
+}
+
+/// The motion type code of a state that does not store it (class version
+/// 4), by the slots its motions fill; `None` for a set no stored type has.
+pub(crate) fn kind_of_slots(motions: &[Motion]) -> Option<u32> {
+    let slots: Vec<&str> = motions.iter().map(|m| m.motion).collect();
+    Some(match slots.as_slice() {
+        [] => 0,
+        ["rz"] => 1,
+        ["tx"] | ["ty"] | ["tz"] => 2,
+        ["rz", "tz"] => 4,
+        ["rz", "tx"] => 6,
+        ["rz", "tx", "ty"] => 7,
+        ["rx", "ry", "rz"] => 8,
+        _ => return None,
     })
 }
 
@@ -285,6 +434,19 @@ fn kind_of(code: u32) -> Option<(&'static str, usize)> {
 
 /// The motion type code of a rigid group (an as-built joint's class).
 pub(super) const RIGID_GROUP: u32 = 11;
+
+/// Whether an as-built joint's state makes it a rigid group, with its
+/// `members` (the placements after the geometry's): the rigid group type,
+/// or for a state without a type (class version 4) no motions and more
+/// than two members.
+pub(crate) fn rigid_group(state: &JointState, members: usize) -> bool {
+    state.motions.is_empty()
+        && if state.typed {
+            state.kind == RIGID_GROUP
+        } else {
+            members > 2
+        }
+}
 
 /// A key point input ([`KEY_POINT`]): the point (cm) and its code. The
 /// point is at 16 bytes after the root part in class version 0, 21 in the
@@ -333,14 +495,19 @@ struct Side {
 /// The opposed byte and the two sides of a joint.
 fn joint_sides(seg: &Segment, id: u64) -> Option<(u8, [Side; 2])> {
     let o = seg.object(id)?;
-    let v4 = seg.version(o)? >= 4;
+    let version = seg.version(o)?;
+    let v4 = version >= 4;
     let d = seg.data(o);
     let mut p = seg.root_part(d)?.end;
     let opposed = *d.get(p)?;
     if opposed > 1 {
         return None;
     }
-    p += if v4 { 11 } else { 3 };
+    p += match version {
+        5.. => 12,
+        4 => 11,
+        _ => 3,
+    };
     let mut side = || -> Option<Side> {
         let r = seg.ref_at(d, p)?;
         if !matches!(
@@ -661,8 +828,13 @@ impl Builder<'_> {
 
     /// Whether an as-built joint item is a rigid group (its motion type).
     pub(super) fn is_rigid_group(&self, fid: u64) -> bool {
-        self.state_of(fid)
-            .is_some_and(|s| s.kind == RIGID_GROUP && s.motions.is_empty())
+        // The first placement is the geometry's, the members' follow.
+        self.state_of(fid).is_some_and(|s| {
+            rigid_group(
+                &s,
+                inputs_of(self.seg, fid, PLACEMENT).len().saturating_sub(1),
+            )
+        })
     }
 
     /// A rigid group's detail (SCHEMA.md §5.3, `RigidGroup`): its members.

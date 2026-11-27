@@ -5,7 +5,9 @@
 # (also run by tools/ui-point-cloud-deviation-test.sh and
 # tools/ui-windows-point-cloud-deviation-test.ps1) on the block mitcad-cli
 # makes of tools/ui-scripts/point-cloud-deviation.json and the scan written
-# here beside it. Insert > Point Cloud reads the scan; Inspect > Point Cloud
+# here beside it. Insert > Point Cloud reads the scan, chosen with Choose
+# File... in Qt's own file dialog (mitcad#2474: no message left, OK
+# available at once); Inspect > Point Cloud
 # Deviation gives the statistics and colours the points, a point's tooltip
 # its distance; the top face only, then 11 of the 32 points measured, the
 # others dimmed (mitcad#2265); OK keeps it as Deviation1, saved (checked in
@@ -37,7 +39,10 @@ for x in 4 8 12 16; do
 done
 MITCAD_TEST_WORK=$files MITCAD_TEST_STEP_MS=70 \
   MITCAD_TEST_INPUT=$here/ui-scripts/point-cloud-deviation.mitcad-ui \
-  ui_run_app point-cloud-deviation --ui=qt --no-recovery --no-mcp --open "$files/deviation-part.mitcad"
+  ui_run_app point-cloud-deviation --ui=qt --no-recovery --no-mcp --no-native-dialogs \
+  --open "$files/deviation-part.mitcad"
+ui_expect_log 'Panel Point Cloud message: error gone: Choose a point cloud file\.' \
+  'the file chosen in the dialog clears the message'
 ui_expect_log 'Point clouds drawn: PointCloud1 32 points' 'the scan inserted and drawn'
 ui_expect_log '32 of 32 points, signed, mean 0\.100 mm, mean absolute 0\.400 mm' 'the statistics'
 ui_expect_log 'deviation 32 point\(s\)' 'the colour map drawn'

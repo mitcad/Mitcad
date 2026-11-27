@@ -26,8 +26,11 @@ in design coordinates. Then:
   left), the farthest named with their components and distances;
 - fallbacks: the items of all documents that fall back to the file's
   bodies, each document counted once, at most FALLBACKS_AT_MOST;
-- the joints the design and its documents kept as as-built joints, and
-  the import's time per document, printed for the record.
+- joints (mitcad#2530): the top design's joints that do not come in as
+  joints (kept as as-built joints or left out) are counted (at most
+  TOP_NOT_JOINTS_AT_MOST), and the joints that come in as joints over the
+  design and its documents (each once, at least JOINTS_AT_LEAST);
+- the import's time per document, printed for the record.
 
 With --compare-serial the package is imported again with one thread (its
 documents one after another; the first import has four, its documents
@@ -59,11 +62,67 @@ VOLUME = 0.01  # relative volume difference of a body taken for a solid
 # The state the import reached (mitcad#2449); lower them as it improves.
 # (25.11.2026: 889 of 3534 solids placed; the solids of the three
 # assemblies of the older reference layout and of the printed circuit
-# boards' inner levels are not, mitcad#2449's notes.)
-MISPLACED_AT_MOST = 2645
-FALLBACKS_AT_MOST = 33
+# boards' inner levels are not, mitcad#2449's notes. 26.11.2026: 1473
+# placed, every solid has a body of its volume: the assemblies of the older
+# layout come in with their documents, mitcad#2492. The documents they
+# bring are imported now, with their own decoder gaps: 42 fallbacks,
+# mitcad#2493. 26.11.2026, measured in the check of mitcad#2492's placement
+# fixes, mitcad#2528: 2948 placed; the 586 left are under the electronics
+# stack's board (224), the blade assembly's line sensors (224), the lift
+# system's bearings (64), the geared motors' planetary gears (34), the two
+# wheel assemblies (20), one board's swapped package bodies (18) and two
+# connectors (2). 26.11.2026, measured in the check of mitcad#2528 and
+# mitcad#2530 (dev 8893f3948): 3490 placed, every solid with a body of its
+# volume; the 44 left are under the two wheel assemblies (20), one board's
+# swapped package bodies (18), the geared motors' planetary gears (4) and
+# two connectors (2). mitcad#2556 links the board's history blobs to their
+# own components (the swapped bodies): 26 expected, to be set to the
+# bundle's run.)
+MISPLACED_AT_MOST = 26
+# Without mitcad#2492's documents: 33 before mitcad#2493's decoder fixes,
+# 16 in its first run (the board holes' flat bottoms and the derive of one
+# body at two placements were fixed after it). With both, measured in the
+# check of mitcad#2528 and at dev 129c2edb8 (mitcad#2529): 11, the same
+# with four threads and with one: the base's rectangular pattern (a
+# chamfer wider than its face), path pattern (its
+# copies off the plane the state is symmetric about), mirror and Fillet8
+# (time), a gear ring's third extrusion, a two-face delete, a one-face
+# offset, a derived context, an electronics board item, a component
+# mirror (no such feature) and a circular pattern of faces whose openings
+# are not planar. The same branch reads the path pattern of a pattern
+# (its features once at each copy), the mirror of a cut up to a face (as
+# it is) and the derive at two placements (its last operation): 8
+# expected. Measured at dev 8893f3948 (mitcad#2556) and in the check that
+# brought them in (mitcad#2557): 10, the base's path pattern, mirror,
+# rectangular pattern and Fillet8, a gear ring's third extrusion, a
+# two-face delete, a one-face offset, an electronics board item, a
+# component mirror and a circular pattern of faces (the derived context
+# read). The gear ring's extrusion is read since the sketch regions take
+# the designs' resolution (mitcad#2557): 9 expected, to be lowered to the
+# bundle's run.
+FALLBACKS_AT_MOST = 10
 # Sketches whose light bulb the decoder does not read (sketch class 12).
 UNKNOWN_BULBS_AT_MOST = 0
+# The top design's joints that do not come in as joints (kept as as-built
+# joints or left out). 31 before mitcad#2530, all kept as as-built joints:
+# none of its joints (class version 5) had its sides read. With them read,
+# 28 hold exactly at the placements the import gives the occurrences (the
+# importer's relation worked out on the saved design of the bundle check
+# before the fix); the other three: two whose side one is inside the wheel
+# assemblies, whose inner occurrences are 6 to 75 mm from the STEP
+# export's (mitcad#2528), and one on a part of a circuit board named by its
+# text key, which the decoder dropped from the path before. Measured at dev
+# 8893f3948 (mitcad#2556): 1, Assemble5, whose side one is a part of the
+# first wheel assembly's second side assembly, which the position the top
+# design's paths give it puts at the design's origin (136.6 mm from side
+# two); Assemble6 and Assemble52 come in as joints.
+TOP_NOT_JOINTS_AT_MOST = 1
+# The joints that come in as joints, the top design's and each document's
+# once: 36 before mitcad#2530 (2 of the top design); with the top design's
+# 28 more at least, and the joints of the documents whose sides (class
+# version 5) or motions (states of class version 4) were not read before.
+# Measured at dev 8893f3948 (mitcad#2556): 95 (32 of the top design).
+JOINTS_AT_LEAST = 95
 
 
 def content_id(path):
@@ -282,8 +341,10 @@ def main():
     if FALLBACKS_AT_MOST is not None and len(fallbacks) > FALLBACKS_AT_MOST:
         fail(f"fallbacks, more than {FALLBACKS_AT_MOST}", fallbacks)
 
-    # Joints, for the record.
-    print(f"note the top design's joints: {report.get('joints', {})}")
+    # Joints (mitcad#2530): the top design's that do not come in as joints,
+    # and those that do over the package, each document once.
+    joints = report.get("joints", {})
+    print(f"note the top design's joints: {joints}")
     for d in documents.values():
         if d.get("joints"):
             print(f"note {d.get('name')}'s joints: {d['joints']}")
@@ -294,6 +355,21 @@ def main():
             if note and ("Joint" in kind or "Snapshot" in kind or "Ground" in kind):
                 print(f"     {item.get('index')} {item.get('name')} ({item.get('type')}, "
                       f"{item.get('outcome')}): {note}")
+    not_joints = [f"{i.get('name')} ({i.get('outcome')}): {i.get('note')}"
+                  for i in report.get("items", [])
+                  if i.get("type") == "Joint"
+                  and (i.get("outcome") == "skipped"
+                       or "kept as an as-built joint" in (i.get("note") or ""))]
+    as_joints = joints.get("joints", 0) + sum((d.get("joints") or {}).get("joints", 0)
+                                              for d in documents.values())
+    print(f"note {len(not_joints)} of the top design's joints do not come in as joints; "
+          f"{as_joints} joints of the package come in as joints")
+    if len(not_joints) > TOP_NOT_JOINTS_AT_MOST:
+        fail(f"the top design's joints that do not come in as joints, more than "
+             f"{TOP_NOT_JOINTS_AT_MOST}", not_joints)
+    if as_joints < JOINTS_AT_LEAST:
+        fail(f"{as_joints} joints of the package come in as joints, fewer than "
+             f"{JOINTS_AT_LEAST}")
 
     # Placements against the STEP file's solids.
     reference = os.path.join(work, "reference.mitcad")
@@ -390,7 +466,8 @@ def main():
     for line in failures:
         print(f"(would fail) {line}")
     print(f"ok   light bulbs of {bulbs.get('copied')} copies as in their documents; "
-          f"{placed} of {len(theirs)} STEP solids placed; {len(fallbacks)} fallbacks")
+          f"{placed} of {len(theirs)} STEP solids placed; {len(fallbacks)} fallbacks; "
+          f"{as_joints} joints as joints, {len(not_joints)} of the top design's not")
     return 0
 
 

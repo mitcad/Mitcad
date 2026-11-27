@@ -468,10 +468,236 @@ other document's component as `01 | u64 id | 01 | u32 0 | str16 GUID |
 00 | str8 class GUID | str16 role GUID | 00`, the role GUID being the
 one the file's `RedirectionsStream.dat` gives the referenced file
 (`references[].properties.neutronRole`, with the designs' URNs), and
-their transforms lie further in the object. The decoder reads neither,
-so those occurrences have no document and the assemblies come in empty.
+their transforms lie further in the object. The decoder read neither,
+so those occurrences had no document and the assemblies came in empty
+(read since mitcad#2492, next section).
 Test: `core.import`
 (`a_grounded_occurrence_placed_along_paths_inside_it_takes_their_placement`).
+
+### The older layout of references into other documents (mitcad#2492)
+
+Designs written by builds up to 2.0.9305 (in the reported package: three
+assemblies placed by the top design or its shell, and the assemblies
+inside them) keep no external documents in the MetaStream's tail. A
+reference into another document carries, where a later design has `01 |
+u64 key | 00 | str8 class GUID | 00` after the object's id, `01 | u32 0 |
+str16 document GUID | 00 | str8 class GUID | str16 role GUID | 00`: the
+document GUID is the one the referenced file's `Manifest.dat` lists (a
+later design's `document_guid`), the role GUID the reference's
+`neutronRole` in the file's `RedirectionsStream.dat` (a later design's
+first GUID of the external document; the stream maps it through the
+reference's `relativePath` to the design's `versionUrn`). An occurrence
+object names its component twice that way, the second time followed by
+its transform flag and matrix, as an occurrence of a later design does.
+Some objects of later designs keep a few references of this form beside
+the MetaStream's documents.
+
+The design streams now carry the redirections (`DesignStreams::
+redirections`, `stream::redirections`), and `Segment::redirect` gives
+each role an external document: the MetaStream's own one whose first
+GUID is the role, else a new one with the role's URN, the document GUID
+and a key made of the role's first 16 hex digits. `context_ref_at` reads
+the older form through that key, so everything that reads references
+into other documents reads them in these designs too: the occurrences
+with their documents and transforms, the placements of paths that go on
+inside them, the joints' and relationships' sides inside them. A role
+neither the MetaStream nor the redirections name stays unread (in the
+package: a few references of face and body records, none of an
+occurrence). Test: `core.f3d-design`
+(`older_references_into_other_documents_through_the_redirections`, on
+synthetic streams).
+
+On the package this brings every solid of the STEP export a body of its
+volume and places the electronics stack (1473 of 3534 solids within
+0.1 mm, 889 before). Two placement faults showed under it:
+
+- **An occurrence two levels below a component placed several times.**
+  A printed circuit board places one sensor module six times; each module
+  holds two sub-boards, each with its packages. The packages' placement
+  in their sub-board was worked out as their path's placement less the
+  sub-board's placement in the module only: `captures::parent_world` took
+  the module, which has no one placement in the root, for the root, so
+  the first module's placement stayed in, turned by each module's own
+  (every sub-board's parts 52.39 mm off in the plane and 1.6 mm up, in
+  the board's own import already). A level placed several times on the
+  way up now leaves the parent's placement unknown (`parent_world`,
+  `Captures::parent_world_after`), and the occurrence takes its step
+  relative to its parent along the step's own path, as an occurrence
+  directly in such a component does. Test: `core.import`
+  (`an_occurrence_below_a_component_placed_twice_keeps_its_place_in_its_parent`).
+- **Levels inside a copy that the design places otherwise than the other
+  document.** The top design turns the lift arm inside the shell it
+  places (28.8 degrees where the shell's own file has 7.3), and an older
+  assembly places the wheel's second bearing on the axle where the
+  wheel's file stores it 103 mm away; the file keeps those placements only
+  in the paths it stores through the occurrence (`_f3d.inside_placements`,
+  mitcad#1892), which gave only the outer occurrence's own placement
+  (`outer_placements`). Each such path's last placement is now a position
+  inside the copy (`references::inside_positions`), its levels named by
+  the GUIDs the other document's import gives the occurrences its object
+  ids name, placed as the captured positions inside are (`plan_inside`,
+  a `capture_position` feature in the copy's component after the
+  timeline, `INSIDE_PLACEMENTS_INDEX`); a path whose last level is where
+  the other document has it already makes none, and a grounded level
+  stays (as for captured positions). Levels further down than the other
+  document's own occurrences (a path through the shell into the lift
+  arm's parts) are not resolved: their object ids are another document's.
+  Test: `core.import`
+  (`the_paths_through_an_occurrence_place_the_levels_inside_its_copy`).
+
+The joints the top design keeps as as-built joints (31) do not hold
+although its own occurrences are where the STEP export has them (offset
+0): their sides are read wrong, not the placements (left for a ticket of
+its own). The older assemblies' own joints (class version 3) are left
+out ("its motion was not decoded"); their parts are placed by the
+placement histories. Some packages of the boards are where the STEP
+export has them but with another volume (0.394 mm3 there, 0.966 mm3 in
+the file's body), so they do not count as placed.
+
+**Measured, and the levels more than one document deep (mitcad#2528).**
+The check of those fixes placed 2948 of the 3534 solids (1473 before), with
+11 fallbacks in all documents, the same with four threads and with one;
+`cli.f3d_reported_package` holds that state. Against the run before the
+fixes, the boards' sensor modules and the lift system's own parts came to
+their places, and two groups left them: the board inside the electronics
+stack (its printed circuit component, 224 solids, all 10.8 mm off: 4, 4
+and 9.16 mm) and the lift system's four bearings (64 solids, turned 36.1
+degrees with the lift system). Both are levels more than one document
+deep: the board document inside the electronics stack, the bearing
+document inside the lift system inside the shell. The documents in
+between had them right in the world only because their own placements
+had come out wrong the other way: the board's file keeps its printed
+circuit component at the board's origin, the paths the stack stores
+through the board put it 4, 4 and 9.16 mm from there, and
+`outer_placements`, taking the paths' placements less the board's own
+for the board's, put the whole board there (in the run before the fixes
+the board's own occurrence was 10.8 mm off and its printed circuit
+component where the STEP export has it). Once
+mitcad#2492 placed the board and the lift system where the top design's
+paths put them, their levels inside moved along, while the top design's
+paths to those levels (which name them by the object ids of the board's
+and the lift system's files) were not resolved.
+
+Each import now keeps its occurrences by their object ids with the GUIDs
+it names them by and, for an occurrence whose component was filled from
+another document, that document's in turn
+(`ComponentReport::object_guids`, `references::ObjectGuids`, handed on as
+`Referenced::object_guids`). `inner_guids` follows a path through them:
+past a level filled from another document, the next ids are that
+document's, and so on down; the GUIDs name the copies' occurrences, as
+`occurrence_guids` knows the copies of the documents filled in. A path
+whose last level the other document has where the file has it still makes
+no position, unless a level above it on the same occurrence moves (then it
+would move along). Test: `core.import`
+(`the_paths_more_than_one_document_deep_place_the_levels_there`, three
+documents on synthetic dumps).
+
+What the check left, by group (the STEP solid against the import's body of
+the same occurrence path):
+
+- **The blade assembly's line sensors** (224): the sensor boards inside
+  both line sensor assemblies, 23 to 179 mm off, and their connectors 42
+  to 62 mm, each copy by its own offset; levels two and three documents
+  deep inside the blade assembly's copy (the sensor line assembly inside
+  the line sensor, its boards). Whether this change resolves them is for
+  the next run.
+- **The geared motors' planetary gears** (34): the sun gear 2.78 mm off
+  along the motor's axis in both motors, the planet gears 0.10 to 0.72 mm
+  (turned about their own axes), the input gear 18.9 mm; the planetary
+  assembly keeps 14 joints as as-built joints whose sides do not hold
+  (mitcad#2530). Cause not established.
+- **The wheel assemblies** (20): the wheel shaft 6.0 mm off (along the
+  assembly's axis), the old wheel system 44 to 50 mm, the side assemblies'
+  parts 6 to 12 mm and, in the second side assembly of each, 47 mm more
+  (the second side assembly's parts are where the first's should be);
+  the wheel's parts, two documents deep, 70 to 141 mm (the second bearing
+  141 mm). In the top design these are levels two and three documents
+  deep, which this change resolves where the top design stores the paths;
+  not measured yet. The wheel's own file inserts the second bearing and
+  places it with a joint after the insert (`Assemble4`); its import
+  leaves its four joints out (the older joint class, mitcad#2530), so the
+  bearing stays where it was inserted unless a path of the design above
+  places it. Whether the bearing's placement steps after that joint are
+  read was not checked: the wheel's file is of the older layout, and no
+  dump of it with the current decoder was made.
+- **One board's package bodies** (18): in the second sensor plate the
+  ten 0402 capacitors have the 0603 resistors' body (0.966 mm3, 0.95 by
+  1.7 mm) and the two 0603 resistors the capacitors' (0.395 mm3), each at
+  the STEP solid's place within 0.001 mm; the STEP export and the other
+  boards have them the right way round. The import is wrong: the bodies
+  of two package components of that board are swapped (likewise six
+  connectors one level down, 0.739 against 0.389 mm3). Cause not
+  established.
+- **Two connectors of the motor drivers** (2): the import's body is at the
+  place and of the size of the STEP solid, with no volume (an open shell).
+
+**Measured after mitcad#2528 and mitcad#2530 (mitcad#2556).** The check of
+both (dev 8893f3948, the import with four threads and the serial one giving
+the same design) placed **3490 of the 3534 solids** within 0.1 mm, every
+solid with a body of its volume; 10 items fall back in all documents; of the
+top design's joints one does not come in as a joint (Assemble5, kept as an
+as-built joint; Assemble6 and Assemble52 hold), and 95 joints of the
+package come in as joints (32 of the top design's). The electronics
+stack's board, the blade assembly's line sensors and the lift system's
+bearings are where the STEP export has them. What was left, by group:
+
+- **One board's package bodies** (18): the cause was the key that links
+  the history blobs (`.smbh`) to components. The design streams link only
+  the `.smb` blobs to their components, and every package component of a
+  board has its own `.smb`/`.smbh` pair; where the timeline's items do not
+  tell which history is whose (a board's packages have no items), a
+  history blob goes to the component of the `.smb` blob that holds the
+  most of its bodies (`StoredFile::link_by_bodies`), bodies being told
+  apart by their numbers of faces, edges and vertices and the sum of their
+  vertices (`body_key`). The capacitors' package (1.1 by 0.6 mm) and the
+  resistors' (1.7 by 0.95 mm) are both 0.6 mm high, of the same topology
+  and symmetric about their origin in the plane: the same counts and the
+  same vertex sum (0, 0, 16.8) mm. Every such history blob matched every
+  such component alike, and the first pairing in order gave the resistors'
+  history to the capacitors' component and a capacitor history to the
+  resistors' (the board's own import has them swapped too); the two
+  connector packages one level down (1.0 by 1.0 by 0.4 mm, other
+  footprints) the same way. The key now also sums the squared coordinates
+  (each rounded to 0.1 µm, summed as integers, so the vertices' order does
+  not matter): 9.05 against 23.44 mm² in x for the two packages. The same
+  key decides which `.smb` bodies of components without a history are the
+  same as a history state's (`history_less_bodies`), where a collision
+  could leave a body out. Test: `mitcad-ffi-bridges`
+  (`core/ffi/src/f3d_import.rs`,
+  `the_body_key_tells_symmetric_bodies_of_one_height_apart`).
+- **The wheel assemblies** (20): two deviations, both in the placements
+  the top design's paths give the levels inside its copies
+  (`inside_positions`, the positions at `INSIDE_PLACEMENTS_INDEX`). First,
+  both copies' wheel axes (the line through the wheel shaft, the cage
+  shafts, the bearings and the older wheel system, all of whose centres of
+  mass lie on it) are 6.000 mm above the STEP export's in world z (24.5
+  against 18.5 mm), in both copies alike; where the parts lie about the
+  axis cannot be told from centres of mass on it. The wheel assembly's
+  own placement in the top design and the positions inside agree on that
+  axis, so the paths the file stores put it there; whether the file's
+  stored placements are older than the state its STEP export was made in
+  (a joint the export solves) needs the top design's dump of those paths.
+  Second, the position of the second side assembly in each copy places it
+  at the top design's origin (the copy's placement after the position is
+  the identity in the first copy, a 70 mm move along z in the second), so
+  its side part, grounded inside it, lies near the origin (98 mm from the
+  STEP solid) and Assemble5's side one, that part, is 136.6 mm from side
+  two. The wheel's own parts (two documents deep) are 17 to 89 mm off and
+  its second bearing 25 mm. Causes not established: which placement each
+  stored path ends with, and what the path's levels are, needs a dump of
+  the top design with the current decoder.
+- **The geared motors' planetary gears** (4): the sun gear 2.779 mm off
+  along the motor's axis in both motors; the input gear, which the import
+  keeps one level deeper than the STEP export (its spur gear's own
+  component inside it), 18.9 mm, each copy turned otherwise about the
+  motor's axis. The planet gears are where the STEP export has them. Cause
+  not established.
+- **Two connectors of the motor drivers** (2): the stored body itself has
+  474 faces (the STEP export's solid 478: it splits some), on planes,
+  cones and two tori, with four edges on exact intersection curves; the
+  import's body has every face but no volume, so the shell does not close.
+  Which face or edge does not build needs the driver board's own import
+  traced.
 
 ## Derived designs (mitcad#324)
 
@@ -1123,6 +1349,9 @@ their class (`core/f3d-decode/src/classes.rs`, `ITEM_TYPES` and
   (`FlangeFeature`) the decoder does not read ([*Sheet metal*](f3d-sheet-metal.md#sheet-metal) below),
   electronics boards
   (`PCBFeature`), whose inputs are not decoded; components mirrored into new ones (`MirrorComponent`).
+  A board's holes (`PCBHole<n>`, class `3E2187AA`) are holes: their
+  class derives from the hole's and keeps its record (mitcad#2493,
+  *Older layouts in an assembly package's documents* below).
   Drafts (`DraftFeature`, mitcad#1363) come in as MitCad's `draft`, one
   per body of their drafted faces: the decoder reads the drafted faces
   (the input slots of role 16), the neutral plane (the slot of role 33:
@@ -1199,3 +1428,211 @@ A linked sketch curve that then follows the coincident copies of one
 edge in two bodies (`linked::prefer_own_body`) follows the copy in the
 body whose face the sketch lies on: each projects the same curve, and
 without the choice the curve stayed fixed geometry.
+
+
+## Older layouts in an assembly package's documents (mitcad#2493)
+
+A reported assembly package (83 documents, several levels deep, saved
+over many years) had 33 items in its documents that fell back to the
+file's bodies (mitcad#2449, which listed the linked documents' own
+fallbacks in the report). All were decoder gaps of a few kinds, read now
+from the documents' own records (no corpus design has these layouts;
+each has a decoder unit test on synthetic records):
+
+- **Older chamfers** (class version 0, builds 2.0.6670 to 2.0.9512): an
+  equal-distance chamfer keeps its size as a `leftDistance` parameter,
+  one per set, and no set records: the sets and their edges are read as
+  a `Distance` chamfer's from the flat input groups (set input, edges,
+  holder). Read only where `leftDistance` is the chamfer's only
+  parameter role: no file shows the other chamfer types in that layout.
+- **Loose sketches** (six generated gears, builds 2.0.6670 to 2.0.20981):
+  the first extrusion's sketch has a null feature reference (a zero byte
+  where other sketches refer to their sketch feature) and no timeline
+  item; the extrusion's profile source names it by its object id (the
+  sketch item after the extrusion is another, nearly empty sketch on its
+  face). The decoder gives each such sketch as a `Sketch` item of its
+  own right before the first item whose profile names it, numbered after
+  the timeline's items (`_f3d.sketch_for`, SCHEMA.md), in the component
+  its frame names; the replay makes it there and keeps it at that item's
+  point of the timeline. Before, the extrusion found no sketch. Its light
+  bulb is in its sub-chunk as for sketch classes 15 to 17, with 1 in the
+  byte before it (`u32 k | u8 1 | u8 light bulb`) where the sketches with
+  a feature have 0; all six are hidden (`sketch::loose_light_bulb`; the
+  byte's meaning is read from these six alone).
+- **Printed circuit board holes** (`PCBHole<n>`, class `3E2187AA`): the
+  class derives from the hole's (`1C037A07`) and the record is a hole's
+  after a part of its own, a key point on the board's other face that
+  the input list repeats at its end. They read as holes (diameter, tip
+  angle, the depth the board's thickness) at the hole's own point, the
+  far point left out. Their direction flag is not read (the hole's
+  reading after the first null reference finds none in these records):
+  the replay tries the direction. Their tip angle parameter holds the
+  straight angle's degrees in its radian value (179.9993, the expression
+  reading `10313.2 deg`), which no hole could have; the history state
+  removes the flat-bottomed cylinder (4.237 mm³ for a 3 mm hole through
+  a 0.5994 mm board), so the decoder gives the straight angle: a flat
+  bottom.
+- **Derive records of class version 2** (two derives, build 2.0.18719):
+  no reference between the source GUID and the document GUID, one name
+  and 11 bytes before the second placement, and no byte between an
+  entity's feature and its count; the rest as in version 3. One of them
+  derives the same body of another document at two placements (two
+  entities, two hidden occurrences): MitCad's `derive` lists a body once,
+  so the replay makes one `derive` per placement of a body
+  (`derive::derives`), checked together against the item's state.
+
+Results (the package's own test, `cli.f3d_reported_package`): 33
+fallbacks before; 16 after the first four readings (all older chamfers,
+loose sketches and the path pattern's record read; the board holes then
+stopped on their tip angle and the repeated body, both fixed after).
+The items left fall back with these first deviations:
+
+- the path pattern (now read and replayed): its copies' bodies end with
+  their centre 2.4 mm off the plane the file's state is symmetric about
+  (volume 156013.9 mm³ against the state's 156707.9): the copies run
+  one way along the path where the file's go both ways or the other way;
+  the decoder reads all three flag bytes 0 (no flip, no symmetry). The
+  mirror after it mirrors the pattern's features, so it falls back with
+  it;
+- the gear ring's third extrusion: 6.4 % more material removed than the
+  file's state (its sketch's 148 projected spline curves stay fixed
+  geometry: no single edge of the replay follows them);
+- a rectangular pattern whose second element's chamfer is wider than
+  the face it would take away (the kernel);
+- the base's Fillet8: each of its three definitions uses its 20 s share
+  in the kernel (a rolling-ball fillet over many edges of a stored face
+  set), then the item's time is over;
+- a delete of two faces whose neighbours the kernel cannot extend to
+  close the gap, also on the file's own state before it (the exact
+  retry): not noise from earlier items;
+- a one-face offset whose kernel result is no solid.
+
+Where the base's time goes: Chamfer3 (31 edges, 1.5 mm) is two kernel
+calls, the 31-edge chamfer at once (16 s, which fails: one chamfer
+reaches exactly to the far edge of its face, which would end in a
+point) and then the edges one by one (19 s, parametric); Fillet8 is the
+three 20 s shares above. A document whose derive now reads waits for
+the derive's source document to be imported first (one of 218 s, most
+of it waiting).
+- **Path patterns with the oldest tail** (build 2.0.12670): the compute
+  option and the object kind follow the body records directly, without
+  the 8 bytes and the `-1`, as the oldest circular patterns'.
+
+## The assembly package's fallbacks, measured (mitcad#2529)
+
+Measured on the package at dev 129c2edb8 (the bundle check's
+`cli.f3d_reported_package`, the import with four threads and the serial
+one give the same items): **11 items fall back** in all its documents
+(42 allowed before, 33 before mitcad#2493); `FALLBACKS_AT_MOST` is 11.
+A traced run of the six documents with fallbacks (single-document
+imports) gave each its first deviation (the trace's `volume/area/faces@x,y,z`
+signatures: mm³, mm², faces and the centre of mass in mm):
+
+| item | first deviation | now |
+|---|---|---|
+| the base's path pattern | its objects are the earlier rectangular pattern (two elements of four cuts, a chamfer and a fillet). The file makes it in six history states (70 to 75), one per feature for its one copy (the earlier pattern made six for its one copy, the other pattern of it twelve for two); the replay repeats the inner pattern's two elements at the copy, as a pattern of a pattern does in MitCad: 156013.9 mm³ and 854 faces against the state's 156707.9 and 819, its centre of mass 0.24 mm off the plane the state is symmetric about (the copy's own place lies on it) | read: the inner pattern's features once at each copy, a candidate of their own the history checks; still falls back (mitcad#2557, below) |
+| the base's rectangular pattern | the same pattern of the earlier pattern (twelve history states for two copies, one set each); its second element's chamfer is wider than the face it would take away (the kernel refuses an invalid shape), also on the file's own state before it (the exact retry) | the one-set candidate is tried too; the chamfer is a kernel case |
+| the base's mirror | a mirror of one cut up to a face of the body: Adjust rebuilds its image up to the same face, through the body between them (1867.6 mm³ removed), where the file's state removes 388.3 mm³ and is symmetric again | the cut mirrored as it is (Identical) is tried after the read candidates, a guess the history checks; still falls back (mitcad#2557, below) |
+| a derived context | one body derived at two placements: the record's two base features each make an operation, and the item's state was taken from the first (one body) while the second operation, which no item names, adds the other | the item's state is the last of its base features' operations: reads (measured, mitcad#2557) |
+| the base's Fillet8 | eight 4.24 mm edges of 1 mm radius at the corners of two pockets: every definition (all at once, one edge at a time) takes its 20 s share in the kernel, also on the file's own state (the exact retry) | a kernel case (time) |
+| a gear ring's third extrusion | its sketch has 30 regions where the file's has 32 (16 slots and 16 segments between them): four of the circular pattern's lines (copies near 0 and 22.5 degrees) do not split the ring, so two selected profiles are merged regions (22.16 and 11.08 mm² where the others are 8.256) and the cut removes 477.95 mm³ against the file's 449.13 | found and fixed (mitcad#2557, below): the lines end 1.0 to 1.1e-6 mm short of the ring's outer circle, under the designs' resolution of 1e-5 mm but over the regions' tolerance of 1e-6 mm then |
+| a two-face delete | two pieces of one side face; the kernel does not close the gap, also on the file's own state before it | a kernel case |
+| a one-face offset | the kernel's offset of the body gives no solid (free edges; the open shell is dropped) | a kernel case: its input measures as the file's state (mitcad#2557, below) |
+| a circular pattern of faces | three side faces whose openings are not planar: MitCad's pattern of faces caps their openings with planes (`geometry/src/pattern.cpp`) | a limit of the pattern of faces |
+| an electronics board item | not translated: MitCad has no such feature | |
+| a component mirror | mirrors a component into a new one: not translated (the stored bodies stand in) | |
+
+The path pattern's path is a straight sketch line of exactly the
+pattern's extent (102.59 mm) from the centre of the patterned cut's hole
+to a point on the plane the file's state is symmetric about: its copy
+lands there whichever way the flags are read (mitcad#2493's suspicion);
+what differed was what it copies.
+
+Chamfer3's at-once chamfer (31 edges) still fails where one of its
+chamfers reaches exactly to its face's far edge, and the edges one by
+one succeed: not changed.
+
+### After mitcad#2529's readings (mitcad#2557)
+
+The bundle check that brought mitcad#2529's three readings in (its
+`cli.f3d_reported_package`, the package's report) measured **10
+fallbacks**; `FALLBACKS_AT_MOST` is 10. The derived context reads; the
+base's path pattern (`no copy of Extrude12 reaches a body`, its other
+definitions, the inner pattern's features once at each copy among them,
+`not in the file's history`) and the base's mirror (`not in the file's
+history`, the Identical candidate included) still fall back: the
+untraced check does not say how far their new candidates are from the
+file's states, which a traced run of the base's single-document import
+gives. The other eight are the table's.
+
+The gear ring's third extrusion is found: its sketch (the ring between
+the body's projected circle of radius 17.45 mm and a circle of 15.75 mm
+cut by 16 pairs of radial lines, a circular pattern of one pair) is
+patterned about the inner circle's centre, which is concentric with an
+arc of the body's edges stored 1.06e-6 mm off the projected circle's
+centre. The copies are turned about that centre, so their outer ends
+lie up to 1.1e-6 mm inside or outside the projected circle; the ends
+outside cross it, but four lie 1.00 to 1.10e-6 mm inside, more than the
+1e-6 mm the profile regions then took as one point, and those four
+lines dangled: 28 pieces of the ring where the file's sketch has 32.
+The designs' own resolution is 1e-5 mm (the sketch import's edge
+tolerance; the profile faces already heal gaps up to it), and a
+curve's end now meets another curve within it
+(`core/sketch/src/regions.rs`, `RESOLUTION`): the four lines cut the
+ring, the extrusion's 16 profiles are the file's 16 slots (8.256 mm²
+each). 9 fallbacks expected, to be measured by the bundle's run.
+
+At first the regions took the resolution as their whole least
+tolerance, and the corpus check showed what that does elsewhere
+(mitcad#2567): the arrangement takes split points within ten
+tolerances as one vertex, so points up to 1e-4 mm apart became one
+while each piece keeps its curve's own ends. A nut's extrusion of
+another design failed on a profile loop whose pieces are farther apart
+than the 1e-5 mm the profile face heals ("it does not connect to the
+previous segment of its loop"), and a third design's sketch gave other
+regions, its extrusion's inputs inferred and its circular pattern's
+result no longer in the file's history. Only the end contact takes the
+resolution now; the arrangement's least tolerance is 1e-6 mm again, as
+before mitcad#2557, so points merge within 1e-5 mm, the gap the profile
+face heals.
+
+The one-face offset ran on bodies whose measures are the file's state's
+before it (within the history's exact match, 1e-5 relative: the traced
+run had no retry, which runs only where they differ or where the kernel
+failed): the input is the file's state, the kernel's offset leaves it
+open, a kernel case. The offset's and the delete's kernel failures now
+count as such (`kernel_failure`), so that `--retry-bodies replace` runs
+them on the state's stored bodies themselves, which is how their kernel
+inputs come out exactly for a geometry test case.
+
+### The kernel cases' inputs (mitcad#2573)
+
+The failure dump (`MITCAD_IMPORT_DRESSUPS`,
+`core/import-replay/src/dressups.rs`), which wrote only the fillets and
+chamfers the geometry kernel failed, now writes the offsets, moves and
+deletes of faces (`offset_face`, `move_face`, `delete_face`) it fails
+too: the definition, the error and the parameter values in
+`<design>.jsonl`, the input body with the face names the definition
+refers to as `T<item>-<n>.shape`, and the stored bodies of the history's
+states before and after the item nearest to it. Only the kernel's own
+failures are written (an open or invalid result, faces its offset
+refuses or cannot rebuild the body around, a gap the neighbours do not
+close), not a face that was not found or a result that is not the
+file's. With `--retry-bodies replace` the retry on the file's state
+runs on the stored bodies themselves, so the input the dump writes for
+the retry is the file's own state: the exact input of the two-face
+delete, the one-face offset and the rectangular pattern's chamfer for a
+geometry test case (in the OCCT lab where a port patch is the place).
+`tools/f3d-rounding-specs-index.py` keeps its index to the fillets and
+chamfers.
+
+Chamfer3's at-once chamfer (31 edges, 1.5 mm) is refused by MitCad's
+own check of an unsound result (`overflow_tangent`,
+`geometry/src/cutouts.cpp`, mitcad#1260): the chamfer of one of its
+edges reaches exactly to the far edge of the face beside it, its contact
+touching that edge in a point where another face lies beyond, and the
+result built with all 31 edges is not a sound solid; the same edges one
+at a time are (19 s, parametric). Whether the touch is within the
+import's geometric tolerance (0.01 mm) of the file's state, or the
+kernel builds the shared corner when the edges go in together, needs
+its dumped input (`T<item>-<n>.shape`) in the lab; not changed yet.

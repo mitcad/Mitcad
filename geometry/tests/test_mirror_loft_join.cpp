@@ -90,6 +90,7 @@
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad/geometry/transform.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -443,7 +444,7 @@ void probe() {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(mirror_loft_join) {
   if (argc > 1 && std::string(argv[1]) == "--probe") {
     test::probe();
     return 0;

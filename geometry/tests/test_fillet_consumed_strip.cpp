@@ -40,6 +40,7 @@
 #include <gp_Trsf.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -211,7 +212,7 @@ void test_windows_sills_rounded_away() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_consumed_strip) {
   test::guarded("test_windows_sills_rounded_away", test::test_windows_sills_rounded_away);
   if (test::failures == 0) {
     std::puts("test_fillet_consumed_strip: all checks passed");

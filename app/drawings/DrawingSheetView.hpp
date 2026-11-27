@@ -60,6 +60,7 @@
 #include <QLineF>
 #include <QList>
 #include <QMargins>
+#include <QPen>
 #include <QPixmap>
 #include <QPoint>
 #include <QPointF>
@@ -191,6 +192,15 @@ public:
   // The width of the hovered pick's body's lines (an `outline` item of the
   // hover's marks, mitcad#1691), logical pixels.
   static constexpr double kOutlineMarkWidth = 1.5;
+  // The pen a line of `pens` (the `drawing` query's table) named `name` is
+  // painted with at `zoom` logical pixels per sheet millimetre, in sheet
+  // millimetres: its width, at least a pixel (mitcad#2477). A dashed pen
+  // widened to a pixel keeps its pattern on the sheet: each painted dash,
+  // its round caps included, covers what it covers on paper at the pen's
+  // own width (the PDF's and the printed SVG's), centred where it is
+  // there, and the pattern's period stays; a dash shorter than the
+  // widening is a dot at its middle.
+  static QPen sheetPen(const QJsonObject& pens, const QString& name, double zoom);
   // Logical pixels per sheet millimetre.
   double zoom() const { return m_zoom; }
   // The corners the views show (sheet mm), each drawn as a filled dot of

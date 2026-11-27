@@ -44,6 +44,7 @@
 #include <gp_Trsf.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -158,7 +159,7 @@ void test_vertical_edge_through_the_mitre() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_mitre_same_radius) {
   test::guarded("test_vertical_edge_through_the_mitre", test::test_vertical_edge_through_the_mitre);
   if (test::failures == 0) {
     std::puts("test_fillet_mitre_same_radius: all checks passed");

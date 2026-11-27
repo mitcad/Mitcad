@@ -7,8 +7,9 @@
 # Fanuc turning dialect with a turning tool, a parting blade and a
 # threading insert):
 #
-#   1. New Setup on the lathe, the bar 2 mm over the part's radius, 1 mm
-#      to face and 5 mm behind it; canned cycles on;
+#   1. New Setup on the lathe, the bar by its diameter and length
+#      (mitcad#2550): 2 mm over the part's radius, 1 mm to face and 5 mm
+#      behind it; canned cycles on;
 #   2. Turn Facing, Turn Roughing, Turn Finishing, Threading (a 40 mm
 #      thread from Z 0 to -8) and Parting Off from their panels, each with
 #      the tool its kind needs by default;
@@ -32,11 +33,20 @@ mark
 command make.cam_setup
 wait-log '^Command New Setup started'
 wait-log '^CAM setup panel: machine lathe$'
-type-in '^Panel New Setup input side at ' '2 mm'
+# The bar by its size (mitcad#2550): 44 mm across (2 mm over the part's
+# radius) and 16 mm long from its face, 1 mm in front of the part's face
+# (5 mm behind its back); the side and bottom margins stay at 0 mm.
 type-in '^Panel New Setup input top at ' '1 mm'
-type-in '^Panel New Setup input bottom at ' '5 mm'
+type-in '^Panel New Setup input stock_diameter at ' '44 mm'
+type-in '^Panel New Setup input stock_length at ' '16 mm'
 key Return
 wait-log '^CAM setup added: Setup 1$'
+capture-model-number barRadius '{"query":"cam_setups"}' setups.0.work.turning.part.stock_radius
+expect-near ${barRadius} 22 1e-6
+capture-model-number barBack '{"query":"cam_setups"}' setups.0.work.turning.stock_back
+expect-near ${barBack} -15 1e-6
+# The bar before any cut round the part, its end circles (mitcad#2552).
+wait-log '^CAM uncut stock: 1 setup\(s\): bar; 390 vertices, 384 triangles, 128 edge\(s\)$'
 mark
 model-command '{"cmd":"cam_setup_edit","setup":1,"changes":{"post":{"canned_cycles":true}}}'
 wait-idle
@@ -95,10 +105,12 @@ command make.cam_simulate
 wait-log '^CAM simulate: Setup 1, 5 operations, [1-9][0-9]* points$' 30
 wait-log '^CAM turned stock: Setup 1: left [0-9.]+, 0 gouge\(s\), 0 rapid cut\(s\)$' 30
 wait-log '^CAM turned stock overlay: [1-9][0-9]* vertices, [1-9][0-9]* triangles$'
+wait-log '^CAM uncut stock: 1 setup\(s\): bar; .*, under the cut stock$'
 focus-dialog '^Simulate$'
 key Escape
 wait-log '^CAM simulate closed$'
 wait-log '^CAM stock overlay: none$'
+wait-log '^CAM uncut stock: 1 setup\(s\): bar; 390 vertices, 384 triangles, 128 edge\(s\)$'
 
 # 5. Post Process… to the lathe's Fanuc dialect.
 mark

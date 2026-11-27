@@ -22,6 +22,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/contact.hpp"
 #include "mitcad/io/mesh.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -153,7 +154,7 @@ void repeated_query_comparison(const Shape& target) {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(tool_contacts) {
   const Shape target = perforated_target();
   distance_tests(target);
   const Shape concurrent_target(target.occt());

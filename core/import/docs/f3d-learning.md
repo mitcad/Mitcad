@@ -576,7 +576,7 @@ to the profile there). On the reference models (`MITCAD_F3D_MODELS`) the
 117 curves the fillet and chamfer edge inputs store are all edges their
 sets list in the reference dumps, ends and middle
 (`stored_edge_curves_match_the_reference_dumps` in
-`core/f3d/tests/design_models.rs`). On the corpora (`MITCAD_F3D_CORPUS`, the backup
+`core/f3d/tests/read/design_models.rs`). On the corpora (`MITCAD_F3D_CORPUS`, the backup
 corpus and `MITCAD_F3D_MODELS`, 856 distinct designs) the edge inputs store
 15,636 curves, all of which decode (7,145 lines, 6,527 arcs, 459 elliptical
 arcs, 1,505 splines); 57 edge inputs store none, and 139 store two or three
@@ -694,7 +694,7 @@ models `cons_axes`, `cons_points`, `sk_text`, `sk_spline_control`,
 `con_smooth`), each with the API dump of the original application as ground
 truth, and checked on the real designs against their API dumps (`f3d-api-ref`).
 The learning dump holds no datum items, so there are no `learn.py` rules; the
-checks are the reference-model tests in `core/f3d/tests/design_models.rs`
+checks are the reference-model tests in `core/f3d/tests/read/design_models.rs`
 (`construction_definitions_match_the_reference_dumps`: 123 definitions agree,
 none differ or are left undecoded; `sketch_dimension_and_constraint_types_
 match_the_reference_dumps`: 1212 sketch lists agree) and counts against the real

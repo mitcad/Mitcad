@@ -7,8 +7,8 @@
 //!
 //! The geometry kernel follows tangent chains (not past a vertex where the
 //! edges turn, unless the next edge is rounded too). What it cannot build
-//! (asymmetric and curvature continuous fillets that meet other rounded
-//! edges at a corner, for instance) fails with an "unsupported:" message
+//! (asymmetric fillets that meet other rounded edges at a corner, for
+//! instance) fails with an "unsupported:" message
 //! (see [`super::face_refs`]).
 //!
 //! In files and commands a single plain set is written with the fields

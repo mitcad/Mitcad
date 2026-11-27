@@ -64,6 +64,7 @@
 #include <TopoDS_Compound.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -362,7 +363,7 @@ void test_transitions_cut_by_their_pieces() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_fin_top_creases) {
   test::guarded("test_chamfer_faces_are_generated_by_their_edges", test::test_chamfer_faces_are_generated_by_their_edges);
   test::guarded("test_rounding_across_the_creases", test::test_rounding_across_the_creases);
   test::guarded("test_transitions_cut_by_their_pieces", test::test_transitions_cut_by_their_pieces);

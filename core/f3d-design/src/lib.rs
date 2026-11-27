@@ -16,7 +16,7 @@
 //! The decoder reproduces the reference decoder (a separate Python
 //! implementation of the format study, not part of this repository)
 //! exactly, so that the two can be compared on the corpus
-//! (`core/f3d/tests/design_corpus.rs`). Fields that cannot be decoded are
+//! (`core/f3d/tests/read/design_corpus.rs`). Fields that cannot be decoded are
 //! absent, never guessed.
 //!
 //! Until mitcad#776 this was the module `design` of `mitcad-f3d`, which
@@ -78,6 +78,33 @@ pub struct DesignStreams {
     pub segment_dir: String,
     pub meta: Vec<u8>,
     pub bulk: Vec<u8>,
+    /// The references of the document's `RedirectionsStream.dat`, which
+    /// resolve the older references into other documents (mitcad#2492;
+    /// empty without the stream).
+    pub redirections: Vec<stream::Redirection>,
+}
+
+impl DesignStreams {
+    /// The segment, its older references into other documents read
+    /// through the redirections ([`Segment::redirect`], mitcad#2492).
+    pub fn into_segment(self) -> Result<Segment, MetaError> {
+        let mut segment = Segment::parse(&self.meta, self.bulk)?;
+        segment.redirect(&self.redirections);
+        Ok(segment)
+    }
+}
+
+/// The references of a document's `RedirectionsStream.dat` (at the top of
+/// the archive), each read to at most [`MANIFEST_LIMIT`]; none without it
+/// (mitcad#2492).
+pub fn read_redirections(doc: &F3dFile) -> Vec<stream::Redirection> {
+    doc.archive()
+        .entries()
+        .iter()
+        .find(|e| e.name == "RedirectionsStream.dat")
+        .and_then(|e| doc.archive().read_with_limit(e, MANIFEST_LIMIT).ok())
+        .map(|data| stream::redirections(&data))
+        .unwrap_or_default()
 }
 
 /// The design segment of a document (`FusionAssetName.../Design1/` or
@@ -96,6 +123,7 @@ pub fn find_design_streams(doc: &F3dFile) -> Result<Option<DesignStreams>, ZipEr
                 segment_dir: parts[1].to_string(),
                 meta,
                 bulk,
+                redirections: read_redirections(doc),
             }));
         }
     }
@@ -112,6 +140,15 @@ impl Design {
     /// Parses the streams and decodes them.
     pub fn parse(meta: &[u8], bulk: Vec<u8>) -> Result<Design, MetaError> {
         let segment = Segment::parse(meta, bulk)?;
+        let decoded = decode::decode(&segment);
+        Ok(Design { segment, decoded })
+    }
+
+    /// [`Design::parse`] of a document's streams with the older references
+    /// into other documents read through its redirections
+    /// ([`DesignStreams::into_segment`], mitcad#2492).
+    pub fn from_streams(streams: DesignStreams) -> Result<Design, MetaError> {
+        let segment = streams.into_segment()?;
         let decoded = decode::decode(&segment);
         Ok(Design { segment, decoded })
     }
@@ -410,8 +447,9 @@ pub fn decode_streams(doc: &F3dFile, label: &str) -> Result<FileDesign, String> 
             dump: None,
         });
     };
-    let design = Design::parse(&s.meta, s.bulk).map_err(|e| format!("{label}: {e}"))?;
-    let mut dump = design.dump(label, &s.segment_dir);
+    let segment_dir = s.segment_dir.clone();
+    let design = Design::from_streams(s).map_err(|e| format!("{label}: {e}"))?;
+    let mut dump = design.dump(label, &segment_dir);
     // The appearances and materials (mitcad#228); their faces and the
     // bodies' records in the blobs come with the inputs.
     dump.f3d.get_or_insert_with(Default::default).appearance =
@@ -421,7 +459,7 @@ pub fn decode_streams(doc: &F3dFile, label: &str) -> Result<FileDesign, String> 
     Ok(FileDesign {
         label: label.to_string(),
         dump: Some(dump),
-        segment_dir: Some(s.segment_dir),
+        segment_dir: Some(segment_dir),
     })
 }
 
@@ -524,7 +562,7 @@ pub fn referenced_documents(doc: &F3dFile) -> Result<Vec<ReferencedDocument>, St
     let Some(s) = find_design_streams(doc).map_err(|e| e.to_string())? else {
         return Ok(Vec::new());
     };
-    let segment = Segment::parse(&s.meta, s.bulk).map_err(|e| e.to_string())?;
+    let segment = s.into_segment().map_err(|e| e.to_string())?;
     let mut counts: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     for o in segment.objects_of(classes::OCCURRENCE) {
         if let Some(key) = build::occurrence_info(&segment, o.id).and_then(|i| i.context) {

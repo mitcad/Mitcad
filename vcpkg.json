@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "mitcad",
-  "version": "0.74.0",
+  "version": "0.75.0",
   "description": "Open source parametric desktop CAD",
   "license": "MIT",
   "builtin-baseline": "3aea538b2bb21a586502c67b00eb474fdd2e3098",
@@ -19,7 +19,7 @@
     "zstd",
     "zlib",
     "cgltf",
-    { "name": "sse2neon", "platform": "osx & arm64" }
+    { "name": "sse2neon", "platform": "arm64 & (osx | linux)" }
   ],
   "default-features": ["heif"],
   "features": {

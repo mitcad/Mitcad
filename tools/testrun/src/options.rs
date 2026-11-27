@@ -36,6 +36,11 @@ Modes:
                         and learns their rooms from them
 
 Selection (passed to ctest): -R REGEX, -E REGEX, -L REGEX, -LE REGEX
+  --tests-from FILE     only the tests the file names, one exact name a line,
+                        with the setup and cleanup tests of their fixtures
+                        (within the selection above; no expression to grow
+                        too big); a list that names none of the build
+                        tree's tests is an error, never an empty run
   -C CONFIG             ctest's configuration (multi-configuration builds)
   --ctest PROGRAM       the ctest to run (default: ctest)
 
@@ -203,6 +208,8 @@ pub struct Options {
     pub jobs: Option<usize>,
     /// ctest's selection arguments, as given.
     pub select: Vec<String>,
+    /// A file of test names, one a line (`ctest::select_named`).
+    pub tests_from: Option<PathBuf>,
     pub config: Option<String>,
     pub ctest: String,
     pub profiles: Option<PathBuf>,
@@ -253,6 +260,7 @@ impl Default for Options {
             dry_run: false,
             jobs: None,
             select: Vec::new(),
+            tests_from: None,
             config: None,
             ctest: "ctest".to_owned(),
             profiles: None,
@@ -356,6 +364,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                 o.select.push(name.to_owned());
                 o.select.push(pattern.to_owned());
             }
+            "--tests-from" => o.tests_from = Some(PathBuf::from(value()?)),
             "-C" => o.config = Some(value()?.to_owned()),
             "--ctest" => o.ctest = value()?.to_owned(),
             "--profiles" => o.profiles = Some(PathBuf::from(value()?)),
@@ -503,6 +512,14 @@ mod tests {
         assert_eq!(o.mode, Mode::Schedule);
         assert_eq!(o.jobs, Some(6));
         assert_eq!(o.select, args("-R ^core -E corpus -L ui"));
+        assert_eq!(o.tests_from, None);
+        let o = parse(&args(
+            "--build b --schedule --tests-from plan.txt -E corpus",
+        ))
+        .unwrap();
+        assert_eq!(o.tests_from, Some(PathBuf::from("plan.txt")));
+        assert_eq!(o.select, args("-E corpus"));
+        assert!(parse(&args("--build b --tests-from")).is_err());
         let o = parse(&args("--build b --memory-budget 20G --sensitive app.ui-*")).unwrap();
         assert_eq!(o.memory_budget, Budget::Bytes(20 << 30));
         assert_eq!(o.memory_floor, 3 << 29);

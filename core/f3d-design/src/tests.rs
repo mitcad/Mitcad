@@ -1982,12 +1982,14 @@ fn context_level(occurrence: &str, component: &str, context: &str) -> Vec<u8> {
     ])
 }
 
-/// Joints (mitcad#66): a joint between two occurrences, side one a frame
-/// built on a face, side two a frame without a stored matrix, with its
-/// alignment parameters, a revolute motion with rotation limits, the
-/// occurrence of each side by its path, and a ground item.
-#[test]
-fn joints_and_ground_items() {
+/// A design with a joint (its class version `joint`, its state's `state`)
+/// between two occurrences, side one a frame built on a face, side two a
+/// frame without a stored matrix, with its alignment parameters, a revolute
+/// motion with rotation limits, the occurrence of each side by its path,
+/// and a ground item; dumped. The state's occurrence list has a null
+/// reference first from class version 6 on, and one into another document
+/// in the older form of the context in class version 4 (mitcad#2530).
+fn joint_design(joint: u32, state: u32) -> Value {
     const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
     const ROOT_GUID: &str = "22222222-0000-0000-0000-000000000002";
     const PIN_GUID: &str = "55555555-0000-0000-0000-000000000005";
@@ -1995,9 +1997,9 @@ fn joints_and_ground_items() {
     const OCC_B: &str = "b0b0b0b0-0000-0000-0000-000000000083";
     let mut d = sample();
     for (g, v) in [
-        (JOINT, 4),
+        (JOINT, joint),
         (GROUND_OCCURRENCE, 1),
-        (JOINT_STATE, 5),
+        (JOINT_STATE, state),
         (PLACEMENT, 5),
         (CONTEXT_PATH, 1),
         (CONTEXT_LEVEL, 4),
@@ -2096,26 +2098,44 @@ fn joints_and_ground_items() {
     let mut value = vec![0u8; 51];
     value[23..31].copy_from_slice(&0.5f64.to_le_bytes());
     value[47] = 2;
+    let first = match state {
+        // A null reference.
+        6.. => cat(&[&[0], &u32b(u32::MAX)]),
+        // An occurrence of another document, the older form of the context.
+        ..=4 => cat(&[
+            &older_context_ref(
+                0x1ae,
+                "dddddddd-0000-0000-0000-000000000001",
+                OCCURRENCE,
+                "eeeeeeee-0000-0000-0000-000000000002",
+            ),
+            &u32b(8),
+        ]),
+        _ => Vec::new(),
+    };
+    let count = if first.is_empty() { 2 } else { 3 };
+    // The rotation in the third slot; the type (1, revolute) and the
+    // ordinal after the slots, or (class version 4) no type and the ordinal
+    // and a byte before them.
+    let slots = cat(&[&[0; 8], &u32b(1), &value, &[0; 12]]);
+    let motion = if state >= 5 {
+        cat(&[&slots, &u32b(1), &u32b(1), &[0], &u32b(2), &[0]])
+    } else {
+        cat(&[&u32b(1), &[0], &slots, &u32b(2), &[0]])
+    };
     d.obj(
         340,
         JOINT_STATE,
         cat(&[
             &[1],
-            &u32b(2),
+            &u32b(count),
+            &first,
             &r(80),
             &u32b(1),
             &r(83),
             &u32b(0),
             &[0],
-            &[0; 8],
-            &u32b(1),
-            &value,
-            &[0; 12],
-            &u32b(1),
-            &u32b(1),
-            &[0],
-            &u32b(2),
-            &[0],
+            &motion,
         ]),
     );
     // Parameters: the alignment and the rotation limits.
@@ -2143,19 +2163,30 @@ fn joints_and_ground_items() {
         );
     }
     let holders: Vec<u8> = (0..4).flat_map(|k| r(350 + 2 * k)).collect();
+    // After the opposed byte: 2 bytes (class version 3), 10 (4) or 11 (5);
+    // 6 bytes after each side's geometry from version 4 on.
+    let head = vec![
+        0u8;
+        match joint {
+            5.. => 11,
+            4 => 10,
+            _ => 2,
+        }
+    ];
+    let gap = vec![0u8; if joint >= 4 { 6 } else { 0 }];
     d.obj(
         300,
         JOINT,
         cat(&[
             &[0, 0],
             &[1],
-            &[0; 10],
+            &head,
             &r(310),
-            &[0; 6],
+            &gap,
             &[0],
             &f64s(&m1),
             &r(320),
-            &[0; 6],
+            &gap,
             &[1],
             &s16("cccccccc-0000-0000-0000-000000000000"),
             &u32b(0),
@@ -2184,7 +2215,12 @@ fn joints_and_ground_items() {
     d.obj(401, HEALTH, vec![0, 0]);
 
     let (m, b) = d.streams();
-    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap()
+}
+
+/// The joint of a [`joint_design`] as it reads: its flip, alignment, sides
+/// with their frames, occurrences and revolute motion.
+fn assert_joint(v: &Value) {
     let items = v["timeline"]["items"].as_array().unwrap();
     let joint = &items[2];
     assert_eq!(joint["objectType"], "Joint");
@@ -2222,6 +2258,17 @@ fn joints_and_ground_items() {
     assert_eq!(motion["rotationLimits"]["maximumValue"]["name"], "d15");
     assert_eq!(motion["rotationLimits"]["isMinimumValueEnabled"], true);
     assert!(motion["slideLimits"].is_null());
+}
+
+/// Joints (mitcad#66): a joint between two occurrences, side one a frame
+/// built on a face, side two a frame without a stored matrix, with its
+/// alignment parameters, a revolute motion with rotation limits, the
+/// occurrence of each side by its path, and a ground item.
+#[test]
+fn joints_and_ground_items() {
+    let v = joint_design(4, 5);
+    assert_joint(&v);
+    let items = v["timeline"]["items"].as_array().unwrap();
     // The ground item grounds occurrence 83 only.
     let ground = &items[3];
     assert_eq!(ground["objectType"], "GroundOccurrence");
@@ -2241,6 +2288,135 @@ fn joints_and_ground_items() {
     // A motion whose free motions do not fit its type is left out.
     assert!(super::build::tests_support::kind_fits(1, 1));
     assert!(!super::build::tests_support::kind_fits(0, 1));
+}
+
+/// Joints of the other class versions (mitcad#2530) read as the version-4
+/// joint does: a joint of class version 5 (a byte more before its sides),
+/// with a state of class version 5 and one of version 6 (a null reference
+/// among its occurrences); a joint of class version 3 with a state of
+/// class version 4 (an occurrence of another document in the older form of
+/// the context; the ordinal and a byte before the slots and no type: a
+/// revolute by its turn about z).
+#[test]
+fn joints_of_other_class_versions() {
+    for (joint, state) in [(5, 5), (5, 6), (3, 4), (4, 4)] {
+        let v = joint_design(joint, state);
+        let detail = &v["timeline"]["items"][2]["detail"];
+        assert!(
+            detail["jointMotion"].is_object() && detail["_f3d"]["frames"].is_array(),
+            "joint version {joint}, state version {state}: {detail}"
+        );
+        assert_joint(&v);
+    }
+}
+
+/// The type of a joint state without one (class version 4, mitcad#2530) by
+/// the slots its motions fill, as the stored types have them; and which
+/// as-built joints are rigid groups: the rigid group type, or without a
+/// type no motions and more than two members.
+#[test]
+fn joint_state_types_by_slots() {
+    use super::build::tests_support::{JointState, Motion, kind_of_slots, rigid_group};
+    let motions = |slots: &[&'static str]| -> Vec<Motion> {
+        slots
+            .iter()
+            .map(|&motion| Motion {
+                motion,
+                axis: 0,
+                limits: [0.0; 3],
+            })
+            .collect()
+    };
+    for (slots, kind) in [
+        (&[][..], Some(0)),
+        (&["rz"][..], Some(1)),
+        (&["tx"][..], Some(2)),
+        (&["ty"][..], Some(2)),
+        (&["tz"][..], Some(2)),
+        (&["rz", "tz"][..], Some(4)),
+        (&["rz", "tx"][..], Some(6)),
+        (&["rz", "tx", "ty"][..], Some(7)),
+        (&["rx", "ry", "rz"][..], Some(8)),
+        (&["rx"][..], None),
+        (&["tx", "ty"][..], None),
+    ] {
+        assert_eq!(kind_of_slots(&motions(slots)), kind, "{slots:?}");
+    }
+    let state = |kind, slots: &[&'static str], typed| JointState {
+        kind,
+        motions: motions(slots),
+        ordinal: 1,
+        typed,
+    };
+    assert!(rigid_group(&state(11, &[], true), 2));
+    assert!(!rigid_group(&state(0, &[], true), 5));
+    assert!(rigid_group(&state(0, &[], false), 3));
+    assert!(!rigid_group(&state(0, &[], false), 2));
+    assert!(!rigid_group(&state(1, &["rz"], false), 3));
+}
+
+/// Occurrence path levels that name a part a circuit board placed by its
+/// text key, not a GUID (mitcad#2530): read as laid out, the key lower
+/// case, where by the GUIDs alone the level was dropped; a level of GUIDs
+/// reads as before; and an occurrence object goes by its text key besides
+/// its GUIDs (not by its other texts).
+#[test]
+fn path_levels_with_text_keys() {
+    use super::build::tests_support::{Level, level, occurrence_keys};
+    const DOC: &str = "dddddddd-0000-0000-0000-000000000000";
+    const BOARD: &str = "b0a4d000-0000-0000-0000-000000000001";
+    const CONTEXT: &str = "c0c0c0c0-0000-0000-0000-000000000002";
+    const PIN: &str = "55555555-0000-0000-0000-000000000005";
+    const KEY: &str = "Lib||PKG-14|4531|4530IC1";
+    let mut d = sample();
+    d.class(CONTEXT_LEVEL, ROOT, 4);
+    // The board's occurrence, then the part on it by its key.
+    d.obj(
+        600,
+        CONTEXT_LEVEL,
+        cat(&[
+            &[0, 0],
+            &u32b(2),
+            &s16(BOARD),
+            &s16(KEY),
+            &s16(DOC),
+            &s16("Lib||PKG-14|4531|4530"),
+            &[2, 0, 0, 0, 0, 0, 0, 0],
+            &s16(DOC),
+            &s16(CONTEXT),
+            &u32b(2),
+        ]),
+    );
+    d.obj(601, CONTEXT_LEVEL, context_level(OCC_A, PIN, CONTEXT));
+    let seg = d.segment();
+    assert_eq!(
+        level(&seg, 600),
+        Some(Level {
+            occurrences: vec![BOARD.to_owned(), KEY.to_lowercase()],
+            context: Some(CONTEXT.to_owned()),
+        })
+    );
+    assert_eq!(
+        level(&seg, 601),
+        Some(Level {
+            occurrences: vec![OCC_A.to_owned()],
+            context: Some(CONTEXT.to_owned()),
+        })
+    );
+    // An occurrence's data: its GUID, a short text, its key and its name.
+    let data = cat(&[
+        &[0, 0],
+        &r(5),
+        &s16(OCC_A),
+        &u32b(0),
+        &s16("$"),
+        &s16(KEY),
+        &s16("PKG-14:IC1"),
+    ]);
+    assert_eq!(
+        occurrence_keys(&data),
+        vec![OCC_A.to_owned(), KEY.to_lowercase()]
+    );
 }
 
 const OCC_A: &str = "a0a0a0a0-0000-0000-0000-000000000080";
@@ -4888,6 +5064,171 @@ fn occurrence_of_a_component_of_another_document() {
     assert_eq!(super::build::urn_version("urn:x"), None);
 }
 
+/// A reference to an object of another document in the older form
+/// (mitcad#2492): `01 id 01 u32 0 str16(document GUID) 00 str8(class)
+/// str16(role GUID) 00`.
+fn older_context_ref(id: u64, document: &str, guid: &str, role: &str) -> Vec<u8> {
+    cat(&[
+        &[1],
+        &id.to_le_bytes(),
+        &[1],
+        &u32b(0),
+        &s16(document),
+        &[0],
+        &s8(guid),
+        &s16(role),
+        &[0],
+    ])
+}
+
+/// The older layout of the references into other documents (mitcad#2492):
+/// a design with no external documents in its MetaStream names the other
+/// document's component by the document's GUID and a role GUID, which the
+/// document's `RedirectionsStream.dat` resolves to the URN. The occurrence
+/// is in the occurrence tree with the URN, its own key and its transform
+/// (after the second component reference, as in the files); the external
+/// document carries the role and the document's GUID (which tells its file
+/// by its manifest). A role that a MetaStream's external document has as its
+/// first GUID is read through that document's key; a role nothing resolves
+/// stays unread, as a newer reference whose key is no external document.
+#[test]
+fn older_references_into_other_documents_through_the_redirections() {
+    let document = "2d8a96b8-03d1-474e-914f-577ae504bc3d";
+    let role = "b482e705-db25-45fe-b348-d9ca0875d3fd";
+    let shared_role = "48153476-aaaa-4bbb-8ccc-1234567890ab";
+    let unknown_role = "65995a22-eced-4a37-bf70-a2733f3ee7ed";
+    let urn = "urn:test:fs.file:vf.bar?version=1";
+    let redirections = format!(
+        r#"{{"name":"RedirectionsStream","schema-version":0,
+            "designs":[{{"file-version":4,"targetFileName":"own.f3d","versionUrn":"urn:test:fs.file:vf.own?version=4"}},
+                       {{"file-version":1,"targetFileName":"bar.f3d","versionUrn":"{urn}"}}],
+            "references":[{{"from":"own.f3d","relativePath":"bar.f3d","type":"XREF",
+                            "properties":[{{"neutronRole":{{"value":"{role}","dataType":"STRING"}}}},
+                                          {{"neutronData":{{"value":"","dataType":"STRING"}}}}]}}]}}"#
+    );
+    let read = super::stream::redirections(redirections.as_bytes());
+    assert_eq!(
+        read,
+        vec![super::stream::Redirection {
+            role: role.into(),
+            urn: urn.into()
+        }]
+    );
+    assert!(super::stream::redirections(b"not json").is_empty());
+
+    let mut d = sample();
+    // An older design: no external documents in the MetaStream's tail.
+    d.external.clear();
+    let t = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -3.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    // The first component reference is followed by the occurrence's
+    // number, the second one by the transform.
+    let occurrence = |doc: &str, role: &str, container: u64| {
+        cat(&[
+            &[0, 0],
+            &older_context_ref(3, doc, COMPONENT, role),
+            &[6, 0, 0, 0, 0],
+            &u32b(1),
+            &s16("9102b6d2-2bab-47da-a10f-27fba6692dd0"),
+            &s16("2fa3916c-bb88-4085-b851-88e498d66a29"),
+            &[0],
+            &older_context_ref(3, doc, COMPONENT, role),
+            &[0],
+            &f64s(&t),
+            &u32b(0),
+            &s16(role),
+            &r(container),
+        ])
+    };
+    d.obj(83, OCCURRENCE, occurrence(document, role, 84));
+    d.obj(84, OCCURRENCE_CONTAINER, cat(&[&[0, 0], &r(83), &r(2)]));
+    d.obj(85, OCCURRENCE, occurrence(document, unknown_role, 86));
+    d.obj(86, OCCURRENCE_CONTAINER, cat(&[&[0, 0], &r(85), &r(2)]));
+    let (m, b) = d.streams();
+    let streams = |redirections: Vec<super::stream::Redirection>| DesignStreams {
+        segment_dir: "Design1".into(),
+        meta: m.clone(),
+        bulk: b.clone(),
+        redirections,
+    };
+
+    // Without the redirections nothing tells the document.
+    let plain = streams(Vec::new()).into_segment().unwrap();
+    assert!(plain.meta.external.is_empty());
+    assert!(build::occurrence_info(&plain, 83).is_none());
+
+    let design = Design::from_streams(streams(read.clone())).unwrap();
+    let seg = &design.segment;
+    let key = 0xb482_e705_db25_45fe;
+    assert_eq!(seg.meta.external.len(), 1);
+    let x = &seg.meta.external[0];
+    assert_eq!(
+        (x.key, x.guid_a.as_str(), x.urn.as_str(), x.guid_c.as_str()),
+        (key, role, urn, document)
+    );
+    let info = build::occurrence_info(seg, 83).unwrap();
+    assert_eq!(info.component, 3);
+    assert_eq!(info.context, Some(key));
+    assert_eq!(info.container, Some(84));
+    let mut placed = [0.0; 16];
+    placed.copy_from_slice(&t);
+    assert_eq!(info.matrix, Some(Some(placed)));
+    // The unresolved role: no reference, so no occurrence.
+    assert!(build::occurrence_info(seg, 85).is_none());
+    let v = serde_json::to_value(design.dump("assembly.f3d", "Design1")).unwrap();
+    let ext = v["occurrences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["isReferencedComponent"] == true)
+        .expect("the occurrence of the other document's component");
+    assert_eq!(ext["transform"][1], json!([0.0, 1.0, 0.0, -3.0]));
+    assert_eq!(ext["_f3d"]["external_key"], "b482e705db2545fe");
+    assert_eq!(ext["_f3d"]["external_document"], urn);
+    assert_eq!(
+        v["_f3d"]["external_documents"][0],
+        json!({"key": "b482e705db2545fe", "urn": urn, "version": 1,
+               "guids": [role], "document_guid": document})
+    );
+
+    // A later design keeps a few older references beside its external
+    // documents: the one whose first GUID is the role gives the key.
+    let mut d = sample();
+    d.external.clear();
+    d.externals.push(super::writer::WriterExternal {
+        key: 0x0102_0304_0506_0708,
+        guids: [
+            shared_role.into(),
+            "f7d6678d-a812-4537-98bd-7db7eea2ea52".into(),
+        ],
+        urn: "urn:test:fs.file:vf.lift?version=4".into(),
+        document_guid: document.into(),
+    });
+    d.obj(83, OCCURRENCE, occurrence(document, shared_role, 84));
+    d.obj(84, OCCURRENCE_CONTAINER, cat(&[&[0, 0], &r(83), &r(2)]));
+    let (m, b) = d.streams();
+    let seg = DesignStreams {
+        segment_dir: "Design1".into(),
+        meta: m,
+        bulk: b,
+        redirections: read,
+    }
+    .into_segment()
+    .unwrap();
+    assert_eq!(seg.meta.external.len(), 1);
+    assert_eq!(
+        build::occurrence_info(&seg, 83).unwrap().context,
+        Some(0x0102_0304_0506_0708)
+    );
+    // The newer form still reads as before beside it.
+    assert_eq!(
+        seg.context_ref_at(&context_ref(0x7777, 0x0102_0304_0506_0708, COMPONENT), 0)
+            .map(|r| (r.id, r.end)),
+        Some((0x7777, 60))
+    );
+}
+
 /// The placements of paths through an occurrence of a component of another
 /// document to occurrences inside it (mitcad#1892: a joint on a part inside
 /// an inserted design) are the paths', not the occurrence's own: they come
@@ -5169,10 +5510,22 @@ fn hidden_occurrences_turn_their_light_bulbs_off() {
 /// entities.
 #[test]
 fn derive_items_name_their_source_bodies_and_placements() {
+    derive_items_of_version(3);
+}
+
+/// The same with the record of class version 2 (mitcad#2493): one name
+/// and 11 bytes before the second placement, and no byte between an
+/// entity's feature and its count.
+#[test]
+fn derive_items_of_class_version_2() {
+    derive_items_of_version(2);
+}
+
+fn derive_items_of_version(version: u32) {
     const DERIVED_BODY_FEATURE: &str = "B1E5B971-C007-48C9-8FF5-F4CCD91F87A4";
     let mut d = sample();
     for (g, p, v) in [
-        (DERIVED_CONTEXT, ROOT, 3),
+        (DERIVED_CONTEXT, ROOT, version),
         (PLACEMENT, ROOT, 5),
         (BASE_FEATURE, ROOT, 4),
         (DERIVED_BODY_FEATURE, BASE_FEATURE, 10),
@@ -5228,6 +5581,13 @@ fn derive_items_name_their_source_bodies_and_placements() {
     d.obj(510, DERIVED_BODY_FEATURE, cat(&[&[0, 0], &r(520), &r(500)]));
     d.obj(520, BODY, vec![0, 0]);
     d.obj(509, HEALTH, vec![0, 0]);
+    // (Version 2: one name and 11 bytes where version 3 has two names and
+    // 9 bytes.)
+    let names = if version == 2 {
+        cat(&[&s16("Assembly"), &[0; 11]])
+    } else {
+        cat(&[&s16("Assembly"), &s16("Assembly"), &[1], &[0; 8]])
+    };
     let source = |entities: &[u8], placements: (u64, u64)| {
         cat(&[
             &[0, 0],
@@ -5236,19 +5596,18 @@ fn derive_items_name_their_source_bodies_and_placements() {
             &[0; 8],
             &s16("74c61ef7-0894-4b42-8532-24fb6b04aa22"),
             &context_ref(3, assembly, COMPONENT),
-            &s16("Assembly"),
-            &s16("Assembly"),
-            &[1],
-            &[0; 8],
+            &names,
             &r(placements.1),
             &[0; 8],
             entities,
         ])
     };
+    // Version 2 has no byte between the feature and the count.
+    let gap: &[u8] = if version == 2 { &[] } else { &[0] };
     let entity = cat(&[
         &u32b(1),
         &r(510),
-        &[0],
+        gap,
         &u32b(1),
         &context_ref(2495, part, BODY),
         &[0],
@@ -5311,6 +5670,64 @@ fn derive_items_name_their_source_bodies_and_placements() {
     let empty = &items[3]["detail"];
     assert_eq!(empty["entities"], json!([]));
     assert_eq!(empty["source"]["name"], "Assembly");
+}
+
+/// A derive of a body at two placements (mitcad#2529): the item has no
+/// result number of its own (-1) and lists itself and two base features
+/// among its sub-items, one per placement, each with its operation (4 and
+/// 5); the item's state is the last of them, where both bodies are, not
+/// the first (whose state has one body, and whose next operation no item
+/// names).
+#[test]
+fn a_derive_at_two_placements_ends_at_its_last_base_feature() {
+    const DERIVED_BODY_FEATURE: &str = "B1E5B971-C007-48C9-8FF5-F4CCD91F87A4";
+    let made = |subs: &[u64]| {
+        let mut d = sample();
+        for (g, p, v) in [
+            (DERIVED_CONTEXT, ROOT, 3),
+            (BASE_FEATURE, ROOT, 4),
+            (DERIVED_BODY_FEATURE, BASE_FEATURE, 10),
+        ] {
+            d.class(g, p, v);
+        }
+        d.objects.retain(|o| o.0 != 3);
+        d.obj(
+            3,
+            TIMELINE,
+            cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(500)]),
+        );
+        d.obj(509, HEALTH, vec![0, 0]);
+        for (id, result) in [(510, 4), (511, 5)] {
+            d.obj(
+                id,
+                DERIVED_BODY_FEATURE,
+                cat(&[&[0, 0], &tail(result, "BaseFeature", 1, "", [0, 0, 0], 509)]),
+            );
+        }
+        let mut b = cat(&[
+            &[0, 0],
+            &(-1i32).to_le_bytes(),
+            &s16("DerivedContext"),
+            &u32b(1),
+            &u32b(0),
+            &s16(""),
+            &u32b(subs.len() as u32),
+        ]);
+        b.extend(subs.iter().flat_map(|&s| r(s)));
+        b.extend(cat(&[&[0, 0, 0], &r(509), &[0]]));
+        d.obj(500, DERIVED_CONTEXT, b);
+        let (m, b) = d.streams();
+        let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+        let item = v["timeline"]["items"][2].clone();
+        assert_eq!(item["_f3d"]["result_no"], -1, "{item}");
+        item["_f3d"]["made_result_no"].clone()
+    };
+    // Both placements: the later operation.
+    assert_eq!(made(&[500, 510, 511]), json!(5));
+    // Listed the other way round, the same.
+    assert_eq!(made(&[500, 511, 510]), json!(5));
+    // One placement: its operation, as before.
+    assert_eq!(made(&[500, 510]), json!(4));
 }
 
 /// A draft's record (mitcad#1363), laid out as the controlled model's and
@@ -5625,4 +6042,229 @@ fn unfold_and_refold_records() {
     let s = &refold["detail"]["sheet"];
     assert_eq!(s["kind"], "refold", "{refold}");
     assert_eq!(s["participantBodies"][0]["_f3d"]["object_id"], 831);
+}
+
+/// An older chamfer (mitcad#2493): class version 0, no set records, its
+/// equal distance as a `leftDistance` parameter and its edges in the flat
+/// input group (the set input, the edge, the holder) before its tail. It
+/// reads as an equal-distance chamfer of one set with that edge.
+#[test]
+fn older_chamfer_with_a_left_distance() {
+    const CHAMFER: &str = "F757D611-217B-4B72-9C41-B617BDCE43DA";
+    const RECIPE: &str = "7ACC2A03-0261-4879-A14A-A93D661A5BDC";
+    const SELECTS: &str = "2DF7DA30-A4E4-4260-AFD1-D9C7154CB44B";
+    let make = |role: &str| {
+        let mut d = sample();
+        for (g, v) in [
+            (CHAMFER, 0),
+            (BODY_INPUT, 1),
+            (FACE_REF, 2),
+            (RECIPE, 1),
+            (SELECTS, 1),
+        ] {
+            d.class(g, ROOT, v);
+        }
+        d.objects.retain(|o| o.0 != 3);
+        d.obj(
+            3,
+            TIMELINE,
+            cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(700)]),
+        );
+        d.obj(
+            700,
+            CHAMFER,
+            cat(&[
+                &[0, 0],
+                &r(740),
+                &r(710),
+                &[0; 8],
+                &u32b(3),
+                &r(710),
+                &r(711),
+                &r(740),
+                &tail(10, "Chamfer", 1, "", [0, 0, 0], 703),
+            ]),
+        );
+        d.obj(703, HEALTH, vec![0, 0]);
+        d.obj(709, SELECTS, vec![0, 0]);
+        d.obj(
+            710,
+            BODY_INPUT,
+            cat(&[
+                &[0, 0],
+                &u32b(1),
+                &r(711),
+                &[0, 0, 1, 0, 0, 0],
+                &r(709),
+                &u32b(0),
+                &u32b(8),
+            ]),
+        );
+        d.obj(711, FACE_REF, cat(&[&[0, 0], &r(751)]));
+        d.obj(751, RECIPE, recipe("edge", &[("3", 301), ("1", 301)], &[]));
+        d.obj(740, PARAMETER_HOLDER, cat(&[&[1], &u32b(1), &r(700), &[0]]));
+        let p = parameter(30, Some(740), "0.4 mm", role, "", "mm", "d30", 0.04);
+        d.obj(742, PARAMETER, p);
+        let (m, b) = d.streams();
+        serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap()
+    };
+    let v = make("leftDistance");
+    let item = &v["timeline"]["items"][2];
+    assert_eq!(item["objectType"], "ChamferFeature");
+    assert_eq!(item["detail"]["chamferType"], "EqualDistanceChamferType");
+    let sets = item["detail"]["edgeSets"].as_array().expect("edge sets");
+    assert_eq!(sets.len(), 1);
+    assert_eq!(sets[0]["distance"]["name"], "d30");
+    assert_eq!(sets[0]["edges"][0]["_f3d"]["object_id"], 711);
+    // The same record with `Distance` reads alike; with a role of no
+    // known chamfer it has no sets.
+    let v = make("Distance");
+    let sets = &v["timeline"]["items"][2]["detail"]["edgeSets"];
+    assert_eq!(sets[0]["distance"]["name"], "d30");
+    assert_eq!(sets[0]["edges"][0]["_f3d"]["object_id"], 711);
+    let v = make("rightDistance");
+    assert!(v["timeline"]["items"][2]["detail"]["edgeSets"].is_null());
+}
+
+/// A sketch that no sketch item holds (mitcad#2493): its feature reference
+/// is null and no sketch feature names it, while the extrusion's profile
+/// does. It comes as a sketch item of its own right before the extrusion,
+/// numbered after the timeline's items, with the sketch's object, frame
+/// and curves; the extrusion's profile names it.
+#[test]
+fn loose_sketch_comes_before_the_item_that_names_it() {
+    let mut d = sample();
+    d.objects.retain(|o| o.0 != 40);
+    d.obj_sub(
+        40,
+        SKETCH,
+        cat(&[
+            &[0, 0],
+            &[1],
+            &u32b(1),
+            &r(54),
+            &[1],
+            &u32b(1),
+            &r(55),
+            &[0],
+        ]),
+        cat(&[&r(41), &u32b(3), &r(50), &r(51), &r(52)]),
+    );
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3, "{items:?}");
+    // The timeline's own sketch item keeps its place and index.
+    assert_eq!(items[0]["index"], 0);
+    assert_eq!(items[0]["name"], "Sketch1");
+    let loose = &items[1];
+    assert_eq!(loose["objectType"], "Sketch", "{loose}");
+    assert_eq!(loose["name"], "Sketch");
+    assert_eq!(loose["index"], 2);
+    assert_eq!(loose["_f3d"]["object_id"], 40);
+    assert_eq!(loose["_f3d"]["sketch_for"], 1);
+    assert_eq!(loose["_f3d"]["class"], SKETCH);
+    // In the component its frame names.
+    assert_eq!(loose["_f3d"]["component"], 2);
+    let sk = &loose["detail"];
+    assert_eq!(sk["origin"], json!([1.0, 2.0, 3.0]));
+    assert_eq!(sk["curves"][0]["id"], "c0");
+    assert!(sk.get("referencePlane").is_none_or(Value::is_null));
+    let ex = &items[2];
+    assert_eq!(ex["index"], 1);
+    assert_eq!(ex["detail"]["profile"][0]["sketch"], "Sketch");
+    assert_eq!(ex["detail"]["profile"][0]["sketch_timeline_index"], 2);
+    // No timeline marker among the items is moved by it.
+    assert!(v["timeline"]["original_marker_position"].is_null());
+    // Where the sketch names its item, nothing is added.
+    let v = sample_dump();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().all(|i| i["_f3d"].get("sketch_for").is_none()));
+}
+
+/// A printed circuit board's hole (mitcad#2493): its class derives from the
+/// hole's and its record is a hole's after a part of its own, a key point
+/// on the board's other face that the input list repeats at its end. It
+/// reads as a simple hole at its one point on the face it starts from;
+/// the same record of a class not derived from the hole's is not read.
+#[test]
+fn board_hole_reads_as_a_hole() {
+    let make = |parent: &str| {
+        let mut d = sample();
+        for (g, p, v) in [(HOLE, ROOT, 5), (PCB_HOLE, parent, 1), (KEY_POINT, ROOT, 3)] {
+            d.class(g, p, v);
+        }
+        d.objects.retain(|o| o.0 != 3);
+        d.obj(
+            3,
+            TIMELINE,
+            cat(&[&[0, 0], &r(1), &u32b(3), &r(10), &r(20), &r(600)]),
+        );
+        // The hole's point on the top face and the far one on the bottom.
+        for (id, z) in [(610, 0.06), (611, 0.0)] {
+            d.obj(
+                id,
+                KEY_POINT,
+                cat(&[&[0, 0], &[0; 21], &f64s(&[1.5, 0.3, z]), &u32b(17)]),
+            );
+        }
+        d.obj(
+            600,
+            PCB_HOLE,
+            cat(&[
+                &[0, 0],
+                &r(611),
+                &[0; 8],
+                &u32b(2),
+                &r(610),
+                &r(611),
+                &tail(10, "PCBHole", 1, "", [0, 0, 0], 601),
+            ]),
+        );
+        d.obj(601, HEALTH, vec![0, 0]);
+        // The tip angle as the board writer keeps it: the straight angle's
+        // degrees in the radian value.
+        for (holder, id, number, role, expr, unit, value) in [
+            (620, 621, 30, "HoleDiameter", "3.00 mm", "mm", 0.3),
+            (622, 623, 31, "HoleDepth", "0.60 mm", "mm", 0.06),
+            (
+                624,
+                625,
+                32,
+                "TipAngle",
+                "10313.2 deg",
+                "deg",
+                179.99929641667921,
+            ),
+        ] {
+            d.obj(
+                holder,
+                PARAMETER_HOLDER,
+                cat(&[&[1], &u32b(1), &r(600), &[0]]),
+            );
+            let name = format!("d{number}");
+            let p = parameter(number, Some(holder), expr, role, "", unit, &name, value);
+            d.obj(id, PARAMETER, p);
+        }
+        let (m, b) = d.streams();
+        serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap()
+    };
+    let v = make(HOLE);
+    let h = &v["timeline"]["items"][2];
+    assert_eq!(h["objectType"], "HoleFeature", "{h}");
+    assert_eq!(h["name"], "PCBHole1");
+    let det = &h["detail"];
+    assert_eq!(det["holeType"], "SimpleHoleType");
+    assert_eq!(det["holeDiameter"]["name"], "d30");
+    assert_eq!(det["extentDefinition"]["distance"]["name"], "d31");
+    assert_eq!(det["position"], json!([1.5, 0.3, 0.06]));
+    assert_eq!(det["_f3d_positions"], json!([[1.5, 0.3, 0.06]]));
+    // Its flat bottom: the straight angle.
+    assert_eq!(det["tipAngle"]["name"], "d32");
+    assert_eq!(det["tipAngle"]["value"], std::f64::consts::PI);
+    // Not derived from the hole's class: an item of no known type.
+    let v = make(ROOT);
+    let h = &v["timeline"]["items"][2];
+    assert!(h["objectType"].is_null(), "{h}");
 }

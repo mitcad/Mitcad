@@ -17,6 +17,7 @@
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <Message_ProgressScope.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <Precision.hxx>
 #include <TopExp.hxx>
@@ -205,13 +206,19 @@ std::optional<Distance> parallel_faces(const TopoDS_Shape& a, const TopoDS_Shape
 
 } // namespace
 
-Distance min_distance(const TopoDS_Shape& a, const TopoDS_Shape& b) {
+Distance min_distance(const TopoDS_Shape& a, const TopoDS_Shape& b, const Message_ProgressRange& range) {
   require(a);
   require(b);
   if (std::optional<Distance> gap = parallel_faces(a, b)) {
     return *gap;
   }
-  BRepExtrema_DistShapeShape distance(a, b);
+  // The extrema stop at the range's user break (mitcad#2577); without one
+  // the range is empty and stops nothing.
+  Message_ProgressScope scope(range, "Distance", 1.0);
+  BRepExtrema_DistShapeShape distance(a, b, Extrema_ExtFlag_MINMAX, Extrema_ExtAlgo_Grad, scope.Next());
+  if (scope.UserBreak()) {
+    throw Error("the distance measurement was cancelled");
+  }
   if (!distance.IsDone() || distance.NbSolution() == 0) {
     throw Error("the distance could not be computed");
   }

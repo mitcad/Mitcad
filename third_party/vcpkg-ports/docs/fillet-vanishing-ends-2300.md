@@ -39,7 +39,7 @@ points (`geometry/src/vanishing_split.cpp`), each piece convex or concave
 all along, its rounding vanishing in a point at both ends, and gives the
 kernel all the pieces at once.
 
-The bodies the kernel got were written by `test_fillet_loft_rim --probe`
+The bodies the kernel got were written by `test_geometry_fillet_f_n fillet_loft_rim --probe`
 and rounded in the OCCT lab with DRAW's `blend` (each build on a freshly
 restored body: the kernel's fillet gives its input's edges curves in
 place). With the loft's Tangent Edges Merge the top convex piece rounded

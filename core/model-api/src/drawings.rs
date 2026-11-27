@@ -203,6 +203,10 @@ pub(super) struct AddViewCommand {
     /// A section seen the other way.
     #[serde(default)]
     flip: bool,
+    /// A section limited to its line (mitcad#2479); of the whole plane
+    /// when left out.
+    #[serde(default)]
+    bounded: bool,
     #[serde(default)]
     letter: Option<String>,
     #[serde(default)]
@@ -290,6 +294,9 @@ pub(super) struct EditViewCommand {
     /// A section seen the other way.
     #[serde(default)]
     flip: bool,
+    /// A section limited to its line, or of the whole plane (mitcad#2479).
+    #[serde(default)]
+    bounded: Option<bool>,
     /// A detail's circle: its centre and radius on the sheet.
     #[serde(default)]
     center: Option<P2>,
@@ -396,6 +403,9 @@ pub(super) struct DrawingQuery {
     title: Option<String>,
     #[serde(default)]
     cached: bool,
+    /// A cut sheet's cutting paths drawn over its parts (mitcad#2553).
+    #[serde(default)]
+    cutting_paths: bool,
 }
 
 fn yes() -> bool {
@@ -719,6 +729,14 @@ pub(super) fn view_key(tag: &str, shown: &[(BodyUid, u128, Transform)], spec: &V
     fp.option(spec.section.as_ref(), |fp, plane| {
         for v in plane.origin.iter().chain(&plane.normal) {
             fp.f64(*v);
+        }
+        // A section limited to its line (mitcad#2479); nothing for one of
+        // the whole plane, whose key stays as it was.
+        if let Some(bound) = &plane.bound {
+            fp.str("bound");
+            for v in bound.along.iter().chain(&[bound.from, bound.to]) {
+                fp.f64(*v);
+            }
         }
     });
     fp.u64(shown.len() as u64);
@@ -1361,6 +1379,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     || c.letter.is_some()
                     || c.hatch.is_some()
                     || c.flip
+                    || c.bounded.is_some()
                     || c.center.is_some()
                     || c.radius.is_some()
                     || c.breaks.is_some()
@@ -2056,11 +2075,13 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     normal,
                     span,
                     letter,
+                    bounded,
                     ..
                 } => {
                     let plane = CutPlane {
                         origin: *origin,
                         normal: *normal,
+                        bound: None,
                     };
                     let on = match parent {
                         Some(p) => evaluated.index_of.get(p).copied(),
@@ -2070,7 +2091,15 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                         sections.push(SectionMark {
                             on,
                             plane,
-                            span: if parent.is_some() { *span } else { None },
+                            // The mark shows the extent of the cut
+                            // (mitcad#2479): a section limited to its line
+                            // along the line, one of the whole plane across
+                            // the whole parent, however short its line.
+                            span: if parent.is_some() && *bounded {
+                                *span
+                            } else {
+                                None
+                            },
                             letter: letter.clone(),
                         });
                     }
@@ -2185,6 +2214,15 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         // A template's fields filled in from the design (mitcad#707 phase
         // 4, `drawing_templates.rs`).
         info.template = self.filled_template(drawing, si, title, scale, units);
+        // Its fields' parameters the design lacks (mitcad#2483): their
+        // references stand on the sheet as written.
+        let missing = self.missing_title_parameters(sheet);
+        if !missing.is_empty() {
+            warnings.push(format!(
+                "title block: {}",
+                super::drawing_annotations::missing_parameters_message(&missing)
+            ));
+        }
         phases.mark("title");
         let title_fields = super::drawing_templates::title_fields(&info);
         let content = SheetContent {
@@ -2263,7 +2301,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     drawing.name, query.sheet
                 )));
             }
-            return Ok(self.cut_sheet_drawing_json(drawing, query.geometry));
+            return Ok(self.cut_sheet_drawing_json(drawing, query.geometry, query.cutting_paths));
         }
         if query.sheet >= drawing.sheets.len() {
             return Err(ApiError(format!(
@@ -2702,6 +2740,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                         span: Some(span),
                         letter: c.letter.clone().unwrap_or_else(|| old.next_letter()),
                         hatch: c.hatch.unwrap_or(true),
+                        bounded: c.bounded,
                     },
                     None,
                 )
@@ -3075,12 +3114,22 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                     }
                 }
                 ViewKind::Section {
+                    parent,
                     normal,
                     span,
                     letter,
                     hatch,
+                    bounded,
                     ..
                 } => {
+                    if let Some(limit) = c.bounded {
+                        if limit && (parent.is_none() || span.is_none()) {
+                            return Err(ApiError(format!(
+                                "view {id} has no line on a parent view to limit its section to"
+                            )));
+                        }
+                        *bounded = limit;
+                    }
                     if c.flip {
                         *normal = normal.map(|v| -v);
                         // The line runs the other way along itself.
@@ -3139,6 +3188,9 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                         return Err(wrong("direction, side or hatching"));
                     }
                 }
+            }
+            if c.bounded.is_some() && !matches!(view.kind, ViewKind::Section { .. }) {
+                return Err(wrong("section line"));
             }
             if (c.center.is_some() || c.radius.is_some())
                 && !matches!(view.kind, ViewKind::Detail { .. })
@@ -3364,11 +3416,15 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                 ];
                 if let Some(plane) = &spec.section {
                     let o = plane.origin;
-                    let side = dot(
-                        [middle[0] - o[0], middle[1] - o[1], middle[2] - o[2]],
-                        plane.normal,
-                    );
-                    if side > 0.0 {
+                    let from_origin = [middle[0] - o[0], middle[1] - o[1], middle[2] - o[2]];
+                    let side = dot(from_origin, plane.normal);
+                    // Within the strip of a section limited to its line
+                    // (mitcad#2479).
+                    let within = plane.bound.is_none_or(|b| {
+                        let u = dot(from_origin, b.along);
+                        u > b.from && u < b.to
+                    });
+                    if side > 0.0 && within {
                         continue;
                     }
                 }
@@ -3456,6 +3512,9 @@ fn view_json(sheet: &DrawingSheet, view: &DrawingView) -> Value {
         }),
         "style": sheet.style(view.id),
         "own_style": view.style.is_some(),
+        // Why its style's hidden_lines draws nothing (mitcad#2447):
+        // "isometric", "section", or null.
+        "no_hidden_lines": sheet.no_hidden_lines(view.id).map(|why| why.key()),
         "label": sheet.label(view.id),
         // Where its label was dragged (mitcad#1909), null when it was not.
         "label_offset": view.label_offset,
@@ -3485,11 +3544,14 @@ fn view_json(sheet: &DrawingSheet, view: &DrawingView) -> Value {
             letter,
             hatch,
             span,
+            bounded,
             ..
         } => {
             value["letter"] = json!(letter);
             value["hatch"] = json!(hatch);
             value["span"] = json!(span);
+            // Limited to its line, or of the whole plane (mitcad#2479).
+            value["bounded"] = json!(bounded);
         }
         ViewKind::Detail {
             letter,

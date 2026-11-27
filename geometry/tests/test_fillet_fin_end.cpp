@@ -58,6 +58,7 @@
 #include <TopoDS_Compound.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -267,7 +268,7 @@ void test_end_rounding_up_to_the_top() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_fin_end) {
   test::guarded("test_top_rounding_runs_past_the_fin_end", test::test_top_rounding_runs_past_the_fin_end);
   test::guarded("test_end_rounding_up_to_the_top", test::test_end_rounding_up_to_the_top);
   if (test::failures == 0) {

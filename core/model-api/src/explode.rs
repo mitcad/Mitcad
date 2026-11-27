@@ -370,16 +370,16 @@ fn steps_of<K: Kernel>(
         .collect()
 }
 
-/// An index of a view's steps, or why it is none.
-fn step_index(view: &ExplodeView, index: usize) -> Result<usize, ApiError> {
-    if index < view.steps.len() {
+/// An index of the steps the view `name` has now, or why it is none.
+fn step_index(name: &str, steps: &[ExplodeStep], index: usize) -> Result<usize, ApiError> {
+    if index < steps.len() {
         Ok(index)
     } else {
         Err(ApiError(format!(
             "{} has no step {} (it has {})",
-            view.name,
+            name,
             index + 1,
-            view.steps.len()
+            steps.len()
         )))
     }
 }
@@ -416,6 +416,22 @@ pub(crate) fn run<K: Kernel>(
             } = *edit;
             let view = doc.explode_view(&name).map_err(failed)?.clone();
             let component = view.component;
+            // One change of the steps a command (mitcad#2527): an index of
+            // one would else name a step another change moved.
+            let changes = [
+                steps.is_some(),
+                step.is_some(),
+                add_step.is_some(),
+                remove_step.is_some(),
+                move_step.is_some(),
+            ];
+            if changes.iter().filter(|given| **given).count() > 1 {
+                return Err(ApiError(
+                    "give one of steps, step, add_step, remove_step and move_step: one change \
+                     of the steps a command"
+                        .to_owned(),
+                ));
+            }
             let mut list = match &steps {
                 Some(inputs) => Some(steps_of(doc, component, inputs)?),
                 None => None,
@@ -428,8 +444,8 @@ pub(crate) fn run<K: Kernel>(
                 let input = set
                     .as_ref()
                     .ok_or_else(|| ApiError("give set: what of the step changes".to_owned()))?;
-                let i = step_index(&view, i)?;
                 edited(&mut |steps| {
+                    let i = step_index(&view.name, steps, i)?;
                     let base = steps.get(i).cloned();
                     steps[i] = step_of(doc, component, input, base)?;
                     Ok(())
@@ -448,16 +464,16 @@ pub(crate) fn run<K: Kernel>(
                 })?;
             }
             if let Some(i) = remove_step {
-                let i = step_index(&view, i)?;
                 edited(&mut |steps| {
+                    let i = step_index(&view.name, steps, i)?;
                     steps.remove(i);
                     Ok(())
                 })?;
             }
             if let Some(i) = move_step {
                 let to = to.ok_or_else(|| ApiError("give to: where the step goes".to_owned()))?;
-                let i = step_index(&view, i)?;
                 edited(&mut |steps| {
+                    let i = step_index(&view.name, steps, i)?;
                     let moved = steps.remove(i);
                     steps.insert(to.min(steps.len()), moved);
                     Ok(())

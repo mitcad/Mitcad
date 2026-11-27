@@ -16,6 +16,7 @@ fn turning_tool(number: u32, name: &str, nose_radius: f64) -> TurningTool {
         kind: TurningToolKind::Turning,
         nose_radius,
         max_depth: 4.0,
+        back_angle: None,
     }
 }
 
@@ -79,6 +80,7 @@ fn a_pin_posts_as_fanuc_turning_cycles() {
             allowance_z: 0.1,
             clearance: 2.0,
             feed: 0.25,
+            plunge: 0.0,
         },
         &rougher,
     )
@@ -89,6 +91,8 @@ fn a_pin_posts_as_fanuc_turning_cycles() {
             side: TurnSide::Outside,
             clearance: 2.0,
             feed: 0.1,
+            plunge: 0.0,
+            roughed: false,
         },
         &finisher,
     )
@@ -237,6 +241,7 @@ fn shaft_program(part: &TurnPart) -> TurningProgram {
         kind: TurningToolKind::Boring { bar_diameter: 6.0 },
         nose_radius: 0.4,
         max_depth: 2.0,
+        back_angle: None,
     };
     let grooving = TurningTool {
         number: 4,
@@ -248,6 +253,7 @@ fn shaft_program(part: &TurnPart) -> TurningProgram {
         },
         nose_radius: 0.1,
         max_depth: 3.0,
+        back_angle: None,
     };
     let threading = TurningTool {
         number: 5,
@@ -259,6 +265,7 @@ fn shaft_program(part: &TurnPart) -> TurningProgram {
         },
         nose_radius: 0.0,
         max_depth: 2.0,
+        back_angle: None,
     };
     let parting = TurningTool {
         number: 6,
@@ -267,6 +274,7 @@ fn shaft_program(part: &TurnPart) -> TurningProgram {
         kind: TurningToolKind::Parting { width: 3.0 },
         nose_radius: 0.0,
         max_depth: 22.0,
+        back_angle: None,
     };
     let rough_op = |side| RoughOp {
         side,
@@ -276,11 +284,14 @@ fn shaft_program(part: &TurnPart) -> TurningProgram {
         allowance_z: 0.1,
         clearance: 1.0,
         feed: 0.25,
+        plunge: 0.0,
     };
     let finish_op = |side| FinishOp {
         side,
         clearance: 1.0,
         feed: 0.1,
+        plunge: 0.0,
+        roughed: false,
     };
     let mut program = TurningProgram::new("Shaft", [100.0, 150.0]);
     program.operations = vec![
@@ -575,6 +586,71 @@ fn a_shaft_with_a_groove_a_thread_and_a_bore_turns_and_checks() {
     assert!(sim.stock.outer[i] <= sim.stock.inner[i] + 1e-9);
 }
 
+/// A bore roughed with no stock to leave (mitcad#2527): G71's allowance
+/// is `U0.`, and the read-back takes the side from the contour against
+/// where the cycle starts, as the post does, not from U's sign.
+#[test]
+fn a_bore_roughed_with_no_stock_to_leave_posts_as_a_cycle_and_reads_back() {
+    let part = shaft();
+    let bar = TurningTool {
+        number: 3,
+        offset: 0,
+        name: "Boring bar".into(),
+        kind: TurningToolKind::Boring { bar_diameter: 6.0 },
+        nose_radius: 0.4,
+        max_depth: 2.0,
+        back_angle: None,
+    };
+    let roughing = rough(
+        &part,
+        &RoughOp {
+            side: TurnSide::Inside,
+            depth: 1.5,
+            retract: 0.5,
+            allowance_x: 0.0,
+            allowance_z: 0.0,
+            clearance: 1.0,
+            feed: 0.25,
+            plunge: 0.0,
+        },
+        &bar,
+    )
+    .unwrap();
+    let mut program = TurningProgram::new("Bore", [100.0, 150.0]);
+    program.operations = vec![op("Rough bore", &bar, css(150.0, 2500.0), roughing)];
+    program.validate().unwrap();
+    let text = turning_post(&program, &FanucTurning, &cycles()).unwrap();
+    assert!(text.contains("G71 U1.5 R0.5\n"), "{text}");
+    assert!(text.contains(" U0. W0. F0.25\n"), "{text}");
+    let read = check_program(&text).unwrap();
+    let kinds: Vec<&str> = read.cycles.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(kinds, vec!["G71"]);
+    // An allowance on the other side of the contour is refused, and a
+    // cycle that starts where the tool is not known.
+    let base = "%\nO1000\nG21 G18 G40 G99\nG54\n";
+    let refuse = |body: &str| {
+        check_program(&format!("{base}{body}%\n"))
+            .unwrap_err()
+            .message
+    };
+    // The contour from X 10 (a diameter): outside from X 20, inside from
+    // X 4.
+    let cycle = |start: &str, u: &str| {
+        format!("{start}G71 U1. R0.5\nG71 P10 Q20 U{u} W0. F0.2\nN10 G0 X10.\nN20 G1 Z-5. F0.1\n")
+    };
+    for (start, u) in [("20.", "0."), ("4.", "0."), ("20.", "0.4"), ("4.", "-0.4")] {
+        let text = format!("{base}{}%\n", cycle(&format!("G0 X{start} Z2.\n"), u));
+        assert!(check_program(&text).is_ok(), "{text}");
+    }
+    let other_side = "Line 7: G71's allowance (U) is on the other side of its contour.";
+    assert_eq!(refuse(&cycle("G0 X20. Z2.\n", "-0.4")), other_side);
+    assert_eq!(refuse(&cycle("G0 X4. Z2.\n", "0.4")), other_side);
+    assert_eq!(
+        refuse(&cycle("", "0.")),
+        "Line 6: G71 from where the tool is not known."
+    );
+}
+
 #[test]
 fn threading_writes_its_passes_deeper_and_shallower() {
     let tool = TurningTool {
@@ -587,6 +663,7 @@ fn threading_writes_its_passes_deeper_and_shallower() {
         },
         nose_radius: 0.0,
         max_depth: 2.0,
+        back_angle: None,
     };
     let op = ThreadOp {
         side: TurnSide::Outside,
@@ -676,6 +753,7 @@ fn a_part_on_the_profile_validates_in_words() {
         kind: TurningToolKind::Boring { bar_diameter: 6.0 },
         nose_radius: 0.4,
         max_depth: 2.0,
+        back_angle: None,
     };
     let e = rough(
         &part,
@@ -687,6 +765,7 @@ fn a_part_on_the_profile_validates_in_words() {
             allowance_z: 0.0,
             clearance: 1.0,
             feed: 0.2,
+            plunge: 0.0,
         },
         &tool,
     )

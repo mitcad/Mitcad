@@ -53,7 +53,10 @@ of its own ([notes](#implementation-notes-mitcad2435)). Doubly curved,
 variable-thickness and stretched material, embossing and
 arbitrary B-rep-to-sheet recognition are outside this contract. Unsupported
 surfaces must produce a specific error, never an approximate flat pattern
-reported as valid.
+reported as exact. Since mitcad#2442 the user may ask for an approximate
+development by triangulation of faces that do not lie flat exactly (duct
+transitions); such a pattern says so and how far its lengths are from the
+faces' ([notes](#implementation-notes-mitcad2442)).
 
 The [model architecture](architecture.md#the-model) remains intact:
 
@@ -1159,6 +1162,66 @@ Decisions made while closing the import gaps of mitcad#211:
   where they do not intersect the sheet does not either: they are checked
   instead, and only where they intersect (material through a window) is
   the sheet itself checked (`geometry/src/sheet_chart.cpp`).
+- **Walls kept apart by planes (mitcad#2444).** That check intersects
+  every pair of faces of the solid whose boxes meet, and the charts' sides
+  are ruled B-spline faces: on a plain 200 x 100 plate it took 90 to 95
+  percent of each Flange preview (0.12 s for a flange on one edge, 0.37 s
+  on three, 0.55 s for the fourth wall, in a debug build). Before it runs,
+  each pair of the shell's material regions is looked at through its exact
+  support function (the most of `m . x` over the region's material: exact
+  for straight and circular sides, over the poles of the exact B-spline
+  form for other curves; a bend along its outline at its inside and
+  outside radius, exactly along straight chart sides, a curved side such
+  as a relief's arc in 32 pieces each by its chart box): a plane among the
+  shell's caps' planes, the planes of its straight sides, its bends' end
+  and port planes, the global axes and the planes halfway between one of
+  each region's (the bisecting plane of a corner, which separates its two
+  bends and is no side's plane, as walls are cut normal to their surfaces)
+  that has two regions no port joins more than four
+  tolerances apart on its two sides, or two a port joins at most touching
+  within the tolerance, shows that they cannot meet. When that is shown
+  for every pair, the check could find nothing and is not run; otherwise
+  it runs as before (in parallel, about three times as fast on the plate),
+  so what is refused and kept is unchanged. A region on its own is the
+  validity check's. With `MITCAD_LOG_TIMING` each construction says how its
+  shells were found not to meet (`shells kept apart by planes 1, checked
+  for collisions 0`), and names the first pair it could not show apart.
+  CLI `sheet_flange_plate_timing` (the reported plate, step by step as the
+  panels send it, `mitcad-cli run --timings`). There every shell is kept
+  apart by planes and the Flange previews take, in a Linux debug build,
+  before and after: one edge 153 and 42 ms, two edges 287 and 34 ms, three
+  edges 410 and 49 ms, the fourth wall 607 and 64 ms, an edit's preview 622
+  and 63 ms, the Flat Pattern 425 and 52 ms; the body is the same (volume,
+  area, faces and edges). OK takes what the preview computed (under 1 ms in
+  the model).
+- **Only the walls planes do not keep apart are checked (mitcad#2536).** A
+  folded box whose tabs go through slots of its base (the corrugated board
+  folders, CLI `sheet_board_0427`) has a pair of regions no plane keeps
+  apart once a tab is in, and every Fold after it then paid, by the
+  construction's path, for the whole check: the sheet built with its holes filled, the self-interference
+  check of all of it (up to 230 faces), which the tab then meets in the
+  filled base; every region of it sewn on its own, checked and compared by
+  booleans pair by pair, only to name the walls that met in a construction
+  whose refusal was thrown away; and then the sheet itself built and
+  checked whole. 1.7 to 7.8 s for each of the box's Folds, growing with
+  each. Now the check looks at the faces of the regions not kept apart from
+  the rest of their shell only (a tab and the base it goes through): a
+  face of any other region is on its own side of a plane from every region
+  of the shell, so it meets nothing, and two walls that meet are two of
+  those regions, which are all the naming compares. The construction with
+  the holes filled checks its shells and stops (it names nothing, and any
+  collision there only means the sheet itself is checked), and is built
+  only when the regions the check looks at hold 16 holes or more (a vent
+  pattern; a few slots cost the check less than building the sheet a second
+  time). The self-interference check no longer runs OCCT's validity check
+  of the solid a second time. What is refused and kept is unchanged
+  (geometry test `sheet tab through a window`: a tab through a window of
+  the base, 2 mm clear, kept with one hole and with 17; across the base's
+  material, refused naming the base and the tab's panel). With
+  `MITCAD_LOG_TIMING` a construction says how many of its shells' regions
+  were checked (`checked for collisions 1, 2 of 7 regions checked`) and
+  marks the one with the holes filled (`Timing sheet chart shape (holes
+  filled)`).
 - **Double bends in the Bend panel.** The panel's Bend Type (Bend, Double
   Bend) writes `port_mode: "double"` and Whole Face the `fixed` boundary;
   editing a double bend (the `.ipt` import's) loads both, so an edit keeps
@@ -1830,6 +1893,141 @@ Patterns (`sheet/folded/curved.rs`):
   spline faces one sheet, folded 2920 pi - 80, the blank 1460 pi - 40, a
   DXF).
 
+### Mitred elbows and eccentric cones (mitcad#2491)
+
+Duct work: the gores of a mitred elbow and eccentric (oblique) cones and
+frusta, added to mitcad#2435's cylinders and cones.
+
+- **Oblique cuts at the neutral surface.** An edge of the faces that is no
+  generator and no circle round the axis, whose face across it is a plane
+  meeting the generators (the sine of its angle to them at least 1e-3), is
+  developed where that plane meets the neutral surface: each point moved
+  along its generator to the plane (`on_wall` in
+  `geometry/src/sheet_develop.cpp`), and a generator that ends at such an
+  edge's vertex ends there too. A gore of neutral radius `r` cut at the
+  angle `a` then keeps the known stretch-out: the cut `r tan(a) cos(s / r)`
+  off a straight line at the developed length `s` from the heel, not the
+  front's radius (mitcad#2435 projected every edge of the front along the
+  normals; circles and generators, and edges along other walls such as a
+  drilled hole's, still are, so mitcad#2435's blanks are unchanged). Each
+  gore converts as a body of its own: an elbow modelled as one body is
+  split into its gores at its mitre joints (mitcad#2559, the next
+  section). The gores' cut walls are not normal to the
+  material: the sheet cuts them normal to it, with mitcad#2435's warning.
+- **Eccentric cones.** A face that is no plane, cylinder or cone (a ruled
+  spline, a loft between two circles) is tried as an oblique cone
+  (`oblique_of`): the straight lines along one of its parameters meet at
+  one point (least squares, each within 1e-5 mm of it), their directions
+  from it lie on a quadric cone (the least eigenvector of their moments),
+  and that cone's circular section (a cyclic plane, the one most square to
+  the generators, halfway along the face) is its circle; a grid of the
+  face's points lies within 1e-5 mm of the cone so found. Twisted ruled
+  surfaces and lofts that bend two ways are refused as before, naming the
+  face.
+- **The oblique chart.** `SheetEmbedding::ObliqueCone`
+  (`ObliqueConeEmbedding` in `core/model-base/src/sheet_oblique_cone.rs`,
+  `geometry::ObliqueConeEmbedding` and `detail::ObliqueDevelopment` in
+  `geometry/src/sheet_oblique_cone.{hpp,cpp}`): the front cone (its apex,
+  its circle, the angle round the circle from `radial_start`) and the
+  neutral depth. The neutral surface, the cone moved `d` along its normals
+  `n`, is developable but no cone: `N(theta, rho) = apex + d n(theta) + rho
+  g(theta)`, `g` the unit generator. It develops as `chart(theta, rho) =
+  base(theta) + rho (cos phi, sin phi)` with `phi' = |g'|` and `base' = -d
+  (n . g'') / |g'| (-sin phi, cos phi)`, `base(0) = d c(0) (1, 0)`, `c = -(n
+  . g'') / |g'|^2` (on a cone of revolution `base` is `d cot(half angle)`
+  along the generator, the neutral apex, and the chart is mitcad#2435's).
+  Model and kernel integrate it the same way: the classical Runge-Kutta
+  rule from angle 0 at steps of a turn over 4096 (the kernel keeps the
+  nodes, the model integrates when it reads the chart). A chart point is
+  read back by its generator: the angle where the point lies on the
+  generator's developed line (Newton's steps in a bracket from the
+  developed angle). The frame of the generator at an angle (`frame`: the
+  isometry from the generator along x from `base - d c` to the chart) is
+  the identity at 0 and a turn about the origin on a cone of revolution;
+  rebasing the chart to start at another angle maps it by that frame's
+  inverse.
+- **Construction.** The caps are B-spline surfaces in (angle, distance
+  along the generator), of degree 3 through the exact surface points at
+  evenly spaced angles (more until within a sixteenth of the tolerance)
+  and of degree 1 along the generators; the boundaries are fitted on them
+  as on a cone (`cone_rails`). The chart turns against (angle, distance);
+  the caps' own normals are read against the cone's outward one.
+- **Plate check, seam and Flat Pattern.** The kernel reports whether the
+  body is a plate behind the face (`SheetFaceDevelopment::plate`): every
+  other face at the thickness behind it along the cone's normals (its
+  points' feet on the generators found by Newton's steps, within 1e-4 mm)
+  or a wall meeting the face and such a back. A closed face is checked in
+  two halves cut along the generator halfway round its developed angle
+  and opened at its seam by the same strips as a cone's, in the frames of
+  the seam's generator at both ends of the turn. The Flat Pattern lays the
+  chart in the plane touching the front at its first boundary point, along
+  and across the generator there.
+- **Tests.** OCCT: `geometry.sheet_mitred_oblique` (the three gores of a
+  90-degree elbow of centre-line radius 60, cut at 22.5 degrees, one of
+  them turned into its place: both seams' lengths, the stretch-out at 63
+  generators, the heel and the throat within 1e-6 mm; an eccentric frustum
+  from a circle of 60 to one of 30 offset 20: apex, seam lengths, both
+  edges' developed lengths against the neutral surface's curves in the end
+  planes, the developed area; a twisted ruled surface refused). Model:
+  `sheet_oblique_cone.rs` (a cone of revolution develops as one, an
+  eccentric cone keeps lengths, chart points at a depth and back, rebasing).
+  CLI `sheet_convert_mitred` (the three gores as bodies: folded volumes and
+  blanks `Lm (39 pi - 1) - 4 19.5^2 tan(a) sin(1 / 39)` and the end gores'
+  half of it; the eccentric frustum shelled 1, its half and whole
+  converted against the integral of the neutral surface's area; a loft
+  from a square to a circle refused).
+
+### One-body elbows and cones of several faces (mitcad#2559)
+
+Follow-up of mitcad#2491: an elbow modelled as one body and an eccentric
+cone whose side the kernel stores as several faces convert without a
+manual split (`sheet/folded/curved.rs`).
+
+- **Mitre joints.** Before the panel is developed, the picked cylinder's
+  or cone's edges to other cylinders or cones whose axes are at an angle
+  (the sine at least 1e-3, `MITRE_SINE`) are read as polylines; an edge
+  whose points lie within 1e-4 mm of their least-squares plane and that is
+  no straight line is a mitre joint (`mitred_gores`, `plane_of`). The
+  faces reached from the picked face across joint after joint are the
+  gores' fronts (the outer or the inner faces, whichever the picked one
+  is); every joint's plane, each once, splits the body (`Kernel::split_body`
+  with the plane, the cut faces `<feature>:split`), a plane leaving a
+  piece whole where it does not divide it. Each piece must hold exactly
+  one front; otherwise (a joint's plane crossing another segment, as in an
+  elbow turning through more than half a turn) the feature is refused in
+  words. A body whose picked face meets no mitre joint converts as before.
+- **The gores' sheets.** Each piece converts exactly as a gore body does
+  (mitcad#2491: its front's cylinder or cone developed at the neutral
+  surface, its cut ends where their planes meet it, the plate check, the
+  seam opened by the corner gap). The picked face's gore keeps the body;
+  every other gore is published as a body of the feature
+  (`BodyUid::new(feature, k)`, in the order of their fronts' names) owned
+  by the body's component, its panel slot `k + 1`. Each is a sheet of one
+  curved panel with its own Flat Pattern; the joints are the seams between
+  the blanks.
+- **Cones of several faces.** On an oblique cone the panel's faces grow
+  from the picked face across shared edges (`oblique_fronts`): each
+  neighbour that is no plane, cylinder or cone joins when the kernel
+  develops it with the faces found so far as one oblique cone (its points
+  on the picked face's generators within 1e-5 mm). The kernel already
+  develops several faces of one cone together (mitcad#2491's tracks,
+  turned to meet at their shared edges); their developments are united as
+  a split cylinder's are, and a closed set is opened where the faces meet
+  again.
+- **Tests.** OCCT: `geometry.sheet_mitred_oblique` adds the eccentric
+  frustum whose side is two faces (its sections two arcs each, meeting at
+  a quarter turn either side): developed as one panel, its four generator
+  lines 70 long, both edges as long as the neutral surface's curves in
+  the end planes and the area the one face's, within 1e-5 mm and 1e-2
+  mm². Model: `curved_tests.rs` (a joint's ellipse spans its plane, from
+  all or half of it; a straight edge or a saddle curve spans none). CLI
+  `sheet_convert_mitred`: the 90-degree elbow of three gores joined into
+  one body converts from its middle gore's face into three sheets with
+  the gore bodies' volumes and blanks (the middle `Lm (39 pi - 1) - 4
+  19.5^2 tan(a) sin(1 / 39)`, the ends half of it), each with its Flat
+  Pattern; the frustum of two faces, half (the one face's volume and
+  blank) and whole (opened along a generator 70 long).
+
 ### A lip on the top edge of a wall (mitcad#2445)
 
 A Flange on the top edge of a tray's wall (a return flange, the lip of a
@@ -1863,6 +2061,439 @@ walls passing through each other.
   both ways; the flat patterns; a lip that crosses the tray refused naming
   itself and the wall it hits); the model test
   `a_lip_keeps_the_gap_short_of_a_wall_beside_its_end`.
+
+### Implementation notes (mitcad#2442)
+
+Convert to Sheet Metal with `development: triangulated`: faces that are
+not exactly developable laid flat approximately, as duct work lays out a
+transition (`sheet/folded/triangulated.rs`):
+
+- **An explicit choice.** Only with `development: triangulated`. One flat,
+  cylindrical or conical face still goes through the exact development
+  (mitcad#2435 and the planar convert), with an information notice that
+  the approximation was not needed. Further faces (`faces`) are laid flat
+  with the picked one only by triangulation; bend and rip edges are
+  refused with it.
+- **The strip.** `Kernel::sheet_face_grid` (`geometry/src/sheet_face_grid.cpp`)
+  samples each face over its surface's parameter bounds: points, unit
+  normals out of the body (a little way in where the surface has none, at
+  an apex) and the face's own area; each piece of a face the kernel split
+  (a loft from a rectangle to a circle splits a side where the circle has
+  a vertex) is a face of the strip of its own. The faces form one strip between two
+  edges (the *rails*, a loft's sections), cut by *rungs* from rail to
+  rail: across the edges the faces share (a rung of one face within 0.01 mm
+  of a rung of the next, in any order and either way round), else the
+  face's parameter lines that run round it (a face closed on itself), else
+  its straighter parameter lines (a loft's or a ruled face's straight
+  lines). A face that does not continue the strip is named. A strip that
+  closes on itself is opened at the picked face's first rung (or the first
+  face's that the strip runs through), the corner gap (default the
+  thickness, above 0) wide, half each side along the rails. A face cut out
+  of its surface, or with holes, is laid out by its boundary since
+  mitcad#2558 (below).
+- **The triangles** (`triangles`, default 64, 2 to 4000) are shared among
+  the faces by their mean rail lengths, at least two each; a face's rungs
+  lie every 8th line of a grid sampled 8 times finer along the strip and
+  16 steps across it. Each quadrilateral between two rungs is split along
+  its shorter diagonal, and the triangles are laid flat in order, each
+  keeping its three sides' lengths (the circle intersection of the two
+  known corners), turned as the faces' front shows it. A rung two faces
+  share is the mean of their points (since mitcad#2558 with the difference
+  shared out along each face). A rung of no length (the rails meet) is
+  laid at the strip's start or end (mitcad#2558) and between its ends
+  (mitcad#2574); a pattern that crosses itself is refused.
+- **The neutral surface** is the rules' K-factor times the thickness from
+  the faces' inner side, the side whose surface (the front, or the surface
+  the thickness behind it) has the smaller area; K 0.5 for kerf-bend rules,
+  measured allowances refused, as for curved panels. The body must be a
+  plate behind the faces: its volume within 3 % of the thickness times the
+  faces' area at the middle of the material ("pick every face of its front,
+  or split the body first").
+- **The deviation** (`SheetApproximation`, stored in the sheet state) is
+  measured, at the neutral surface, against the faces sampled 8 times
+  finer along the strip and 16 steps across it, each length corrected for
+  its chords' error (Richardson's extrapolation, the error falling with the
+  square of the step): `edges` is the largest difference of the pattern's
+  rails and end rungs (the seam's before it is opened) from the faces'
+  lengths; `across` the largest of the lines of the faces between the rails
+  (the pattern's points on each rung at the share of the face's line across
+  it), the rungs between (straight in the pattern, curved on a face that
+  bulges), and the diagonals not laid (the pattern's against the faces'
+  chords: the twist a warped face needs). The convert says them in an
+  information notice; the Flat Pattern gives them as `approximation`
+  (`method`, `triangles`, `edges`, `across`, `seam`, `folds`), the
+  `sheet_bodies` query without the folds, and the Browser's Flat Pattern
+  row in its tooltip.
+- **The sheet.** Its one panel's chart (slot 0) is the pattern, a polygon of
+  generated curves `g<2000000+>`, on the plane touching the strip's first
+  point, the first rung along the chart's y axis, seen from the front. The
+  folded body is the body as it was: the kernel builds no folded sheet from
+  the pattern. Sheet features refuse such a sheet (`folded::read`), ordinary
+  features take its sheet meaning away with the reason, and the Flat
+  Pattern's points have no exact place on the body (`flat_point` refuses).
+- **Fold lines.** Where two triangles meet at 0.01° or more, with the
+  angle (positive: folded towards the front). The DXF export writes them
+  as bend lines on `BEND_UP` and `BEND_DOWN` with `folds: true` (the
+  application asks when it exports such a pattern); a closed strip's seam
+  is the outline's two end edges.
+- **Since.** Holes, faces cut out of their surfaces and rails meeting
+  where the strip starts or ends: mitcad#2558; the plane triangles of a
+  square-to-round built of planes and cones in one strip with its cones,
+  and rails that meet between the strip's ends: mitcad#2574 (both below).
+- **Tests.** Model: `triangulated_tests.rs` (a cylinder's face laid flat as
+  its rectangle of chords with its folds, a square-to-round face and a
+  rectangle-to-round transition with an offset whose stated deviation is
+  the measured one, faces given in any order and way round, the seam
+  opened, faces that do not join the strip, more triangles closer). OCCT:
+  `geometry.sheet_face_grid`. CLI `sheet_convert_triangulated` (both
+  transitions shelled and converted, their Flat Patterns approximate, a
+  DXF with folds, refusals, sheet features refused, a tube asked to be
+  triangulated developed exactly). UI: the Linux UI test
+  `sheet-convert-triangulated` and its Windows and macOS twins.
+
+### Implementation notes (mitcad#2558)
+
+Holes, faces cut out of their surfaces and fans in the triangulated
+development (`sheet/folded/triangulated.rs`):
+
+- **Boundaries.** `Kernel::sheet_face_grid` takes `edge_steps`: above 0,
+  each piece's wires come with it (`SheetFaceWire`: the outer wire and the
+  holes, `BRepTools_WireExplorer` order, edges of no length left out), each
+  edge at `edge_steps` (64) equal steps of its parameter on the face, its
+  points' places in the grid, the points and the normals. A face whose
+  outer wire runs along its grid's four bounding lines (within 10⁻⁵ of the
+  grid's size) fills it, holes or not; an edge off them makes the face *cut
+  out of its surface* (the area test of mitcad#2442 is kept only for a
+  kernel that gives no boundary). The plate test takes each face's own area
+  (less its holes) grown or shrunk as its grid's is.
+- **Laying out.** A boundary point at the neutral surface is laid out with
+  its strip's quadrilateral (by its place along the grid), through the
+  triangle in which its barycentric coordinates on the triangle's plane are
+  least negative; a point on a rail at a rung is that rung's end. Holes are
+  holes of the pattern's region (generated curves after the outline's). The
+  outline of a strip with a face cut out of its surface is joined end to
+  end (within 0.1 mm) from the other faces' rails and end rungs and that
+  face's edges: an edge along a rail through the rungs' ends it passes, one
+  along the strip's first or last rung straight, a rung shared with the
+  face beside it left out, any other edge as its laid-out points. A hole
+  that crosses the outline or another hole, and an outline that does not
+  join, are refused. Fold lines are clipped to the material.
+- **Measured.** Each hole's edge and each edge of a face cut out of its
+  surface: the pattern's polyline as drawn against the edge's length at the
+  neutral surface (Richardson's correction from every second point), in
+  `edges`; such a face's rails and end rungs (no edges of it) go to
+  `across`. The Flat Pattern's `approximation` gives `holes`.
+- **Fans.** A rung whose ends lie within 0.01 mm at the neutral surface is
+  one point (the rails meet). At the strip's start the first quadrilateral
+  is one triangle laid from the line to the next rung's second-rail end,
+  which is the pattern's y axis (`Layout::axis` 3; the chart's frame
+  follows); at the end it lays as before. Rails meeting between the ends
+  were refused (laid since mitcad#2574, below). A fan from a point (a rail
+  of no length) lays as before.
+- **The deviation against the count.** At a rung two faces share at an
+  angle `a`, their points `d` behind it lie `2 d sin(a/2)` apart (1.4 mm at
+  a right angle 1 mm behind). The strip ran through their mean, and the
+  measure moved each face's line there within its last fine step: the
+  pattern took the difference over the face's last strip, the measure over
+  an eighth of it, so their difference grew as the strips got shorter (64
+  triangles 0.207 mm, 98 triangles 0.360 mm on the CLI fixture's
+  transition). It did not come from how the triangles are shared out
+  (each face's share never falls as the count grows). Now each face's points
+  at the neutral surface are moved towards the mean evenly along the face
+  (`Neutral`), the stations and the lines measured alike, so the pattern
+  near such a rung does not depend on the count and the edges' deviation
+  falls with it. The pattern still gives such a rung no bend allowance of its own
+  (a sharp corner of the faces is laid as the faces' neutral lengths meeting
+  at the mean).
+- **The deviation across does not fall (mitcad#2585).** `across` is the
+  largest of the inner rungs', the diagonals not laid and the lines
+  between the rails. The faces of the offset transition are not
+  developable (straight lines from a rectangle's side to a quarter circle
+  at the same share of each), so a pattern that keeps the rails and the
+  rungs stretches the lines between the rails: the middle line of a long
+  side about 1.38 mm. Fewer, wider triangles cut across the twist and the
+  pattern's line through few rungs is short, which hides part of that
+  stretch; with more triangles `across` climbs towards it and settles
+  (1.129 mm at 24 triangles, 1.346 at 48, 1.364 at 64, 1.380 at 98, 1.384
+  at 128; the diagonals' part falls, 0.857 to 0.048 mm). It is the faces'
+  own departure from developable, not an effect of how the triangles are
+  shared out, and no count can make it fall.
+- **Tests.** Model: `triangulated_tests.rs`
+  (`more_triangles_do_not_give_a_worse_pattern`: the offset transition 1 mm
+  behind its faces at 24, 48, 64, 98 and 128 triangles, the edges'
+  deviation not rising by more than 0.002 mm from one count to the next and
+  the one across settling, no rise larger than the one before and no count
+  above the finest; a round hole and
+  a face cut out of a cylinder, their laid lengths within the stated
+  deviation and the folds only on the material; a fan whose rails meet
+  where it starts and one from a point, the stated deviation the arcs'
+  chords' error). CLI `sheet_convert_triangulated`: the offset transition
+  with a 16 mm hole through both long sides (two holes, `edges` under
+  0.5 mm, a DXF). A fan thickened from a surface loft between an arc and a
+  line from one point is not in it (mitcad#2585): Thicken fails on that
+  surface to either side and half way (the kernel's offset of the face
+  whose two edges start at one point), so such a body cannot be made for
+  the fixture yet; the fans are tested in the model.
+
+### Implementation notes (mitcad#2574)
+
+Rails meeting between the strip's ends, planar faces in a strip, and the
+outline of a strip that mixes a face cut out of its surface with others
+(`sheet/folded/triangulated.rs`):
+
+- **Rails meeting midway.** A station between the strip's ends whose rung
+  has no length (its ends within 1e-9 mm at the neutral surface, where
+  `Neutral` has already made the rails one point within 0.01 mm) splits
+  the strip into two fans (`Layout::pinches`). The quadrilateral after it
+  is one triangle, laid as the first of a fan from a point: the next
+  rung's second-rail end at its distance from the point, then its
+  first-rail end by the triangle's sides, both turned about the point so
+  that the middle of the new fan's corner there points against the middle
+  of the corner of the fan before. Each corner is under 180 degrees, so
+  the two fans meet at the point only. The outline is the strip's as
+  before, through the point twice, its two lobes running round the same
+  way (the region's area is their sum); the self-crossing check lets the
+  sides that end at such a point touch there (`crosses_itself_but`). The
+  two fans share no triangle edge, so there is no fold between them.
+  Both fans' rails, rungs and lines across are measured as any face's.
+  Where two faces share such a rung, every way across the next face
+  matches it, so `chain` takes the one that runs round as the face before
+  does (the sign of (along x across) . normal one line in from the rung):
+  the rails stay on their sides, and the outline touches itself at the
+  point rather than crossing there.
+  A rung of no length followed by another is refused ("the strip's edges
+  meet along a stretch of it"); a degenerate diagonal (the rails crossing
+  between two rungs) now says "the strip's edges cross between two of its
+  lines across: use more triangles". A meeting point inside a face is a
+  station only where the face's grid has a rung through it (the kernel
+  samples a face at equal steps of its parameters), so the typical case
+  is two faces meeting at a point, as a loft whose sections touch there
+  makes them.
+- **Planar faces.** `plane_rungs` takes the faces' first look sampled with
+  their boundaries (`edge_steps` 64 now in the first look too): a face is
+  planar when its normals agree within 1e-9 and its points lie within
+  1e-6 mm of the plane through its first point. A straight edge of its
+  outer wire (every sampled point within 0.01 mm of the chord) is a rung
+  when another face of the strip has a line with the same ends (either
+  way round, within 0.01 mm): a planar face's straight edge, any other
+  face's grid's four bounding lines. Two such edges are the first and the
+  last rung; one alone is the first, the last a triangle's opposite corner
+  (the rails meet there) or the edge across a face of more edges.
+  `plane_grid` builds the grid between them: the first rail the wire's
+  edges from the first rung's start to the last rung (in reverse), the
+  second those from the first rung's end, each resampled at equal steps of
+  its length (a rail of no edges is its corner, as a triangle's apex),
+  the lines across straight, the normals the plane's, the area the face's.
+  Its outer wire's points are placed exactly on the grid's bounding lines
+  (the rails at their share of the rail's length, the rungs at their share
+  of the rung's), so the face fills its grid and is not cut out; a hole's
+  points are placed through the triangle of a cell they lie in. The size
+  is the kernel's for the face's orientation (columns and rows swapped
+  where the strip runs along its rows). A face without a closed outer wire
+  of three edges or more, or without a shared straight edge, keeps the
+  kernel's grid as before.
+- **The mixed strip.** A strip of an ordinary face and a face cut out of
+  its surface joins its outline from the ordinary face's rails and end
+  rungs and the cut face's edges, the rung they share left out; a model
+  test now covers it.
+- **Tests.** Model: `triangulated_tests.rs`
+  (`rails_meeting_between_the_ends_split_the_strip_into_two_fans`: two
+  twisted fans meeting at the origin, the split station, the second fan's
+  corner opening away from the first's, each rail against the faces'
+  length within the stated deviation, the outline through the point twice
+  and the lobes' areas adding up;
+  `a_square_to_round_of_planes_and_cones_lies_flat_in_one_strip`: four
+  plane triangles as the kernel gives a plane (a rectangle of axes turned
+  0.4 rad holding the triangle) and four oblique corner cones, which do
+  not chain as sampled; their grids from the edges chain round, planes and
+  cones in turn, the sides laid at 2 A, the quarters as chords, the stated
+  deviation the measured one;
+  `a_strip_of_a_cut_out_face_and_an_ordinary_face_has_one_outline`). CLI
+  `sheet_convert_triangulated`: a rectangle with one rounded corner
+  extruded with a 10 degree taper and shelled (four trapezoid planes and a
+  cone in one strip, `edges` under 0.5 mm, a DXF), and two fans thickened
+  from a surface loft between two arcs and two lines that meet at the
+  origin (`edges` under 0.5 mm, a DXF).
+
+### Lofted Flange (mitcad#2512)
+
+A transition made directly as sheet between two sketch profiles, for
+ducts, hoods and hoppers (`sheet_lofted_flange`,
+[its API](../core/model-api/src/commands.md#lofted-flange-mitcad2512);
+`features/sheet_lofted.rs`, `sheet/folded/lofted.rs` and
+`lofted_geometry.rs`).
+
+- **Profiles.** A sketch's region (its outer boundary) or curves of a
+  sketch joined end to end, both closed or both open, on sketch planes. The
+  second is turned to run the way the first does (round the same way, or
+  from the end nearer the first's start). The profiles lie on the sheet's
+  front; the thickness lies behind it, outwards of a closed transition,
+  along the surface's normals for an open one (Flip: the other side).
+- **Regions (strips).** The transition is a sequence of regions from the
+  first profile to the second, each between a piece of the first (a point,
+  a segment or an arc) and a piece of the second; its lines at the same
+  fraction of both pieces are straight lines of the surface (rulings). A
+  region of points and segments is flat (a triangle or a trapezoid), a
+  point against an arc a cone, two arcs a cone between circles in parallel
+  planes (a cylinder for equal radii). Every region develops without
+  stretching.
+- **Matched profiles.** Profiles in parallel planes that turn one way
+  (convex: lines, arcs and corners all turning left) are joined where they
+  run in the same direction: a line against a line is a trapezoid (their
+  segments are parallel), a line against a corner or a point of an arc a
+  triangle, a corner against an arc a cone, an arc against an arc a cone
+  between the circles; corners against corners fold. This is the classic
+  developable transition (a rectangle to a circle is four triangles and
+  four corner cones, tangent to each other): **die formed** it is the part,
+  and its blank is exact. On the **press brake** each cone is cut into flat
+  facets: triangles from the corner to the arc's chords, or trapezoids
+  between both arcs' chords at the same angles (parallel, so flat), by a
+  count per region (default 4) or as few as keep the chords within a chord
+  tolerance. Every facet is exact, so the blank is.
+- **Other profiles** (on angled planes, not convex, ellipses or splines):
+  the press brake cuts them into polylines the same way and joins them by
+  triangles, each time across the shorter diagonal. Die formed they have no
+  such surface and are refused in words, unless the Approximate development
+  is chosen (below, mitcad#2560).
+- **Seam and gap.** A closed transition opens along a ruling: the shortest
+  (sampled over each region and refined), or the one through the point at
+  the `seam` fraction of the first profile's length (a corner's: the one
+  after its fan). Both profiles lose `gap / 2` (default the thickness) each
+  side of it, measured along them. Where the two cut points fall in one
+  flat region its new edge joins them; where they fall in different regions
+  (the cut on the circle of a rectangle-to-circle transition lies in a
+  corner's cone, the one on the rectangle in a side's triangle), triangles
+  and cones from the farther cut point fill the part between (still
+  developable; they meet the next region at slight folds, 2.45 degrees for
+  the test's rectangle 120 x 80 to a circle of radius 30, 70 up). Two
+  arcs' region is trimmed at the same angle on both arcs (a cone from the
+  farther point fills the rest), so the gap there is at least `gap` on both
+  profiles.
+- **Depth and folds.** The surface `h` behind the front is the regions
+  moved along their normals; where two regions meet at a fold both end on
+  the mitre (`(n1 + n2) / (1 + n1 . n2)`), so a flat region stays flat and
+  exactly `h` behind its front. A curved region meeting a fold keeps a flat
+  sliver between its own moved ruling and the mitre. Folds are signed as
+  bends are: positive towards the back; a fold's inside is on the front
+  when the surface turns away from the material. Folds sharper than 170
+  degrees are refused; where the moved surface would run backwards (the
+  material on the inside of a sharp corner's fan, a rectangle's corners
+  with the material inwards) it is refused as the material folding over
+  itself.
+- **Blank.** The chart is the development of the neutral surface, `K t`
+  behind the front (the rules' K-factor; kerf-bend rules at the middle;
+  measured fold allowances are refused, as for a rolled face, mitcad#2435).
+  Flat bands are laid down exactly; a curved band is laid down as a strip
+  of thin triangles at 1024 and 2048 steps, extrapolated (Richardson), its
+  edges cubic B-splines through 129 stations with their tangents. The
+  chart is checked not to overlap itself. Since the area of a developable
+  surface moved along its normals grows linearly with the distance (folds
+  meeting on mitres too), the folded body's volume is the thickness times
+  the middle surface's area: with K 0.5 the blank's area times `t`.
+- **Folds are sharp** unless Bends is on (below, mitcad#2560). The facets
+  meet at folds without a bend radius (the bend table reports radius 0 and
+  no allowance); a profile's sharp corner folds sharply (a rectangle to a
+  rectangle folds about 89 degrees at its corners).
+- **Body.** The folded body is built of B-spline patches sewn into one solid
+  (`Kernel::patch_body`): the front and the back of every band, the walls
+  along both profiles and at the seam or the open ends. Flat bands are
+  bilinear patches (exactly planar); curved ones cubic along the profiles
+  (through 129 exact stations with their tangents, within about 1e-6 mm)
+  and straight across.
+- **Sheet state and Flat Pattern.** One panel (slot 0) with a
+  `SheetEmbedding::Lofted` chart: the neutral surface's rulings in the body
+  and in the chart, the lines the Flat Pattern marks, the neutral depth and
+  K-factor. The Flat Pattern lays the chart in the plane touching the first
+  ruling: the folds are its bend lines (`bends`, one line each, with their
+  angles, up or down), die formed the lines where flat regions meet formed
+  ones are `facet_lines`; the DXF has them on `BEND_UP`/`BEND_DOWN` and
+  `FACET_LINE`, a drawing's flat view draws them as bend lines and thin
+  lines.
+- **Not yet** (follow-ups): Sheet Cut and the other sheet features on its
+  sheet (refused in words), cuts that reach the sheet's edge, bends where
+  folds meet in a point, import from other files.
+- **Tests.** `lofted_tests.rs` (chains; a rectangle to an offset rectangle
+  as four exact trapezoids; concentric circles laid flat into an annular
+  sector, every station on its circles about the apex; eccentric circles'
+  rulings and profile lengths kept; a rectangle to a circle in triangles and
+  corner cones, faceted, more facets a larger blank, inwards refused; the
+  seam and the gap's lengths; angled planes triangulated; a profile turning
+  both ways not matched), `cli.sheet_lofted_flange` (the Done-when cases:
+  blanks against exact areas, volumes against `t` times the middle
+  surface's area, bend and facet lines, DXFs, refusals) and the UI test
+  `tools/ui-sheet-lofted-flange-test.sh` with its Windows and macOS twins.
+
+#### Holes, bends and the approximate development (mitcad#2560)
+
+- **Holes and cuts** (`sheet/folded/lofted_cut.rs`, called by the sheet
+  adapter of ordinary features). The cut's walls are the result's faces
+  that are not the lofted flange's own; their edges on the front (every
+  sample on the transition's front within 0.1 µm, found over the rulings'
+  triangles moved to the front, each ruling at its own depth) are laid
+  into the chart: on a flat facet by the facet's own map, exactly (a
+  circle stays a circle), elsewhere as a spline through 65 laid points with
+  their tangents. Every front edge moved the thickness along the material
+  direction must lie on a back edge of the walls (0.01 mm, the imports'
+  tolerance): the walls run through the sheet at right angles to it. The
+  front edges join into closed loops, each taken out of the chart by a
+  sheet trim (the chart's curves keep their identities); the body stays
+  the feature's result. Refused in words, the body then without its sheet
+  meaning: material added, slanted walls or a pocket, a cut reaching the
+  sheet's edge (not yet). The inverse of the chart's map
+  (`lofted::located`, `chart_coordinates`) also serves `flat_point` on the
+  lofted body.
+- **Bends** (`bends`, press brake). At each fold between facets a cylinder
+  strip tangent to both: the front's radius R is the rules' radius where
+  the fold's inside is on the front and that plus the thickness where it is
+  on the back; the facets are cut back `R tan(θ/2)` along the fold (the
+  setback), the cylinder's lines run parallel to the fold, and the bend's
+  ends are where they meet the profiles' planes (ellipse arcs: the bend
+  rounds the profiles there). The joins are smooth, so the surface at
+  any depth is the facets moved along their normals and the cylinders'
+  radii changed by the depth: exact. The facets lie flat at K t behind the
+  front, each bend at K t from its inside (`(1 - 2K) t` deeper where its
+  inside is on the back, each ruling stored with its depth), so the bend's
+  width in the blank is its allowance `θ (r + K t)`. The Flat Pattern's
+  bend has the rules' radius, that allowance, its centre line and its two
+  tangent lines. Where two folds meet in a point of a profile (a sharp
+  corner's fan, the tip of a triangle against an arc, the press brake's
+  triangulated transitions) bends of one radius would run into each other:
+  no cylinder pair closes there without stretching or a relief, so it is
+  refused in words (fold sharp, or join profiles whose facets all have four
+  sides: two rectangles, two circles, two rounded rectangles). A facet too
+  narrow for its two setbacks is refused too. Beside the seam two arcs'
+  region is cut at one angle on both arcs, so no cone's fan of facets meets
+  in the seam's cut point.
+- **Approximate development** (`development: triangulated`, die formed).
+  Profiles without a developable surface are joined by the ruled surface
+  between the points at the same share of both profiles' lengths, from the
+  seam (`seam`, or the shortest line) less `gap / 2` each side; a band
+  between every two places where either profile has a corner or another
+  curve begins, so each band is smooth (a crease along the line from a
+  corner). The front's bands are B-spline patches (exact lines across,
+  cubic through 129 exact stations along), sewn and made solid the
+  thickness behind them (`Kernel::thicken`, the side found by a point
+  inside). The bands are the faces of mitcad#2442's strip: their grids (the
+  triangles shared by their lengths, 16 steps across) are laid flat at K t
+  behind the front, and the feature says how far the pattern's lengths
+  along the edges and across differ from the surface's. The sheet is the
+  triangulated pattern's, as Convert to Sheet Metal makes it (a plane
+  chart, `approximation`), so sheet features refuse it and ordinary
+  features take its sheet meaning. Profiles with the exact surface are
+  made exactly, with a remark.
+- **Tests.** `lofted_tests.rs` (an L's bend: the facets less their
+  setbacks and the arc at the middle; a rectangle's corner bends, their
+  depth with the material inwards; folds meeting in a point refused; two
+  arcs cut at one angle at the seam; a point of the body located in the
+  chart and back, a circle staying a circle; the ruled transition between
+  a square and a circle on angled planes, its bands joined and on the
+  profiles, laid flat with the stated difference measured) and
+  `cli.sheet_lofted_flange_cuts_bends` (a hole of diameter 10 through a
+  rectangle-to-circle's facet: the blank exactly its area less; the L and
+  the rectangles with bends of radius 2 against the facets less their
+  setbacks and the bends' arcs, volumes t times the blank at K 0.5; the
+  rectangle to the circle with bends refused; a square to a circle on
+  angled planes die formed refused, then laid flat approximately).
 
 ## Kernel seam
 

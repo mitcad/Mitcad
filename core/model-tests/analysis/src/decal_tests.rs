@@ -7,7 +7,9 @@
 //! developed face when the rod grows thicker; saved with its bytes and read
 //! back the same; a decal whose face is gone saying why; the refusals; a
 //! decal cut at its face's edges and one more than once around a cone
-//! refused (mitcad#2266).
+//! refused (mitcad#2266); a decal on a body of an occurrence following it
+//! to another parent and into a new component (mitcad#2527), and its body
+//! into an existing one (mitcad#2555).
 
 use serde_json::{Value, json};
 
@@ -572,4 +574,241 @@ fn a_decal_more_than_once_around_a_cone_is_refused() {
     // (The circle's points 11.25 degrees apart: chords of it within 0.01
     // mm.)
     assert!(triangle_points(decal).iter().all(|p| p[2] >= -0.02));
+}
+
+/// A decal's corners as points.
+fn corners_of(decal: &Value) -> Vec<[f64; 3]> {
+    decal["corners"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{decal}"))
+        .iter()
+        .map(point)
+        .collect()
+}
+
+fn same_corners(decal: &Value, expected: &[[f64; 3]]) {
+    assert!(decal.get("error").is_none(), "{decal}");
+    let actual = corners_of(decal);
+    assert_eq!(actual.len(), expected.len(), "{decal}");
+    for (a, e) in actual.iter().zip(expected) {
+        assert!((0..3).all(|i| (a[i] - e[i]).abs() < 1e-6), "{decal}: {e:?}");
+    }
+}
+
+/// mitcad#2527: a decal on a face of a body of an occurrence, its path
+/// from the root, follows the occurrence to another parent (Reparent
+/// Occurrence) and its body into a new component (Move into Component),
+/// and lies where it lay.
+#[test]
+fn a_decal_follows_its_occurrence_to_another_parent_and_into_a_component() {
+    let mut doc = Document::new(MockKernel::default());
+    // Arm, 50 up, with a 20 x 20 x 20 block (F2.b0).
+    let created = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Arm", "transform": {"translation": [0, 0, 50]}}),
+    );
+    let arm = created["occurrence"].as_str().unwrap().to_owned();
+    let arm_component = created["component"].as_str().unwrap().to_owned();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+            {"cmd": "activate_component", "component": "C0"},
+        ]),
+    );
+    // Cell, 100 along X.
+    let cell = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Cell", "transform": {"translation": [100, 0, 0]}}),
+    )["occurrence"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "insert_decal", "data": data(), "face": top(), "occurrence": arm,
+               "center": [10, 10], "width": 10}),
+    );
+    let decal = decals(&doc)[0].clone();
+    assert_eq!(decal["occurrence"], json!(arm), "{decal}");
+    // On the block's top at z = 20 in Arm, 70 in the design.
+    let placed = corners_of(&decal);
+    assert!(placed.iter().all(|p| (p[2] - 70.0).abs() < 1e-6), "{decal}");
+
+    // Reparent Occurrence: Arm into Cell, where it is in the design.
+    let result = command(
+        &mut doc,
+        json!({"cmd": "reparent_occurrence", "occurrence": arm, "parent": cell}),
+    );
+    let updated = result["updated"].as_array().unwrap();
+    assert!(updated.contains(&json!("Decal1")), "{result}");
+    let decal = decals(&doc)[0].clone();
+    let through_cell = format!("{cell}/{arm}");
+    assert_eq!(decal["occurrence"], json!(through_cell), "{decal}");
+    same_corners(&decal, &placed);
+
+    // Move into Component: Arm's features go into a new component placed
+    // in Arm; the decal's path goes on through its occurrence.
+    command(
+        &mut doc,
+        json!({"cmd": "move_to_component", "component": arm_component}),
+    );
+    let decal = decals(&doc)[0].clone();
+    let path = decal["occurrence"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{decal}"));
+    assert!(path.starts_with(&format!("{through_cell}/")), "{decal}");
+    assert_eq!(path.split('/').count(), 3, "{decal}");
+    same_corners(&decal, &placed);
+
+    // Each is undone with its move.
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(decals(&doc)[0]["occurrence"], json!(through_cell));
+    command(&mut doc, json!({"cmd": "undo"}));
+    let decal = decals(&doc)[0].clone();
+    assert_eq!(decal["occurrence"], json!(arm));
+    same_corners(&decal, &placed);
+}
+
+/// mitcad#2555: a decal on a face of a body whose features go into an
+/// existing component (Move into Component with an explicit destination)
+/// takes the destination's path from the root, still finds its face and
+/// lies where it lay; Undo gives it its path back. The destination is
+/// placed elsewhere, so the body is rebuilt in its coordinates, where the
+/// top's coordinates start from another origin: the decal's centre is
+/// rewritten (100 mm along the face's x axis here).
+#[test]
+fn a_decal_follows_its_body_into_an_existing_component() {
+    let mut doc = Document::new(MockKernel::default());
+    // Arm, 50 up, with a 20 x 20 x 20 block (F2.b0).
+    let created = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Arm", "transform": {"translation": [0, 0, 50]}}),
+    );
+    let arm = created["occurrence"].as_str().unwrap().to_owned();
+    let arm_component = created["component"].as_str().unwrap().to_owned();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+            {"cmd": "activate_component", "component": "C0"},
+        ]),
+    );
+    // Bin, an existing empty component 100 along X.
+    let created = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Bin", "transform": {"translation": [100, 0, 0]}}),
+    );
+    let bin = created["occurrence"].as_str().unwrap().to_owned();
+    let bin_component = created["component"].as_str().unwrap().to_owned();
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "insert_decal", "data": data(), "face": top(), "occurrence": arm,
+               "center": [10, 10], "width": 10}),
+    );
+    let decal = decals(&doc)[0].clone();
+    assert_eq!(decal["occurrence"], json!(arm), "{decal}");
+    let placed = corners_of(&decal);
+    assert!(placed.iter().all(|p| (p[2] - 70.0).abs() < 1e-6), "{decal}");
+
+    // Arm's features go into Bin, the body staying where it is in the
+    // design.
+    let result = command(
+        &mut doc,
+        json!({"cmd": "move_to_component", "component": arm_component,
+               "features": ["F1", "F2"], "source_occurrence": arm,
+               "destination": {"kind": "existing", "component": bin_component, "occurrence": bin}}),
+    );
+    assert_eq!(result["components"][0]["created"], false, "{result}");
+    let decal = decals(&doc)[0].clone();
+    assert_eq!(decal["occurrence"], json!(bin), "{decal}");
+    same_corners(&decal, &placed);
+
+    command(&mut doc, json!({"cmd": "undo"}));
+    let decal = decals(&doc)[0].clone();
+    assert_eq!(decal["occurrence"], json!(arm), "{decal}");
+    same_corners(&decal, &placed);
+    assert_eq!(decal["center"], json!([10.0, 10.0]), "{decal}");
+}
+
+/// mitcad#2555: into an existing component turned a quarter turn about Z,
+/// a decal on the moved body's top still lies where it lay, the same way
+/// round: the destination's x axis is the design's Y, so the top's
+/// coordinates are turned too, and the decal's angle is rewritten with its
+/// centre. Undo gives back both.
+#[test]
+fn a_decal_keeps_its_place_and_turn_in_a_turned_destination() {
+    let mut doc = Document::new(MockKernel::default());
+    // Arm, 50 up, with a 20 x 20 x 20 block (F2.b0).
+    let created = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Arm", "transform": {"translation": [0, 0, 50]}}),
+    );
+    let arm = created["occurrence"].as_str().unwrap().to_owned();
+    let arm_component = created["component"].as_str().unwrap().to_owned();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+            {"cmd": "activate_component", "component": "C0"},
+        ]),
+    );
+    // Bin, 100 along X and turned a quarter turn about Z (its X along the
+    // design's Y).
+    let created = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "Bin",
+               "transform": [[0, -1, 0, 100], [1, 0, 0, 0], [0, 0, 1, 0]]}),
+    );
+    let bin = created["occurrence"].as_str().unwrap().to_owned();
+    let bin_component = created["component"].as_str().unwrap().to_owned();
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "insert_decal", "data": data(), "face": top(), "occurrence": arm,
+               "center": [10, 10], "width": 10}),
+    );
+    let decal = decals(&doc)[0].clone();
+    let placed = corners_of(&decal);
+    // Its top edge (top left to top right) along the design's X.
+    assert!(placed[1][0] - placed[0][0] > 9.0, "{decal}");
+
+    command(
+        &mut doc,
+        json!({"cmd": "move_to_component", "component": arm_component,
+               "features": ["F1", "F2"], "source_occurrence": arm,
+               "destination": {"kind": "existing", "component": bin_component, "occurrence": bin}}),
+    );
+    let decal = decals(&doc)[0].clone();
+    assert_eq!(decal["occurrence"], json!(bin), "{decal}");
+    same_corners(&decal, &placed);
+    // The design's X is the top's -y in Bin: the decal turned -90 degrees
+    // there.
+    near(&decal["angle"], -90.0);
+
+    command(&mut doc, json!({"cmd": "undo"}));
+    let decal = decals(&doc)[0].clone();
+    assert_eq!(decal["occurrence"], json!(arm), "{decal}");
+    same_corners(&decal, &placed);
+    near(&decal["angle"], 0.0);
 }

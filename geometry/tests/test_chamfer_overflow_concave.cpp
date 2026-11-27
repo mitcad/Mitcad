@@ -64,6 +64,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/user_error.hpp"
 #include "mitcad/io/step.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -734,7 +735,7 @@ void test_warning_on_an_eave() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(chamfer_overflow_concave) {
   test::guarded("octagon foot", test::test_octagon_foot);
   test::guarded("octagon foot to the rim", test::test_octagon_foot_to_the_rim);
   test::guarded("warning on an eave", test::test_warning_on_an_eave);

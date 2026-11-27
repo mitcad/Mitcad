@@ -129,7 +129,12 @@ Matching rules:
   geometry kernel failed on (an operation that failed or built an invalid
   shape, a taper that failed) is tried on the stored state the same way
   (mitcad#325: an extrusion whose decoded cut came out invalid on the
-  replay's bodies).
+  replay's bodies). So are an offset of faces the kernel's offset leaves
+  open and a delete of faces whose neighbours do not close the gap
+  (mitcad#2557: both failed on bodies whose measures were the state's,
+  where nothing was retried and the import could not tell the kernel's
+  failure from what the bodies carry; with `--retry-bodies replace` they
+  run on the stored bodies themselves).
 - The note of an item that falls back says why its decoded definition (the
   first one not guessed) failed, where it failed and the guesses after it
   only built other results or nothing that reached a body: "fillet failed;
@@ -708,7 +713,7 @@ body records | 8 bytes | u32 compute | u32 kind | i32 -1 | …`
 The layout comes from two path patterns: the reference model's (a body
 patterned four times along a straight sketch line, spacing, none of the
 flags set; its decoded fields are its dump's,
-`core/f3d/tests/design_models.rs`) and the one design of the corpora
+`core/f3d/tests/read/design_models.rs`) and the one design of the corpora
 with one (`b832916a`, mitcad#658, mitcad#673: 372 copies of a rib's
 extrusion and its rounding along the closed outline of a bin, by extent,
 identical, one body record). The reference model, without body records,

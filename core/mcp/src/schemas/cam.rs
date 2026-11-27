@@ -237,7 +237,8 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                         "length": cam_value("Its stick-out; the flute length and 5 mm when left out"),
                         "flutes": {"type": "integer", "minimum": 1, "description": "Its number of flutes"},
                         "holder": text("Its holder"),
-                        "cutting": object("Its default {spindle_rpm, feed, plunge_feed}, values (a feed is a length per minute)")
+                        "cutting": object("Its default {spindle_rpm, feed, plunge_feed}, values (a feed is a length per minute)"),
+                        "insert": object("A turning tool's or boring bar's insert and holder: {insert (an ISO insert code, \"CNMG 120408\"), holder (an ISO holder code, \"PCLNR 2525 M12\", or a boring bar's, \"S25S-PCLNR 12\"), tip_angle, approach_angle (degrees), hand (right, left, neutral)}, each optional; a typed value wins over the code's, and the insert code's corner radius is the nose radius when none is given (model_reference {\"section\": \"CAM: a turning tool's insert and holder (mitcad#2502)\"})")
                     },
                     "required": ["number", "shape", "diameter"],
                     "additionalProperties": false

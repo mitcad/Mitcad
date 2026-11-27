@@ -43,6 +43,11 @@ click-pick 'profile ${p2:re} at '
 wait-log '^Extrude Profiles: 2 profiles'
 click-pick 'profile ${p3:re} at '
 wait-log '^Extrude Profiles: 3 profiles'
+# A new Extrude starts at 0 mm (mitcad#2481): 10 mm typed; the 3D view
+# has the keyboard again, as after the picks above (Ctrl held in a text
+# field hides no preview).
+type-in '^Panel Extrude input distance at ' '10 mm'
+focus-widget modelView
 wait-log '^Preview Extrude: ok' 30
 wait-idle 30
 expect-log '^Preview bodies: (?=(?:.*? new(?:;|$)){3})(?!(?:.*? new(?:;|$)){4})'

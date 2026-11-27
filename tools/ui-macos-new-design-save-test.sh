@@ -60,7 +60,10 @@ if [ -f "$files/local.mitcad" ] && [ -f "$team/Untitled.mitcad" ]; then
 else
   ui_fail 'a saved design is missing'
 fi
-if git -C "$team" log --format=%s 2> /dev/null | grep -q 'Untitled\.mitcad'; then
+# Read whole, then searched: piped into grep -q under pipefail, git's next
+# line could meet the closed pipe and fail the check (mitcad#2601).
+subjects=$(git -C "$team" log --format=%s 2> /dev/null)
+if grep -q 'Untitled\.mitcad' <<< "$subjects"; then
   ui_pass 'the design in the project is a version'
 else
   ui_fail 'no version of Untitled.mitcad in the project'

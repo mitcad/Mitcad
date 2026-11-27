@@ -408,7 +408,8 @@ bool MainWindow::openProjectDesign(const QString& root, const QString& preferred
   }
   const QString path = QDir(root).filePath(design);
   QString error;
-  if (!loadDesign(path, error)) {
+  // Changes made to it in place elsewhere settled first (mitcad#2527).
+  if (!settleInPlaceForOpen(path, error) || !loadDesign(path, error)) {
     if (!error.isEmpty()) {
       const QString message = tr("Could not open %1:\n%2").arg(QDir::toNativeSeparators(path), error);
       qWarning().noquote() << message;

@@ -28,6 +28,10 @@
 //! Two dialects (mitcad#2425): Fanuc lathe controls ([`FanucTurning`]) and
 //! LinuxCNC on a lathe ([`LinuxCncTurning`]), which writes every operation
 //! longhand, its threads as G33 moves.
+//!
+//! Manual G-code (mitcad#2506, [`super::ManualBlock`]) is written as it is
+//! between the operations, fenced by comments, with a defined state before
+//! it and everything stated again after it.
 
 use serde::Serialize;
 
@@ -342,7 +346,14 @@ pub trait TurningPost {
     /// The tape mark, the program's number and its name.
     fn start(&self, out: &mut TurnOutput, program: &TurningProgram);
     /// The modes and the work offset.
-    fn header(&self, out: &mut TurnOutput, program: &TurningProgram);
+    fn header(&self, out: &mut TurnOutput, program: &TurningProgram) {
+        self.modes(out);
+        out.line(format!("G{}", 53 + u32::from(program.work_offset)));
+    }
+    /// The program's modes (units, plane, compensation off, feeds per
+    /// revolution and the rest of the dialect's), as the header writes
+    /// them and again after a manual block (mitcad#2506).
+    fn modes(&self, out: &mut TurnOutput);
     fn footer(&self, out: &mut TurnOutput, program: &TurningProgram);
     /// Indexes the turret to the tool with its offset.
     fn tool_change(&self, out: &mut TurnOutput, tool: &TurningTool);
@@ -434,6 +445,127 @@ pub trait TurningPost {
     fn tool_words(&self, tool: &TurningTool) -> String {
         format!("T{:02}{:02}", tool.number, tool.offset_number())
     }
+    // Manual G-code blocks (mitcad#2506).
+    /// What a manual block's line holds that this control would not run
+    /// as part of the program, in words; none when the post writes it.
+    fn manual_refusal(&self, line: &str) -> Option<String> {
+        manual_refusal(line, self.control())
+    }
+}
+
+/// What a manual block's line holds that the control would not run as a
+/// part of the program (mitcad#2506), in words; none when the post may
+/// write it as it is. Refused: a character other than printable ASCII
+/// (a tab too), the fencing comments' text, a comment that is not closed,
+/// a tape mark (`%`), an N word (the post numbers the lines and the
+/// cycles refer to them), the program's end (M2, M30) and, on a Fanuc
+/// control, an O word (a program number), M99 (a return or a jump) and
+/// lower case letters outside comments; on LinuxCNC an O word other than a
+/// subroutine call (`o<name> call`). Runs of letters (a macro's `GOTO`,
+/// `SIN`, `EQ`) are words of their own, not addresses; `;` starts a
+/// comment on LinuxCNC.
+pub fn manual_refusal(line: &str, control: Control) -> Option<String> {
+    let lcnc = control == Control::LinuxCnc;
+    if line.chars().any(|c| !c.is_ascii() || c.is_ascii_control()) {
+        return Some(
+            "a character the control does not read here (only printable ASCII, no tabs)".to_owned(),
+        );
+    }
+    let upper = line.to_ascii_uppercase();
+    if upper.contains(super::MANUAL_BEGIN) || upper.contains(super::MANUAL_END) {
+        return Some("the text of the comments that fence the manual code".to_owned());
+    }
+    // The code outside comments.
+    let mut code = String::new();
+    let mut comment = false;
+    for c in line.chars() {
+        if comment {
+            if c == ')' {
+                comment = false;
+            }
+            continue;
+        }
+        match c {
+            '(' => comment = true,
+            ';' if lcnc => break,
+            c => code.push(c),
+        }
+    }
+    if comment {
+        return Some("a comment that is not closed".to_owned());
+    }
+    if code.contains('%') {
+        return Some("a tape mark (%), which ends the program there".to_owned());
+    }
+    if !lcnc && code.chars().any(|c| c.is_ascii_lowercase()) {
+        return Some("lower case letters: the control reads capitals".to_owned());
+    }
+    let chars: Vec<char> = code.to_ascii_uppercase().chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_ascii_alphabetic() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && chars[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+        if i - start > 1 {
+            continue;
+        }
+        let letter = chars[start];
+        let mut j = i;
+        while j < chars.len() && chars[j] == ' ' {
+            j += 1;
+        }
+        let mut value = String::new();
+        while j < chars.len() && (chars[j].is_ascii_digit() || matches!(chars[j], '.' | '-' | '+'))
+        {
+            value.push(chars[j]);
+            j += 1;
+        }
+        match letter {
+            'N' => {
+                return Some(
+                    "an N word: the post numbers the lines itself, and its cycles refer to them"
+                        .to_owned(),
+                );
+            }
+            'O' if !lcnc => {
+                return Some("an O word, a program number inside the program".to_owned());
+            }
+            'O' => {
+                let rest: String = chars[j..].iter().collect();
+                let call = rest
+                    .split(|c: char| !c.is_ascii_alphabetic())
+                    .any(|w| w == "CALL");
+                if !call {
+                    return Some(
+                        "an O word other than a subroutine call (o<name> call)".to_owned(),
+                    );
+                }
+                // The rest is the call's name and arguments.
+                return None;
+            }
+            'M' => match value.parse::<u32>() {
+                Ok(v @ (2 | 30)) => {
+                    return Some(format!(
+                        "M{v}, the program's end; the post writes the end after the operations"
+                    ));
+                }
+                Ok(99) if !lcnc => {
+                    return Some(
+                        "M99, a return or a jump that leaves the program's order".to_owned(),
+                    );
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        i = j.max(i);
+    }
+    None
 }
 
 /// Fanuc lathe controls (Series 0i-TF, 31i-B and their kin) in G-code
@@ -463,9 +595,8 @@ impl TurningPost for FanucTurning {
         }
     }
 
-    fn header(&self, out: &mut TurnOutput, program: &TurningProgram) {
+    fn modes(&self, out: &mut TurnOutput) {
         out.line(format!("{} G18 G40 G99", out.units_code()));
-        out.line(format!("G{}", 53 + u32::from(program.work_offset)));
     }
 
     fn footer(&self, out: &mut TurnOutput, _program: &TurningProgram) {
@@ -655,10 +786,9 @@ impl TurningPost for LinuxCncTurning {
         out.raw("%");
     }
 
-    fn header(&self, out: &mut TurnOutput, program: &TurningProgram) {
+    fn modes(&self, out: &mut TurnOutput) {
         out.line(format!("{} G18 G7 G90 G91.1 G40 G80 G95", out.units_code()));
         out.line(format!("G64 P{}", out.len(out.arc_tolerance)));
-        out.line(format!("G{}", 53 + u32::from(program.work_offset)));
     }
 
     fn footer(&self, out: &mut TurnOutput, _program: &TurningProgram) {
@@ -890,6 +1020,88 @@ fn release(
     out.forget();
 }
 
+/// The post's state between operations that a manual block changes
+/// (mitcad#2506).
+struct Between<'a> {
+    coolant: Coolant,
+    running: Option<SpindleDirection>,
+    tool: Option<&'a TurningTool>,
+    limit: Option<f64>,
+    speed: Option<TurnSpindle>,
+    sub: bool,
+}
+
+/// Writes a manual block (mitcad#2506, [`super::ManualBlock`]): into it
+/// the coolant off, the live tool and the C axis off, the tool at the
+/// change position, the spindle that holds the part stopped; its lines
+/// between the fencing comments; out of it the modes and the work offset
+/// (the sub-spindle's after the hand-over), the coolant and the spindle
+/// off, and nothing known of the tool, the spindle's speed and limit or
+/// where the tool is, so that the next operation writes them all.
+fn manual_block(
+    out: &mut TurnOutput,
+    dialect: &dyn TurningPost,
+    program: &TurningProgram,
+    block: &super::ManualBlock,
+    state: &mut Between<'_>,
+    live_state: &mut super::live::LiveState,
+) -> Result<(), CamError> {
+    let lines: Vec<&str> = block
+        .lines
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    for (k, line) in lines.iter().enumerate() {
+        if let Some(why) = dialect.manual_refusal(line) {
+            return Err(CamError::new(format!(
+                "The manual G-code {} cannot be written for {}: its line {} has {why}.",
+                block.name,
+                dialect.label(),
+                k + 1
+            )));
+        }
+    }
+    if state.coolant != Coolant::Off {
+        dialect.coolant(out, Coolant::Off)?;
+        state.coolant = Coolant::Off;
+    }
+    super::live::stop(out, dialect, program, live_state);
+    out.motion(&TurnMove::Rapid {
+        to: program.change_position,
+    });
+    if state.running.is_some() {
+        stop_spindle(out, dialect, program, state.sub);
+        state.running = None;
+    }
+    out.notice(&format!(
+        "{}: {}, not simulated or read back",
+        super::MANUAL_BEGIN,
+        block.name
+    ));
+    for line in lines {
+        out.line(line);
+    }
+    out.notice(super::MANUAL_END);
+    // Nothing the block did is known.
+    out.forget();
+    *live_state = super::live::LiveState::default();
+    dialect.modes(out);
+    let offset = match (&program.hand_over, state.sub) {
+        (Some(h), true) => h.work_offset,
+        _ => program.work_offset,
+    };
+    out.line(format!("G{}", 53 + u32::from(offset)));
+    dialect.coolant(out, Coolant::Off)?;
+    stop_spindle(out, dialect, program, state.sub);
+    state.coolant = Coolant::Off;
+    state.running = None;
+    state.tool = None;
+    state.limit = None;
+    state.speed = None;
+    Ok(())
+}
+
 /// Writes a turning program in a dialect.
 pub fn turning_post(
     program: &TurningProgram,
@@ -978,6 +1190,33 @@ pub fn turning_post(
     let first_sub = program.first_sub();
     let mut sub = false;
     for (index, op) in program.operations.iter().enumerate() {
+        // The manual blocks before it (mitcad#2506).
+        for block in program.manual.iter().filter(|b| b.at == index) {
+            let mut state = Between {
+                coolant,
+                running,
+                tool,
+                limit,
+                speed,
+                sub,
+            };
+            manual_block(
+                &mut out,
+                dialect,
+                program,
+                block,
+                &mut state,
+                &mut live_state,
+            )?;
+            Between {
+                coolant,
+                running,
+                tool,
+                limit,
+                speed,
+                ..
+            } = state;
+        }
         if let Some(hand_over) = &program.hand_over {
             if Some(index) == grip_at {
                 if coolant != Coolant::Off {
@@ -1158,6 +1397,32 @@ pub fn turning_post(
                 i += 1;
             }
         }
+    }
+    // The manual blocks after the last operation, before the end
+    // (mitcad#2506).
+    let last = program.operations.len();
+    for block in program.manual.iter().filter(|b| b.at == last) {
+        let mut state = Between {
+            coolant,
+            running,
+            tool,
+            limit,
+            speed,
+            sub,
+        };
+        manual_block(
+            &mut out,
+            dialect,
+            program,
+            block,
+            &mut state,
+            &mut live_state,
+        )?;
+        Between {
+            coolant,
+            running,
+            ..
+        } = state;
     }
     if coolant != Coolant::Off {
         dialect.coolant(&mut out, Coolant::Off)?;

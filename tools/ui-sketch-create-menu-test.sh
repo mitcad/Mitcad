@@ -72,7 +72,7 @@ SOLID_CREATE="New Component | Create Sketch | - | Extrude | Revolve | Sweep | Lo
 SOLID_CREATE="$SOLID_CREATE | - | Hole | Cell Grid | Thread"
 SOLID_CREATE="$SOLID_CREATE | - | Box | Cylinder | Cone | Sphere | Torus | Coil | Pipe"
 SOLID_CREATE="$SOLID_CREATE | - | Pattern > [$SOLID_PATTERNS] | Mirror | Thicken | Boundary Fill"
-SOLID_CREATE="$SOLID_CREATE | - | Curves > [Helix | Intersection Curve | Helix Curve]"
+SOLID_CREATE="$SOLID_CREATE | - | Curves > [Helix | Intersection Curve | Helix Curve | Isoparametric Curve]"
 SOLID_CREATE="$SOLID_CREATE | - | Plastic Feature | Envelope | Form | Flex"
 SOLID_CREATE="$SOLID_CREATE | - | Machine Elements > [Gear | Gear Pair | Pulley | Belt Drive | Bearing"
 

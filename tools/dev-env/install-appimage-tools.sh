@@ -21,20 +21,44 @@ set -euo pipefail
 
 DIR=${MITCAD_APPIMAGE_TOOLS:-$HOME/appimage-tools}
 
-# name, release asset, SHA-256 published with it. linuxdeploy-plugin-qt has
-# published digests only on its continuous build (of 22.8.2026): when that
-# is rebuilt, the check fails and the digest here is to be updated.
-TOOLS=(
-  linuxdeploy
-  https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
-  c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
-  linuxdeploy-plugin-qt
-  https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-  cfc1055b2b9dbc08412b579f20990b7b41a17b61beaa5847dc9477c96c9e9617
-  appimagetool
-  https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-  ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
-)
+# name, release asset, SHA-256 published with it, for this machine's
+# architecture (x86-64, or aarch64 for Linux on 64-bit ARM: the same
+# releases' aarch64 assets). linuxdeploy-plugin-qt has published digests
+# only on its continuous build (of 22.8.2026): when that is rebuilt, the
+# check fails and the digests here are to be updated.
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)
+    TOOLS=(
+      linuxdeploy
+      https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+      c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+      linuxdeploy-plugin-qt
+      https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+      cfc1055b2b9dbc08412b579f20990b7b41a17b61beaa5847dc9477c96c9e9617
+      appimagetool
+      https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+      ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+    )
+    ;;
+  aarch64)
+    TOOLS=(
+      linuxdeploy
+      https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-aarch64.AppImage
+      620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff
+      linuxdeploy-plugin-qt
+      https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
+      d5b5a9020065cefda8c7af7c9500f686b23640eac50c88201a81752c6ee2e49c
+      appimagetool
+      https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-aarch64.AppImage
+      f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+    )
+    ;;
+  *)
+    echo "install-appimage-tools.sh: no AppImage tools for $ARCH (x86_64 and aarch64 only)" >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$DIR/bin"
 for ((i = 0; i < ${#TOOLS[@]}; i += 3)); do
@@ -66,7 +90,7 @@ done
 # The runtime: appimagetool's AppImage up to its file system, with the
 # sections of its update information and signature zeroed.
 image=$DIR/appimagetool.AppImage
-runtime=$DIR/runtime-x86_64
+runtime=$DIR/runtime-$ARCH
 offset=$("$image" --appimage-offset)
 head -c "$offset" "$image" > "$runtime.part"
 for section in .upd_info .sha256_sig .sig_key .digest_md5; do

@@ -1,0 +1,187 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: the enlarged face of a spindle torus stops at its apexes, and an
+offset whose unwinding keeps no shell is an error, not success with no
+shape (mitcad#2457, GitHub mitcad/Mitcad#678).
+
+1. A shelled block with rounded edges, a rounded bead along its outline
+   that ends at a corner in a spindle torus (major radius 0.6, minor 1.4:
+   it meets itself at two apexes on its axis), some faces moved by their
+   own offsets and every other face at 0 (MitCad's Offset Face): the
+   offset gave no shape, whatever faces it moved, also faces far from the
+   corner. EnLargeFace enlarges a face on a periodic surface by a tenth of
+   the rest of the period on each side; the torus face (v from 3pi/2 to
+   2pi) was enlarged past the apex (at v = -acos(-R/r), 0.03 rad beyond its
+   reach), into the torus' other part. There the face's offset met its
+   neighbours' a second time (a loop of the intersection round the apex),
+   its own loop did not close, the outer rounding beside it was left as its
+   untrimmed enlarged face, and the unwinding of the shells dropped the
+   shell with those free edges. The enlarged face of a spindle torus, also
+   given as an offset surface of a torus, now stops at the apexes on the
+   face's side, as a cone's stops at its apex, and MakeFace takes the iso
+   at an apex for a point (a degenerated edge), as it does a cone's.
+
+2. Where the unwinding (SelectShells) keeps no shell, MakeOffsetShape
+   reported success with no shape (IsDone true, no error): MitCad read the
+   empty result ("the offset produced no solid"), and in 0.72.0 on Windows
+   the Offset Face of the reported design ended in an access violation.
+   It is now not done, with BRepOffset_UnknownError.
+
+On the reported body the offset now closes (the four faces moved 2 mm, the
+sum of the four moves). On the chain without patch 2418 one edge of it comes
+out with a tolerance of 2.9 mm: the tangent edge between two faces that keep
+their offset 0 (a sloped plane and a swept band, a B-spline whose parameter
+runs 38 times faster than the edge's), trimmed where the moved faces' new
+positions meet them; BRepOffset_Inter2d's ExtendPCurve makes the band's
+straight curve under the edge (a two-pole B-spline over [-2.72, 0]) a line
+of unit speed from its first pole. With patch 2418 before this one, as in
+MitCad's port, the result is valid (23801.198 mm3 in MitCad).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2457.
+
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index 35e64d0d..08bf93b7 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -1083,6 +1083,14 @@ void BRepOffset_MakeOffset::MakeOffsetShape(const Message_ProgressRange& theRang
+   // Unwinding 3D.
+   //--------------
+   SelectShells();
++  if (myOffsetShape.IsNull())
++  {
++    // Unwinding removed every shell: none closes up (an offset face left
++    // without a loop leaves free edges). Not done, and said so, instead of
++    // success with no shape (mitcad#2457).
++    myError = BRepOffset_UnknownError;
++    return;
++  }
+   //----------------------------------
+   // Remove INTERNAL edges if necessary
+   //----------------------------------
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+index 6894f41d..bc2af2f2 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -65,6 +65,8 @@
+ #include <Geom_BezierCurve.hxx>
+ #include <Geom_Conic.hxx>
+ #include <Geom_ConicalSurface.hxx>
++#include <Geom_ToroidalSurface.hxx>
++#include <gp_Torus.hxx>
+ #include <Geom_Curve.hxx>
+ #include <Geom_Line.hxx>
+ #include <Geom_OffsetSurface.hxx>
+@@ -3699,6 +3701,44 @@ static void SelectEdge(const TopoDS_Face& /*F*/,
+ 
+ //=================================================================================================
+ 
++//! True for a spindle torus (its major radius smaller than its minor one),
++//! also given as an offset surface of a torus: it meets itself at two
++//! apexes on its axis, where R + r cos(v) = 0, at v = +-theApexV, theMinor
++//! being r (the offset's included, on the part of the torus outside the
++//! apexes, where its normal points out of the tube) (mitcad#2457).
++static bool IsSpindleTorus(const occ::handle<Geom_Surface>& theSurf,
++                           double&                          theApexV,
++                           double&                          theMajor,
++                           double&                          theMinor)
++{
++  occ::handle<Geom_Surface> aBasis  = theSurf;
++  double                    aOffset = 0.;
++  if (const occ::handle<Geom_OffsetSurface> aOS = occ::down_cast<Geom_OffsetSurface>(theSurf))
++  {
++    aBasis  = aOS->BasisSurface();
++    aOffset = aOS->Offset();
++  }
++  if (const occ::handle<Geom_RectangularTrimmedSurface> aRT =
++        occ::down_cast<Geom_RectangularTrimmedSurface>(aBasis))
++  {
++    aBasis = aRT->BasisSurface();
++  }
++  const occ::handle<Geom_ToroidalSurface> aTorusS = occ::down_cast<Geom_ToroidalSurface>(aBasis);
++  if (aTorusS.IsNull())
++  {
++    return false;
++  }
++  const gp_Torus aTorus = aTorusS->Torus();
++  theMajor              = aTorus.MajorRadius();
++  theMinor = aTorus.MinorRadius() + (aTorus.Position().Direct() ? aOffset : -aOffset);
++  if (!(theMajor < theMinor - Precision::Confusion()))
++  {
++    return false;
++  }
++  theApexV = std::acos(-theMajor / theMinor);
++  return true;
++}
++
+ static void MakeFace(const occ::handle<Geom_Surface>& S,
+                      const double                     Um,
+                      const double                     UM,
+@@ -3744,6 +3784,21 @@ static void MakeFace(const occ::handle<Geom_Surface>& S,
+       vmaxdegen = true;
+     }
+   }
++  // A spindle torus bounded at an apex (EnLargeFace): that iso is a point.
++  double aSpindleV = 0., aSpindleR = 0., aSpindler = 0.;
++  if (IsSpindleTorus(theSurf, aSpindleV, aSpindleR, aSpindler))
++  {
++    if (!Precision::IsInfinite(VMin)
++        && std::abs(aSpindleR + aSpindler * std::cos(VMin)) <= Precision::Confusion())
++    {
++      vmindegen = true;
++    }
++    if (!Precision::IsInfinite(VMax)
++        && std::abs(aSpindleR + aSpindler * std::cos(VMax)) <= Precision::Confusion())
++    {
++      vmaxdegen = true;
++    }
++  }
+ 
+   // compute vertices
+   BRep_Builder     B;
+@@ -4705,6 +4760,44 @@ bool BRepOffset_Tool::EnLargeFace(const TopoDS_Face& F,
+     }
+   }
+ 
++  // Special treatment for spindle tori (mitcad#2457), as for cones above: a
++  // spindle torus meets itself at its two apexes, and past them its surface
++  // runs on into the other part of the torus (the outer part into the inner
++  // one, or back), through the region on the face's own side. Enlarged past
++  // an apex, the face's offset met its neighbours' a second time there (a
++  // loop of the intersection round the apex), its own loop did not close and
++  // the faces beside it were left untrimmed: the offset of a body with a
++  // rounded bead ending in such a torus at a corner gave no shape, whatever
++  // faces it moved. The enlarged face stops at the apexes on the face's side.
++  double aSpindleV = 0., aSpindleR = 0., aSpindler = 0.;
++  if (IsSpindleTorus(theSurf, aSpindleV, aSpindleR, aSpindler))
++  {
++    const double aTwoPi = 2. * M_PI;
++    const double aMid   = 0.5 * (VF1 + VF2);
++    const double aK     = std::floor((aMid + M_PI) / aTwoPi) * aTwoPi;
++    const double aM     = aMid - aK; // in [-pi, pi)
++    double       aLo    = aK - aSpindleV;
++    double       aHi    = aK + aSpindleV;
++    if (aM >= aSpindleV)
++    {
++      // the inner part, round v = pi
++      aLo = aK + aSpindleV;
++      aHi = aK + aTwoPi - aSpindleV;
++    }
++    else if (aM <= -aSpindleV)
++    {
++      // the inner part, round v = -pi
++      aLo = aK - aTwoPi + aSpindleV;
++      aHi = aK - aSpindleV;
++    }
++    constexpr double aTolV = Precision::PConfusion();
++    if (VF1 >= aLo - aTolV && VF2 <= aHi + aTolV)
++    {
++      VV1 = std::max(VV1, aLo);
++      VV2 = std::min(VV2, aHi);
++    }
++  }
++
+   if (!theEnlargeU)
+   {
+     UU1 = UF1;

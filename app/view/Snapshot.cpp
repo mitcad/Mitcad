@@ -206,4 +206,22 @@ QImage OcctViewer::snapshot(const QSize& size, bool transparent, bool withMeasur
   return image;
 }
 
+QImage OcctViewer::snapshotFrom(const occ::handle<Graphic3d_Camera>& camera, const QSize& size, gp_Dir* direction) {
+  if (m_view.IsNull() || camera.IsNull()) {
+    return QImage();
+  }
+  // The view's camera object stays (its owners keep the handle): its
+  // values are swapped for the frame's and back.
+  const occ::handle<Graphic3d_Camera> own = new Graphic3d_Camera(m_view->Camera());
+  m_view->Camera()->Copy(camera);
+  if (direction != nullptr) {
+    *direction = m_view->Camera()->Direction();
+  }
+  QImage image = snapshot(size, false, false);
+  m_view->Camera()->Copy(own);
+  m_view->Invalidate();
+  update();
+  return image;
+}
+
 } // namespace mitcad

@@ -58,6 +58,7 @@
 #include <TopoDS_Compound.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -252,7 +253,7 @@ void test_corners_roll_on_the_lip_edge() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_end_edge_turn) {
   test::guarded("test_corners_roll_on_the_lip_edge", test::test_corners_roll_on_the_lip_edge);
   if (test::failures == 0) {
     std::puts("test_fillet_end_edge_turn: all checks passed");

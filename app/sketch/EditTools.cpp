@@ -41,8 +41,26 @@ bool isLine(const SketchModel& model, const QString& id) {
 // ---------------------------------------------------------------------------
 // Trim and Extend
 
-// The piece of a curve between the curves crossing it around `at`.
-std::vector<V2> trimPiece(const SketchModel& model, const CurveData& c, const V2& at, double step) {
+// The parameters of the piece of a curve between the curves crossing it
+// around `at`: from `lo` to `hi`, which on a closed curve may run past the
+// curve's range by up to one `period`.
+struct PieceRange {
+  double lo = 0.0;
+  double hi = 0.0;
+  bool closedSpline = false;
+  double period = kTwoPi;
+
+  // The curve's parameter of `u` on the piece (a closed spline's wrapped
+  // into its range).
+  double wrapped(const Curve2& curve, double u) const {
+    if (closedSpline) {
+      return u < curve.t0() ? u + period : u > curve.t1() ? u - period : u;
+    }
+    return u;
+  }
+};
+
+PieceRange trimRange(const SketchModel& model, const CurveData& c, const V2& at) {
   std::vector<double> cuts;
   for (const CurveData& other : model.curves) {
     if (other.id == c.id) {
@@ -93,20 +111,44 @@ std::vector<V2> trimPiece(const SketchModel& model, const CurveData& c, const V2
       }
     }
   }
+  PieceRange range;
+  range.lo = lo;
+  range.hi = hi;
+  range.closedSpline = closedSpline;
+  range.period = period;
+  return range;
+}
+
+// Whether two ranges of one curve are the same piece (a closed curve's
+// counted round, mitcad#2524).
+bool samePiece(const CurveData& c, const PieceRange& a, const PieceRange& b) {
+  constexpr double kTolerance = 1e-9;
+  if (c.curve.isClosed() || a.closedSpline) {
+    return std::abs(std::remainder(a.lo - b.lo, a.period)) <= kTolerance &&
+           std::abs(std::remainder(a.hi - b.hi, a.period)) <= kTolerance;
+  }
+  return std::abs(a.lo - b.lo) <= kTolerance && std::abs(a.hi - b.hi) <= kTolerance;
+}
+
+// The points of a piece, about `step` mm apart (a line's: its ends).
+std::vector<V2> piecePoints(const CurveData& c, const PieceRange& range, double step) {
   std::vector<V2> piece;
+  const double lo = range.lo;
+  const double hi = range.hi;
   const double length = (hi - lo) * (c.curve.type == Curve2::Type::Line ? norm(c.curve.b - c.curve.a)
                                                                         : std::max(c.curve.radius, 1.0));
   const int count = c.curve.type == Curve2::Type::Line
                         ? 1
                         : std::clamp(static_cast<int>(std::abs(length) / std::max(step, 1e-6)), 8, 400);
   for (int i = 0; i <= count; ++i) {
-    double u = lo + (hi - lo) * i / count;
-    if (closedSpline) {
-      u = u < c.curve.t0() ? u + period : u > c.curve.t1() ? u - period : u;
-    }
-    piece.push_back(c.curve.at(u));
+    piece.push_back(c.curve.at(range.wrapped(c.curve, lo + (hi - lo) * i / count)));
   }
   return piece;
+}
+
+// The piece of a curve between the curves crossing it around `at`.
+std::vector<V2> trimPiece(const SketchModel& model, const CurveData& c, const V2& at, double step) {
+  return piecePoints(c, trimRange(model, c, at), step);
 }
 
 // What a click on a curve does: Trim, Extend, Break (split at the crossings
@@ -180,7 +222,7 @@ public:
     case ClickMode::Trim:
       break;
     }
-    m_c.hint(QObject::tr("Trim: click the part of a curve to remove."));
+    m_c.hint(QObject::tr("Trim: click the part of a curve to remove, or drag across the parts to remove."));
   }
 
   void move(const Snap& snap) override {
@@ -190,10 +232,227 @@ public:
       m_c.setHover(m_curve);
     }
     m_split = splitAt(snap, m_curve);
+    // Trim's press moved further than a click's tolerance is a sweep
+    // (mitcad#2524): from its start, every piece it crosses or passes over.
+    if (m_pressed && !m_sweeping &&
+        std::hypot(snap.screen.x() - m_pressSnap.screen.x(), snap.screen.y() - m_pressSnap.screen.y()) >
+            kClickPixels) {
+      m_sweeping = true;
+      qDebug().noquote() << QStringLiteral("Trim drag started at %1").arg(text(m_pressSnap.at));
+      if (const CurveData* c = m_c.model().curve(m_pressCurve)) {
+        addSwept(*c, c->curve.nearest(m_pressSnap.at));
+      }
+    }
+    if (m_sweeping) {
+      sweepTo(snap);
+    }
   }
 
   void press(const Snap& snap) override {
-    const QString curve = curveAt(snap);
+    if (m_mode == ClickMode::Trim) {
+      // Trim waits for the release (mitcad#2524): a click trims the piece
+      // under the press, a drag the pieces it sweeps over.
+      clearGesture();
+      m_pressed = true;
+      m_pressSnap = snap;
+      m_pressCurve = curveAt(snap);
+      m_sweep.push_back(snap.at);
+      return;
+    }
+    act(snap, curveAt(snap));
+  }
+
+  void release(const Snap& snap) override {
+    if (m_mode != ClickMode::Trim || !m_pressed) {
+      return;
+    }
+    if (!m_sweeping) {
+      const Snap pressed = m_pressSnap;
+      const QString curve = m_pressCurve;
+      clearGesture();
+      act(pressed, curve);
+      return;
+    }
+    sweepTo(snap); // the last stretch
+    std::vector<SweptPiece> pieces = std::move(m_swept);
+    clearGesture();
+    trimSwept(pieces);
+  }
+
+  // Esc while Trim's button is held drops the click or the sweep
+  // (mitcad#2524): its release then trims nothing; otherwise it ends the
+  // tool.
+  bool cancel() override {
+    if (!m_pressed) {
+      return false;
+    }
+    qDebug().noquote() << (m_sweeping ? QStringLiteral("Trim drag cancelled: %1 pieces not trimmed")
+                                            .arg(static_cast<int>(m_swept.size()))
+                                      : QStringLiteral("Trim click cancelled"));
+    clearGesture();
+    return true;
+  }
+
+private:
+  // A piece Trim's sweep crossed (mitcad#2524): its curve, its range, the
+  // middle where it is trimmed, and its points for the preview.
+  struct SweptPiece {
+    QString curve;
+    PieceRange range;
+    V2 at;
+    std::vector<V2> points;
+  };
+
+  void clearGesture() {
+    m_pressed = false;
+    m_sweeping = false;
+    m_pressCurve.clear();
+    m_sweep.clear();
+    m_swept.clear();
+  }
+
+  // The piece of `c` at `at` added to the sweep's, once however often the
+  // sweep passes over it.
+  void addSwept(const CurveData& c, const V2& at) {
+    const PieceRange range = trimRange(m_c.model(), c, at);
+    for (const SweptPiece& piece : m_swept) {
+      if (piece.curve == c.id && samePiece(c, piece.range, range)) {
+        return;
+      }
+    }
+    SweptPiece piece;
+    piece.curve = c.id;
+    piece.range = range;
+    piece.at = c.curve.at(range.wrapped(c.curve, (range.lo + range.hi) / 2.0));
+    piece.points = piecePoints(c, range, 2.0 * m_c.pixel());
+    m_swept.push_back(std::move(piece));
+    qDebug().noquote()
+        << QStringLiteral("Trim drag crosses %1: %2 pieces").arg(c.id).arg(static_cast<int>(m_swept.size()));
+  }
+
+  // The sweep continued to `snap`: the curves its new stretch crosses, in
+  // their order along it, and the curve the pointer is on there, as a
+  // click there picks it.
+  void sweepTo(const Snap& snap) {
+    const V2 from = m_sweep.empty() ? snap.at : m_sweep.back();
+    if (dist(from, snap.at) > 0.0) {
+      const Curve2 stretch = Curve2::line(from, snap.at);
+      std::vector<std::pair<double, std::pair<QString, V2>>> hits;
+      for (const CurveData& c : m_c.model().curves) {
+        if (!c.axis.isEmpty()) {
+          continue; // an axis's line is not trimmed, as entityAt does not pick it
+        }
+        for (const V2& hit : intersections(stretch, c.curve)) {
+          hits.push_back({dist(from, hit), {c.id, hit}});
+        }
+      }
+      std::stable_sort(hits.begin(), hits.end(),
+                       [](const auto& a, const auto& b) { return a.first < b.first; });
+      for (const auto& hit : hits) {
+        if (const CurveData* c = m_c.model().curve(hit.second.first)) {
+          addSwept(*c, hit.second.second);
+        }
+      }
+      m_sweep.push_back(snap.at);
+    }
+    if (const CurveData* c = m_c.model().curve(m_c.entityAt(snap.screen, PickCurves))) {
+      addSwept(*c, c->curve.nearest(snap.at));
+    }
+  }
+
+  // The curve that now has the swept piece's middle on it: its own curve
+  // when that is still there (a trim before may have left it in pieces of
+  // its own), else the nearest one.
+  QString curveOfPiece(const SketchModel& model, const SweptPiece& piece) const {
+    const double tolerance = 2.0 * m_c.pixel();
+    const CurveData* own = model.curve(piece.curve);
+    if (own != nullptr && own->curve.distanceTo(piece.at) <= tolerance) {
+      return own->id;
+    }
+    QString best;
+    double bestDistance = tolerance;
+    for (const CurveData& c : model.curves) {
+      if (!c.axis.isEmpty()) {
+        continue;
+      }
+      const double d = c.curve.distanceTo(piece.at);
+      if (d <= bestDistance) {
+        best = c.id;
+        bestDistance = d;
+      }
+    }
+    return best;
+  }
+
+  // The swept pieces trimmed in the order the sweep crossed them, as one
+  // undo step (mitcad#2524). A piece the model refuses is left, and the
+  // refusals are shown after the others are trimmed; with none trimmed,
+  // nothing changes.
+  void trimSwept(const std::vector<SweptPiece>& pieces) {
+    if (pieces.empty()) {
+      qDebug().noquote() << QStringLiteral("Trim drag crossed nothing");
+      return;
+    }
+    SketchOp op(m_c);
+    int trimmed = 0;
+    QStringList refused;
+    QStringList notes;
+    for (const SweptPiece& piece : pieces) {
+      const QString curve = curveOfPiece(op.model(), piece);
+      if (curve.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Trim drag: the piece of %1 at %2 is no longer there")
+                                  .arg(piece.curve, text(piece.at));
+        continue;
+      }
+      QJsonObject cmd = op.command(QStringLiteral("sketch.trim"));
+      cmd.insert(QStringLiteral("curve"), curve);
+      cmd.insert(QStringLiteral("at"), xy(piece.at));
+      QJsonObject result;
+      if (!op.run(cmd, &result)) {
+        if (!refused.contains(op.error())) {
+          refused << op.error();
+        }
+        continue;
+      }
+      ++trimmed;
+      const QString joined = result.value(QStringLiteral("joined")).toString();
+      qDebug().noquote() << QStringLiteral("Trimmed %1 at %2%3")
+                                .arg(curve, text(piece.at),
+                                     joined.isEmpty() ? QString() : QStringLiteral(" (joined %1)").arg(joined));
+      for (const QString& note : shownTexts(result, QStringLiteral("notes"), QStringLiteral("note_messages"))) {
+        if (!notes.contains(note)) {
+          notes << note;
+        }
+      }
+    }
+    if (trimmed == 0) {
+      op.rollback();
+      qDebug().noquote() << QStringLiteral("Trim drag trimmed none of %1 pieces").arg(static_cast<int>(pieces.size()));
+      if (!refused.isEmpty()) {
+        m_c.error(QObject::tr("%1: %2").arg(name(), refused.join(QStringLiteral("; "))));
+      }
+      return;
+    }
+    op.commit();
+    m_curve.clear();
+    qDebug().noquote() << QStringLiteral("Trim drag trimmed %1 of %2 pieces as one step")
+                              .arg(trimmed)
+                              .arg(static_cast<int>(pieces.size()));
+    if (!refused.isEmpty()) {
+      m_c.error(QObject::tr("%1: %2 of %3 pieces were not trimmed: %4")
+                    .arg(name())
+                    .arg(static_cast<int>(pieces.size()) - trimmed)
+                    .arg(static_cast<int>(pieces.size()))
+                    .arg(refused.join(QStringLiteral("; "))));
+    }
+    if (!notes.isEmpty()) {
+      m_c.notice(QObject::tr("%1: %2").arg(name(), notes.join(QStringLiteral("; "))), NoticeLevel::Information);
+    }
+  }
+
+  // A click's action on `curve` at `snap`: one trim, extension, break or
+  // split, one undo step.
+  void act(const Snap& snap, const QString& curve) {
     const CurveData* c = m_c.model().curve(curve);
     if (c == nullptr) {
       return;
@@ -253,7 +512,16 @@ public:
     }
   }
 
+public:
   void paint(ToolPreview& preview) const override {
+    if (m_sweeping) {
+      // Trim's sweep (mitcad#2524): its path and the pieces it trims.
+      preview.add(m_sweep, Style::Guide);
+      for (const SweptPiece& piece : m_swept) {
+        preview.add(piece.points, Style::Remove);
+      }
+      return;
+    }
     const CurveData* c = m_c.model().curve(m_curve);
     if (c == nullptr || m_mode == ClickMode::Extend) {
       return;
@@ -311,6 +579,15 @@ private:
   QString m_curve;
   V2 m_at;
   std::optional<std::pair<V2, QString>> m_split;
+  // Trim's gesture (mitcad#2524): the button held since `m_pressSnap` (on
+  // `m_pressCurve`, if any), moved beyond a click into a sweep along
+  // `m_sweep` over the pieces `m_swept`.
+  bool m_pressed = false;
+  bool m_sweeping = false;
+  Snap m_pressSnap;
+  QString m_pressCurve;
+  std::vector<V2> m_sweep;
+  std::vector<SweptPiece> m_swept;
 };
 
 // ---------------------------------------------------------------------------

@@ -1248,6 +1248,125 @@ void test_replace_tilted_round_top() {
   }
 }
 
+// A face replaced onto a plane past a wall beside it (mitcad#2541, GitHub
+// #717: on a shelled body, the inner ceiling 3 mm above the rim onto the
+// rim, or the rim onto the ceiling, failed with "replace faces:
+// NCollection_DataMap::Find"). The wall between them, as high as the move,
+// shrinks to nothing, which the geometry kernel's offset cannot do; the
+// region between the face and the target is added or removed, the wall
+// goes with it and the face joins the target's face. The block with a
+// 50 x 30 recess 3 deep cut into its bottom: the recess's ceiling at z = 3,
+// its walls from z = 0 to 3, the bottom a 5 mm rim around it at z = 0.
+void test_replace_past_a_wall() {
+  const ShapePtr cutter = extrude("F4", {rectangle(5, 5, 5, 50, 30)}, -5, 3);
+  const ShapePtr recessed = boolean(BooleanOp::Cut, {block().get()}, *cutter).pieces.at(0).shape;
+  const double recess = 50.0 * 30.0 * 3.0;
+  CHECK_NEAR(volume(*recessed), kBlock - recess);
+  const std::string ceiling = end_cap("F4", 5);
+  const std::string rim = start_cap("F2", 1);
+  const auto valid = [](const Shape& shape) { return BRepCheck_Analyzer(shape.occt()).IsValid(); };
+  const auto no_walls = [](const Shape& shape) {
+    int walls = 0;
+    for (int i = 0; i < 4; ++i) {
+      walls += faces_named(shape, side("F4", 5, i));
+    }
+    return walls == 0;
+  };
+
+  // The ceiling onto the rim, a face of the body itself, as reported (with
+  // the tangent chain): the recess is filled, the block whole again, its
+  // bottom one face.
+  const ShapePtr filled = replace_faces("F5", *recessed, {ceiling}, Tool::of_face(recessed, rim), true);
+  CHECK_NEAR(volume(*filled), kBlock);
+  CHECK(valid(*filled));
+  CHECK(filled->face_count() == 6);
+  CHECK(no_walls(*filled));
+  CHECK(faces_named(*filled, ceiling) == 0);
+  CHECK(faces_named(*filled, rim) == 1);
+  CHECK(faces_named(*filled, "F5:replace(" + ceiling + ")") == 1);
+
+  // The rim onto the ceiling: the rim's 3 mm are removed, the block stands
+  // from z = 3, its bottom one face.
+  const ShapePtr lifted = replace_faces("F5", *recessed, {rim}, Tool::of_face(recessed, ceiling), true);
+  CHECK_NEAR(volume(*lifted), 60.0 * 40.0 * 17.0);
+  CHECK(valid(*lifted));
+  CHECK(lifted->face_count() == 6);
+  CHECK(no_walls(*lifted));
+  CHECK(faces_named(*lifted, rim) == 0);
+  CHECK(faces_named(*lifted, ceiling) == 1);
+  CHECK(faces_named(*lifted, "F5:replace(" + rim + ")") == 1);
+  CHECK(near(bounding_box(*lifted).min.Z(), 3.0));
+  for (int i = 0; i < 4; ++i) {
+    CHECK(faces_named(*lifted, side("F2", 1, i)) == 1);
+  }
+
+  // A pocket's floor onto the top: the pocket is filled.
+  const ShapePtr pocketed =
+      boolean(BooleanOp::Cut, {block().get()}, *extrude("F4", {circle(5, 30, 20, 5)}, 10, 30))
+          .pieces.at(0)
+          .shape;
+  const std::string floor = "F4:start(r{c5})";
+  const ShapePtr closed =
+      replace_faces("F5", *pocketed, {floor}, Tool::of_face(pocketed, end_cap("F2", 1)), true);
+  CHECK_NEAR(volume(*closed), kBlock);
+  CHECK(valid(*closed));
+  CHECK(closed->face_count() == 6);
+  CHECK(faces_named(*closed, "F4:side(c5)") == 0);
+  CHECK(faces_named(*closed, floor) == 0);
+
+  // Short of the wall the ceiling moves as before (the walls shorten to
+  // 1 mm): the recess 1 deep.
+  const ShapePtr shallower =
+      replace_faces("F5", *recessed, {ceiling}, Tool::of_plane(plane(0, 0, 1, 0, 0, -1)), true);
+  CHECK_NEAR(volume(*shallower), kBlock - 50.0 * 30.0 * 1.0);
+  CHECK(faces_named(*shallower, "F5:replace(" + ceiling + ")") == 1);
+  CHECK(faces_named(*shallower, side("F4", 5, 0)) == 1);
+}
+
+// The end of a rib that sticks out of a pin replaced by the pin's own
+// side, a B-spline (GitHub mitcad/Mitcad#674, mitcad#2538: the ends of ribs
+// replaced by the rounding they stick out of). The new face lies on the
+// side's surface continued, and the side moves onto that continuation too:
+// the side and the new face are one face, without the outline of the end
+// on it.
+void test_replace_by_own_spline_face() {
+  // A pin of R 10 along z (0..20) whose faces are B-splines, as imported
+  // bodies have them.
+  const ShapePtr pin = extrude("F2", {circle(5, 0, 0, 10)}, 0, 20);
+  BRepBuilderAPI_NurbsConvert nurbs(pin->occt(), true);
+  std::vector<Shape::NamedFace> named;
+  for (int i = 0; i < pin->face_count(); ++i) {
+    named.push_back({nurbs.ModifiedShape(pin->face(i)), pin->face_names(i)});
+  }
+  const Shape spline_pin(nurbs.Shape(), named);
+  // A rib through its side, away from the side's seam: x -2..2, y 5..15,
+  // z 5..15, its end at y = 15.
+  const ShapePtr rib = extrude("F3", {rectangle(9, -2, 5, 4, 10)}, 5, 15);
+  const BooleanResult joined = boolean(BooleanOp::Join, {&spline_pin}, *rib);
+  CHECK(joined.pieces.size() == 1);
+  if (joined.pieces.size() != 1) {
+    return;
+  }
+  const ShapePtr ribbed = joined.pieces.front().shape;
+  const std::string end = side("F3", 9, 2);
+  CHECK(faces_named(*ribbed, end) == 1);
+  CHECK(faces_named(*ribbed, "F2:side(c5)") == 1);
+
+  const ShapePtr flush = replace_faces("F5", *ribbed, {end}, Tool::of_face(ribbed, "F2:side(c5)"));
+  // The rib now ends at the side: the pin's volume.
+  CHECK_NEAR_TOL(volume(*flush), kPi * 100.0 * 20.0, 1e-5);
+  CHECK(BRepCheck_Analyzer(flush->occt()).IsValid());
+  CHECK(faces_named(*flush, end) == 0);
+  // One face holds the side's name and the new face's.
+  const std::string replaced = "F5:replace(" + end + ")";
+  const std::vector<int> found = flush->find_faces(replaced);
+  CHECK(found.size() == 1);
+  if (found.size() == 1) {
+    CHECK(has_name(flush->face_names(found.front()), "F2:side(c5)"));
+  }
+  CHECK(faces_named(*flush, "F2:side(c5)") == 1);
+}
+
 } // namespace
 
 void faceops_tests() {
@@ -1270,6 +1389,10 @@ void faceops_tests() {
   guarded("test_replace_tilted_round_top", test_replace_tilted_round_top);
   guarded("test_draft_about_a_moved_plane", test_draft_about_a_moved_plane);
   guarded("test_replace_floor_through_the_body", test_replace_floor_through_the_body);
+  guarded("test_replace_past_a_wall", test_replace_past_a_wall);
+  // A face replaced by a B-spline face of the same body merges with it
+  // (GitHub mitcad/Mitcad#674, mitcad#2538).
+  guarded("test_replace_by_own_spline_face", test_replace_by_own_spline_face);
 }
 
 } // namespace test

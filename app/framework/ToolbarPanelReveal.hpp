@@ -43,6 +43,11 @@ public:
     std::function<void()> reveal;
     // `how`: why it goes ("the pointer left it", "shown again", ...).
     std::function<void(const QString& how)> conceal;
+    // While revealed, after a watched widget moved or was resized (the
+    // window, the top bar): the panel placed again where it shows (the
+    // Docked panel over the view across the window's width, mitcad#2527);
+    // optional.
+    std::function<void()> place;
   };
 
   // How long the pointer rests on the band before the panel shows, and how
@@ -62,7 +67,7 @@ public:
   void updateBand();
   // The band placed again (a moment later) when this widget moves, is
   // resized, shown or hidden: what the band's place follows (the top bar,
-  // the view).
+  // the view); while revealed, the panel too (Hooks::place).
   void watch(QWidget* widget);
   bool revealed() const { return m_revealed; }
   // The panel back at once without the leave's wait (shown for good, the

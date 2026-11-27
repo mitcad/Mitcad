@@ -181,6 +181,15 @@ void TimelineHistoryList::rebuild() {
   if (state() == QAbstractItemView::EditingState) {
     cancelRename();
   }
+  // A feature pressed or dragged while the items changed (an agent's
+  // command, an undo): its press and drop indices would name other items
+  // now, and the release would move the wrong feature or to the wrong place;
+  // the gesture ends and the release moves nothing (mitcad#2527). The
+  // marker's drag goes on: it changes the items' state, not their order.
+  if (m_press >= 0 && itemOrder() != m_pressOrder) {
+    qDebug().noquote() << "History drag ended: the timeline changed";
+    endItemGesture();
+  }
   const QSignalBlocker blocker(this);
   m_building = true;
   const int scrolled = verticalScrollBar()->value();
@@ -755,6 +764,7 @@ void TimelineHistoryList::mousePressEvent(QMouseEvent* event) {
     return;
   }
   m_press = firstOf(row);
+  m_pressOrder = itemOrder();
   m_pressAt = at;
   m_shift = event->modifiers().testFlag(Qt::ShiftModifier);
   m_toggle = event->modifiers().testFlag(Qt::ControlModifier);
@@ -961,13 +971,28 @@ bool TimelineHistoryList::viewportEvent(QEvent* event) {
   return QTreeWidget::viewportEvent(event);
 }
 
-void TimelineHistoryList::endGestures() {
+QStringList TimelineHistoryList::itemOrder() const {
+  QStringList uids;
+  const int count = m_owner.itemCount();
+  uids.reserve(count);
+  for (int i = 0; i < count; ++i) {
+    uids << m_owner.itemFeature(i).uid;
+  }
+  return uids;
+}
+
+void TimelineHistoryList::endItemGesture() {
   unsetCursor();
   m_press = -1;
+  m_pressOrder.clear();
   m_dragItem = false;
   m_dropIndex = -1;
   QToolTip::hideText();
   viewport()->update();
+}
+
+void TimelineHistoryList::endGestures() {
+  endItemGesture();
   if (m_dragMarker) {
     m_dragMarker = false;
     emit m_owner.markerDragFinished(m_dragPosition);

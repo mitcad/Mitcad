@@ -523,20 +523,29 @@ pub struct Chain {
     pub level: bool,
 }
 
-/// Takes the segment that starts (or, reversed, ends) at `at`.
+/// Takes the segment that starts (or, reversed, ends) at `at`: the one
+/// whose end is nearest within [`JOIN`], so that a curve cut into pieces
+/// shorter than that (a finely sampled spline of a section) is followed
+/// piece by piece, not skipped ahead or walked back on itself (mitcad#2499).
+/// An end exactly at `at` is taken at once; of equally near ends the first
+/// in the list wins.
 fn take_from(left: &mut [Option<Seg>], at: P3) -> Option<Seg> {
-    for slot in left.iter_mut() {
+    let mut best: Option<(f64, usize, bool)> = None;
+    'search: for (i, slot) in left.iter().enumerate() {
         let Some(seg) = *slot else { continue };
-        if plane_distance(seg.a, at) <= JOIN {
-            *slot = None;
-            return Some(seg);
-        }
-        if plane_distance(seg.b, at) <= JOIN {
-            *slot = None;
-            return Some(seg.reversed());
+        for (end, reversed) in [(seg.a, false), (seg.b, true)] {
+            let d = plane_distance(end, at);
+            if d <= JOIN && best.is_none_or(|(b, _, _)| d < b) {
+                best = Some((d, i, reversed));
+                if d == 0.0 {
+                    break 'search;
+                }
+            }
         }
     }
-    None
+    let (_, i, reversed) = best?;
+    let seg = left[i].take()?;
+    Some(if reversed { seg.reversed() } else { seg })
 }
 
 /// Takes the segment that ends (or, reversed, starts) at `at`.
@@ -807,5 +816,112 @@ mod tests {
                 b: [6.0, 6.0, 7.0],
             }
         );
+    }
+
+    /// A line, then an arc sampled in chords 0.0006 mm long (under
+    /// [`JOIN`], as a section cuts a fine spline), then a line: the
+    /// points of the path in order (mitcad#2499).
+    fn finely_sampled_path() -> Vec<P3> {
+        let radius = 5.0;
+        let step = 0.0006 / radius;
+        let mut points = vec![[-10.0, -radius, -2.0]];
+        points.extend((0..=40).map(|k| {
+            let t = step * f64::from(k);
+            [radius * t.sin(), -radius * t.cos(), -2.0]
+        }));
+        let last = points[points.len() - 1];
+        points.push([last[0] + 10.0, last[1] + 3.0, -2.0]);
+        points
+    }
+
+    /// The path's pieces in a shuffled order (a fixed pseudo-random
+    /// permutation of `seed`), every third one reversed.
+    fn shuffled_pieces(points: &[P3], seed: u64) -> Vec<Seg> {
+        let mut segs: Vec<Seg> = points
+            .windows(2)
+            .enumerate()
+            .map(|(i, w)| {
+                let seg = Seg {
+                    a: w[0],
+                    b: w[1],
+                    bulge: 0.0,
+                };
+                if i % 3 == 1 { seg.reversed() } else { seg }
+            })
+            .collect();
+        let mut state = seed;
+        for i in (1..segs.len()).rev() {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let j = usize::try_from((state >> 33) % (i as u64 + 1)).unwrap();
+            segs.swap(i, j);
+        }
+        segs
+    }
+
+    /// One open chain through every point of `path`, in order one way or
+    /// the other.
+    fn assert_one_chain_along(found: &[Chain], path: &[P3]) {
+        assert_eq!(found.len(), 1, "{found:?}");
+        let contour = &found[0].contour;
+        assert!(!contour.closed);
+        let got: Vec<[f64; 2]> = contour.vertices.iter().map(|v| [v.x, v.y]).collect();
+        let forward: Vec<[f64; 2]> = path.iter().map(|p| [p[0], p[1]]).collect();
+        let mut backward = forward.clone();
+        backward.reverse();
+        assert!(got == forward || got == backward, "{got:?}");
+    }
+
+    #[test]
+    fn a_curve_in_pieces_shorter_than_the_join_chains_in_order() {
+        let path = finely_sampled_path();
+        // Last piece of the curve first: the piece two along is met
+        // before the next one.
+        let mut segs: Vec<Seg> = path
+            .windows(2)
+            .map(|w| Seg {
+                a: w[0],
+                b: w[1],
+                bulge: 0.0,
+            })
+            .collect();
+        let tail = segs.pop().unwrap();
+        segs[1..].reverse();
+        segs.push(tail);
+        assert_one_chain_along(&chains(segs), &path);
+    }
+
+    #[test]
+    fn shuffled_pieces_shorter_than_the_join_chain_in_order_both_ways() {
+        let path = finely_sampled_path();
+        let count = path.len() - 1;
+        for seed in [1_u64, 7, 2499, 31_337] {
+            let segs = shuffled_pieces(&path, seed);
+            // The chain starts from the first segment in the list: from
+            // either end it grows only one way (towards its end, or
+            // reversed towards its start), from the middle of the curve
+            // both ways.
+            for first in [0, 1, count / 2, count - 2, count - 1] {
+                let at = segs
+                    .iter()
+                    .position(|s| {
+                        let ends = [path[first], path[first + 1]];
+                        (s.a == ends[0] && s.b == ends[1]) || (s.a == ends[1] && s.b == ends[0])
+                    })
+                    .unwrap();
+                let mut order = segs.clone();
+                order.rotate_left(at);
+                for flip in [false, true] {
+                    let mut order = order.clone();
+                    if flip {
+                        order[0] = order[0].reversed();
+                    }
+                    let found = chains(order);
+                    assert_one_chain_along(&found, &path);
+                    assert_eq!(found[0].contour.vertices.len(), count + 1);
+                }
+            }
+        }
     }
 }

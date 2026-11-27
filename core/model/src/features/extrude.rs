@@ -24,7 +24,7 @@ use super::{
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::{
     BooleanOp, Bound, ExtrudeFeatureSpec, ExtrudeSide, ExtrudeStart, FaceExtrudeSpec, Kernel,
-    SideEnd, ThinWall, WallLocation,
+    SideEnd, Target, ThinWall, WallLocation,
 };
 use crate::links::OccurrenceLink;
 use crate::parameters::ParamId;
@@ -103,6 +103,16 @@ pub enum Extent<P = ParamId> {
         #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
         taper: Option<P>,
     },
+    /// One side, up to the first face of the participant bodies (all
+    /// bodies if none are listed) that the profile meets in the extrusion
+    /// direction, without picking it (To Next, GitHub mitcad/Mitcad#674):
+    /// each part of the profile ends at the first face ahead of it. Found
+    /// again on every recompute, so it follows the bodies' changes. A part
+    /// of the profile that meets no face ahead fails the feature.
+    ToNext {
+        #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+        taper: Option<P>,
+    },
     /// Both ways from the start, `distance` to each side, or in total with
     /// `full_length` (`isFullLength` in .f3d designs); the same taper both ways.
     Symmetric {
@@ -150,6 +160,12 @@ pub enum Side<P = ParamId> {
         taper: Option<P>,
     },
     ThroughAll {
+        #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+        taper: Option<P>,
+    },
+    /// Up to the first face of the bodies this side meets (see
+    /// [`Extent::ToNext`]).
+    ToNext {
         #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
         taper: Option<P>,
     },
@@ -310,6 +326,9 @@ impl<P> Side<P> {
             Self::ThroughAll { taper } => Side::ThroughAll {
                 taper: map_option(&slot("taper"), taper, f)?,
             },
+            Self::ToNext { taper } => Side::ToNext {
+                taper: map_option(&slot("taper"), taper, f)?,
+            },
         })
     }
 }
@@ -356,6 +375,9 @@ impl<P> ExtrudeDef<P> {
             },
             Extent::ThroughAll { both_sides, taper } => Extent::ThroughAll {
                 both_sides: *both_sides,
+                taper: map_option("extent.taper", taper, f)?,
+            },
+            Extent::ToNext { taper } => Extent::ToNext {
                 taper: map_option("extent.taper", taper, f)?,
             },
             Extent::Symmetric {
@@ -439,6 +461,18 @@ impl<P> ExtrudeDef<P> {
         match &self.extent {
             Extent::TwoSides { side1, side2, .. } => [distance(side1), distance(side2)],
             _ => [None, None],
+        }
+    }
+
+    /// Whether a side runs To Next (GitHub mitcad/Mitcad#674): up to the
+    /// first face of the bodies it meets.
+    pub fn to_next(&self) -> bool {
+        match &self.extent {
+            Extent::ToNext { .. } => true,
+            Extent::TwoSides { side1, side2, .. } => {
+                matches!(side1, Side::ToNext { .. }) || matches!(side2, Side::ToNext { .. })
+            }
+            _ => false,
         }
     }
 
@@ -773,6 +807,15 @@ impl FeatureInfo for ExtrudeDef {
         {
             return Err("an extrusion starts from a plane or a face, not a body".to_owned());
         }
+        // To Next (GitHub mitcad/Mitcad#674) finds the bodies ahead of the
+        // profile's plane, which a start object moves the profile off.
+        if self.to_next() && matches!(self.start, Start::Object { .. }) {
+            return Err(
+                "an extrusion To Next starts at the profile plane or an offset from it, not at an \
+                 object"
+                    .to_owned(),
+            );
+        }
         if let Some(thin) = &self.thin
             && thin.side2.is_some()
             && !matches!(
@@ -919,6 +962,7 @@ enum SideView<'a> {
     Distance(ParamId),
     ToObject(&'a ExtentObject, Option<ParamId>),
     ThroughAll,
+    ToNext,
 }
 
 impl<'a> SideView<'a> {
@@ -931,6 +975,7 @@ impl<'a> SideView<'a> {
                 taper,
             } => (Self::ToObject(object, *offset), *taper),
             Side::ThroughAll { taper } => (Self::ThroughAll, *taper),
+            Side::ToNext { taper } => (Self::ToNext, *taper),
         }
     }
 }
@@ -993,8 +1038,11 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
                     ..
                 }
         );
+        // A side To Next (GitHub mitcad/Mitcad#674) ends at the bodies the
+        // cut may reach, as a side through all goes past them.
+        let scope_bodies = through_all || self.to_next();
         let participants = match &discovery {
-            Some(discovery) if through_all => discovery.in_source_frame(ctx)?,
+            Some(discovery) if scope_bodies => discovery.in_source_frame(ctx)?,
             Some(_) => Vec::new(),
             None => participant_bodies(ctx, self.operation, &self.participants)?,
         };
@@ -1013,7 +1061,13 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
                 // would cut (mitcad#1676).
                 Err(message)
                     if message == super::extrude_scope::NO_INTERSECTION
-                        && self.flipped_cut_hits(ctx, scope, &sketch, &regions, through_all)? =>
+                        && self.flipped_cut_hits(
+                            ctx,
+                            scope,
+                            &sketch,
+                            &regions,
+                            scope_bodies,
+                        )? =>
                 {
                     if let Some(report) = &mut ctx.cut_targets {
                         report.flip_would_cut = true;
@@ -1110,7 +1164,7 @@ impl ExtrudeDef {
         scope: &super::extrude_scope::CutScope,
         sketch: &SketchOutput,
         regions: &[ProfileRegion],
-        through_all: bool,
+        scope_bodies: bool,
     ) -> Result<bool, String> {
         // Flip changes nothing of an extrusion even to both sides.
         if matches!(
@@ -1134,7 +1188,7 @@ impl ExtrudeDef {
             ctx.warning_places.len(),
             ctx.remarks.len(),
         );
-        let hits = flipped.cut_hits(ctx, scope, sketch, regions, through_all);
+        let hits = flipped.cut_hits(ctx, scope, sketch, regions, scope_bodies);
         ctx.cut_targets = report;
         ctx.warnings.truncate(notes.0);
         ctx.infos.truncate(notes.1);
@@ -1153,17 +1207,19 @@ impl ExtrudeDef {
         }
     }
 
-    /// Whether this cut's tool would cut a body its scope may take.
+    /// Whether this cut's tool would cut a body its scope may take. With
+    /// `scope_bodies` (a side through all or To Next) the tool is built
+    /// with the bodies the scope finds.
     fn cut_hits<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
         scope: &super::extrude_scope::CutScope,
         sketch: &SketchOutput,
         regions: &[ProfileRegion],
-        through_all: bool,
+        scope_bodies: bool,
     ) -> Result<bool, String> {
         let discovery = scope.discover(ctx)?;
-        let participants = if through_all {
+        let participants = if scope_bodies {
             discovery.in_source_frame(ctx)?
         } else {
             Vec::new()
@@ -1306,7 +1362,7 @@ impl ExtrudeDef {
         let to_object = |side: &Side| !matches!(side, Side::Distance { .. });
         !self.objects().is_empty()
             || match &self.extent {
-                Extent::ThroughAll { .. } => true,
+                Extent::ThroughAll { .. } | Extent::ToNext { .. } => true,
                 Extent::TwoSides { side1, side2, .. } => to_object(side1) || to_object(side2),
                 _ => false,
             }
@@ -1398,6 +1454,7 @@ impl ExtrudeDef {
                 (SideView::ThroughAll, *taper),
                 both_sides.then_some((SideView::ThroughAll, *taper)),
             ),
+            Extent::ToNext { taper } => ((SideView::ToNext, *taper), None),
             Extent::Symmetric {
                 distance, taper, ..
             } => (
@@ -1514,6 +1571,24 @@ impl ExtrudeDef {
                         both,
                     )?)
                 }
+                // Up to the first face ahead (GitHub mitcad/Mitcad#674): the
+                // bodies a side through all would go past, those ahead of
+                // the start as one body the kernel ends each part of the
+                // profile at the first face of.
+                SideView::ToNext => {
+                    let all = self.active_cut_scope().is_none()
+                        && (participants.is_empty() || self.reaches_all_bodies());
+                    let bodies = if participants.is_empty() && self.active_cut_scope().is_none() {
+                        ctx.surface_bodies()
+                    } else {
+                        participants.to_vec()
+                    };
+                    let bodies = through_bodies(ctx, bodies, all);
+                    SideEnd::Target(Bound {
+                        target: next_target(ctx.kernel, bodies, &[origin], normal, along)?,
+                        offset: 0.0,
+                    })
+                }
             };
             let taper = taper.map(|id| ctx.param(id)).transpose()?.unwrap_or(0.0);
             sides.push(ExtrudeSide {
@@ -1569,7 +1644,26 @@ impl ExtrudeDef {
             (None, Some(chains)) => ctx.kernel.extrude_curves(&spec, chains),
             (None, None) => ctx.kernel.extrude_feature(&spec),
         }
-        .map_err(|e| e.to_string())
+        .map_err(|e| self.to_next_error(e.to_string()))
+    }
+
+    /// A kernel error of an extrusion To Next (GitHub mitcad/Mitcad#674)
+    /// in its terms: a part of the profile that meets no face ahead has no
+    /// end. Other errors, and those of an extrusion with a side up to an
+    /// object (which may be that side's), stay as they are.
+    fn to_next_error(&self, error: String) -> String {
+        let to_object = match &self.extent {
+            Extent::ToObject { .. } => true,
+            Extent::TwoSides { side1, side2, .. } => {
+                matches!(side1, Side::ToObject { .. }) || matches!(side2, Side::ToObject { .. })
+            }
+            _ => false,
+        };
+        if self.to_next() && !to_object && error.contains(NOT_ACROSS) {
+            TO_NEXT_UNREACHED.to_owned()
+        } else {
+            error
+        }
     }
 
     /// A surface extrusion's bodies (mitcad#455): the profiles' walls (the
@@ -1636,12 +1730,13 @@ fn check_face_profile(
 
 /// One side of a body face's extrusion as evaluation sees it
 /// (mitcad#2033): a distance (> 0, or any but zero with two sides), up to
-/// an object moved by an offset, or through all (both ways alike with
-/// `both`).
+/// an object moved by an offset, through all (both ways alike with
+/// `both`) or To Next (GitHub mitcad/Mitcad#674).
 enum FaceSide<'a> {
     Distance(f64),
     ToObject(&'a ExtentObject, f64),
     ThroughAll { both: bool },
+    ToNext,
 }
 
 impl ExtrudeDef {
@@ -1666,6 +1761,7 @@ impl ExtrudeDef {
                 (FaceSide::ToObject(object, offset), *taper)
             }
             Side::ThroughAll { taper } => (FaceSide::ThroughAll { both: false }, *taper),
+            Side::ToNext { taper } => (FaceSide::ToNext, *taper),
         })
     }
 
@@ -1739,6 +1835,7 @@ impl ExtrudeDef {
                 *taper,
                 both_sides.then_some(*taper).flatten(),
             ),
+            Extent::ToNext { taper } => (FaceSide::ToNext, None, *taper, None),
             Extent::Symmetric {
                 distance,
                 full_length,
@@ -1840,6 +1937,28 @@ impl ExtrudeDef {
                         ctx.kernel, &way.from, along, &bodies, both,
                     )?)
                 }
+                // Up to the first face ahead (GitHub mitcad/Mitcad#674), of
+                // the bodies a side through all goes past.
+                FaceSide::ToNext => {
+                    let way = way.as_ref().expect("the way of a side To Next");
+                    let along = if k == 0 {
+                        way.along
+                    } else {
+                        way.along.map(|v| -v)
+                    };
+                    let all = participants.is_empty()
+                        || (self.active_cut_scope().is_none() && self.reaches_all_bodies());
+                    let bodies = if participants.is_empty() {
+                        ctx.surface_bodies()
+                    } else {
+                        participants.to_vec()
+                    };
+                    let bodies = through_bodies(ctx, bodies, all);
+                    SideEnd::Target(Bound {
+                        target: next_target(ctx.kernel, bodies, &way.from, way.normal, along)?,
+                        offset: 0.0,
+                    })
+                }
             };
             ends.push(end);
         }
@@ -1862,6 +1981,7 @@ impl ExtrudeDef {
         ctx.kernel
             .extrude_face(&spec)
             .map_err(super::face_refs::kernel_error)
+            .map_err(|e| self.to_next_error(e))
     }
 
     /// The way a body face's extrusion goes (mitcad#2033): side one along
@@ -1973,6 +2093,80 @@ pub(crate) fn through_all_length<K: Kernel>(
     }
     // Past the far side, so the cap is outside every body.
     Ok(reach * 1.25 + 1.0)
+}
+
+// To Next (GitHub mitcad/Mitcad#674).
+
+/// What the kernel says when the target leaves a part of the profile
+/// without an end (`geometry/src/sweep.cpp`, `trimmed`).
+const NOT_ACROSS: &str = "the target does not cut across the whole profile";
+
+/// The error of a side To Next that leaves a part of the profile without
+/// an end.
+pub(crate) const TO_NEXT_UNREACHED: &str = "To Next finds no face ahead of a part of the profile: \
+     each part of the profile must meet a face of the bodies in the extrusion direction; flip the \
+     direction, leave that part out of the profiles or choose another extent";
+
+/// The error of a side To Next with no bodies to end at.
+pub(crate) const TO_NEXT_NO_BODIES: &str = "To Next needs a body to end at: there are no bodies";
+
+/// The error of a side To Next whose bodies all lie behind the start.
+pub(crate) const TO_NEXT_NONE_AHEAD: &str = "To Next finds no body ahead of the profile in the \
+     extrusion direction; flip the direction or choose another extent";
+
+/// How far a body must reach past the start to be ahead of it (mm): a body
+/// the profile lies on, behind the start, reaches it only by its box's
+/// tolerance.
+const NEXT_AHEAD: f64 = 1e-5;
+
+/// The target of a side To Next (GitHub mitcad/Mitcad#674): of `bodies`,
+/// those that reach ahead of the start along `along` (the start: the
+/// plane across `normal` through the farthest back of the points `from`),
+/// as one body, up to whose first face the kernel ends each part of the
+/// profile ([`Target::Body`]). A body behind the start, such as the one
+/// whose face the sketch lies on when the extrusion goes out of it, is no
+/// target: the side never turns round to reach one.
+fn next_target<K: Kernel>(
+    kernel: &K,
+    bodies: Vec<(BodyUid, K::Shape)>,
+    from: &[[f64; 3]],
+    normal: [f64; 3],
+    along: [f64; 3],
+) -> Result<Target<K::Shape>, String> {
+    if bodies.is_empty() {
+        return Err(TO_NEXT_NO_BODIES.to_owned());
+    }
+    let facing = if dot(normal, along) < 0.0 {
+        normal.map(|v| -v)
+    } else {
+        normal
+    };
+    let start = from
+        .iter()
+        .map(|p| dot(*p, facing))
+        .fold(f64::INFINITY, f64::min);
+    let mut ahead = Vec::new();
+    for (_, shape) in bodies {
+        let Some(bounds) = kernel.bounding_box(&shape).map_err(|e| e.to_string())? else {
+            continue;
+        };
+        let reach = bounds
+            .corners()
+            .map(|c| dot(c, facing))
+            .fold(f64::NEG_INFINITY, f64::max);
+        if reach > start + NEXT_AHEAD {
+            ahead.push(shape);
+        }
+    }
+    let body = match ahead.len() {
+        0 => return Err(TO_NEXT_NONE_AHEAD.to_owned()),
+        1 => ahead.pop().expect("one body ahead"),
+        _ => kernel.compound(&ahead).map_err(|e| e.to_string())?,
+    };
+    Ok(Target::Body {
+        body,
+        through: false,
+    })
 }
 
 /// The error of signed two-sided distances (mitcad#765) whose ends meet or

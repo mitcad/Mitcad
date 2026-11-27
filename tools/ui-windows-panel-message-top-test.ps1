@@ -4,7 +4,7 @@
 # build VM, as tools/ui-panel-message-top-test.sh on Linux: the shared steps
 # tools/ui-scripts/panel-message-top.mitcad-ui on the cube that mitcad-cli
 # makes (tools/ui-scripts/panel-message-top.json), in a 1280 x 800 window,
-# Docked and then Floating: Extrude1 edited, its distance 0 fails the
+# Docked and then Floating: Extrude1 edited, Symmetric, its distance -5 fails the
 # preview, and the panel's error box shows its text from the first line,
 # not scrolled down it. The box had opened scrolled in the Docked layout,
 # its "Failed:" line cut off.
@@ -34,7 +34,7 @@ foreach ($layout in @('docked', 'floating')) {
   if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
     Ui-Fail "${layout}: the panel message driver failed (exit code $exitCode)"
   }
-  Ui-ExpectLog 'Preview Extrude: failed' "${layout}: a distance of 0 fails the preview"
+  Ui-ExpectLog 'Preview Extrude: failed' "${layout}: a symmetric distance of -5 fails the preview"
   Ui-ExpectLog 'Panel Extrude message box: error: ' "${layout}: its error in the panel's box"
   Ui-LogLines | Where-Object { $_ -match 'Panel Extrude message [0-9]+x[0-9]+' } | Select-Object -Last 1 |
     ForEach-Object { Write-Host "     $_" }

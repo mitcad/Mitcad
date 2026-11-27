@@ -12,9 +12,12 @@
 # design mitcad-cli makes: a 40 x 30 block 20 deep under the XY plane
 # (Body1, F2.b0; its top face lies in XY), a square on XY over the block
 # (Sketch2, F3) and a square on XY far from it (Sketch3, F4).
+# A new Extrude starts at 0 mm and builds nothing (mitcad#2481): each new
+# one below gets 10 mm typed first.
 #   1. Extrude of the far square: New Body, nothing chosen automatically.
-#   2. Extrude of the square on the block's face: Join at once; a negative
-#      distance makes it Cut, a positive one Join again; OK joins. A typed
+#   2. Extrude of the square on the block's face: Join once 10 mm is
+#      typed; a negative distance makes it Cut, a positive one Join again;
+#      OK joins. A typed
 #      "-5 mm" has no "= -5 mm" line under the field, an expression has
 #      one (mitcad#994).
 #   3. Undone; Extrude of the same square with New Body chosen by hand:
@@ -71,6 +74,7 @@ echo "--- 1. A profile away from the bodies: New Body"
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F4]" "the far square taken"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
 ui_expect_new "Preview Extrude: ok" "previewed"
 ui_step "distance 15"                    ui_type_in "Panel Extrude input distance" "15"
 ui_expect_new "Extrude Distance: 15 = 15 mm" "15 mm up"
@@ -84,7 +88,8 @@ echo "--- 2. A profile on the block's face: Join, Cut going in, Join coming out"
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F3]" "the square on the face taken"
-ui_expect_new "Extrude: automatic Operation = Join" "Join at once (10 mm up from the face)"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
+ui_expect_new "Extrude: automatic Operation = Join" "Join at once (10 mm typed, up from the face)"
 ui_expect_new "Extrude Local bodies: 1 body [body F2.b0]" "the block is the object"
 ui_expect_new "Preview Extrude: ok" "the join previewed"
 ui_mark
@@ -148,7 +153,8 @@ echo "--- 3. New Body chosen by hand stays when the distance goes in"
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F3]" "the square on the face again"
-ui_expect_new "Extrude: automatic Operation = Join" "Join at once"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
+ui_expect_new "Extrude: automatic Operation = Join" "Join at once (10 mm typed)"
 ui_expect_new "Preview Extrude: ok" "previewed"
 ui_mark
 ui_step "New Body (one up from Join)"    ui_choose "Panel Extrude input operation" -1
@@ -216,7 +222,8 @@ ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F3]" "the square on the block's face taken"
 ui_expect_new "Extrude: automatic operation off by preference" "the preference keeps the model's choice off"
-ui_expect_new "Preview Extrude: ok" "the outward New Body previewed (10 mm up from the face)"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
+ui_expect_new "Preview Extrude: ok" "the outward New Body previewed (10 mm typed, up from the face)"
 ui_wait_idle
 no_new "Extrude: automatic Operation" "outward, touching the block: it stays New Body"
 ui_mark
@@ -239,6 +246,7 @@ ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F3]" "the square on the face again"
 ui_expect_new "Extrude: automatic operation off by preference" "off by preference again"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
 ui_expect_new "Preview Extrude: ok" "previewed"
 ui_mark
 ui_step "distance 5"                     ui_type_in "Panel Extrude input distance" "5"

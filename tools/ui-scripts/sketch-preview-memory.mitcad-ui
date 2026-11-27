@@ -1,0 +1,571 @@
+# SPDX-License-Identifier: MIT
+# The view's memory stays bounded while a sketch preview follows the
+# pointer (mitcad#2452, mitcad#2485; the cause and fix in mitcad#2437).
+# Each sketch overlay picture is a view-sized texture that OCCT lets go
+# only at full frames; on Apple silicon graphics memory counts in the
+# process footprint, which the memory guard compares with installed RAM.
+#   1. Center Point Arc after the reported sequence (Midpoint Line,
+#      Centerline, Line, Centerline twice): the radius preview, then the
+#      sweep preview, follow the pointer; the arc commits.
+#   2. A typed radius, the sweep following the pointer.
+#   3. Sketch Dimension on each arc of a two-arc profile (GitHub #681's
+#      shape): the value follows the pointer, then the radius commits.
+# Each preview may grow the footprint by at most 400 MB: a few replaced
+# pictures, where every move once kept one (19 MB at 1440 x 838 points
+# on a 2x screen). Run by tools/ui-macos-sketch-preview-memory-test.sh.
+expect-ever 'View area'
+sleep 800
+command sketch.create
+click-logged 'Datum xy'
+expect-log 'Sketch started on xy'
+wait-idle
+
+# The reported sequence before Center Point Arc.
+command sketch.line_midpoint
+sketch-click 0 40
+sketch-click 30 40
+key Escape
+command sketch.centerline
+command sketch.line
+sketch-click -60 60
+sketch-click 60 60
+key Escape
+command sketch.centerline
+command sketch.centerline
+wait-idle
+
+# 1. Center Point Arc: the radius preview follows the pointer.
+command sketch.arc_center
+sketch-click 0 0
+capture-footprint arc_radius
+sketch-move 14.10 -5.13
+sketch-move 14.11 -5.63
+sketch-move 14.44 -6.29
+sketch-move 15.07 -7.13
+sketch-move 15.97 -8.17
+sketch-move 17.08 -9.41
+sketch-move 18.35 -10.87
+sketch-move 19.74 -12.53
+sketch-move 21.17 -14.38
+sketch-move 22.60 -16.39
+sketch-move 23.97 -18.54
+sketch-move 25.21 -20.78
+sketch-move 26.29 -23.07
+sketch-move 27.16 -25.36
+sketch-move 27.78 -27.59
+sketch-move 28.12 -29.72
+sketch-move 28.18 -31.69
+sketch-move 27.94 -33.45
+sketch-move 27.41 -34.96
+sketch-move 26.60 -36.17
+sketch-move 25.52 -37.05
+sketch-move 24.21 -37.58
+sketch-move 22.70 -37.75
+sketch-move 21.02 -37.56
+sketch-move 19.23 -37.00
+sketch-move 17.37 -36.10
+sketch-move 15.48 -34.90
+sketch-move 13.61 -33.42
+sketch-move 11.78 -31.72
+sketch-move 10.05 -29.84
+sketch-move 8.43 -27.86
+sketch-move 6.95 -25.83
+sketch-move 5.62 -23.81
+sketch-move 4.46 -21.88
+sketch-move 3.45 -20.09
+sketch-move 2.59 -18.50
+sketch-move 1.87 -17.16
+sketch-move 1.25 -16.12
+sketch-move 0.72 -15.41
+sketch-move 0.23 -15.05
+sketch-move -0.23 -15.05
+sketch-move -0.72 -15.41
+sketch-move -1.25 -16.12
+sketch-move -1.87 -17.16
+sketch-move -2.59 -18.50
+sketch-move -3.45 -20.09
+sketch-move -4.46 -21.88
+sketch-move -5.62 -23.81
+sketch-move -6.95 -25.83
+sketch-move -8.43 -27.86
+sketch-move -10.05 -29.84
+sketch-move -11.78 -31.72
+sketch-move -13.61 -33.42
+sketch-move -15.48 -34.90
+sketch-move -17.37 -36.10
+sketch-move -19.23 -37.00
+sketch-move -21.02 -37.56
+sketch-move -22.70 -37.75
+sketch-move -24.21 -37.58
+sketch-move -25.52 -37.05
+sketch-move -26.60 -36.17
+sketch-move -27.41 -34.96
+sketch-move -27.94 -33.45
+sketch-move -28.18 -31.69
+sketch-move -28.12 -29.72
+sketch-move -27.78 -27.59
+sketch-move -27.16 -25.36
+sketch-move -26.29 -23.07
+sketch-move -25.21 -20.78
+sketch-move -23.97 -18.54
+sketch-move -22.60 -16.39
+sketch-move -21.17 -14.38
+sketch-move -19.74 -12.53
+sketch-move -18.35 -10.87
+sketch-move -17.08 -9.41
+sketch-move -15.97 -8.17
+sketch-move -15.07 -7.13
+sketch-move -14.44 -6.29
+sketch-move -14.11 -5.63
+sketch-move -14.10 -5.13
+expect-footprint-within arc_radius 400
+sketch-click 30 0
+capture-footprint arc_sweep
+sketch-move 29.54 5.21
+sketch-move 29.34 6.25
+sketch-move 29.10 7.28
+sketch-move 28.83 8.31
+sketch-move 28.52 9.32
+sketch-move 28.17 10.32
+sketch-move 27.79 11.31
+sketch-move 27.37 12.29
+sketch-move 26.92 13.25
+sketch-move 26.43 14.19
+sketch-move 25.91 15.11
+sketch-move 25.36 16.02
+sketch-move 24.78 16.91
+sketch-move 24.17 17.77
+sketch-move 23.53 18.62
+sketch-move 22.85 19.44
+sketch-move 22.15 20.23
+sketch-move 21.42 21.00
+sketch-move 20.67 21.75
+sketch-move 19.89 22.46
+sketch-move 19.08 23.15
+sketch-move 18.25 23.81
+sketch-move 17.40 24.44
+sketch-move 16.52 25.04
+sketch-move 15.63 25.61
+sketch-move 14.71 26.14
+sketch-move 13.78 26.65
+sketch-move 12.83 27.12
+sketch-move 11.86 27.56
+sketch-move 10.88 27.96
+sketch-move 9.89 28.32
+sketch-move 8.88 28.66
+sketch-move 7.86 28.95
+sketch-move 6.83 29.21
+sketch-move 5.80 29.43
+sketch-move 4.75 29.62
+sketch-move 3.70 29.77
+sketch-move 2.65 29.88
+sketch-move 1.59 29.96
+sketch-move 0.53 30.00
+sketch-move -0.53 30.00
+sketch-move -1.59 29.96
+sketch-move -2.65 29.88
+sketch-move -3.70 29.77
+sketch-move -4.75 29.62
+sketch-move -5.80 29.43
+sketch-move -6.83 29.21
+sketch-move -7.86 28.95
+sketch-move -8.88 28.66
+sketch-move -9.89 28.32
+sketch-move -10.88 27.96
+sketch-move -11.86 27.56
+sketch-move -12.83 27.12
+sketch-move -13.78 26.65
+sketch-move -14.71 26.14
+sketch-move -15.63 25.61
+sketch-move -16.52 25.04
+sketch-move -17.40 24.44
+sketch-move -18.25 23.81
+sketch-move -19.08 23.15
+sketch-move -19.89 22.46
+sketch-move -20.67 21.75
+sketch-move -21.42 21.00
+sketch-move -22.15 20.23
+sketch-move -22.85 19.44
+sketch-move -23.53 18.62
+sketch-move -24.17 17.77
+sketch-move -24.78 16.91
+sketch-move -25.36 16.02
+sketch-move -25.91 15.11
+sketch-move -26.43 14.19
+sketch-move -26.92 13.25
+sketch-move -27.37 12.29
+sketch-move -27.79 11.31
+sketch-move -28.17 10.32
+sketch-move -28.52 9.32
+sketch-move -28.83 8.31
+sketch-move -29.10 7.28
+sketch-move -29.34 6.25
+sketch-move -29.54 5.21
+expect-footprint-within arc_sweep 400
+sketch-click 0 30
+wait-log '^Added arc c[0-9]+, radius 30 mm' 10
+wait-idle
+expect-footprint-within arc_radius 400
+
+# 2. A typed radius; the sweep follows the pointer.
+sketch-click 0 -10
+type 20
+key Return
+capture-footprint arc_typed
+sketch-move 19.70 -13.47
+sketch-move 19.56 -14.17
+sketch-move 19.40 -14.86
+sketch-move 19.22 -15.54
+sketch-move 19.01 -16.21
+sketch-move 18.78 -16.88
+sketch-move 18.52 -17.54
+sketch-move 18.25 -18.19
+sketch-move 17.94 -18.83
+sketch-move 17.62 -19.46
+sketch-move 17.28 -20.08
+sketch-move 16.91 -20.68
+sketch-move 16.52 -21.27
+sketch-move 16.11 -21.85
+sketch-move 15.68 -22.41
+sketch-move 15.24 -22.96
+sketch-move 14.77 -23.49
+sketch-move 14.28 -24.00
+sketch-move 13.78 -24.50
+sketch-move 13.26 -24.97
+sketch-move 12.72 -25.43
+sketch-move 12.17 -25.87
+sketch-move 11.60 -26.29
+sketch-move 11.01 -26.69
+sketch-move 10.42 -27.07
+sketch-move 9.81 -27.43
+sketch-move 9.19 -27.77
+sketch-move 8.55 -28.08
+sketch-move 7.91 -28.37
+sketch-move 7.25 -28.64
+sketch-move 6.59 -28.88
+sketch-move 5.92 -29.10
+sketch-move 5.24 -29.30
+sketch-move 4.55 -29.47
+sketch-move 3.86 -29.62
+sketch-move 3.17 -29.75
+sketch-move 2.47 -29.85
+sketch-move 1.77 -29.92
+sketch-move 1.06 -29.97
+sketch-move 0.35 -30.00
+sketch-move -0.35 -30.00
+sketch-move -1.06 -29.97
+sketch-move -1.77 -29.92
+sketch-move -2.47 -29.85
+sketch-move -3.17 -29.75
+sketch-move -3.86 -29.62
+sketch-move -4.55 -29.47
+sketch-move -5.24 -29.30
+sketch-move -5.92 -29.10
+sketch-move -6.59 -28.88
+sketch-move -7.25 -28.64
+sketch-move -7.91 -28.37
+sketch-move -8.55 -28.08
+sketch-move -9.19 -27.77
+sketch-move -9.81 -27.43
+sketch-move -10.42 -27.07
+sketch-move -11.01 -26.69
+sketch-move -11.60 -26.29
+sketch-move -12.17 -25.87
+sketch-move -12.72 -25.43
+sketch-move -13.26 -24.97
+sketch-move -13.78 -24.50
+sketch-move -14.28 -24.00
+sketch-move -14.77 -23.49
+sketch-move -15.24 -22.96
+sketch-move -15.68 -22.41
+sketch-move -16.11 -21.85
+sketch-move -16.52 -21.27
+sketch-move -16.91 -20.68
+sketch-move -17.28 -20.08
+sketch-move -17.62 -19.46
+sketch-move -17.94 -18.83
+sketch-move -18.25 -18.19
+sketch-move -18.52 -17.54
+sketch-move -18.78 -16.88
+sketch-move -19.01 -16.21
+sketch-move -19.22 -15.54
+sketch-move -19.40 -14.86
+sketch-move -19.56 -14.17
+sketch-move -19.70 -13.47
+expect-footprint-within arc_typed 400
+sketch-click -20 -10
+wait-log '^Added arc c[0-9]+, radius 20 mm' 10
+key Escape
+key Escape
+wait-idle
+
+# 3. GitHub #681's profile on grid points: two half arcs below a line
+# through their centre, joined by two lines, then Sketch Dimension on
+# each arc.
+command sketch.arc_center
+sketch-click 40 -40
+sketch-click 10 -40
+sketch-move 11.81 -50.26
+sketch-move 20.72 -62.98
+sketch-move 34.79 -69.54
+sketch-move 50.26 -68.19
+sketch-move 62.98 -59.28
+sketch-move 68.98 -47.76
+sketch-click 70 -40
+wait-log '^Added arc c[0-9]+, radius 30 mm' 10
+sketch-click 40 -40
+sketch-click 20 -40
+sketch-move 21.21 -46.84
+sketch-move 27.14 -55.32
+sketch-move 36.53 -59.70
+sketch-move 46.84 -58.79
+sketch-move 55.32 -52.86
+sketch-move 59.32 -45.18
+sketch-click 60 -40
+wait-log '^Added arc c[0-9]+, radius 20 mm' 10
+key Escape
+key Escape
+command sketch.line
+sketch-click 10 -40
+sketch-click 20 -40
+key Escape
+command sketch.line
+sketch-click 60 -40
+sketch-click 70 -40
+key Escape
+key Escape
+wait-idle
+
+command sketch.dimension
+wait-log '^Sketch tool Sketch Dimension$'
+mark
+sketch-click 40 -70
+capture-footprint dim_outer
+sketch-move 50.39 -46.00
+sketch-move 50.36 -46.27
+sketch-move 50.49 -46.67
+sketch-move 50.80 -47.18
+sketch-move 51.25 -47.83
+sketch-move 51.83 -48.61
+sketch-move 52.52 -49.53
+sketch-move 53.30 -50.57
+sketch-move 54.14 -51.74
+sketch-move 55.03 -53.03
+sketch-move 55.94 -54.41
+sketch-move 56.84 -55.89
+sketch-move 57.72 -57.44
+sketch-move 58.54 -59.03
+sketch-move 59.29 -60.66
+sketch-move 59.95 -62.29
+sketch-move 60.50 -63.91
+sketch-move 60.93 -65.49
+sketch-move 61.23 -66.99
+sketch-move 61.39 -68.41
+sketch-move 61.40 -69.72
+sketch-move 61.26 -70.89
+sketch-move 60.98 -71.90
+sketch-move 60.56 -72.75
+sketch-move 60.00 -73.41
+sketch-move 59.32 -73.87
+sketch-move 58.52 -74.13
+sketch-move 57.62 -74.18
+sketch-move 56.64 -74.02
+sketch-move 55.58 -73.65
+sketch-move 54.48 -73.08
+sketch-move 53.34 -72.33
+sketch-move 52.18 -71.39
+sketch-move 51.03 -70.31
+sketch-move 49.89 -69.08
+sketch-move 48.79 -67.74
+sketch-move 47.73 -66.31
+sketch-move 46.72 -64.82
+sketch-move 45.78 -63.30
+sketch-move 44.92 -61.77
+sketch-move 44.13 -60.27
+sketch-move 43.42 -58.82
+sketch-move 42.79 -57.45
+sketch-move 42.24 -56.19
+sketch-move 41.76 -55.06
+sketch-move 41.34 -54.08
+sketch-move 40.98 -53.27
+sketch-move 40.67 -52.66
+sketch-move 40.39 -52.24
+sketch-move 40.13 -52.03
+sketch-move 39.87 -52.03
+sketch-move 39.61 -52.24
+sketch-move 39.33 -52.66
+sketch-move 39.02 -53.27
+sketch-move 38.66 -54.08
+sketch-move 38.24 -55.06
+sketch-move 37.76 -56.19
+sketch-move 37.21 -57.45
+sketch-move 36.58 -58.82
+sketch-move 35.87 -60.27
+sketch-move 35.08 -61.77
+sketch-move 34.22 -63.30
+sketch-move 33.28 -64.82
+sketch-move 32.27 -66.31
+sketch-move 31.21 -67.74
+sketch-move 30.11 -69.08
+sketch-move 28.97 -70.31
+sketch-move 27.82 -71.39
+sketch-move 26.66 -72.33
+sketch-move 25.52 -73.08
+sketch-move 24.42 -73.65
+sketch-move 23.36 -74.02
+sketch-move 22.38 -74.18
+sketch-move 21.48 -74.13
+sketch-move 20.68 -73.87
+sketch-move 20.00 -73.41
+sketch-move 19.44 -72.75
+sketch-move 19.02 -71.90
+sketch-move 18.74 -70.89
+sketch-move 18.60 -69.72
+sketch-move 18.61 -68.41
+sketch-move 18.77 -66.99
+sketch-move 19.07 -65.49
+sketch-move 19.50 -63.91
+sketch-move 20.05 -62.29
+sketch-move 20.71 -60.66
+sketch-move 21.46 -59.03
+sketch-move 22.28 -57.44
+sketch-move 23.16 -55.89
+sketch-move 24.06 -54.41
+sketch-move 24.97 -53.03
+sketch-move 25.86 -51.74
+sketch-move 26.70 -50.57
+sketch-move 27.48 -49.53
+sketch-move 28.17 -48.61
+sketch-move 28.75 -47.83
+sketch-move 29.20 -47.18
+sketch-move 29.51 -46.67
+sketch-move 29.64 -46.27
+sketch-move 29.61 -46.00
+expect-footprint-within dim_outer 400
+sketch-click 40 -48
+wait-log '^Sketch value editor at '
+key ctrl+a
+type 35
+key Return
+wait-log '^Added (driven )?dimension k[0-9]+ '
+key Escape
+wait-idle
+expect-footprint-within dim_outer 400
+
+command sketch.dimension
+wait-log '^Sketch tool Sketch Dimension$'
+mark
+sketch-click 40 -60
+capture-footprint dim_inner
+sketch-move 46.93 -44.00
+sketch-move 46.90 -44.18
+sketch-move 47.00 -44.44
+sketch-move 47.20 -44.79
+sketch-move 47.50 -45.22
+sketch-move 47.88 -45.74
+sketch-move 48.34 -46.35
+sketch-move 48.86 -47.05
+sketch-move 49.43 -47.83
+sketch-move 50.02 -48.68
+sketch-move 50.63 -49.61
+sketch-move 51.23 -50.59
+sketch-move 51.81 -51.62
+sketch-move 52.36 -52.69
+sketch-move 52.86 -53.77
+sketch-move 53.30 -54.86
+sketch-move 53.67 -55.94
+sketch-move 53.95 -56.99
+sketch-move 54.15 -58.00
+sketch-move 54.26 -58.94
+sketch-move 54.27 -59.81
+sketch-move 54.18 -60.59
+sketch-move 53.99 -61.27
+sketch-move 53.71 -61.83
+sketch-move 53.33 -62.27
+sketch-move 52.88 -62.58
+sketch-move 52.35 -62.75
+sketch-move 51.75 -62.79
+sketch-move 51.09 -62.68
+sketch-move 50.39 -62.43
+sketch-move 49.65 -62.05
+sketch-move 48.89 -61.55
+sketch-move 48.12 -60.93
+sketch-move 47.35 -60.20
+sketch-move 46.59 -59.39
+sketch-move 45.86 -58.49
+sketch-move 45.15 -57.54
+sketch-move 44.48 -56.55
+sketch-move 43.85 -55.53
+sketch-move 43.28 -54.51
+sketch-move 42.75 -53.51
+sketch-move 42.28 -52.54
+sketch-move 41.86 -51.63
+sketch-move 41.49 -50.79
+sketch-move 41.17 -50.04
+sketch-move 40.90 -49.39
+sketch-move 40.66 -48.85
+sketch-move 40.45 -48.44
+sketch-move 40.26 -48.16
+sketch-move 40.08 -48.02
+sketch-move 39.92 -48.02
+sketch-move 39.74 -48.16
+sketch-move 39.55 -48.44
+sketch-move 39.34 -48.85
+sketch-move 39.10 -49.39
+sketch-move 38.83 -50.04
+sketch-move 38.51 -50.79
+sketch-move 38.14 -51.63
+sketch-move 37.72 -52.54
+sketch-move 37.25 -53.51
+sketch-move 36.72 -54.51
+sketch-move 36.15 -55.53
+sketch-move 35.52 -56.55
+sketch-move 34.85 -57.54
+sketch-move 34.14 -58.49
+sketch-move 33.41 -59.39
+sketch-move 32.65 -60.20
+sketch-move 31.88 -60.93
+sketch-move 31.11 -61.55
+sketch-move 30.35 -62.05
+sketch-move 29.61 -62.43
+sketch-move 28.91 -62.68
+sketch-move 28.25 -62.79
+sketch-move 27.65 -62.75
+sketch-move 27.12 -62.58
+sketch-move 26.67 -62.27
+sketch-move 26.29 -61.83
+sketch-move 26.01 -61.27
+sketch-move 25.82 -60.59
+sketch-move 25.73 -59.81
+sketch-move 25.74 -58.94
+sketch-move 25.85 -58.00
+sketch-move 26.05 -56.99
+sketch-move 26.33 -55.94
+sketch-move 26.70 -54.86
+sketch-move 27.14 -53.77
+sketch-move 27.64 -52.69
+sketch-move 28.19 -51.62
+sketch-move 28.77 -50.59
+sketch-move 29.37 -49.61
+sketch-move 29.98 -48.68
+sketch-move 30.57 -47.83
+sketch-move 31.14 -47.05
+sketch-move 31.66 -46.35
+sketch-move 32.12 -45.74
+sketch-move 32.50 -45.22
+sketch-move 32.80 -44.79
+sketch-move 33.00 -44.44
+sketch-move 33.10 -44.18
+sketch-move 33.07 -44.00
+expect-footprint-within dim_inner 400
+sketch-click 40 -48
+wait-log '^Sketch value editor at '
+key ctrl+a
+type 25
+key Return
+wait-log '^Added (driven )?dimension k[0-9]+ '
+key Escape
+wait-idle
+expect-footprint-within dim_inner 400
+
+expect-no-log 'ran out of memory'

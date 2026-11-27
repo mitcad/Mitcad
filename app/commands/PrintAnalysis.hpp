@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <QColor>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -131,9 +132,35 @@ struct PrintOverlay {
   // in (mitcad#2265: outside the sample, or failed), the legend's entry
   // "Measured 8 of 32 points; the others dimmed" when there are any.
   QColor unmeasuredColor;
+  // Minimum Distance (mitcad#2519, MinimumDistance.hpp): `gaps` holds its
+  // one line between the closest points and `narrowest` the line's middle
+  // with the distance as its label, in `gapColor`: the distance's color,
+  // or the clearance's when the selections come closer than it.
+  bool distanceLine = false;
+  bool closerThanClearance = false;
+  // Surface quality analyses (mitcad#2517, SurfaceAnalysis.hpp,
+  // addSurfaceOverlay): one of them is the overlay (`surface`: its legend's
+  // colors stay as they are on another background, they are the same on
+  // both). A Zebra's dark and light stripes (9 numbers per triangle, design
+  // coordinates) drawn as the overhangs are; a Curvature Map's triangles
+  // with each corner's color (9 numbers and 3 colors per triangle); an
+  // Isocurve Analysis' curves (3 numbers per point) with each point's
+  // color; an Environment Map's triangles with each corner's normal (9
+  // numbers each), reflecting `environment`.
+  bool surface = false;
+  std::array<std::vector<float>, 2> zebra;
+  std::array<QColor, 2> zebraColors;
+  std::vector<float> shaded;
+  std::vector<QRgb> shadedColors;
+  std::vector<std::vector<float>> isoLines;
+  std::vector<std::vector<QRgb>> isoColors;
+  std::vector<float> mirror;
+  std::vector<float> mirrorNormals;
+  QImage environment;
   bool isEmpty() const {
     return overhangs.empty() && thin.empty() && gaps.empty() && !thinnest && !narrowest && legend.empty() &&
-           draft[0].empty() && draft[1].empty() && draft[2].empty() && cloudPoints.empty();
+           draft[0].empty() && draft[1].empty() && draft[2].empty() && cloudPoints.empty() && zebra[0].empty() &&
+           zebra[1].empty() && shaded.empty() && isoLines.empty() && mirror.empty();
   }
 };
 // A deviation's colour (mitcad#2240): within `tolerance` of the faces the
@@ -148,18 +175,29 @@ QJsonObject printOverlayJson(const QJsonObject& def, const PrintAnswers& answers
 // draftOverlayJson) in `draftColors`; a Point Cloud Deviation's
 // (`deviation`, pointCloudDeviationOverlayJson, mitcad#2240) in
 // `deviationColors`, its points not measured in `unmeasuredColor`
-// (mitcad#2265).
+// (mitcad#2265); a Minimum Radius' (`min_radius`, minRadiusOverlayJson,
+// mitcad#2518) as the thin walls are: its smallest radius the marker, the
+// faces under its limit the thin triangles, in `thinColor`; a Minimum
+// Distance's (`minimum_distance`, minimumDistanceOverlayJson, mitcad#2519)
+// line in `distanceColors` (the distance's, the clearance's when closer
+// than it).
 PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor, const QColor& thinColor,
                             const QColor& gapColor = QColor(), const std::array<QColor, 3>& draftColors = {},
                             const std::array<QColor, 3>& deviationColors = {},
-                            const QColor& unmeasuredColor = QColor());
+                            const QColor& unmeasuredColor = QColor(),
+                            const std::array<QColor, 2>& distanceColors = {});
 // For the log, when it changes: "Print overlay: 12 overhang triangle(s)
 // #rrggbb, 4 thin triangle(s) #rrggbb (150.0 mm^2: the area drawn thin),
 // thinnest 0.50 mm at (x, y, z) (with narrow gaps then ", 1 narrow gap(s)
 // #rrggbb, marker Gap 0.20 mm at (x, y, z)");
 // legend Print1: Overhang over 45° | Wall under 0.8 mm", or "Print overlay:
 // none". A Draft Analysis' adds ", draft 2 along #rrggbb, 8 under #rrggbb, 2
-// against #rrggbb" (triangles) after the markers.
+// against #rrggbb" (triangles) after the markers. A Minimum Distance's line
+// (mitcad#2519) is ", minimum distance #rrggbb[ closer than the clearance],
+// marker 5.00 mm at (x, y, z)" in place of the narrow gaps. A surface quality
+// analysis' (mitcad#2517) adds ", zebra 4 dark #rrggbb, 8 light #rrggbb",
+// ", curvature 12 triangle(s)", ", isocurves 36 curve(s) 72 point(s)" or
+// ", environment 12 triangle(s) 256x256 picture".
 QString printOverlayLog(const PrintOverlay& overlay);
 
 // The point of a result link ("point:x,y,z"), if it is one.

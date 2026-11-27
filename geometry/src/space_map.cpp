@@ -19,6 +19,7 @@
 #include <BRepLib.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_Modification.hxx>
+#include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <Geom2dAPI_Interpolate.hxx>
@@ -41,7 +42,9 @@
 #include <TopLoc_Location.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Edge.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <gp_Vec.hxx>
@@ -595,6 +598,31 @@ std::string check_report(const TopoDS_Shape& shape) {
   return report.empty() ? "(no sub-shape status)" : report;
 }
 
+// The shape with each solid's material inside it: a solid turned where
+// BRepLib::OrientClosedSolid finds it inside-out, the solids of a compound
+// each so. OrientClosedSolid reverses the handle it is given, so the turned
+// handles are put back (as orient_solids in brep_import.cpp does). The
+// faces stay the same faces (IsSame), so their names are found in the
+// result. (Not analysis::oriented_solids, which makes a compound of any
+// shape.)
+TopoDS_Shape material_inside(const TopoDS_Shape& shape) {
+  if (shape.ShapeType() == TopAbs_SOLID) {
+    TopoDS_Solid solid = TopoDS::Solid(shape);
+    BRepLib::OrientClosedSolid(solid);
+    return solid;
+  }
+  if (shape.ShapeType() != TopAbs_COMPOUND) {
+    return shape;
+  }
+  BRep_Builder builder;
+  TopoDS_Compound out;
+  builder.MakeCompound(out);
+  for (TopoDS_Iterator it(shape); it.More(); it.Next()) {
+    builder.Add(out, material_inside(it.Value()));
+  }
+  return out;
+}
+
 // BRepBuilderAPI_ModifyShape's history over Bend's modification.
 class Bending final : public BRepBuilderAPI_ModifyShape {
 public:
@@ -632,15 +660,13 @@ ShapePtr mapped_solid(const Shape& shape, const SpaceMap& map, const LaidFaces& 
       trace("the modifier failed");
       return nullptr;
     }
-    const TopoDS_Shape result = bending.Shape();
-    BRepLib::SameParameter(result, tolerance, true);
-    BRepLib::UpdateTolerances(result);
+    const TopoDS_Shape bent = bending.Shape();
+    BRepLib::SameParameter(bent, tolerance, true);
+    BRepLib::UpdateTolerances(bent);
     // (The faces turned over as the map turns space; each solid's material
-    // made sure to lie inside it.)
-    for (TopExp_Explorer it(result, TopAbs_SOLID); it.More(); it.Next()) {
-      TopoDS_Solid solid = TopoDS::Solid(it.Current());
-      BRepLib::OrientClosedSolid(solid);
-    }
+    // made sure to lie inside it. OrientClosedSolid turns the handle it is
+    // given, so the turned solids make up the result.)
+    const TopoDS_Shape result = material_inside(bent);
     if (!is_valid(result)) {
       trace("the result is not valid: " + check_report(result));
       return nullptr;

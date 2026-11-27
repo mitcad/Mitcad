@@ -6,7 +6,7 @@
 # tools/ui-scripts/panel-message-reveal.mitcad-ui on the cube that
 # mitcad-cli makes (tools/ui-scripts/panel-message-top.json), in a
 # 1280 x 600 window, Docked and then Floating: Extrude1 edited, its Distance
-# typed 0 fails the preview, and the panel's error box and the Distance
+# typed -5 (Symmetric) fails the preview, and the panel's error box and the Distance
 # field typed in lie within the page's view ("Panel Extrude view y A to B")
 # without the test scrolling to the box; Docked, the page scrolled to it by
 # itself ("Panel Extrude message revealed: ..., scrolled N" with N above 0).
@@ -49,7 +49,7 @@ foreach ($layout in @('docked', 'floating')) {
   if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
     Ui-Fail "${layout}: the panel message driver failed (exit code $exitCode)"
   }
-  Ui-ExpectLog 'Preview Extrude: failed' "${layout}: a distance of 0 fails the preview"
+  Ui-ExpectLog 'Preview Extrude: failed' "${layout}: a symmetric distance of -5 fails the preview"
   Ui-ExpectLog 'Panel Extrude message box: error: ' "${layout}: its error in the panel's box"
   Ui-ExpectLog 'TestDriver: done' "${layout}: the error is brought into view"
   # From the error to the panel's end (Esc).

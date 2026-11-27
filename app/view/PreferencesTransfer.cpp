@@ -414,6 +414,9 @@ void ViewController::applyImportedSettings(const SettingsBeforeImport& was, cons
     through<TimelinePresentation>(before, {QStringLiteral("timeline/presentation")},
                                   [] { return timelinePresentation(); },
                                   [](const TimelinePresentation& shown) { setTimelinePresentation(shown); });
+    // The Browser rows' spacing (mitcad#2513).
+    through<BrowserRowSpacing>(before, {QStringLiteral("browser/rowSpacing")}, [] { return browserRowSpacing(); },
+                               [](const BrowserRowSpacing& spacing) { setBrowserRowSpacing(spacing); });
     const ThemeChoice themeNow = themePreference();
     if (themeNow != was.theme) {
       applyThemePreference(themeNow);

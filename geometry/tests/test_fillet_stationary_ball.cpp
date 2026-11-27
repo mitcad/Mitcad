@@ -79,6 +79,7 @@
 #include <gp_Pnt2d.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -397,7 +398,7 @@ void test_reported_body() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_stationary_ball) {
   test::guarded("test_top_rim_through_the_mitres", test::test_top_rim_through_the_mitres);
   test::guarded("test_both_rims_on_the_half_lid", test::test_both_rims_on_the_half_lid);
   test::guarded("test_reported_body", test::test_reported_body);

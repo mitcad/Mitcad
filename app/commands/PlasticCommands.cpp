@@ -117,7 +117,13 @@ CommandDef plasticCommand(const CommandContext& context) {
   const auto snap = typeIn({QStringLiteral("snap_fit")});
   const auto rest = typeIn({QStringLiteral("rest")});
   const auto rule = typeIn({QStringLiteral("plastic_rule")});
-  const auto ruled = typeIn({QStringLiteral("boss"), QStringLiteral("groove"), QStringLiteral("rest")});
+  const auto ruled =
+      typeIn({QStringLiteral("boss"), QStringLiteral("lip"), QStringLiteral("groove"), QStringLiteral("rest")});
+  // mitcad#2511: a lip's or groove's side draft, a boss's rib and hole
+  // drafts, each its own angle or (0) the plastic rule's.
+  const auto sideDraft = [band](const CommandState& s) { return band(s) && s.checked(QStringLiteral("side_draft")); };
+  const auto ribDraft = [boss](const CommandState& s) { return boss(s) && s.checked(QStringLiteral("rib_draft")); };
+  const auto holeDraft = [boss](const CommandState& s) { return boss(s) && s.checked(QStringLiteral("hole_draft")); };
   const auto height = typeIn({QStringLiteral("boss"), QStringLiteral("lip"), QStringLiteral("rest")});
   const auto width = typeIn({QStringLiteral("lip"), QStringLiteral("groove"), QStringLiteral("snap_fit"),
                              QStringLiteral("rest")});
@@ -172,6 +178,37 @@ CommandDef plasticCommand(const CommandContext& context) {
       valueInput(QStringLiteral("rib_offset"), QObject::tr("Rib Offset"), ValueKind::Length, length("0 mm")).withStepMinimum(0.0)
           .withTooltip(QObject::tr("The ribs' tops below the boss's top"))
           .withVisible(boss),
+      valueInput(QStringLiteral("rib_angle"), QObject::tr("Rib Angle"), ValueKind::Angle, length("0 deg"))
+          .withTooltip(QObject::tr("The first rib's angle about the boss's axis; the others follow it evenly"))
+          .withVisible(boss),
+      checkInput(QStringLiteral("rib_draft"), QObject::tr("Rib Draft"), false)
+          .withTooltip(QObject::tr("The ribs lean by a draft of their own, thinner towards their tops"))
+          .withVisible(boss),
+      valueInput(QStringLiteral("rib_draft_angle"), QObject::tr("Rib Draft Angle"), ValueKind::Angle, length("0 deg"))
+          .withTooltip(QObject::tr("0: the plastic rule's draft"))
+          .withVisible(ribDraft),
+      listInput(QStringLiteral("rib_ends"), QObject::tr("Rib Ends"),
+                {choiceInput(QStringLiteral("end"), QObject::tr("End"),
+                             {{QStringLiteral("length"), QStringLiteral("At Its Length")},
+                              {QStringLiteral("wall"), QStringLiteral("Up to the Wall")}},
+                             QStringLiteral("wall"))
+                     .withTooltip(QObject::tr("Where this rib ends: its length, or the wall or face it meets")),
+                 valueInput(QStringLiteral("short"), QObject::tr("Short of the Wall"), ValueKind::Length,
+                            length("0 mm"))
+                     .withStepMinimum(0.0)
+                     .withTooltip(QObject::tr("How far before the wall the rib stops"))
+                     .withVisible([](const CommandState& row) {
+                       return row.choice(QStringLiteral("end")) == QStringLiteral("wall");
+                     })},
+                QObject::tr("Add Rib End"), QObject::tr("Rib %1"), 0)
+          .withTooltip(QObject::tr("Where each rib ends, the first rib first; ribs without a row end at their length"))
+          .withVisible(boss),
+      checkInput(QStringLiteral("hole_draft"), QObject::tr("Hole Draft"), false)
+          .withTooltip(QObject::tr("The hole narrows towards its bottom by a draft of its own"))
+          .withVisible(boss),
+      valueInput(QStringLiteral("hole_draft_angle"), QObject::tr("Hole Draft Angle"), ValueKind::Angle, length("0 deg"))
+          .withTooltip(QObject::tr("0: the plastic rule's draft"))
+          .withVisible(holeDraft),
       // Rest.
       choiceInput(QStringLiteral("shape"), QObject::tr("Shape"),
                   {{QStringLiteral("round"), QStringLiteral("Round")},
@@ -195,6 +232,15 @@ CommandDef plasticCommand(const CommandContext& context) {
                    {QStringLiteral("outside"), QStringLiteral("Along the Outer Edge")}},
                   QStringLiteral("inside"))
           .withVisible(band),
+      checkInput(QStringLiteral("tangent"), QObject::tr("Follow Tangency"), false)
+          .withTooltip(QObject::tr("The side along the edge goes on from the face beside it, along its tangent"))
+          .withVisible(band),
+      checkInput(QStringLiteral("side_draft"), QObject::tr("Side Draft"), false)
+          .withTooltip(QObject::tr("The other side leans: a lip narrows as it rises, a groove as it goes down"))
+          .withVisible(band),
+      valueInput(QStringLiteral("side_draft_angle"), QObject::tr("Side Draft Angle"), ValueKind::Angle, length("0 deg"))
+          .withTooltip(QObject::tr("0: the plastic rule's draft"))
+          .withVisible(sideDraft),
       // Snap fit.
       valueInput(QStringLiteral("thickness"), QObject::tr("Thickness"), ValueKind::Length, length("1.5 mm")).withStepMinimum(0.0, true)
           .withVisible(snap),
@@ -261,6 +307,18 @@ CommandDef plasticCommand(const CommandContext& context) {
         value(slot, input);
       }
     };
+    // A draft of its own when checked (mitcad#2511): its angle, or at 0
+    // the flag that takes the plastic rule's.
+    const auto drafted = [&](const char* check, const char* input, const char* flag, const char* slot) {
+      if (!state.checked(QString::fromLatin1(check))) {
+        return;
+      }
+      if (nonZero(state, QString::fromLatin1(input))) {
+        value(slot, input);
+      } else {
+        d.insert(QString::fromLatin1(flag), true);
+      }
+    };
     if (type == QStringLiteral("plastic_rule")) {
       const QString name = state.text(QStringLiteral("rule_name")).trimmed();
       if (name.isEmpty()) {
@@ -301,6 +359,26 @@ CommandDef plasticCommand(const CommandContext& context) {
       optional("rib_thickness", "rib_thickness");
       optional("rib_length", "rib_length");
       optional("rib_offset", "rib_offset");
+      // mitcad#2511.
+      optional("rib_angle", "rib_angle");
+      drafted("rib_draft", "rib_draft_angle", "rib_draft", "rib_draft_angle");
+      drafted("hole_draft", "hole_draft_angle", "hole_draft", "hole_draft_angle");
+      QJsonArray ends;
+      for (int i = 0; i < state.rows(QStringLiteral("rib_ends")); ++i) {
+        const CommandState row = state.row(QStringLiteral("rib_ends"), i);
+        if (row.choice(QStringLiteral("end")) != QStringLiteral("wall")) {
+          ends.append(QJsonObject{{QStringLiteral("end"), QStringLiteral("length")}});
+          continue;
+        }
+        QJsonObject end{{QStringLiteral("end"), QStringLiteral("wall")}};
+        if (nonZero(row, QStringLiteral("short"))) {
+          end.insert(QStringLiteral("short"), row.expression(QStringLiteral("short")));
+        }
+        ends.append(end);
+      }
+      if (!ends.isEmpty()) {
+        d.insert(QStringLiteral("rib_ends"), ends);
+      }
     } else if (type == QStringLiteral("lip") || type == QStringLiteral("groove")) {
       value("width", "width");
       if (type == QStringLiteral("lip")) {
@@ -312,6 +390,11 @@ CommandDef plasticCommand(const CommandContext& context) {
       if (state.choice(QStringLiteral("side")) == QStringLiteral("outside")) {
         d.insert(QStringLiteral("outside"), true);
       }
+      // mitcad#2511.
+      if (state.checked(QStringLiteral("tangent"))) {
+        d.insert(QStringLiteral("tangent"), true);
+      }
+      drafted("side_draft", "side_draft_angle", "side_draft", "draft_angle");
     } else if (type == QStringLiteral("snap_fit")) {
       d.insert(QStringLiteral("hook"), directionOf(state.choice(QStringLiteral("hook"))));
       value("length", "length");
@@ -330,8 +413,8 @@ CommandDef plasticCommand(const CommandContext& context) {
       optional("thickness", "wall");
     }
     const QString rule = state.choice(QStringLiteral("rule"));
-    if (!rule.isEmpty() &&
-        (type == QStringLiteral("boss") || type == QStringLiteral("groove") || type == QStringLiteral("rest"))) {
+    if (!rule.isEmpty() && (type == QStringLiteral("boss") || type == QStringLiteral("lip") ||
+                            type == QStringLiteral("groove") || type == QStringLiteral("rest"))) {
       d.insert(QStringLiteral("rule"), rule);
     }
     result.def = d;
@@ -371,8 +454,37 @@ CommandDef plasticCommand(const CommandContext& context) {
                             "catch_depth", "catch_length"}) {
       load(key, key);
     }
-    load("draft", "draft_angle");
     loadCount(state, QStringLiteral("ribs"), feature.value(QStringLiteral("ribs")), feature, context);
+    // mitcad#2511: a lip's or groove's draft_angle is its side draft.
+    const bool band = type == QStringLiteral("lip") || type == QStringLiteral("groove");
+    load(band ? "side_draft_angle" : "draft", "draft_angle");
+    const auto drafted = [&](const char* check, const char* flag, const char* slot) {
+      state.setChecked(QString::fromLatin1(check),
+                       feature.value(QLatin1String(flag)).toBool() || feature.contains(QLatin1String(slot)));
+    };
+    if (band) {
+      state.setChecked(QStringLiteral("tangent"), feature.value(QStringLiteral("tangent")).toBool());
+      drafted("side_draft", "side_draft", "draft_angle");
+    }
+    if (type == QStringLiteral("boss")) {
+      load("rib_angle", "rib_angle");
+      load("rib_draft_angle", "rib_draft_angle");
+      load("hole_draft_angle", "hole_draft_angle");
+      drafted("rib_draft", "rib_draft", "rib_draft_angle");
+      drafted("hole_draft", "hole_draft", "hole_draft_angle");
+      const QJsonArray ends = feature.value(QStringLiteral("rib_ends")).toArray();
+      state.setRows(QStringLiteral("rib_ends"), static_cast<int>(ends.size()));
+      for (int i = 0; i < static_cast<int>(ends.size()); ++i) {
+        const QJsonObject end = ends.at(i).toObject();
+        const auto key = [i](const char* id) {
+          return CommandState::rowKey(QStringLiteral("rib_ends"), i, QString::fromLatin1(id));
+        };
+        state.setChoice(key("end"), end.value(QStringLiteral("end")).toString() == QStringLiteral("wall")
+                                        ? QStringLiteral("wall")
+                                        : QStringLiteral("length"));
+        loadValue(state, key("short"), end.value(QStringLiteral("short")), feature, context);
+      }
+    }
     state.setChoice(QStringLiteral("side"), feature.value(QStringLiteral("outside")).toBool() ? QStringLiteral("outside")
                                                                                                : QStringLiteral("inside"));
     if (type == QStringLiteral("rest")) {

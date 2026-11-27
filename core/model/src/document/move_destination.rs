@@ -5,7 +5,7 @@
 use serde::Deserialize;
 
 use super::{
-    DocState, Document, ModelError, MovePlan, PlannedGroup, follow_cut_scopes, has_origins,
+    DocState, Document, Follow, ModelError, MovePlan, PlannedGroup, follow_cut_scopes, has_origins,
     invalid, plane_features, set_component,
 };
 use crate::assembly::inverse;
@@ -351,6 +351,18 @@ impl<K: Kernel> Document<K> {
             .owners
             .iter()
             .any(|(b, c)| *c == source && !group.bodies.contains(b));
+        // Decals on faces of the moved bodies keep where they lie
+        // (mitcad#2555): an existing destination placed differently rebuilds
+        // the bodies in its coordinates (`rebase_sketches`), and a face's
+        // coordinates start from its component's origin and axes. A new
+        // destination is placed so that its coordinates are the source's.
+        let decals = if matches!(destination, MoveDestination::Existing { .. })
+            && !context.transform.is_identity()
+        {
+            self.decals_rebased(&group.bodies, &context.source, &context.transform)
+        } else {
+            Vec::new()
+        };
         self.apply_move(|state| {
             let created = matches!(destination, MoveDestination::New { .. });
             let (component, target) = if let MoveDestination::New { name, .. } = destination {
@@ -403,6 +415,22 @@ impl<K: Kernel> Document<K> {
             state.follow_set_members(&moved, &group.bodies, &|p: &OccurrencePath| {
                 (p.0 == context.source).then(|| path.clone())
             });
+            // Comments, decals and drawings' recorded bodies and picks of
+            // the moved bodies (mitcad#2555), as Move into Component's.
+            state.follow(&Follow::Destination {
+                bodies: &group.bodies,
+                from: &context.source,
+                to: &target,
+            });
+            for (name, center, angle) in &decals {
+                if let Some(decal) = state.decals.iter_mut().find(|d| d.name == *name) {
+                    decal.center = *center;
+                    decal.angle = *angle;
+                }
+            }
+            // Explode views' steps of the moved bodies and their
+            // directions' geometry (mitcad#2572), as Move into Component's.
+            state.follow_explode_destination(&moved, &group.bodies, &context.source, &target);
             let label = format!(
                 "Move Features of {label_source} into {}",
                 state.assembly.name(component)
@@ -488,6 +516,13 @@ fn relocate_links(
             }
             FeatureDef::Sweep(sweep) => {
                 for (body, link) in &mut sweep.body_links {
+                    follow(link, &BTreeSet::from([body.feature]), own);
+                }
+            }
+            // An Isoparametric Curve on another component's face
+            // (mitcad#2554), as a sweep's.
+            FeatureDef::IsoparametricCurve(iso) => {
+                for (body, link) in &mut iso.links {
                     follow(link, &BTreeSet::from([body.feature]), own);
                 }
             }

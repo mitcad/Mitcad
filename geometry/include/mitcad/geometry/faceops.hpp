@@ -55,9 +55,13 @@ struct ShellSpec {
 // Faces with a thickness of their own (mitcad#2443) are offset by it in the
 // geometry kernel's own offset (a thickness for each face). The kernel
 // offsets faces that meet smoothly as one, and in a rounded shell also the
-// faces a rounding joins: such faces take one thickness. With the tangent
-// chain the faces tangent to one with its own thickness take it too; a face
-// joined so to one of another thickness is refused, the faces painted. The
+// faces a rounding joins where the rounding cannot run from one thickness
+// to the other (it can along a straight edge where neither face turns,
+// along a circle about whose axis both turn, and round a corner of three
+// faces square to each other; mitcad#2488): such faces take one thickness.
+// With the tangent chain the faces tangent to one with its own thickness
+// take it too; a face joined so to one of another thickness is refused,
+// the faces painted. The
 // cavity above is not built for such a shell (it has one thickness): where
 // the kernel's offset fails, the shell fails, and where it succeeds at the
 // shell's thickness alone, the error paints the faces whose own thickness
@@ -93,7 +97,12 @@ ShapePtr draft(const std::string& feature, const Shape& body, const DraftSpec& s
 // <feature>:step(<moved face>) ("#k" for several); where the step cannot
 // be made the offset fails saying so. With `tangent_chain` (mitcad#2438)
 // the faces joined to the listed ones through smooth edges move with them,
-// grown as replace_faces grows its faces.
+// grown as replace_faces grows its faces. Planar faces in one plane
+// (mitcad#2548) end on the level of another planar face of the body where
+// they come within 1e-6 mm of it and cross the body's other faces as Move
+// Face's do (move_faces_rigidly): flush with the side of the base under a
+// raised block's end, or past it, the overhang's underside named
+// <feature>:step(<moved face>).
 ShapePtr offset_faces(const std::string& feature, const Shape& body,
                       const std::vector<std::string>& faces, double distance,
                       bool tangent_chain = false);

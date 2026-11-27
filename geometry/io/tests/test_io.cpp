@@ -106,6 +106,8 @@
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
 
+#include "bundled_test.hpp"
+
 // windows.h (which OCCT headers such as Message_ProgressIndicator.hxx may
 // bring in on Windows) defines near and far as empty macros, which would
 // break near() below.
@@ -3307,7 +3309,7 @@ void test_face_colors(const std::string& dir) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(geometry_io) {
   const std::string dir =
       argc > 1 ? argv[1]
                : (std::filesystem::temp_directory_path() / "mitcad-test-geometry-io").string();

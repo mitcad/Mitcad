@@ -16,6 +16,7 @@
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepClass_FaceClassifier.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
@@ -390,7 +391,7 @@ int solid_count(const TopoDS_Shape& shape) {
 } // namespace
 
 ShapePtr replace_by_slab(const Shape& body, const std::vector<int>& faces, const Tool& target,
-                         const std::string& name) {
+                         const std::string& name, bool name_walls) {
   const std::set<int> sources(faces.begin(), faces.end());
   // The target's faces as given.
   std::vector<TopoDS_Face> given;
@@ -483,6 +484,33 @@ ShapePtr replace_by_slab(const Shape& body, const std::vector<int>& faces, const
     TopLoc_Location b;
     if (!elementary(face) && BRep_Tool::Surface(wall->face, a) != BRep_Tool::Surface(face, b)) {
       moves.emplace_back(n, wall->face);
+    }
+  }
+  // A face of the body itself as the target (GitHub mitcad/Mitcad#674,
+  // mitcad#2538: the ends of ribs that stick out of a rounded wall onto the
+  // rounding): the new faces lie on the target's continued surface, a copy
+  // of it, and the face itself (with any other face of the body on its
+  // surface) on the original, so the merge after the boolean operations
+  // left them apart where they are one smooth surface, a B-spline rounding
+  // with the outlines of the replaced faces drawn on it. The body's faces
+  // on the target's surface move onto the copy too (where it gives them the
+  // same points at the same parameters, which on_surfaces checks), so that
+  // the new faces merge with them. Planes merge by their geometry.
+  if (given.size() == 1 && target_faces.size() == 1 && !target_faces.front().IsSame(given.front()) &&
+      !face_plane(given.front())) {
+    TopLoc_Location given_location;
+    const occ::handle<Geom_Surface> given_surface = BRep_Tool::Surface(given.front(), given_location);
+    const TopoDS_Face continued = TopoDS::Face(target_faces.front());
+    for (int i = 0; i < body.face_count(); ++i) {
+      if (sources.count(i) > 0 || std::any_of(moves.begin(), moves.end(), [i](const auto& move) {
+            return move.first == i;
+          })) {
+        continue;
+      }
+      TopLoc_Location location;
+      if (BRep_Tool::Surface(body.face(i), location) == given_surface && location == given_location) {
+        moves.emplace_back(i, continued);
+      }
     }
   }
 
@@ -608,7 +636,7 @@ ShapePtr replace_by_slab(const Shape& body, const std::vector<int>& faces, const
         named.push_back({f.Current(), {name}});
         continue;
       }
-      for (std::size_t w = 0; w < walls.size(); ++w) {
+      for (std::size_t w = 0; name_walls && w < walls.size(); ++w) {
         if (wall_images[w].Contains(f.Current())) {
           named.push_back({f.Current(), walls[w].names});
           break;
@@ -655,6 +683,158 @@ ShapePtr replace_by_slab(const Shape& body, const std::vector<int>& faces, const
   if (solid_count(result->occt()) == 0) {
     throw std::runtime_error("the target removes the whole body");
   }
+  return result;
+}
+
+// Planar faces moved along their normal across the body's other faces
+// (mitcad#2548; replace.hpp).
+
+namespace {
+
+// How far two face normals may turn apart and still be one direction
+// (radians).
+constexpr double kParallel = 1.0e-9;
+
+// A point inside the face (none for a face too thin to hold one).
+std::optional<gp_Pnt> inner_point(const TopoDS_Face& face) {
+  double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  BRepTopAdaptor_FClass2d inside(face, Precision::PConfusion());
+  const BRepAdaptor_Surface surface(face);
+  for (const int cells : {3, 8, 24}) {
+    for (int a = 0; a < cells; ++a) {
+      for (int b = 0; b < cells; ++b) {
+        const gp_Pnt2d uv(u0 + (u1 - u0) * (a + 0.5) / cells, v0 + (v1 - v0) * (b + 0.5) / cells);
+        if (inside.Perform(uv) == TopAbs_IN) {
+          return surface.Value(uv.X(), uv.Y());
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+// The moved faces (indices into the body) a face of the result on their
+// new plane comes from: those that hold a point inside it moved back by
+// `motion`; all of them when none does (a face the moved ones joined
+// another coplanar face in, whose sampled point lies on that face's part).
+std::vector<int> moved_sources(const Shape& body, const std::vector<int>& faces, const TopoDS_Face& image,
+                               const gp_Vec& motion) {
+  if (faces.size() == 1) {
+    return faces;
+  }
+  std::vector<int> found;
+  if (const std::optional<gp_Pnt> point = inner_point(image)) {
+    const gp_Pnt back = point->Translated(-motion);
+    for (int f : faces) {
+      BRepClass_FaceClassifier classifier;
+      classifier.Perform(body.face(f), back, kPlanarLevel);
+      if (classifier.State() == TopAbs_IN || classifier.State() == TopAbs_ON) {
+        found.push_back(f);
+      }
+    }
+  }
+  return found.empty() ? faces : found;
+}
+
+} // namespace
+
+std::optional<gp_Pln> movable_plane(const Shape& body, const std::vector<int>& faces, const gp_Vec& motion) {
+  if (faces.empty() || motion.Magnitude() <= Precision::Confusion()) {
+    return std::nullopt;
+  }
+  const std::optional<gp_Pln> first = face_plane(body.face(faces.front()));
+  if (!first) {
+    return std::nullopt;
+  }
+  const gp_Dir normal = first->Axis().Direction();
+  if (!normal.IsParallel(gp_Dir(motion), kParallel)) {
+    return std::nullopt;
+  }
+  for (int f : faces) {
+    const std::optional<gp_Pln> plane = face_plane(body.face(f));
+    if (!plane || normal.Angle(plane->Axis().Direction()) > kParallel ||
+        first->Distance(plane->Location()) > kPlanarLevel) {
+      return std::nullopt;
+    }
+  }
+  return first;
+}
+
+std::optional<gp_Vec> landing_motion(const Shape& body, const std::vector<int>& faces, const gp_Pln& plane,
+                                     const gp_Vec& motion) {
+  const gp_Pln moved = plane.Translated(motion);
+  const gp_Dir normal = moved.Axis().Direction();
+  std::optional<double> shift;
+  double gap = kPlanarLevel;
+  for (int i = 0; i < body.face_count(); ++i) {
+    if (std::find(faces.begin(), faces.end(), i) != faces.end()) {
+      continue;
+    }
+    const std::optional<gp_Pln> other = face_plane(body.face(i));
+    if (!other || !normal.IsParallel(other->Axis().Direction(), kParallel)) {
+      continue;
+    }
+    // The other plane's level along the normal, from the moved plane.
+    const double along = gp_Vec(moved.Location(), other->Location()).Dot(gp_Vec(normal));
+    if (std::abs(along) <= gap) {
+      gap = std::abs(along);
+      shift = along;
+    }
+  }
+  if (!shift) {
+    return std::nullopt;
+  }
+  const gp_Vec landed = motion + gp_Vec(normal) * *shift;
+  // (A motion shorter than the tolerance onto a level next to the faces'
+  // own moves them as given, landing nowhere.)
+  if (!(landed.Magnitude() > Precision::Confusion())) {
+    return std::nullopt;
+  }
+  return landed;
+}
+
+ShapePtr move_planar_faces(const Shape& body, const std::vector<int>& faces, const gp_Pln& plane,
+                           const gp_Vec& motion, const std::string& feature) {
+  if (faces.empty()) {
+    throw std::invalid_argument("there are no faces to move");
+  }
+  const std::string first = primary_name(body, faces.front());
+  // The faces' new place under a name of its own until it gets theirs.
+  const std::string moved = face_name(feature, "moved", first);
+  const ShapePtr slab = replace_by_slab(body, faces, Tool::of_plane(plane.Translated(motion)), moved, false);
+  FaceNamer namer(slab->occt());
+  for (int i = 0; i < slab->face_count(); ++i) {
+    const TopoDS_Face& face = slab->face(i);
+    const NameList& names = slab->face_names(i);
+    if (names.empty()) {
+      // A face of the region that continues no face of the body.
+      namer.add(face, face_name(feature, "step", first));
+      continue;
+    }
+    NameList kept;
+    bool on_new_place = false;
+    for (const std::string& name : names) {
+      if (name_matches(name, moved)) {
+        on_new_place = true;
+      } else {
+        kept.push_back(name);
+      }
+    }
+    if (on_new_place) {
+      for (int f : moved_sources(body, faces, face, motion)) {
+        for (const std::string& name : body.face_names(f)) {
+          if (std::find(kept.begin(), kept.end(), name) == kept.end()) {
+            kept.push_back(name);
+          }
+        }
+      }
+    }
+    namer.add(face, kept, -1);
+  }
+  namer.finish();
+  ShapePtr result = namer.shape();
+  require_valid(result->occt(), "moving the faces");
   return result;
 }
 

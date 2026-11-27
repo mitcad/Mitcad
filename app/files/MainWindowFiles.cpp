@@ -640,6 +640,12 @@ bool MainWindow::openFile(const QString& path, QString& error) {
   }
   switch (kind) {
   case FileKind::Design:
+    // Not while a window edits it in place without a tab, and changes made
+    // to it in place and kept for a holder's Save settled first
+    // (mitcad#2527).
+    if (!settleInPlaceForOpen(path, error)) {
+      return false;
+    }
     return loadDesign(path, error);
   case FileKind::F3d:
   case FileKind::FreeCad:
@@ -900,15 +906,41 @@ void MainWindow::openDropped(const QStringList& paths, std::optional<QPointF> on
   // (from the Start page too, mitcad#1258, which the import leaves).
   // While a command is open they come in by its kind (mitcad#2281,
   // arriveDropped): at once beside an inspection, else when it closes.
-  afterEventWhenIdle(*this, this, [this, paths, onView] { arriveDropped(paths, onView); });
+  std::optional<ViewDrop> drop;
+  // Only design files of other formats go in at the drop's place
+  // (openDroppedNow); for them the place is worked out now, before the
+  // camera can move, or at the job's end while a job computes the model
+  // (mitcad#2527).
+  const bool placed = onView && std::any_of(paths.cbegin(), paths.cend(), [](const QString& path) {
+                        return importsAsComponent(fileKind(path));
+                      });
+  if (onView) {
+    drop = ViewDrop{*onView, std::nullopt};
+    if (placed && !modelBusy()) {
+      placeViewDrop(*drop);
+    }
+  }
+  afterEventWhenIdle(*this, this, [this, paths, drop, placed]() mutable {
+    if (placed) {
+      placeViewDrop(*drop);
+    }
+    arriveDropped(paths, drop);
+  });
 }
 
-void MainWindow::openDroppedNow(const QStringList& paths, std::optional<QPointF> onView) {
+void MainWindow::placeViewDrop(ViewDrop& drop) {
+  if (drop.at) {
+    return;
+  }
+  drop.at = m_viewer != nullptr ? dropTransform(drop.pixel) : QJsonValue();
+}
+
+void MainWindow::openDroppedNow(const QStringList& paths, const std::optional<ViewDrop>& drop) {
   {
     // Design files of other formats dropped on the view of a design with
     // content come in as its components, without asking (mitcad#1894).
     QStringList designs;
-    if (onView && m_mode == Mode::Idle) {
+    if (drop && m_mode == Mode::Idle) {
       for (const QString& path : paths) {
         if (importsAsComponent(fileKind(path)) && designHasContent(path)) {
           designs << path;
@@ -935,8 +967,9 @@ void MainWindow::openDroppedNow(const QStringList& paths, std::optional<QPointF>
     }
     if (!designs.isEmpty()) {
       // The first at the point of the face under the drop, its Z along the
-      // face's normal; at the origin over empty space.
-      importDesignsIntoDesign(designs, false, dropTransform(*onView));
+      // face's normal; at the origin over empty space. Worked out at the
+      // drop (openDropped places every drop of such a design).
+      importDesignsIntoDesign(designs, false, drop->at.value_or(QJsonValue()));
     }
   }
 }
@@ -989,23 +1022,36 @@ void MainWindow::dropProjectDesign(const QString& path, const QPoint& global) {
                            .arg(file)
                            .arg(qRound(at.x()))
                            .arg(qRound(at.y()));
-  // Refused at once, whatever is open: waiting would not change it.
-  const QString refusal = insertRefusal(path);
-  if (!refusal.isEmpty()) {
-    showStatus(refusal, NoticeLevel::Warning);
-    return;
+  // Refused at once, whatever is open: waiting would not change it. The
+  // check reads the document, so not while a job computes it (mitcad#2527):
+  // then Insert Component checks when the design comes in.
+  if (!modelBusy()) {
+    const QString refusal = insertRefusal(path);
+    if (!refusal.isEmpty()) {
+      showStatus(refusal, NoticeLevel::Warning);
+      return;
+    }
   }
   Arrival arrival;
   arrival.paths = {path};
-  arrival.onView = at;
+  arrival.drop = ViewDrop{at, std::nullopt};
   arrival.project = true;
+  // Its place worked out now, before the camera can move; while a job
+  // computes the model, at the job's end (mitcad#2527).
+  if (!modelBusy()) {
+    placeViewDrop(*arrival.drop);
+  }
   // Later, so that the drag ends first (the panel still has the mouse).
-  afterEventWhenIdle(*this, this, [this, arrival] { arriveProjectDesign(arrival); });
+  afterEventWhenIdle(*this, this, [this, arrival]() mutable {
+    placeViewDrop(*arrival.drop);
+    arriveProjectDesign(arrival);
+  });
 }
 
-void MainWindow::insertDroppedDesign(const QString& path, std::optional<QPointF> onView) {
+void MainWindow::insertDroppedDesign(const QString& path, const std::optional<ViewDrop>& drop) {
   leaveStartPage();
-  const QJsonValue at = onView && m_viewer != nullptr ? dropTransform(*onView) : QJsonValue();
+  // Worked out at the drop (dropProjectDesign).
+  const QJsonValue at = drop ? drop->at.value_or(QJsonValue()) : QJsonValue();
   if (at.isObject()) {
     const QJsonArray point = at.toObject().value(QStringLiteral("translation")).toArray();
     qInfo().noquote() << QStringLiteral("Projects panel: %1 goes in at the face under the drop, at %2, %3, %4 mm")
@@ -1688,8 +1734,7 @@ void MainWindow::insertMesh() {
   // A glTF file (mitcad#1826) comes in as File > Import takes it: its node
   // tree as components, in metres, nothing asked about the unit. A 3MF file
   // (mitcad#2156) as STL, in the unit it says.
-  const QString path = dialogOpenFileName(this, tr("Insert Mesh"), dialogFolder(DialogGroup::Import),
-                                          tr("Meshes (*.stl *.obj *.glb *.gltf *.3mf);;All files (*)"));
+  const QString path = dialogOpenFileName(this, tr("Insert Mesh"), dialogFolder(DialogGroup::Import), meshFilter());
   if (!path.isEmpty()) {
     rememberDialogFolder(DialogGroup::Import, path);
     importPath(path, true);
@@ -1698,7 +1743,7 @@ void MainWindow::insertMesh() {
 
 void MainWindow::insertDxf() {
   const QString path = dialogOpenFileName(this, tr("Insert DXF"), dialogFolder(DialogGroup::Import),
-                                          tr("DXF drawings (*.dxf);;All files (*)"));
+                                          tr("DXF drawings (*.dxf *.DXF);;All files (*)"));
   if (!path.isEmpty()) {
     rememberDialogFolder(DialogGroup::Import, path);
     importPath(path, true);
@@ -2633,69 +2678,157 @@ void MainWindow::exportSketch(const QString& sketch) {
   exportFile(sketch);
 }
 
-// The top-level fields a newer MitCad wrote that this one did not read
-// (mitcad#1132): all of them, or with a path those saving there drops.
-QStringList MainWindow::unknownFields(const QString& path) const {
+// What the `unknown_fields` query answers: the top-level fields a newer
+// MitCad wrote (mitcad#1132) and the CAM section this one could not read,
+// with why (mitcad#2581).
+MainWindow::FieldsNotRead MainWindow::fieldsNotRead(const QJsonObject& answer) {
+  FieldsNotRead result;
+  QStringList unreadable;
+  for (const QJsonValue& value : answer.value(QStringLiteral("unreadable")).toArray()) {
+    const QJsonObject entry = value.toObject();
+    const QString field = entry.value(QStringLiteral("field")).toString();
+    unreadable << field;
+    if (field == QStringLiteral("cam")) {
+      result.cam = true;
+      result.camReason = entry.value(QStringLiteral("reason")).toString();
+    }
+  }
+  for (const QJsonValue& field : answer.value(QStringLiteral("fields")).toArray()) {
+    if (!unreadable.contains(field.toString())) {
+      result.newer << field.toString();
+    }
+  }
+  return result;
+}
+
+// What this design's file has that this MitCad did not read: all of it, or
+// with a path what saving there drops.
+MainWindow::FieldsNotRead MainWindow::unknownFields(const QString& path) const {
   QJsonObject request{{QStringLiteral("query"), QStringLiteral("unknown_fields")}};
   if (!path.isEmpty()) {
     request.insert(QStringLiteral("path"), path);
   }
-  QStringList fields;
   try {
-    for (const QJsonValue& field : queryObject(request).value(QStringLiteral("fields")).toArray()) {
-      fields << field.toString();
-    }
+    return fieldsNotRead(queryObject(request));
   } catch (const std::exception& e) {
     qWarning().noquote() << QStringLiteral("Unknown fields not read: %1").arg(errorText(e));
   }
-  return fields;
+  return {};
 }
 
+namespace {
+
+// What is wrong with a CAM section that could not be read, as a sentence of
+// the user's language.
+QString camReasonSentence(const QString& reason) {
+  QString sentence = mitcad::modelMessage(reason).trimmed();
+  if (!sentence.isEmpty()) {
+    sentence[0] = sentence[0].toUpper();
+    if (!sentence.endsWith(QLatin1Char('.'))) {
+      sentence += QLatin1Char('.');
+    }
+  }
+  return sentence;
+}
+
+} // namespace
+
 void MainWindow::warnUnknownFields() {
-  const QStringList fields = unknownFields(QString());
+  const FieldsNotRead fields = unknownFields(QString());
   if (fields.isEmpty()) {
     return;
   }
-  const QString list = fields.join(QStringLiteral(", "));
-  qInfo().noquote() << QStringLiteral("Unknown fields of %1 not read: %2").arg(m_filePath, list);
+  const QString list = fields.newer.join(QStringLiteral(", "));
   // A warning on every surface (the status bar of Docked, the message band
   // of Floating), not a dialog: the design opens as this MitCad reads it.
-  showWarning(tr("This design was written by a newer MitCad: %1 not read. Saving over it drops them.").arg(list));
+  if (!fields.newer.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Unknown fields of %1 not read: %2").arg(m_filePath, list);
+  }
+  if (fields.cam) {
+    qInfo().noquote() << QStringLiteral("CAM of %1 not read: %2").arg(m_filePath, fields.camReason);
+  }
+  if (fields.cam && !fields.newer.isEmpty()) {
+    showWarning(tr("This design was written by a newer MitCad: %1 not read. Its CAM could not be read either "
+                   "and was left out (machines, setups and operations). %2 Saving over the design drops them.")
+                    .arg(list, camReasonSentence(fields.camReason)));
+  } else if (fields.cam) {
+    // Written by this MitCad, a newer one or another build: what is wrong
+    // with it says which, not a guess.
+    showWarning(tr("This design's CAM could not be read and was left out (machines, setups and operations). %1 "
+                   "Saving over the design drops it.")
+                    .arg(camReasonSentence(fields.camReason)));
+  } else {
+    showWarning(tr("This design was written by a newer MitCad: %1 not read. Saving over it drops them.").arg(list));
+  }
 }
 
 std::optional<bool> MainWindow::askDropUnknownFields(const QString& path) {
-  const QStringList fields = unknownFields(path);
+  return askDropFieldsNotRead(unknownFields(path), path, true);
+}
+
+std::optional<bool> MainWindow::askDropFieldsNotRead(const FieldsNotRead& fields, const QString& path,
+                                                      bool offerSaveAs) {
   if (fields.isEmpty()) {
     return true;
   }
   const QString name = QFileInfo(path).fileName();
-  const QString list = fields.join(QStringLiteral(", "));
-  qInfo().noquote() << QStringLiteral("Save drops unknown fields: %1: %2").arg(path, list);
+  const QString list = fields.newer.join(QStringLiteral(", "));
+  QStringList logged = fields.newer;
+  if (fields.cam) {
+    logged.prepend(QStringLiteral("cam"));
+  }
+  qInfo().noquote() << QStringLiteral("Save drops unknown fields: %1: %2").arg(path, logged.join(QStringLiteral(", ")));
   // An agent cannot answer a question (MCP's document_save): refused, the
   // file as it is.
   if (m_mcpRequestActive) {
-    showError(tr("%1 was written by a newer MitCad: saving over it would drop %2, which this MitCad did not "
-                 "read. Save it in the application, which asks first, or give another path.")
-                  .arg(name, list));
+    if (fields.cam && !fields.newer.isEmpty()) {
+      showError(tr("%1 was written by a newer MitCad and its CAM could not be read: saving over it would drop %2 "
+                   "and its CAM (machines, setups and operations). Save it in the application, which asks first, "
+                   "or give another path.")
+                    .arg(name, list));
+    } else if (fields.cam) {
+      showError(tr("The CAM of %1 could not be read: saving over it would drop its machines, setups and "
+                   "operations. Save it in the application, which asks first, or give another path.")
+                    .arg(name));
+    } else {
+      showError(tr("%1 was written by a newer MitCad: saving over it would drop %2, which this MitCad did not "
+                   "read. Save it in the application, which asks first, or give another path.")
+                    .arg(name, list));
+    }
     return std::nullopt;
   }
-  QMessageBox box(QMessageBox::Warning, tr("MitCad"),
-                  tr("%1 was written by a newer MitCad. Saving over it drops what this MitCad did not read: %2.")
-                      .arg(name, list),
-                  QMessageBox::NoButton, this);
-  box.setInformativeText(tr("Cancel keeps the file as it is. Save As writes the design to a new file and leaves "
-                            "this one as it is."));
+  QString text;
+  if (fields.cam && !fields.newer.isEmpty()) {
+    text = tr("%1 was written by a newer MitCad and its CAM could not be read. Saving over it drops what this "
+              "MitCad did not read: %2, and the CAM (machines, setups and operations).")
+               .arg(name, list);
+  } else if (fields.cam) {
+    text = tr("The CAM of %1 could not be read when it was opened. Saving over it drops its machines, setups and "
+              "operations.")
+               .arg(name);
+  } else {
+    text = tr("%1 was written by a newer MitCad. Saving over it drops what this MitCad did not read: %2.")
+               .arg(name, list);
+  }
+  QMessageBox box(QMessageBox::Warning, tr("MitCad"), text, QMessageBox::NoButton, this);
+  QString informative = offerSaveAs ? tr("Cancel keeps the file as it is. Save As writes the design to a new file "
+                                         "and leaves this one as it is.")
+                                    : tr("Cancel keeps the file as it is.");
+  if (fields.cam) {
+    informative.prepend(camReasonSentence(fields.camReason) + QLatin1Char(' '));
+  }
+  box.setInformativeText(informative);
   QPushButton* drop = box.addButton(tr("&Save and Drop Them"), QMessageBox::DestructiveRole);
-  QPushButton* another = box.addButton(tr("Save &As…"), QMessageBox::AcceptRole);
-  box.addButton(QMessageBox::Cancel);
-  box.setDefaultButton(another);
+  QPushButton* another = offerSaveAs ? box.addButton(tr("Save &As…"), QMessageBox::AcceptRole) : nullptr;
+  QPushButton* cancel = box.addButton(QMessageBox::Cancel);
+  box.setDefaultButton(another != nullptr ? another : cancel);
   prepareModal(&box);
   execDialog(&box);
   if (box.clickedButton() == drop) {
     qInfo().noquote() << QStringLiteral("Save drops unknown fields: save");
     return true;
   }
-  if (box.clickedButton() == another) {
+  if (another != nullptr && box.clickedButton() == another) {
     qInfo().noquote() << QStringLiteral("Save drops unknown fields: save as");
     return false;
   }

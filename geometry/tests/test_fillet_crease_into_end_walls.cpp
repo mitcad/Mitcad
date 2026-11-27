@@ -48,6 +48,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -240,7 +241,7 @@ void test_drafted_peg_rounded_into_a_block() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_crease_into_end_walls) {
   test::guarded("test_drafted_peg_rounded_into_a_block", test::test_drafted_peg_rounded_into_a_block);
   if (test::failures == 0) {
     std::puts("test_fillet_crease_into_end_walls: all checks passed");

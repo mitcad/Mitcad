@@ -105,11 +105,10 @@ pub struct ExternalLink {
     /// warning.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unlinked: Vec<EnvelopeFrame>,
-    /// The whole design with its components, read only (mitcad#2209,
+    /// The design with its components, read only (mitcad#2209,
     /// `document/link_tree.rs`): the components, occurrences, joints and
-    /// rigid groups made for those of the design. None: the design's
-    /// bodies as one base feature (a design without components, chosen
-    /// parts, and every link saved before).
+    /// assembly relationships made for those of the design. None: the
+    /// design's bodies as one base feature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<LinkTree>,
 }
@@ -129,11 +128,31 @@ pub struct LinkTree {
     /// The design's joints, as-built joints and rigid groups.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<LinkedFeature>,
+    /// Display envelopes of its occurrences, sharing a body at a given size.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub envelopes: Vec<TreeEnvelope>,
     /// The design's root holds nothing of its own and one component
     /// (mitcad#2429): the linked component stands for that component, not
     /// for the root. None: it stands for the design's root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<LinkTop>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TreeEnvelope {
+    /// Detail size in millimetres, finite and positive.
+    pub detail: f64,
+    pub feature: FeatureUid,
+    pub occurrences: BTreeSet<OccurrenceUid>,
+}
+
+impl Eq for TreeEnvelope {}
+
+impl TreeEnvelope {
+    pub fn body(&self) -> BodyUid {
+        BodyUid::new(self.feature, 0)
+    }
 }
 
 /// The one component of a design whose root holds nothing of its own (no
@@ -194,6 +213,18 @@ pub struct LinkedFeature {
 }
 
 impl LinkTree {
+    pub fn envelope(&self, occurrence: OccurrenceUid) -> Option<&TreeEnvelope> {
+        self.envelopes
+            .iter()
+            .find(|envelope| envelope.occurrences.contains(&occurrence))
+    }
+
+    pub fn is_envelope_body(&self, body: BodyUid) -> bool {
+        self.envelopes
+            .iter()
+            .any(|envelope| envelope.body() == body)
+    }
+
     /// Whether a component is one made for a component of the design.
     pub fn holds(&self, component: ComponentUid) -> bool {
         self.components.iter().any(|c| c.component == component)
@@ -750,6 +781,14 @@ impl Assembly {
     ) -> Vec<Instance> {
         let mut out = Vec::new();
         let mut path = Vec::new();
+        let envelopes = self
+            .components
+            .iter()
+            .filter_map(|c| {
+                let tree = c.link.as_ref()?.tree.as_ref()?;
+                (!tree.envelopes.is_empty()).then_some((c.uid, tree))
+            })
+            .collect();
         self.walk(
             ComponentUid::ROOT,
             Transform::IDENTITY,
@@ -759,6 +798,7 @@ impl Assembly {
                 crate::joints::flexed_step(flexed, path, o).unwrap_or_else(|| placement(o))
             },
             bodies,
+            &envelopes,
             &mut out,
         );
         out
@@ -773,9 +813,22 @@ impl Assembly {
         path: &mut Vec<OccurrenceUid>,
         placement: &dyn Fn(&[OccurrenceUid], OccurrenceUid) -> Transform,
         bodies: &dyn Fn(&[OccurrenceUid], ComponentUid) -> Vec<BodyUid>,
+        envelopes: &BTreeMap<ComponentUid, &LinkTree>,
         out: &mut Vec<Instance>,
     ) {
-        for body in bodies(path, component) {
+        let tree = envelopes.get(&component).copied();
+        let owned = bodies(path, component);
+        let envelope = path
+            .last()
+            .and_then(|uid| tree.and_then(|tree| tree.envelope(*uid)))
+            .filter(|envelope| owned.contains(&envelope.body()));
+        for body in owned {
+            if !match envelope {
+                Some(envelope) => envelope.body() == body,
+                None => tree.is_none_or(|tree| !tree.is_envelope_body(body)),
+            } {
+                continue;
+            }
             out.push(Instance {
                 path: path.clone(),
                 component,
@@ -784,7 +837,7 @@ impl Assembly {
                 visible,
             });
         }
-        if path.len() >= MAX_DEPTH {
+        if envelope.is_some() || path.len() >= MAX_DEPTH {
             return;
         }
         for o in self.children(component) {
@@ -800,6 +853,7 @@ impl Assembly {
                 path,
                 placement,
                 bodies,
+                envelopes,
                 out,
             );
             path.pop();
@@ -885,9 +939,20 @@ impl Assembly {
                     .iter()
                     .map(|c| c.feature)
                     .chain(t.features.iter().map(|f| f.feature))
+                    .chain(t.envelopes.iter().map(|envelope| envelope.feature))
                     .find(|f| !features.contains(f))
             }) {
                 return Err(format!("{}: feature {} does not exist", c.name, f));
+            }
+            if tree.is_some_and(|tree| {
+                tree.envelopes
+                    .iter()
+                    .any(|envelope| !(envelope.detail.is_finite() && envelope.detail > 0.0))
+            }) {
+                return Err(format!(
+                    "{}: the envelope detail size must be above zero",
+                    c.name
+                ));
             }
         }
         let mut numbers = BTreeMap::new();

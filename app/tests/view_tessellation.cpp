@@ -47,6 +47,8 @@
 #include <TopoDS.hxx>
 #include <gp_Ax2.hxx>
 
+#include "bundled_test.hpp"
+
 namespace {
 int failures = 0;
 void check(bool condition, const char* expression, int line) {
@@ -588,7 +590,7 @@ void checkFunnel() {
 }
 } // namespace
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(view_tessellation) {
   if (argc != 2) return 2;
   std::filesystem::create_directories(argv[1]);
   const std::string path = (std::filesystem::path(argv[1]) / "cylinder.step").string();

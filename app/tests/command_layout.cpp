@@ -14,6 +14,7 @@
 #include "framework/CommandLayout.hpp"
 
 #include <cstdio>
+#include <initializer_list>
 
 #include <QCoreApplication>
 #include <QFile>
@@ -195,8 +196,26 @@ void shippedDefaultTests() {
   // Point Cloud Deviation after Draft Analysis, Point Cloud in Insert after
   // Image Reference; Move Point Cloud from a cloud's row only (mitcad#2240).
   CHECK(home("inspect.point_cloud_deviation") == QStringLiteral("SOLID/INSPECT"));
+  // Minimum Distance after Continuity Analysis (mitcad#2519).
+  CHECK(home("inspect.minimum_distance") == QStringLiteral("SOLID/INSPECT"));
+  // Continuity Analysis after Minimum Radius (mitcad#2521).
+  CHECK(home("inspect.continuity_analysis") == QStringLiteral("SOLID/INSPECT"));
   CHECK(home("insert.point_cloud") == QStringLiteral("SOLID/INSERT"));
   CHECK(layout.unplaced.contains(QStringLiteral("insert.move_point_cloud")));
+  // The point cloud tools from a cloud's row too (mitcad#2516).
+  CHECK(layout.unplaced.contains(QStringLiteral("insert.align_point_cloud")));
+  CHECK(layout.unplaced.contains(QStringLiteral("insert.filter_point_cloud")));
+  CHECK(layout.unplaced.contains(QStringLiteral("insert.reconstruct_point_cloud")));
+  // Minimum Radius after Point Cloud Deviation (mitcad#2518).
+  CHECK(home("inspect.min_radius") == QStringLiteral("SOLID/INSPECT"));
+  // The surface quality analyses in the Inspect group after Minimum Distance
+  // (mitcad#2517).
+  for (const char* id : {"inspect.zebra", "inspect.curvature_map", "inspect.isocurve_analysis",
+                         "inspect.environment_map"}) {
+    CHECK(home(id) == QStringLiteral("SOLID/INSPECT"));
+  }
+  // Curvature Comb after Environment Map (mitcad#2520).
+  CHECK(home("inspect.curvature_comb") == QStringLiteral("SOLID/INSPECT"));
   // The Make workspace's tabs (the owner, 18.11.2026): each method's
   // commands at home on its own tab, every command of 3D Print's own groups
   // and of Laser's Export a button of its own; Materials, Annotate and
@@ -209,6 +228,10 @@ void shippedDefaultTests() {
   CHECK(layout.tab(QStringLiteral("MAKE_PRINT")) != nullptr &&
         layout.tab(QStringLiteral("MAKE_PRINT"))->groups.front().key == QStringLiteral("SLICE"));
   CHECK(home("make.export_face_dxf") == QStringLiteral("MAKE_LASER/EXPORT"));
+  // Nesting and the cutting program (mitcad#2553).
+  CHECK(home("make.nest_flat_patterns") == QStringLiteral("MAKE_LASER/NEST"));
+  CHECK(home("cut_sheet.nest") == QStringLiteral("CUT SHEET/PARTS"));
+  CHECK(home("cut_sheet.post") == QStringLiteral("CUT SHEET/CUTTING"));
   CHECK(home("make.cam_setup") == QStringLiteral("MAKE_CNC/SETUP"));
   CHECK(home("make.cam_machines") == QStringLiteral("MAKE_CNC/SETUP"));
   CHECK(home("make.cam_contour") == QStringLiteral("MAKE_CNC/2D MILLING"));
@@ -257,6 +280,8 @@ void shippedDefaultTests() {
   CHECK(idsOf(layout.entries(QStringLiteral("menu/VIEW/PANELS"))) == QStringList{QStringLiteral("view.comments")});
   CHECK(!idsOf(layout.entries(QStringLiteral("menu/VIEW"))).contains(QStringLiteral("view.export_snapshot")));
   CHECK(idsOf(layout.entries(QStringLiteral("menu/FILE"))).contains(QStringLiteral("view.export_snapshot")));
+  // Export Turntable… beside it (mitcad#2523).
+  CHECK(idsOf(layout.entries(QStringLiteral("menu/FILE"))).contains(QStringLiteral("view.export_turntable")));
   CHECK(layout.placesOf(QStringLiteral("view.render_environment")) ==
         (QStringList{QStringLiteral("RENDER/ENVIRONMENT"), QStringLiteral("menu/VIEW/VISUAL STYLE")}));
   // The extras the code provides, by key.

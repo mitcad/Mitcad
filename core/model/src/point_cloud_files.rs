@@ -6,7 +6,8 @@
 //!   element's `x`, `y`, `z` of any numeric type and its colour when it has
 //!   one (`red`, `green`, `blue`, or `r`, `g`, `b`, or `diffuse_red` …;
 //!   bytes, 16-bit values or 0 to 1 floats). Other properties and elements
-//!   (faces, edges) are passed over.
+//!   (faces, edges) are passed over; an element before the vertices that
+//!   has items but no properties is refused.
 //! - XYZ and PTS text: a point per line, `x y z`, then optionally `r g b`
 //!   (six numbers) or an intensity and `r g b` (seven or more, as PTS files
 //!   write it); spaces, tabs, commas or semicolons between the numbers;
@@ -415,6 +416,27 @@ mod ply {
             .iter()
             .position(|e| e.name == "vertex")
             .ok_or_else(|| "the PLY file has no vertex element".to_owned())?;
+        let data = &bytes[header.body..];
+        // The counts read up to the vertices are held to the data: an item
+        // of an element with properties takes at least a byte (in ASCII a
+        // line), so no count can be larger than the data's size, and an
+        // element with items but no properties takes none and is refused
+        // (mitcad#2527).
+        for element in &header.elements[..=at] {
+            if element.count > 0 && element.properties.is_empty() {
+                return Err(format!(
+                    "the PLY element {} has items but no properties",
+                    element.name
+                ));
+            }
+            if element.count > data.len() {
+                return Err(if element.name == "vertex" {
+                    "the PLY file ends before its last vertex".to_owned()
+                } else {
+                    "the PLY file ends before its vertices".to_owned()
+                });
+            }
+        }
         let vertex = &header.elements[at];
         if vertex.count > MAX_POINTS.saturating_mul(16) {
             return Err(format!(
@@ -432,7 +454,6 @@ mod ply {
             })
             .collect();
         let mut keeper = Keeper::new(vertex.count, max, columns.rgb.is_some());
-        let data = &bytes[header.body..];
         match header.format {
             Format::Ascii => ascii(
                 data,
@@ -468,12 +489,14 @@ mod ply {
     ) -> Result<(), String> {
         let text = String::from_utf8_lossy(data);
         let mut lines = text.lines().filter(|l| !l.trim().is_empty());
-        // Elements before the vertices: a line per item.
-        let skip: usize = before.iter().map(|e| e.count).sum();
-        for _ in 0..skip {
-            lines
-                .next()
-                .ok_or_else(|| "the PLY file ends before its vertices".to_owned())?;
+        // Elements before the vertices: a line per item, element by element
+        // (their counts are not summed: a sum can overflow).
+        for element in before {
+            for _ in 0..element.count {
+                lines
+                    .next()
+                    .ok_or_else(|| "the PLY file ends before its vertices".to_owned())?;
+            }
         }
         let has_lists = vertex
             .properties
@@ -867,6 +890,50 @@ mod tests {
         let error = read_point_cloud(&bytes, "scan.ply", 1.0, 100).unwrap_err();
         assert!(error.contains("ends before"), "{error}");
         assert!(read_point_cloud(b"ply\nformat ascii 1.0\n", "a.ply", 1.0, 10).is_err());
+    }
+
+    /// mitcad#2527: an element with the largest count and no properties
+    /// before the vertices took no bytes per item and was looped over for
+    /// its whole count; counts larger than the file overflowed the ASCII
+    /// sum. Both formats are refused at once.
+    #[test]
+    fn a_ply_with_counts_beyond_the_file_is_refused_at_once() {
+        for format in ["ascii", "binary_little_endian", "binary_big_endian"] {
+            let mut bytes = format!(
+                "ply\nformat {format} 1.0\nelement junk 18446744073709551615\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n"
+            )
+            .into_bytes();
+            if format == "ascii" {
+                bytes.extend_from_slice(b"1 2 3\n");
+            } else {
+                bytes.extend_from_slice(&[0u8; 12]);
+            }
+            let started = std::time::Instant::now();
+            let error = read_point_cloud(&bytes, "scan.ply", 1.0, 100).unwrap_err();
+            assert!(error.contains("no properties"), "{format}: {error}");
+            assert!(started.elapsed().as_secs() < 5, "{format}");
+            // Two elements with properties whose counts sum past usize.
+            let mut bytes = format!(
+                "ply\nformat {format} 1.0\nelement a 18446744073709551615\nproperty uchar v\nelement b 18446744073709551615\nproperty uchar v\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n"
+            )
+            .into_bytes();
+            bytes.extend_from_slice(b"1 2 3\n");
+            let error = read_point_cloud(&bytes, "scan.ply", 1.0, 100).unwrap_err();
+            assert!(
+                error.contains("ends before its vertices"),
+                "{format}: {error}"
+            );
+            // A vertex count beyond the file.
+            let bytes = format!(
+                "ply\nformat {format} 1.0\nelement vertex 1000000\nproperty float x\nproperty float y\nproperty float z\nend_header\n1 2 3\n"
+            )
+            .into_bytes();
+            let error = read_point_cloud(&bytes, "scan.ply", 1.0, 100).unwrap_err();
+            assert!(
+                error.contains("ends before its last vertex"),
+                "{format}: {error}"
+            );
+        }
     }
 
     #[test]

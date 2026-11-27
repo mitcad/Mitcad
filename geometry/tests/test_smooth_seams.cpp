@@ -85,6 +85,7 @@
 
 #include "check.hpp"
 #include "mitcad/geometry/smooth_seams.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -561,7 +562,7 @@ void test_analytic_surfaces() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(smooth_seams) {
   test::guarded("box", test::test_box);
   test::guarded("cylinder and sphere", test::test_cylinder_and_sphere);
   test::guarded("hole", test::test_hole);

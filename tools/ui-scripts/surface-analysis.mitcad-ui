@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: MIT
+# Surface quality analyses (mitcad#2517), the shared input script of
+# tools/ui-surface-analysis-test.sh (Linux),
+# tools/ui-windows-surface-analysis-test.ps1 (Windows) and
+# tools/ui-macos-surface-analysis-test.sh (macOS), on surface-analysis.json
+# saved as surface-part.mitcad in the work folder: a cylinder 20 mm across
+# and 10 mm high (Body1). ASCII only: the Windows runner copies it as ASCII.
+#   1. Inspect > Zebra with the shown body, 3 stripes from +Z, 30 % of each
+#      dark: the ends (0 and 180 degrees from +Z) dark, the side (90
+#      degrees, half way through a stripe) light; the view draws the
+#      stripes with the legend. OK keeps it as Zebra1, shown.
+#   2. Inspect > Curvature Map, the largest principal curvature: 0 on the
+#      ends, 0.1/mm on the side (radius 10 mm); OK keeps Curvature1, shown,
+#      Zebra1 hidden.
+#   3. Inspect > Isocurve Analysis, 2 curves each way per face, colored by
+#      curvature: 12 curves (4 on each of the three faces); OK keeps
+#      Isocurves1.
+#   4. Inspect > Environment Map with the studio picture; OK keeps
+#      Environment1, the view reflects the picture in the faces.
+#   5. Zebra1 shown again from its light bulb, edited with its settings by a
+#      double-click; saved (the runner checks the file).
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+
+# --- 1. Zebra: 3 stripes, 30 % dark.
+mark
+command inspect.zebra
+wait-log '^Command Zebra started' 20
+wait-log '^Zebra Bodies: 1 body' 20
+wait-log '^Inspect Zebra: direction [(]0, 0, 1[)], 12 stripes, width 0[.]5: Body1 dark ' 60
+wait-idle 60
+mark
+type-in '^Panel Zebra input stripes at ' '3'
+wait-log '^Inspect Zebra: direction [(]0, 0, 1[)], 3 stripes, width 0[.]5: ' 60
+wait-log '^Print overlay: .*zebra [1-9][0-9]* dark #[0-9a-f]{6}, [1-9][0-9]* light #[0-9a-f]{6}; legend Zebra: #[0-9a-f]{6} Dark stripes, 3 over 180' 30
+wait-idle 60
+# 30 % dark: the ends (at a stripe's start) stay dark and the side (half
+# way through one) light, so the stripes and their overlay line stay the
+# same; only the analysis' line changes.
+mark
+type-in '^Panel Zebra input width at ' '30'
+wait-log '^Inspect Zebra: direction [(]0, 0, 1[)], 3 stripes, width 0[.]3: Body1 dark 6[0-9][0-9][.][0-9] mm\^2 [(][1-9][0-9]* triangles[)], light 6[0-9][0-9][.][0-9] mm\^2 [(][1-9][0-9]* triangles[)]$' 60
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/surface-zebra.png'
+capture-undo-depth before_zebra
+mark
+button '^OK$'
+wait-log '^Kept Zebra as Zebra1' 30
+wait-log '^Browser Root/Analysis/Zebra1 at ' 30
+wait-log '^Zebra analysis Zebra1: direction [(]0, 0, 1[)], 3 stripes, width 0[.]3: Body1 dark ' 60
+wait-idle 60
+expect-undo-depth ${before_zebra} 1
+
+# --- 2. Curvature Map: the largest principal curvature.
+mark
+command inspect.curvature_map
+wait-log '^Command Curvature Map started' 20
+wait-log '^Inspect Curvature Map: gaussian 1/mm\^2, limit .* [(]automatic[)]: Body1 min 0, max 0, [1-9][0-9]* triangles$' 60
+wait-idle 60
+mark
+qt-choice input_kind 'Largest Principal'
+wait-log '^Inspect Curvature Map: maximum 1/mm, limit 0[.]1 [(]automatic[)]: Body1 min 0, max 0[.]1, [1-9][0-9]* triangles$' 60
+wait-log '^Print overlay: .*curvature [1-9][0-9]* triangle[(]s[)]; legend Curvature Map: #[0-9a-f]{6} Bulging, 0[.]1 1/mm or more' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/surface-curvature.png'
+mark
+button '^OK$'
+wait-log '^Kept Curvature Map as Curvature1' 30
+wait-log '^Curvature map Curvature1: maximum 1/mm, limit 0[.]1 [(]automatic[)]: ' 60
+wait-idle 60
+
+# --- 3. Isocurve Analysis: 2 curves each way per face, colored.
+mark
+command inspect.isocurve_analysis
+wait-log '^Command Isocurve Analysis started' 20
+wait-log '^Inspect Isocurve Analysis: 10 per face: Body1 60 curves, ' 60
+wait-idle 60
+mark
+type-in '^Panel Isocurve Analysis input count at ' '2'
+wait-log '^Inspect Isocurve Analysis: 2 per face: Body1 12 curves, [1-9][0-9]* points$' 60
+wait-idle 60
+mark
+click-logged '^Panel Isocurve Analysis input curvature at '
+wait-log '^Inspect Isocurve Analysis: 2 per face, curvature colored: Body1 12 curves, [1-9][0-9]* points, min 0, max 0[.]1$' 60
+wait-log '^Print overlay: .*isocurves 12 curve[(]s[)] [1-9][0-9]* point[(]s[)]' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/surface-isocurves.png'
+mark
+button '^OK$'
+wait-log '^Kept Isocurve Analysis as Isocurves1' 30
+wait-idle 60
+
+# --- 4. Environment Map with the studio picture.
+mark
+command inspect.environment_map
+wait-log '^Command Environment Map started' 20
+wait-log '^Inspect Environment Map: studio picture: Body1 [1-9][0-9]* triangles$' 60
+wait-log '^Print overlay: .*environment [1-9][0-9]* triangle[(]s[)] 256x256 picture; legend Environment Map: #[0-9a-f]{6} Reflecting the studio picture' 30
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/surface-environment.png'
+mark
+button '^OK$'
+wait-log '^Kept Environment Map as Environment1' 30
+wait-log '^Environment map Environment1: studio picture: ' 60
+wait-idle 60
+
+# --- 5. Zebra1 shown again, edited with its settings, saved.
+mark
+click-logged '^Browser eye Root/Analysis/Zebra1 at '
+wait-log '^Visibility Root/Analysis/Zebra1: shown' 20
+wait-log '^Zebra analysis Zebra1: direction [(]0, 0, 1[)], 3 stripes, width 0[.]3: ' 60
+wait-log 'legend Zebra1: ' 30
+wait-idle 60
+mark
+dblclick-logged '^Browser Root/Analysis/Zebra1 at '
+wait-log '^Editing analysis Zebra1 with Zebra' 20
+wait-log '^Inspect Zebra: direction [(]0, 0, 1[)], 3 stripes, width 0[.]3: ' 60
+wait-idle 60
+key escape
+wait-log '^Command Zebra cancelled' 20
+wait-idle 60
+mark
+command file.save
+wait-log 'Saved .*surface-part[.]mitcad' 30
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

@@ -76,6 +76,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "sketch.set_rho",
     "sketch.equation_curve",
     "sketch.edit_equation_curve",
+    "sketch.set_profile_boundary",
     "sketch3d.create",
     "sketch3d.add_point",
     "sketch3d.add_line",
@@ -1059,6 +1060,13 @@ fn planar(name: &str) -> Option<Value> {
             },
             "required": ["sketch", "curve"],
             "examples": [{"cmd": "sketch.edit_equation_curve", "sketch": "F1", "curve": "c9", "y": "x^2/10"}]
+        }),
+        // Profile Boundary (mitcad#2551).
+        "sketch.set_profile_boundary" => json!({
+            "description": "Profile Boundary: curves of the face outline a sketch got when it was made (a projection marked automatic) bound profiles as the user's own curves do, or no longer. A chosen circle of the outline inside an area the user's curves close (an inset of the outline) makes a hole in it; the curves stay linked to the face's edges. The choice is saved in the projection's boundaries. Refused in words for a curve that is not of the automatic outline.",
+            "properties": {"sketch": sketch(), "curves": ids("The outline's curves (c<n>)"), "boundary": flag(true, "They bound profiles")},
+            "required": ["sketch", "curves"],
+            "examples": [{"cmd": "sketch.set_profile_boundary", "sketch": "F3", "curves": ["c12", "c14"]}]
         }),
         _ => return None,
     };

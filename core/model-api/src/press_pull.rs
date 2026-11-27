@@ -42,7 +42,10 @@ pub(crate) fn moving_end_input(def: &FeatureDef, role: &str) -> Option<&'static 
             (Extent::Symmetric { .. }, "start" | "end") => Some("distance"),
             (Extent::TwoSides { .. }, "start") => Some("distance"),
             (Extent::TwoSides { .. }, "end") => Some("distance2"),
-            (Extent::ToObject { .. } | Extent::ThroughAll { .. }, "end") => Some(""),
+            (
+                Extent::ToObject { .. } | Extent::ThroughAll { .. } | Extent::ToNext { .. },
+                "end",
+            ) => Some(""),
             _ => None,
         },
         FeatureDef::Revolve(r) => match (&r.extent, role) {

@@ -215,6 +215,25 @@ public:
   // (SelectionSet1, ...), one undo step, its row then renamed in place;
   // logged "Created selection set SelectionSet1: body F2.b0, feature F1".
   void createSelectionSet(const QJsonArray& members);
+  // Construction sets (mitcad#2514, app/COMMANDS.md "Construction Sets").
+  // New Construction Set: a set of `component` (the active one when empty)
+  // under the next free name (ConstructionSet1, ...), made the active set,
+  // one undo step; its row (under the occurrence `occurrence`, the
+  // component's first when empty) then renamed in place; logged "Created
+  // construction set ConstructionSet1 in Root".
+  void createConstructionSet(const QString& component = QString(), const QString& occurrence = QString());
+  // Activate and Deactivate on a set's row and the Surface tab: one undo
+  // step each, logged "Activated construction set Guides", "Deactivated
+  // construction set Guides". Deactivate does nothing while none is active.
+  void activateConstructionSet(const QString& name);
+  void deactivateConstructionSet();
+  // Move to Construction Set and Remove from Construction Set on the rows
+  // of bodies, sketches and construction geometry: the row and the rows of
+  // the same component selected with it into the set (out of the one they
+  // are in), or out of their sets; one undo step per set, logged
+  // "Construction set Guides: 3 members".
+  void moveToConstructionSet(const QString& set, const BrowserNode& node);
+  void removeFromConstructionSets(const BrowserNode& node);
   // The view's context menu Hide submenu (mitcad#347): the bodies (uids) and
   // the occurrences (paths) of the faces, edges, vertices and bodies of the
   // selection, each once; no occurrence for the root component's bodies.
@@ -236,6 +255,18 @@ public:
   // Browser row's Hide/Show (on the rows selected with it) and the view's
   // Hide submenu (hideBodies, hideOccurrences) run the same.
   bool toggleItemsVisibility(const Selection& items);
+  // Isolate and Unisolate (`view.isolate`, `view.unisolate`; mitcad#2482,
+  // GitHub mitcad/Mitcad#613), the Browser row menu's entries as commands
+  // that Keyboard Shortcuts binds. isolateItems isolates what the items
+  // are, each once (isolationTargets): the bodies of the faces, edges,
+  // vertices and bodies, in the occurrence picked, and the occurrences of
+  // the components (not the root); one undo step (MainWindow::setIsolation),
+  // logged "Isolated body F2.b0, component C1 in O1". False when the items
+  // have none. unisolate shows everything again ("Unisolated"); false when
+  // nothing is isolated. The row menu's Isolate (its row alone) and
+  // Unisolate run the same.
+  bool isolateItems(const Selection& items);
+  bool unisolate();
   // Transparent (mitcad#1093), in the view's and the browser's context
   // menus: the bodies of the faces, edges, vertices and bodies of the items
   // and the occurrences of their components (not the root), each once.
@@ -404,7 +435,8 @@ private:
   QHash<QString, QString> bodyFoldersOf(const QString& component) const;
   // Body or component rows dragged onto a row that takes them
   // (BrowserPanel::dropFor): into its folder, or out of their folders;
-  // component rows before or after a sibling's row (mitcad#2104).
+  // component rows before or after a sibling's row (mitcad#2104); a block of
+  // manual G-code moved in its setup (mitcad#2532, moveCamManualCode).
   void rowsDropped(const QVector<BrowserNode>& sources, const BrowserNode& target, BrowserDrop place);
   // The order of components among their siblings (mitcad#2104,
   // BrowserOrder.hpp): occurrences (paths, of one parent) put into the
@@ -456,6 +488,13 @@ private:
   void moveCamSetup(const BrowserNode& node, int index);
   void moveCamOperation(const BrowserNode& node, int setup, int index);
   void camDropped(const BrowserNode& source, const BrowserNode& target);
+  // A lathe setup's block of manual G-code dragged within its setup
+  // (mitcad#2532, BrowserPanel::dropFor) and let go on `target`: it follows
+  // the operation before that place in the program (cam::manualCodeMoved),
+  // one undo step (Move <block>), logged "CAM manual G-code <block> moved
+  // after <operation> of <setup>" (or "to the program start of <setup>").
+  // Its Delete (the menu's and the Delete key's) is deleteNodes'.
+  void moveCamManualCode(const BrowserNode& node, const BrowserNode& target, BrowserDrop place);
   void toggleVisibility(const BrowserNode& node);
   // Hide/Show (mitcad#2356): what a light bulb shows or hides, the body
   // (uid), the occurrence (path) or the sketch or construction feature
@@ -495,6 +534,8 @@ private:
   // The isolation with a row's items added: the body, the occurrence, or
   // a Bodies folder's bodies.
   Selection isolationWith(const BrowserNode& node) const;
+  // What Isolate isolates of the items (isolateItems, mitcad#2482).
+  Selection isolationTargets(const Selection& items) const;
   // The eye of a component's Bodies, Sketches or Construction folder
   // (mitcad#1771), or of the root's Annotations folder (mitcad#2041): the
   // model's set_folder_visible, display state that changes no light bulb in

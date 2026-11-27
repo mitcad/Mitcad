@@ -169,6 +169,20 @@ enum class ColorRole {
   // The cloud's points it did not measure (mitcad#2265), dimmed towards the
   // view's background.
   DeviationUnmeasured,
+  // Surface quality analyses (mitcad#2517): a Zebra's dark and light
+  // stripes; a Curvature Map's diverging scale, hollow (or a saddle), flat,
+  // bulging (or a dome); an Isocurve Analysis' curves in one color; the
+  // Environment Map's studio picture: its sky, floor and lights. With the
+  // legend; the same on either background (baked into what is drawn).
+  ZebraDark,
+  ZebraLight,
+  CurvatureConcave,
+  CurvatureFlat,
+  CurvatureConvex,
+  Isocurve,
+  EnvironmentSky,
+  EnvironmentFloor,
+  EnvironmentLight,
   // A call to support the project (mitcad#1990): the top bar's Boost
   // development pill's outline and rocket (its label in the window's text);
   // a warm pink apart from the error's red and the accent's blue.
@@ -189,6 +203,20 @@ enum class ColorRole {
   FormulaString,
   FormulaLine,    // the line with the caret, under the text
   FormulaBracket, // the bracket at the caret and its match, under the text
+  // Continuity Analysis' classes (mitcad#2521): edges whose faces do not
+  // touch, touch (G0), are tangent (G1), curvature continuous (G2); with
+  // the legend.
+  ContinuityNone,
+  ContinuityG0,
+  ContinuityG1,
+  ContinuityG2,
+  // The uncut stock's outline (mitcad#2569): readable on light and dark
+  // view backgrounds, in the stock's own grey.
+  CamStockEdge,
+  // Not a role: the number of roles, which the color roles test compares
+  // with the table, so that a role added to the enum without its row is
+  // found whichever branch adds it. New roles go before it.
+  Count
 };
 
 // How a role is used, for the contrast test: text (at least 4.5:1 on a

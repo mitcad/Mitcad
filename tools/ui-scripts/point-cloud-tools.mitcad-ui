@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: MIT
+# Point cloud tools (mitcad#2516), the shared input script of
+# tools/ui-point-cloud-tools-test.sh (Linux),
+# tools/ui-windows-point-cloud-tools-test.ps1 (Windows) and
+# tools/ui-macos-point-cloud-tools-test.sh (macOS), on point-cloud-tools.json
+# saved as point-cloud-tools.mitcad in the work folder: a block 20 x 20 x 10
+# mm from the origin (Body1) and the point cloud Scan, 110 points on the
+# block's faces moved by (0.6, -0.4, 0.3) mm and 3 outliers far from it.
+#   1. Filter Point Cloud with its defaults (statistical outliers, 16
+#      neighbors, a spread of 2): OK makes Scan Filtered of the 110 points
+#      on the faces, drawn; Scan is kept, hidden.
+#   2. Align Point Cloud from Scan Filtered's row in the Browser: onto
+#      Body1 (the first shown body) by the best fit; the panel states the
+#      remaining deviation (all 110 points matched, RMS and largest
+#      distance 0.000 mm); OK moves the cloud, one undo step.
+#   3. Reconstruct Mesh from Scan Filtered's row: OK adds the closed mesh
+#      body Scan Filtered Mesh, in the Browser's Bodies.
+#   4. Saved (the runner checks the file).
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+expect-ever '^Browser Root/Point Clouds/Scan at ' 30
+
+# --- 1. The outliers filtered out into a new cloud.
+mark
+command insert.filter_point_cloud
+wait-log '^Command Filter Point Cloud started' 20
+wait-idle
+expect-no-log '^Panel Filter Point Cloud error: '
+capture-undo-depth before_filter
+button '^OK$'
+wait-log '^Filtered point cloud Scan: outliers statistical$' 30
+wait-log '^Point clouds drawn: Scan Filtered 110 points$' 30
+expect-ever '^Browser Root/Point Clouds/Scan Filtered at ' 30
+wait-idle 60
+expect-undo-depth ${before_filter} 1
+
+# --- 2. Scan Filtered aligned onto the block by the best fit.
+mark
+context-menu-logged '^Browser Root/Point Clouds/Scan Filtered at ' 'Align Point Cloud'
+wait-log '^Command Align Point Cloud started' 20
+wait-log '^Inspect Align Point Cloud: Scan Filtered to Body1: RMS 0[.]000 mm, mean 0[.]000 mm, max 0[.]00[0-9] mm, 110 of 110 points, [0-9]+ rounds, settled$' 120
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/point-cloud-tools-aligned.png'
+capture-undo-depth before_align
+button '^OK$'
+wait-log '^Aligned point cloud Scan Filtered to Body1: RMS 0[.]000 mm, ' 120
+wait-idle 60
+expect-undo-depth ${before_align} 1
+
+# --- 3. A closed mesh body of Scan Filtered.
+mark
+context-menu-logged '^Browser Root/Point Clouds/Scan Filtered at ' 'Reconstruct Mesh'
+wait-log '^Command Reconstruct Mesh started' 20
+wait-idle
+expect-no-log '^Panel Reconstruct Mesh error: '
+button '^OK$'
+wait-log '^Reconstructed a mesh of point cloud Scan Filtered, detail 64$' 300
+expect-ever '^Browser Root/Bodies/Scan Filtered Mesh at ' 60
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/point-cloud-tools-mesh.png'
+
+# --- 4. Saved.
+mark
+command file.save
+wait-log 'Saved .*point-cloud-tools[.]mitcad' 30
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

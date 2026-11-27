@@ -41,6 +41,7 @@
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/item_origin.hpp"
 #include "mitcad/geometry/naming.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -230,7 +231,7 @@ void test_preview_items_before() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_foot_mitre) {
   test::guarded("three foot edges", test::test_three_foot_edges);
   test::guarded("preview items before", test::test_preview_items_before);
   if (test::failures == 0) {

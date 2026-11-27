@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: MIT
+# A base view with many warnings (mitcad#2476, mitcad#2507; GitHub
+# mitcad/Mitcad#694: a view of a large design kept 141 bodies that were
+# gone, one warning each, and the window stopped answering once the view
+# was selected) on drawing-many-warnings.json: Plate placed 60 times,
+# Drawing1's base view at 1:20 drawing them all, 49 of the placements then
+# deleted. The window is Docked (the runners' default, --chrome=docked on
+# macOS), the hang watchdog on at 15 s (MITCAD_HANG_WATCHDOG_MS=15000).
+#   1. The view selected: its panel says the warning once, with how many
+#      times it came; its fields are in their scroll area and the drawing's
+#      area keeps its size (the window its own).
+#   2. Close Drawing: the 3D view again.
+#   3. The drawing opened again: its view at 1:20 with the warning said
+#      once.
+#   No "UI not responding" line of the hang watchdog all along.
+# Run by tools/ui-drawing-many-warnings-test.sh (Linux),
+# tools/ui-windows-drawing-many-warnings-test.ps1 (Windows) and
+# tools/ui-macos-drawing-many-warnings-test.sh (macOS).
+wait-idle
+# The browser folded the same way on every platform's screen: Collapse All,
+# then the Drawings folder opened to reach Drawing1's row.
+expect-ever '^Browser opened (folded|expanded): ' 30
+expect-ever '^Browser Root at ' 30
+mark
+context-menu-logged '^Browser Root at ' 'Collapse All'
+wait-log '^Browser collapsed all$' 10
+wait-idle
+mark
+click-logged '^Browser arrow Root/Drawings at '
+wait-log '^Browser Root/Drawings/Drawing1 at ' 20
+wait-idle
+
+# 1. Opened, the view selected.
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing sheet drawn: ' 60
+wait-log '^Drawing Close Drawing at '
+wait-log '^Drawing view 1 at '
+wait-idle
+sleep 500
+capture areaWidth '^Drawing area [0-9]+,[0-9]+ ([0-9]+)x[0-9]+'
+capture areaHeight '^Drawing area [0-9]+,[0-9]+ [0-9]+x([0-9]+)'
+mark
+click-logged '^Drawing view 1 at '
+wait-log '^Drawing view 1 selected'
+wait-log '^Drawing view 1 scale: 1:20'
+wait-log '^Drawing view 1 panel warnings \(49 of them\): an occurrence is gone \(49 times\)$'
+wait-log '^Drawing panel drawingViewShowsToggle at '
+# The view's Shows list is folded at first (mitcad#2498): open it.
+click-logged '^Drawing panel drawingViewShowsToggle at '
+wait-log '^Drawing view 1 Shows opened'
+wait-log '^Drawing panel fields [0-9]+ px high, [0-9]+ px in sight'
+wait-idle
+sleep 500
+# The warning said once: no other label in the panel.
+expect-no-log '^Drawing view 1 panel warnings (?!\(49 of them\): an occurrence is gone \(49 times\)$)'
+# The drawing's area as before the panel had the view's fields.
+capture areaWidthAfter '^Drawing area [0-9]+,[0-9]+ ([0-9]+)x[0-9]+'
+capture areaHeightAfter '^Drawing area [0-9]+,[0-9]+ [0-9]+x([0-9]+)'
+expect-near ${areaWidthAfter} ${areaWidth} 0 0
+expect-near ${areaHeightAfter} ${areaHeight} 0 0
+expect-never 'UI not responding'
+
+# 2. Close Drawing: the 3D view again.
+mark
+click-logged '^Drawing Close Drawing at '
+wait-log '^Drawing closed$'
+wait-idle
+sleep 500
+expect-never 'UI not responding'
+
+# 3. The drawing again, its view selected. Its row and its view's place
+# are logged again only where they moved: the last lines are where they are.
+expect-ever '^Browser Root/Drawings/Drawing1 at '
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing sheet drawn: ' 60
+wait-idle
+sleep 500
+expect-ever '^Drawing view 1 at '
+mark
+click-logged '^Drawing view 1 at '
+wait-log '^Drawing view 1 selected'
+wait-log '^Drawing view 1 scale: 1:20'
+wait-log '^Drawing view 1 panel warnings \(49 of them\): an occurrence is gone \(49 times\)$'
+wait-log '^Drawing panel fields [0-9]+ px high, [0-9]+ px in sight'
+wait-idle
+sleep 500
+expect-no-log '^Drawing view 1 panel warnings (?!\(49 of them\): an occurrence is gone \(49 times\)$)'
+expect-never 'UI not responding'
+expect-never '^Drawing command refused'
+expect-never 'TestDriver: FAIL'

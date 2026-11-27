@@ -20,6 +20,22 @@ pub struct CutPlane {
     pub origin: Vec3,
     /// A unit vector.
     pub normal: Vec3,
+    /// The part of the plane the section is limited to; the whole plane
+    /// when None (mitcad#2479).
+    pub bound: Option<CutBound>,
+}
+
+/// A section limited to the line drawn on its parent view (mitcad#2479):
+/// only what lies on the plane's normal side within the strip of the plane
+/// whose distance from its origin along `along` lies between `from` and
+/// `to` goes, and only that strip is cut and hatched.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CutBound {
+    /// A unit vector in the plane: the line's direction.
+    pub along: Vec3,
+    /// Millimetres from the plane's origin along `along`, `from < to`.
+    pub from: f64,
+    pub to: f64,
 }
 
 /// Input of [`crate::Kernel::project_view`]: an orthographic view from far

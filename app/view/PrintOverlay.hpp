@@ -71,6 +71,7 @@ private:
   QColor m_unmeasuredColor;                // its points not measured (mitcad#2265)
   QString m_title;
   std::vector<std::pair<QColor, QString>> m_entries; // the legend's
+  bool m_surface = false; // a surface quality analysis' legend (mitcad#2517)
   QColor m_markerColor;
   // What the cards were painted for.
   qreal m_ratio = 0.0;

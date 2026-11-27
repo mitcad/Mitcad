@@ -46,6 +46,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -188,7 +189,7 @@ void test_convex_and_concave_bevel_at_a_sharp_edge() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(chamfer_sharp_corner) {
   test::guarded("test_convex_and_concave_bevel_at_a_sharp_edge", test::test_convex_and_concave_bevel_at_a_sharp_edge);
   if (test::failures == 0) {
     std::puts("test_chamfer_sharp_corner: all checks passed");

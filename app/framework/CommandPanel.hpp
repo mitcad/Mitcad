@@ -130,6 +130,8 @@ signals:
   void itemRemoved(const QString& key, int index);
   void rowAdded(const QString& list);
   void rowRemoved(const QString& list, int index);
+  // A row moved up or down (InputDef::orderedRows, mitcad#2506).
+  void rowMoved(const QString& list, int from, int to);
   // The button beside a choice (InputDef::onButton).
   void buttonClicked(const QString& key);
   // A note row's button (InputDef::onNoteAction, mitcad#655).

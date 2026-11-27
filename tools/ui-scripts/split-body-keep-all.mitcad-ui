@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: MIT
+# Split Body with Keep left at its default (mitcad#2504, GitHub
+# mitcad/Mitcad#647, app/COMMANDS.md "Split Body's Keep") on
+# split-body-keep.json (a 30 x 20 x 10 block Body1, F2.b0, and Plane1 at
+# x = 10):
+#   1. Split Body: Body1 and Plane1 picked; Keep shows All Pieces and the
+#      Pieces field is hidden; the preview builds.
+#   2. OK without a click on either piece: both pieces remain, 2000 and
+#      4000 mm3, the definition without `keep`.
+# Run by tools/ui-split-body-keep-all-test.sh (Linux).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle 30
+# The browser folded by Collapse All, then its Bodies and Construction
+# folders opened, and their rows' places waited for.
+expect-ever '^Browser opened (folded|expanded): ' 30
+expect-ever '^Browser Root at ' 30
+mark
+context-menu-logged '^Browser Root at ' 'Collapse All'
+wait-log '^Browser collapsed all$' 10
+wait-idle
+mark
+click-logged '^Browser arrow Root/Bodies at '
+wait-log '^Browser Root/Bodies/Body1 at ' 30
+wait-idle
+mark
+click-logged '^Browser arrow Root/Construction at '
+wait-log '^Browser Root/Construction/Plane1 at ' 30
+wait-idle
+expect-model-bodies 1 6000
+
+# 1. Body1 split by Plane1, Keep at its default.
+capture-undo-depth start
+mark
+command solid.split_body
+wait-log '^Command Split Body started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Split Body Bodies to Split: 1 body' 30
+wait-idle
+mark
+click-logged '^Panel Split Body input tool at '
+wait-idle
+click-logged '^Browser Root/Construction/Plane1 at '
+wait-log '^Split Body Splitting Tool: 1 ' 30
+wait-log '^Preview Split Body: ok' 60
+wait-idle 60
+expect-choice-text keep '^All Pieces$'
+expect-no-log '^Split Body Pieces: |^Preview Split Body: not built'
+
+# 2. OK without clicking a piece: both pieces stay.
+mark
+button '^OK$'
+wait-log '^Added split body of 1 body[(]ies[)]' 60
+wait-idle 60
+expect-undo-depth ${start} 1
+expect-model-bodies 2 6000
+capture-model-number behind '{"query":"properties","bodies":["F2.b0"]}' total.volume
+expect-near ${behind} 2000
+capture-model-number front '{"query":"properties","bodies":["F4.b0"]}' total.volume
+expect-near ${front} 4000
+expect-never 'Recompute failed|The document was read while a job computes it|TestDriver: FAIL'

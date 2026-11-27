@@ -22,6 +22,12 @@
 //!   occurrence in the source design)
 //! ```
 //!
+//! Class version 2 (mitcad#2493: the two derives of a reported package,
+//! saved by build 2.0.18719; none in the corpora) has no `ref A22FD0FD or
+//! DF53910F` before the document GUID, one name followed by 11 bytes
+//! before the second placement, and no `u8` between an entity's feature
+//! and its count `m`; the rest reads as in version 3.
+//!
 //! The source design is the document the item names first (an assembly);
 //! each entity is named in the document that holds it (a part the
 //! assembly places), by its object id there. A placement ([`PLACEMENT`])
@@ -132,13 +138,16 @@ pub(super) fn derive(seg: &Segment, id: u64) -> Option<Derive> {
         return None;
     }
     p += 12;
+    // Class version 2 has no byte between an entity's feature and its
+    // count (mitcad#2493).
+    let gap = usize::from(seg.version(o)? != 2);
     for _ in 0..n {
         let feature = seg.ref_at(d, p)?;
         if !seg.is_kind_of(feature.id, BASE_FEATURE) {
             return None;
         }
-        let m = u32_at(d, feature.end + 1)? as usize;
-        let first = seg.context_ref_at(d, feature.end + 5)?;
+        let m = u32_at(d, feature.end + gap)? as usize;
+        let first = seg.context_ref_at(d, feature.end + gap + 4)?;
         let mut q = first.end;
         for _ in 1..m {
             q = seg.context_ref_at(d, q)?.end;

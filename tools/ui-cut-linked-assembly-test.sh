@@ -4,18 +4,25 @@
 # check-all sources: core/model/src/assembly_cut.rs core/model/src/features/extrude_scope.rs core/model-api/src/components.rs tools/cli
 # check-all sources: tools/ui-scripts/cut-linked-assembly.mitcad-ui tools/ui-scripts/cut-linked-assembly-part.json
 # check-all sources: tools/ui-scripts/cut-linked-assembly-holder.json tools/ui-scripts/cut-linked-assembly-check.json
-# Extrude Cut in an assembly on a linked part (mitcad#2131) through the
-# real UI, the shared input script tools/ui-scripts/cut-linked-assembly.mitcad-ui
-# (also run by tools/ui-windows-cut-linked-assembly-test.ps1 and
+# check-all sources: app/commands/ExtrudeCommands.cpp app/commands/HoleCommands.cpp app/commands/CommandSupport.cpp
+# check-all sources: core/model/src/features/revolve.rs core/model/src/features/hole.rs
+# Extrude Cut, Revolve Cut and Hole in an assembly on a linked part
+# (mitcad#2131, mitcad#2160) through the real UI, the shared input script
+# tools/ui-scripts/cut-linked-assembly.mitcad-ui (also run by
+# tools/ui-windows-cut-linked-assembly-test.ps1 and
 # tools/ui-macos-cut-linked-assembly-test.sh): a block linked from
-# plate.mitcad and a square sketched in the root over it.
-#   - Affected components lists the linked occurrence, left out of the
-#     automatic scope but checkable; checked, the scope turns explicit and
-#     the row says it is machined in this assembly only.
+# plate.mitcad, and in the root a square over it and a rectangle beside the
+# Z axis.
+#   - Extrude: Affected components lists the linked occurrence, left out of
+#     the automatic scope but checkable; checked, the scope turns explicit
+#     and the row says it is machined in this assembly only.
 #   - OK cuts the occurrence: its Browser row says it is machined, the
 #     linked block itself stays as it was; Undo and Redo.
-#   - Saved: the occurrence shows 3520 mm3 (cut-linked-assembly-check.json),
-#     and plate.mitcad is the file it was.
+#   - Revolve Cut about the Z axis: the same list in the Revolve panel,
+#     checked, machined here, OK; a Hole through the occurrence edited in
+#     the Hole panel's list.
+#   - Saved: the occurrence shows the three cuts, 3362.920 mm3
+#     (cut-linked-assembly-check.json), and plate.mitcad is the file it was.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-cut-linked-assembly-test.sh
@@ -43,7 +50,7 @@ cp "$work/plate.mitcad" "$work/plate-written.mitcad"
 ui_start_display
 export MITCAD_TEST_INPUT=$here/ui-scripts/cut-linked-assembly.mitcad-ui
 ui_start_app --ui=qt --no-mcp --no-recovery --open "$work/holder.mitcad"
-for _ in $(seq 1 900); do
+for _ in $(seq 1 1800); do
   kill -0 "$UI_RUNNER" 2> /dev/null || break
   sleep 0.2
 done
@@ -56,7 +63,7 @@ ui_expect_log 'TestDriver: done' 'cut-linked-assembly: the shared steps'
   cat "$work/check.log"
   ui_fail 'the saved assembly does not show the machined occurrence'
 }
-echo "ok   saved with plate:1 machined, 3520 mm3 shown"
+echo "ok   saved with plate:1 machined by the three cuts, 3362.920 mm3 shown"
 cmp -s "$work/plate.mitcad" "$work/plate-written.mitcad" || ui_fail 'plate.mitcad changed'
 echo "ok   plate.mitcad is the file it was"
-ui_finish 'UI cut on a linked part in an assembly'
+ui_finish 'UI cuts (Extrude, Revolve, Hole) on a linked part in an assembly'

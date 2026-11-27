@@ -9,7 +9,8 @@
 #   2. Extrude on the crossing sketch starts with one of its regions and
 #      the panel says that its closed curves cross.
 #   3. With the timeline marker before Sketch2, Extrude starts with the
-#      plate and the island (2 profiles, no hole) and previews them; with
+#      plate and the island (2 profiles, no hole) and previews them (10 mm
+#      typed in each Extrude: a new one starts at 0 mm, mitcad#2481); with
 #      the plate clicked away, a click on Sketch1's timeline cell and then
 #      on its Browser row brings it back (the outline set's unused member).
 #   4. Sketch1 selected on its Browser row before Extrude: Profiles are its
@@ -44,6 +45,7 @@ mark
 key e
 wait-log '^Command Extrude started'
 wait-log '^Extrude Profiles: 1 profile [[]profile r[{].* of F2[]]$'
+type-in '^Panel Extrude input distance at ' '10 mm'
 wait-log '^Panel Extrude note: The closed curves of Sketch2 cross each other' 30
 wait-log '^Preview Extrude: ok' 30
 mark
@@ -61,6 +63,7 @@ wait-log '^Command Extrude started'
 wait-log '^Extrude Profiles: 2 profiles [[]profile r[{]c1[[].* of F1; profile r[{]c[0-9]+[[].* of F1[]]$'
 expect-no-log '^Extrude Profiles: .*profile r[{]c[0-9]+[}] of F1'
 expect-no-log '^Panel Extrude note: '
+type-in '^Panel Extrude input distance at ' '10 mm'
 wait-log '^Preview Extrude: ok' 30
 wait-log '^Pick profile F1/r[{]c1[[]' 20
 screenshot '${MITCAD_TEST_WORK}/outline-set-plate.png'
@@ -97,6 +100,7 @@ key e
 wait-log '^Command Extrude started'
 wait-log '^Profiles: the whole sketch Sketch1 taken as 2 of its outline set$'
 wait-log '^Extrude Profiles: 2 profiles [[]profile r[{]c1[[].* of F1; profile r[{]c[0-9]+[[].* of F1[]]$'
+type-in '^Panel Extrude input distance at ' '10 mm'
 wait-log '^Preview Extrude: ok' 30
 mark
 click-logged '^Browser Root/Sketches/Sketch2 at '

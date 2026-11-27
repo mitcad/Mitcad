@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/files/MainWindowPrint.cpp app/files/Print3d.cpp app/browser/DocumentSnapshot.cpp
 # check-all sources: app/framework/TestDriverModel.cpp core/model/src/exchange
+# check-all sources: app/commands/InspectCommands.cpp app/framework/Command.hpp
 # Send to Slicer with Isolate (mitcad#2475) on tools/ui-scripts/print-isolate.json:
 # Pin placed twice (Pin:1, and Pin:2 turned a quarter), Cube in the design
 # itself and one print plate.
@@ -10,7 +11,9 @@
 #      and Send writes one STL file, Pin:2's.
 #   2. 3MF (tools/ui-scripts/print-isolate.mitcad-ui): with Pin:2 isolated
 #      and nothing selected Bodies starts with the placement shown and
-#      Send the Design's Plates off, so Send writes the bodies; the box
+#      Send the Design's Plates off, so Send writes the bodies; Print
+#      Analysis and Draft Analysis start with Pin:2's body alone too
+#      (mitcad#2490); the box
 #      ticked sends the plates; with Isolate off the plates start on
 #      again; Pin:2 isolated and selected sends one 3MF placement, Pin:2's.
 # The files are read by tools/ui-scripts/print-isolate-verify.py.

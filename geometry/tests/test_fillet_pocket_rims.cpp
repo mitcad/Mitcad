@@ -78,6 +78,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -482,7 +483,7 @@ void test_turned_pockets_at_4() { round_pocket_rims(Layout::Turned, 4.0); }
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(fillet_pocket_rims) {
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--probe") == 0) {
       test::probe = true;

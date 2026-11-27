@@ -49,7 +49,9 @@ class TimelineWidget;
 // "History list: Sketch1, Extrude1, [Holes: Hole1, Hole2], ...; marker
 // after Extrude1" when its rows change (a folded group "[Holes folded]", a
 // run "(2 hidden)"), "History eye <name>: shown|hidden" when a light
-// bulb's state changes and "History selected: <names>|nothing".
+// bulb's state changes, "History selected: <names>|nothing" and "History
+// drag ended: the timeline changed" when the items change while a feature
+// is pressed or dragged (the release then moves nothing).
 class TimelineHistoryList : public QTreeWidget {
   Q_DECLARE_TR_FUNCTIONS(mitcad::TimelineHistoryList)
 
@@ -111,6 +113,12 @@ private:
   void hoverRow(QTreeWidgetItem* row);
   void logRows();
   void endGestures();
+  // A feature's press or drag ended without a move (the marker's drag goes
+  // on).
+  void endItemGesture();
+  // The items' uids in timeline order, as the press and drop indices name
+  // them.
+  QStringList itemOrder() const;
 
   TimelineWidget& m_owner;
   QStyledItemDelegate* m_delegate = nullptr;
@@ -131,6 +139,10 @@ private:
   bool m_dragItem = false;
   int m_dropIndex = -1;
   bool m_dropAllowed = true;
+  // The items as they were at the press: when a rebuild changes them (an
+  // agent's command, an undo) the indices name other items, and the
+  // gesture ends (mitcad#2527).
+  QStringList m_pressOrder;
   // The rename editor's feature.
   QString m_renaming;
   QString m_loggedRows;

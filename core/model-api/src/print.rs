@@ -33,6 +33,9 @@ use mitcad_model::kernel::{BoundingBox, Kernel};
 use mitcad_model::print_analysis::{self, Bed, EstimateSettings};
 use mitcad_model::transform::Transform;
 use mitcad_model::{Document, DraftAnalysis, ModelError};
+// Minimum Radius (mitcad#2518).
+use mitcad_model::internal::document::check_min_radius_limit;
+use mitcad_model::{FaceName, MinRadiusAnalysis};
 
 fn default_angle() -> f64 {
     print_analysis::DEFAULT_ANGLE
@@ -175,18 +178,19 @@ pub(super) struct MinGapQuery {
 }
 
 /// A body to analyse: its shape, the identity of the shape and where it
-/// is printed from.
-struct PrintBody<'a, S> {
-    uid: BodyUid,
-    name: String,
-    shape: &'a S,
-    version: u128,
-    placement: Transform,
+/// is printed from. The surface quality analyses (mitcad#2517,
+/// `surface_quality.rs`) take their bodies so too.
+pub(super) struct PrintBody<'a, S> {
+    pub(super) uid: BodyUid,
+    pub(super) name: String,
+    pub(super) shape: &'a S,
+    pub(super) version: u128,
+    pub(super) placement: Transform,
 }
 
 /// The mesh tolerance: the 3MF export's default (the mesh a slicer gets),
 /// with the deviation given.
-fn print_tolerance(deviation: Option<f64>) -> Result<MeshTolerance, ApiError> {
+pub(super) fn print_tolerance(deviation: Option<f64>) -> Result<MeshTolerance, ApiError> {
     let preset = Refinement::default().tolerance();
     match deviation {
         None => Ok(preset),
@@ -203,7 +207,7 @@ fn print_tolerance(deviation: Option<f64>) -> Result<MeshTolerance, ApiError> {
 /// The cache key of a body's result: what it is of, the body's shape and
 /// placement, the mesh tolerance and the settings (shared with
 /// `model_render`'s overlay, mitcad#1488).
-fn result_key<S>(
+pub(super) fn result_key<S>(
     tag: &str,
     body: &PrintBody<'_, S>,
     tolerance: &MeshTolerance,
@@ -220,7 +224,7 @@ fn result_key<S>(
 }
 
 /// Sets the body's uid and name (the name may change without the shape).
-fn named<S>(value: &Value, body: &PrintBody<'_, S>) -> Value {
+pub(super) fn named<S>(value: &Value, body: &PrintBody<'_, S>) -> Value {
     let mut value = value.clone();
     value["body"] = json!(body.uid);
     value["name"] = json!(body.name);
@@ -709,10 +713,10 @@ fn placed_box(found: &BoundingBox, placement: &Transform) -> BoundingBox {
     )
 }
 
-/// The document's methods used only in this module, as an
-/// extension trait (mitcad#777): the api can then live in a crate above
-/// the model.
-trait PrintLocal<K: Kernel> {
+/// The document's methods used only in this module and by the surface
+/// quality analyses (mitcad#2517), as an extension trait (mitcad#777): the
+/// api can then live in a crate above the model.
+pub(super) trait PrintLocal<K: Kernel> {
     /// The bodies (all at the marker when none are named), or why one is
     /// not there.
     fn print_bodies(&self, uids: &[BodyUid]) -> Result<Vec<PrintBody<'_, K::Shape>>, String>;
@@ -1003,6 +1007,203 @@ impl<K: Kernel> DraftOps<K> for Document<K> {
             "bodies": results,
         });
         draft_areas(&mut answer, area, areas);
+        Ok(answer)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Minimum Radius (mitcad#2518): `min_radius_analysis`, the smallest radius
+// of curvature of the faces of bodies and of faces picked, where it is,
+// and the faces under a limit, on the exact faces
+// (`Kernel::face_curvatures`); the faces under the limit drawn with the
+// triangles Print Analysis meshes them into.
+
+/// `min_radius_analysis`: the fields of a minimum radius analysis'
+/// definition, and the mesh's deviation and whether the triangles are
+/// wanted.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MinRadiusQuery {
+    /// With no `faces` either: every body at the marker.
+    #[serde(default)]
+    bodies: Vec<BodyUid>,
+    /// Face references of any body, analysed besides `bodies`' faces.
+    #[serde(default)]
+    faces: Vec<GeomRef>,
+    /// Faces whose smallest radius is under this (mm) are marked.
+    #[serde(default)]
+    limit: Option<f64>,
+    #[serde(default)]
+    deviation: Option<f64>,
+    /// The marked faces' triangles per body; false answers the numbers
+    /// only.
+    #[serde(default = "default_triangles")]
+    triangles: bool,
+}
+
+/// One body's faces measured: the count, the smallest radius with its
+/// place (design coordinates) and face, and the faces under the limit with
+/// their area (the exact faces') and their triangles (design coordinates).
+fn min_radius_of<K: Kernel>(
+    doc: &Document<K>,
+    body: &PrintBody<'_, K::Shape>,
+    faces: &[FaceName],
+    limit: Option<f64>,
+    tolerance: &MeshTolerance,
+) -> Result<Value, String> {
+    let kernel = doc.kernel();
+    let found = kernel
+        .face_curvatures(body.shape, faces)
+        .map_err(|e| format!("{}: {e}", body.name))?;
+    // Names and exact areas, by the faces' order; none known without them.
+    let infos = kernel.faces(body.shape).unwrap_or_default();
+    let name_of = |i: usize| infos.get(i).and_then(|f| f.names.first()).cloned();
+    let area_of = |i: usize| infos.get(i).map_or(0.0, |f| f.area);
+    let largest = found
+        .iter()
+        .filter(|f| f.curvature > 0.0)
+        .max_by(|a, b| a.curvature.total_cmp(&b.curvature));
+    let under: Vec<usize> = match limit {
+        Some(limit) => found
+            .iter()
+            .filter(|f| f.curvature > 0.0 && 1.0 / f.curvature < limit)
+            .map(|f| f.face)
+            .collect(),
+        None => Vec::new(),
+    };
+    let mut triangles = Vec::new();
+    if !under.is_empty() {
+        let mesh = kernel
+            .triangle_mesh_faces(body.shape, tolerance)
+            .map_err(|e| format!("{}: {e}", body.name))?;
+        let placed = print_analysis::placed(&mesh.mesh, &body.placement);
+        for (t, face) in mesh.faces.iter().enumerate() {
+            if usize::try_from(*face).is_ok_and(|face| under.contains(&face)) {
+                triangles.push(print_analysis::flat(&placed, t));
+            }
+        }
+    }
+    let under_faces: Vec<String> = under
+        .iter()
+        .map(|&i| name_of(i).unwrap_or_default())
+        .collect();
+    Ok(json!({
+        "faces": found.len(),
+        "smallest": largest.map(|f| 1.0 / f.curvature),
+        "at": largest.map(|f| body.placement.apply_point(f.at)),
+        "face": largest.and_then(|f| name_of(f.face)),
+        "under_count": under.len(),
+        "under_faces": under_faces,
+        "under_area": under.iter().map(|&i| area_of(i)).sum::<f64>(),
+        "triangles": triangles,
+    }))
+}
+
+/// The document's method of Minimum Radius, as an extension trait
+/// (mitcad#777).
+pub(super) trait MinRadiusOps<K: Kernel> {
+    /// `min_radius_analysis`: per body and in all the smallest radius of
+    /// curvature and where it is, and with a limit the faces under it, their
+    /// area and (per body) their triangles in design coordinates.
+    fn min_radius_analysis_json(&self, query: &MinRadiusQuery) -> Result<Value, ApiError>;
+}
+
+impl<K: Kernel> MinRadiusOps<K> for Document<K> {
+    fn min_radius_analysis_json(&self, query: &MinRadiusQuery) -> Result<Value, ApiError> {
+        if let Some(limit) = query.limit {
+            check_min_radius_limit(limit).map_err(ApiError)?;
+        }
+        if let Some(face) = query
+            .faces
+            .iter()
+            .find(|face| !matches!(face, GeomRef::Face { .. }))
+        {
+            return Err(ApiError(
+                face.error(|what| format!("{what} is not a face of a body")),
+            ));
+        }
+        let tolerance = print_tolerance(query.deviation)?;
+        let bodies = if query.bodies.is_empty() && query.faces.is_empty() {
+            self.bodies().iter().map(|b| b.uid).collect()
+        } else {
+            query.bodies.clone()
+        };
+        let def = MinRadiusAnalysis {
+            bodies,
+            faces: query.faces.clone(),
+            limit: query.limit,
+        };
+        if let Err(error) = self.min_radius_check(&def) {
+            return Ok(json!({"error": error}));
+        }
+        let targets = def.targets();
+        let uids: Vec<BodyUid> = targets.iter().map(|(body, _)| *body).collect();
+        let printed = if uids.is_empty() {
+            Vec::new()
+        } else {
+            match self.print_bodies(&uids) {
+                Ok(bodies) => bodies,
+                Err(error) => return Ok(json!({"error": error})),
+            }
+        };
+        let mut results = Vec::with_capacity(printed.len());
+        // The smallest of all: its radius, then its body and place.
+        let mut smallest: Option<(f64, Value)> = None;
+        let (mut under_count, mut under_area) = (0, 0.0);
+        for (body, (_, faces)) in printed.iter().zip(&targets) {
+            self.print_stop()?;
+            let names: Vec<String> = faces.iter().map(ToString::to_string).collect();
+            let settings = json!({"faces": names, "limit": query.limit});
+            let key = result_key("min-radius-v1", body, &tolerance, &settings);
+            let value = match self.print_cache().result(key) {
+                Some(value) => value,
+                None => {
+                    let value = match min_radius_of(self, body, faces, query.limit, &tolerance) {
+                        Ok(value) => Arc::new(value),
+                        Err(error) => return Ok(json!({"error": error})),
+                    };
+                    self.print_cache().keep_result(key, Arc::clone(&value));
+                    value
+                }
+            };
+            if let Some(radius) = value["smallest"].as_f64()
+                && smallest.as_ref().is_none_or(|(least, _)| radius < *least)
+            {
+                let place = json!({
+                    "at": value["at"],
+                    "body": body.uid,
+                    "body_name": body.name,
+                    "face": value["face"],
+                });
+                smallest = Some((radius, place));
+            }
+            under_count += value["under_count"].as_u64().unwrap_or_default();
+            under_area += value["under_area"].as_f64().unwrap_or_default();
+            let mut value = named(&value, body);
+            if !query.triangles
+                && let Some(fields) = value.as_object_mut()
+            {
+                fields.remove("triangles");
+            }
+            results.push(value);
+        }
+        let mut answer = json!({
+            "limit": query.limit,
+            "smallest": Value::Null,
+            "at": Value::Null,
+            "body": Value::Null,
+            "body_name": Value::Null,
+            "face": Value::Null,
+            "under_count": under_count,
+            "under_area": under_area,
+            "bodies": results,
+        });
+        if let Some((radius, place)) = smallest {
+            answer["smallest"] = json!(radius);
+            for field in ["at", "body", "body_name", "face"] {
+                answer[field] = place[field].clone();
+            }
+        }
         Ok(answer)
     }
 }

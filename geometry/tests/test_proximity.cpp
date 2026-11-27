@@ -81,6 +81,7 @@
 #include "../src/content_cache.hpp"
 #include "../src/history.hpp"
 #include "../src/proximity.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -514,7 +515,7 @@ void test_content_cache() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(proximity) {
   test::guarded("shapes", test::test_shapes);
   test::guarded("reused", test::test_reused);
   test::guarded("surfaces", test::test_surfaces);

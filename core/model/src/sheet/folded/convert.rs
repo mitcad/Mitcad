@@ -518,6 +518,12 @@ pub(crate) fn convert<K: Kernel>(
         .copied()
         .ok_or_else(|| format!("body {} has no owner", d.body))?;
     let uid = ctx.uid;
+    // Faces laid flat approximately, by triangulation (mitcad#2442).
+    if let Some(output) =
+        super::triangulated::convert(d, ctx, &shape, &fixed_name, owner, &rules_version, &rules)?
+    {
+        return Ok(output);
+    }
     // A cylindrical or conical face is a curved panel of its own; other
     // curved faces are refused saying why (mitcad#2435).
     let surface = ctx
@@ -543,6 +549,7 @@ pub(crate) fn convert<K: Kernel>(
             gaps: Vec::new(),
             invalidated: None,
             blockers: Vec::new(),
+            approximation: None,
         };
         return super::curved::convert(d, ctx, &shape, &fixed_name, &surface, base, &rules);
     }
@@ -588,6 +595,7 @@ pub(crate) fn convert<K: Kernel>(
         gaps: Vec::new(),
         invalidated: None,
         blockers: Vec::new(),
+        approximation: None,
     };
     if d.bends.is_empty() {
         if let Some(rip) = d.rips.first() {

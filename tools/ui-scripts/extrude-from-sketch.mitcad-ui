@@ -8,7 +8,8 @@
 #      Extrude from the sketch: fitted; ... (inside)").
 #   2. Extrude starts with both drawn circles (the sketch's outline set,
 #      mitcad#2194), not the face's leftover region around them (a key
-#      with the face's boundary, b{...}), and its preview is made.
+#      with the face's boundary, b{...}), and its preview is made once
+#      10 mm is typed (a new Extrude starts at 0 mm, mitcad#2481).
 # Run by tools/ui-extrude-from-sketch-test.sh (Linux) and
 # tools/ui-windows-extrude-from-sketch-test.ps1 (Windows).
 expect-ever 'View area'
@@ -30,6 +31,7 @@ wait-log '^Command Extrude started'
 wait-log '^View for Extrude from the sketch: fitted; .* \(inside\)$'
 wait-log '^Extrude Profiles: 2 profiles '
 expect-no-log '^Extrude Profiles: .*b\{'
+type-in '^Panel Extrude input distance at ' '10 mm'
 wait-log '^Preview Extrude: ok' 30
 screenshot '${MITCAD_TEST_WORK}/extrude-from-zoomed-sketch.png'
 mark

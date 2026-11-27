@@ -596,8 +596,16 @@ fn uid_of(answer: &Value) -> Result<String, ApiError> {
         .ok_or_else(|| ApiError(format!("no feature was added: {answer}")))
 }
 
-/// `add_flat_pack`.
+/// `add_flat_pack`: the feature and its cut sheet, one undo step; nothing
+/// stays when a step is refused (mitcad#2527).
 pub(super) fn add_flat_pack<K: Kernel>(
+    doc: &mut Document<K>,
+    c: AddFlatPackCommand,
+) -> Result<Value, ApiError> {
+    doc.all_or_nothing(|doc| flat_pack_steps(doc, c))
+}
+
+fn flat_pack_steps<K: Kernel>(
     doc: &mut Document<K>,
     c: AddFlatPackCommand,
 ) -> Result<Value, ApiError> {
@@ -802,12 +810,21 @@ fn options_json(c: &AddStandardBoxCommand) -> Value {
     v
 }
 
-/// `add_standard_box`.
+/// `add_standard_box`: one undo step for the whole box; nothing stays when
+/// a step is refused (mitcad#2527).
 pub(super) fn add_standard_box<K: Kernel>(
     doc: &mut Document<K>,
     c: AddStandardBoxCommand,
 ) -> Result<Value, ApiError> {
     let made = make_box(&c)?;
+    doc.all_or_nothing(|doc| standard_box_steps(doc, &c, made))
+}
+
+fn standard_box_steps<K: Kernel>(
+    doc: &mut Document<K>,
+    c: &AddStandardBoxCommand,
+    made: BoxMade,
+) -> Result<Value, ApiError> {
     let depth = doc.undo_depth();
     // As a component of its own: a part to save into a library.
     let component = if c.component {
@@ -1050,33 +1067,52 @@ pub(super) fn edit_standard_box<K: Kernel>(
     let made = make_box(&command)?;
     let found = box_features(doc, c.rules)?;
     let depth = doc.undo_depth();
-    let edited = remake_box(doc, &c, &made, &found);
-    if edited.is_err() {
-        // What was changed before the refusal goes again.
-        if doc.undo_depth() > depth {
-            doc.merge_undo(depth, "Edit Standard Box");
-            doc.undo();
-        }
-        return edited;
-    }
+    // What was changed before a refusal goes again, the undo and redo
+    // steps as they were (mitcad#2527: no half-made edit to redo).
+    let edited = doc.all_or_nothing(|doc| remake_box(doc, &c, &made, &found))?;
     doc.merge_undo(depth, "Edit Standard Box");
-    edited
+    Ok(edited)
 }
 
 /// [`edit_standard_box`]'s changes to the box's features: its rules, its
 /// Face's region when the outline's lines are others, its outline and
-/// creases sketches and its Folds.
+/// creases sketches and its Folds. The features it keeps are edited in one
+/// command, so the box is built again once, not once for each of them
+/// (mitcad#2495: a folder's eighteen Folds took minutes for each edit).
 fn remake_box<K: Kernel>(
     doc: &mut Document<K>,
     c: &EditStandardBoxCommand,
     made: &BoxMade,
     found: &BoxFeatures,
 ) -> Result<Value, ApiError> {
-    doc.run_command(json!({"cmd": "edit_feature", "uid": c.rules, "def": made.rules}))?;
+    use mitcad_model::features::{FeatureDef, ValueInput};
+    let parsed = |def: Value| super::parse::<FeatureDef<ValueInput>>(def, "box feature definition");
+    let face = found.face.to_string();
+    let crease_count = made.blank.folds.len();
+    // A flat box (no Folds of its own) keeps having none: only its creases
+    // sketch follows (mitcad#2301).
+    let same = found.folds.is_empty()
+        || (found.folds.len() == crease_count
+            && found.folds.iter().all(|&(k, _)| k < crease_count));
+    // The Folds of creases the blank no longer has go first, the last
+    // first; one a later feature uses refuses the edit in words.
+    if found.creases.is_some() && !same {
+        for &(k, uid) in found.folds.iter().rev() {
+            if k >= crease_count {
+                let name = doc.feature(uid).map(|f| f.name.clone()).unwrap_or_default();
+                doc.run_command(json!({"cmd": "delete_feature", "uid": uid}))
+                    .map_err(|e| {
+                        ApiError(format!(
+                            "the new blank has no crease for the box's Fold {name}: {e}"
+                        ))
+                    })?;
+            }
+        }
+    }
+    let mut edits = vec![(c.rules, parsed(made.rules.clone())?)];
     // The Face names the new outline's region (its key names the lines by
     // their uids, which shift with their number) before the outline
-    // changes, so that the outline's edit builds the Face and its Folds
-    // once, on the new region.
+    // changes.
     let region = blank_region(&made.blank);
     if region != found.region {
         let mut def = found.face_def.clone();
@@ -1092,40 +1128,35 @@ fn remake_box<K: Kernel>(
                 }
             }
         }
-        doc.run_command(json!({"cmd": "edit_feature", "uid": found.face, "def": def}))?;
+        edits.push((found.face, parsed(def)?));
     }
-    doc.run_command(json!({"cmd": "edit_feature", "uid": found.outline,
-        "def": {"type": "sketch", "plane": "xy", "entities": made.outline}}))?;
-    let face = found.face.to_string();
-    let mut folds: Vec<Value> = Vec::new();
+    edits.push((
+        found.outline,
+        parsed(json!({"type": "sketch", "plane": "xy", "entities": made.outline}))?,
+    ));
     if let Some(creases) = found.creases {
-        let creases_name = creases.to_string();
-        let crease_count = made.blank.folds.len();
-        // A flat box (no Folds of its own) keeps having none: only its
-        // creases sketch follows (mitcad#2301).
-        let same = found.folds.is_empty()
-            || (found.folds.len() == crease_count
-                && found.folds.iter().all(|&(k, _)| k < crease_count));
-        // The Folds of creases the blank no longer has go first, the last
-        // first; one a later feature uses refuses the edit in words.
+        edits.push((
+            creases,
+            parsed(json!({"type": "sketch", "plane": "xy", "entities": made.creases}))?,
+        ));
+        // Each kept crease's Fold made again from the blank (its side and
+        // angle may be others now).
         if !same {
-            for &(k, uid) in found.folds.iter().rev() {
-                if k >= crease_count {
-                    doc.run_command(json!({"cmd": "delete_feature", "uid": uid}))
-                        .map_err(|e| {
-                            ApiError(format!(
-                                "the new blank has no crease for the box's Fold {uid}: {e}"
-                            ))
-                        })?;
+            let creases_name = creases.to_string();
+            for (k, fold) in made.blank.folds.iter().enumerate() {
+                if let Some(&(_, uid)) = found.folds.iter().find(|&&(at, _)| at == k) {
+                    edits.push((uid, parsed(fold_def(&face, &creases_name, k, fold))?));
                 }
             }
         }
-        doc.run_command(json!({"cmd": "edit_feature", "uid": creases,
-            "def": {"type": "sketch", "plane": "xy", "entities": made.creases}}))?;
+    }
+    doc.edit_features("Edit Standard Box", &edits)?;
+    let mut folds: Vec<Value> = Vec::new();
+    if let Some(creases) = found.creases {
         if !same {
-            // Each crease's Fold made again from the blank (its side and
-            // angle may be others now), a new crease's after the box's last
-            // Fold kept (after the Face when none is).
+            // A new crease's Fold after the box's last Fold kept (after the
+            // Face when none is).
+            let creases_name = creases.to_string();
             let mut last = found
                 .folds
                 .iter()
@@ -1135,13 +1166,10 @@ fn remake_box<K: Kernel>(
                 .unwrap_or(found.face)
                 .to_string();
             for (k, fold) in made.blank.folds.iter().enumerate() {
-                let def = fold_def(&face, &creases_name, k, fold);
                 match found.folds.iter().find(|&&(at, _)| at == k) {
-                    Some(&(_, uid)) => {
-                        doc.run_command(json!({"cmd": "edit_feature", "uid": uid, "def": def}))?;
-                        folds.push(json!(uid));
-                    }
+                    Some(&(_, uid)) => folds.push(json!(uid)),
                     None => {
+                        let def = fold_def(&face, &creases_name, k, fold);
                         let uid = uid_of(&doc.run_command(json!({"cmd": "add_feature",
                             "def": def, "component": found.component, "after": last}))?)?;
                         folds.push(json!(uid));
@@ -1179,11 +1207,12 @@ pub(super) struct AddGlueFlapCommand {
 /// (`sheet_flange_profile`) made a trapezoid, its root along the edge
 /// `inset` in from each end, its sides slanting in by `taper` degrees, as
 /// glue flaps are; the flange with that profile; one undo step "Glue Flap".
+/// Refused, it leaves nothing: not the profile's plane and sketch either
+/// (mitcad#2527).
 pub(super) fn add_glue_flap<K: Kernel>(
     doc: &mut Document<K>,
     c: AddGlueFlapCommand,
 ) -> Result<Value, ApiError> {
-    use mitcad_model::features::FeatureDef;
     let taper = c.taper.unwrap_or(15.0);
     let inset = c.inset.unwrap_or(0.0);
     if !(0.0..60.0).contains(&taper) || !inset.is_finite() || inset < 0.0 {
@@ -1191,8 +1220,18 @@ pub(super) fn add_glue_flap<K: Kernel>(
             "a glue flap's taper is from 0 to 60 degrees and its inset not negative".into(),
         ));
     }
+    doc.all_or_nothing(|doc| glue_flap_steps(doc, c.def, taper, inset))
+}
+
+fn glue_flap_steps<K: Kernel>(
+    doc: &mut Document<K>,
+    mut flange: Value,
+    taper: f64,
+    inset: f64,
+) -> Result<Value, ApiError> {
+    use mitcad_model::features::FeatureDef;
     let depth = doc.undo_depth();
-    let made = doc.run_command(json!({"cmd": "sheet_flange_profile", "def": c.def}))?;
+    let made = doc.run_command(json!({"cmd": "sheet_flange_profile", "def": flange}))?;
     let sketch: mitcad_model::ids::FeatureUid = made["sketch"]
         .as_str()
         .and_then(|s| s.parse().ok())
@@ -1240,7 +1279,6 @@ pub(super) fn add_glue_flap<K: Kernel>(
     };
     let sketch_def = json!({"type": "sketch", "plane": plane, "entities": entities});
     doc.run_command(json!({"cmd": "edit_feature", "uid": sketch, "def": sketch_def}))?;
-    let mut flange = c.def;
     flange["profile"] = json!(sketch);
     let added = doc.run_command(json!({"cmd": "add_feature", "def": flange}))?;
     doc.merge_undo(depth, "Glue Flap");

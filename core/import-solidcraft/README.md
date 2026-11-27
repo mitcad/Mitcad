@@ -21,7 +21,7 @@ and `has_design_extension`).
 
 Tests: `cargo test -p mitcad-import-solidcraft` (ctest
 `core.import-solidcraft`), on the reader's test designs
-(`core/solidcraft/tests/designs`) with the mock kernel; `tests/sc_extension.rs`
+(`core/solidcraft/tests/designs`) with the mock kernel; `tests/import/sc_extension.rs`
 imports them copied to `.sc`. The corpus
 (`MITCAD_SOLIDCRAFT_CORPUS`) runs through `mitcad-cli`
 (`solidcraft.corpus`).

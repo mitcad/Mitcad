@@ -24,3 +24,6 @@ mod sheet_hem_tests;
 // The rules' version flag of the corner relief at flange corners
 // (mitcad#2342).
 mod sheet_corner_flag_tests;
+// Flat Patterns nested on a cut sheet and cut with a plasma torch
+// (mitcad#2553).
+mod cut_sheet_cutting_tests;

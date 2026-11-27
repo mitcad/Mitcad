@@ -1,0 +1,47 @@
+[
+  {"comment": "Curvature continuous (G2) fillet corners (mitcad#2332, GitHub #611): a 40 x 30 x 10 block, Sketch1 F1, Extrude1 F2, Body1; the three edges at (40, 0, 10) rounded 4 mm G2 through the command, with Rolling Ball corners and then Setback corners: one body, the box's six faces, three roundings and the corner's three faces."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Corner", "def": {"type": "fillet", "body": "F2.b0", "sets": [
+    {"edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}",
+               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}",
+               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}"],
+     "size": {"type": "constant", "radius": 4}, "continuity": "curvature"}]}},
+  {"expect": {"feature": "Corner", "status": "ok", "body": "F2.b0", "faces": 12,
+    "has_face": "F3:corner(V{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])|F2:side(c2[c1,c3])})"}},
+  {"cmd": "edit_feature", "uid": "F3", "def": {"type": "fillet", "body": "F2.b0", "sets": [
+    {"edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}",
+               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}",
+               "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c2[c1,c3])}"],
+     "size": {"type": "constant", "radius": 4}, "continuity": "curvature"}], "rolling_ball_corners": false}},
+  {"expect": {"feature": "Corner", "status": "ok", "body": "F2.b0", "faces": 12,
+    "has_face": "F3:corner(V{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])|F2:side(c2[c1,c3])})"}},
+
+  {"comment": "Sketch2 F4, Extrude2 F5 at (100, 0): every edge of a 40 x 30 x 10 block rounded 2 mm G2 (its six faces in the set): eight corners of three faces each."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F4", "corner": [100, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F4", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Corners", "def": {"type": "fillet", "body": "F5.b0", "sets": [
+    {"faces": ["F5:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})",
+               "F5:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})",
+               "F5:side(c1[c4,c2])", "F5:side(c2[c1,c3])", "F5:side(c3[c2,c4])", "F5:side(c4[c3,c1])"],
+     "size": {"type": "constant", "radius": 2}, "continuity": "curvature"}]}},
+  {"expect": {"feature": "Corners", "status": "ok", "body": "F5.b0", "faces": 42}},
+  {"comment": "Sketch3 F7, Extrude3 F8 at (200, 0): the two top edges at (240, 0, 10) rounded 4 mm G2, the vertical edge there sharp: the roundings run on to the faces beyond and meet in a mitre (the six faces and two roundings)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F7", "corner": [200, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F7", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Mitre", "def": {"type": "fillet", "body": "F8.b0", "sets": [
+    {"edges": ["E{F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F8:side(c1[c4,c2])}",
+               "E{F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F8:side(c2[c1,c3])}"],
+     "size": {"type": "constant", "radius": 4}, "continuity": "curvature"}]}},
+  {"expect": {"feature": "Mitre", "status": "ok", "body": "F8.b0", "faces": 8}},
+  {"expect": {"bodies": 3}}
+]

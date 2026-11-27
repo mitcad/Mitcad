@@ -45,6 +45,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -229,7 +230,7 @@ void test_cube_rounded_within_a_hair_of_half_its_side() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_rib_full_round) {
   test::guarded("test_full_round", test::test_full_round);
   test::guarded("test_full_bevel", test::test_full_bevel);
   test::guarded("test_cube_rounded_within_a_hair_of_half_its_side",

@@ -46,6 +46,9 @@ key Return
 wait-log '^CAM setup added: Setup 1$'
 wait-log '^CAM states: Setup 1: no operations$'
 wait-log '^Browser CAM: Setup 1 \[\]$'
+# Its stock before any cut drawn round the block, without toolpaths
+# (mitcad#2552).
+wait-log '^CAM uncut stock: 1 setup\(s\): box; 24 vertices, 12 triangles, 12 edge\(s\)$'
 
 # 2. The operations, each with the setup and its tool by default.
 mark
@@ -101,10 +104,12 @@ capture-undo-depth before_eye
 click-logged '^Browser eye Root/CAM/Setup 1 at '
 wait-log '^Visibility Root/CAM/Setup 1: hidden$'
 wait-log '^CAM toolpaths drawn: 0 operation\(s\), 0 moves$' 30
+wait-log '^CAM uncut stock: none$'
 expect-undo-depth ${before_eye} 1
 mark
 command edit.undo
 wait-log '^CAM toolpaths drawn: 4 operation\(s\), [1-9][0-9]* moves$' 30
+wait-log '^CAM uncut stock: 1 setup\(s\): box; 24 vertices, 12 triangles, 12 edge\(s\)$'
 expect-undo-depth ${before_eye} 0
 expect-no-log '^CAM states: .*out_of_date'
 
@@ -120,6 +125,8 @@ command make.cam_simulate
 wait-log '^CAM simulate: Setup 1, 4 operations, [1-9][0-9]* points$' 30
 wait-log '^CAM stock: Setup 1, [1-9][0-9]* x [1-9][0-9]* nodes, [1-9][0-9]* snapshots$' 30
 wait-log '^CAM stock overlay: [1-9][0-9]* vertices, [1-9][0-9]* triangles, plain$'
+# The stock as cut shown by itself: the uncut stock set aside.
+wait-log '^CAM uncut stock: 1 setup\(s\): box; 24 vertices, 12 triangles, 12 edge\(s\), under the cut stock$'
 focus-dialog '^Simulate$'
 focus-widget camSimulateSlider
 key End
@@ -130,6 +137,7 @@ wait-log '^CAM stock overlay: [1-9][0-9]* vertices, [1-9][0-9]* triangles, by th
 key Escape
 wait-log '^CAM simulate closed$'
 wait-log '^CAM stock overlay: none$'
+wait-log '^CAM uncut stock: 1 setup\(s\): box; 24 vertices, 12 triangles, 12 edge\(s\)$'
 wait-log '^CAM toolpath overlay: [0-9]+ groups, [0-9]+ segments \([^;]*\)$'
 
 # 6. Post Process… to grbl in millimeters.

@@ -32,6 +32,7 @@
 #include "framework/SectionPreview.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad_bridge/lib.h"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -255,7 +256,7 @@ void testPreviewClips() {
 
 } // namespace
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(section_preview) {
   QCoreApplication app(argc, argv);
   testHelpers();
   testPreviewClips();

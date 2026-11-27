@@ -341,6 +341,7 @@ fn a_retrieved_vertical_sketch_dimension_is_horizontal_under_asme() {
     let plane = CutPlane {
         origin: [0.0; 3],
         normal: [0.0, 0.0, 1.0],
+        bound: None,
     };
     let spec = section_spec(&plane, false, false, true);
     let map = map();

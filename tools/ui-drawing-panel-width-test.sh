@@ -6,7 +6,7 @@
 # drawing whose base view draws both, that mitcad-cli makes (as
 # tools/ui-windows-drawing-panel-width-test.ps1 does on Windows):
 #   - Floating, a fresh configuration: the panel is 230 px wide; the base
-#     view's Shows spans it under its label, and Update from Model's whole
+#     view's Shows spans it under its heading, and Update from Model's whole
 #     text fits its button.
 #   - The panel's edge dragged toward the sheet: the panel and Shows are
 #     wider by the same amount, and the width is remembered.
@@ -76,11 +76,19 @@ wait_width() {
 }
 
 # select_view: the base view selected, its panel laid out (Shows and Update
-# from Model in it).
+# from Model in it). Its Shows list is folded under its heading at the
+# app's start (mitcad#2498): opened then; it stays open after that.
 select_view() {
   ui_mark
   ui_step "select the front view"          ui_click_logged "Drawing view 1"
   ui_expect_new "Drawing view 1 selected" "the front view selected"
+  ui_expect_new "Drawing panel drawingViewShowsToggle at" "its Shows heading in the panel"
+  settled "Drawing panel drawingViewShowsToggle"
+  if grep -E "^Drawing panel drawingViewShows (at |out of sight$)" "$UI_LOG" | tail -1 | grep -q "out of sight$"; then
+    ui_mark
+    ui_step "open its Shows"               ui_click_logged "Drawing panel drawingViewShowsToggle"
+    ui_expect_new "Drawing view 1 Shows opened" "the list opened under its heading"
+  fi
   ui_expect_new "Drawing panel drawingViewShows at" "its Shows in the panel"
   ui_expect_new "Drawing panel drawingViewUpdate at" "Update from Model in the panel"
   settled "Drawing panel drawingViewUpdate"

@@ -921,6 +921,7 @@ mod tests {
             gaps: Vec::new(),
             invalidated: None,
             blockers: Vec::new(),
+            approximation: None,
         };
         // The panel next to the first bend on the path to the second.
         assert_eq!(stationary_panel(&state, b1, b2, None), Ok(p_right));

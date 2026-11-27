@@ -3,17 +3,24 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <limits>
+#include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <utility>
 
 #include <Adaptor3d_CurveOnSurface.hxx>
 #include <Approx_Curve3d.hxx>
+#include <BOPAlgo_ArgumentAnalyzer.hxx>
 #include <BRepAlgoAPI_Check.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepBndLib.hxx>
@@ -36,6 +43,8 @@
 #include <Geom2dAdaptor_Curve.hxx>
 #include <Geom2dConvert.hxx>
 #include <Geom2d_BSplineCurve.hxx>
+#include <Geom2d_Circle.hxx>
+#include <Geom2d_Line.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
 #include <GeomAPI_Interpolate.hxx>
 #include <GeomAdaptor_Surface.hxx>
@@ -47,17 +56,22 @@
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
 #include <NCollection_HArray1.hxx>
+#include <NCollection_IndexedMap.hxx>
 #include <NCollection_List.hxx>
 #include <Precision.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
+#include <gp_Circ2d.hxx>
 
 #include "history.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "sheet_curve.hpp"
+#include "sheet_oblique_cone.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
 
@@ -120,8 +134,31 @@ struct Embedding {
   double rho_ref = 0;
   double sin_angle = 0;
   double cos_angle = 1;
+  // An oblique cone (mitcad#2491): its front surface's cone, the caps'
+  // offsets from it along its normals (front, back), the development of
+  // its neutral surface and the sign of its caps' own normals against the
+  // outward one (their parameters are the angle and the distance along the
+  // generator).
+  detail::ObliqueCone skew{};
+  std::array<double, 2> skew_offsets{0, 0};
+  std::shared_ptr<const detail::ObliqueDevelopment> skew_development{};
+  double skew_natural = 1;
 
   const ConeEmbedding* cone() const { return std::get_if<ConeEmbedding>(&patch->embedding); }
+  const ObliqueConeEmbedding* oblique() const { return std::get_if<ObliqueConeEmbedding>(&patch->embedding); }
+  // A conical or an oblique conical panel: its boundaries are fitted onto
+  // its caps (cone_rails), and no port joins it.
+  bool fanned() const { return cone() || oblique(); }
+
+  // An oblique cone's chart point as its angle and its distance along the
+  // generator.
+  gp_Pnt2d skew_coordinates(const gp_Pnt2d& p) const {
+    double theta = 0, rho = 0;
+    if (!skew_development->inverse(p, theta, rho)) {
+      throw std::invalid_argument("sheet material lies outside the oblique cone's angle interval");
+    }
+    return {theta, rho};
+  }
 
   // A cone chart point's developed angle in the chart's window.
   double developed_angle(const gp_Pnt2d& p) const {
@@ -146,6 +183,10 @@ struct Embedding {
       return k->apex.Translated((rho * sin_angle + d * cos_angle) * radial +
                                 (rho * cos_angle - d * sin_angle) * gp_Vec(k->axis));
     }
+    if (oblique()) {
+      const gp_Pnt2d at = skew_coordinates(p);
+      return skew.point(at.X(), at.Y(), skew_offsets[back ? 1 : 0]);
+    }
     const auto& c = std::get<CylinderEmbedding>(patch->embedding);
     const double r = c.inside_radius + ((back == c.inner_is_front) ? thickness : 0.0);
     const double angle = p.X() / c.neutral_radius;
@@ -160,6 +201,7 @@ struct Embedding {
     if (cone()) {
       return {uv_sign * developed_angle(p) / sin_angle, std::hypot(p.X(), p.Y()) - rho_ref};
     }
+    if (oblique()) return skew_coordinates(p);
     return p;
   }
 
@@ -167,14 +209,128 @@ struct Embedding {
     if (std::holds_alternative<PlaneEmbedding>(patch->embedding)) {
       return back ? material_sign < 0 : material_sign > 0;
     }
+    // An oblique cone's caps: the cap's own normal against the solid's
+    // outward one there (the front's points against front-to-back).
+    if (const auto* o = oblique()) return skew_natural * (o->inner_is_front ? 1 : -1) * (back ? 1 : -1) < 0;
     // A cylinder's and a cone's surfaces face away from the axis.
     if (const auto* k = cone()) return back != k->inner_is_front;
     return back != std::get<CylinderEmbedding>(patch->embedding).inner_is_front;
   }
 };
 
-Embedding make_embedding(const SheetPatch& patch, double thickness) {
+// An oblique cone's cap (mitcad#2491): the surface `offset` from the cone
+// along its normals over the angles [first, last] and the distances [inner_rho,
+// outer_rho] along the generators, its parameters the angle and the distance: a
+// B-spline of degree 3 in the angle through its exact points at evenly
+// spaced angles (more until within `tolerance` of it between them) and of
+// degree 1 along the generators, where the surface is straight.
+occ::handle<Geom_BSplineSurface> oblique_cap(const detail::ObliqueCone& cone, double offset, double first,
+                                             double last, double inner_rho, double outer_rho, double tolerance) {
+  for (int n = 32; n <= 16384; n *= 2) {
+    throw_if_cancelled();
+    const occ::handle<NCollection_HArray1<double>> params = new NCollection_HArray1<double>(1, n + 1);
+    std::array<occ::handle<NCollection_HArray1<gp_Pnt>>, 2> rows{new NCollection_HArray1<gp_Pnt>(1, n + 1),
+                                                                 new NCollection_HArray1<gp_Pnt>(1, n + 1)};
+    for (int i = 0; i <= n; ++i) {
+      const double t = first + (last - first) * i / n;
+      params->SetValue(i + 1, t);
+      rows[0]->SetValue(i + 1, cone.point(t, inner_rho, offset));
+      rows[1]->SetValue(i + 1, cone.point(t, outer_rho, offset));
+    }
+    std::array<Curve3Ptr, 2> curves;
+    for (int k = 0; k < 2; ++k) {
+      GeomAPI_Interpolate fit(rows[k], params, false, 1.0e-12);
+      fit.Perform();
+      if (!fit.IsDone()) throw std::runtime_error("sheet oblique conical panel could not be laid on its cone");
+      curves[k] = fit.Curve();
+    }
+    const int poles = curves[0]->NbPoles();
+    if (curves[1]->NbPoles() != poles || curves[0]->Degree() != curves[1]->Degree()) {
+      throw std::runtime_error("sheet oblique conical panel could not be laid on its cone");
+    }
+    NCollection_Array2<gp_Pnt> net(1, poles, 1, 2);
+    for (int i = 1; i <= poles; ++i) {
+      net(i, 1) = curves[0]->Pole(i);
+      net(i, 2) = curves[1]->Pole(i);
+    }
+    NCollection_Array1<double> along(1, 2);
+    along(1) = inner_rho;
+    along(2) = outer_rho;
+    NCollection_Array1<int> ends(1, 2);
+    ends(1) = ends(2) = 2;
+    const occ::handle<Geom_BSplineSurface> surface = new Geom_BSplineSurface(
+        net, curves[0]->Knots(), along, curves[0]->Multiplicities(), ends, curves[0]->Degree(), 1);
+    double worst = 0;
+    for (int i = 0; i < n; ++i) {
+      const double t = first + (last - first) * (i + 0.5) / n;
+      for (const double rho : {inner_rho, (inner_rho + outer_rho) / 2, outer_rho}) {
+        worst = std::max(worst, surface->Value(t, rho).Distance(cone.point(t, rho, offset)));
+      }
+    }
+    if (worst <= tolerance) return surface;
+  }
+  throw std::runtime_error("sheet oblique conical panel exceeded the surface approximation tolerance");
+}
+
+Embedding make_embedding(const SheetPatch& patch, double thickness, double tolerance) {
   Embedding result{&patch, thickness, {}};
+  if (const auto* o = std::get_if<ObliqueConeEmbedding>(&patch.embedding)) {
+    finite(o->apex);
+    finite(o->centre);
+    detail::require_positive("sheet oblique cone radius", o->radius);
+    detail::require_positive("sheet oblique cone angle", o->angle_extent);
+    if (o->angle_extent >= 2 * kPi - kAngularTolerance ||
+        std::abs(o->radial_start.Dot(o->angular_direction)) > kAngularTolerance) {
+      throw std::invalid_argument("invalid sheet oblique cone angle or orthogonal basis");
+    }
+    result.skew.apex = o->apex;
+    result.skew.centre = o->centre;
+    result.skew.radius = o->radius;
+    result.skew.x = gp_Vec(o->radial_start);
+    result.skew.y = gp_Vec(o->angular_direction);
+    // The neutral surface and the back from the front, away from the
+    // cone's inside.
+    const double neutral = o->inner_is_front ? o->neutral_depth : o->neutral_depth - thickness;
+    result.skew_offsets = {0.0, o->inner_is_front ? thickness : -thickness};
+    const double free = kPi - o->angle_extent / 2;
+    result.skew_development =
+        std::make_shared<const detail::ObliqueDevelopment>(result.skew, neutral, -free, o->angle_extent + free);
+    // The chart's (x, y) turns against (angle, distance): along the
+    // generator and across it, as on a cone of revolution.
+    const detail::ObliqueCone::Generator start = result.skew.generator(0);
+    result.skew_natural = start.dg.Crossed(start.g).Dot(start.n) > 0 ? 1 : -1;
+    result.wire_sign = -1;
+    result.material_sign = -result.skew_natural * (o->inner_is_front ? 1 : -1);
+    // The caps over the material's angles and distances along the
+    // generators, a millimetre wider.
+    double inner_rho = std::numeric_limits<double>::infinity(), outer_rho = -inner_rho;
+    double first = inner_rho, last = outer_rho;
+    for (const auto& region : patch.regions) {
+      for (const auto& loop : region.loops) {
+        for (const auto& edge : loop.edges) {
+          const auto curve = detail::make_sheet_curve(edge.curve);
+          for (int i = 0; i <= 64; ++i) {
+            const double t = edge.curve.range.first + (edge.curve.range.last - edge.curve.range.first) * i / 64;
+            const gp_Pnt2d at = result.skew_coordinates(curve.curve->Value(curve.native_parameter(t)));
+            first = std::min(first, at.X());
+            last = std::max(last, at.X());
+            inner_rho = std::min(inner_rho, at.Y());
+            outer_rho = std::max(outer_rho, at.Y());
+          }
+        }
+      }
+    }
+    if (!(outer_rho > inner_rho) || !(last > first)) throw std::invalid_argument("sheet oblique conical panel has no material");
+    inner_rho = inner_rho > 1 ? inner_rho - 1 : inner_rho / 2;
+    outer_rho += 1;
+    first = std::max(-free, first - 0.01);
+    last = std::min(o->angle_extent + free, last + 0.01);
+    for (int back = 0; back < 2; ++back) {
+      result.surfaces[back] =
+          oblique_cap(result.skew, result.skew_offsets[back], first, last, inner_rho, outer_rho, tolerance / 16);
+    }
+    return result;
+  }
   if (const auto* p = std::get_if<PlaneEmbedding>(&patch.embedding)) {
     const Frame& f = p->front_frame;
     finite(f.origin);
@@ -331,7 +487,7 @@ Rails cone_rails(const occ::handle<Geom2d_Curve>& chart_curve, double first, dou
 }
 
 Rails make_rails(const Curve2Ptr& chart_curve, const Embedding& embedding, double tolerance) {
-  if (embedding.cone()) {
+  if (embedding.fanned()) {
     return cone_rails(chart_curve, chart_curve->FirstParameter(), chart_curve->LastParameter(), embedding, tolerance);
   }
   Rails result{map_uv(chart_curve, embedding), {}};
@@ -519,7 +675,7 @@ std::vector<Port> make_ports(const SheetChartShapeSpec& spec, const std::vector<
       std::size_t p = 0;
       const auto& ref = *sides[side];
       const auto& edge = boundary(spec, ref.boundary, p);
-      if (embeddings[p].cone()) throw std::invalid_argument("sheet ports cannot join a conical panel");
+      if (embeddings[p].fanned()) throw std::invalid_argument("sheet ports cannot join a conical panel");
       const auto curve = detail::make_sheet_curve(edge.curve);
       if (edge.curve.geometry.kind != SegmentKind::Line) throw std::invalid_argument("sheet tangent ports must be straight");
       detail::require_finite("sheet port axial scale", ref.axial.scale);
@@ -657,7 +813,7 @@ void region_faces(const MaterialRegion& input, const Embedding& embedding, std::
           }
         } else {
           const double native_first = curve.native_parameter(first), native_last = curve.native_parameter(last);
-          const Rails rails = embedding.cone()
+          const Rails rails = embedding.fanned()
                                   ? cone_rails(curve.curve, std::min(native_first, native_last),
                                                std::max(native_first, native_last), embedding, tolerance)
                                   : make_rails(bounded_spline(curve, {native_first, native_last}), embedding, tolerance);
@@ -828,7 +984,105 @@ std::optional<SheetChartShapeSpec> holes_filled(const SheetChartShapeSpec& spec)
   return filled;
 }
 
-SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisions);
+// How a construction checks the sheet's walls for collisions: Checked
+// (walls that meet refused, naming them), Unchecked (a construction with
+// its holes filled found none), Clearance (that construction with its
+// holes filled: it builds and checks the shells only, and any collision or
+// invalid shell throws without naming walls, since only whether there is
+// one decides, mitcad#2536).
+enum class Pass { Checked, Unchecked, Clearance };
+
+SheetChartGeometry construct(const SheetChartShapeSpec& spec, Pass pass);
+
+// Whether MITCAD_LOG_TIMING (not 0) asks for a line per sheet construction
+// on standard error (mitcad#2444): where a sheet feature's time goes.
+bool log_timing() {
+  static const bool on = [] {
+#ifdef _MSC_VER
+    char* value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, "MITCAD_LOG_TIMING") != 0 || value == nullptr) {
+      return false;
+    }
+    const bool set = std::string(value) != "0";
+    std::free(value);
+    return set;
+#else
+    const char* value = std::getenv("MITCAD_LOG_TIMING");
+    return value != nullptr && std::string(value) != "0";
+#endif
+  }();
+  return on;
+}
+
+// The phases of one construction, each the time since the one before
+// (log_timing()), printed as one line when it ends:
+// `Timing sheet chart shape: 9 charts, 58 faces, faces 2.1 ms, sew 14.0 ms, ...`,
+// with how the shells' walls were found not to meet: kept apart by planes or
+// by OCCT's self-interference check.
+class ShapeTiming {
+public:
+  enum Phase { Faces, Sew, Valid, Collisions, Names, Fuse, Apart, PhaseCount };
+
+  ShapeTiming() : m_start(Clock::now()), m_last(m_start) {}
+
+  void mark(Phase phase) {
+    if (!log_timing()) return;
+    const auto now = Clock::now();
+    m_ms[static_cast<std::size_t>(phase)] += std::chrono::duration<double, std::milli>(now - m_last).count();
+    m_last = now;
+  }
+
+  // A shell of `regions` material regions, `suspects` of them not kept
+  // apart by planes from the rest and checked (none: the shell's walls kept
+  // apart; `unshown`: the first pair of regions not shown apart).
+  void shell(std::size_t suspects, std::size_t regions, const std::string& unshown) {
+    const bool apart = suspects == 0;
+    ++(apart ? m_apart : m_checked);
+    m_suspects += suspects;
+    m_regions += regions;
+    if (!apart && m_unshown.empty()) m_unshown = unshown;
+  }
+
+  // `filled`: the construction with the holes filled, which checks the
+  // shells only (mitcad#2536).
+  void print(std::size_t charts, std::size_t faces, bool filled = false) const {
+    if (!log_timing()) return;
+    static const char* const names[PhaseCount] = {"faces", "sew", "valid", "collisions", "names", "fuse", "apart"};
+    std::string line = std::string("Timing sheet chart shape") + (filled ? " (holes filled)" : "") + ": " +
+                       std::to_string(charts) + " charts, " + std::to_string(faces) + " faces";
+    char buffer[64];
+    for (std::size_t i = 0; i < m_ms.size(); ++i) {
+      std::snprintf(buffer, sizeof buffer, ", %s %.2f ms", names[i], m_ms[i]);
+      line += buffer;
+    }
+    std::snprintf(buffer, sizeof buffer, ", total %.2f ms",
+                  std::chrono::duration<double, std::milli>(Clock::now() - m_start).count());
+    line += buffer;
+    if (m_apart + m_checked == 0) {
+      line += " (collisions not checked)\n";
+    } else {
+      line += " (shells kept apart by planes " + std::to_string(m_apart) + ", checked for collisions " +
+              std::to_string(m_checked) +
+              (m_checked == 0 ? std::string()
+                              : ", " + std::to_string(m_suspects) + " of " + std::to_string(m_regions) +
+                                    " regions checked") +
+              (m_unshown.empty() ? std::string() : ": not shown apart " + m_unshown) + ")\n";
+    }
+    std::fputs(line.c_str(), stderr);
+  }
+
+private:
+  using Clock = std::chrono::steady_clock;
+  Clock::time_point m_start;
+  Clock::time_point m_last;
+  std::array<double, PhaseCount> m_ms{};
+  int m_apart = 0;
+  int m_checked = 0;
+  std::size_t m_suspects = 0;
+  std::size_t m_regions = 0;
+  std::string m_unshown;
+};
 
 // A domain as the model names it in messages: `panel F4 slot 0`.
 std::string domain_label(const SheetDomainRef& d) {
@@ -958,6 +1212,390 @@ std::invalid_argument meeting_refusal(const WallMeeting& meeting, const std::vec
                                " touch over a face, which a sheet body cannot hold: leave a seam gap between them");
 }
 
+// Walls that cannot meet (mitcad#2444). OCCT's self-interference check of a
+// folded sheet intersects every pair of its faces whose boxes meet, and the
+// sides of the charts are ruled B-spline faces: it took 90 to 95 percent of
+// a Flange's time on a plain plate (0.12 s for one flange, 0.55 s for a box
+// of four in a debug build), more with every wall. Most pairs of material
+// regions are kept apart by a plane that is easy to find: a cap's plane, the
+// plane of a straight side, a bend's end plane, the plane through a port or
+// the bisecting plane of a corner between two bends. When such a plane separates every pair of a shell's
+// regions, the check could find nothing and is not run; otherwise it runs
+// on the faces of the regions such planes do not keep apart from the rest
+// (mitcad#2536). Each region is bounded by its exact support function (the
+// largest of m . x over its material): exact for straight and circular
+// sides, over the poles of the exact B-spline form (which hold the curve)
+// for other curves. A region on its own was checked by the validity check.
+
+// The largest of A cos a + B sin a for a in [lo, hi].
+double turn_max(double a_coefficient, double b_coefficient, double lo, double hi) {
+  double best = std::max(a_coefficient * std::cos(lo) + b_coefficient * std::sin(lo),
+                         a_coefficient * std::cos(hi) + b_coefficient * std::sin(hi));
+  const double peak = std::atan2(b_coefficient, a_coefficient);
+  const double turns = std::ceil((lo - peak) / (2 * kPi));
+  if (peak + turns * 2 * kPi <= hi) best = std::max(best, std::hypot(a_coefficient, b_coefficient));
+  return best;
+}
+
+// One side of a region's outline in its chart, as the support function
+// reads it: a straight side by its two ends, a circular arc exactly, another
+// curve by the poles of its exact B-spline form (positive weights: they hold
+// the curve).
+struct ChartEdge {
+  bool line = false;
+  std::vector<gp_Pnt2d> points;
+  bool circular = false;
+  gp_Pnt2d centre;
+  gp_Vec2d x, y;
+  double radius = 0, lo = 0, hi = 0;
+  // A curved side of a bend's chart in short pieces, each by its chart box
+  // (u from, u to, y from, y to): a relief's arc ends a bend where its box
+  // as a whole would reach the corner the relief took away.
+  std::vector<std::array<double, 4>> boxes;
+};
+
+// How many pieces a curved side of a bend's chart is bounded in.
+constexpr int kBendSidePieces = 32;
+
+// The largest of w . p over a side.
+double edge_support(const ChartEdge& edge, const gp_Vec2d& w) {
+  double best = -std::numeric_limits<double>::infinity();
+  for (const auto& p : edge.points) best = std::max(best, gp_Vec2d(p.XY()).Dot(w));
+  if (edge.circular) {
+    best = std::max(best, gp_Vec2d(edge.centre.XY()).Dot(w) +
+                              edge.radius * turn_max(edge.x.Dot(w), edge.y.Dot(w), edge.lo, edge.hi));
+  }
+  return best;
+}
+
+// A region's outline (its exterior loop), with what may separate it from
+// another region.
+struct RegionHull {
+  const Embedding* embedding = nullptr;
+  std::vector<ChartEdge> edges;
+  // A bend's chart box: u along the turn (at the neutral radius), y along the axis.
+  double u0 = 0, u1 = 0, y0 = 0, y1 = 0;
+  // Unit normals of the planes that may separate it from another region.
+  std::vector<gp_Vec> directions;
+};
+
+// The largest of w . p over a region's outline in its chart.
+double chart_support(const RegionHull& hull, const gp_Vec2d& w) {
+  double best = -std::numeric_limits<double>::infinity();
+  for (const auto& edge : hull.edges) best = std::max(best, edge_support(edge, w));
+  return best;
+}
+
+// The largest of along * y + d * (a cos(u / neutral) + b sin(u / neutral))
+// over a side (u, y) of a bend's chart, at the radius d: exact along a
+// straight side (its ends and the points where the derivative is zero),
+// over the side's own chart box for another curve.
+double bend_edge_max(const ChartEdge& edge, double along, double a, double b, double neutral, double d) {
+  const auto at = [&](double u, double y) { return along * y + d * (a * std::cos(u / neutral) + b * std::sin(u / neutral)); };
+  if (!edge.line) {
+    double best = -std::numeric_limits<double>::infinity();
+    for (const auto& [ua, ub, ya, yb] : edge.boxes) {
+      best = std::max(best, std::max(along * ya, along * yb) + d * turn_max(a, b, ua / neutral, ub / neutral));
+    }
+    return best;
+  }
+  const gp_Pnt2d p = edge.points[0], q = edge.points[1];
+  double best = std::max(at(p.X(), p.Y()), at(q.X(), q.Y()));
+  const double du = q.X() - p.X();
+  const double rho = std::hypot(a, b);
+  // Along the axis (u fixed) or with no turning part, linear: its ends.
+  if (std::abs(du) <= Precision::PConfusion() || rho <= 0) return best;
+  const double slope = (q.Y() - p.Y()) / du;
+  const double lo = std::min(p.X(), q.X()), hi = std::max(p.X(), q.X());
+  // F(u) = along (p.y + slope (u - p.x)) + d rho cos(u / neutral - phi):
+  // F'(u) = 0 where sin(u / neutral - phi) = along slope neutral / (d rho).
+  const double s = along * slope * neutral / (d * rho);
+  if (std::abs(s) <= 1) {
+    const double phi = std::atan2(b, a);
+    const double period = 2 * kPi * neutral;
+    for (const double theta : {std::asin(s), kPi - std::asin(s)}) {
+      const double base = neutral * (theta + phi);
+      for (double u = base + std::ceil((lo - base) / period) * period; u <= hi; u += period) {
+        best = std::max(best, at(u, p.Y() + slope * (u - p.X())));
+      }
+    }
+  }
+  return best;
+}
+
+// The largest of m . x over a region's material. A bend's: for a fixed u
+// the material's slice is linear in y and the radius, so the most is on the
+// outline, at the inside or the outside radius.
+double support(const RegionHull& hull, const gp_Vec& m) {
+  const auto& patch = *hull.embedding->patch;
+  const double thickness = hull.embedding->thickness;
+  if (const auto* plane = std::get_if<PlaneEmbedding>(&patch.embedding)) {
+    const Frame& f = plane->front_frame;
+    const gp_Vec2d w(m.Dot(gp_Vec(f.x_axis)), m.Dot(gp_Vec(f.y_axis)));
+    const double across = thickness * parity(plane->front_to_back_sign) * m.Dot(gp_Vec(f.normal()));
+    return m.Dot(gp_Vec(f.origin.XYZ())) + chart_support(hull, w) + std::max(0.0, across);
+  }
+  const auto& c = std::get<CylinderEmbedding>(patch.embedding);
+  const double along = m.Dot(gp_Vec(c.axis));
+  const double a = m.Dot(gp_Vec(c.radial_start)), b = m.Dot(gp_Vec(c.angular_direction));
+  double best = -std::numeric_limits<double>::infinity();
+  for (const double d : {c.inside_radius, c.inside_radius + thickness}) {
+    for (const auto& edge : hull.edges) best = std::max(best, bend_edge_max(edge, along, a, b, c.neutral_radius, d));
+  }
+  return m.Dot(gp_Vec(c.centre.XYZ())) + best;
+}
+
+RegionHull region_hull(const MaterialRegion& region, const Embedding& embedding) {
+  if (region.loops.empty() || region.loops.front().edges.empty()) {
+    throw std::invalid_argument("sheet material region has no outline");
+  }
+  RegionHull hull;
+  hull.embedding = &embedding;
+  std::vector<gp_Vec2d> normals;
+  const bool bend = std::holds_alternative<CylinderEmbedding>(embedding.patch->embedding);
+  for (const auto& edge : region.loops.front().edges) {
+    const auto curve = detail::make_sheet_curve(edge.curve);
+    const double lo = std::min(curve.native_range.first, curve.native_range.last);
+    const double hi = std::max(curve.native_range.first, curve.native_range.last);
+    occ::handle<Geom2d_Curve> basis = curve.curve;
+    if (const auto trimmed = occ::handle<Geom2d_TrimmedCurve>::DownCast(basis)) basis = trimmed->BasisCurve();
+    ChartEdge side;
+    if (!occ::handle<Geom2d_Line>::DownCast(basis).IsNull()) {
+      const gp_Pnt2d a = curve.curve->Value(lo), b = curve.curve->Value(hi);
+      side.line = true;
+      side.points = {a, b};
+      const gp_Vec2d along(a, b);
+      if (along.Magnitude() > Precision::Confusion()) normals.push_back(gp_Vec2d(along.Y(), -along.X()).Normalized());
+    } else if (const auto circle = occ::handle<Geom2d_Circle>::DownCast(basis); !circle.IsNull()) {
+      const gp_Circ2d c = circle->Circ2d();
+      side.circular = true;
+      side.centre = c.Location();
+      side.x = gp_Vec2d(c.XAxis().Direction());
+      side.y = gp_Vec2d(c.YAxis().Direction());
+      side.radius = c.Radius();
+      side.lo = lo;
+      side.hi = hi;
+    } else {
+      const auto spline = bounded_spline(curve, {lo, hi});
+      for (int i = 1; i <= spline->NbPoles(); ++i) {
+        if (spline->Weight(i) <= 0) throw std::invalid_argument("sheet curve has a weight that is not positive");
+        side.points.push_back(spline->Pole(i));
+      }
+    }
+    if (bend && !side.line) {
+      for (int k = 0; k < kBendSidePieces; ++k) {
+        const double from = lo + (hi - lo) * k / kBendSidePieces;
+        const double to = lo + (hi - lo) * (k + 1) / kBendSidePieces;
+        ChartEdge piece;
+        if (side.circular) {
+          piece.circular = true;
+          piece.centre = side.centre;
+          piece.x = side.x;
+          piece.y = side.y;
+          piece.radius = side.radius;
+          piece.lo = from;
+          piece.hi = to;
+        } else {
+          const auto spline = bounded_spline(curve, {from, to});
+          for (int i = 1; i <= spline->NbPoles(); ++i) {
+            if (spline->Weight(i) <= 0) throw std::invalid_argument("sheet curve has a weight that is not positive");
+            piece.points.push_back(spline->Pole(i));
+          }
+        }
+        side.boxes.push_back({-edge_support(piece, gp_Vec2d(-1, 0)), edge_support(piece, gp_Vec2d(1, 0)),
+                              -edge_support(piece, gp_Vec2d(0, -1)), edge_support(piece, gp_Vec2d(0, 1))});
+      }
+    }
+    hull.edges.push_back(std::move(side));
+  }
+  const auto& patch = *embedding.patch;
+  if (const auto* plane = std::get_if<PlaneEmbedding>(&patch.embedding)) {
+    const Frame& f = plane->front_frame;
+    hull.directions.push_back(gp_Vec(f.normal()));
+    for (const auto& n : normals) hull.directions.push_back(n.X() * gp_Vec(f.x_axis) + n.Y() * gp_Vec(f.y_axis));
+  } else {
+    const auto& c = std::get<CylinderEmbedding>(patch.embedding);
+    hull.u0 = -chart_support(hull, gp_Vec2d(-1, 0));
+    hull.u1 = chart_support(hull, gp_Vec2d(1, 0));
+    hull.y0 = -chart_support(hull, gp_Vec2d(0, -1));
+    hull.y1 = chart_support(hull, gp_Vec2d(0, 1));
+    hull.directions.push_back(gp_Vec(c.axis));
+    for (const double u : {hull.u0, hull.u1}) {
+      const double a = u / c.neutral_radius;
+      hull.directions.push_back(-std::sin(a) * gp_Vec(c.radial_start) + std::cos(a) * gp_Vec(c.angular_direction));
+    }
+  }
+  for (const gp_Vec axis : {gp_Vec(1, 0, 0), gp_Vec(0, 1, 0), gp_Vec(0, 0, 1)}) hull.directions.push_back(axis);
+  return hull;
+}
+
+// Whether a plane keeps two regions apart: their material on its two sides
+// at least `gap` apart (a negative gap: overlapping at most by its size).
+// The planes tried are the two regions' own; the planes halfway between
+// one of each (the sum or difference of their normals: the bisecting plane
+// of a corner between two bends' axes, which no side of the sheet lies in,
+// as walls are cut normal to their surfaces); then those of every region of
+// the shell (`shell`).
+bool kept_apart(const RegionHull& a, const RegionHull& b, const std::vector<gp_Vec>& shell, double gap) {
+  const auto separates = [&](const gp_Vec& direction) {
+    for (const gp_Vec m : {direction, direction.Reversed()}) {
+      if (support(a, m) + support(b, m.Reversed()) <= -gap) return true;
+    }
+    return false;
+  };
+  const auto apart = [&](const std::vector<gp_Vec>& directions) {
+    return std::any_of(directions.begin(), directions.end(), separates);
+  };
+  if (apart(a.directions) || apart(b.directions)) return true;
+  for (const auto& first : a.directions) {
+    for (const auto& second : b.directions) {
+      for (const gp_Vec halfway : {first + second, first - second}) {
+        if (halfway.Magnitude() > 1.0e-9 && separates(halfway.Normalized())) return true;
+      }
+    }
+  }
+  return apart(shell);
+}
+
+// Whether a port joins two domains.
+bool joined_domains(const SheetChartShapeSpec& spec, const SheetDomainRef& a, const SheetDomainRef& b) {
+  const auto key_a = domain_key(a), key_b = domain_key(b);
+  return std::any_of(spec.ports.begin(), spec.ports.end(), [&](const ShapePort& port) {
+    const auto first = domain_key(port.first.boundary.domain), second = domain_key(port.second.boundary.domain);
+    return (first == key_a && second == key_b) || (first == key_b && second == key_a);
+  });
+}
+
+// The material regions among `members` (one shell's) that planes do not
+// keep apart from every other region of the shell, in the order of
+// `members`; empty when every pair is kept apart, so that the shell cannot
+// meet itself. Two regions no port joins are kept apart at least four
+// tolerances apart (the self-interference check finds faces within their
+// tolerances of each other, and walls a few tolerances apart are then
+// refused as touching, mitcad#1409), two a port joins touching at most
+// within the tolerance on the plane between them (where the port is). All
+// of `members` for an outline this cannot read. `unshown` names the first
+// pair not shown apart (for MITCAD_LOG_TIMING).
+//
+// Only these regions' faces can meet a face of another region: each other
+// region's material is on its own side of a plane from each region of the
+// shell (mitcad#2536). A folded box's tab through a slot of its base
+// leaves the tab and the base here, and its other walls out.
+std::vector<std::size_t> unshown_regions(const SheetChartShapeSpec& spec, const std::vector<Embedding>& embeddings,
+                                         const std::vector<RegionMembership>& membership,
+                                         const std::vector<std::size_t>& member_patch,
+                                         const std::vector<std::size_t>& members, std::string& unshown) {
+  try {
+    std::vector<RegionHull> hulls;
+    std::vector<gp_Vec> shell;
+    for (const std::size_t m : members) {
+      hulls.push_back(region_hull(spec.patches.at(member_patch[m]).regions.at(membership[m].region),
+                                  embeddings[member_patch[m]]));
+      shell.insert(shell.end(), hulls.back().directions.begin(), hulls.back().directions.end());
+    }
+    std::vector<bool> suspect(hulls.size(), false);
+    for (std::size_t i = 0; i < hulls.size(); ++i) {
+      for (std::size_t j = i + 1; j < hulls.size(); ++j) {
+        // A pair whose two regions are both suspects already adds nothing.
+        if (suspect[i] && suspect[j]) continue;
+        const auto& first = membership[members[i]].domain;
+        const auto& second = membership[members[j]].domain;
+        const double gap = joined_domains(spec, first, second) ? -spec.tolerance : 4 * spec.tolerance;
+        if (!kept_apart(hulls[i], hulls[j], shell, gap)) {
+          if (unshown.empty()) unshown = domain_label(first) + " and " + domain_label(second);
+          suspect[i] = suspect[j] = true;
+        }
+      }
+    }
+    std::vector<std::size_t> result;
+    for (std::size_t i = 0; i < members.size(); ++i) {
+      if (suspect[i]) result.push_back(members[i]);
+    }
+    return result;
+  } catch (const std::exception& error) {
+    unshown = std::string("an outline not read: ") + error.what();
+    return members;
+  } catch (...) {
+    unshown = "an outline not read";
+    return members;
+  }
+}
+
+// Whether OCCT's self-interference check finds faces of `shape` that meet
+// (or fails). The shape is a solid the validity check has passed, or a
+// compound of some of its faces: the checker's own validity check of it
+// (BRepAlgoAPI_Check runs one after the interferences) would only repeat
+// that one (mitcad#2536).
+bool self_interferes(const TopoDS_Shape& shape) {
+  BOPAlgo_ArgumentAnalyzer analyzer;
+  analyzer.SetShape1(shape);
+  analyzer.ArgumentTypeMode() = true;
+  analyzer.SelfInterMode() = true;
+  analyzer.SmallEdgeMode() = false;
+  analyzer.SetRunParallel(true);
+  detail::interruptible([&](const Message_ProgressRange& range) { analyzer.Perform(range); });
+  return analyzer.HasErrors() || analyzer.HasFaulty();
+}
+
+// How many holes of the regions a collision check would look at make
+// building the sheet once more with its holes filled pay off (mitcad#288,
+// mitcad#2536). Each hole adds its walls to the check, which compares every
+// pair of faces whose boxes meet: hundreds (a vent pattern) took most of a
+// minute. A few slots (a box's base, its tabs through them) cost the check
+// less than building every face of the sheet and sewing it a second time,
+// which a tab through a slot then refuses anyway (the filled base meets it).
+constexpr std::size_t kHolesFilledFirst = 16;
+
+// Whether the spec is first built with its holes filled (`filled`, from
+// holes_filled): when the regions planes do not keep apart from the rest
+// of their shell (unshown_regions) hold at least kHolesFilledFirst of the
+// holes filled there. Not when every region is kept apart: then nothing is
+// checked for collisions either way. False for a spec it cannot read; the
+// construction says why.
+bool holes_filled_first(const SheetChartShapeSpec& spec, const SheetChartShapeSpec& filled) {
+  try {
+    std::vector<Embedding> embeddings;
+    std::vector<RegionMembership> membership;
+    std::vector<std::size_t> member_patch;
+    std::vector<std::size_t> holes;
+    for (std::size_t p = 0; p < spec.patches.size(); ++p) {
+      embeddings.push_back(make_embedding(spec.patches[p], spec.thickness, spec.tolerance));
+      for (std::size_t r = 0; r < spec.patches[p].regions.size(); ++r) {
+        membership.push_back({spec.patches[p].domain, r});
+        member_patch.push_back(p);
+        holes.push_back(spec.patches[p].regions[r].loops.size() - filled.patches.at(p).regions.at(r).loops.size());
+      }
+    }
+    // The shells as the construction sews them: patches joined by ports.
+    std::vector<std::size_t> group(spec.patches.size());
+    for (std::size_t p = 0; p < group.size(); ++p) group[p] = p;
+    const auto patch_of = [&](const SheetDomainRef& d) {
+      for (std::size_t p = 0; p < spec.patches.size(); ++p) {
+        if (domain_key(spec.patches[p].domain) == domain_key(d)) return p;
+      }
+      throw std::invalid_argument("sheet port refers to an unknown domain");
+    };
+    const std::function<std::size_t(std::size_t)> root = [&](std::size_t p) {
+      return group[p] == p ? p : group[p] = root(group[p]);
+    };
+    for (const auto& port : spec.ports) {
+      group[root(patch_of(port.first.boundary.domain))] = root(patch_of(port.second.boundary.domain));
+    }
+    std::map<std::size_t, std::vector<std::size_t>> shells;
+    for (std::size_t m = 0; m < membership.size(); ++m) shells[root(member_patch[m])].push_back(m);
+    std::size_t checked = 0;
+    for (const auto& entry : shells) {
+      std::string unshown;
+      for (const std::size_t m : unshown_regions(spec, embeddings, membership, member_patch, entry.second, unshown)) {
+        checked += holes[m];
+      }
+    }
+    return checked >= kHolesFilledFirst;
+  } catch (...) {
+    return false;
+  }
+}
+
 } // namespace
 
 SheetChartGeometry sheet_shape(const SheetChartShapeSpec& spec) {
@@ -977,30 +1615,35 @@ SheetChartGeometry sheet_shape(const SheetChartShapeSpec& spec) {
     // their panel's caps, which took most of a minute (mitcad#288). The
     // charts with their holes filled are checked instead; only where those
     // intersect (material through a window) is the sheet itself checked.
-    if (const auto filled = holes_filled(spec)) {
+    // That costs a second construction, which pays only for many holes
+    // where the check looks (holes_filled_first, mitcad#2536).
+    if (const auto filled = holes_filled(spec); filled && holes_filled_first(spec, *filled)) {
       bool clear = false;
       try {
-        construct(*filled, true);
+        construct(*filled, Pass::Clearance);
         clear = true;
       } catch (const std::invalid_argument&) {
       } catch (const std::runtime_error&) {
       }
-      return construct(spec, !clear);
+      return construct(spec, clear ? Pass::Unchecked : Pass::Checked);
     }
-    return construct(spec, true);
+    return construct(spec, Pass::Checked);
   });
 }
 
 namespace {
 
-SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisions) {
+SheetChartGeometry construct(const SheetChartShapeSpec& spec, Pass pass) {
+  const bool check_collisions = pass != Pass::Unchecked;
+  const bool clearance = pass == Pass::Clearance;
   {
+    ShapeTiming timing;
     std::set<std::string> identities;
     std::vector<Embedding> embeddings;
     std::vector<RegionMembership> membership;
     for (const auto& patch : spec.patches) {
       if (!identities.insert(domain_key(patch.domain)).second) throw std::invalid_argument("sheet chart identity is duplicated");
-      embeddings.push_back(make_embedding(patch, spec.thickness));
+      embeddings.push_back(make_embedding(patch, spec.thickness, spec.tolerance));
       if (patch.regions.empty()) throw std::invalid_argument("sheet chart has no material regions");
     }
     auto ports = make_ports(spec, embeddings);
@@ -1016,6 +1659,7 @@ SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisi
     for (const auto& port : ports) {
       if (port.uses[0] != 2 || port.uses[1] != 2) throw std::invalid_argument("sheet port must join exactly two material regions");
     }
+    timing.mark(ShapeTiming::Faces);
     // Domains joined by ports form one shell; each such group is sewn on its
     // own, so that walls of separate groups that coincide (coplanar panels
     // meeting along a boundary no port pairs, mitcad#242) are not sewn into
@@ -1091,42 +1735,78 @@ SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisi
         BRepBuilderAPI_MakeSolid maker(shell);
         TopoDS_Solid solid = maker.Solid();
         if (!BRepLib::OrientClosedSolid(solid)) throw std::runtime_error("sheet chart shell has no consistent material side");
+        timing.mark(ShapeTiming::Sew);
         // Walls of this shell that meet where no port joins them: the
         // checker refuses a solid whose walls touch over a face or pass
         // through each other; the self-interference check below finds walls
         // that meet at all (mitcad#1409).
-        const auto meeting = [&] {
-          std::vector<std::size_t> group_members;
-          for (const NamedFace* face : mine) group_members.push_back(face->member);
-          std::sort(group_members.begin(), group_members.end());
-          group_members.erase(std::unique(group_members.begin(), group_members.end()), group_members.end());
-          return meeting_walls(spec, embeddings, membership, member_patch, group_members);
+        std::vector<std::size_t> group_members;
+        for (const NamedFace* face : mine) group_members.push_back(face->member);
+        std::sort(group_members.begin(), group_members.end());
+        group_members.erase(std::unique(group_members.begin(), group_members.end()), group_members.end());
+        const auto meeting = [&](const std::vector<std::size_t>& regions) {
+          return meeting_walls(spec, embeddings, membership, member_patch, regions);
         };
         try {
           detail::require_valid(solid, "sheet chart solid");
         } catch (const std::runtime_error&) {
+          // With the holes filled only whether the shell holds counts.
+          if (clearance) throw;
           std::optional<WallMeeting> found;
           try {
-            found = meeting();
+            found = meeting(group_members);
           } catch (const std::invalid_argument&) {
           }
           if (!found) throw;
           throw meeting_refusal(*found, membership);
         }
+        timing.mark(ShapeTiming::Valid);
         // Topological validity alone permits intersecting nonadjacent walls
         // in a connected folded sheet. Check geometric self-interference as
         // well; where faces meet, walls that touch only along a line or at a
-        // point are kept, the others refused naming both.
+        // point are kept, the others refused naming both. Regions that
+        // planes keep apart pair by pair cannot meet: the check could find
+        // nothing then and is not run (mitcad#2444). Otherwise it looks at
+        // the faces of the regions not kept apart only (mitcad#2536): a
+        // face of any other region is kept apart from every region of the
+        // shell, so it meets none, and walls that meet are two of those
+        // regions, which is all meeting_walls then needs to compare.
         if (check_collisions) {
-          BRepAlgoAPI_Check collision;
-          collision.SetData(solid, false, true);
-          detail::interruptible([&](const Message_ProgressRange& range) { collision.Perform(range); });
-          if (collision.HasErrors() || !collision.IsValid()) {
-            if (const auto found = meeting()) {
-              throw meeting_refusal(*found, membership);
+          std::string unshown;
+          const auto suspects = unshown_regions(spec, embeddings, membership, member_patch, group_members, unshown);
+          timing.shell(suspects.size(), group_members.size(), unshown);
+          if (!suspects.empty()) {
+            TopoDS_Shape checked = solid;
+            if (suspects.size() < group_members.size()) {
+              NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> in_solid;
+              TopExp::MapShapes(solid, TopAbs_FACE, in_solid);
+              TopoDS_Compound faces_of;
+              BRep_Builder builder;
+              builder.MakeCompound(faces_of);
+              bool all_found = true;
+              for (std::size_t i = 0; i < mine.size(); ++i) {
+                if (!std::binary_search(suspects.begin(), suspects.end(), mine[i]->member)) continue;
+                const auto& sewn = images[i];
+                const auto image = sewing.IsModifiedSubShape(sewn) ? sewing.ModifiedSubShape(sewn) : sewn;
+                if (in_solid.Contains(image)) builder.Add(faces_of, image);
+                else all_found = false;
+              }
+              // A face not found in the solid as such: the solid is checked
+              // whole, as before.
+              if (all_found) checked = faces_of;
+            }
+            if (self_interferes(checked)) {
+              if (clearance) throw std::invalid_argument("sheet material charts intersect in the current configuration");
+              if (const auto found = meeting(suspects)) {
+                throw meeting_refusal(*found, membership);
+              }
             }
           }
         }
+        timing.mark(ShapeTiming::Collisions);
+        // With the holes filled the shells are what was asked: the sheet
+        // itself is built next, named and fused there.
+        if (clearance) continue;
         detail::FaceNamer namer(solid);
         std::set<std::size_t> members;
         for (std::size_t i = 0; i < mine.size(); ++i) {
@@ -1143,11 +1823,17 @@ SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisi
           output.membership.push_back(membership[member]);
         }
         result.solids.push_back(std::move(output));
+        timing.mark(ShapeTiming::Names);
       }
     };
     for (const std::size_t current : roots) sew(current);
+    if (clearance) {
+      timing.print(spec.patches.size(), faces.size(), true);
+      return result;
+    }
     if (std::find(seen.begin(), seen.end(), false) != seen.end()) throw std::runtime_error("sheet chart construction lost a material region");
     fuse_coplanar(result, spec, embeddings);
+    timing.mark(ShapeTiming::Fuse);
     for (std::size_t i = 0; i < result.solids.size(); ++i) for (std::size_t j = i + 1; j < result.solids.size(); ++j) {
       detail::Interrupt interrupt;
       BRepExtrema_DistShapeShape distance(result.solids[i].shape->occt(), result.solids[j].shape->occt(),
@@ -1157,6 +1843,8 @@ SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisi
         throw std::invalid_argument("sheet material regions overlap or touch without a paired port");
       }
     }
+    timing.mark(ShapeTiming::Apart);
+    timing.print(spec.patches.size(), faces.size());
     return result;
   }
 }

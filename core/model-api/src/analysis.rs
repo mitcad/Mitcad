@@ -29,11 +29,31 @@ use mitcad_model::internal::joints::path_component;
 use mitcad_model::kernel::{Kernel, KernelError, Plane};
 use mitcad_model::topo::{EdgeName, FaceName, TopoName, VertexName};
 use mitcad_model::transform::Transform;
-use mitcad_model::{BodyView, Document, MeasurePick};
+use mitcad_model::{BodyView, Document, MeasurePick, ModelError};
 
 /// Size of the shapes that stand for datums in measurements, mm: large
 /// enough to act as unbounded.
 const DATUM_EXTENT: f64 = 1e5;
+
+/// The most pairs an `interference` check of the whole design (no
+/// `bodies`) makes without a warning in its answer (mitcad#2577: about 100
+/// bodies, 4950 pairs, took 159 s over live MCP); 1000 pairs are about 45
+/// bodies.
+const INTERFERENCE_PAIRS_WARNED: usize = 1000;
+
+/// The `interference` answer's warning (mitcad#2577), for an agent: a check
+/// of every body of the design (`whole`) of more pairs than
+/// [`INTERFERENCE_PAIRS_WARNED`].
+fn interference_warning(whole: bool, bodies: usize) -> Option<String> {
+    let pairs = bodies * bodies.saturating_sub(1) / 2;
+    (whole && pairs > INTERFERENCE_PAIRS_WARNED).then(|| {
+        format!(
+            "Every pair of the design's {bodies} bodies was checked ({pairs} pairs, more than \
+             {INTERFERENCE_PAIRS_WARNED}); such a check can take minutes. Give bodies to check \
+             only those that can meet."
+        )
+    })
+}
 
 /// Two planes whose normals are closer than this (radians, either way) are
 /// parallel for Measure's offset (mitcad#646): the tolerance assembly
@@ -819,6 +839,9 @@ impl<K: Kernel> AnalysisApi<K> for Document<K> {
                         pair["volume"].as_f64().unwrap_or(0.0)
                     );
                 }
+                if let Some(warning) = result["warning"].as_str() {
+                    let _ = writeln!(text, "Warning: {warning}");
+                }
             }
             TextQuery::Section(q) => {
                 let result = self.section_json(&q)?;
@@ -1026,6 +1049,13 @@ pub(super) trait AnalysisOps<K: Kernel> {
     /// selection in the error.
     fn placed_body(&self, arg: &SelectionArg, what: &str)
     -> Result<PlacedBody<K::Shape>, ApiError>;
+
+    /// The exact separation of two picks in the design's coordinates
+    /// (mitcad#2519, `min_distance.rs`), as the `measure` query measures
+    /// two selections: each placed by its occurrence, then
+    /// [`Kernel::measure_between`]. Not kept: the caller keeps it by
+    /// [`AnalysisOps::picks_key`].
+    fn pick_separation(&self, a: &MeasurePick, b: &MeasurePick) -> Result<Separation, ApiError>;
 }
 
 /// A body placed in the design (mitcad#1737): [`AnalysisOps::placed_body`].
@@ -1335,10 +1365,28 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
     fn interference_json(&self, query: &InterferenceQuery) -> Result<Value, ApiError> {
         let bodies = self.chosen_bodies(&query.bodies)?;
         let shapes: Vec<&K::Shape> = bodies.iter().map(|b| b.shape).collect();
-        let found = self
-            .kernel()
-            .interferences(&shapes, query.min_volume)
-            .map_err(kernel_error("interference"))?;
+        // In a model job (a live MCP query, mitcad#2540) the job's Cancel
+        // stops the pairs' booleans and the query answers that it was
+        // cancelled; for tests the job's delay
+        // (RecomputeMonitor::set_test_delay) makes the check that much
+        // longer, ending early on a cancel.
+        let found = match self.monitor() {
+            Some(monitor) => {
+                monitor.test_pause();
+                if monitor.is_cancelled() {
+                    return Err(ModelError::Cancelled.into());
+                }
+                let found = self.kernel().interruptible(monitor, || {
+                    self.kernel().interferences(&shapes, query.min_volume)
+                });
+                if monitor.is_cancelled() {
+                    return Err(ModelError::Cancelled.into());
+                }
+                found
+            }
+            None => self.kernel().interferences(&shapes, query.min_volume),
+        }
+        .map_err(kernel_error("interference"))?;
         let pairs: Vec<Value> = found
             .iter()
             .map(|i| {
@@ -1346,7 +1394,11 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
                        "names": [bodies[i.first].name, bodies[i.second].name]})
             })
             .collect();
-        Ok(json!({"bodies": bodies.len(), "pairs": pairs}))
+        let mut answer = json!({"bodies": bodies.len(), "pairs": pairs});
+        if let Some(warning) = interference_warning(query.bodies.is_empty(), bodies.len()) {
+            answer["warning"] = json!(warning);
+        }
+        Ok(answer)
     }
 
     fn section_json(&self, query: &SectionQuery) -> Result<Value, ApiError> {
@@ -1501,6 +1553,26 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
             placed: resolved.placed,
             occurrence: resolved.occurrence,
         })
+    }
+
+    fn pick_separation(&self, a: &MeasurePick, b: &MeasurePick) -> Result<Separation, ApiError> {
+        let ra = self.resolve_selection(&selection_arg(a))?;
+        let rb = self.resolve_selection(&selection_arg(b))?;
+        let kernel = self.kernel();
+        let (shape_a, shape_b, placed) = common_frame(kernel, &ra, &rb, "minimum distance")?;
+        let between = kernel
+            .measure_between(
+                &Selection {
+                    shape: &shape_a,
+                    name: ra.name.as_ref(),
+                },
+                &Selection {
+                    shape: &shape_b,
+                    name: rb.name.as_ref(),
+                },
+            )
+            .map_err(kernel_error("minimum distance"))?;
+        Ok(moved_separation(between, &placed))
     }
 }
 
@@ -3072,4 +3144,57 @@ pub(super) fn chosen_bodies<'a, K: Kernel>(
     uids: &[BodyUid],
 ) -> Result<Vec<BodyView<'a, K::Shape>>, ApiError> {
     doc.chosen_bodies(uids)
+}
+
+/// A picked edge's curves (every edge its name gives) in its body's
+/// coordinates and the placement that puts them where the design shows
+/// them, for the curvature comb (mitcad#2520, `curvature_comb.rs`), which
+/// cannot reach the local trait. `item` is a selection as `measure` takes
+/// it (`{"body", "edge", "occurrence"}`); anything but an edge is refused.
+pub(super) fn picked_edge_curves<K: Kernel>(
+    doc: &Document<K>,
+    item: &Value,
+) -> Result<(Vec<mitcad_model::kernel::Curve3>, Transform), ApiError> {
+    let arg: SelectionArg = parse(item.clone(), "an edge")?;
+    let resolved = doc.resolve_selection(&arg)?;
+    let Some(name @ TopoName::Edge(_)) = &resolved.name else {
+        return Err(ApiError(format!("{} is not an edge", arg.describe())));
+    };
+    let curves = doc
+        .kernel()
+        .curves_of(&resolved.shape, name)
+        .map_err(kernel_error("curvature comb"))?;
+    Ok((curves, resolved.placed))
+}
+
+/// Where a component's geometry (a sketch's) is in the design: placed by
+/// `occurrence` (a path by ids or names), else by the component's only
+/// placement; the identity in the root (mitcad#2520).
+pub(super) fn component_placement<K: Kernel>(
+    doc: &Document<K>,
+    owner: ComponentUid,
+    occurrence: Option<&str>,
+    what: &str,
+) -> Result<Transform, ApiError> {
+    let path = occurrence
+        .map(|text| doc.occurrence_path(text))
+        .transpose()?;
+    doc.selection_transform(Some(owner), path.as_ref(), what)
+}
+
+#[cfg(test)]
+mod interference_warning_tests {
+    use super::{INTERFERENCE_PAIRS_WARNED, interference_warning};
+
+    #[test]
+    fn a_whole_design_of_many_pairs_is_warned_and_chosen_bodies_are_not() {
+        // 45 bodies: 990 pairs, under the limit of 1000; 46: 1035, over it.
+        assert_eq!(INTERFERENCE_PAIRS_WARNED, 1000);
+        assert_eq!(interference_warning(true, 45), None);
+        let warning = interference_warning(true, 46).unwrap();
+        assert!(warning.contains("1035 pairs"), "{warning}");
+        // The bodies given: what was asked for, no warning.
+        assert_eq!(interference_warning(false, 100), None);
+        assert_eq!(interference_warning(true, 0), None);
+    }
 }

@@ -893,6 +893,24 @@ fn crossings(a: &Prim, b: &Prim, tol: f64) -> Vec<(f64, f64)> {
 }
 
 impl Piece {
+    /// How far a point lies from it (mm): from a line or an arc exactly,
+    /// from a polyline's segments, from a B-spline's points within
+    /// [`SPLINE_SAMPLES`].
+    pub fn distance(&self, p: P2) -> f64 {
+        self.prims()
+            .iter()
+            .map(|(prim, _, _)| prim.nearest(p).1)
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    /// Its points from its start to its end, arcs in steps of at most 2
+    /// degrees.
+    pub fn flattened(&self) -> Vec<P2> {
+        let mut out = vec![self.start()];
+        self.flatten_into(&mut out);
+        out
+    }
+
     /// Its lines and arcs, each with the parameter it starts at and the
     /// span of the piece's parameter it covers.
     fn prims(&self) -> Vec<(Prim, f64, f64)> {
@@ -2081,14 +2099,25 @@ mod tests;
 
 // --- Kerf compensation and nesting (mitcad#1939) ------------------------------
 
+/// How far apart the ends of two moved pieces may lie and still meet
+/// (mm): pieces that run on from one another at a tangent.
+const KERF_JOINT: f64 = 1e-6;
+
 /// The loops with the cutting beam's path moved half of `kerf` away from
 /// the material (mitcad#1939): an outer boundary out, a hole in, so that
-/// the cut leaves the part at its size. Each loop is flattened (arcs and
-/// splines as lines within their deflection) and every edge moved along
-/// its normal away from the material (the right of its direction, the
-/// material being on the left), the corners mitred, a mitre longer than
-/// four times the offset bevelled. A kerf of 0 leaves the loops as they
-/// are.
+/// the cut leaves the part at its size. Every piece is moved along its
+/// normal away from the material (the right of its direction, the
+/// material being on the left): a line as a line, an arc as an arc about
+/// its centre with its radius grown or shrunk by half the kerf
+/// (mitcad#2570), so that a circle stays a circle for the DXF, the SVG
+/// and the cutting program's G2 and G3. Polylines, B-splines and an arc
+/// that curves into the material no wider than half the kerf are
+/// flattened (within their deflection) and their segments moved as lines.
+/// Where two lines meet, the corner is mitred, a mitre longer than four
+/// times the offset bevelled; where an arc meets another piece at a
+/// corner, the path turns round the outside of the corner on an arc of
+/// half the kerf about it, and on the inside of a corner the two moved
+/// pieces end where they cross. A kerf of 0 leaves the loops as they are.
 pub fn kerf_compensated(loops: &[OutlineLoop], kerf: f64) -> Vec<OutlineLoop> {
     if kerf.is_nan() || kerf <= 0.0 {
         return loops.to_vec();
@@ -2096,54 +2125,277 @@ pub fn kerf_compensated(loops: &[OutlineLoop], kerf: f64) -> Vec<OutlineLoop> {
     let d = kerf / 2.0;
     loops
         .iter()
-        .map(|l| {
-            let points = offset_polygon(&l.polygon(), d);
-            let n = points.len();
-            OutlineLoop {
-                outer: l.outer,
-                pieces: (0..n)
-                    .map(|i| Piece::Line(points[i], points[(i + 1) % n]))
-                    .collect(),
-            }
+        .map(|l| OutlineLoop {
+            outer: l.outer,
+            pieces: offset_loop(&l.pieces, d),
         })
         .collect()
 }
 
-/// A closed polygon's edges moved `d` to their right, corners mitred.
-fn offset_polygon(points: &[P2], d: f64) -> Vec<P2> {
-    let n = points.len();
-    if n < 3 {
-        return points.to_vec();
+/// The unit normal right of a direction, None for no direction.
+fn right_of(e: P2) -> Option<P2> {
+    let len = norm(e);
+    (len > 1e-12).then_some([e[1] / len, -e[0] / len])
+}
+
+/// The lines between points that lie apart.
+fn push_lines(points: &[P2], out: &mut Vec<Piece>) {
+    for w in points.windows(2) {
+        if dist(w[0], w[1]) > 1e-12 {
+            out.push(Piece::Line(w[0], w[1]));
+        }
     }
-    let right = |a: P2, b: P2| {
-        let e = sub(b, a);
-        let len = (e[0] * e[0] + e[1] * e[1]).sqrt();
-        if len <= 1e-12 {
-            None
-        } else {
-            Some([e[1] / len, -e[0] / len])
+}
+
+/// A loop's pieces as the lines and arcs its offset by `d` moves: lines
+/// and arcs as they are, an arc curving into the material no wider than
+/// `d` and every other piece as the lines between its points.
+fn offset_elements(pieces: &[Piece], d: f64) -> Vec<Piece> {
+    let mut out = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        match piece {
+            Piece::Line(a, b) => push_lines(&[*a, *b], &mut out),
+            // A clockwise arc has the material outside its circle: the
+            // path runs inside it, half the kerf nearer the centre.
+            Piece::Arc { radius, sweep, .. }
+                if radius * sweep.abs() > 1e-12 && (*sweep > 0.0 || radius - d > KERF_JOINT) =>
+            {
+                out.push(piece.clone())
+            }
+            _ => push_lines(&piece.flattened(), &mut out),
         }
-    };
-    // The edges that have a length, each with its normal.
-    let edges: Vec<(usize, P2)> = (0..n)
-        .filter_map(|i| right(points[i], points[(i + 1) % n]).map(|r| (i, r)))
-        .collect();
-    let m = edges.len();
-    let mut out = Vec::with_capacity(m + 4);
-    for k in 0..m {
-        let (i, n1) = edges[k];
-        let n0 = edges[(k + m - 1) % m].1;
-        let p = points[i];
-        let cos = n0[0] * n1[0] + n0[1] * n1[1];
-        let s = 1.0 + cos;
-        let miter = [(n0[0] + n1[0]) / s, (n0[1] + n1[1]) / s];
-        let length = (miter[0] * miter[0] + miter[1] * miter[1]).sqrt();
-        if s > 1e-9 && length <= 4.0 {
-            out.push([p[0] + d * miter[0], p[1] + d * miter[1]]);
-        } else {
-            out.push([p[0] + d * n0[0], p[1] + d * n0[1]]);
-            out.push([p[0] + d * n1[0], p[1] + d * n1[1]]);
+    }
+    out
+}
+
+/// A line or an arc moved `d` to its right.
+fn moved_right(piece: &Piece, d: f64) -> Piece {
+    match piece {
+        Piece::Line(a, b) => {
+            let n = scale(right_of(sub(*b, *a)).unwrap_or([0.0, 0.0]), d);
+            Piece::Line(add(*a, n), add(*b, n))
         }
+        Piece::Arc {
+            center,
+            radius,
+            start,
+            sweep,
+        } => Piece::Arc {
+            center: *center,
+            radius: radius + d * sweep.signum(),
+            start: *start,
+            sweep: *sweep,
+        },
+        other => other.clone(),
+    }
+}
+
+/// The unit direction a line or an arc runs in at its start, or at its
+/// end with `at_end`.
+fn direction(piece: &Piece, at_end: bool) -> P2 {
+    match piece {
+        Piece::Arc { start, sweep, .. } => {
+            let a = if at_end { start + sweep } else { *start };
+            let s = sweep.signum();
+            [-a.sin() * s, a.cos() * s]
+        }
+        _ => {
+            let e = sub(piece.end(), piece.start());
+            let l = norm(e);
+            if l > 0.0 {
+                scale(e, 1.0 / l)
+            } else {
+                [1.0, 0.0]
+            }
+        }
+    }
+}
+
+/// Where the line through `p` and `q` crosses the circle about `c` of
+/// radius `r`.
+fn line_circle(p: P2, q: P2, c: P2, r: f64) -> Vec<P2> {
+    let e = sub(q, p);
+    let l = norm(e);
+    if l <= 1e-12 {
+        return Vec::new();
+    }
+    let u = scale(e, 1.0 / l);
+    let foot = add(p, scale(u, dot2(sub(c, p), u)));
+    let h2 = r * r - dot2(sub(c, foot), sub(c, foot));
+    if h2 < -1e-12 * r.max(1.0) {
+        return Vec::new();
+    }
+    let h = h2.max(0.0).sqrt();
+    vec![sub(foot, scale(u, h)), add(foot, scale(u, h))]
+}
+
+/// Where two circles cross.
+fn circle_circle(c1: P2, r1: f64, c2: P2, r2: f64) -> Vec<P2> {
+    let e = sub(c2, c1);
+    let l = norm(e);
+    if l <= 1e-12 {
+        return Vec::new();
+    }
+    let a = (r1 * r1 - r2 * r2 + l * l) / (2.0 * l);
+    let h2 = r1 * r1 - a * a;
+    if h2 < -1e-12 * r1.max(1.0) {
+        return Vec::new();
+    }
+    let h = h2.max(0.0).sqrt();
+    let m = add(c1, scale(e, a / l));
+    let across = [-e[1] / l, e[0] / l];
+    vec![add(m, scale(across, h)), sub(m, scale(across, h))]
+}
+
+/// Where the line or circle of one moved piece crosses the other's (two
+/// lines are mitred, not crossed here).
+fn meets(a: &Piece, b: &Piece) -> Vec<P2> {
+    match (a, b) {
+        (Piece::Line(p, q), Piece::Arc { center, radius, .. })
+        | (Piece::Arc { center, radius, .. }, Piece::Line(p, q)) => {
+            line_circle(*p, *q, *center, *radius)
+        }
+        (
+            Piece::Arc {
+                center: c1,
+                radius: r1,
+                ..
+            },
+            Piece::Arc {
+                center: c2,
+                radius: r2,
+                ..
+            },
+        ) => circle_circle(*c1, *r1, *c2, *r2),
+        _ => Vec::new(),
+    }
+}
+
+/// A moved line or arc cut back to end at `p` (to start there unless
+/// `at_end`), a point on its line or circle; None when that would leave
+/// nothing of it or lengthen it.
+fn trimmed(piece: &Piece, p: P2, at_end: bool) -> Option<Piece> {
+    match piece {
+        Piece::Line(a, b) => {
+            let e = sub(*b, *a);
+            let l2 = dot2(e, e);
+            let t = if l2 > 0.0 {
+                dot2(sub(p, *a), e) / l2
+            } else {
+                0.0
+            };
+            let kept = if at_end { t } else { 1.0 - t };
+            let shortened = kept > 1e-12 && kept <= 1.0 + 1e-9;
+            if !shortened {
+                return None;
+            }
+            Some(if at_end {
+                Piece::Line(*a, p)
+            } else {
+                Piece::Line(p, *b)
+            })
+        }
+        Piece::Arc {
+            center,
+            radius,
+            start,
+            sweep,
+        } => {
+            let angle = (p[1] - center[1]).atan2(p[0] - center[0]);
+            let wrap = |x: f64| (x + PI).rem_euclid(TAU) - PI;
+            let (from, by) = if at_end {
+                (*start, sweep + wrap(angle - (start + sweep)))
+            } else {
+                let delta = wrap(angle - start);
+                (start + delta, sweep - delta)
+            };
+            (by * sweep > 0.0 && by.abs() <= sweep.abs() + 1e-9).then_some(Piece::Arc {
+                center: *center,
+                radius: *radius,
+                start: from,
+                sweep: by,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// A closed loop's pieces moved `d` to their right (see
+/// [`kerf_compensated`]).
+fn offset_loop(pieces: &[Piece], d: f64) -> Vec<Piece> {
+    let elements = offset_elements(pieces, d);
+    let n = elements.len();
+    if n == 0 {
+        return elements;
+    }
+    let mut moved: Vec<Piece> = elements.iter().map(|p| moved_right(p, d)).collect();
+    // What joins the piece before each to it where their ends part.
+    let mut joints: Vec<Option<Piece>> = vec![None; n];
+    for k in 0..n {
+        let prev = (k + n - 1) % n;
+        let corner = elements[k].start();
+        let (before, after) = (&elements[prev], &elements[k]);
+        if n > 1
+            && let (Piece::Line(..), Piece::Line(..)) = (before, after)
+        {
+            let n0 = right_of(direction(before, true)).unwrap_or([0.0, 0.0]);
+            let n1 = right_of(direction(after, false)).unwrap_or([0.0, 0.0]);
+            let s = 1.0 + dot2(n0, n1);
+            let miter = scale(add(n0, n1), 1.0 / s);
+            let (end, start) = if s > 1e-9 && norm(miter) <= 4.0 {
+                let p = add(corner, scale(miter, d));
+                (p, p)
+            } else {
+                let (p, q) = (add(corner, scale(n0, d)), add(corner, scale(n1, d)));
+                joints[k] = Some(Piece::Line(p, q));
+                (p, q)
+            };
+            moved[prev] = Piece::Line(moved[prev].start(), end);
+            moved[k] = Piece::Line(start, moved[k].end());
+            continue;
+        }
+        let (end, start) = (moved[prev].end(), moved[k].start());
+        if dist(end, start) <= KERF_JOINT {
+            continue;
+        }
+        let turn = cross2(direction(before, true), direction(after, false));
+        let (u, v) = (sub(end, corner), sub(start, corner));
+        if turn > 1e-9 && cross2(u, v) > 0.0 {
+            // The outside of the corner: the beam turns about it.
+            joints[k] = Some(Piece::Arc {
+                center: corner,
+                radius: d,
+                start: u[1].atan2(u[0]),
+                sweep: cross2(u, v).atan2(dot2(u, v)),
+            });
+            continue;
+        }
+        // The inside: both end where they cross nearest the corner.
+        let near = lerp(end, start, 0.5);
+        let cut = meets(&moved[prev], &moved[k])
+            .into_iter()
+            .min_by(|p, q| dist(*p, near).total_cmp(&dist(*q, near)))
+            .and_then(|p| {
+                Some((
+                    trimmed(&moved[prev], p, true)?,
+                    trimmed(&moved[k], p, false)?,
+                ))
+            });
+        match cut {
+            Some((x, y)) if turn < -1e-9 => {
+                moved[prev] = x;
+                moved[k] = y;
+            }
+            // They cannot be cut back to one point: a straight line from
+            // one to the other, which the cutting checks find too near
+            // the part.
+            _ => joints[k] = Some(Piece::Line(end, start)),
+        }
+    }
+    let mut out = Vec::with_capacity(2 * n);
+    for (joint, piece) in joints.into_iter().zip(moved) {
+        out.extend(joint);
+        out.push(piece);
     }
     out
 }
@@ -2186,6 +2438,8 @@ pub fn nest(sizes: &[(f64, f64)], width: f64, gap: f64) -> Vec<(P2, f64)> {
 
 #[cfg(test)]
 mod kerf_tests {
+    use std::f64::consts::FRAC_PI_2;
+
     use super::*;
 
     fn square(outer: bool, size: f64) -> OutlineLoop {
@@ -2214,6 +2468,173 @@ mod kerf_tests {
             kerf_compensated(&[square(true, 10.0)], 0.0)[0],
             square(true, 10.0)
         );
+    }
+
+    fn arc(center: P2, radius: f64, start: f64, sweep: f64) -> Piece {
+        Piece::Arc {
+            center,
+            radius,
+            start,
+            sweep,
+        }
+    }
+
+    /// Every point of a moved loop lies `d` from the part's loop, no
+    /// nearer and no farther: the beam's path is the exact offset. Where
+    /// two lines meet the path is mitred (see [`kerf_compensated`]): the
+    /// points of `mitres`, each at a right-angled corner of the part, lie
+    /// `d` times the square root of two from it.
+    fn exactly_off(path: &OutlineLoop, part: &OutlineLoop, d: f64, mitres: &[P2]) {
+        let points = path.polygon();
+        for m in mitres {
+            assert!(
+                points.iter().any(|p| dist(*p, *m) < 1e-9),
+                "no mitre at {m:?}: {path:?}"
+            );
+        }
+        for p in points {
+            let nearest = part
+                .pieces
+                .iter()
+                .map(|piece| piece.distance(p))
+                .fold(f64::INFINITY, f64::min);
+            let wanted = if mitres.iter().any(|m| dist(p, *m) < 1e-9) {
+                d * 2f64.sqrt()
+            } else {
+                d
+            };
+            assert!((nearest - wanted).abs() < 1e-9, "{p:?} {nearest}: {path:?}");
+        }
+        // End to end.
+        let n = path.pieces.len();
+        for i in 0..n {
+            let (a, b) = (path.pieces[i].end(), path.pieces[(i + 1) % n].start());
+            assert!(dist(a, b) < 1e-6, "{i}: {path:?}");
+        }
+    }
+
+    fn arcs(l: &OutlineLoop) -> Vec<(P2, f64, f64)> {
+        l.pieces
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Arc {
+                    center,
+                    radius,
+                    sweep,
+                    ..
+                } => Some((*center, *radius, *sweep)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Arcs stay arcs (mitcad#2570): a plate with rounded corners grows
+    /// its corners' radii by half the kerf, a round hole shrinks by it,
+    /// each still one circle about its centre.
+    #[test]
+    fn arcs_move_as_arcs_about_their_centres() {
+        let (r, d) = (3.0, 0.75);
+        // A 40 x 20 plate with corners rounded 3, counter-clockwise.
+        let mut pieces = Vec::new();
+        let corners = [[37.0, 3.0], [37.0, 17.0], [3.0, 17.0], [3.0, 3.0]];
+        for (k, c) in corners.iter().enumerate() {
+            let a = (k as f64 - 1.0) * FRAC_PI_2;
+            let before = polar(*c, r, a);
+            let prev = corners[(k + 3) % 4];
+            pieces.push(Piece::Line(polar(prev, r, a), before));
+            pieces.push(arc(*c, r, a, FRAC_PI_2));
+        }
+        let plate = OutlineLoop {
+            outer: true,
+            pieces,
+        };
+        let hole = OutlineLoop {
+            outer: false,
+            pieces: vec![arc([20.0, 10.0], 4.0, 0.0, -TAU)],
+        };
+        let out = kerf_compensated(&[plate.clone(), hole.clone()], 2.0 * d);
+        assert_eq!(out[0].pieces.len(), 8, "no joint at a tangent");
+        for (center, radius, sweep) in arcs(&out[0]) {
+            assert!(corners.contains(&center));
+            assert!((radius - (r + d)).abs() < 1e-12);
+            assert!((sweep - FRAC_PI_2).abs() < 1e-12);
+        }
+        assert_eq!(arcs(&out[1]), vec![([20.0, 10.0], 4.0 - d, -TAU)]);
+        exactly_off(&out[0], &plate, d, &[]);
+        exactly_off(&out[1], &hole, d, &[]);
+    }
+
+    /// Where an arc meets a line at a corner (mitcad#2570): round the
+    /// outside of the corner the beam turns about it on an arc of half the
+    /// kerf; on the inside the moved arc and line end where they cross.
+    #[test]
+    fn corners_at_arcs_are_turned_round_or_cut_back() {
+        let d = 0.5;
+        // A 40 x 20 plate with a half-round notch of radius 5 in the
+        // middle of its lower edge: the notch's corners are on the
+        // outside.
+        let plate = OutlineLoop {
+            outer: true,
+            pieces: vec![
+                Piece::Line([0.0, 0.0], [15.0, 0.0]),
+                arc([20.0, 0.0], 5.0, PI, -PI),
+                Piece::Line([25.0, 0.0], [40.0, 0.0]),
+                Piece::Line([40.0, 0.0], [40.0, 20.0]),
+                Piece::Line([40.0, 20.0], [0.0, 20.0]),
+                Piece::Line([0.0, 20.0], [0.0, 0.0]),
+            ],
+        };
+        let out = &kerf_compensated(std::slice::from_ref(&plate), 2.0 * d)[0];
+        // The plate's square corners, where two lines meet, are mitred.
+        let mitres = [
+            [-d, -d],
+            [40.0 + d, -d],
+            [40.0 + d, 20.0 + d],
+            [-d, 20.0 + d],
+        ];
+        exactly_off(out, &plate, d, &mitres);
+        let turns: Vec<(P2, f64, f64)> = arcs(out);
+        assert_eq!(turns.len(), 3, "{out:?}");
+        assert!(turns.contains(&([20.0, 0.0], 4.5, -PI)), "{turns:?}");
+        for corner in [[15.0, 0.0], [25.0, 0.0]] {
+            assert!(
+                turns.iter().any(|(c, r, s)| dist(*c, corner) < 1e-12
+                    && *r == d
+                    && (s - FRAC_PI_2).abs() < 1e-12),
+                "{turns:?}"
+            );
+        }
+
+        // A D-shaped hole: its corners are on the inside.
+        let hole = OutlineLoop {
+            outer: false,
+            pieces: vec![
+                arc([0.0, 0.0], 5.0, PI, -PI),
+                Piece::Line([5.0, 0.0], [-5.0, 0.0]),
+            ],
+        };
+        let out = &kerf_compensated(std::slice::from_ref(&hole), 2.0 * d)[0];
+        exactly_off(out, &hole, d, &[]);
+        assert_eq!(out.pieces.len(), 2, "{out:?}");
+        let x = 20f64.sqrt();
+        assert!(dist(out.pieces[0].start(), [-x, 0.5]) < 1e-12, "{out:?}");
+        assert!(dist(out.pieces[0].end(), [x, 0.5]) < 1e-12, "{out:?}");
+        assert!(matches!(out.pieces[0], Piece::Arc { radius, .. } if radius == 4.5));
+    }
+
+    /// An arc curving into the material tighter than half the kerf cannot
+    /// be followed: it is moved as the lines of its points, as before
+    /// (mitcad#2570), and the path comes nearer the part than half the
+    /// kerf, which the cutting checks refuse.
+    #[test]
+    fn a_hole_narrower_than_the_kerf_is_not_kept_as_an_arc() {
+        let hole = OutlineLoop {
+            outer: false,
+            pieces: vec![arc([0.0, 0.0], 1.0, 0.0, -TAU)],
+        };
+        let out = &kerf_compensated(&[hole], 3.0)[0];
+        assert!(arcs(out).is_empty());
+        assert!(out.pieces.iter().all(|p| matches!(p, Piece::Line(..))));
     }
 
     /// Marks laid on a part (mitcad#1939): a sketch's polyline taken into

@@ -39,6 +39,7 @@
 #include <gp_Torus.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -299,7 +300,7 @@ void test_bottom_rounded_past_corners_tighter_than_the_ball() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_tight_corner) {
   test::guarded("test_bottom_rounded_past_corners_tighter_than_the_ball",
                 test::test_bottom_rounded_past_corners_tighter_than_the_ball);
   if (test::failures == 0) {

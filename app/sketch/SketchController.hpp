@@ -33,6 +33,7 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
+#include "../commands/CurvatureComb.hpp"
 #include "../framework/CommandSession.hpp"
 #include "../framework/NoticeLevel.hpp"
 #include "../framework/ValueStep.hpp"
@@ -173,6 +174,10 @@ struct FieldSpec {
   bool stepAboveMinimum = false;
 };
 
+// A press that moves further than this many pixels starts a drag; a
+// shorter one is a click (the sketch's drags, Trim's sweep, mitcad#2524).
+inline constexpr double kClickPixels = 4.0;
+
 // Entities that a picking tool or a drag accepts.
 enum EntityFilter : unsigned {
   PickPoints = 1u << 0,
@@ -296,6 +301,12 @@ private:
 
   SketchController& m_c;
   int m_depth = 0;
+  // A job computed the model when the action began (mitcad#2500, GitHub
+  // mitcad/Mitcad#706): its undo depth could not be read, so every command
+  // is refused with the busy reason and commit() and rollback() leave the
+  // model alone. ModelBusy never leaves a SketchOp: on macOS a throw out of
+  // a menu's or a key's handler ends the application (mitcad#1382).
+  bool m_busy = false;
   QString m_label;
   bool m_relabel = false; // setLabel() named the step
   QString m_error;
@@ -369,7 +380,9 @@ public:
   // Takes back what the tool has half done (before an undo); the tool
   // stays.
   void resetTool();
-  // Commands on the selection.
+  // Commands on the selection. Delete asked for while a job computes the
+  // model waits for the job and deletes what is selected then only when
+  // that is still what was selected (mitcad#2500, waitForModel).
   void deleteSelection();
   void toggleConstruction();
   // What X converts (mitcad#2040): the selected curves of this sketch,
@@ -385,6 +398,12 @@ public:
   void convertProjected();
   bool selectionHasProjected() const;
   void updateConvertAction();
+  // Profile Boundary (mitcad#2551): the selected curves of the face's
+  // outline the sketch got when it was made bound profiles as drawn curves
+  // do, or no longer when all of them did; whether the selection holds
+  // any (the command is enabled only then).
+  void toggleProfileBoundary();
+  bool selectionHasAutomatic() const;
   void toggleFixed();
   void editDimension(const QString& id);
   // A horizontal or vertical distance made signed or unsigned, its point
@@ -392,7 +411,10 @@ public:
   void setDimensionSigned(const QString& id, bool on);
   // Make Driven / Make Driving (mitcad#2055): dimension `id` made driven,
   // only measuring, or driving at its measured value (`sketch.set_driven`),
-  // one undo step; a refusal is shown in words.
+  // one undo step; a refusal is shown in words. Asked for while a job
+  // computes the model (a menu open as it began), it waits for the job
+  // and checks the sketch and the dimension again (mitcad#2500,
+  // waitForModel).
   void setDimensionDriven(const QString& id, bool driven);
   // The parameter of dimension `id` when it is the sketch's own (a driving
   // dimension's, owned by the sketch, used by no other of its dimensions):
@@ -523,6 +545,17 @@ public:
   // design; a change applies to every document window.
   bool showPoints() const { return m_showPoints; }
   void setShowPoints(bool on);
+  // Curvature comb (mitcad#2520): the combs of the selected curves of this
+  // sketch, else of its splines, conics and ellipses, drawn over the sketch
+  // with their inflection points and read again as the curves change, at
+  // each step of a drag (at the scale the drag started with). A UI
+  // preference (QSettings sketch/curvatureComb, off by default), not in
+  // the design; drawn with Inspect > Curvature Comb's Density and Scale.
+  bool showCurvatureComb() const { return m_showComb; }
+  void setShowCurvatureComb(bool on);
+  // The combs as last read, in sketch coordinates (z = 0); empty while the
+  // option is off.
+  const CurvatureCombDrawing& curvatureComb() const { return m_comb; }
   // Filled regions are rebuilt after a geometry drag, while curves stay live.
   bool draggingGeometry() const { return m_dragging && m_dragDimension.isEmpty(); }
   bool showProfiles() const { return m_showProfiles; }
@@ -751,10 +784,20 @@ public:
   // for a sketch that is not edited (mitcad#1772).
   static double lengthScaleOf(const QString& unit);
 
-  // Model access for SketchOp: throws the model's error.
+  // Model access for SketchOp: throws the model's error (ModelBusy while
+  // a job computes the model).
   QJsonObject runModel(const QJsonObject& command);
   int undoDepth() const;
   QString undoLabel() const;
+  // Whether a user's edit of the sketch (`action`: "Delete", "Make
+  // Driven") can run now: the model computes nothing, or a read in the
+  // background gives way (mitcad#2500, GitHub mitcad/Mitcad#706). If not,
+  // it is logged ("Sketch Delete waits until the model is idle"), the
+  // status line says so, and `again` runs once the job has ended, unless
+  // sketch mode has left this sketch by then ("Sketch Delete not done: the
+  // sketch was closed while the model computed"); `again` checks what the
+  // edit works on once more and asks again itself.
+  bool waitForModel(const QString& action, std::function<void()> again);
 
   // Equal spacing (mitcad#221): the objects an Equal Spacing panel has
   // (its preview's chain is drawn numbered, in the order the model keeps).
@@ -889,6 +932,9 @@ private:
   // saving or logging it again: this window's view and palette follow
   // (mitcad#1764).
   void applyShowPoints(bool on);
+  // The combs read again for the curves the option shows, from the sketch
+  // query's answer last read (mitcad#2520); logged when they change.
+  void updateCurvatureComb();
   // The selection item of a point, curve, constraint or dimension of this
   // sketch (selectItems); false for an id the sketch lacks.
   bool selectionItemOf(const QString& id, SelectionItem& item) const;
@@ -1062,6 +1108,14 @@ private:
   bool m_showPoints = true;
   bool m_showProfiles = true;
   bool m_hideAbove = false;
+  // Curvature comb (mitcad#2520): the option, the sketch query's answer the
+  // combs are read from, the combs, the scale kept through a drag and the
+  // line last logged.
+  bool m_showComb = false;
+  QJsonObject m_combSketch;
+  CurvatureCombDrawing m_comb;
+  double m_combScale = 0.0;
+  QString m_combLogged;
 
   AutoConstraintSession m_auto;
   bool m_autoHover = false;
@@ -1159,6 +1213,8 @@ private:
   V2 m_dragAnchorLast;
   std::optional<std::pair<QString, V2>> m_textOverride;
   QTimer m_dragTimer;
+  // The edits waiting for a job to end (waitForModel, mitcad#2500).
+  QSet<QString> m_waitingEdits;
 
   QVector<Field> m_fields;
   QPointer<QLineEdit> m_editor;

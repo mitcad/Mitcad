@@ -24,6 +24,8 @@ pub mod tables_def;
 pub mod template_def;
 // Cut sheets: flat parts at 1:1 for cutting (mitcad#853).
 pub mod cut_sheet_def;
+// Parameters in a drawing's texts, `{param:Length}` (mitcad#2483).
+pub mod parameter_text;
 
 use serde::{Deserialize, Serialize};
 
@@ -32,8 +34,8 @@ use crate::datum::Vec3;
 // What the kernel works out: the projected views and round holes, below
 // the model (mitcad#777).
 pub use mitcad_model_base::drawing_view::{
-    CutFace, CutPlane, P2, RoundHole, ViewCurve, ViewEdge, ViewEdgeKind, ViewProjection, ViewSpec,
-    ViewSpline,
+    CutBound, CutFace, CutPlane, P2, RoundHole, ViewCurve, ViewEdge, ViewEdgeKind, ViewProjection,
+    ViewSpec, ViewSpline,
 };
 
 // --- The command's options --------------------------------------------------

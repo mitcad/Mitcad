@@ -20,6 +20,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/cancel.hpp"
 #include "mitcad/geometry/sheet_trim.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 using namespace mitcad::geometry;
@@ -257,10 +258,10 @@ void refusals_and_cancellation() {
   CHECK(test::throws_with([&] { sheet_shape(spec); }, "cancelled"));
 }
 
-void connected_material_collision() {
-  // Three quarter-turns produce a long return flange that passes through the
-  // stationary base. Every declared port still meets exactly: graph closure
-  // and ordinary topological validity cannot substitute for collision checks.
+// Three quarter-turns from the L's base (F3, x -30 to 0, z -2 to 0): up
+// (F4, x 3 to 5), across the top (F5, z 21 to 23, x 0 to -20) and down
+// again (F6, x -25 to -23, from z 18 to z -12), through the base.
+SheetChartShapeSpec return_flange() {
   auto spec = uncut_l();
   spec.patches[2].regions = {rectangle(0, 0, 15, 20, "F12")};
   spec.patches[2].embedding = PlaneEmbedding{{{5, 20, 3}, {0, 0, 1}, {0, -1, 0}}, MaterialParity::Negative};
@@ -276,8 +277,66 @@ void connected_material_collision() {
   for (std::size_t i = 1; i < spec.patches.size(); ++i) {
     spec.ports.push_back({static_cast<std::uint32_t>(i), {0, 20}, port_side(spec.patches[i - 1], 1), port_side(spec.patches[i], 3)});
   }
+  return spec;
+}
+
+void connected_material_collision() {
+  // A long return flange passes through the stationary base. Every declared
+  // port still meets exactly: graph closure and ordinary topological
+  // validity cannot substitute for collision checks.
+  const auto spec = return_flange();
   // The refusal names the two walls that pass through each other (mitcad#1409).
   CHECK(test::throws_with([&] { sheet_shape(spec); }, "sheet walls panel F3 slot 0 and panel F6 slot 0 pass through each other"));
+}
+
+// The return flange narrowed to a tab (chart y 6 to 14) where it passes the
+// base (chart x 18 to 20 of its 30), and a window in the base around it
+// (chart x -27 to -21, y `window_from` to `window_from + window_height`),
+// with `holes` small holes elsewhere in the base (mitcad#2536: a folded
+// box's tabs through slots of its base). Only the base and the tab's panel
+// are not kept apart by planes; the collision check looks at their faces.
+SheetChartShapeSpec tab_through_window(double window_from, double window_height, int holes) {
+  auto spec = return_flange();
+  const std::array<gp_Pnt2d, 8> outline{{{0, 0}, {16, 0}, {16, 6}, {30, 6}, {30, 14}, {16, 14}, {16, 20}, {0, 20}}};
+  MaterialRegion tab;
+  MaterialLoop loop;
+  for (std::size_t i = 0; i < outline.size(); ++i) {
+    Segment s; s.kind = SegmentKind::Line; s.start = outline[i]; s.end = outline[(i + 1) % outline.size()];
+    loop.edges.push_back({{"F16:sheet_curve(" + std::to_string(i) + ")", 0}, {s, {0, 1}}});
+  }
+  tab.loops.push_back(loop);
+  spec.patches[6].regions = {tab};
+  // Its port side is the tab's edge 7, x = 0 from y 20 to 0.
+  spec.ports.back().second = port_side(spec.patches[6], 7);
+  auto& base = spec.patches[0].regions.front();
+  base.loops.push_back(rectangle(-27, window_from, 6, window_height, "F17").loops.front());
+  for (int k = 0; k < holes; ++k) {
+    base.loops.push_back(rectangle(-16 + (k % 4) * 3, 3 + (k / 4) * 4, 1, 1, "F" + std::to_string(40 + k)).loops.front());
+  }
+  return spec;
+}
+
+void tab_through_window_checked() {
+  // The tab clears the window by 2 mm all round: one solid, with a few
+  // holes (the sheet checked as it is) and with many (first with its holes
+  // filled, which the tab then meets, so checked as it is after all).
+  for (const int holes : {0, 16}) {
+    const auto result = sheet_shape(tab_through_window(4, 12, holes));
+    CHECK(result.solids.size() == 1);
+    if (result.solids.size() != 1) continue;
+    CHECK(result.solids[0].membership.size() == 7);
+    // The panels' areas (the base less its window and holes, the tab's
+    // panel) and the bends' (three quarter-turns, radii 3 to 5, 20 wide).
+    const double panels = (600 - 72 - holes) + 300 + 400 + (320 + 112);
+    CHECK_NEAR_TOL(volume(*result.solids[0].shape), 2 * panels + 3 * 80 * test::kPi, 1e-6);
+    CHECK(!result.solids[0].shape->find_faces("F6:sheet_front(0)").empty());
+  }
+  // A window that leaves the base's material across the tab (y 9 to 15 for
+  // the tab's 6 to 14): refused, naming the two walls, few holes or many.
+  for (const int holes : {0, 16}) {
+    const auto spec = tab_through_window(9, 6, holes);
+    CHECK(test::throws_with([&] { sheet_shape(spec); }, "sheet walls panel F3 slot 0 and panel F6 slot 0 pass through each other"));
+  }
 }
 
 void concave_corner_union_roundtrip() {
@@ -316,13 +375,14 @@ void concave_corner_union_roundtrip() {
 }
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(sheet_bend) {
   enable_input_checks(true);
   test::guarded("sheet L circle across both seams", actual_circle_across_both_seams);
   test::guarded("sheet L material volumes", uncut_and_rectangular_cut);
   test::guarded("sheet tangent mask and adjacent base panels", tangent_mask_and_adjacent_base_panels);
   test::guarded("sheet chart refusals", refusals_and_cancellation);
   test::guarded("sheet connected material collision", connected_material_collision);
+  test::guarded("sheet tab through a window", tab_through_window_checked);
   test::guarded("sheet concave corner union roundtrip", concave_corner_union_roundtrip);
   CHECK(input_changes().empty());
   if (test::failures == 0) std::puts("test_sheet_bend: all checks passed");

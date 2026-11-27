@@ -72,20 +72,27 @@ make_project() {
 
 # check_versions name: the versions the script recorded, as mitcad-cli
 # lists them: the files there, the renamed and deleted one gone.
+# git's output is read whole first and searched afterwards, never piped
+# into `grep -q` (mitcad#2601): under pipefail, grep -q leaves at its match,
+# git's next line written to the closed pipe ends it with SIGPIPE, and the
+# pipeline fails although the version is there. git writes each commit's
+# line as it goes, so this lost about every second run with git 2.43.
 check_versions() {
-  local dir=$MITCAD_PROJECTS_DIR/$1 tree
+  local dir=$MITCAD_PROJECTS_DIR/$1 tree status subjects subject
   tree=$("$cli" project tree "$dir")
   for line in "  datasheet.pdf  " "  drop.csv  " "  notes.txt  "; do
-    printf '%s\n' "$tree" | grep -qF -- "$line" || ui_fail "$1: '$line' is not in the tree: $tree"
+    grep -qF -- "$line" <<< "$tree" || ui_fail "$1: '$line' is not in the tree: $tree"
   done
-  printf '%s\n' "$tree" | grep -qE 'photo\.png|front\.png|changed|not recorded' &&
+  grep -qE 'photo\.png|front\.png|changed|not recorded' <<< "$tree" &&
     ui_fail "$1: the tree after the run: $tree"
-  git -C "$dir" status --porcelain | grep -q . && ui_fail "$1: git status is not clean: $(git -C "$dir" status --porcelain)"
-  git -C "$dir" log --format=%s | grep -qxF "Add notes.txt" || ui_fail "$1: no version 'Add notes.txt'"
-  git -C "$dir" log --format=%s | grep -qxF "Add drop.csv" || ui_fail "$1: no version 'Add drop.csv'"
-  git -C "$dir" log --format=%s | grep -qxF "Record datasheet.pdf" || ui_fail "$1: no version 'Record datasheet.pdf'"
-  git -C "$dir" log --format=%s | grep -qxF "Move photo.png to front.png" || ui_fail "$1: no version of the rename"
-  git -C "$dir" log --format=%s | grep -qxF "Delete front.png" || ui_fail "$1: no version of the delete"
+  status=$(git -C "$dir" status --porcelain) || ui_fail "$1: git status failed"
+  [ -z "$status" ] || ui_fail "$1: git status is not clean: $status"
+  subjects=$(git -C "$dir" log --format=%s) || ui_fail "$1: git log failed"
+  for subject in "Add notes.txt" "Add drop.csv" "Record datasheet.pdf"; do
+    grep -qxF -- "$subject" <<< "$subjects" || ui_fail "$1: no version '$subject'"
+  done
+  grep -qxF "Move photo.png to front.png" <<< "$subjects" || ui_fail "$1: no version of the rename: $subjects"
+  grep -qxF "Delete front.png" <<< "$subjects" || ui_fail "$1: no version of the delete: $subjects"
   echo "ok   $1: each change is one version"
 }
 

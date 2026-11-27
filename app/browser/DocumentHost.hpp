@@ -357,6 +357,12 @@ public:
   virtual void openExplodeView(const QString& /*name*/) {}
   virtual void showExplodeView(const QString& /*name*/) {}
   virtual QString shownExplodeView() const { return QString(); }
+
+  // Point cloud tools (mitcad#2516, MainWindowPointClouds.cpp): a tool's
+  // panel (`insert.align_point_cloud`, `insert.filter_point_cloud`,
+  // `insert.reconstruct_point_cloud`) opened on a cloud, from its row in
+  // the Browser.
+  virtual void startPointCloudTool(const QString& /*command*/, const QString& /*name*/) {}
 };
 
 } // namespace mitcad

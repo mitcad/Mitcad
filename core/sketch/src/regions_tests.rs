@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use super::EntityUid;
-use super::geometry::Curve2;
+use super::geometry::{Curve2, P2};
 use super::regions::{Region, RegionCurve, regions};
 
 /// `side` × `side` disjoint circles of radius 2 on a 10 mm grid, the
@@ -218,5 +218,227 @@ fn a_dangling_line_leaves_the_side_it_cut_whole() {
         let found = regions(&cut);
         assert_eq!(found.len(), 60);
         assert_eq!(keys_and_areas(&found), keys_and_areas(&regions(&plain)));
+    }
+}
+
+/// A ring between two circles cut by `count` pairs of radial lines turned
+/// about `pivot` (the inner circle's centre), the lines from the inner
+/// circle to the outer one, which is centred at the origin: the lines'
+/// outer ends lie on the outer circle when `pivot` is its centre, else up
+/// to about twice the pivot's offset off it (mitcad#2557).
+fn patterned_ring(pivot: P2, count: u32) -> Vec<RegionCurve> {
+    let (inner, outer) = (15.75, 17.45);
+    let mut curves = vec![
+        RegionCurve::new(
+            EntityUid(1),
+            Curve2::Circle {
+                center: [0.0, 0.0],
+                radius: outer,
+                start: 0.0,
+            },
+        ),
+        RegionCurve::new(
+            EntityUid(2),
+            Curve2::Circle {
+                center: pivot,
+                radius: inner,
+                start: 0.0,
+            },
+        ),
+    ];
+    // The originals about the y axis, their ends on both circles.
+    let originals: Vec<(P2, P2)> = [-0.6_f64, 0.6]
+        .iter()
+        .map(|&x| {
+            let end = [x, (outer * outer - x * x).sqrt()];
+            let dir = [end[0] - pivot[0], end[1] - pivot[1]];
+            let len = dir[0].hypot(dir[1]);
+            let start = [
+                pivot[0] + dir[0] * inner / len,
+                pivot[1] + dir[1] * inner / len,
+            ];
+            (start, end)
+        })
+        .collect();
+    let turn = |p: P2, a: f64| {
+        let (s, c) = a.sin_cos();
+        let d = [p[0] - pivot[0], p[1] - pivot[1]];
+        [
+            pivot[0] + d[0] * c - d[1] * s,
+            pivot[1] + d[0] * s + d[1] * c,
+        ]
+    };
+    let mut id = 3;
+    for k in 0..count {
+        let a = std::f64::consts::TAU * f64::from(k) / f64::from(count);
+        for (start, end) in &originals {
+            curves.push(RegionCurve::new(
+                EntityUid(id),
+                Curve2::Line {
+                    a: turn(*start, a),
+                    b: turn(*end, a),
+                },
+            ));
+            id += 1;
+        }
+    }
+    curves
+}
+
+/// The lines' ends that miss the outer circle, and by how much at most.
+fn misses(curves: &[RegionCurve]) -> (usize, f64) {
+    let mut worst: f64 = 0.0;
+    let mut short = 0;
+    for c in curves {
+        if let Curve2::Line { b, .. } = c.curve {
+            let gap = 17.45 - b[0].hypot(b[1]);
+            if gap > 1e-6 {
+                short += 1;
+            }
+            worst = worst.max(gap);
+        }
+    }
+    (short, worst)
+}
+
+/// An imported sketch's pattern about a centre a nanometre off the circle
+/// its lines end on (mitcad#2557, a ring gear's cut: the inner circle
+/// concentric with an edge of the body 1.06e-6 mm off the outer circle's
+/// centre): the copies' outer ends fall up to 1.1e-6 mm short of the outer
+/// circle, within the designs' resolution, and still cut the ring: 32
+/// pieces and the disc inside, as with the centre exact.
+#[test]
+fn pattern_lines_a_nanometre_short_of_a_circle_still_cut_the_ring() {
+    let exact = regions(&patterned_ring([0.0, 0.0], 16));
+    assert_eq!(exact.len(), 33, "{:?}", keys(&exact));
+    let curves = patterned_ring([-1.0625e-6, 0.0], 16);
+    let (short, worst) = misses(&curves);
+    // As in the design: four ends more than 1e-6 mm short, 1.1e-6 at most.
+    assert!(
+        short == 4 && worst < 1.2e-6,
+        "{short} ends short, {worst} mm"
+    );
+    let found = regions(&curves);
+    assert_eq!(found.len(), 33, "{:?}", keys(&found));
+    let mut areas: Vec<f64> = found.iter().map(|r| r.area).collect();
+    let mut expected: Vec<f64> = exact.iter().map(|r| r.area).collect();
+    areas.sort_by(f64::total_cmp);
+    expected.sort_by(f64::total_cmp);
+    for (a, e) in areas.iter().zip(&expected) {
+        assert!((a - e).abs() < 1e-3, "{areas:?} against {expected:?}");
+    }
+}
+
+/// Ends farther off than the resolution still leave a line dangling: a
+/// line 2e-5 mm short of the outer circle does not cut the ring.
+#[test]
+fn a_line_short_of_a_circle_by_more_than_the_resolution_dangles() {
+    let mut curves = patterned_ring([0.0, 0.0], 2);
+    // The ring cut twice by each pair: four pieces and the disc.
+    assert_eq!(regions(&curves).len(), 5);
+    for c in curves.iter_mut().skip(2) {
+        if let Curve2::Line { b, .. } = &mut c.curve {
+            let r = b[0].hypot(b[1]);
+            let shorter = (r - 2.0 * super::regions::RESOLUTION) / r;
+            *b = [b[0] * shorter, b[1] * shorter];
+        }
+    }
+    let found = regions(&curves);
+    assert_eq!(found.len(), 2, "{:?}", keys(&found));
+}
+
+/// The end points of a line's or an arc's profile geometry; none for a
+/// closed curve.
+fn segment_ends(geometry: &crate::profile::SegmentGeometry) -> Option<(P2, P2)> {
+    use crate::profile::SegmentGeometry;
+    match *geometry {
+        SegmentGeometry::Line { start, end } => Some((start, end)),
+        SegmentGeometry::Arc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+        } => {
+            let at = |a: f64| [center[0] + radius * a.cos(), center[1] + radius * a.sin()];
+            Some((at(start_angle), at(end_angle)))
+        }
+        _ => None,
+    }
+}
+
+/// The largest gap between consecutive segments of the region's loops,
+/// each segment taken in whichever direction continues its loop (as the
+/// profile face's loop check does, `geometry/src/profile.cpp`).
+fn largest_loop_gap(region: &Region) -> f64 {
+    let dist = |a: P2, b: P2| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let mut worst: f64 = 0.0;
+    for lp in &region.profile.loops {
+        let ends: Vec<(P2, P2)> = lp
+            .segments
+            .iter()
+            .filter_map(|s| segment_ends(&s.geometry))
+            .collect();
+        if ends.len() < 2 {
+            continue;
+        }
+        let walk = |reversed: bool| {
+            let start = if reversed { ends[0].1 } else { ends[0].0 };
+            let mut current = if reversed { ends[0].0 } else { ends[0].1 };
+            let mut gap: f64 = 0.0;
+            for &(a, b) in &ends[1..] {
+                let (forward, backward) = (dist(current, a), dist(current, b));
+                gap = gap.max(forward.min(backward));
+                current = if forward <= backward { b } else { a };
+            }
+            gap.max(dist(current, start))
+        };
+        worst = worst.max(walk(false).min(walk(true)));
+    }
+    worst
+}
+
+/// The pieces of the ring patterned about a centre off its circle meet
+/// within the designs' resolution, the gap the profile faces heal
+/// (mitcad#2567): the lines' ends meet the circle there, and no points
+/// farther apart are taken as one.
+#[test]
+fn pattern_lines_short_of_a_circle_leave_no_gap_over_the_resolution() {
+    let found = regions(&patterned_ring([-1.0625e-6, 0.0], 16));
+    assert_eq!(found.len(), 33, "{:?}", keys(&found));
+    for region in &found {
+        let gap = largest_loop_gap(region);
+        assert!(
+            gap <= super::regions::RESOLUTION,
+            "{}: a gap of {gap} mm",
+            region.profile.key
+        );
+    }
+}
+
+/// A rectangle whose top line ends `gap` mm short of the right one's end
+/// (its corner at (10, 10)).
+fn rectangle_open_at_a_corner(gap: f64) -> Vec<RegionCurve> {
+    let mut curves = rectangle(1, [0.0, 0.0], [10.0, 10.0]);
+    // The top line runs from (10, 10) to (0, 10).
+    curves[2].curve = Curve2::Line {
+        a: [10.0 - gap, 10.0],
+        b: [0.0, 10.0],
+    };
+    curves
+}
+
+/// Points over the resolution apart stay apart (mitcad#2567: with the
+/// arrangement's tolerance at the resolution, points up to ten times
+/// farther apart were one vertex, and a profile loop of the pieces had a
+/// gap the profile face does not heal, "it does not connect to the
+/// previous segment of its loop"). Within the resolution the corner closes.
+#[test]
+fn a_corner_open_by_more_than_the_resolution_bounds_no_region() {
+    let closed = regions(&rectangle_open_at_a_corner(5e-6));
+    assert_eq!(closed.len(), 1, "{:?}", keys(&closed));
+    assert!(largest_loop_gap(&closed[0]) <= super::regions::RESOLUTION);
+    for gap in [2e-5, 5e-5, 9e-5] {
+        let open = regions(&rectangle_open_at_a_corner(gap));
+        assert!(open.is_empty(), "a gap of {gap} mm: {:?}", keys(&open));
     }
 }

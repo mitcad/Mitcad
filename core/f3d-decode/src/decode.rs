@@ -390,7 +390,10 @@ pub fn decode(seg: &Segment) -> Decoded {
         timeline.push(TimelineEntry {
             pos,
             id: fid,
-            type_name: classes::known_name(&class),
+            // (A board's hole as a hole where the class table says its
+            // class derives from the hole's, mitcad#2493.)
+            type_name: classes::known_name(&class)
+                .or_else(|| classes::derived_name(&class).filter(|_| seg.is_kind_of(fid, HOLE))),
             class_version: seg.version(o).unwrap_or(0),
             class,
             name,

@@ -2,7 +2,8 @@
 # Linux AppImage (mitcad#18): install rules and the target appimage. After a
 # build (a release build for a release),
 #   cmake --build --preset dev --target appimage
-# makes Mitcad-<version>-x86_64.AppImage in the build directory: one
+# makes Mitcad-<version>-x86_64.AppImage (on aarch64 Linux
+# Mitcad-<version>-aarch64.AppImage) in the build directory: one
 # executable file with Mitcad, mitcad-cli, the Qt and OCCT libraries, Qt's
 # plugins, the icon, a desktop file and the render worker mitcad-render
 # with its libraries, which runs on a Linux desktop
@@ -10,7 +11,7 @@
 # the tools of tools/dev-env/install-appimage-tools.sh).
 # docs/development.md#linux-appimage describes it, tools/appimage-test.sh
 # tests the result, and docs/updates.md#signing-a-release signs it for the
-# automatic updates (the asset linux-x64).
+# automatic updates (the asset linux-x64, on aarch64 linux-arm64).
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   return()
 endif()
@@ -121,7 +122,14 @@ install(FILES "${mitcad_render_install}/oidn/share/doc/OpenImageDenoise/LICENSE.
 
 set(MITCAD_APPIMAGE_TOOLS "$ENV{HOME}/appimage-tools" CACHE PATH
     "linuxdeploy, its Qt plugin, appimagetool and the AppImage runtime (tools/dev-env/install-appimage-tools.sh)")
-set(mitcad_appimage "Mitcad-${PROJECT_VERSION}-x86_64.AppImage")
+# The machine's architecture in AppImage's terms: x86_64, or aarch64 on
+# Linux on 64-bit ARM (packaging/linux/make-appimage.sh takes the same).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(mitcad_appimage_arch aarch64)
+else()
+  set(mitcad_appimage_arch x86_64)
+endif()
+set(mitcad_appimage "Mitcad-${PROJECT_VERSION}-${mitcad_appimage_arch}.AppImage")
 add_custom_target(appimage
   COMMAND "${CMAKE_COMMAND}" -E env
           "CMAKE=${CMAKE_COMMAND}"

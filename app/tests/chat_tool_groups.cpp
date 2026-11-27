@@ -16,6 +16,8 @@
 #include <QList>
 #include <QString>
 
+#include "bundled_test.hpp"
+
 namespace {
 
 int failures = 0;
@@ -61,7 +63,7 @@ QJsonObject card() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(chat_tool_groups) {
   using namespace mitcad::agent;
   QList<QJsonObject> entries;
   entries << text(QStringLiteral("user"), QStringLiteral("measure the box"))

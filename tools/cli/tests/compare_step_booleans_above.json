@@ -1,0 +1,19 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "compare_step's booleans_above reaches the kernel (mitcad#2534): a 40 x 20 x 10 mm block exported to STEP and compared with itself. With booleans_above the volume booleans are left out (every sample lies on the other side, so the volumes only on one side are null); without it they run and find nothing on either side. Before the fix the kernel dropped the option and ran the booleans anyway, which on the railed lofts' bodies against their mirror images took minutes."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 8000}},
+  {"cmd": "export", "path": "booleans-above.step", "bodies": ["F2.b0"]},
+  {"expect": {"query": {"query": "compare_step", "file": "booleans-above.step", "bodies": ["F2.b0"], "samples": 50,
+                        "booleans_above": 1e-3},
+              "result": {"max_deviation": 0, "volume_only_mitcad": null, "volume_only_step": null,
+                         "relative_difference": null},
+              "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "compare_step", "file": "booleans-above.step", "bodies": ["F2.b0"], "samples": 50},
+              "result": {"max_deviation": 0, "volume_only_mitcad": 0, "volume_only_step": 0},
+              "tolerance": 1e-3}}
+]

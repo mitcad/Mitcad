@@ -65,6 +65,7 @@
 #include "mitcad/geometry/face_revolve.hpp"
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/user_error.hpp"
+#include "replace.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
 
@@ -610,10 +611,26 @@ void check_turn_clear(const Shape& body, int f, const Shape& tool, const std::st
 ShapePtr tool_of(const Shape& body, int f, const std::string& key, const PressPullSpec& spec) {
   const FaceRun run = run_of(body, f, key);
   const bool join = spec.distance > 0.0;
-  const double length = std::abs(spec.distance);
+  double length = std::abs(spec.distance);
   const bool draft = spec.taper == PressPullTaper::Draft && spec.taper_angle != 0.0;
   const bool scale = spec.taper == PressPullTaper::Scale && spec.end_scale != 1.0;
   const TopoDS_Face& face = body.face(f);
+  // A straight run along the face's normal ends on the level of another
+  // planar face of the body where it comes within detail::kPlanarLevel of
+  // it (mitcad#2548, as Move Face's and Offset Face's): flush with the side
+  // of the base under a raised block's end, not a fraction of a micrometre
+  // past it.
+  const bool straight = spec.run == PressPullRun::Straight || run.along == FaceRun::Along::Straight;
+  const bool normal_run =
+      spec.run == PressPullRun::Straight || run.direction.IsParallel(run.normal, kAngular);
+  if (straight && normal_run && !draft && !scale) {
+    if (const std::optional<gp_Pln> own = detail::face_plane(face)) {
+      const gp_Vec outward(own->Axis().Direction());
+      if (const std::optional<gp_Vec> landed = detail::landing_motion(body, {f}, *own, outward * spec.distance)) {
+        length = std::abs(landed->Dot(outward));
+      }
+    }
+  }
   const std::string start_name = face_name(spec.feature, "start", key);
   const std::string end_name = face_name(spec.feature, "end", key);
   if (draft && spec.taper_angle < 0.0) {
@@ -622,7 +639,7 @@ ShapePtr tool_of(const Shape& body, int f, const std::string& key, const PressPu
   const gp_Pln plane = BRepAdaptor_Surface(face).Plane();
   ShapePtr tool;
 
-  if (spec.run == PressPullRun::Straight || run.along == FaceRun::Along::Straight) {
+  if (straight) {
     const std::optional<gp_Dir> along =
         spec.run == PressPullRun::Along ? std::optional<gp_Dir>(run.direction) : std::nullopt;
     if (!scale) {

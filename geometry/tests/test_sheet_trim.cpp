@@ -23,6 +23,7 @@
 #include "mitcad/geometry/cancel.hpp"
 #include "mitcad/geometry/sheet_trim.hpp"
 #include "../src/sheet_curve.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -574,7 +575,7 @@ void invalid_seams_and_cancellation() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(sheet_trim) {
   test::guarded("sheet circle crosses both seams", circle_across_two_seams);
   test::guarded("sheet trim holes islands ownership", holes_islands_and_ownership);
   test::guarded("sheet trim exact conics rational splines", exact_supports_and_reflection);

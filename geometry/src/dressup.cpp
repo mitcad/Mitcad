@@ -102,6 +102,7 @@
 #include "face_join.hpp"
 #include "face_select.hpp"
 #include "full_round.hpp"
+#include "g2_corner.hpp"
 #include "groove_end.hpp"
 #include "history.hpp"
 #include "mitcad/geometry/boolean.hpp"
@@ -3006,21 +3007,82 @@ double contact_distance(const Shape& body, int edge, const FilletSet& set) {
   return set.radius * std::tan(angle / 2.0);
 }
 
+// The curvature continuous corner at a vertex of the body where a blended
+// chain meets other chains (mitcad#2332): every edge there rounded, by
+// curvature continuous or constant radius (or chord length) tangent
+// continuous sets; refused in words otherwise. Setback corners stop the
+// roundings kSetback times the largest radius there from the vertex,
+// rolling ball ones as far as the corner needs (g2_corner.hpp).
+detail::G2Corner curvature_corner(const Shape& body, int vertex, const std::vector<FilletSet>& sets,
+                                  const std::vector<int>& owner, const std::vector<char>& blended,
+                                  bool rolling_ball_corners, double scale) {
+  const TopoDS_Vertex& at = body.vertex(vertex);
+  const std::string& name = body.vertex_name(vertex);
+  const auto refuse = [&](const std::string& said, int edge) {
+    std::vector<ErrorPlace> places{vertex_place(name)};
+    if (edge >= 0) {
+      places.push_back(edge_place(body.edge_name(edge)));
+    }
+    throw std::invalid_argument(placed_error(said, said + " (vertex " + name + ")", places));
+  };
+  std::vector<detail::CornerLeg> legs;
+  double largest = 0.0;
+  for (int edge = 0; edge < body.edge_count(); ++edge) {
+    const TopoDS_Edge& e = body.edge(edge);
+    if (BRep_Tool::Degenerated(e) ||
+        !(TopExp::FirstVertex(e).IsSame(at) || TopExp::LastVertex(e).IsSame(at))) {
+      continue;
+    }
+    const int s = owner[static_cast<std::size_t>(edge)];
+    if (s < 0) {
+      refuse("unsupported: curvature continuous fillets that meet other rounded edges at a corner where an "
+             "edge is not rounded",
+             edge);
+    }
+    const FilletSet& set = sets[static_cast<std::size_t>(s)];
+    if (set.size == FilletSize::Asymmetric) {
+      refuse("unsupported: asymmetric fillets that meet other rounded edges at a corner", edge);
+    }
+    if (blended[static_cast<std::size_t>(s)] == 0 && set.size != FilletSize::Constant &&
+        set.size != FilletSize::ChordLength && set.size != FilletSize::FullRound) {
+      refuse("unsupported: a curvature continuous corner where a rounding of a variable radius meets it", edge);
+    }
+    detail::CornerLeg leg;
+    leg.edge = edge;
+    leg.contact = contact_distance(body, edge, set) * scale;
+    leg.curvature = set.curvature;
+    legs.push_back(leg);
+    largest = std::max(largest, largest_radius(body, set, edge) * scale);
+  }
+  bool curvature = false;
+  for (const detail::CornerLeg& leg : legs) {
+    curvature = curvature || leg.curvature;
+  }
+  if (!curvature) {
+    refuse("unsupported: asymmetric fillets that meet other rounded edges at a corner", -1);
+  }
+  return detail::g2_corner(body, vertex, legs, rolling_ball_corners ? 0.0 : kSetback * largest);
+}
+
 // Fillets with asymmetric or G2 sets (`blended`): the other sets' rolling
 // ball fillets first, then a chamfer of the blended sets at their contact
-// distances, its bevels replaced by blend surfaces. A blended chain that
-// meets another rounded edge at a vertex is unsupported.
-ShapePtr round_and_blend(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
-                         const std::vector<int>& owner, const std::vector<char>& blended,
+// distances, its bevels replaced by blend surfaces. Where a G2 chain meets
+// other rounded edges at a vertex, the corner is cut back to planes across
+// its edges first, the roundings end there, and a curvature continuous
+// patch closes it (g2_corner.hpp, mitcad#2332); where an edge there is not
+// rounded, the chains meet in a mitre. An asymmetric chain that meets
+// other rounded edges where every edge is rounded is unsupported.
+ShapePtr round_and_blend(const std::string& feature, const Shape& input, const std::vector<FilletSet>& sets,
+                         const std::vector<int>& input_owner, const std::vector<char>& blended,
                          bool rolling_ball_corners, double scale, bool tight) {
   // The chains of all sets, to see where the blended ones end.
-  BRepFilletAPI_MakeChamfer probe(body.occt());
-  for (int edge = 0; edge < body.edge_count(); ++edge) {
-    if (owner[static_cast<std::size_t>(edge)] >= 0 && probe.Contour(body.edge(edge)) == 0) {
-      probe.Add(1.0, body.edge(edge));
+  BRepFilletAPI_MakeChamfer probe(input.occt());
+  for (int edge = 0; edge < input.edge_count(); ++edge) {
+    if (input_owner[static_cast<std::size_t>(edge)] >= 0 && probe.Contour(input.edge(edge)) == 0) {
+      probe.Add(1.0, input.edge(edge));
     }
   }
-  const std::vector<int> contour_sets = check_contours(probe, body, sets, owner);
+  const std::vector<int> contour_sets = check_contours(probe, input, sets, input_owner);
   std::vector<ShapeMap> ends(contour_sets.size());
   for (std::size_t c = 0; c < contour_sets.size(); ++c) {
     const int ic = static_cast<int>(c) + 1;
@@ -3028,19 +3090,182 @@ ShapePtr round_and_blend(const std::string& feature, const Shape& body, const st
       TopExp::MapShapes(probe.Edge(ic, ie), TopAbs_VERTEX, ends[c]);
     }
   }
-  for (std::size_t c = 0; c < contour_sets.size(); ++c) {
+  // Where a blended chain meets others: a G2 corner where every edge at the
+  // vertex is rounded, its chains then built together; a mitre where an
+  // edge there is not (a box's two top edges at a corner whose upright edge
+  // stays sharp), its chains rounded apart and the results intersected, so
+  // that each rounding runs on to the face beyond and the two meet in a
+  // crease that carries on the sharp edge, as the kernel's own roundings
+  // meet there (mitcad#2332).
+  const std::size_t count = contour_sets.size();
+  std::vector<detail::G2Corner> corners;
+  std::set<int> corner_vertices;
+  std::vector<std::size_t> root(count);
+  for (std::size_t c = 0; c < count; ++c) {
+    root[c] = c;
+  }
+  const auto group_of = [&root](std::size_t c) {
+    while (root[c] != c) {
+      c = root[c] = root[root[c]];
+    }
+    return c;
+  };
+  std::vector<std::pair<std::size_t, std::size_t>> apart;
+  std::set<int> mitre_kinds;
+  for (std::size_t c = 0; c < count; ++c) {
     if (contour_sets[c] < 0 || blended[static_cast<std::size_t>(contour_sets[c])] == 0) {
       continue;
     }
-    for (std::size_t other = 0; other < contour_sets.size(); ++other) {
+    for (std::size_t other = 0; other < count; ++other) {
       for (int v = 1; other != c && v <= ends[other].Extent(); ++v) {
-        if (ends[c].Contains(ends[other](v))) {
-          throw std::invalid_argument("unsupported: asymmetric and curvature continuous fillets that "
-                                      "meet other rounded edges at a corner");
+        const TopoDS_Shape& at = ends[other](v);
+        const int vertex = input.vertex_index(at);
+        if (!ends[c].Contains(at) || vertex < 0 || !corner_vertices.insert(vertex).second) {
+          continue;
+        }
+        std::vector<std::size_t> here;
+        for (std::size_t d = 0; d < count; ++d) {
+          if (ends[d].Contains(at)) {
+            here.push_back(d);
+          }
+        }
+        bool every = true;
+        for (int edge = 0; edge < input.edge_count() && every; ++edge) {
+          const TopoDS_Edge& e = input.edge(edge);
+          every = BRep_Tool::Degenerated(e) ||
+                  !(TopExp::FirstVertex(e).IsSame(at) || TopExp::LastVertex(e).IsSame(at)) ||
+                  input_owner[static_cast<std::size_t>(edge)] >= 0;
+        }
+        if (every) {
+          corners.push_back(
+              curvature_corner(input, vertex, sets, input_owner, blended, rolling_ball_corners, scale));
+          for (const std::size_t d : here) {
+            root[group_of(d)] = group_of(here.front());
+          }
+          continue;
+        }
+        for (std::size_t i = 0; i < here.size(); ++i) {
+          for (std::size_t j = 0; j < i; ++j) {
+            apart.emplace_back(here[i], here[j]);
+          }
+          const int ic = static_cast<int>(here[i]) + 1;
+          for (int ie = 1; ie <= probe.NbEdges(ic); ++ie) {
+            const TopoDS_Edge& e = probe.Edge(ic, ie);
+            const int index = input.edge_index(e);
+            if (index >= 0 && (TopExp::FirstVertex(e).IsSame(at) || TopExp::LastVertex(e).IsSame(at))) {
+              mitre_kinds.insert(convex_edge(input, index) ? 1 : 0);
+              break;
+            }
+          }
         }
       }
     }
   }
+  if (!apart.empty()) {
+    if (mitre_kinds.size() > 1) {
+      throw std::invalid_argument("unsupported: curvature continuous fillets that meet in a mitre where convex "
+                                  "and concave edges meet");
+    }
+    // Groups by greedy colouring of the chains built together: a group
+    // takes the first colour none of the chains it meets in a mitre has.
+    std::map<std::size_t, int> colour;
+    for (std::size_t c = 0; c < count; ++c) {
+      const std::size_t r = group_of(c);
+      if (colour.count(r) > 0) {
+        continue;
+      }
+      std::set<int> taken;
+      for (const auto& [x, y] : apart) {
+        const std::size_t rx = group_of(x);
+        const std::size_t ry = group_of(y);
+        if (rx == ry) {
+          throw std::invalid_argument("unsupported: curvature continuous fillets that meet both at a corner "
+                                      "where every edge is rounded and in a mitre");
+        }
+        const std::size_t partner = rx == r ? ry : ry == r ? rx : count;
+        if (partner < count && colour.count(partner) > 0) {
+          taken.insert(colour[partner]);
+        }
+      }
+      int g = 0;
+      while (taken.count(g) > 0) {
+        ++g;
+      }
+      colour[r] = g;
+    }
+    int groups = 0;
+    for (const auto& entry : colour) {
+      groups = std::max(groups, entry.second + 1);
+    }
+    std::vector<ShapePtr> made;
+    for (int g = 0; g < groups; ++g) {
+      throw_if_cancelled();
+      std::vector<int> only(static_cast<std::size_t>(input.edge_count()), -1);
+      bool any_blended = false;
+      for (int edge = 0; edge < input.edge_count(); ++edge) {
+        const int s = input_owner[static_cast<std::size_t>(edge)];
+        const int ic = s < 0 ? 0 : probe.Contour(input.edge(edge));
+        if (ic > 0 && colour[group_of(static_cast<std::size_t>(ic) - 1)] == g) {
+          only[static_cast<std::size_t>(edge)] = s;
+          any_blended = any_blended || blended[static_cast<std::size_t>(s)] != 0;
+        }
+      }
+      // Each group on a copy of its own: the kernel's dressups change their
+      // input.
+      const ShapePtr own = detail::working_copy(input);
+      made.push_back(any_blended ? round_and_blend(feature, *own, sets, only, blended, rolling_ball_corners, scale,
+                                                   tight)
+                                 : round_edges(feature, *own, sets, only, rolling_ball_corners, scale, tight));
+    }
+    ShapePtr result = made.front();
+    for (std::size_t g = 1; g < made.size(); ++g) {
+      BooleanResult common = boolean(BooleanOp::Intersect, {result.get()}, *made[g]);
+      if (!common.touched.front()) {
+        continue;
+      }
+      if (common.pieces.size() != 1) {
+        throw std::runtime_error("the mitred roundings split the body");
+      }
+      result = common.pieces.front().shape;
+    }
+    if (mitre_kinds.count(0) > 0) {
+      // Inside edges add material: each group's, joined.
+      for (const ShapePtr& group_result : made) {
+        for (const BooleanPiece& wedge : boolean(BooleanOp::Cut, {group_result.get()}, input).pieces) {
+          BooleanResult joined = boolean(BooleanOp::Join, {result.get()}, *wedge.shape);
+          if (joined.pieces.size() != 1) {
+            throw std::runtime_error("the mitred roundings could not be joined");
+          }
+          result = joined.pieces.front().shape;
+        }
+      }
+    }
+    for (const ShapePtr& group_result : made) {
+      if (group_result != result) {
+        result->copy_notes(*group_result);
+      }
+    }
+    return result;
+  }
+  // An edge with corners at both ends must be longer than their setbacks.
+  detail::share_edges(corners);
+  // The corners cut back (or filled) to their planes: the roundings end
+  // there, on planar faces.
+  ShapePtr notched;
+  std::vector<int> notched_owner;
+  if (!corners.empty()) {
+    notched = detail::notch_corners(feature, input, corners);
+    notched_owner.assign(static_cast<std::size_t>(notched->edge_count()), -1);
+    for (int edge = 0; edge < notched->edge_count(); ++edge) {
+      const std::string& name = notched->edge_name(edge);
+      const std::vector<int> found = name.empty() ? std::vector<int>() : input.find_edges(name);
+      if (found.size() == 1) {
+        notched_owner[static_cast<std::size_t>(edge)] = input_owner[static_cast<std::size_t>(found.front())];
+      }
+    }
+  }
+  const Shape& body = notched ? *notched : input;
+  const std::vector<int>& owner = notched ? notched_owner : input_owner;
   // The rolling ball sets.
   ShapePtr rounded;
   std::vector<int> plain = owner;
@@ -3140,7 +3365,8 @@ ShapePtr round_and_blend(const std::string& feature, const Shape& body, const st
     throw std::runtime_error("fillet failed; " + beyond);
   }
   const ShapePtr chamfered = name_result(maker, feature, "fillet", start);
-  return detail::blend_bevels(feature, start, *chamfered, kinds);
+  const ShapePtr smooth = detail::blend_bevels(feature, start, *chamfered, kinds);
+  return corners.empty() ? smooth : detail::g2_corner_patches(feature, *smooth, corners);
 }
 
 // A dressup built as rings gets a note only where its result is faulty

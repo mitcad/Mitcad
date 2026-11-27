@@ -19,7 +19,6 @@
 #include "CommandSupport.hpp"
 #include "ExtrudeDragProxy.hpp"
 #include "ProfilePicks.hpp"
-#include "../framework/CutTargetsPanel.hpp"
 
 namespace mitcad::cmd {
 namespace {
@@ -27,6 +26,7 @@ namespace {
 const QString kDistance = QStringLiteral("distance");
 const QString kToObject = QStringLiteral("to_object");
 const QString kThroughAll = QStringLiteral("through_all");
+const QString kToNext = QStringLiteral("to_next");
 const QString kOneSide = QStringLiteral("one_side");
 const QString kTwoSides = QStringLiteral("two_sides");
 const QString kSymmetric = QStringLiteral("symmetric");
@@ -34,9 +34,13 @@ const QString kSymmetric = QStringLiteral("symmetric");
 const Choices kDirections = {{QStringLiteral("one_side"), QStringLiteral("One Side")},
                              {QStringLiteral("two_sides"), QStringLiteral("Two Sides")},
                              {QStringLiteral("symmetric"), QStringLiteral("Symmetric")}};
+// To Next ends at the first face of the bodies ahead without a pick
+// (GitHub mitcad/Mitcad#674); last, so that the earlier choices keep their
+// places.
 const Choices kExtents = {{QStringLiteral("distance"), QStringLiteral("Distance")},
                           {QStringLiteral("to_object"), QStringLiteral("To Object")},
-                          {QStringLiteral("through_all"), QStringLiteral("All")}};
+                          {QStringLiteral("through_all"), QStringLiteral("All")},
+                          {QStringLiteral("to_next"), QStringLiteral("To Next")}};
 // Where the extrusion starts; a body face starts at the face or an offset
 // from it, not at an object (mitcad#2033: the panel offers only these).
 const Choices kStarts = {{QStringLiteral("profile_plane"), QStringLiteral("Profile Plane")},
@@ -80,24 +84,6 @@ Choices startChoices(const CommandState& state) {
     }
   }
   return offered;
-}
-
-void initializeCutScope(CommandState& state, const CommandContext& model) {
-  const QJsonObject components = model.queryObject({{QStringLiteral("query"), QStringLiteral("components")}});
-  QJsonValue component = state.object(QStringLiteral("cut_owner")).value(QStringLiteral("component"));
-  if (component.isUndefined()) {
-    component = components.value(QStringLiteral("active"));
-  }
-  state.setObject(QStringLiteral("cut_scope"),
-                  {{QStringLiteral("context"), QJsonObject{{QStringLiteral("component"), component},
-                                                            {QStringLiteral("occurrence"), QString()}}},
-                   {QStringLiteral("targets"), QJsonObject{{QStringLiteral("type"), QStringLiteral("automatic")},
-                                                            {QStringLiteral("excluded"), QJsonArray()},
-                                                            {QStringLiteral("excluded_bodies"), QJsonArray()}}}});
-  state.setChecked(QStringLiteral("cut_context_from_profile"), true);
-  const QJsonObject document = model.queryObject({{QStringLiteral("query"), QStringLiteral("document")}});
-  state.setObject(QStringLiteral("cut_view"),
-                  cutTargetVisibility(components, model.queryArray(QStringLiteral("bodies")), document));
 }
 
 // The profiles' middle and the way they go: a face's middle and outward
@@ -153,6 +139,22 @@ QJsonObject sideOf(const CommandState& state, const QString& suffix, Built& erro
   return side;
 }
 
+// A new Extrude starts at zero (mitcad#2481, GitHub #698): while every
+// distance that gives the solid its length is zero, it waits for one (one
+// side or symmetric: its Distance; two sides: both, when both are
+// distances), so the panel says so as a hint, not as the model's refusal.
+// Any other span keeps its own rules (the model's, the two sides' overlap).
+bool waitsForDistance(const CommandState& state) {
+  const auto zero = [&state](const QString& suffix) {
+    return state.choice(QStringLiteral("extent") + suffix) == kDistance &&
+           state.value(QStringLiteral("distance") + suffix) == 0.0;
+  };
+  if (state.choice(QStringLiteral("direction")) == kTwoSides) {
+    return zero(QString()) && zero(QStringLiteral("2"));
+  }
+  return zero(QString());
+}
+
 bool loadSide(const QJsonObject& side, CommandState& state, const QString& suffix,
               const QJsonObject& feature, const CommandContext& context) {
   const QString type = str(side, "type");
@@ -163,7 +165,7 @@ bool loadSide(const QJsonObject& side, CommandState& state, const QString& suffi
   if (type == kToObject) {
     return loadObject(side.value(QStringLiteral("object")).toObject(), state, suffix, context);
   }
-  return type == kDistance || type == kThroughAll;
+  return type == kDistance || type == kThroughAll || type == kToNext;
 }
 
 // Whether a stored side's distance is negative: a number, or a parameter
@@ -191,7 +193,7 @@ bool sideEditable(const QJsonObject& side, const CommandContext* context) {
   if (type == kToObject) {
     return context == nullptr || objectShowable(side.value(QStringLiteral("object")).toObject(), *context);
   }
-  return type == kDistance || type == kThroughAll;
+  return type == kDistance || type == kThroughAll || type == kToNext;
 }
 
 QVector<InputDef> sideInputs(const QString& suffix, std::function<bool(const CommandState&)> shown,
@@ -203,10 +205,14 @@ QVector<InputDef> sideInputs(const QString& suffix, std::function<bool(const Com
   QVector<InputDef> inputs = {
       choiceInput(extent, name.isEmpty() ? QObject::tr("Extent") : QObject::tr("Extent %1").arg(name),
                   kExtents, kDistance)
+          .withTooltip(QObject::tr("How far it goes; To Next stops at the first face ahead, without a pick"))
           .withVisible(shown),
+      // A new extrusion starts at zero, whatever the part's size
+      // (mitcad#2481): the arrow is there from the start, and the first
+      // distance typed or dragged makes the preview (`waitsForDistance`).
       valueInput(QStringLiteral("distance") + suffix,
                  name.isEmpty() ? QObject::tr("Distance") : QObject::tr("Distance %1").arg(name),
-                 ValueKind::Length, QStringLiteral("10 mm"))
+                 ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(when(kDistance))
           .withManipulator([suffix](const CommandState& state,
                                     const CommandContext& context) -> std::optional<Manipulator> {
@@ -216,7 +222,8 @@ QVector<InputDef> sideInputs(const QString& suffix, std::function<bool(const Com
             }
             gp_Dir direction = base->second;
             const bool one = state.choice(QStringLiteral("direction")) == kOneSide;
-            if ((one && state.checked(QStringLiteral("flip"))) || !suffix.isEmpty()) {
+            const bool turned = (one && state.checked(QStringLiteral("flip"))) || !suffix.isEmpty();
+            if (turned) {
               direction.Reverse(); // side two goes against the normal
             }
             // A Two Sides arrow crosses the start to a negative distance,
@@ -224,6 +231,15 @@ QVector<InputDef> sideInputs(const QString& suffix, std::function<bool(const Com
             // the profiles' size (mitcad#1431).
             Manipulator handle = arrow(base->first, direction);
             handle.scale = itemsScale(state.items(QStringLiteral("profiles")), context);
+            // At zero (a new Extrude, mitcad#2481) it stands on the
+            // profile: drawn clear of it, so that a click on the profile
+            // still takes it away or adds it. The Start Offset's arrow
+            // ends where this one starts and points the same way unless
+            // this one is turned: drawn past it (mitcad#2508).
+            handle.clearOfOrigin = true;
+            if (!turned && state.choice(QStringLiteral("start")) == QStringLiteral("offset")) {
+              handle.clearPast = 1;
+            }
             return handle;
           }),
   };
@@ -349,6 +365,9 @@ CommandDef extrudeCommand(const CommandContext& context) {
             }
             Manipulator handle = arrow(base->first, base->second);
             handle.scale = itemsScale(state.items(QStringLiteral("profiles")), model); // mitcad#1431
+            // At zero on the profile, as the distance's arrow: drawn clear
+            // of it, the distance's arrow past it (mitcad#2508).
+            handle.clearOfOrigin = true;
             return handle;
           }),
       // A point stands for the plane through it (mitcad#1329); a curved
@@ -432,19 +451,11 @@ CommandDef extrudeCommand(const CommandContext& context) {
                                       state.checked(QStringLiteral("cut_scope_legacy")) || hasProfileFace(state));
   };
   def.inputs += operations;
-  InputDef targets;
-  targets.type = InputDef::Type::CutTargets;
-  targets.id = QStringLiteral("cut_scope");
-  targets.label = QObject::tr("Affected components");
-  targets.visible = [](const CommandState& state) {
+  def.inputs.append(cutTargetsInput([](const CommandState& state) {
     return state.choice(QStringLiteral("operation")) == QStringLiteral("cut") &&
            !state.object(QStringLiteral("cut_scope")).isEmpty() &&
            !state.checked(QStringLiteral("cut_scope_legacy")) && !hasProfileFace(state);
-  };
-  targets.onChange = [](CommandState& state, const CommandContext&) {
-    state.setChecked(QStringLiteral("cut_scope_chosen"), true);
-  };
-  def.inputs.append(targets);
+  }));
   // A face selected before the command goes to Profiles when it is planar
   // and not a mesh body's (a cylinder or cone to Wrap Onto). Any other
   // stays the profile all the same, so that the panel says why it is
@@ -476,26 +487,8 @@ CommandDef extrudeCommand(const CommandContext& context) {
     initializeCutScope(state, model);
   };
   def.previewReported = [](QJsonObject& report, CommandState& state) {
-    // An automatic Cut preview alone chooses no lasting targets for a
-    // feature ultimately accepted as Join; deliberate choices do above.
-    QJsonObject view = state.object(QStringLiteral("cut_view"));
-    QJsonObject scope = state.object(QStringLiteral("cut_scope"));
-    if (view.isEmpty() || scope.isEmpty() || state.choice(QStringLiteral("operation")) != QStringLiteral("cut") ||
-        !report.contains(QStringLiteral("cut_targets"))) {
-      return false;
-    }
-    const bool changed = excludeHiddenCutTargets(scope, view, report);
-    state.setObject(QStringLiteral("cut_view"), view);
-    if (changed) {
-      state.setObject(QStringLiteral("cut_scope"), scope);
-      const QJsonObject targets = scope.value(QStringLiteral("targets")).toObject();
-      qDebug().noquote() << QStringLiteral("Extrude: hidden targets start unchecked: excluded %1, excluded bodies %2")
-                                .arg(QString::fromUtf8(QJsonDocument(targets.value(QStringLiteral("excluded")).toArray())
-                                                           .toJson(QJsonDocument::Compact)),
-                                     QString::fromUtf8(QJsonDocument(targets.value(QStringLiteral("excluded_bodies")).toArray())
-                                                           .toJson(QJsonDocument::Compact)));
-    }
-    return changed;
+    return cutTargetsReported(report, state, state.choice(QStringLiteral("operation")) == QStringLiteral("cut"),
+                              QStringLiteral("Extrude"));
   };
   // Thin walls follow sketch curves too, so a sketch of open curves is
   // enough (mitcad#463), a 3D sketch's too (mitcad#1550); a body's planar
@@ -561,6 +554,11 @@ CommandDef extrudeCommand(const CommandContext& context) {
       return Built::failure(QObject::tr("Select profiles or sketch curves, not both."),
                             QStringLiteral("profiles"));
     }
+    // Zero, as a new Extrude starts (mitcad#2481): no preview and OK off
+    // until a distance is typed or the arrow dragged, said as a hint.
+    if (waitsForDistance(state)) {
+      return Built::asking(QObject::tr("Type a distance or drag the arrow."), QStringLiteral("distance"));
+    }
     const QString direction = state.choice(QStringLiteral("direction"));
     QJsonObject extent;
     if (direction == kTwoSides) {
@@ -596,7 +594,7 @@ CommandDef extrudeCommand(const CommandContext& context) {
       }
       if (direction == kSymmetric) {
         const QString kind = state.choice(QStringLiteral("extent"));
-        if (kind == kToObject) {
+        if (kind == kToObject || kind == kToNext) {
           return Built::failure(QObject::tr("A symmetric extrusion goes a distance or through all."),
                                 QStringLiteral("extent"));
         }
@@ -667,6 +665,14 @@ CommandDef extrudeCommand(const CommandContext& context) {
                         QJsonObject{{QStringLiteral("type"), QStringLiteral("offset")},
                                     {QStringLiteral("offset"), state.expression(QStringLiteral("start_offset"))}});
     } else if (start == QStringLiteral("object")) {
+      // To Next finds the bodies ahead of the profile's plane (GitHub
+      // mitcad/Mitcad#674).
+      const bool next = state.choice(QStringLiteral("extent")) == kToNext ||
+                        (direction == kTwoSides && state.choice(QStringLiteral("extent2")) == kToNext);
+      if (next) {
+        return Built::failure(QObject::tr("To Next starts at the profile plane or an offset from it."),
+                              QStringLiteral("start"));
+      }
       const Selection& object = state.items(QStringLiteral("start_object"));
       if (object.isEmpty()) {
         return Built::failure(QObject::tr("Select the plane the extrusion starts at."),
@@ -856,23 +862,7 @@ CommandDef extrudeCommand(const CommandContext& context) {
     }
     keepLinksTarget(state, links);
     loadOperation(feature, state);
-    state.setObject(QStringLiteral("cut_scope"), feature.value(QStringLiteral("cut_scope")).toObject());
-    state.setObject(QStringLiteral("cut_view"), {});
-    state.setChecked(QStringLiteral("cut_scope_chosen"),
-                     !state.object(QStringLiteral("cut_scope")).isEmpty() &&
-                     !state.object(QStringLiteral("cut_scope")).value(QStringLiteral("initialize_on_cut")).toBool());
-    state.setChecked(QStringLiteral("cut_scope_legacy"),
-                     (state.choice(QStringLiteral("operation")) == QStringLiteral("cut") &&
-                      state.object(QStringLiteral("cut_scope")).isEmpty()) ||
-                     (state.object(QStringLiteral("cut_scope")).isEmpty() &&
-                      !state.items(QStringLiteral("objects")).isEmpty()));
-    if (feature.contains(QStringLiteral("uid"))) {
-      const QJsonObject stored = context.queryObject(
-          {{QStringLiteral("query"), QStringLiteral("feature")},
-           {QStringLiteral("uid"), feature.value(QStringLiteral("uid"))}});
-      state.setObject(QStringLiteral("cut_owner"),
-                      {{QStringLiteral("component"), stored.value(QStringLiteral("component")).toString(QStringLiteral("C0"))}});
-    }
+    loadCutScope(feature, state, context, state.choice(QStringLiteral("operation")) == QStringLiteral("cut"));
     // The extrusion's own direction, kept for `build` (mitcad#543).
     QJsonObject kept;
     if (feature.contains(QStringLiteral("direction"))) {
@@ -983,6 +973,8 @@ CommandDef extrudeCommand(const CommandContext& context) {
       extent = QStringLiteral("all");
     } else if (kind == kToObject) {
       extent = QStringLiteral("to object");
+    } else if (kind == kToNext) {
+      extent = QStringLiteral("to next");
     }
     const Selection& wrap = state.items(QStringLiteral("wrap"));
     const QString wrapped = wrap.isEmpty() || hasProfileFace(state) ? QString()
@@ -1090,10 +1082,59 @@ CommandDef revolveCommand(const CommandContext& context) {
   def.inputs += objectInputs(QString(), toObject);
   def.inputs.append(checkInput(QStringLiteral("project_axis"), QObject::tr("Project Axis"), false)
                         .withTooltip(QObject::tr("Revolve about the axis projected into the sketch plane")));
-  def.inputs += operationInputs();
+  // A Cut across components (mitcad#2160), as Extrude's (mitcad#200,
+  // mitcad#2131): Cut picked starts an automatic scope in the revolution's
+  // component, which the Affected components list edits; it may machine an
+  // occurrence of a linked or multiply placed component there only. A
+  // revolution of a face, and a Cut saved without a scope, cut the bodies of
+  // their own component (Local bodies).
+  auto operations = operationInputs();
+  operations[0].onChange = [](CommandState& state, const CommandContext& model) {
+    if (state.choice(QStringLiteral("operation")) == QStringLiteral("cut") &&
+        !state.checked(QStringLiteral("cut_scope_legacy"))) {
+      if (!state.checked(QStringLiteral("cut_scope_chosen")) ||
+          state.object(QStringLiteral("cut_scope")).isEmpty() ||
+          state.object(QStringLiteral("cut_scope")).value(QStringLiteral("initialize_on_cut")).toBool()) {
+        // Choosing Cut is a new cutting operation: what the view hides is
+        // sampled now (mitcad#475).
+        initializeCutScope(state, model);
+      }
+      state.setChecked(QStringLiteral("cut_scope_chosen"), true);
+    }
+  };
+  operations[1].label = QObject::tr("Local bodies");
+  operations[1].tooltip = QObject::tr("Bodies in the feature's component. Older cuts retain this local scope.");
+  operations[1].onChange = [](CommandState& state, const CommandContext&) {
+    if (state.choice(QStringLiteral("operation")) != QStringLiteral("cut")) {
+      // Bodies picked for a Join or an Intersect are a deliberate local
+      // choice, which a later Cut keeps.
+      state.setChecked(QStringLiteral("cut_scope_legacy"), !state.items(QStringLiteral("objects")).isEmpty());
+    }
+  };
+  const auto originalVisible = operations[1].visible;
+  operations[1].visible = [originalVisible](const CommandState& state) {
+    return originalVisible(state) && (state.choice(QStringLiteral("operation")) != QStringLiteral("cut") ||
+                                      state.object(QStringLiteral("cut_scope")).isEmpty() ||
+                                      state.checked(QStringLiteral("cut_scope_legacy")) || hasProfileFace(state));
+  };
+  def.inputs += operations;
+  def.inputs.append(cutTargetsInput([](const CommandState& state) {
+    return state.choice(QStringLiteral("operation")) == QStringLiteral("cut") &&
+           !state.object(QStringLiteral("cut_scope")).isEmpty() &&
+           !state.checked(QStringLiteral("cut_scope_legacy")) && !hasProfileFace(state);
+  }));
   // The newest sketch's outline set, as Extrude's (mitcad#2194).
-  def.init = newestOutline;
   def.note = crossingNote;
+  def.init = [](CommandState& state, const CommandContext& model) {
+    newestOutline(state, model);
+    // What the view hides now (mitcad#475), for a Cut chosen later; an
+    // edited revolution keeps its stored scope.
+    initializeCutScope(state, model);
+  };
+  def.previewReported = [](QJsonObject& report, CommandState& state) {
+    return cutTargetsReported(report, state, state.choice(QStringLiteral("operation")) == QStringLiteral("cut"),
+                              QStringLiteral("Revolve"));
+  };
   def.enabled = [&context] { return hasProfiles(context) || hasBodies(context); };
 
   def.build = [](const CommandState& state, const CommandContext& model) {
@@ -1175,6 +1216,24 @@ CommandDef revolveCommand(const CommandContext& context) {
       result.def.insert(QStringLiteral("project_axis"), true);
     }
     addOperation(result.def, state);
+    // The scope of a Cut (mitcad#2160), seen where the profiles are; one
+    // chosen before and kept by another operation stays, without effect.
+    const bool cutting = state.choice(QStringLiteral("operation")) == QStringLiteral("cut");
+    if (face == nullptr && !state.checked(QStringLiteral("cut_scope_legacy")) &&
+        !state.object(QStringLiteral("cut_scope")).isEmpty() &&
+        (cutting || state.checked(QStringLiteral("cut_scope_chosen")))) {
+      QJsonObject scope = state.object(QStringLiteral("cut_scope"));
+      if (state.checked(QStringLiteral("cut_context_from_profile"))) {
+        QJsonObject where = scope.value(QStringLiteral("context")).toObject();
+        where.insert(QStringLiteral("occurrence"), profiles.first().occurrence);
+        scope.insert(QStringLiteral("context"), where);
+      }
+      if (cutting) {
+        scope.remove(QStringLiteral("initialize_on_cut"));
+        result.def.remove(QStringLiteral("participants"));
+      }
+      result.def.insert(QStringLiteral("cut_scope"), scope);
+    }
     return result;
   };
 
@@ -1211,6 +1270,8 @@ CommandDef revolveCommand(const CommandContext& context) {
     }
     state.setChecked(QStringLiteral("project_axis"), feature.value(QStringLiteral("project_axis")).toBool());
     loadOperation(feature, state);
+    // Its stored scope (mitcad#2160); a Cut saved without one is local.
+    loadCutScope(feature, state, context, state.choice(QStringLiteral("operation")) == QStringLiteral("cut"));
     // A body face as the profile (mitcad#543).
     const SelectionItem face = itemOf(feature.value(QStringLiteral("profile_face")), context);
     if (face.isValid()) {

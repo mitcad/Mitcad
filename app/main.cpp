@@ -51,6 +51,7 @@
 #include "framework/Diagnostics.hpp"
 #include "framework/DisplayMeshes.hpp"
 #include "framework/DisplayPlatform.hpp"
+#include "framework/GraphicsEnvironment.hpp"
 #if defined(__linux__) && defined(MITCAD_OCCT_EGL)
 #include "framework/GraphicsStart.hpp"
 #endif
@@ -593,6 +594,11 @@ int runApplication(int argc, char* argv[]) {
 #ifdef __linux__
   qInfo().noquote() << QStringLiteral("Display platform: %1")
                            .arg(mitcad::displayPlatformDescription(displayPlatform, QGuiApplication::platformName()));
+  // The session, the graphics cards and what the launch asked of them (a
+  // hybrid laptop's render offload, Qt's scaling; mitcad#2031). The GPU
+  // that draws is the "OpenGL renderer:" line once the view starts.
+  qInfo().noquote() << QStringLiteral("Graphics environment: %1")
+                           .arg(mitcad::graphicsEnvironmentDescription(mitcad::graphicsEnvironment()));
 #endif
   for (const QString& line : std::as_const(graphicsLog)) {
     qInfo().noquote() << line;
@@ -762,7 +768,9 @@ int runApplication(int argc, char* argv[]) {
         {"view.right", "4"},                                  {"view.top", "5"},
         {"view.bottom", "6"},                                 {"view.iso", "7"},
         // Hide/Show of the selection (mitcad#2356), in the 3D view.
-        {"view.toggle_visibility", "V"}};
+        {"view.toggle_visibility", "V"},
+        // Isolate and Unisolate (mitcad#2482): no key; the user binds them.
+        {"view.isolate", ""},                                 {"view.unisolate", ""}};
     bool expectedKeys = true;
     for (const auto& entry : expected) {
       const QString id = QString::fromLatin1(entry[0]);

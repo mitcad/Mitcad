@@ -104,6 +104,43 @@ private:
   NCollection_Array1<int> m_mults;
 };
 
+// The blending of values at increasing parameters that never carries the
+// curve beyond its neighbouring values (mitcad#2533, the sections of a loft
+// along rails): one Bezier piece per span, each value's derivatives zero
+// at every inner parameter, so that between two neighbouring values the
+// curve is a blend of those two alone, its weights the Bezier basis's and
+// never negative (the interpolations above, through three or more values,
+// give some value a negative weight between its neighbours). The ends take
+// `start` and `end` derivatives (0, 1 or 2 each); an end without one stays
+// still there as the inner values do. Cubic (continuous in the first
+// derivative), quintic when a second derivative is given (continuous in
+// the second); the inner parameters are knots of multiplicity `degree`,
+// the curve passing through its value there. The interface is
+// EndInterpolation's, and the rows of a surface share the basis.
+class BlendInterpolation {
+public:
+  BlendInterpolation(std::vector<double> parameters, int start, int end);
+
+  int degree() const { return m_degree; }
+  int pole_count() const { return m_degree * (static_cast<int>(m_parameters.size()) - 1) + 1; }
+  const NCollection_Array1<double>& knots() const { return m_knots; }
+  const NCollection_Array1<int>& multiplicities() const { return m_mults; }
+
+  // The poles of one coordinate (of the homogeneous ones, for a rational
+  // curve): `values` at the parameters, `start` and `end` the derivatives
+  // (first, then second) at the ends.
+  std::vector<double> solve(const std::vector<double>& values, const std::vector<double>& start,
+                            const std::vector<double>& end) const;
+
+private:
+  std::vector<double> m_parameters;
+  int m_start = 0;
+  int m_end = 0;
+  int m_degree = 3;
+  NCollection_Array1<double> m_knots;
+  NCollection_Array1<int> m_mults;
+};
+
 // The polynomial B-spline curve through the points at the parameters with
 // the end derivatives (see EndInterpolation).
 occ::handle<Geom_BSplineCurve> interpolate_with_ends(const std::vector<gp_Pnt>& points,

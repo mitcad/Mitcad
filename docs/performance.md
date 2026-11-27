@@ -277,7 +277,7 @@ one thread and with several are the same.
 
 The ticket's synthetic fixture: a 120 x 100 x 20 mm block with 83 through
 holes of 4 mm and a 20 x 10 mm boss joined on top (94 faces), built by
-`test_preview_meshing` through the model's commands; each sample previews a
+`test_app_view preview_meshing` through the model's commands; each sample previews a
 new distance and meshes it as the preview job does. Linux workstation
 (16-core desktop CPU, 32 threads), the `dev` build (OCCT's release
 libraries, MitCad's own code unoptimised), not the ticket's macOS baseline.
@@ -292,7 +292,7 @@ the two planes with 84 and 85 wires and about 12 000 boundary points took
 default (Watson) insertion of a plane's boundary points grows much faster
 than linearly with them.
 
-`test_preview_meshing --compare` (n = 10, from no triangulation):
+`test_app_view preview_meshing --compare` (n = 10, from no triangulation):
 
 | Options | Median / p95 | Triangles |
 |---|---|---|

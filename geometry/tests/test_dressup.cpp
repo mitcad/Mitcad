@@ -886,10 +886,19 @@ void test_g2_fillets() {
   CHECK_NEAR_TOL(accurate_volume(*fillet("F5", *block(), {vertical, set})),
                  48000.0 - fillet_loss(5) * 20 - area * 60, 1e-7);
 
-  // Chains that meet at a corner, and variable radii, are unsupported.
+  // Chains that meet at a corner, every edge there rounded, get a G2 corner
+  // patch (mitcad#2332, geometry.fillet_g2_corners); without the corner's
+  // third edge they meet in a mitre. Variable radii are unsupported.
   FilletSet three = set;
   three.edges = {corner_edge(1), top_front(), edge(end_cap("F2", 1), side("F2", 1, 1))};
-  CHECK(throws_with([&] { fillet("F5", *block(), {three}); }, "unsupported: asymmetric and curvature"));
+  const ShapePtr cornered = fillet("F5", *block(), {three});
+  CHECK(mitcad::geometry::detail::is_valid(cornered->occt()));
+  CHECK(cornered->face_count() == 12);
+  FilletSet two = set;
+  two.edges = {top_front(), edge(end_cap("F2", 1), side("F2", 1, 1))};
+  const ShapePtr mitred = fillet("F5", *block(), {two});
+  CHECK(mitcad::geometry::detail::is_valid(mitred->occt()));
+  CHECK(mitred->face_count() == 8);
   FilletSet variable = set;
   variable.size = FilletSize::Variable;
   variable.radius2 = 4;

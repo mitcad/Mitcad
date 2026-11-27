@@ -2078,6 +2078,36 @@ void SketchOverlay::paintCommandPicks(QPainter& painter) const {
   }
 }
 
+void SketchOverlay::paintCurvatureComb(QPainter& painter) const {
+  const CurvatureCombDrawing& comb = m_c.curvatureComb();
+  if (!m_c.showCurvatureComb() || comb.empty()) {
+    return;
+  }
+  // What an inspection points at (the role table's PreviewTarget), by the
+  // view's background.
+  const QColor color = sketchRole(ColorRole::PreviewTarget, m_c.viewer().backgroundDark());
+  const auto at = [this](const CombPoint& p) { return m_c.toScreen(V2{p[0], p[1]}); };
+  painter.save();
+  painter.setRenderHint(QPainter::Antialiasing, true);
+  painter.setBrush(Qt::NoBrush);
+  painter.setPen(QPen(color, 1.0));
+  for (const auto& [from, to] : comb.teethLines()) {
+    painter.drawLine(at(from), at(to));
+  }
+  painter.setPen(QPen(color, 1.6));
+  for (const auto& [from, to] : comb.envelopeLines()) {
+    painter.drawLine(at(from), at(to));
+  }
+  // An inflection: a ring round the point, with the background's tone
+  // inside, so it reads over the curve and the teeth.
+  painter.setPen(QPen(color, 2.0));
+  painter.setBrush(m_c.viewer().sketchHaloColor());
+  for (const CombPoint& p : comb.inflections) {
+    painter.drawEllipse(at(p), 5.0, 5.0);
+  }
+  painter.restore();
+}
+
 void SketchOverlay::paint(QPainter& painter) {
   if (!m_c.isActive()) {
     return;
@@ -2121,6 +2151,9 @@ void SketchOverlay::paint(QPainter& painter) {
     painter.restore();
   }
   painter.restore();
+
+  // The curvature comb under the highlights (mitcad#2520).
+  paintCurvatureComb(painter);
 
   // The selection's, the picks' and the hover's highlights, with the
   // highlighted curves' point markers over them (paintHighlights,

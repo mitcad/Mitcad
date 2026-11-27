@@ -3,7 +3,7 @@
 //! along its sketch's normal, and where the swept surfaces cross
 //! (`geometry/include/mitcad/geometry/intersection_curve.hpp`); since
 //! mitcad#1777 also the curve tools' growing helices and sections of faces
-//! and bodies.
+//! and bodies, and since mitcad#2522 the isoparametric curves of faces.
 
 #[cxx::bridge(namespace = "mitcad::bridge")]
 pub mod ffi {
@@ -72,6 +72,24 @@ pub mod ffi {
             first_direction: [f64; 3],
             second: &[SweepCurve],
             second_direction: [f64; 3],
+        ) -> Result<Vec<CrossingCurve>>;
+
+        #[namespace = "mitcad::geometry"]
+        type Shape = crate::kernel::shape::ffi::Shape;
+
+        /// The isoparametric curves of the face `face` of `shape`
+        /// (mitcad#2522, `geometry::iso_curves`): holding u (`hold_u`) or
+        /// v, one at each of `fractions`, or with `through` (three values)
+        /// the one through the face's point nearest to it. The pieces of
+        /// all curves in order, and in `curves` the index of each piece's
+        /// curve.
+        fn iso_curves(
+            shape: &Shape,
+            face: &str,
+            hold_u: bool,
+            fractions: &[f64],
+            through: &[f64],
+            curves: &mut Vec<usize>,
         ) -> Result<Vec<CrossingCurve>>;
     }
 }

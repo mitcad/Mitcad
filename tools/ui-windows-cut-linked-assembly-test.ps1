@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/CutTargetsPanel.cpp app/browser core/model/src/assembly_cut.rs core/model/src/features/extrude_scope.rs tools/cli tools/ui-scripts/cut-linked-assembly.mitcad-ui
-# Extrude Cut in an assembly on a linked part (mitcad#2131) in the build VM,
-# as tools/ui-cut-linked-assembly-test.sh on Linux: the shared steps
+# Extrude Cut, Revolve Cut and Hole in an assembly on a linked part
+# (mitcad#2131, mitcad#2160) in the build VM, as
+# tools/ui-cut-linked-assembly-test.sh on Linux: the shared steps
 # tools/ui-scripts/cut-linked-assembly.mitcad-ui on a holder linking
-# plate.mitcad, both made by mitcad-cli: Affected components lists the
-# linked occurrence, checked it is machined in this assembly only, OK cuts
-# it; the saved holder checked with cut-linked-assembly-check.json and the
-# part's file as it was written.
+# plate.mitcad, both made by mitcad-cli: the Affected components list of
+# each panel lists the linked occurrence, checked it is machined in this
+# assembly only, OK cuts it; the saved holder checked with
+# cut-linked-assembly-check.json and the part's file as it was written.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-cut-linked-assembly-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(
@@ -37,7 +38,7 @@ $name = 'cut-linked-assembly'
 $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot "ui-scripts/$name.mitcad-ui"
 Ui-StartApp $name @('--ui=qt', '--no-mcp', '--no-recovery', '--open', $holder)
 $null = $script:UiProcess.Handle
-if (-not $script:UiProcess.WaitForExit(240000)) { Ui-Fail "${name}: driver timed out" }
+if (-not $script:UiProcess.WaitForExit(420000)) { Ui-Fail "${name}: driver timed out" }
 $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "${name}: driver failed (exit code $exitCode)"
@@ -52,4 +53,4 @@ try {
   Pop-Location
 }
 if ((Get-FileHash $plate -Algorithm SHA256).Hash -ne $written) { Ui-Fail "${name}: plate.mitcad changed" }
-Write-Host 'PASS: the linked occurrence listed, checked, machined in this assembly only; its design file as it was'
+Write-Host 'PASS: the linked occurrence listed, checked, machined in this assembly only by Extrude, Revolve and Hole; its design file as it was'

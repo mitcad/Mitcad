@@ -431,6 +431,12 @@ int drawingToolsTests() {
   CHECK(command.value(QStringLiteral("line")).toArray().size() == 2);
   CHECK(command.value(QStringLiteral("hatch")).toBool() && !command.value(QStringLiteral("flip")).toBool());
   CHECK(!command.contains(QStringLiteral("letter")) && !command.contains(QStringLiteral("at")));
+  // Of the whole plane unless Only Along the Line is checked (mitcad#2479).
+  CHECK(command.contains(QStringLiteral("bounded")) && !command.value(QStringLiteral("bounded")).toBool());
+  CHECK(section->command(QStringLiteral("D1"), 0, picks(1, {QPointF(85, 105), QPointF(85, 135)}),
+                         {{QStringLiteral("bounded"), QStringLiteral("true")}})
+            .value(QStringLiteral("bounded"))
+            .toBool());
   CHECK(section->command(QStringLiteral("D1"), 0, picks(1, {QPointF(85, 105)}), none).isEmpty());
   command = section->command(QStringLiteral("D1"), 0, picks(1, {QPointF(0, 0), QPointF(0, 9), QPointF(200, 50)}),
                              {{QStringLiteral("letter"), QStringLiteral(" K ")}, {QStringLiteral("flip"), QStringLiteral("true")}});
@@ -1066,6 +1072,29 @@ int drawingToolsTests() {
     // A tolerance of its own; the same point twice: nothing.
     CHECK(snapLineAngle(from, QPointF(126.0, 52.0), 5.0).has_value());
     CHECK(!snapLineAngle(from, from));
+  }
+  {
+    // A view's warnings, one per body gone (GitHub mitcad/Mitcad#694: 141
+    // of them in a view of a large design): each text once, in the order
+    // it first came, with how many times; none, nothing.
+    QStringList warnings;
+    for (int i = 0; i < 141; ++i) {
+      warnings << QStringLiteral("a body is gone");
+      if (i == 70) {
+        warnings << QStringLiteral("an occurrence is gone") << QStringLiteral("an occurrence is gone");
+      }
+    }
+    warnings.prepend(QStringLiteral("an occurrence is gone"));
+    const QVector<RepeatedText> grouped = repeatedTexts(warnings);
+    CHECK(grouped.size() == 2);
+    if (grouped.size() == 2) {
+      CHECK(grouped.at(0).text == QStringLiteral("an occurrence is gone") && grouped.at(0).count == 3);
+      CHECK(grouped.at(1).text == QStringLiteral("a body is gone") && grouped.at(1).count == 141);
+    }
+    const QVector<RepeatedText> once = repeatedTexts({QStringLiteral("b"), QStringLiteral("a")});
+    CHECK(once.size() == 2 && once.at(0).text == QStringLiteral("b") && once.at(0).count == 1 &&
+          once.at(1).text == QStringLiteral("a") && once.at(1).count == 1);
+    CHECK(repeatedTexts({}).isEmpty());
   }
   return failures;
 }

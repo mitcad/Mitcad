@@ -92,21 +92,28 @@ wait_url() {
 zip_names() { python3 -I -c 'import sys, zipfile; print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))' "$1"; }
 # zip_text zip name: a file's text in a zip.
 zip_text() { python3 -I -c 'import sys, zipfile; print(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]).decode())' "$1" "$2"; }
-# send_feedback summary: Send Feedback from the command search, the summary,
-# a screenshot, Include the design, then Preview.
+# send_feedback summary [kind]: Send Feedback from the command search, the
+# summary, the kind (bug by default; tweak or feature chosen in the Kind box
+# by its first letter, mitcad#2563), a screenshot, Include the design, then
+# Preview.
 send_feedback() {
+  local kind=${2:-bug}
   ui_mark
   ui_step "Send Feedback (command search)"   ui_command "Send Feedback"
   ui_focus_dialog '^Send Feedback$'
   ui_expect_new "Send Feedback: the form shows" "the form shows"
   ui_step "summary"                          xdotool type --delay 20 "$1"
+  if [ "$kind" != bug ]; then
+    # The Kind box is before the summary; back to the summary after it.
+    ui_step "kind $kind"                     ui_key shift+Tab "${kind:0:1}" Tab
+  fi
   ui_step "the screenshot on"                ui_key Tab Tab Tab Tab space
   ui_expect_new "Feedback screenshot " "the screenshot of the window"
   ui_step "Include the design (Alt+G)"       ui_key alt+g
   ui_expect_new "Feedback design on" "Include the design on"
   ui_step "Preview (Enter)"                  ui_key Return
   ui_focus_dialog '^Review Report$'
-  ui_expect_new "Feedback form: kind bug, summary '$1'" "the form's content"
+  ui_expect_new "Feedback form: kind $kind, summary '$1'" "the form's content"
   ui_expect_new ", design on" "the form asks for the design"
 }
 
@@ -176,8 +183,11 @@ grep -qF "link is not followed" "$UI_LOG" && ui_fail "opening says a link is not
 echo "ok   the link to the block is followed in the unpacked project"
 
 echo "--- 3. Larger than an issue takes: e-mail it"
-send_feedback "Too large"
-ui_expect_new "Report section design: Bug-Too-large-" "the preview shows the zip"
+# A Feature report (mitcad#2563): its title, and so its zip, has the
+# kind's prefix.
+send_feedback "Too large" feature
+ui_expect_new "Report preview: Feature: Too large" "the preview's title has the Feature prefix"
+ui_expect_new "Report section design: Feature-Too-large-" "the preview shows the zip"
 ui_expect_new ", over the attachment limit" "the preview says it is too large to attach"
 ui_mark
 ui_step "Send (Alt+S)"                     ui_key alt+s

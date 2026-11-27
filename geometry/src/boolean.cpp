@@ -44,6 +44,7 @@
 #include <ShapeAnalysis_FreeBounds.hxx>
 #include <ShapeBuild_ReShape.hxx>
 #include <ShapeFix_Face.hxx>
+#include <Standard_DomainError.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
@@ -849,7 +850,22 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
   // Merge the coplanar faces and collinear edges the operation leaves behind.
   // The history then includes the merge.
   if (simplify) {
-    operation->SimplifyResult();
+    try {
+      operation->SimplifyResult();
+    } catch (const Standard_DomainError&) {
+      // The merge can fail on a result the operation made, as it can break
+      // one (below): OCCT's merge joining B-spline faces (GitHub
+      // mitcad/Mitcad#674, mitcad#2538: a tab joined into a shelled bowl
+      // whose rounding and the rib ends replaced onto it lie on one
+      // continued surface) approximates a surface that closes on itself and
+      // is not periodic by a periodic B-spline, then trims the surface it
+      // started from to that period, past its bounds ("V parameters out of
+      // range"). The result then keeps the faces as the operation left
+      // them, as where the merge breaks it; boolean() joins those on one
+      // plane, cylinder, cone, sphere or torus afterwards.
+      trace.note("the merge failed");
+      return run_operation(op, targets, tool, tool_tag, false, seen, reduce, split, fuzzy, lost, unused);
+    }
   }
   if (const int faces = remove_internal_edges(operation->Shape()); faces > 0) {
     trace.note("internal edges removed from " + std::to_string(faces) + " faces");

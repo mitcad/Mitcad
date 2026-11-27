@@ -6,7 +6,7 @@
 //! developed lengths with OCCT are `cli.sheet_process_allowances`.
 
 use mitcad_model::features::SketchPlane;
-use mitcad_model::ids::FeatureUid;
+use mitcad_model::ids::{BodyUid, FeatureUid};
 use mitcad_model::test_support::{def, num};
 use mitcad_model::testing::MockKernel;
 use mitcad_model::{Document, FeatureStatus};
@@ -364,4 +364,145 @@ fn a_flat_boxs_creases_follow_its_edit() {
             "{edit}: undo brings the old creases back"
         );
     }
+}
+
+/// Edit Standard Box changes the box's rules, outline, creases (and, for
+/// another number of tabs, its Folds) in one recompute (mitcad#2495: a
+/// recompute for each of them built a folder's eighteen Folds again each
+/// time), and the box is the one made with the new options.
+#[test]
+fn a_box_edit_recomputes_once() {
+    for (edit, expected) in [
+        (json!({"height": 120}), json!({"height": 120, "tabs": 3})),
+        (json!({"tabs": 4}), json!({"height": 100, "tabs": 4})),
+    ] {
+        let mut doc = folder(3);
+        let before = doc.recompute_count();
+        let mut command = json!({"cmd":"edit_standard_box","rules":"F1"});
+        for (key, value) in edit.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        doc.command(&command.to_string()).unwrap();
+        // The rules, sketches, Face and kept Folds in one recompute: a
+        // recompute for each made 3 (another height) and 16 (twelve Folds
+        // edited for four tabs). Another number of tabs then adds the two
+        // new creases' Folds after the box's last, each its own command
+        // (at most a recompute each).
+        let recomputes = doc.recompute_count() - before;
+        if edit.get("tabs").is_some() {
+            assert!(
+                (1..=3).contains(&recomputes),
+                "{edit}: the box's features edited in one recompute, got {recomputes}"
+            );
+        } else {
+            assert_eq!(
+                recomputes, 1,
+                "{edit}: the box's features edited in one recompute"
+            );
+        }
+        let mut made = Document::new(MockKernel::default());
+        made.command(
+            &json!({"cmd":"add_standard_box","style":"fefco_0421","length":300,"width":200,
+                    "height":expected["height"],"board":"c_flute","radius":0.5,
+                    "tabs":expected["tabs"]})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(box_defs(&doc), box_defs(&made), "{edit}");
+    }
+}
+
+/// What a refused command leaves as it was: the design, the undo depth and
+/// the labels of Undo and Redo.
+fn history(doc: &Document<MockKernel>) -> (String, usize, Option<String>, Option<String>) {
+    (
+        doc.to_json(),
+        doc.undo_depth(),
+        doc.undo_label().map(str::to_owned),
+        doc.redo_label().map(str::to_owned),
+    )
+}
+
+/// A glue flap its inset leaves no room for is refused and leaves nothing
+/// (mitcad#2527): not the profile's plane and sketch it made first, nor
+/// their undo step, and the redo step before it stays. With room the flap
+/// is made, one undo step.
+#[test]
+fn a_refused_glue_flap_leaves_the_design_and_its_steps_as_they_were() {
+    let mut doc = Document::new(MockKernel::default());
+    let rules = doc
+        .add_feature(&def(rules(None, json!({"type":"k_factor","k":0.4}))), None)
+        .unwrap()
+        .uid;
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, [0.0, 0.0], &num(40.0), &num(20.0))
+        .unwrap()
+        .region;
+    let face =
+        json!({"type":"sheet_face","rules":rules,"profiles":[{"sketch":sketch,"region":region}]});
+    let face = doc.add_feature(&def(face), None).unwrap().uid;
+    let body = BodyUid::new(face, 0);
+    // A flange of 15 mm on the Face's edge x = 40, 20 mm long.
+    let flange = json!({"type":"sheet_flange","body":body,
+        "boundary":{"panel":{"feature":face,"slot":0},
+            "curve":{"type":"sketch","sketch":sketch,"segment":"c2[c1,c3]"}},
+        "angle":std::f64::consts::FRAC_PI_2,"length":{"mode":"tangent","value":15},
+        "position":"inside"});
+    // A redo step of the person's own.
+    doc.set_suppressed(face, true).unwrap();
+    doc.undo();
+    let before = history(&doc);
+    assert!(before.3.is_some(), "a redo step");
+    let error = doc
+        .command(&json!({"cmd":"add_glue_flap","def":flange,"inset":12}).to_string())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("leave no flap"), "{error}");
+    assert_eq!(history(&doc), before);
+    doc.command(&json!({"cmd":"add_glue_flap","def":flange,"inset":2}).to_string())
+        .unwrap();
+    assert_eq!(doc.undo_depth(), before.1 + 1);
+    assert_eq!(doc.undo_label(), Some("Glue Flap"));
+    assert_eq!(doc.redo_label(), None);
+}
+
+/// A refused Edit Standard Box leaves no half-made edit to redo
+/// (mitcad#2527): what it changed before the refusal goes, the undo depth
+/// and the redo step before it as they were. Here a Fold on the box's
+/// creases sketch past its creases, which the box takes as its own, is
+/// used by an Unfold, so the edit cannot delete it, after it changed the
+/// rules.
+#[test]
+fn a_refused_box_edit_leaves_no_redo_step() {
+    let mut doc = folder(3);
+    let fold = doc
+        .add_feature(
+            &def(json!({"type":"sheet_fold","body":"F4.b0",
+                "panel":{"feature":"F4","slot":0},"line":{"sketch":"F3","curve":"c300"},
+                "stationary_side":"left","angle":1.0,"position":"bend_line"})),
+            None,
+        )
+        .unwrap()
+        .uid;
+    let unfold = doc
+        .add_feature(
+            &def(json!({"type":"sheet_unfold","body":"F4.b0",
+                "stationary":{"feature":"F4","slot":0},"bends":[{"feature":fold,"slot":0}]})),
+            None,
+        )
+        .unwrap()
+        .uid;
+    // A redo step of the person's own.
+    doc.set_suppressed(unfold, true).unwrap();
+    doc.undo();
+    let before = history(&doc);
+    assert!(before.3.is_some(), "a redo step");
+    let error = doc
+        .command(&json!({"cmd":"edit_standard_box","rules":"F1","tabs":4}).to_string())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no crease for the box's Fold"), "{error}");
+    assert_eq!(history(&doc), before);
+    assert_ne!(doc.redo_label(), Some("Edit Standard Box"));
 }

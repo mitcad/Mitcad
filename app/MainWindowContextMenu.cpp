@@ -549,13 +549,9 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
           addCall(QStringLiteral("edit"), tr("Edit in Place"), [this, component] { editInPlace(component); });
           addCall(QStringLiteral("update"), tr("Update Link"), [this, component] { updateLink(component); });
           addCall(QStringLiteral("update"), tr("Update All Links"), [this] { updateLink(QString()); });
-          // Linked parts of the design only (mitcad#2130); not of one
-          // linked with its components (mitcad#2209), whose Browser row
-          // says why.
-          if (!c.linkTree) {
-            addCall(QStringLiteral("component"), tr("Choose Linked Parts…"),
-                    [this, component] { chooseLinkedParts(component); });
-          }
+          // Linked parts of the design (mitcad#2130, mitcad#2252).
+          addCall(QStringLiteral("component"), tr("Choose Linked Parts…"),
+                  [this, component] { chooseLinkedParts(component); });
         }
         break;
       }

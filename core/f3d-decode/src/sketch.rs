@@ -759,7 +759,7 @@ pub struct LightBulb {
 /// entity list follow (`ref | str16 name | u8 0 | u32 n | ref[n]`) comes
 /// after `u32 k | u8 0 | u8 light bulb` (1 on, 0 off; `k` is open). It
 /// equals the reference dumps' `isVisible` for every sketch of the reference
-/// models (`tests/design_models.rs`). Sketch classes 15 to 17 keep the same
+/// models (`core/f3d/tests/read/design_models.rs`). Sketch classes 15 to 17 keep the same
 /// part in the object's sub-chunk instead ([`sub_chunk_light_bulb`],
 /// mitcad#2449). None when neither place is found exactly once.
 pub fn light_bulb(seg: &Segment, s: &Object) -> Option<LightBulb> {
@@ -805,15 +805,31 @@ fn main_light_bulb(seg: &Segment, s: &Object) -> Option<LightBulb> {
 /// and the 30 hidden ones of class 16 and 17 designs without the anchor;
 /// none differs. None where the sub-chunk is laid out otherwise.
 fn sub_chunk_light_bulb(seg: &Segment, s: &Object) -> Option<LightBulb> {
+    sub_chunk_light_bulb_after(seg, s, 0)
+}
+
+/// The light bulb of a sketch that no sketch feature holds (a loose sketch,
+/// mitcad#2493: its feature reference is null). Its sub-chunk keeps the
+/// part of [`sub_chunk_light_bulb`] with 1 in the byte before the light
+/// bulb (`u32 k | u8 1 | u8 light bulb`), where every sketch with a feature
+/// has 0: the six loose sketches of a reported package (classes 15 and 17)
+/// have 1 there, the sketches with a feature looked at beside them 0. None where the
+/// sub-chunk is laid out otherwise.
+pub fn loose_light_bulb(seg: &Segment, s: &Object) -> Option<LightBulb> {
+    sub_chunk_light_bulb_after(seg, s, 1)
+}
+
+/// [`sub_chunk_light_bulb`] with `flag` in the byte before the light bulb.
+fn sub_chunk_light_bulb_after(seg: &Segment, s: &Object, flag: u8) -> Option<LightBulb> {
     let start = seg.sub_start(s);
     if start == 0 {
         return None;
     }
     let d = seg.data(s).get(start..)?;
     let p = seg.ref_at(d, header_end(d)?)?.end;
-    // `u32 k | u8 0 | u8 light bulb`.
+    // `u32 k | u8 flag | u8 light bulb`.
     let bulb = *d.get(p + 5)?;
-    if u32_at(d, p).is_none() || d.get(p + 4) != Some(&0) || bulb > 1 {
+    if u32_at(d, p).is_none() || d.get(p + 4) != Some(&flag) || bulb > 1 {
         return None;
     }
     let mut q = p + 6;
@@ -2455,6 +2471,17 @@ mod tests {
     /// sub-chunk keeps the light bulb `bulb` (with the name anchor's
     /// reference where `anchor`), the anchor (id 12) and a curve (id 20).
     fn old_sketch(version: u32, bulb: u8, anchor: bool) -> crate::stream::Segment {
+        old_sketch_flagged(version, 0, bulb, anchor)
+    }
+
+    /// [`old_sketch`] with `flag` in the byte before the light bulb (1 for
+    /// a sketch without a feature, mitcad#2493).
+    fn old_sketch_flagged(
+        version: u32,
+        flag: u8,
+        bulb: u8,
+        anchor: bool,
+    ) -> crate::stream::Segment {
         use crate::stream::{ClassRecord, MetaStream, Segment};
         let mut bulk = Vec::new();
         // The sketch: its main part, then the sub-chunk.
@@ -2464,7 +2491,7 @@ mod tests {
         object_header(&mut bulk, 11);
         reference(&mut bulk, 20);
         bulk.extend(7u32.to_le_bytes());
-        bulk.extend([0, bulb]);
+        bulk.extend([flag, bulb]);
         if anchor {
             reference(&mut bulk, 12);
         }
@@ -2526,6 +2553,25 @@ mod tests {
         // Anything but 0 or 1 is no light bulb.
         let seg = old_sketch(16, 2, false);
         assert_eq!(light_bulb(&seg, seg.object(10).unwrap()), None);
+    }
+
+    /// A sketch without a feature (mitcad#2493) has 1 in the byte before
+    /// its light bulb: read as such only by [`loose_light_bulb`].
+    #[test]
+    fn reads_the_light_bulb_of_a_loose_sketch() {
+        for (version, anchor) in [(17, true), (15, false)] {
+            for bulb in [0u8, 1] {
+                let seg = old_sketch_flagged(version, 1, bulb, anchor);
+                let sketch = seg.object(10).expect("the sketch");
+                let read = loose_light_bulb(&seg, sketch).expect("read");
+                assert_eq!(read.on, bulb == 1, "class {version}, anchor {anchor}");
+                assert_eq!(read.raw, [7, 0, 0, 0, 1, bulb]);
+                assert_eq!(light_bulb(&seg, sketch), None);
+            }
+        }
+        // A sketch with a feature's layout is not a loose one's.
+        let seg = old_sketch(16, 0, false);
+        assert_eq!(loose_light_bulb(&seg, seg.object(10).unwrap()), None);
     }
 
     /// An ellipse's normal is its major direction across its minor one.

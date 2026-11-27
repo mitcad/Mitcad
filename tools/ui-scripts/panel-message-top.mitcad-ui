@@ -2,7 +2,8 @@
 # A failed preview's message opens at its first line (mitcad#1430), on
 # panel-message-top.json (a 20 mm cube: Sketch1 F1, Extrude1 F2), in a
 # window of 1280 x 800 and the layout the runner chose (Docked, Floating):
-# Extrude1 edited, its distance 0 fails the preview, and the panel's error
+# Extrude1 edited, made Symmetric, its distance -5 fails the preview (a
+# distance of 0 is only a hint, mitcad#2481), and the panel's error
 # box shows its text from the first line: "Panel Extrude message <w>x<h>,"
 # when it all fits, "... scrolling, at 0 of <n>," when it scrolls, never
 # scrolled down its text, also once the panel has settled. (The box had
@@ -22,12 +23,22 @@ wait-log '^Editing F2 with Extrude' 20
 wait-log '^Panel Extrude input distance at ' 20
 wait-idle 30
 
-# Distance 0: the preview fails, its error in the panel's box.
+# Symmetric, then Distance -5: the model refuses the preview (a symmetric
+# distance must be greater than zero), its error in the panel's box. (A
+# distance of 0 only waits for a distance, as a hint, mitcad#2481.)
 mark
-type-in '^Panel Extrude input distance at ' 0
+qt-choice input_direction 'Symmetric'
+wait-log '^Extrude: Direction = Symmetric' 20
+wait-log '^Preview Extrude: ok' 30
+wait-idle 30
+mark
+type-in '^Panel Extrude input distance at ' -5
 wait-log '^Preview Extrude: failed' 30
 wait-log '^Panel Extrude message box: error: ' 10
 wait-log '^Panel Extrude message [0-9]+x[0-9]+(, | scrolling, at 0 of [0-9]+, )panel width ' 10
+# From the error shown on (typing "-5" relays out the panel at its "-",
+# which logs the message hidden as before, while there is none yet).
+mark
 wait-idle 30
 sleep 500
 expect-no-log '^Panel Extrude message [0-9]+x[0-9]+ scrolling, at [1-9]'

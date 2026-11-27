@@ -160,6 +160,39 @@ pub struct SheetState {
     pub gaps: Vec<SheetGap>,
     pub invalidated: Option<SheetDiagnostic>,
     pub blockers: Vec<SheetDiagnostic>,
+    /// A sheet laid flat approximately, by triangulation (mitcad#2442):
+    /// its one chart is the pattern, not the folded faces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approximation: Option<SheetApproximation>,
+}
+
+/// How a sheet laid flat by triangulation (mitcad#2442,
+/// `folded/triangulated.rs`) differs from its faces, and the lines the
+/// triangulation folds it along. Lengths are mm at the neutral surface;
+/// the lines are in its chart's coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SheetApproximation {
+    /// The triangles laid flat.
+    pub triangles: u32,
+    /// The largest difference between a length along the pattern's edges
+    /// and the same length along the faces' edges.
+    pub edges: f64,
+    /// The largest difference between a length across the pattern (along
+    /// a line of the faces between their edges, a triangle's side, a
+    /// diagonal not laid) and the same length on the faces.
+    pub across: f64,
+    /// The strip closes on itself and is opened at a seam.
+    pub seam: bool,
+    /// The triangulation's fold lines: where its triangles meet at an
+    /// angle (radians; positive: folded towards the front).
+    pub folds: Vec<SheetFold>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SheetFold {
+    pub start: [f64; 2],
+    pub end: [f64; 2],
+    pub angle: f64,
 }
 
 impl SheetState {

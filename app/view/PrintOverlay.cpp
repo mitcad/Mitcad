@@ -39,15 +39,21 @@
 #include <Graphic3d_AspectMarker3d.hxx>
 #include <Graphic3d_Group.hxx>
 #include <Graphic3d_Texture2D.hxx>
+#include <Graphic3d_TextureEnv.hxx>
 #include <Graphic3d_TextureParams.hxx>
 #include <Graphic3d_TransformPers.hxx>
 #include <Graphic3d_ZLayerId.hxx>
+#include <Graphic3d_ZLayerSettings.hxx>
 #include <Image_PixMap.hxx>
+#include <NCollection_Sequence.hxx>
 #include <NCollection_Vec2.hxx>
+#include <V3d_View.hxx>
+#include <V3d_Viewer.hxx>
 #include <Prs3d_Presentation.hxx>
 #include <PrsMgr_PresentationManager.hxx>
 #include <Quantity_Color.hxx>
 #include <SelectMgr_Selection.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 
@@ -113,7 +119,8 @@ class PrintTriangles : public AIS_InteractiveObject {
 public:
   explicit PrintTriangles(const PrintOverlay& overlay)
       : m_overhangs(overlay.overhangs), m_thin(overlay.thin), m_overhangColor(overlay.overhangColor),
-        m_thinColor(overlay.thinColor), m_draft(overlay.draft), m_draftColors(overlay.draftColors) {}
+        m_thinColor(overlay.thinColor), m_draft(overlay.draft), m_draftColors(overlay.draftColors),
+        m_zebra(overlay.zebra), m_zebraColors(overlay.zebraColors) {}
 
   bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
 
@@ -137,6 +144,11 @@ protected:
     for (std::size_t c = 0; c < m_draft.size(); ++c) {
       addTriangles(presentation, m_draft[c], m_draftColors[c], kOverhangLift, -1.0f);
     }
+    // A Zebra's dark and light stripes (mitcad#2517), cut along their
+    // borders by the model.
+    for (std::size_t b = 0; b < m_zebra.size(); ++b) {
+      addTriangles(presentation, m_zebra[b], m_zebraColors[b], kOverhangLift, -1.0f);
+    }
   }
   void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}
 
@@ -147,7 +159,180 @@ private:
   QColor m_thinColor;
   std::array<std::vector<float>, 3> m_draft;
   std::array<QColor, 3> m_draftColors;
+  std::array<std::vector<float>, 2> m_zebra;
+  std::array<QColor, 2> m_zebraColors;
 };
+
+// How far a triangle is moved off the face it lies on along its normal:
+// `lift` mm along the cross product of its edges, nothing for a sliver.
+gp_Vec liftOf(const gp_Pnt& a, const gp_Pnt& b, const gp_Pnt& c, double lift) {
+  const gp_Vec normal = gp_Vec(a, b).Crossed(gp_Vec(a, c));
+  const double length = normal.Magnitude();
+  return length > 1e-12 ? normal * (lift / length) : gp_Vec(0.0, 0.0, 0.0);
+}
+
+// A Curvature Map's triangles (mitcad#2517): each corner in its own color,
+// shading across the triangle, flat (light does not darken them), both
+// sides, in front of the faces they lie on; not pickable.
+class ShadedTriangles : public AIS_InteractiveObject {
+public:
+  ShadedTriangles(const std::vector<float>& xyz, const std::vector<QRgb>& colors) : m_xyz(xyz), m_colors(colors) {}
+
+  bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
+
+protected:
+  void Compute(const occ::handle<PrsMgr_PresentationManager>&, const occ::handle<Prs3d_Presentation>& presentation,
+               const int mode) override {
+    const std::size_t count = std::min(m_xyz.size() / 9, m_colors.size() / 3);
+    if (mode != 0 || count == 0) {
+      return;
+    }
+    occ::handle<Graphic3d_ArrayOfTriangles> triangles =
+        new Graphic3d_ArrayOfTriangles(static_cast<int>(count * 3), 0, Graphic3d_ArrayFlags_VertexColor);
+    for (std::size_t t = 0; t < count; ++t) {
+      const float* v = m_xyz.data() + t * 9;
+      const gp_Pnt corners[3] = {gp_Pnt(v[0], v[1], v[2]), gp_Pnt(v[3], v[4], v[5]), gp_Pnt(v[6], v[7], v[8])};
+      const gp_Vec shift = liftOf(corners[0], corners[1], corners[2], kOverhangLift);
+      for (std::size_t k = 0; k < 3; ++k) {
+        triangles->AddVertex(corners[k].Translated(shift), occtColor(QColor::fromRgb(m_colors[t * 3 + k])));
+      }
+    }
+    occ::handle<Graphic3d_AspectFillArea3d> aspect = new Graphic3d_AspectFillArea3d();
+    aspect->SetInteriorStyle(Aspect_IS_SOLID);
+    aspect->SetShadingModel(Graphic3d_TypeOfShadingModel_Unlit);
+    aspect->SetInteriorColor(occtColor(QColor::fromRgb(m_colors[0])));
+    aspect->SetFaceCulling(Graphic3d_TypeOfBackfacingModel_DoubleSided);
+    aspect->SetPolygonOffsets(Aspect_POM_Fill, -1.0f, -1.0f);
+    const occ::handle<Graphic3d_Group> group = presentation->NewGroup();
+    group->SetGroupPrimitivesAspect(aspect);
+    group->AddPrimitiveArray(triangles);
+  }
+  void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}
+
+private:
+  std::vector<float> m_xyz;
+  std::vector<QRgb> m_colors;
+};
+
+// An Isocurve Analysis' curves (mitcad#2517): polylines on the faces (the
+// model's points lifted a little along the face's normal), each point in
+// its color, depth-tested with the bodies; not pickable.
+class IsoLines : public AIS_InteractiveObject {
+public:
+  IsoLines(const std::vector<std::vector<float>>& lines, const std::vector<std::vector<QRgb>>& colors)
+      : m_lines(lines), m_colors(colors) {}
+
+  bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
+
+protected:
+  void Compute(const occ::handle<PrsMgr_PresentationManager>&, const occ::handle<Prs3d_Presentation>& presentation,
+               const int mode) override {
+    std::size_t segments = 0;
+    const std::size_t lines = std::min(m_lines.size(), m_colors.size());
+    for (std::size_t l = 0; l < lines; ++l) {
+      const std::size_t points = std::min(m_lines[l].size() / 3, m_colors[l].size());
+      segments += points > 1 ? points - 1 : 0;
+    }
+    if (mode != 0 || segments == 0) {
+      return;
+    }
+    occ::handle<Graphic3d_ArrayOfSegments> array =
+        new Graphic3d_ArrayOfSegments(static_cast<int>(segments * 2), 0, Graphic3d_ArrayFlags_VertexColor);
+    QRgb first = 0;
+    bool any = false;
+    for (std::size_t l = 0; l < lines; ++l) {
+      const std::vector<float>& line = m_lines[l];
+      const std::vector<QRgb>& shades = m_colors[l];
+      const std::size_t points = std::min(line.size() / 3, shades.size());
+      for (std::size_t i = 0; i + 1 < points; ++i) {
+        for (const std::size_t at : {i, i + 1}) {
+          array->AddVertex(gp_Pnt(line[at * 3], line[at * 3 + 1], line[at * 3 + 2]),
+                           occtColor(QColor::fromRgb(shades[at])));
+        }
+        if (!any) {
+          first = shades[i];
+          any = true;
+        }
+      }
+    }
+    // Each point has its own color; the aspect's is the first point's.
+    occ::handle<Graphic3d_AspectLine3d> aspect =
+        new Graphic3d_AspectLine3d(occtColor(QColor::fromRgb(first)), Aspect_TOL_SOLID, 1.5);
+    const occ::handle<Graphic3d_Group> group = presentation->NewGroup();
+    group->SetGroupPrimitivesAspect(aspect);
+    group->AddPrimitiveArray(array);
+  }
+  void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}
+
+private:
+  std::vector<std::vector<float>> m_lines;
+  std::vector<std::vector<QRgb>> m_colors;
+};
+
+// An Environment Map's faces (mitcad#2517): the triangles with their
+// corners' normals, a little in front of the faces, in a layer of their own
+// that alone takes the view's environment texture: the view's shading
+// reflects the picture in them by the camera's direction (a sphere map), so
+// the reflection moves over the faces as the view turns. Not pickable.
+class MirrorTriangles : public AIS_InteractiveObject {
+public:
+  MirrorTriangles(const std::vector<float>& xyz, const std::vector<float>& normals, const QColor& base)
+      : m_xyz(xyz), m_normals(normals), m_base(base) {}
+
+  bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
+
+protected:
+  void Compute(const occ::handle<PrsMgr_PresentationManager>&, const occ::handle<Prs3d_Presentation>& presentation,
+               const int mode) override {
+    const std::size_t count = std::min(m_xyz.size(), m_normals.size()) / 9;
+    if (mode != 0 || count == 0) {
+      return;
+    }
+    occ::handle<Graphic3d_ArrayOfTriangles> triangles =
+        new Graphic3d_ArrayOfTriangles(static_cast<int>(count * 3), 0, Graphic3d_ArrayFlags_VertexNormal);
+    for (std::size_t t = 0; t < count; ++t) {
+      const float* v = m_xyz.data() + t * 9;
+      const float* n = m_normals.data() + t * 9;
+      const gp_Pnt corners[3] = {gp_Pnt(v[0], v[1], v[2]), gp_Pnt(v[3], v[4], v[5]), gp_Pnt(v[6], v[7], v[8])};
+      const gp_Vec shift = liftOf(corners[0], corners[1], corners[2], kOverhangLift);
+      const gp_Vec facet = shift.Magnitude() > 0.0 ? shift : gp_Vec(0.0, 0.0, 1.0);
+      for (std::size_t k = 0; k < 3; ++k) {
+        const gp_Vec normal(n[k * 3], n[k * 3 + 1], n[k * 3 + 2]);
+        triangles->AddVertex(corners[k].Translated(shift),
+                             gp_Dir(normal.Magnitude() > 1e-9 ? normal : facet));
+      }
+    }
+    occ::handle<Graphic3d_AspectFillArea3d> aspect = new Graphic3d_AspectFillArea3d();
+    aspect->SetInteriorStyle(Aspect_IS_SOLID);
+    aspect->SetInteriorColor(occtColor(m_base));
+    aspect->SetFaceCulling(Graphic3d_TypeOfBackfacingModel_DoubleSided);
+    aspect->SetPolygonOffsets(Aspect_POM_Fill, -1.0f, -1.0f);
+    const occ::handle<Graphic3d_Group> group = presentation->NewGroup();
+    group->SetGroupPrimitivesAspect(aspect);
+    group->AddPrimitiveArray(triangles);
+  }
+  void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}
+
+private:
+  std::vector<float> m_xyz;
+  std::vector<float> m_normals;
+  QColor m_base;
+};
+
+// A picture as OCCT's pixels, top row first.
+occ::handle<Image_PixMap> pixelsOf(const QImage& image) {
+  const QImage straight = image.convertToFormat(QImage::Format_ARGB32);
+  occ::handle<Image_PixMap> pixels = new Image_PixMap();
+  pixels->InitZero(Image_Format_BGRA, static_cast<std::size_t>(straight.width()),
+                   static_cast<std::size_t>(straight.height()));
+  pixels->SetTopDown(true);
+  // QImage's ARGB32 is B, G, R, A in memory on little-endian machines.
+  for (int y = 0; y < straight.height(); ++y) {
+    std::memcpy(pixels->ChangeRow(static_cast<std::size_t>(y)), straight.constScanLine(y),
+                static_cast<std::size_t>(straight.width()) * 4);
+  }
+  return pixels;
+}
 
 // The narrow gaps between bodies (mitcad#1519): a line between each gap's
 // closest points and a dot at each end, in the gaps' colour, over the
@@ -399,14 +584,35 @@ void OcctViewer::setPrintOverlay(const PrintOverlay& overlay) {
     m_printTriangles.Nullify();
   }
   const bool drafts = !overlay.draft[0].empty() || !overlay.draft[1].empty() || !overlay.draft[2].empty();
-  if (!overlay.overhangs.empty() || !overlay.thin.empty() || drafts) {
+  const bool stripes = !overlay.zebra[0].empty() || !overlay.zebra[1].empty(); // mitcad#2517
+  if (!overlay.overhangs.empty() || !overlay.thin.empty() || drafts || stripes) {
     m_printTriangles = new PrintTriangles(overlay);
     m_context->Display(m_printTriangles, 0, -1, false);
   }
+  // A Curvature Map's colored triangles, an Isocurve Analysis' curves and
+  // an Environment Map's mirrored faces (mitcad#2517).
+  for (occ::handle<AIS_InteractiveObject>* object : {&m_surfaceShading, &m_surfaceLines}) {
+    if (!object->IsNull()) {
+      m_context->Remove(*object, false);
+      object->Nullify();
+    }
+  }
+  if (!overlay.shaded.empty()) {
+    m_surfaceShading = new ShadedTriangles(overlay.shaded, overlay.shadedColors);
+    m_context->Display(m_surfaceShading, 0, -1, false);
+  }
+  if (!overlay.isoLines.empty()) {
+    m_surfaceLines = new IsoLines(overlay.isoLines, overlay.isoColors);
+    m_context->Display(m_surfaceLines, 0, -1, false);
+  }
+  setEnvironmentMap(overlay);
   if (!m_printGaps.IsNull()) {
     m_context->Remove(m_printGaps, false);
     m_printGaps.Nullify();
   }
+  m_printGapRole = !overlay.distanceLine           ? ColorRole::PrintGap
+                   : overlay.closerThanClearance ? ColorRole::Interference
+                                                 : ColorRole::PreviewTarget;
   if (!overlay.gaps.empty()) {
     m_printGaps = new PrintGaps(overlay.gaps, overlay.gapColor);
     m_context->Display(m_printGaps, 0, -1, false);
@@ -443,6 +649,51 @@ void OcctViewer::setPrintOverlay(const PrintOverlay& overlay) {
   sceneChanged();
 }
 
+void OcctViewer::setEnvironmentMap(const PrintOverlay& overlay) {
+  // An Environment Map (mitcad#2517): its faces in a layer of their own,
+  // the only one that takes the view's environment texture, which is set
+  // to the picture only while one is shown.
+  if (!m_surfaceMirror.IsNull()) {
+    m_context->Remove(m_surfaceMirror, false);
+    m_surfaceMirror.Nullify();
+  }
+  if (overlay.mirror.empty() || overlay.environment.isNull()) {
+    if (!m_view->TextureEnv().IsNull()) {
+      m_view->SetTextureEnv(occ::handle<Graphic3d_TextureEnv>());
+    }
+    return;
+  }
+  if (m_environmentLayer == Graphic3d_ZLayerId_UNKNOWN) {
+    // Just after the bodies' layer, against their depth; the layers of the
+    // edges come after it.
+    Graphic3d_ZLayerSettings mirror;
+    mirror.SetName("environment map");
+    mirror.SetClearDepth(false);
+    mirror.SetEnvironmentTexture(true);
+    m_viewer->InsertLayerAfter(m_environmentLayer, mirror, Graphic3d_ZLayerId_Default);
+    // Every other layer draws without it: the bodies, the edges, the
+    // sketches and the overlays keep their own shading.
+    NCollection_Sequence<int> layers;
+    m_viewer->GetAllZLayers(layers);
+    for (int i = 1; i <= layers.Length(); ++i) {
+      const int layer = layers.Value(i);
+      if (layer == m_environmentLayer) {
+        continue;
+      }
+      Graphic3d_ZLayerSettings settings = m_viewer->ZLayerSettings(layer);
+      if (settings.UseEnvironmentTexture()) {
+        settings.SetEnvironmentTexture(false);
+        m_viewer->SetZLayerSettings(layer, settings);
+      }
+    }
+  }
+  occ::handle<Graphic3d_TextureEnv> texture = new Graphic3d_TextureEnv(pixelsOf(overlay.environment));
+  m_view->SetTextureEnv(texture);
+  m_surfaceMirror = new MirrorTriangles(overlay.mirror, overlay.mirrorNormals, overlay.zebraColors[1]);
+  m_context->Display(m_surfaceMirror, 0, -1, false);
+  m_context->SetZLayer(m_surfaceMirror, m_environmentLayer);
+}
+
 PrintOverlayLabels::PrintOverlayLabels(OcctViewer* viewer, occ::handle<AIS_InteractiveContext> context,
                                        std::function<void()> changed)
     : QObject(viewer), m_viewer(viewer), m_context(std::move(context)), m_changed(std::move(changed)),
@@ -476,6 +727,7 @@ void PrintOverlayLabels::setOverlay(const PrintOverlay& overlay) {
   m_unmeasuredColor = overlay.unmeasuredColor;
   m_title = overlay.title;
   m_entries = overlay.legend;
+  m_surface = overlay.surface;
   m_markerColor = overlay.thinColor;
   m_shown = !overlay.isEmpty();
   paintCards();
@@ -485,8 +737,13 @@ void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin, c
                                    const std::array<QColor, 3>& draft) {
   // The legend's categories: a Draft Analysis' classes have their colours
   // (mitcad#2166), the thin walls' entry has the marker's colour, the
-  // narrow gaps' the gap marker's, the other is the overhangs'.
+  // narrow gaps' the gap marker's, the other is the overhangs'. A surface
+  // quality analysis' colors are the same on either background
+  // (mitcad#2517): its entries stay.
   for (auto& entry : m_entries) {
+    if (m_surface) {
+      break;
+    }
     // A Point Cloud Deviation's scale (mitcad#2240) keeps its colours: its
     // points were coloured with them.
     if (entry.first.isValid() &&
@@ -513,7 +770,8 @@ void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin, c
 void OcctViewer::recolorPrintOverlay() {
   const QColor overhang = viewColor(ColorRole::PrintOverhang, m_backgroundDark);
   const QColor thin = viewColor(ColorRole::PrintThin, m_backgroundDark);
-  const QColor gap = viewColor(ColorRole::PrintGap, m_backgroundDark);
+  // A Minimum Distance's line in its own role (mitcad#2519).
+  const QColor gap = viewColor(m_printGapRole, m_backgroundDark);
   const std::array<QColor, 3> draft = {viewColor(ColorRole::DraftPositive, m_backgroundDark),
                                        viewColor(ColorRole::DraftUnder, m_backgroundDark),
                                        viewColor(ColorRole::DraftNegative, m_backgroundDark)};

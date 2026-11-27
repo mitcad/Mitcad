@@ -27,6 +27,12 @@
 // (RemoteController::bringUpToDate, mitcad#2397), and a request for a lock
 // the mode holds (or a lending tab holds) is answered by ending the mode
 // (endInPlaceFor) before the lock is handed over.
+//
+// Kept edits never go over the design's own saves unasked (mitcad#2527):
+// opening the design in a tab asks about them first (settleInPlaceForOpen),
+// and a write without a tab asks when a tab has the file open or the file
+// changed on disk since it was read (askInPlaceWrite); while the mode edits
+// a design without a tab, the design does not open in a tab.
 #include "../MainWindow.hpp"
 
 #include <cstdint>
@@ -51,6 +57,7 @@
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Json.hpp"
+#include "Autosave.hpp"
 #include "LinkedFiles.hpp"
 #include "LockController.hpp"
 #include "RemoteController.hpp"
@@ -70,6 +77,15 @@ void markSaved(Document& document) {
 bool documentModified(const Document& document) {
   const QByteArray query = compactJson({{QStringLiteral("query"), QStringLiteral("document")}});
   return parseObject(document.query(rustStr(query))).value(QStringLiteral("modified")).toBool();
+}
+
+// The file's content (fileDigest); empty when it cannot be read.
+QString digestOfFile(const QString& path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    return QString();
+  }
+  return fileDigest(file.readAll());
 }
 
 } // namespace
@@ -250,6 +266,9 @@ void MainWindow::editInPlace(const QString& component) {
   m_inPlaceName = name;
   m_inPlaceFile = file;
   m_inPlaceTab = tab;
+  // The file as read, for the writes without a tab (askInPlaceWrite): the
+  // kept edits' when they come back.
+  m_inPlaceDigest = tab ? QString() : fromKept ? m_inPlaceKeptDigest : fileDigest(json);
   // Drawn faded from the first refresh on (mitcad#2353).
   m_inPlaceOccurrence = begun.value(QStringLiteral("occurrence")).toString();
   m_measureHistory.clear();
@@ -329,7 +348,9 @@ void MainWindow::finishEditInPlace() {
   if (unsaved) {
     m_inPlaceKeptComponent = m_inPlaceComponent;
     m_inPlaceKeptFile = m_inPlaceFile;
+    m_inPlaceKeptDigest = m_inPlaceDigest;
   }
+  m_inPlaceDigest.clear();
   // The lock held for the mode goes with it (mitcad#2389); kept unsaved
   // edits take it again when the holder's Save writes them.
   if (m_locks != nullptr) {
@@ -379,8 +400,16 @@ bool MainWindow::saveInPlaceDesign() {
     showError(tr("Could not save %1:\n%2").arg(QDir::toNativeSeparators(m_inPlaceFile), errorText(e)));
     return false;
   }
+  // Without a tab: not over a tab that has the file open now, nor over
+  // what changed on disk since it was read, unasked (mitcad#2527).
+  if (!m_inPlaceTab && askInPlaceWrite(m_inPlaceFile, m_inPlaceDigest, false) != InPlaceWrite::Write) {
+    return false;
+  }
   if (!writeInPlaceDesign(*m_document, m_inPlaceFile, m_inPlaceTab)) {
     return false;
+  }
+  if (!m_inPlaceTab) {
+    m_inPlaceDigest = digestOfFile(m_inPlaceFile);
   }
   updateWindowTitle();
   qInfo().noquote() << QStringLiteral("Edit in Place: saved %1").arg(m_inPlaceFile);
@@ -389,6 +418,24 @@ bool MainWindow::saveInPlaceDesign() {
 
 bool MainWindow::writeInPlaceDesign(Document& document, const QString& file, const QPointer<MainWindow>& tab) {
   const QString name = fileNameOf(file);
+  // What the design's file has that this MitCad did not read (fields a
+  // newer MitCad wrote, mitcad#1132; a CAM section it could not read,
+  // mitcad#2581): writing over the file drops it, so it asks first as Save
+  // does (Save As has no place here: the link names this file); an agent's
+  // save is refused.
+  {
+    FieldsNotRead notRead;
+    try {
+      const QByteArray request = compactJson(
+          {{QStringLiteral("query"), QStringLiteral("unknown_fields")}, {QStringLiteral("path"), file}});
+      notRead = fieldsNotRead(parseObject(document.query(rustStr(request))));
+    } catch (const std::exception& e) {
+      qWarning().noquote() << QStringLiteral("Unknown fields not read: %1").arg(errorText(e));
+    }
+    if (!askDropFieldsNotRead(notRead, file, false)) {
+      return false;
+    }
+  }
   // The project's edit lock (mitcad#2353), as a save from the design's own
   // tab respects it: the tab that lent the design holds it, or says why
   // not; the mode without a tab holds it since it started (mitcad#2389);
@@ -506,6 +553,19 @@ bool MainWindow::saveInPlaceEdits() {
       return false;
     }
   } else if (m_inPlaceKept) {
+    // Not over a tab that has the file open now, nor over what changed on
+    // disk since it was read, unasked (mitcad#2527).
+    switch (askInPlaceWrite(m_inPlaceKeptFile, m_inPlaceKeptDigest, true)) {
+    case InPlaceWrite::Write:
+      break;
+    case InPlaceWrite::Drop:
+      m_inPlaceSaving.clear();
+      dropKeptInPlaceEdits();
+      return true;
+    case InPlaceWrite::Cancel:
+      m_inPlaceSaving.clear();
+      return false;
+    }
     // With its edit lock and its version, as a save in the mode
     // (mitcad#2353).
     if (!writeInPlaceDesign(**m_inPlaceKept, m_inPlaceKeptFile, nullptr)) {
@@ -705,14 +765,128 @@ bool MainWindow::endInPlaceFor(const QString& path, InPlaceEnd how) {
   }
   if (how == InPlaceEnd::Discard && !fromTab && m_inPlaceKept && sameFile(m_inPlaceKeptFile, path)) {
     // Not saved, as asked: as Don't Save on closing drops them.
-    m_inPlaceKept.reset();
-    qInfo().noquote() << QStringLiteral("Edit in Place: the unsaved changes made in place to %1 dropped").arg(name);
-    showStatus(tr("The changes made in place to %1 were not saved. The assembly keeps what it took from them as one "
-                  "step, which Undo takes back.")
-                   .arg(name),
-               NoticeLevel::Information);
+    dropKeptInPlaceEdits();
   }
   return true;
+}
+
+void MainWindow::dropKeptInPlaceEdits() {
+  const QString name = fileNameOf(m_inPlaceKeptFile);
+  m_inPlaceKept.reset();
+  m_inPlaceKeptDigest.clear();
+  qInfo().noquote() << QStringLiteral("Edit in Place: the unsaved changes made in place to %1 dropped").arg(name);
+  showStatus(tr("The changes made in place to %1 were not saved. The assembly keeps what it took from them as one "
+                "step, which Undo takes back.")
+                 .arg(name),
+             NoticeLevel::Information);
+}
+
+MainWindow::InPlaceWrite MainWindow::askInPlaceWrite(const QString& file, const QString& digest, bool canDrop) {
+  const QString name = fileNameOf(file);
+  MainWindow* tab = m_windowManager != nullptr ? m_windowManager->findByPath(file) : nullptr;
+  const bool tabOpen = tab != nullptr && tab != this;
+  // Changed on disk: what it has now is not what was read or last written
+  // here (nothing to lose when it is gone).
+  const bool changed = !tabOpen && !digest.isEmpty() && QFileInfo::exists(file) && digestOfFile(file) != digest;
+  if (!tabOpen && !changed) {
+    return InPlaceWrite::Write;
+  }
+  if (tabOpen && !canDrop) {
+    qInfo().noquote() << QStringLiteral("Edit in Place: %1 is open in a tab of its own: not written").arg(name);
+    showError(tr("%1 is open in a tab of its own: the changes made in place are not saved over it.").arg(name));
+    return InPlaceWrite::Cancel;
+  }
+  qInfo().noquote() << QStringLiteral("Save question: %1 (in place, %2)")
+                           .arg(name, tabOpen ? QStringLiteral("open in a tab") : QStringLiteral("changed on disk"));
+  QMessageBox box(QMessageBox::Warning, tr("MitCad"),
+                  tabOpen ? tr("%1 is open in a tab of its own.").arg(name)
+                          : tr("%1 changed on disk after it was edited in place.").arg(name),
+                  QMessageBox::NoButton, this);
+  QPushButton* overwriteButton = nullptr;
+  if (tabOpen) {
+    box.setInformativeText(tr("The changes made to it in place in %1 are not saved over the design of its tab. "
+                              "Don't Save drops them; %1 keeps what it took from them.")
+                               .arg(documentName()));
+  } else {
+    box.setInformativeText(tr("Overwrite writes the changes made in place in %1 over what the file has now.")
+                               .arg(documentName()));
+    overwriteButton = box.addButton(tr("&Overwrite"), QMessageBox::DestructiveRole);
+  }
+  QPushButton* dropButton = canDrop ? box.addButton(tr("&Don't Save"), QMessageBox::DestructiveRole) : nullptr;
+  QPushButton* cancelButton = box.addButton(QMessageBox::Cancel);
+  box.setDefaultButton(cancelButton);
+  prepareModal(&box);
+  execDialog(&box);
+  if (overwriteButton != nullptr && box.clickedButton() == overwriteButton) {
+    qInfo().noquote() << QStringLiteral("Save question: %1 overwritten").arg(name);
+    return InPlaceWrite::Write;
+  }
+  if (dropButton != nullptr && box.clickedButton() == dropButton) {
+    return InPlaceWrite::Drop;
+  }
+  qInfo().noquote() << QStringLiteral("Save question: %1 canceled").arg(name);
+  return InPlaceWrite::Cancel;
+}
+
+bool MainWindow::settleInPlaceForOpen(const QString& path, QString& error) {
+  if (m_windowManager == nullptr) {
+    return true;
+  }
+  QList<QPointer<MainWindow>> windows;
+  for (MainWindow* window : m_windowManager->windows()) {
+    windows << window;
+  }
+  for (const QPointer<MainWindow>& window : windows) {
+    if (!window) {
+      continue; // closed while a question was open
+    }
+    // Edited in place without a tab: one file is never edited in two
+    // documents.
+    if (window->m_inPlaceHolder && !window->m_inPlaceTab && sameFile(window->m_inPlaceFile, path)) {
+      qInfo().noquote() << QStringLiteral("Edit in Place: %1 not opened: edited in place in %2")
+                               .arg(fileNameOf(path), window->documentName());
+      error = tr("%1 is edited in place in %2: finish there first.").arg(fileNameOf(path), window->documentName());
+      return false;
+    }
+    if (window->m_inPlaceKept && sameFile(window->m_inPlaceKeptFile, path) && !window->settleKeptForOpen(error)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool MainWindow::settleKeptForOpen(QString& error) {
+  const QString name = fileNameOf(m_inPlaceKeptFile);
+  // Their save records the file in this window's link: not while a job
+  // computes its document.
+  if (modelBusy()) {
+    qInfo().noquote() << QStringLiteral("Edit in Place: %1 not opened: %2 is busy with changes made in place to it")
+                             .arg(name, documentName());
+    error = tr("%1 has changes made in place to %2 that are not saved yet: try again when %1 is done computing.")
+                .arg(documentName(), name);
+    return false;
+  }
+  qInfo().noquote() << QStringLiteral("Save question: %1 (in place, before it opens in a tab)").arg(name);
+  QMessageBox box(QMessageBox::Warning, tr("MitCad"),
+                  tr("Save the changes made in place to %1 before it opens?").arg(name),
+                  QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, this);
+  box.setInformativeText(tr("They were made in %1 and are not saved yet. If you don't save them, %2 opens as it was "
+                            "saved, and %1 keeps what it took from them.")
+                             .arg(documentName(), name));
+  box.button(QMessageBox::Save)->setText(tr("&Save"));
+  box.button(QMessageBox::Discard)->setText(tr("&Don't Save"));
+  box.setDefaultButton(QMessageBox::Save);
+  prepareModal(&box);
+  switch (execDialog(&box)) {
+  case QMessageBox::Save:
+    return saveInPlaceEdits();
+  case QMessageBox::Discard:
+    dropKeptInPlaceEdits();
+    return true;
+  default:
+    qInfo().noquote() << QStringLiteral("Save question: %1 canceled").arg(name);
+    return false;
+  }
 }
 
 } // namespace mitcad

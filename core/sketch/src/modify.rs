@@ -327,6 +327,7 @@ impl SketchEdit<'_> {
         self.drop_constraints(&constraints);
         for projection in &mut self.def.projections {
             projection.entities.retain(|r| !entities.contains(&r.uid()));
+            projection.keep_listed_boundaries();
         }
         self.def.projections.retain(|p| !p.entities.is_empty());
         // Patterns forget what is gone; one without originals or centre
@@ -733,6 +734,9 @@ impl SketchEdit<'_> {
     }
 
     fn drag_goals(&mut self, goals: &[Goal]) -> Result<(), String> {
+        // Where the geometry of the dimensions with a placed value is
+        // before the drag (mitcad#2580).
+        let placed = self.placed_dimension_points();
         let params = &*self.params;
         let solved = self
             .def
@@ -771,9 +775,86 @@ impl SketchEdit<'_> {
                 },
             );
         }
+        self.carry_dimension_texts(&placed);
         // What finishing the edit would solve again (mitcad#679).
         self.dragged = Some(Box::new((self.def.clone(), self.params.clone(), solved)));
         Ok(())
+    }
+
+    /// The dimensions with a placed value, by index, each with the points
+    /// of its geometry and where they are now (mitcad#2580): a point
+    /// itself, a curve's points (ends, centre, control points); an equal
+    /// spacing's dimension its constraint's. A dimension whose geometry is
+    /// missing is left out.
+    fn placed_dimension_points(&self) -> Vec<(usize, Vec<(EntityUid, P2)>)> {
+        let mut placed = Vec::new();
+        'dimensions: for (i, d) in self.def.dimensions.iter().enumerate() {
+            if d.text.is_none() {
+                continue;
+            }
+            let mut points = BTreeSet::new();
+            for r in self.def.dimension_refs(d) {
+                match self.def.entity(r.uid()) {
+                    Some(e) if e.is_point() => {
+                        points.insert(e.id);
+                    }
+                    Some(e) => points.extend(e.kind.points()),
+                    None => continue 'dimensions,
+                }
+            }
+            let mut places = Vec::with_capacity(points.len());
+            for p in points {
+                match self.at(p) {
+                    Ok(at) => places.push((p, at)),
+                    Err(_) => continue 'dimensions,
+                }
+            }
+            if !places.is_empty() {
+                placed.push((i, places));
+            }
+        }
+        placed
+    }
+
+    /// Carries the placed values of dimensions whose geometry a drag or
+    /// move translated together (mitcad#2580, GitHub mitcad/Mitcad#739):
+    /// where every point of a dimension's geometry moved by the same
+    /// offset, its value moves by that offset too, so it stays where it
+    /// was put beside what it measures, also after it was dragged by
+    /// hand. The offset is the one the solve made, not the one asked for:
+    /// a move the constraints hold back moves the value as far as the
+    /// geometry went, a blocked one leaves it. A dimension to geometry
+    /// that stays, or whose geometry changes shape, keeps its value where
+    /// it is and goes on spanning its own references. `placed` is
+    /// [`SketchEdit::placed_dimension_points`] from before the solve.
+    fn carry_dimension_texts(&mut self, placed: &[(usize, Vec<(EntityUid, P2)>)]) {
+        // Points that moved within this of one offset moved together; an
+        // offset within it is no move. Above the solver's noise (also of
+        // its looser second solve) and far below what the view shows.
+        const TOGETHER: f64 = 1e-5;
+        'dimensions: for (i, points) in placed {
+            let mut shifts = Vec::with_capacity(points.len());
+            for &(p, was) in points {
+                match self.at(p) {
+                    Ok(now) => shifts.push(sub(now, was)),
+                    Err(_) => continue 'dimensions,
+                }
+            }
+            let n = shifts.len() as f64;
+            let total = shifts.iter().fold([0.0, 0.0], |sum, s| add(sum, *s));
+            let by = scale(total, 1.0 / n);
+            if norm(by) <= TOGETHER || shifts.iter().any(|s| dist(*s, by) > TOGETHER) {
+                continue;
+            }
+            if let Some(text) = self
+                .def
+                .dimensions
+                .get_mut(*i)
+                .and_then(|d| d.text.as_mut())
+            {
+                *text = add(*text, by);
+            }
+        }
     }
 
     /// The points of entities: points themselves and the points of curves.

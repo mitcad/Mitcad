@@ -48,6 +48,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/profile.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -246,7 +247,7 @@ void test_wider_strip() { round_and_check("strip 1.5", 1.5); }
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_narrow_face_hole_wall) {
   test::guarded("test_report_proportions", test::test_report_proportions);
   test::guarded("test_half_wide_strip", test::test_half_wide_strip);
   test::guarded("test_wider_strip", test::test_wider_strip);

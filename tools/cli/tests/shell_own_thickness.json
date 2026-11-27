@@ -92,7 +92,7 @@
     "face_thicknesses": [{"faces": ["F17:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "inside": 5}]}},
   {"expect": {"feature": "Shell6", "status": "ok", "body": "Body6", "volume": 17760}},
 
-  {"comment": "Rounded outside is refused: the rounding along the bottom's edges would join the 5 mm bottom to the 2 mm sides (Sketch7 F19, Extrude7 F20, Shell7 F21); the block stays as it was."},
+  {"comment": "Rounded outside (mitcad#2488; Sketch7 F19, Extrude7 F20, Shell7 F21): the rounding along the bottom's edges runs from the 5 mm bottom to the 2 mm sides (a quarter ellipse 2 mm across and 5 mm down), the bottom's corners eighths of an ellipsoid 2, 2 and 5 mm, the vertical edges rounded 2 mm: 20000 + 1780 pi / 3 mm3. The bottom measures 5 mm, the sides 2 mm."},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_rectangle", "sketch": "F19", "corner": [700, 0], "width": 60, "height": 40},
   {"cmd": "add_feature", "def": {"type": "extrude",
@@ -101,6 +101,9 @@
   {"cmd": "add_feature", "def": {"type": "shell", "body": "F20.b0",
     "faces": ["F20:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "outside": 2, "rounded": true,
     "face_thicknesses": [{"faces": ["F20:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"], "outside": 5}]}},
-  {"expect": {"feature": "Shell7", "status": "error", "error_contains": "rounds only walls of one thickness"}},
-  {"expect": {"body": "Body7", "volume": 48000}}
+  {"expect": {"feature": "Shell7", "status": "ok", "body": "Body7", "volume": 21864.011641129942}},
+  {"expect": {"query": {"query": "measure", "a": "Body7/F20:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})", "b": "Body7/F21:offset(F20:start(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}))"},
+    "result": {"between": {"offset": 5}}}},
+  {"expect": {"query": {"query": "measure", "a": "Body7/F20:side(c1[c4,c2])", "b": "Body7/F21:offset(F20:side(c1[c4,c2]))"},
+    "result": {"between": {"offset": 2}}}}
 ]

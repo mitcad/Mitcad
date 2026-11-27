@@ -28,6 +28,7 @@
 #include <initializer_list>
 #include <memory>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <QColor>
@@ -44,6 +45,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPdfWriter>
+#include <QPen>
 #include <QTextItem>
 #include <QPixmap>
 #include <QPointF>
@@ -1235,6 +1237,205 @@ void drawingPdfTests() {
   CHECK(boxIs(one, 0, 420.0, 297.0));
 }
 
+// A line or a path painted: where (the device's pixels) and with what pen
+// (its width in pixels, its dashes in its widths).
+struct StrokedItem {
+  QLineF line;     // a line's ends; empty for a path
+  QRectF bounds;   // a path's bounds; empty for a line
+  QPen pen;
+  double scale = 1.0; // device pixels per unit of the pen
+};
+
+class PenRecordingEngine : public QPaintEngine {
+public:
+  PenRecordingEngine() : QPaintEngine(QPaintEngine::AllFeatures) {}
+  bool begin(QPaintDevice*) override { return true; }
+  bool end() override { return true; }
+  void updateState(const QPaintEngineState& changed) override {
+    if (changed.state() & QPaintEngine::DirtyTransform) {
+      m_transform = changed.transform();
+    }
+    if (changed.state() & QPaintEngine::DirtyPen) {
+      m_pen = changed.pen();
+    }
+  }
+  using QPaintEngine::drawLines;
+  void drawLines(const QLineF* lines, int count) override {
+    for (int i = 0; i < count; ++i) {
+      stroked.push_back({m_transform.map(lines[i]), QRectF(), m_pen, scaleOf()});
+    }
+  }
+  using QPaintEngine::drawPolygon;
+  void drawPolygon(const QPointF*, int, PolygonDrawMode) override {}
+  void drawPath(const QPainterPath& path) override {
+    stroked.push_back({QLineF(), m_transform.map(path).boundingRect(), m_pen, scaleOf()});
+  }
+  void drawPixmap(const QRectF&, const QPixmap&, const QRectF&) override {}
+  Type type() const override { return QPaintEngine::User; }
+
+  std::vector<StrokedItem> stroked;
+
+private:
+  double scaleOf() const { return std::sqrt(std::abs(m_transform.determinant())); }
+  QTransform m_transform;
+  QPen m_pen;
+};
+
+class PenRecordingDevice : public QPaintDevice {
+public:
+  PenRecordingDevice(int dpi, const QSizeF& mm) : m_dpi(dpi), m_mm(mm) {}
+  QPaintEngine* paintEngine() const override { return &m_engine; }
+  const std::vector<StrokedItem>& stroked() const { return m_engine.stroked; }
+
+protected:
+  int metric(PaintDeviceMetric which) const override {
+    switch (which) {
+    case PdmWidth:
+      return static_cast<int>(std::ceil(m_mm.width() * m_dpi / 25.4));
+    case PdmHeight:
+      return static_cast<int>(std::ceil(m_mm.height() * m_dpi / 25.4));
+    case PdmWidthMM:
+      return static_cast<int>(std::ceil(m_mm.width()));
+    case PdmHeightMM:
+      return static_cast<int>(std::ceil(m_mm.height()));
+    case PdmDpiX:
+    case PdmDpiY:
+    case PdmPhysicalDpiX:
+    case PdmPhysicalDpiY:
+      return m_dpi;
+    case PdmDepth:
+      return 32;
+    case PdmNumColors:
+      return INT_MAX;
+    case PdmDevicePixelRatio:
+      return 1;
+    case PdmDevicePixelRatioScaled:
+      return static_cast<int>(QPaintDevice::devicePixelRatioFScale());
+    default:
+      return QPaintDevice::metric(which);
+    }
+  }
+
+private:
+  int m_dpi;
+  QSizeF m_mm;
+  mutable PenRecordingEngine m_engine;
+};
+
+// File › Print of a drawing's hidden edges (mitcad#2477, GitHub #695): the
+// sheet's SVG as the model writes it (core/model-drawing/src/svg.rs: a
+// hidden line 40 mm long, a hidden circle of radius 5 as its two halves
+// from its top, a visible line), printed as printSheets paints it. The
+// print engine gets each hidden edge where the sheet has it with the pen
+// table's pen (0.18 mm, 3 mm dashes 1 mm apart, round caps), the visible
+// line continuous; painted on pixels at 600 dpi the hidden line shows its
+// 10 dashes, each at its place on the sheet.
+void drawingHiddenEdgePrintTests() {
+  QTemporaryDir folder;
+  CHECK(folder.isValid());
+  const QString path = folder.filePath(QStringLiteral("sheet.svg"));
+  {
+    QFile file(path);
+    CHECK(file.open(QIODevice::WriteOnly));
+    const char* svg =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200mm\" height=\"100mm\" viewBox=\"0 0 200 100\">\n"
+        "<rect x=\"0\" y=\"0\" width=\"200\" height=\"100\" fill=\"white\"/>\n"
+        "<g class=\"view\" id=\"view-1\">\n"
+        "<line x1=\"10\" y1=\"80\" x2=\"50\" y2=\"80\" fill=\"none\" stroke=\"black\" stroke-width=\"0.18\" "
+        "stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-dasharray=\"3 1\"/>\n"
+        "<path d=\"M 100 45 A 5 5 0 0 0 100 55 A 5 5 0 0 0 100 45\" fill=\"none\" stroke=\"black\" "
+        "stroke-width=\"0.18\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-dasharray=\"3 1\"/>\n"
+        "<line x1=\"10\" y1=\"20\" x2=\"190\" y2=\"20\" fill=\"none\" stroke=\"black\" stroke-width=\"0.35\" "
+        "stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n"
+        "</g>\n"
+        "</svg>\n";
+    CHECK(file.write(svg) > 0);
+  }
+  QString error;
+  const PrintPicture sheet = svgPicture(path, &error);
+  CHECK(sheet.valid());
+  if (!sheet.valid()) {
+    return;
+  }
+  constexpr int kDpi = 600;
+  constexpr double pixelsPerMm = kDpi / 25.4;
+  // As printSheets paints a sheet on paper of its size.
+  const auto paintSheet = [&sheet](QPainter& painter) {
+    painter.scale(pixelsPerMm, pixelsPerMm);
+    painter.setClipRect(QRectF(QPointF(0.0, 0.0), sheet.size));
+    sheet.paint(painter, 1.0);
+  };
+  PenRecordingDevice device(kDpi, sheet.size);
+  {
+    QPainter painter(&device);
+    paintSheet(painter);
+  }
+  const auto hiddenPen = [](const StrokedItem& item) {
+    const QPen& pen = item.pen;
+    const QVector<qreal> dashes = pen.dashPattern();
+    return pen.style() == Qt::CustomDashLine && dashes.size() == 2 && near(pen.widthF(), 0.18, 1e-9) &&
+           near(dashes[0] * pen.widthF(), 3.0, 1e-9) && near(dashes[1] * pen.widthF(), 1.0, 1e-9) &&
+           near(pen.dashOffset(), 0.0, 1e-12) && pen.capStyle() == Qt::RoundCap &&
+           near(item.scale, pixelsPerMm, 1e-6);
+  };
+  int hiddenLines = 0;
+  int hiddenCircles = 0;
+  int visible = 0;
+  for (const StrokedItem& item : device.stroked()) {
+    if (!item.line.isNull()) {
+      if (near(item.line.p1().y(), 80.0 * pixelsPerMm, 0.5)) {
+        ++hiddenLines;
+        CHECK(hiddenPen(item));
+        CHECK(near(item.line.p1().x(), 10.0 * pixelsPerMm, 0.5) && near(item.line.p2().x(), 50.0 * pixelsPerMm, 0.5));
+      } else if (near(item.line.p1().y(), 20.0 * pixelsPerMm, 0.5)) {
+        ++visible;
+        CHECK(item.pen.style() == Qt::SolidLine && near(item.pen.widthF(), 0.35, 1e-9));
+      }
+    } else if (item.pen.style() != Qt::NoPen && item.bounds.width() < 20.0 * pixelsPerMm &&
+               near(item.bounds.center().x(), 100.0 * pixelsPerMm, 1.0) &&
+               near(item.bounds.center().y(), 50.0 * pixelsPerMm, 1.0)) {
+      ++hiddenCircles;
+      CHECK(hiddenPen(item));
+      CHECK(near(item.bounds.width(), 10.0 * pixelsPerMm, 1.0) && near(item.bounds.height(), 10.0 * pixelsPerMm, 1.0));
+    }
+  }
+  CHECK(hiddenLines == 1);
+  CHECK(hiddenCircles == 1);
+  CHECK(visible == 1);
+
+  // On pixels: the band of the sheet from y 75 to 85 mm, 60 mm wide; the
+  // hidden line's row (y 80 mm) between x 5 and 55 mm.
+  QImage image(static_cast<int>(std::ceil(60.0 * pixelsPerMm)), static_cast<int>(std::ceil(10.0 * pixelsPerMm)),
+               QImage::Format_RGB32);
+  image.fill(Qt::white);
+  {
+    QPainter painter(&image);
+    painter.translate(0.0, -75.0 * pixelsPerMm);
+    paintSheet(painter);
+  }
+  const int row = static_cast<int>(std::floor(5.0 * pixelsPerMm));
+  std::vector<std::pair<int, int>> runs;
+  int start = -1;
+  for (int x = static_cast<int>(5.0 * pixelsPerMm); x < static_cast<int>(55.0 * pixelsPerMm); ++x) {
+    const bool ink = qGray(image.pixel(x, row)) < 128;
+    if (ink && start < 0) {
+      start = x;
+    } else if (!ink && start >= 0) {
+      runs.emplace_back(start, x - 1);
+      start = -1;
+    }
+  }
+  CHECK(runs.size() == 10);
+  for (std::size_t i = 0; i < std::min<std::size_t>(runs.size(), 10); ++i) {
+    // Each dash 3 mm and its caps (3.18 mm) about 11.5 + 4i mm.
+    const double middle = (runs[i].first + runs[i].second + 1) / 2.0 / pixelsPerMm;
+    const double length = (runs[i].second - runs[i].first + 1) / pixelsPerMm;
+    CHECK(near(middle, 11.5 + 4.0 * static_cast<double>(i), 0.1));
+    CHECK(near(length, 3.18, 0.15));
+  }
+}
+
 // mitcad#1591: finding the printer waited on the print system with the
 // window frozen (a network printer that does not answer: a minute). The
 // work runs on another thread while the application's timers still fire,
@@ -1283,6 +1484,7 @@ int paperPrintTests() {
   listPageBreakTests();
   listPageColumnsTests();
   drawingPdfTests();
+  drawingHiddenEdgePrintTests();
   waitForWorkTests();
   return failures;
 }

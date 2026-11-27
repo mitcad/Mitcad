@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: MIT
+# Isoparametric Curve (mitcad#2522; app/COMMANDS.md "Isoparametric
+# Curve"), on isoparametric-curve.json (the parameter h = 20; a cylinder of
+# 20 mm diameter, h high on XY about the Z axis, Cylinder1, F1, F1.b0, its
+# side face F1:side0):
+#   1. Isoparametric Curve, the side face clicked (U Direction, At Point):
+#      the preview a line along the axis from z 0 to 20; OK adds
+#      IsoparametricCurve1 (F2), drawn under Construction.
+#   2. A second one on the face, V Direction, Evenly Spaced (Count 3): the
+#      preview three circles apart; OK adds IsoparametricCurve2.
+#   3. h = 30: the first curve follows the taller face, up to z 30 (the
+#      feature_curves query).
+#   4. IsoparametricCurve1 reopened: At Point loaded, its preview from z 0
+#      to 30; Cancel.
+# Run by tools/ui-isoparametric-curve-test.sh (Linux),
+# tools/ui-windows-isoparametric-curve-test.ps1 (Windows) and
+# tools/ui-macos-isoparametric-curve-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The u curve through the clicked point.
+mark
+command solid.isoparametric_curve
+wait-log '^Command Isoparametric Curve started' 30
+wait-log '^Pick face F1[.]b0/F1:side0 at ' 20
+wait-idle 30
+mark
+click-pick 'face F1[.]b0/F1:side0 at '
+wait-log '^Isoparametric Curve Face: 1 face' 20
+wait-log '^Preview Isoparametric Curve: ok' 60
+wait-log '^Preview curve: 2 point[(]s[)] from [(][-0-9.]+, [-0-9.]+, 0[.]000[)] to [(][-0-9.]+, [-0-9.]+, 20[.]000[)]$' 30
+wait-idle 30
+mark
+button '^OK$'
+wait-log '^Added isoparametric curve, U direction, through the picked point$' 60
+wait-idle 60
+expect-ever '^Construction shown: .*IsoparametricCurve1' 30
+capture-model-number firstTop '{"query":"feature_curves"}' 0.points.1.2
+expect-near ${firstTop} 20 1e-6 1e-6
+
+# 2. Three v curves evenly spaced.
+mark
+command solid.isoparametric_curve
+wait-log '^Command Isoparametric Curve started' 30
+wait-log '^Pick face F1[.]b0/F1:side0 at ' 20
+wait-idle 30
+mark
+click-pick 'face F1[.]b0/F1:side0 at '
+wait-log '^Isoparametric Curve Face: 1 face' 20
+wait-log '^Preview Isoparametric Curve: ok' 60
+wait-idle 30
+mark
+qt-choice input_direction 'V Direction'
+wait-log '^Preview Isoparametric Curve: ok' 60
+wait-idle 30
+mark
+qt-choice input_place 'Evenly Spaced'
+wait-log '^Preview curve: [0-9]+ point[(]s[)] in 3 curves from ' 60
+wait-idle 30
+mark
+button '^OK$'
+wait-log '^Added isoparametric curve, V direction, 3 evenly spaced$' 60
+wait-idle 60
+expect-ever '^Construction shown: .*IsoparametricCurve2' 30
+
+# 3. The cylinder 30 high: the first curve runs up to its new top.
+mark
+model-command '{"cmd":"set_parameter","name":"h","value":30}'
+wait-idle 60
+capture-model-number grownTop '{"query":"feature_curves"}' 0.points.1.2
+expect-near ${grownTop} 30 1e-6 1e-6
+capture-model-number grownBottom '{"query":"feature_curves"}' 0.points.0.2
+expect-near ${grownBottom} 0 1e-6 1e-6
+
+# 4. Reopened: At Point, the preview up to z 30.
+mark
+dblclick-logged '^Timeline IsoparametricCurve1 at '
+wait-log '^Editing F2 with Isoparametric Curve' 30
+wait-log '^Preview curve: 2 point[(]s[)] from [(][-0-9.]+, [-0-9.]+, 0[.]000[)] to [(][-0-9.]+, [-0-9.]+, 30[.]000[)]$' 60
+wait-idle 30
+expect-choice-text place '^At Point$'
+expect-choice-text direction '^U Direction$'
+mark
+button '^Cancel$'
+wait-idle 30
+expect-never 'Failed features: [^n]|Recompute failed|TestDriver: FAIL'

@@ -128,7 +128,8 @@ Ui-Step 'click Extrude on the card'        { Ui-ClickLogged 'Selection card crea
 Ui-ExpectNew 'Selection card create chose Extrude' 'the card''s button clicked'
 Ui-ExpectNew 'Command Extrude started' 'Extrude started'
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $rect of F3]" 'with the selected profile'
-Ui-ExpectNew 'Preview Extrude: ok' 'previewed' 30
+# A new Extrude starts at 0 mm and waits for a distance (mitcad#2481).
+Ui-ExpectNew 'Preview Extrude: not built: Type a distance or drag the arrow.' 'waiting for a distance' 30
 Ui-Mark
 Ui-Step 'cancel (Esc)'                     { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Extrude cancelled' 'cancelled'

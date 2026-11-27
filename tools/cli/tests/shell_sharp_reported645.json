@@ -27,5 +27,20 @@
   {"cmd": "edit_feature", "uid": "F11", "def": {"type": "shell", "body": "F6.b0", "faces": ["F6:side(c2)#1"],
     "inside": 1, "tangent_chain": false, "rounded": false}},
   {"expect": {"feature": "Shell1", "status": "ok"}},
-  {"expect": {"body": "Body1", "volume": 9595.7, "tolerance": 1e-4}}
+  {"expect": {"body": "Body1", "volume": 9595.7, "tolerance": 1e-4}},
+  {"comment": "3 mm, Sharp (mitcad#2494): the wall is thicker than the 2 mm rounding, whose faces vanish beside the top. Only the three roundings of four edges were found vanishing; the one along the slot's near round end (47 edges, its boundary split where the crease split and the slot's faces cut it) and the crease's 0.4 mm2 sliver (13 edges) were kept, and the offsets did not close. Now a face of four sides that are chains of edges vanishes too (OCCT port patch 2494), the walls' offsets meet the top, and the tiny edges of the top (0.000015 mm) keep both their vertices. 26653.3 mm3 in the OCCT lab. Rounded at 3 mm: below (mitcad#2535)."},
+  {"cmd": "edit_feature", "uid": "F11", "def": {"type": "shell", "body": "F6.b0", "faces": ["F6:side(c2)#1"],
+    "inside": 3, "tangent_chain": false, "rounded": false}},
+  {"comment": "Built, with the shell's note that the wall is thinner than 3 mm beside the roundings (they curve in 2 mm from the sides, the inside of the wall is 3 mm in)."},
+  {"expect": {"feature": "Shell1", "status": "warning", "error_contains": "the wall is thinner than 3 mm beside"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"body": "Body1", "has_face": "F11:offset(F9:side(c4[c1,c3]))"}},
+  {"expect": {"body": "Body1", "volume": 26653.3, "tolerance": 1e-4}},
+  {"comment": "3 mm, Rounded (mitcad#2535): the wall along the slot's near round end has 21 edges across the vanishing rounding and sliver, the top 35. The arc join extended that wall to the top along the one edge each of the top's edges was paired with first, each extended edge got the whole section with the top, and the vertices between them had no place on it: a construction error ('Standard_ConstructionError'), and the cavity route ran. Now the wall's edges across are extended as one run with one section, the image of the top's edges there (OCCT port patch 2535). The same wall as Sharp (the body has no concave edge for the arc join to round): 26653.3 mm3 in the OCCT lab (case 2535-wall-chain-across-vanishing-rounding), with the same note."},
+  {"cmd": "edit_feature", "uid": "F11", "def": {"type": "shell", "body": "F6.b0", "faces": ["F6:side(c2)#1"],
+    "inside": 3, "tangent_chain": false, "rounded": true}},
+  {"expect": {"feature": "Shell1", "status": "warning", "error_contains": "the wall is thinner than 3 mm beside"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"body": "Body1", "has_face": "F11:offset(F9:side(c4[c1,c3]))"}},
+  {"expect": {"body": "Body1", "volume": 26653.3, "tolerance": 1e-4}}
 ]

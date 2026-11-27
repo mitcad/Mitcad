@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -37,6 +39,7 @@
 #include <gp_Vec2d.hxx>
 
 #include "check.hpp"
+#include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/user_error.hpp"
 
 namespace test {
@@ -592,7 +595,8 @@ void test_to_faces_and_bodies() {
   // Half of the circle passes the block's edge: not everywhere ended.
   post.side1.target->through = false;
   post.regions = {circle(5, 60, 20, 10)};
-  CHECK(throws_with([&] { extrude_feature(post); }, "does not cut across the whole profile"));
+  CHECK(throws_with([&] { extrude_feature(post); },
+                    "does not cut across the whole profile: a part of the profile passes beside the target"));
   // Behind the start: the side turns round to reach it, down to the block's
   // top as before (mitcad#2118).
   post.regions = {circle(5, 30, 20, 10)};
@@ -1514,6 +1518,154 @@ void test_to_an_object_behind_the_start() {
   CHECK(throws_with([&] { extrude_feature(slot); }, "behind the start"));
 }
 
+// To Next (GitHub mitcad/Mitcad#674): the model hands the kernel the bodies
+// ahead of the profile as one compound body, up to whose first faces each
+// part of the profile ends.
+void test_to_next_bodies() {
+  // A low block (x 0..30, z 0..10) and a plate beside it (x 30..60,
+  // z 20..25) that nothing holds up. The outside of the bodies is one
+  // space: under the plate it joins the space above the block.
+  const ShapePtr low = extrude("F2", {rectangle(1, 0, 0, 30, 40)}, 0, 10);
+  const ShapePtr plate = extrude("F3", {rectangle(5, 30, 0, 30, 40)}, 20, 25);
+  Target next;
+  next.kind = Target::Kind::Body;
+  next.body = compound({low.get(), plate.get()});
+
+  // A 60 x 40 rectangle at z = 40, down: over the block it ends on the
+  // block's top (z = 10), over the plate on the plate's top (z = 25).
+  ExtrudeFeatureSpec down;
+  down.feature = "F4";
+  down.frame.origin = gp_Pnt(0, 0, 40);
+  down.regions = {rectangle(9, 0, 0, 60, 40)};
+  down.direction = gp_Dir(0, 0, -1);
+  down.side1.target = next;
+  const ShapePtr stepped = extrude_feature(down);
+  CHECK(near(volume(*stepped), 30 * 40 * 30 + 30 * 40 * 15));
+  CHECK(near(bounding_box(*stepped).min.Z(), 10) && near(bounding_box(*stepped).max.Z(), 40));
+  CHECK(BRepCheck_Analyzer(stepped->occt()).IsValid());
+  CHECK(faces_named(*stepped, start_cap("F4", 9)) == 1);
+
+  // From below, up: under the block it ends on the block's bottom (z = 0),
+  // under the plate on the plate's underside (z = 20), past the block's
+  // side.
+  ExtrudeFeatureSpec up = down;
+  up.frame.origin = gp_Pnt(0, 0, -10);
+  up.direction = gp_Dir(0, 0, 1);
+  const ShapePtr under = extrude_feature(up);
+  CHECK(near(volume(*under), 30 * 40 * 10 + 30 * 40 * 30));
+  CHECK(near(bounding_box(*under).min.Z(), -10) && near(bounding_box(*under).max.Z(), 20));
+  CHECK(BRepCheck_Analyzer(under->occt()).IsValid());
+
+  // Partly over nothing: the rectangle widened past the bodies to x = 80
+  // leaves its part beyond x = 60 without an end, from above and below.
+  down.regions = {rectangle(9, 0, 0, 80, 40)};
+  CHECK(throws_with([&] { extrude_feature(down); }, "does not cut across the whole profile"));
+  up.regions = {rectangle(9, 0, 0, 80, 40)};
+  CHECK(throws_with([&] { extrude_feature(up); }, "does not cut across the whole profile"));
+
+  // A circle over the plate alone ends on it, the block beside it left
+  // alone.
+  down.regions = {circle(13, 45, 20, 5)};
+  const ShapePtr post = extrude_feature(down);
+  CHECK(near(volume(*post), kPi * 25 * 15));
+  CHECK(face_at_z(*post, "F4:end(r{c13})", 25) && face_at_z(*post, "F4:start(r{c13})", 40));
+}
+
+// The error of an extrusion, empty when it builds.
+static std::string error_of(const ExtrudeFeatureSpec& spec) {
+  try {
+    extrude_feature(spec);
+  } catch (const std::exception& error) {
+    return error.what();
+  }
+  return {};
+}
+
+// The first point place of an error (placed_error: `"at":[x,y,z]` in its
+// last line), or none.
+static std::optional<gp_Pnt> first_point_place(const std::string& error) {
+  const std::size_t at = error.find("\"at\":[");
+  if (at == std::string::npos) {
+    return std::nullopt;
+  }
+  const char* text = error.c_str() + at + 6;
+  char* end = nullptr;
+  const double x = std::strtod(text, &end);
+  if (end == text || *end != ',') {
+    return std::nullopt;
+  }
+  const double y = std::strtod(end + 1, &end);
+  if (*end != ',') {
+    return std::nullopt;
+  }
+  const double z = std::strtod(end + 1, &end);
+  if (*end != ']') {
+    return std::nullopt;
+  }
+  return gp_Pnt(x, y, z);
+}
+
+// Up to a face and the faces next to it (To Adjacent Faces) that leave a
+// part of the profile without an end (GitHub mitcad/Mitcad#674,
+// mitcad#2538): the error says in words whether that part runs into the
+// target's body at other faces or passes beside the target, and paints
+// where that part starts, not where the whole profile does.
+void test_to_adjacent_faces_unreached() {
+  // A step: a block (x 0..60, z 0..20) and a lower one beside it (x
+  // 60..80, z 0..10), joined. The higher top is next to its sides and to
+  // the step's wall (x = 60, z 10..20), not to the lower top.
+  const ShapePtr high = extrude("F2", {rectangle(1, 0, 0, 60, 40)}, 0, 20);
+  const ShapePtr low = extrude("F3", {rectangle(5, 60, 0, 20, 40)}, 0, 10);
+  const BooleanResult joined = boolean(BooleanOp::Join, {high.get()}, *low);
+  CHECK(joined.pieces.size() == 1);
+  if (joined.pieces.size() != 1) {
+    return;
+  }
+  Target top;
+  top.kind = Target::Kind::Face;
+  top.body = joined.pieces.front().shape;
+  top.face = end_cap("F2", 1);
+  top.extend = false;
+
+  // A rectangle at z = 40 over the higher top, down: it ends there.
+  ExtrudeFeatureSpec down;
+  down.feature = "F4";
+  down.frame.origin = gp_Pnt(0, 0, 40);
+  down.regions = {rectangle(9, 10, 10, 30, 20)};
+  down.direction = gp_Dir(0, 0, -1);
+  down.side1.target = top;
+  const ShapePtr post = extrude_feature(down);
+  CHECK(near(volume(*post), 30 * 20 * 20));
+
+  // Widened past the step's wall (x 30..70): the part past it meets the
+  // lower top, which is no face of the target, first. It has no end, and
+  // it meets the target's body only at other faces; the part over the
+  // higher top ends there, so the place painted is the start of the part
+  // past the wall (x 60..70), not of the whole profile.
+  down.regions = {rectangle(9, 30, 10, 40, 20)};
+  const std::string into = error_of(down);
+  CHECK(into.find("does not cut across the whole profile: a part of the profile meets the target's body only "
+                  "at faces") != std::string::npos);
+  CHECK(error_message(into).find("F2:") == std::string::npos);
+  const std::optional<gp_Pnt> into_at = first_point_place(into);
+  CHECK(into_at.has_value());
+  if (into_at) {
+    CHECK(into_at->X() > 60 && into_at->X() < 70 && near(into_at->Z(), 40));
+  }
+
+  // Widened past the blocks' side (y 30..50): the part beyond y = 40
+  // passes beside the target and the body.
+  down.regions = {rectangle(9, 10, 30, 30, 20)};
+  const std::string beside = error_of(down);
+  CHECK(beside.find("does not cut across the whole profile: a part of the profile passes beside the target") !=
+        std::string::npos);
+  const std::optional<gp_Pnt> beside_at = first_point_place(beside);
+  CHECK(beside_at.has_value());
+  if (beside_at) {
+    CHECK(beside_at->Y() > 40 && beside_at->Y() < 50);
+  }
+}
+
 // Each test named on stdout before it runs, flushed, so that a crash
 // shows where it was (the suite crashed with no output in a scheduled run,
 // mitcad#1851).
@@ -1551,6 +1703,11 @@ void extrude_feature_tests() {
   traced("test_from_a_curved_face", test_from_a_curved_face);
   // A curved start face crossed twice by the projection (mitcad#1852).
   traced("test_from_a_curved_face_crossed_twice", test_from_a_curved_face_crossed_twice);
+  // To Next across bodies at different heights (GitHub mitcad/Mitcad#674).
+  traced("test_to_next_bodies", test_to_next_bodies);
+  // To Adjacent Faces leaving a part of the profile without an end
+  // (GitHub mitcad/Mitcad#674, mitcad#2538).
+  traced("test_to_adjacent_faces_unreached", test_to_adjacent_faces_unreached);
 }
 
 } // namespace test

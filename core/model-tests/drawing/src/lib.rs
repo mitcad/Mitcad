@@ -38,3 +38,6 @@ mod blank_template_tests;
 // The drawing book: drawings of the design and of its linked designs
 // printed as one job (mitcad#2448).
 mod drawing_book_tests;
+// Parameters in a drawing's texts and title block, `{param:Name}`
+// (mitcad#2483).
+mod parameter_reference_tests;

@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: MIT
+# Perspective with Orthographic Faces (mitcad#2473) on a new design, with
+# the orientation cube's places logged (MITCAD_LOG_ORIENTATION_CUBE=1):
+#   1. View › Camera › Perspective with Orthographic Faces: saved
+#      (view/perspective true, view/orthographicFaces true); the camera's
+#      line names the projection in use and the mode.
+#   2. A click on the cube's front face: the camera at rest along it is an
+#      orthographic one.
+#   3. An orbit (Shift + middle drag in the view): a perspective one again,
+#      the height at the target kept.
+#   4. View › Front: orthographic; the arrow key Right turns the view off
+#      the face, perspective with the same height; Left turns it back,
+#      orthographic with the same height.
+#   5. Home, then the cube's front-top edge and its front-right-top corner:
+#      perspective each time.
+#   6. View › Camera › Perspective ends the mode: perspective at Front too.
+# Run by tools/ui-view-orthographic-faces-test.sh (Linux),
+# tools/ui-windows-view-orthographic-faces-test.ps1 (Windows) and
+# tools/ui-macos-view-orthographic-faces-test.sh (macOS).
+expect-ever 'View area' 30
+wait-idle
+
+# 1. The mode from View › Camera.
+mark
+command view.perspective_orthographic_faces
+expect-log '^Camera perspective with orthographic faces$'
+expect-setting view/perspective true
+expect-setting view/orthographicFaces true
+wait-log '^Camera direction .* [(](perspective|orthographic), perspective with orthographic faces[)]$' 30
+wait-log '^Orientation cube front at ' 30
+wait-idle
+
+# 2. The cube's front face: orthographic.
+mark
+click-logged '^Orientation cube front at '
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]orthographic, perspective with orthographic faces[)]$' 30
+wait-idle
+
+# 3. An orbit off the face: perspective, as large at the target.
+capture-view-height front
+mark
+drag 45 50 58 56 middle shift
+wait-log '^Camera direction .* [(]perspective, perspective with orthographic faces[)]$' 30
+expect-no-log '^Camera direction -?0 1 -?0 up '
+expect-view-zoom ${front} unchanged
+wait-idle
+
+# 4. A standard view: orthographic; the arrow keys turn it off the face and
+#    back.
+mark
+command view.front
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]orthographic, perspective with orthographic faces[)]$' 30
+wait-idle
+focus-widget modelView
+capture-view-height front
+mark
+key Right
+expect-log '^View turned right by 15 degrees$'
+wait-log '^Camera direction -0[.]259 0[.]966 -?0 up -?0 -?0 1 [(]perspective, perspective with orthographic faces[)]$' 30
+expect-view-zoom ${front} unchanged
+mark
+key Left
+expect-log '^View turned left by 15 degrees$'
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]orthographic, perspective with orthographic faces[)]$' 30
+expect-view-zoom ${front} unchanged
+wait-idle
+
+# 5. Home, the cube's edge and corner: perspective.
+mark
+command view.home
+wait-log '^Camera direction .* [(]perspective, perspective with orthographic faces[)]$' 30
+wait-log '^Orientation cube front-top at ' 30
+wait-idle
+mark
+click-logged '^Orientation cube front-top at '
+wait-log '^Camera direction -?0 0[.]707 -0[.]707 up .* [(]perspective, perspective with orthographic faces[)]$' 30
+wait-log '^Orientation cube front-right-top at ' 30
+wait-idle
+mark
+click-logged '^Orientation cube front-right-top at '
+wait-log '^Camera direction -0[.]577 0[.]577 -0[.]577 up .* [(]perspective, perspective with orthographic faces[)]$' 30
+wait-idle
+
+# 6. Perspective ends the mode: perspective along the front face too.
+mark
+command view.perspective
+expect-log '^Camera perspective$'
+expect-setting view/orthographicFaces false
+command view.front
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]perspective[)]$' 30
+command view.orthographic
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]orthographic[)]$' 30
+expect-setting view/perspective false

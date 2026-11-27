@@ -519,6 +519,7 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
                         span: None,
                         letter: "A".to_owned(),
                         hatch: true,
+                        bounded: false,
                     },
                 ));
             }

@@ -100,6 +100,7 @@
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/naming.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -617,7 +618,7 @@ void test_slot_case_body() { check_case_body("slot-boss-tangent-rounding"); }
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_boss_tangent) {
   test::guarded("test_seam_at_the_side_rounded", test::test_seam_at_the_side_rounded);
   test::guarded("test_seam_at_the_other_side", test::test_seam_at_the_other_side);
   test::guarded("test_case_body", test::test_case_body);

@@ -53,6 +53,10 @@ pub mod solid;
 // machine's parts as Simulate draws them (mitcad#2412).
 pub mod drawn;
 pub mod turret;
+// Finishing into undercuts: the plunge modes (mitcad#2503).
+pub mod plunge;
+// A turning tool's insert and holder from their ISO codes (mitcad#2502).
+pub mod insert;
 
 #[cfg(test)]
 mod axes_tests;
@@ -79,6 +83,19 @@ mod turret_tests;
 // LinuxCNC on a lathe (mitcad#2425).
 #[cfg(test)]
 mod linuxcnc_tests;
+// Manual G-code blocks between the operations (mitcad#2506).
+#[cfg(test)]
+mod manual_tests;
+// Finishing into undercuts: the neck and a bore in each plunge mode, the
+// depth along an arc, the trailing edge in the simulation, G70 only on
+// the roughing's contour (mitcad#2503).
+#[cfg(test)]
+mod plunge_tests;
+// Roughing into undercuts: a neck, pockets split by a collar, a bore's
+// recess and a curved one, what the roughings leave a finish, the moves
+// posted and the G71 kept for a roughing without a plunge (mitcad#2549).
+#[cfg(test)]
+mod rough_plunge_tests;
 
 pub use check::{
     ProgramCheck, ReadMove, TurnPlacement, check_lathe, check_program, check_program_with,
@@ -94,6 +111,8 @@ pub use ops::{
     part_off, rough, thread,
 };
 pub use post::LinuxCncTurning;
+// Manual G-code blocks (mitcad#2506).
+pub use post::manual_refusal;
 pub use post::{DialectInfo, TurnOutput, decimal};
 pub use post::{FanucTurning, TurningPost, turning_dialect, turning_dialects, turning_post};
 pub use profile::{PV, TurnPart};
@@ -101,6 +120,11 @@ pub use solid::{SolidSim, Voxels, simulate_solid};
 pub use stock::{TurnStock, TurnedStock, simulate_turning};
 pub use tool::{TurningTool, TurningToolKind};
 pub use turret::turret_hits;
+// A turning tool's insert and holder (mitcad#2502).
+pub use insert::{
+    Hand, HolderCode, InsertCode, InsertGeometry, ReadInsert, ToolOutline, TypedInsert,
+    parse_holder, parse_insert,
+};
 
 /// A point in the lathe's plane: `[x, z]`, x a radius (mm).
 pub type PXZ = [f64; 2];
@@ -464,7 +488,43 @@ pub struct TurningProgram {
     /// back (mitcad#2319).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hand_over: Option<HandOver>,
+    /// Blocks of G-code the programmer wrote, written as they are between
+    /// the operations (mitcad#2506), in their order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manual: Vec<ManualBlock>,
 }
+
+/// A block of G-code the programmer wrote (mitcad#2506): the stock's
+/// handling between operations (pulling the bar after parting off, a bar
+/// feeder, opening and closing the chuck), which no operation computes.
+///
+/// The post writes its lines as they are, before the operation `at` (an
+/// index into the program's operations; their count: after the last, before
+/// the program's end). Before it the post leaves a defined state: the
+/// coolant off, the live tool and the C axis off, the tool at the tool
+/// change position with the last operation's tool and offset still
+/// indexed, the spindle that holds the part stopped. After it nothing the
+/// block did is assumed: the post writes the modes and the work offset
+/// again, the coolant and the spindle off, then the next operation from
+/// its tool change on (the turret indexed, the spindle and its limit, the
+/// coolant, the first move with both axes). Between the two the lines are
+/// fenced by [`MANUAL_BEGIN`] and [`MANUAL_END`] comments, written even
+/// when comments are off: the read-back passes over them, and neither the
+/// simulation nor the lathe check sees their moves.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ManualBlock {
+    /// Its name, written in the comment that opens it.
+    pub name: String,
+    pub at: usize,
+    /// Its lines, each written as it is (blank lines left out).
+    pub lines: Vec<String>,
+}
+
+/// The comment that opens a manual block in the written program (its
+/// start: the block's name follows).
+pub const MANUAL_BEGIN: &str = "MANUAL CODE BEGIN";
+/// The comment that closes a manual block.
+pub const MANUAL_END: &str = "MANUAL CODE END";
 
 impl TurningProgram {
     pub fn new(name: &str, change_position: PXZ) -> Self {
@@ -476,6 +536,18 @@ impl TurningProgram {
             operations: Vec::new(),
             mill_turn: MillTurn::default(),
             hand_over: None,
+            manual: Vec::new(),
+        }
+    }
+
+    /// Where the manual blocks may not go (mitcad#2506): between the
+    /// hand-over's grip and its release, while both spindles hold the
+    /// part. A block at `at` comes before the operation `at`, and so
+    /// before a hand-over written there.
+    fn manual_inside_hand_over(&self, at: usize) -> bool {
+        match (self.hand_over_at(), self.first_sub()) {
+            (Some(grip), Some(release)) => grip < at && at <= release,
+            _ => false,
         }
     }
 
@@ -589,6 +661,28 @@ impl TurningProgram {
                         op.name
                     )));
                 }
+            }
+        }
+        // The manual blocks (mitcad#2506): in the program, outside the
+        // hand-over, with code.
+        for block in &self.manual {
+            if block.at > self.operations.len() {
+                return Err(CamError::new(format!(
+                    "The manual G-code {} follows an operation the program does not have.",
+                    block.name
+                )));
+            }
+            if self.manual_inside_hand_over(block.at) {
+                return Err(CamError::new(format!(
+                    "The manual G-code {} is inside the hand-over to the sub-spindle, while both spindles hold the part: put it before the parting off or after the first operation on the sub-spindle.",
+                    block.name
+                )));
+            }
+            if block.lines.iter().all(|l| l.trim().is_empty()) {
+                return Err(CamError::new(format!(
+                    "The manual G-code {} has no code.",
+                    block.name
+                )));
             }
         }
         for (i, op) in self.operations.iter().enumerate() {

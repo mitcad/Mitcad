@@ -799,7 +799,9 @@ ignored, and no dialog asks to close the command:
 - **Nothing is lost while it waits.** A download that waits is kept (a
   copy of its own) until it comes in; only a design closed or replaced
   before drops what waited for it, and that is said (*`<file>` did not
-  come in: the design it waited for was closed.*).
+  come in: the design it waited for was closed.*). A drop on the 3D view
+  keeps the place worked out at the drop: it goes in where it was
+  dropped, however the camera turned while it waited (mitcad#2527).
 - **Empty means empty.** A note calls a file empty only when it has no
   bytes; a file that cannot be read says that.
 
@@ -899,8 +901,8 @@ dynamic value.
 | States | `BoundText`, `BoundFill` | #174ea6 / #d6e4ff on #dce8fb / #1e3a66 | a value bound to a formula or a configuration: one fx style | |
 | Command feedback | `Input1`–`Input4` | #1f7aff, #ff8c00, #2ca02c, #9b30ff | the command panel's selection inputs, one table for Qt and AppKit | |
 | | `PreviewAdd`, `PreviewRemove` | blue, red | material added; material a cut removes (red: recorded exception) | |
-| | `PreviewFailed`, `Interference` | the error's ring | a failed feature's dashed outline; overlapping volume | |
-| | `PreviewTarget`, `ExtendedTool` | #00a6b4, #ff8c00 | what an inspection points at; a split's tool | |
+| | `PreviewFailed`, `Interference` | the error's ring | a failed feature's dashed outline; overlapping volume; a Minimum Distance's line closer than its clearance (mitcad#2519) | |
+| | `PreviewTarget`, `ExtendedTool` | #00a6b4, #ff8c00 | what an inspection points at (a Minimum Distance's line between the closest points, mitcad#2519); a split's tool | |
 | | `Handle` | #e07b1a | manipulators, the timeline marker's handle, snaps, drawing picks | |
 | | `Provisional`, `FeatureFaces` | orange, amber | a mesh being made; a selected Fillet's own faces | |
 | | `HandleActive` | #ffffff | an axis-colored handle (Free Move's arrows and rings) hovered or dragged, white over its dark halo: none of the axis colors, no status hue, not the selection's blue that the Z axis' is close to (mitcad#1707); other handles take `Select` | |
@@ -909,19 +911,25 @@ dynamic value.
 | Domain | `Component0`–`Component7` | #e0892a, #3aa35b, #8e5bd0, #2aa7a7, #5560c8, #8d6e63, #c45a9a, #3d8bd9 | the components: timeline bands, section caps, Component Colors (no red, no olive) | |
 | | `AxisX`, `AxisY`, `AxisZ` | #e84f4f, #4cb05e, #3f8cff | the axes: view cube, joint triad, Free Move's arrows and rings (mitcad#1581) | |
 | | `JointA`, `JointB`, `JointOrigin` | #f28c28, #2ab57d, #17a2b8 | a joint's sides and motion origin | |
-| | `PrintOverhang`, `PrintThin`, `PrintGap` | #7e3fd0 / #b48cff, #c2188b / #ff6ec7, #00897b / #4dd0c0 | Print Analysis' categories (violet, magenta, teal: narrow gaps, mitcad#1519), by the view's background, with the legend | |
+| | `PrintOverhang`, `PrintThin`, `PrintGap` | #7e3fd0 / #b48cff, #c2188b / #ff6ec7, #00897b / #4dd0c0 | Print Analysis' categories (violet, magenta, teal: narrow gaps, mitcad#1519), by the view's background, with the legend; `PrintThin` also Minimum Radius' marker and its faces under the limit (mitcad#2518: the place that is too tight, as a thin wall is) | |
 | | `RuleFrame` … `RuleAction`, `RuleText` | see [configurations.md](configurations.md) | the rule blocks' categories under white text | |
-| | `CamStock`, `CamLeftThin`, `CamLeftThick`, `CamGouge` | #b0aaa2 / #8c877f, #4fb3bf / #6fd0db, #5e35b1 / #9575cd, #d81b60 / #ff5c8d | Simulate's stock (mitcad#1013): the stock grey (nothing left over the part reads as the stock), the material left from teal (thin) to violet (thick), a cut into the part pink; by the view's background, with the legend in the Simulate window | |
+| | `CamStock`, `CamLeftThin`, `CamLeftThick`, `CamGouge` | #b0aaa2 / #8c877f, #4fb3bf / #6fd0db, #5e35b1 / #9575cd, #d81b60 / #ff5c8d | Simulate's stock (mitcad#1013): the stock grey (nothing left over the part reads as the stock), the material left from teal (thin) to violet (thick), a cut into the part pink; by the view's background, with the legend in the Simulate window. `CamStock` is also the uncut stock of the setups shown (mitcad#2552): see-through (transparency 0.75) so the part reads inside it, its outline in thin solid `CamStockEdge` lines, never over the toolpaths | |
+| | `CamStockEdge` | #5c5650 / #c8c2b9 | the uncut stock's outline (mitcad#2569): the stock's own warm grey, darker on a light background and lighter on a dark one, at least 3:1 on every view background preset and over two of the stock's see-through faces (`app.unit`'s color roles test); apart in hue from the body's blue-grey edges. `HiddenEdge`'s one grey-blue on both backgrounds read only 1.2:1 to 2:1 on the light ones | |
 | | `DraftPositive`, `DraftUnder`, `DraftNegative` | #2b8cbe / #74c0e8, #c2185b / #ec6aa0, #7b5cc4 / #b59cf0 | Draft Analysis' classes (mitcad#2166): blue where a face has the draft towards the pull, raspberry where it needs more draft, violet where it has the draft only against the pull (the other mold half); by the view's background, with the legend; none of the status hues, each far in hue from the others | |
 | | `DeviationInside`, `DeviationNeutral`, `DeviationOutside` | #2166ac / #6baed6, #a0a0a0 / #bdbdbd, #c51b7d / #e77fc0 | Point Cloud Deviation's diverging scale (mitcad#2240): a measured point blue inside the material, grey within the tolerance of the faces, magenta outside, shading from the grey at the tolerance to the full colour at the scale's limit; by the view's background, with the legend; none of the status hues, the two ends far apart in hue | |
 | | `DeviationUnmeasured` | #cfcfcf / #6e6e6e | the points of the cloud a shown Point Cloud Deviation did not measure (mitcad#2265: outside its sample, or failed): a grey between `DeviationNeutral` and the view's background, so the whole cloud stays in sight without reading as within tolerance; the legend's entry says how many were measured | |
+| | `ZebraDark`, `ZebraLight`, `CurvatureConcave`, `CurvatureFlat`, `CurvatureConvex`, `Isocurve`, `EnvironmentSky`, `EnvironmentFloor`, `EnvironmentLight` | #1d2126, #f3f5f8, #3366b3, #b0b4ba, #c2408f, #1b2a4a, #c9d8ea, #3a3f46, #ffffff | the surface quality analyses (mitcad#2517): a Zebra's near black and near white stripes; a Curvature Map's diverging scale, blue where a face is hollow (or a saddle), grey where it is flat, magenta where it bulges (or is a dome), shading from the grey at zero to the full color at the scale's limit, the ends far apart in hue and none of the status hues; an Isocurve Analysis' curves in a dark blue over the faces; the Environment Map's studio picture (a pale sky, a dark floor, white lights). The same on either background: the colors are baked into the drawn vertices and the picture; with the legend | |
 | Chrome | `Support` | #d81b60 / #f06292 | the top bar's Boost development pill (mitcad#1990): its outline and rocket (an indicator, at least 3:1 on the windows), its label in the window's text (`Text`); it fills only under the pointer, with a translucent tint of the pink (20%, pressed 32%) that keeps the label's contrast. A quiet, warm call to support the project that does not draw the eye, apart from the error's red and the accent's blue | |
 | | `DiscordFill`, `DiscordMark` | #5865f2 (both themes), #ffffff | the top bar's Discord pill (mitcad#2159): Discord's blurple fill (a badge under its mark, 4.6:1; a shade darker under the pointer and pressed) and its logo mark and × in white, as Discord's brand guidelines give them | |
 | Formula | `FormulaName`, `FormulaFunction`, `FormulaKeyword`, `FormulaNumber`, `FormulaUnit`, `FormulaOperator`, `FormulaString` | #0a559f / #86bdff, #6238b5 / #c9b1ff, #961e74 / #f59ad9, #00636c / #4fd1d9, #87420e / #f2a96a, #505664 / #b0b6c0, #505d00 / #c8d46a | the Formula Editor's text by its tokens' kinds (mitcad#2179): names, functions, `LET` and the constants (bold), numbers, units, operators and brackets, quoted texts; texts at least 4.5:1 on the fields and on the two fills below, none of them a status hue. An unknown name is `ErrorText` with the `ErrorBorder` wavy underline (a word or mark beside the color) | |
 | | `FormulaLine`, `FormulaBracket` | #dde3ec / #23272e, #d3e2f7 / #2b3b55 | the line with the caret and the bracket at the caret with its match, fills under the text | |
+| Domain | `ContinuityNone`, `ContinuityG0`, `ContinuityG1`, `ContinuityG2` | #b5179e / #e27ad3, #7b4fd0 / #b398f2, #2166ac / #6b9be0, #00897b / #4dd0c0 | Continuity Analysis' classes (mitcad#2521): an edge drawn magenta where its faces do not touch, violet where they touch (G0), blue where they are tangent (G1), teal where they are curvature continuous (G2); by the view's background, with the legend in the panel; none of the status hues, each at least 30° in hue from the next | |
 
 The table's order is the enum's; `allColorRoles`, `colorRoleName`,
-`colorRoleUse` and `colorRolePartner` list it for the checks.
+`colorRoleUse` and `colorRolePartner` list it for the checks. A new role
+goes at the end of the enum, before its end marker `ColorRole::Count`
+(not a role), and its row at the end of the table; the color roles test
+compares the table's length with the marker.
 
 **A region without fill** (mitcad#2194): Show profiles fills a sketch's
 regions with `ProfileFill`, but a region outside the sketch's outline
@@ -933,6 +941,16 @@ selection's own styles, as any region's, so it is still found and
 picked. A sketch whose closed curves cross has no outline set: all its
 regions are filled. The same in sketch mode and for the sketches shown
 in the design, in the Docked and the Floating layout.
+
+**A curvature comb** (mitcad#2520): what an inspection points at, so
+`PreviewTarget` (by the view's background), not a role of its own: the
+teeth thin, the line through their tips heavier, and an inflection point
+a ring of the same colour filled with the sketch's halo (the
+background's tone), so that it reads over the curve and the teeth without
+a status hue. Inspect › Curvature Comb draws the same lines as the
+inspection's shape, with each inflection a labelled marker. In sketch
+mode it is drawn under the selection's highlights, so that a selected
+curve stays in the selection's colour.
 
 ## 5. The checks
 
@@ -1078,6 +1096,38 @@ gap before the column; the fx badge and the Make marker stay after the
 name. With the Rows background every row's box reaches the column at the
 card's right edge, and the card's width counts the column in.
 
+**Browser row spacing** (mitcad#2513, Preferences › Display, beside
+Timeline) sets the rows' height in both layouts, every row the same:
+**Standard**, the default, the layout's own height (Floating at least
+26 px, Docked at least the panels' row height, `panel::kRowHeight`, or the
+style's height when a larger text or icon size needs more); **Compact** a
+fifth less, never below the icon's or the name's height plus 4 px, so
+that the icon, the name, the eye and the radio button stay whole inside
+the selection's band and the Rows background's box; **Comfortable** a
+quarter more (`spacedBrowserRowHeight`). Only the height changes: the
+parts stay centred on the row, the indentation and widths as they are. A
+change applies at once in every window; the row at the top of the view,
+the selection and the open folders stay. The History list keeps the
+Standard height.
+
+**Dragging Browser rows** (mitcad#2103, mitcad#2104, mitcad#2532). While
+rows are dragged, the Browser draws where they would go on the row under
+the pointer: a 3 px line before or after the row when they go among its
+siblings (before it in the row's upper half, after it in the lower half),
+a frame around the row when they go into it; both in `DropAllowed`, or
+in `DropRefused` with the no-entry cursor where they may not go, and a
+refused drop changes nothing. A drag moves rows only where their order
+or their container means something to the model, and the line stands
+for that place: component rows among their siblings and into folders,
+bodies into body folders, a lathe setup's block of manual G-code among
+its own setup's operations and blocks (the line under the setup's own row
+being the program's start). A row whose place belongs to another owner is
+refused there rather than moved with a second meaning: a block of manual
+G-code is not dragged into another setup, whose operations it does not
+follow. One drop is one undo step. (A CAM operation's drag, mitcad#1013,
+still shows only the closed hand, onto the operation whose place it
+takes or the setup it goes last in.)
+
 **The History list** (mitcad#2427, Preferences › Display › Timeline:
 History list) is the timeline as a tree of the left column, under the
 Browser: a row per timeline item, the first at the top, painted by the
@@ -1216,6 +1266,7 @@ part inside a control are not spaces.
 | Bar margins | 16 at the sides, 4 above and below (`GlassCard::barMargins`) | around a bottom bar's one row |
 | Row spacing | 4 | between the controls of one row (tabs, chips, small buttons) |
 | Top bar spacing | 12 | between the top bar's groups |
+| Preferences group inset | the style's layout margins at the sides and below; above too in the Settings window's pane, none under a dialog group's title (`insetPreferencesGroup`, `app/framework/PreferencesPageLayout.hpp`, mitcad#2561) | between a Preferences group's frame and contents that would otherwise reach it (Navigation's tabs); a group whose contents are a form keeps the form's own margins, which are the same |
 | Printed rule | 4 pt under the rule (`kRuleGap`), the rule 0.25 pt (`kRuleWidth`, `app/build/ListPages.cpp`) | between a printed list's column header and its rule, and the caption or row under it (mitcad#2096, mitcad#2116); a printed list is laid out in a fixed 1200 dpi reference scaled to the device (`kReferenceDpi`), so the PDF and the print break the pages at the same rows and give the columns the same widths (chapter 6, "On paper the name keeps its room too") |
 
 ## 9. Corners
@@ -1612,7 +1663,11 @@ places in the log (`Floating cards: … timelineDock x,y WxH`,
   that they can be typed too. The dots show as soon as there is something
   to choose, before any preview. Where a choice is needed and there is
   only one thing to choose (Boundary Fill's one closed region), it is
-  chosen at once.
+  chosen at once. The pieces a command makes before it keeps some (Split
+  Body's Keep: Selected, mitcad#2504) are chosen the same way: their faces
+  are not there to click before the command has made them, so a dot sits
+  inside each piece, and the dots stay while the panel waits for the
+  first click and shows no preview.
 
 ## 17. States
 
@@ -1671,6 +1726,13 @@ red pixel, an edge the band reaches or a square corner.
 - Words in capitals for styling, or ids and coordinates in a label.
 - A setting as a row of its own where a context menu or the toolbar
   says it in place.
+- A panel whose rows ask the window to be taller than its screen: a
+  panel beside a workspace's view (the drawing's) scrolls its rows up and
+  down under its title where the screen has no room for them all, and
+  the same warning there comes once,
+  with how many times it applies, not as a row each (GitHub
+  mitcad/Mitcad#694: 141 rows of "a body is gone" made the window taller
+  than the screen, and it stopped answering).
 - A row of text chips, a drop-down list or loose text in the toolbar
   panel (chapter 13).
 - Tabs cut to fit a narrow card ("Libr…"): a drop-down choice instead

@@ -8,6 +8,7 @@
 
 #include "check.hpp"
 #include "mitcad/geometry/cancel.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -283,7 +284,7 @@ void cancellation() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(sheet) {
   enable_input_checks(true);
   test::guarded("sheet material sides", material_sides_and_parameters);
   test::guarded("sheet curved domains", curved_domains);

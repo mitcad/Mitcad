@@ -972,6 +972,7 @@ impl<K: Kernel> Evaluate<K> for SheetFaceDef {
                     gaps: Vec::new(),
                     invalidated: None,
                     blockers: Vec::new(),
+                    approximation: None,
                 }),
             );
         }

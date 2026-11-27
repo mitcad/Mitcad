@@ -422,9 +422,40 @@ fn ctest_listing(o: &Options, select: &[String]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// The tests of the build tree as ctest selects them.
+/// The tests of the build tree as ctest selects them; with `--tests-from`
+/// only those the list names and their fixtures' tests (mitcad#2579: the
+/// names go through a file, never as one `-R` expression, which ctest
+/// refuses past its size).
 fn list_tests(o: &Options) -> Result<Vec<TestDef>, String> {
-    ctest::parse_tests(&ctest_listing(o, &o.select)?)
+    let defs = ctest::parse_tests(&ctest_listing(o, &o.select)?)?;
+    let Some(path) = &o.tests_from else {
+        return Ok(defs);
+    };
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("cannot read the test list {}: {e}", path.display()))?;
+    let names = ctest::read_names(&text);
+    let named =
+        ctest::select_named(defs, &names).map_err(|e| format!("{e} ({})", path.display()))?;
+    if !named.missing.is_empty() {
+        let shown: Vec<&str> = named.missing.iter().take(10).map(String::as_str).collect();
+        let more = named.missing.len() - shown.len();
+        let rest = if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        };
+        eprintln!(
+            "testrun: {} of the list's tests are not in the build tree's selection: {}{rest}",
+            named.missing.len(),
+            shown.join(", ")
+        );
+    }
+    println!(
+        "testrun: {} tests from the list {} (with their fixtures' tests)",
+        named.tests.len(),
+        path.display()
+    );
+    Ok(named.tests)
 }
 
 /// A release gate's run (`--release-passed`, mitcad#1822): which of the
@@ -483,6 +514,14 @@ impl<'o> Runner<'o> {
             } else {
                 selected.push(def);
             }
+        }
+        // A list of tests to run whose tests are all disabled or have no
+        // command here runs none: an error, never a run that passes.
+        if o.tests_from.is_some() && selected.is_empty() {
+            return Err(format!(
+                "none of the {} tests of the test list can run here (disabled or without a command)",
+                skipped.len()
+            ));
         }
         // A release gate's run leaves out the geometry tests that passed
         // with their fingerprints in an earlier release gate (mitcad#1822).

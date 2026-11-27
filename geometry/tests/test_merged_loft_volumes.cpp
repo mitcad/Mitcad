@@ -75,6 +75,7 @@
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -405,7 +406,7 @@ const Part kParts[] = {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(merged_loft_volumes) {
   const std::string only = argc > 1 ? argv[1] : "";
   bool found = only.empty();
   for (const test::Part& part : test::kParts) {

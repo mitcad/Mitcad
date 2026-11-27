@@ -777,7 +777,7 @@ the ezf3d project's format notes (MIT licence, copyright its authors,
 information only: the layouts below are written in our own words, no
 text or code was taken over, and nothing depends on either project. Each
 decode taken over was checked on the reference models' dumps
-(`MITCAD_F3D_MODELS`, `core/f3d/tests/design_models.rs`) and, where the
+(`MITCAD_F3D_MODELS`, `core/f3d/tests/read/design_models.rs`) and, where the
 history settles the input, on the corpora (the learning dump, *Learning
 the undecoded inputs*). Where a layout below was found by comparing the
 reference models' records with their dumps and neither description gives
@@ -794,7 +794,7 @@ it ([*What the history settles*](f3d-history.md#what-the-history-settles)).
 | What the descriptions give (source) | Decoder | Notes |
 |---|---|---|
 | Container: ZIP with stored, deflated and zstd entries, `.f3z` packages (both) | read | `core/f3d-file/src/container.rs`; `.f3z` members as separate designs |
-| Segment registry `Manifest.dat`, external references `RedirectionsStream.dat`, component reference slot (cadmpeg) | not read | the import names inserted documents' occurrences from the design stream only |
+| Segment registry `Manifest.dat`, external references `RedirectionsStream.dat`, component reference slot (cadmpeg) | partly read | `Manifest.dat`'s GUIDs tell a referenced document's file; `RedirectionsStream.dat` resolves the role GUIDs of the older references into other documents to the documents' URNs (`stream::redirections`, `Segment::redirect`, mitcad#2492); the newer designs' occurrences are named from the design stream only |
 | `MetaStream.dat`: header, type table (GUID, base GUID, version, module, ids), primary and secondary record index, named ids, version contexts, property block (both) | read | the whole stream (`MetaStream::parse`); the secondary index is our sub-chunk table, the version contexts our external references, the property block our feature versions; the two `u32` after the module name, which we called a segment version, are a segment type code by cadmpeg (1 design) |
 | Reference encoding: present flag, id, same/other segment, cross-document form with link name and version; the inline type GUID of one writer generation (cadmpeg) | read | `stream::ref_at`; the cross-document form as an assembly context (`Ref::context`) |
 | Members written one class level at a time in name order; leading block and property block flags (cadmpeg) | read differently | we read the root part (references, attributes) and then fixed layouts per class and version found on the files; the name ordering explains why a member added in a later version shifts a layout, which matches the version-keyed layouts we keep |

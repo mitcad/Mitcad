@@ -14,6 +14,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 #include "CamToolpaths.hpp"
 
@@ -84,6 +85,36 @@ StockMesh turnedStockMesh(const QJsonObject& stock, const WorkFrame& frame, int 
 // `triangles` three vertices each), each triangle with its own corners and
 // its face's normal. Plain shades; empty when the mesh does not read.
 StockMesh solidStockMesh(const QJsonObject& solid);
+
+// The uncut stock (mitcad#2552): a setup's stock before any cut, drawn
+// see-through round the part from its `work` (the `cam_setups` query, the
+// stock CAM computes with), with or without toolpaths. A mill setup's
+// box from `stock_min` to `stock_max` in its work frame (six faces, twelve
+// edges); a lathe setup's bar about the spindle axis (`turning`: the part's
+// `stock_radius`, `stock_inner_radius` and `stock_face`, and `stock_back`)
+// from its back to its face, a tube when it has a bore, with a circle at
+// each end of the outside and of the bore. Its surface (plain shades, every
+// triangle wound round its normal) and its edges as segments (six numbers
+// each) in the design; `kinds` names each setup's stock ("box", "bar",
+// "tube").
+struct UncutStock {
+  StockMesh surface;
+  std::vector<float> edges;
+  QStringList kinds;
+
+  bool empty() const { return surface.empty(); }
+  int edgeCount() const { return static_cast<int>(edges.size() / 6); }
+  // Another setup's stock drawn with this one.
+  void add(const UncutStock& other);
+  // "CAM uncut stock: 2 setup(s): box, tube; 284 vertices, 268 triangles,
+  // 140 edge(s)", "CAM uncut stock: none": the view's log line.
+  QString log() const;
+};
+// One setup's stock; empty when its work is in error or has no stock.
+UncutStock uncutStock(const QJsonObject& work, int segments = 64);
+// The stock of every setup shown (`cam_setups`' entries whose `visible` is
+// not false), in their order.
+UncutStock uncutStockOfSetups(const QJsonArray& setups, int segments = 64);
 
 // The snapshots' places along a playback of `points` places: at most
 // `count`, evenly apart, the last place always one; ascending, each once.

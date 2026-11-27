@@ -109,6 +109,8 @@ Ui-ExpectNew 'Pick places:' 'its Profiles take faces'
 Ui-Mark
 Ui-Step 'pick a face of the cube'        { Ui-ClickPick 'face F1.b0/F1:import(' }
 Ui-ExpectNew 'Extrude Profiles: 1 face [face F1:import(' 'the face is the profile'
+# A new Extrude starts at 0 mm and builds nothing yet (mitcad#2481).
+Ui-Step 'distance 10 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
 Ui-ExpectNew 'Extrude: automatic Operation = Join' 'Join: out of the cube' 30
 # Two Sides takes a negative side, which ends on the other side's side
 # (mitcad#765): 10 and -3 preview; 10 and -10 meet and are refused; back

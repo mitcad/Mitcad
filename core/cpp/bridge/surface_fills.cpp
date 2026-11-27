@@ -109,9 +109,11 @@ std::shared_ptr<geometry::Shape> blend_surface(rust::Str feature, const ShapeLis
 std::shared_ptr<geometry::Shape> boundary_surface(rust::Str feature, const ShapeList& bodies,
                                                   rust::Slice<const SweepCurve> curves, bool fill,
                                                   rust::Slice<const BoundaryData> u,
-                                                  rust::Slice<const BoundaryData> v) {
+                                                  rust::Slice<const BoundaryData> v,
+                                                  rust::Slice<const BoundaryData> guides) {
   if (fill) {
-    return geometry::boundary_fill(std::string(feature), curves_of(u, bodies, curves));
+    return geometry::boundary_fill(std::string(feature), curves_of(u, bodies, curves),
+                                   curves_of(guides, bodies, curves));
   }
   return geometry::boundary_network(std::string(feature), curves_of(u, bodies, curves),
                                     curves_of(v, bodies, curves));

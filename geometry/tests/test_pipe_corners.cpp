@@ -33,6 +33,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -165,7 +166,7 @@ void test_straight_path() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(pipe_corners) {
   test::guarded("circular section", test::test_circular_section);
   test::guarded("square section", test::test_square_section);
   test::guarded("hollow circular section", test::test_hollow_circular_section);

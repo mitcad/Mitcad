@@ -48,6 +48,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/boolean.hpp"
 #include "mitcad/geometry/query.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -239,7 +240,7 @@ void test_classifiers_beside_each_other() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(classifier_pool_joins) {
   test::guarded("joins_of_lofts", test::test_joins_of_lofts);
   test::guarded("joins_of_a_rounded_loft", test::test_joins_of_a_rounded_loft);
   test::guarded("joins_of_pattern_instances", test::test_joins_of_pattern_instances);

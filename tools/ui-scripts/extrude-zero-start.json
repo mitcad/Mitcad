@@ -1,0 +1,12 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A new Extrude starts at zero (mitcad#2481, tools/ui-extrude-zero-start-test.sh): a 20 x 20 x 10 block behind the XY plane's origin (Sketch1 F1, Extrude1 F2, F2.b0; its top face F2:end(r{...}) at z = 10, 4000 mm3) and a 1 x 1 mm square centred on the origin in an unused Sketch2 (F3), the newest sketch, which Extrude starts with; it touches no body."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[-10,20],"width":20,"height":20},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":10},"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok"}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F3","corner":[-0.5,-0.5],"width":1,"height":1},
+  {"expect":{"feature":"F3","status":"ok"}},
+  {"expect":{"body":"Body1","volume":4000,"tolerance":1e-6}}
+]

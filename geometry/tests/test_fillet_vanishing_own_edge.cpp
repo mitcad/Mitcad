@@ -41,6 +41,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -190,7 +191,7 @@ void test_rounding_vanishing_where_its_faces_come_tangent() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_vanishing_own_edge) {
   test::guarded("test_rounding_vanishing_where_its_faces_come_tangent",
                 test::test_rounding_vanishing_where_its_faces_come_tangent);
   if (test::failures == 0) {

@@ -1138,6 +1138,24 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
     updateHighlights();
     inputsChanged();
   };
+  // A row moved up or down (InputDef::orderedRows, mitcad#2506): its
+  // inputs' values go with it.
+  actions.rowMoved = [this](const QString& list, int from, int to) {
+    const int count = m_state.rows(list);
+    if (from == to || from < 0 || to < 0 || from >= count || to >= count) {
+      return;
+    }
+    m_state.moveRow(list, from, to);
+    qDebug().noquote() << QStringLiteral("%1: moved %2 row %3 to %4").arg(m_def.name, list).arg(from + 1).arg(to + 1);
+    m_presenter->refresh(m_state);
+    for (const Slot& slot : slotsOf(false)) {
+      if (slot.list == list && slot.def->type == InputDef::Type::Value) {
+        evaluate(slot.key);
+      }
+    }
+    updateHighlights();
+    inputsChanged();
+  };
   actions.accepted = [this] {
     m_continueAfterCommit = false; // OK closes, also after an Apply that waited
     commit();
@@ -1225,6 +1243,12 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
     auto action = actions.rowRemoved;
     actions.rowRemoved = [this, action](const QString& key, int index) {
       structuralInputAction(key, [action, key, index] { action(key, index); });
+    };
+  }
+  {
+    auto action = actions.rowMoved;
+    actions.rowMoved = [this, action](const QString& key, int from, int to) {
+      structuralInputAction(key, [action, key, from, to] { action(key, from, to); });
     };
   }
   actions.valueFocused = [this](const QString& key, bool focused) { valueFocused(key, focused); };
@@ -2235,7 +2259,8 @@ void CommandSession::inputsChanged() {
     }
   }
   // A selection a choice showed, still empty, takes the next picks
-  // (Extrude's To Object).
+  // (Extrude's To Object); one that needs none when it says so, also with
+  // picks (InputDef::activeWhenShown).
   QSet<QString> shownSelections;
   QString newlyShown;
   for (const Slot& slot : slotsOf(true)) {
@@ -2243,8 +2268,8 @@ void CommandSession::inputsChanged() {
       continue;
     }
     shownSelections.insert(slot.key);
-    if (newlyShown.isEmpty() && !m_shownSelections.contains(slot.key) && slot.def->min > 0 &&
-        m_state.items(slot.key).isEmpty()) {
+    if (newlyShown.isEmpty() && !m_shownSelections.contains(slot.key) &&
+        ((slot.def->min > 0 && m_state.items(slot.key).isEmpty()) || slot.def->activeWhenShown)) {
       newlyShown = slot.key;
     }
   }
@@ -2787,16 +2812,7 @@ void CommandSession::runInspection() {
             return;
           }
           if (outcome.cancelled) {
-            m_previewOk = true; // Close remains available after cancellation.
-            m_shownKey = QByteArrayLiteral("inspection");
-            m_presenter->setResult(QString());
-            showPanelMessage(tr("Inspection canceled; change an input to try again."), NoticeLevel::Information);
-            m_presenter->setOkEnabled(true);
-            m_host.viewer().setPreview(TopoDS_Shape());
-            if (m_def.keepsSection) {
-              m_host.showPrintAnalysis(QJsonObject());
-            }
-            qDebug().noquote() << QStringLiteral("Inspect %1: cancelled").arg(m_def.name);
+            showCancelledInspection();
           } else {
             Inspection shown = result;
             if (!outcome.error.isEmpty()) { shown.error = outcome.error; }
@@ -2813,10 +2829,30 @@ void CommandSession::runInspection() {
   Inspection result;
   try {
     result = m_def.inspect(m_state, m_host);
+  } catch (const ComputationCancelled&) {
+    // A check run as a model job (CommandHost::jobQuery: Interference,
+    // mitcad#2577; Print Analysis) whose progress Cancel was pressed.
+    showCancelledInspection();
+    return;
   } catch (const std::exception& e) {
     result.error = errorText(e);
   }
   acceptInspection(result);
+}
+
+void CommandSession::showCancelledInspection() {
+  if (m_done || !m_presenter) { return; }
+  m_previewOk = true; // Close remains available after cancellation.
+  m_failed = false;
+  m_shownKey = QByteArrayLiteral("inspection");
+  m_presenter->setResult(QString());
+  showPanelMessage(tr("Inspection canceled; change an input to try again."), NoticeLevel::Information);
+  m_presenter->setOkEnabled(true);
+  m_host.viewer().setPreview(TopoDS_Shape());
+  if (m_def.keepsSection) {
+    m_host.showPrintAnalysis(QJsonObject());
+  }
+  qDebug().noquote() << QStringLiteral("Inspect %1: cancelled").arg(m_def.name);
 }
 
 void CommandSession::acceptInspection(const Inspection& result) {
@@ -2832,6 +2868,11 @@ void CommandSession::acceptInspection(const Inspection& result) {
   // (mitcad#1979); setPreview took the last ones away.
   if (!result.guide.IsNull()) {
     m_host.viewer().setPreviewGuide(result.guide);
+  }
+  // Continuity Analysis' edges by their classes (mitcad#2521); setPreview
+  // took the last ones away.
+  if (!result.coloredEdges.empty()) {
+    m_host.viewer().setPreviewEdges(result.coloredEdges);
   }
   // The rows that paint their places while the pointer is over them
   // (Inspection::Value::places, mitcad#1979): those of this answer. A row
@@ -3379,11 +3420,14 @@ CommandSession::Preview CommandSession::previewFromReport(
       // (MainWindow::showDatums): its polyline, in its component's
       // coordinates, placed by the occurrence of that component, as a
       // construction feature's datum is (mitcad#1496).
-      const QJsonArray points =
-          preview.report.value(QStringLiteral("curve")).toObject().value(QStringLiteral("points")).toArray();
+      // Curves apart (an Isoparametric Curve's, mitcad#2522) each drawn as
+      // a polyline of its own, and counted in the logged text.
+      const QJsonObject curve = preview.report.value(QStringLiteral("curve")).toObject();
+      const QJsonArray points = curve.value(QStringLiteral("points")).toArray();
+      const qsizetype runs = curve.value(QStringLiteral("polylines")).toArray().size();
       const gp_Trsf placement = m_host.datumPlacement(m_editUid);
-      const TopoDS_Shape polyline = polylineShape(points);
-      if (!polyline.IsNull()) {
+      const TopoDS_Shape polyline = featureCurveShape(curve);
+      if (!polyline.IsNull() && !points.isEmpty()) {
         preview.tool = polyline.Moved(TopLoc_Location(placement));
         const auto pointText = [&placement](const QJsonValue& value) {
           const gp_Pnt point = pointOf(value).Transformed(placement);
@@ -3395,9 +3439,13 @@ CommandSession::Preview CommandSession::previewFromReport(
           }
           return QStringLiteral("(%1)").arg(parts.join(QStringLiteral(", ")));
         };
-        preview.curve = QStringLiteral("%1 point(s) from %2 to %3")
-                            .arg(points.size())
-                            .arg(pointText(points.first()), pointText(points.last()));
+        preview.curve = runs > 1 ? QStringLiteral("%1 point(s) in %2 curves from %3 to %4")
+                                       .arg(points.size())
+                                       .arg(runs)
+                                       .arg(pointText(points.first()), pointText(points.last()))
+                                 : QStringLiteral("%1 point(s) from %2 to %3")
+                                       .arg(points.size())
+                                       .arg(pointText(points.first()), pointText(points.last()));
       }
     }
   }

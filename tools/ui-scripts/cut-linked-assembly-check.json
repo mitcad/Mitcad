@@ -1,8 +1,9 @@
 [
   {"comment": "SPDX-License-Identifier: MIT"},
-  {"comment": "The assembly saved by tools/ui-scripts/cut-linked-assembly.mitcad-ui (mitcad#2131): plate:1 machined by the cut, the 12 x 4 mm square through its 10 mm block (4000 - 480 = 3520 mm3 shown), the linked block itself as it was (the bodies query lists the definition's, 4000 mm3)."},
-  {"expect": {"instances": 1, "world_volume": 3520, "tolerance": 1e-3}},
+  {"comment": "The assembly saved by tools/ui-scripts/cut-linked-assembly.mitcad-ui (mitcad#2131, mitcad#2160): plate:1 machined by the Extrude cut (F4: the 12 x 4 mm square through its 10 mm block, 480 mm3), the Revolve cut (F5: a cylinder of radius 2 about the Z axis through its corner, a quarter of it in the block, 10 pi = 31.416 mm3) and the Hole (F6: 4 mm across through it at (10, 14), 40 pi = 125.664 mm3): 4000 - 480 - 50 pi = 3362.920 mm3 shown; the linked block itself as it was (the bodies query lists the definition's, 4000 mm3)."},
+  {"expect": {"instances": 1, "world_volume": 3362.9204, "tolerance": 1e-3}},
   {"expect": {"bodies": 1}},
   {"expect": {"query": {"query": "components"}, "result": {
-    "occurrences": [{"name": "plate:1", "machined": {"note": "Machined in this assembly; its own design stays as it is."}}]}}}
+    "occurrences": [{"name": "plate:1", "machined": {"cuts": ["F4", "F5", "F6"],
+      "note": "Machined in this assembly; its own design stays as it is."}}]}}}
 ]

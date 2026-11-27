@@ -86,6 +86,7 @@
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
+#include "bundled_test.hpp"
 #include "check.hpp"
 #include "mitcad/geometry/flex_route.hpp"
 
@@ -1574,7 +1575,7 @@ void test_into_a_slot_mouth() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(flex_route) {
   // (Each line as it comes: a test that is stopped has said how far it got.)
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   test::guarded("over the edge", test::test_over_the_edge);

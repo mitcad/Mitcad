@@ -33,10 +33,11 @@ void registerCreateCommands(CommandRegistry& registry, const CommandContext& con
   registry.add(coilCommand(context));
   registry.add(helixCommand(context));
   registry.add(pipeCommand(context));
-  // the curve tools' Intersection Curve (mitcad#1405) and Helix Curve
-  // (mitcad#1777),
+  // the curve tools' Intersection Curve (mitcad#1405), Helix Curve
+  // (mitcad#1777) and Isoparametric Curve (mitcad#2522),
   registry.add(intersectionCurveCommand(context));
   registry.add(helixCurveCommand(context));
+  registry.add(isoparametricCurveCommand(context));
   // the Pattern submenu and Mirror, Envelope (mitcad#1276); the Machine
   // Elements submenu (Gear, Pulley) follows from
   // MainWindow::registerCommands.

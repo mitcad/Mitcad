@@ -2,9 +2,11 @@
 //! Command scripts with expectations, for `mitcad-cli run` and its tests.
 //!
 //! A script is a JSON array of steps: commands (`{"cmd": ...}`, see
-//! `commands.md`), expectations (`{"expect": {...}}`) and comments
-//! (`{"comment": "..."}`). An expectation checks the document after the
-//! steps before it:
+//! `commands.md`), previews (`{"preview": {"cmd": "add_feature", ...}}`,
+//! mitcad#2444: the command evaluated as a command panel previews it,
+//! nothing committed, its status required to be ok), expectations
+//! (`{"expect": {...}}`) and comments (`{"comment": "..."}`). An
+//! expectation checks the document after the steps before it:
 //!
 //! - `"bodies": n`: the number of bodies at the timeline marker;
 //! - `"body": "Body1"` (a name or uid) with any of `"volume"`, `"area"`
@@ -38,6 +40,13 @@
 //!   `area`, `bbox`, `center`, `min`, `max`); `"instances": n` counts the
 //!   visible bodies in the design (every occurrence's) and
 //!   `"world_volume"` adds up their volumes.
+//! - with `"body"`, `"keep": "<name>"` keeps the body's volume under that
+//!   name for later steps of the same script, and `"volume_kept":
+//!   "<name>"` expects the volume kept under it (relative `"tolerance"`)
+//!   (mitcad#2568: a rigid move of faces on a reported design keeps the
+//!   design's own volume, whatever it is).
+
+use std::collections::BTreeMap;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -96,7 +105,13 @@ struct Expectation {
     // contains this.
     none: Option<Value>,
     some: Option<Value>,
+    // A body's volume kept for later steps, and compared with (mitcad#2568).
+    keep: Option<String>,
+    volume_kept: Option<String>,
 }
+
+/// The volumes `"keep"` kept by name in one run of a script (mitcad#2568).
+pub(crate) type Kept = BTreeMap<String, f64>;
 
 /// A body's bounding box.
 #[derive(Debug, Deserialize)]
@@ -165,6 +180,7 @@ impl<K: Kernel> ScriptApi<K> for Document<K> {
             return Err(ApiError("a script is a JSON array of steps".to_owned()));
         };
         let mut results = Vec::new();
+        let mut kept = Kept::new();
         for (i, step) in steps.into_iter().enumerate() {
             let fail = |e: ApiError| ApiError(format!("steps[{i}]: {e}"));
             let started = std::time::Instant::now();
@@ -172,6 +188,7 @@ impl<K: Kernel> ScriptApi<K> for Document<K> {
                 let expectation: Expectation = serde_json::from_value(expect.clone())
                     .map_err(|e| fail(ApiError(format!("invalid expectation: {e}"))))?;
                 self.check(&expectation).map_err(fail)?;
+                self.check_kept(&expectation, &mut kept).map_err(fail)?;
                 match expect.pointer("/query/query").and_then(Value::as_str) {
                     Some(query) => format!("expect {query}"),
                     None => "expect".to_owned(),
@@ -180,6 +197,30 @@ impl<K: Kernel> ScriptApi<K> for Document<K> {
                 && step.as_object().is_some_and(|o| o.len() == 1)
             {
                 continue;
+            } else if let Some(command) = step
+                .get("preview")
+                .filter(|c| c.is_object() && step.get("cmd").is_none())
+            {
+                // A command panel's preview (mitcad#2444): the add_feature
+                // or edit_feature command evaluated as the panel previews
+                // it, nothing committed; a preview whose status is not ok
+                // fails the script. (A command's own `"preview": true`, as
+                // sketch3d.drag takes it, stays the command's.)
+                let name = command
+                    .get("def")
+                    .and_then(|d| d.get("type"))
+                    .and_then(Value::as_str)
+                    .map_or_else(|| "preview".to_owned(), |t| format!("preview {t}"));
+                let answer = DocumentApi::preview(self, &command.to_string()).map_err(fail)?;
+                let report = read_json(&answer).map_err(fail)?;
+                if report["status"] != "ok" {
+                    return Err(fail(ApiError(format!(
+                        "the preview's status is {}: {}",
+                        report["status"], report["error"]
+                    ))));
+                }
+                results.push(report);
+                name
             } else {
                 let name = step
                     .get("cmd")
@@ -200,15 +241,18 @@ impl<K: Kernel> ScriptApi<K> for Document<K> {
 
 /// Runs one step of a script as [`ScriptApi::run_script`] does: a
 /// command's result, None for a comment or an expectation that holds
-/// (the `run_script` command, mitcad#2245).
+/// (the `run_script` command, mitcad#2245). `kept`: the volumes the
+/// script's earlier steps kept.
 pub(crate) fn run_step<K: Kernel>(
     doc: &mut Document<K>,
     step: Value,
+    kept: &mut Kept,
 ) -> Result<Option<Value>, ApiError> {
     if let Some(expect) = step.get("expect") {
         let expectation: Expectation = serde_json::from_value(expect.clone())
             .map_err(|e| ApiError(format!("invalid expectation: {e}")))?;
         doc.check(&expectation)?;
+        doc.check_kept(&expectation, kept)?;
         return Ok(None);
     }
     if step.get("comment").is_some() && step.as_object().is_some_and(|o| o.len() == 1) {
@@ -233,6 +277,10 @@ trait ScriptLocal<K: Kernel> {
 
     /// The profile regions and degrees of freedom of a sketch.
     fn check_sketch(&self, wanted: &str, expect: &Expectation) -> Result<(), ApiError>;
+
+    /// `keep` and `volume_kept` (mitcad#2568): a body's volume compared
+    /// with the one kept under a name, then kept under a name.
+    fn check_kept(&self, expect: &Expectation, kept: &mut Kept) -> Result<(), ApiError>;
 }
 
 impl<K: Kernel> ScriptLocal<K> for Document<K> {
@@ -575,6 +623,46 @@ impl<K: Kernel> ScriptLocal<K> for Document<K> {
                     "{wanted} to have {dof} degrees of freedom, got {actual}"
                 ));
             }
+        }
+        Ok(())
+    }
+
+    fn check_kept(&self, expect: &Expectation, kept: &mut Kept) -> Result<(), ApiError> {
+        if expect.keep.is_none() && expect.volume_kept.is_none() {
+            return Ok(());
+        }
+        let fail = |message: String| Err(ApiError(format!("expected {message}")));
+        let Some(wanted) = &expect.body else {
+            return fail("a body to keep or compare the volume of".to_owned());
+        };
+        let bodies = self.bodies();
+        let Some(body) = bodies
+            .iter()
+            .find(|b| &b.name == wanted || &b.uid.to_string() == wanted)
+        else {
+            return fail(format!("a body {wanted}"));
+        };
+        let before = match &expect.volume_kept {
+            Some(name) => match kept.get(name) {
+                Some(&volume) => Some((name, volume)),
+                None => return fail(format!("a volume kept as {name} by an earlier step")),
+            },
+            None => None,
+        };
+        let volume = self
+            .kernel()
+            .mass_properties(body.shape)
+            .map_err(|e| ApiError(format!("{wanted}: {e}")))?
+            .volume;
+        if let Some((name, before)) = before
+            && !close(volume, before, expect.tolerance.unwrap_or(1e-6))
+        {
+            return fail(format!(
+                "{wanted} to have the volume kept as {name}, {before}, got {volume}"
+            ));
+        }
+        if let Some(name) = &expect.keep {
+            kept.insert(name.clone(), volume);
         }
         Ok(())
     }

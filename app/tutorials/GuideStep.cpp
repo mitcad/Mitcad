@@ -138,7 +138,9 @@ const QStringList& guideNavigationCommands() {
                                QStringLiteral("view.look_at"),     QStringLiteral("view.orthographic"),
                                QStringLiteral("view.perspective"), QStringLiteral("view.turn_left"),
                                QStringLiteral("view.turn_right"),  QStringLiteral("view.turn_up"),
-                               QStringLiteral("view.turn_down")};
+                               QStringLiteral("view.turn_down"),
+                               // mitcad#2473
+                               QStringLiteral("view.perspective_orthographic_faces")};
   return ids;
 }
 

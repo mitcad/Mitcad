@@ -261,8 +261,8 @@ limit of 36.0 GiB, shared with other processes using 24.3 GiB)" (its own
 scope: "half of its own cgroup's memory limit …"). The reading of the
 cgroup files stays Linux-only; the decision and the walk up the tree
 (`cgroup_memory`, given the hierarchy's root and the text of
-`/proc/self/cgroup`) run on every platform, and `test_bridge`
-(`core.bridge`, `test_bridge memory-guard`) checks them on a fake tree:
+`/proc/self/cgroup`) run on every platform, and the bridge test
+(`core.bridge`, `test_core_bridge bridge memory-guard`) checks them on a fake tree:
 a small import under a full shared slice, one that grew past its share,
 one that holds most of the usage, and a limit on its own scope, shared
 or not.

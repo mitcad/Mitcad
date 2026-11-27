@@ -457,6 +457,19 @@ impl SketchEdit<'_> {
         }
         self.def.projections[k].entities = renamed.iter().map(Entity::as_ref).collect();
         self.def.projections[k].by_geometry = true;
+        // The outline's curves chosen to bound profiles (mitcad#2551) stay
+        // chosen in the new curves they went to.
+        {
+            let again = &mut self.def.projections[k];
+            for c in &mut again.boundaries {
+                if let Some(to) = map.get(c) {
+                    *c = *to;
+                }
+            }
+            again.boundaries.sort_unstable();
+            again.boundaries.dedup();
+            again.keep_listed_boundaries();
+        }
         // The old ones that went, and those that stay as references.
         let gone: BTreeSet<EntityUid> = own
             .iter()
@@ -1031,6 +1044,7 @@ mod tests {
             after: None,
             outline: false,
             automatic: false,
+            boundaries: Vec::new(),
         };
         let def: SketchDef = SketchDef {
             entities: vec![

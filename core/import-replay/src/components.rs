@@ -70,6 +70,14 @@ pub struct ComponentReport {
     /// placements it stores (mitcad#1892).
     #[serde(skip)]
     pub occurrence_objects: HashMap<u64, OccurrenceUid>,
+    /// The occurrences by their object ids in the file with their GUIDs,
+    /// and in turn those of the documents the components of other documents
+    /// were filled from, once the import has filled them: a design that
+    /// inserts this one names the levels of its paths deeper than this
+    /// design's own occurrences by those documents' object ids
+    /// (mitcad#2528, [`crate::references::ObjectGuids`]).
+    #[serde(skip)]
+    pub object_guids: std::sync::Arc<crate::references::ObjectGuids>,
     /// The captured positions of occurrences inside the components of other
     /// documents, which the replay leaves out (mitcad#196).
     #[serde(skip)]

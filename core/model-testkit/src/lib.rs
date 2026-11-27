@@ -314,6 +314,9 @@ pub struct MockKernel {
     /// Drawings (mitcad#1997): the scale each `project_view` call was
     /// given (`ViewSpec::scale`), in order.
     pub projected_scales: RefCell<Vec<Option<f64>>>,
+    /// Drawings (mitcad#2479): the section plane each `project_view` call
+    /// was given (`ViewSpec::section`, with its bound), in order.
+    pub projected_sections: RefCell<Vec<Option<mitcad_model_base::drawing_view::CutPlane>>>,
     /// Drawings (mitcad#1286): lines in the model (polylines through
     /// these points) that `project_view` draws as visible in every view
     /// besides the boxes' edges, as the kernel draws the rim of a hole the
@@ -5128,8 +5131,17 @@ impl Kernel for MockKernel {
         spec: &mitcad_model_base::kernel::RimBandSpec<'_, MockShape>,
     ) -> Result<MockShape, KernelError> {
         self.call("rim_band")?;
+        // Tangent following and a side's lean (mitcad#2511) only when
+        // asked for, so that older specs read as before.
+        let mut more = String::new();
+        if spec.tangent {
+            more.push_str(" tangent");
+        }
+        if spec.side_taper != 0.0 {
+            more.push_str(&format!(" side_taper {}", number(spec.side_taper)));
+        }
         self.specs.borrow_mut().push(format!(
-            "rim_band {} on {} {} width {} free {} from {} to {}",
+            "rim_band {} on {} {} width {} free {} from {} to {}{more}",
             spec.feature,
             spec.face,
             if spec.outside { "outside" } else { "inside" },
@@ -5236,6 +5248,7 @@ impl Kernel for MockKernel {
             .borrow_mut()
             .push(shapes.iter().map(|s| s.history.clone()).collect());
         self.projected_scales.borrow_mut().push(spec.scale);
+        self.projected_sections.borrow_mut().push(spec.section);
         let mut projection = ViewProjection {
             polygonal: self.projects_polygonal.get(),
             ..ViewProjection::default()
@@ -5868,7 +5881,15 @@ impl Kernel for MockKernel {
             Ok(parts.join("; "))
         };
         let text = match spec.curves {
-            BoundaryCurves::Loop(curves) => format!("loop [{}]", describe(curves)?),
+            BoundaryCurves::Loop {
+                boundary,
+                guides: [],
+            } => format!("loop [{}]", describe(boundary)?),
+            BoundaryCurves::Loop { boundary, guides } => format!(
+                "loop [{}] guides [{}]",
+                describe(boundary)?,
+                describe(guides)?
+            ),
             BoundaryCurves::Network { u, v } => {
                 format!("u [{}] v [{}]", describe(u)?, describe(v)?)
             }
@@ -7570,6 +7591,336 @@ impl Kernel for MockKernel {
             .collect();
         Ok(mitcad_model_base::exchange::FacedTriangleMesh { mesh, faces })
     }
+
+    // Minimum Radius (mitcad#2518).
+
+    /// Each face's curvature by `surfaces`: one over a cylinder's, a
+    /// sphere's or a cone's radius or a torus' minor radius; 0 for a plane,
+    /// another surface or a face without one. Where: the middle of the box
+    /// side [`Kernel::triangle_mesh_faces`] puts the face on (side `i` of
+    /// -Z, +Z, -Y, +Y, -X, +X for face `i` modulo 6; the origin without
+    /// bounds). Every face, or each one named (an error for a name the
+    /// shape lacks).
+    fn face_curvatures(
+        &self,
+        shape: &MockShape,
+        faces: &[FaceName],
+    ) -> Result<Vec<mitcad_model_base::kernel::FaceCurvature>, KernelError> {
+        self.call("face_curvatures")?;
+        let indices: Vec<usize> = if faces.is_empty() {
+            (0..shape.faces.len()).collect()
+        } else {
+            let mut found = Vec::new();
+            for face in faces {
+                let i =
+                    shape.faces.iter().position(|f| f == face).ok_or_else(|| {
+                        KernelError::failed(format!("the body has no face {face}"))
+                    })?;
+                if !found.contains(&i) {
+                    found.push(i);
+                }
+            }
+            found
+        };
+        let surfaces = self.surfaces.borrow();
+        Ok(indices
+            .into_iter()
+            .map(|i| {
+                let curvature = match surfaces.get(&shape.faces[i].to_string()) {
+                    Some(
+                        SurfaceGeometry::Cylinder { radius, .. }
+                        | SurfaceGeometry::Sphere { radius, .. }
+                        | SurfaceGeometry::Cone { radius, .. },
+                    ) => 1.0 / radius,
+                    Some(SurfaceGeometry::Torus { minor_radius, .. }) => 1.0 / minor_radius,
+                    _ => 0.0,
+                };
+                let at = shape.bounds.as_ref().map_or([0.0; 3], |b| {
+                    let side = i % 6;
+                    let axis = 2 - side / 2;
+                    let mut middle: [f64; 3] = std::array::from_fn(|k| (b.min[k] + b.max[k]) / 2.0);
+                    middle[axis] = if side % 2 == 1 {
+                        b.max[axis]
+                    } else {
+                        b.min[axis]
+                    };
+                    middle
+                });
+                mitcad_model_base::kernel::FaceCurvature {
+                    face: i,
+                    curvature,
+                    at,
+                }
+            })
+            .collect())
+    }
+
+    // Isoparametric curves (mitcad#2522).
+
+    /// Records the call in `specs` (`iso_curves <face> <u|v> at
+    /// <fractions>` or `through <point>`). On a face whose surface is a
+    /// cylinder in `surfaces` (u its angle from `default_x_axis` of its
+    /// axis, v the height along the axis over the shape's box): a u curve
+    /// is the line along the axis across the box, a v curve the whole
+    /// circle; on other faces, across the shape's box, a u curve the line
+    /// along Y at its share of the box's X, a v curve the line along X at
+    /// its share of Y. A point gives the share where it lies.
+    fn iso_curves(
+        &self,
+        shape: &MockShape,
+        face: &FaceName,
+        held: mitcad_model_base::kernel::IsoParameter,
+        place: &mitcad_model_base::kernel::IsoPlace,
+    ) -> Result<Vec<mitcad_model_base::kernel::IsoCurve>, KernelError> {
+        use mitcad_model_base::kernel::{Curve3, IsoCurve, IsoParameter, IsoPlace};
+        use mitcad_vec3::{add, cross, dot, scale, sub, unit};
+        self.call("iso_curves")?;
+        if !shape.has_face(face) {
+            return Err(KernelError::failed(format!("the body has no face {face}")));
+        }
+        let hold_u = held == IsoParameter::U;
+        let direction = if hold_u { "u" } else { "v" };
+        let bounds = shape.bounds.ok_or(KernelError::Unsupported(
+            "isoparametric curves of a shape without a box",
+        ))?;
+        let cylinder = match self.surfaces.borrow().get(&face.to_string()) {
+            Some(SurfaceGeometry::Cylinder {
+                origin,
+                axis,
+                radius,
+            }) => Some((*origin, unit(*axis).unwrap_or([0.0, 0.0, 1.0]), *radius)),
+            _ => None,
+        };
+        // Along the cylinder's axis, the box's reach either way.
+        let reach = |origin: [f64; 3], axis: [f64; 3]| {
+            let along: Vec<f64> = bounds
+                .corners()
+                .map(|c| dot(sub(c, origin), axis))
+                .collect();
+            (
+                along.iter().copied().fold(f64::INFINITY, f64::min),
+                along.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            )
+        };
+        let fractions: Vec<f64> = match place {
+            IsoPlace::Fractions(fractions) => {
+                self.specs.borrow_mut().push(format!(
+                    "iso_curves {face} {direction} at {}",
+                    fractions
+                        .iter()
+                        .map(|f| number(round(*f)))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ));
+                if fractions.iter().any(|f| !(0.0..=1.0).contains(f)) {
+                    return Err(KernelError::failed(
+                        "an isoparametric curve's position must lie from 0 to 1 across the face",
+                    ));
+                }
+                fractions.clone()
+            }
+            IsoPlace::Through(point) => {
+                self.specs.borrow_mut().push(format!(
+                    "iso_curves {face} {direction} through {:?}",
+                    point.map(|v| number(round(v)))
+                ));
+                let share = match cylinder {
+                    Some((origin, axis, _)) if hold_u => {
+                        let x = mitcad_model_base::datum::default_x_axis(axis);
+                        let y = cross(axis, x);
+                        let off = sub(*point, origin);
+                        dot(off, y)
+                            .atan2(dot(off, x))
+                            .rem_euclid(std::f64::consts::TAU)
+                            / std::f64::consts::TAU
+                    }
+                    Some((origin, axis, _)) => {
+                        let (low, high) = reach(origin, axis);
+                        (dot(sub(*point, origin), axis) - low) / (high - low)
+                    }
+                    None => {
+                        let k = if hold_u { 0 } else { 1 };
+                        (point[k] - bounds.min[k]) / (bounds.max[k] - bounds.min[k])
+                    }
+                };
+                vec![share.clamp(0.0, 1.0)]
+            }
+        };
+        Ok(fractions
+            .iter()
+            .map(|&f| {
+                let piece = match cylinder {
+                    Some((origin, axis, radius)) => {
+                        let x = mitcad_model_base::datum::default_x_axis(axis);
+                        let y = cross(axis, x);
+                        let (low, high) = reach(origin, axis);
+                        if hold_u {
+                            let angle = std::f64::consts::TAU * f;
+                            let out = add(
+                                scale(x, radius * angle.cos()),
+                                scale(y, radius * angle.sin()),
+                            );
+                            Curve3::Line {
+                                start: add(add(origin, out), scale(axis, low)),
+                                end: add(add(origin, out), scale(axis, high)),
+                            }
+                        } else {
+                            Curve3::Conic {
+                                center: add(origin, scale(axis, low + (high - low) * f)),
+                                normal: axis,
+                                x_axis: x,
+                                major: radius,
+                                minor: radius,
+                                start: 0.0,
+                                end: std::f64::consts::TAU,
+                                closed: true,
+                            }
+                        }
+                    }
+                    None => {
+                        let (k, other) = if hold_u { (0, 1) } else { (1, 0) };
+                        let mut start = bounds.min;
+                        start[k] = bounds.min[k] + (bounds.max[k] - bounds.min[k]) * f;
+                        start[2] = bounds.max[2];
+                        let mut end = start;
+                        end[other] = bounds.max[other];
+                        Curve3::Line { start, end }
+                    }
+                };
+                IsoCurve {
+                    pieces: vec![piece],
+                }
+            })
+            .collect())
+    }
+    // Surface quality analyses (mitcad#2517).
+
+    /// The sides of [`Kernel::face_meshes`]' box (the tolerance goes to
+    /// `mesh_tolerances` too) of the faces named, every face's for none
+    /// (face `i` on side `i` modulo 6), flat: each vertex with its side's
+    /// normal and no curvature. A name the shape lacks is an error.
+    fn surface_samples(
+        &self,
+        shape: &MockShape,
+        faces: &[FaceName],
+        tolerance: &mitcad_model_base::exchange::MeshTolerance,
+    ) -> Result<mitcad_model_base::surface_quality::SurfaceSamples, KernelError> {
+        self.call("surface_samples")?;
+        self.mesh_tolerances.borrow_mut().push(*tolerance);
+        let mut samples = mitcad_model_base::surface_quality::SurfaceSamples::default();
+        for (quad, normal) in mock_face_sides(shape, faces)? {
+            let first = samples.vertices.len() as u32;
+            samples.vertices.extend(quad);
+            samples.normals.extend([normal; 4]);
+            samples.curvatures.extend([[0.0, 0.0]; 4]);
+            samples
+                .triangles
+                .extend([[first, first + 1, first + 2], [first, first + 2, first + 3]]);
+            samples.face_triangles.push(2);
+        }
+        Ok(samples)
+    }
+
+    /// Each face's side (as [`Kernel::surface_samples`] finds it) crossed
+    /// by `count` straight lines each way, of two points, square to its
+    /// edges at (i + 1) / (count + 1) of the way, without curvature.
+    fn face_isocurves(
+        &self,
+        shape: &MockShape,
+        faces: &[FaceName],
+        count: u32,
+        _deviation: f64,
+    ) -> Result<Vec<mitcad_model_base::surface_quality::IsoCurve>, KernelError> {
+        self.call("face_isocurves")?;
+        let mut curves = Vec::new();
+        for (face, (quad, normal)) in mock_face_sides(shape, faces)?.into_iter().enumerate() {
+            let along = |from: [f64; 3], to: [f64; 3], t: f64| -> [f64; 3] {
+                std::array::from_fn(|k| from[k] + t * (to[k] - from[k]))
+            };
+            for along_u in [true, false] {
+                for i in 0..count {
+                    let at = f64::from(i + 1) / f64::from(count + 1);
+                    let (start, end) = if along_u {
+                        (along(quad[0], quad[3], at), along(quad[1], quad[2], at))
+                    } else {
+                        (along(quad[0], quad[1], at), along(quad[3], quad[2], at))
+                    };
+                    curves.push(mitcad_model_base::surface_quality::IsoCurve {
+                        face: face as u32,
+                        along_u,
+                        at,
+                        points: vec![start, end],
+                        normals: vec![normal; 2],
+                        curvatures: vec![0.0; 2],
+                    });
+                }
+            }
+        }
+        Ok(curves)
+    }
+}
+
+/// A side of a mock shape's box: its four corners and its outward normal.
+type MockSide = ([[f64; 3]; 4], [f64; 3]);
+
+/// The sides of a shape's bounding box its faces stand for (face `i` on
+/// side `i` modulo 6, the sides in turn -Z, +Z, -Y, +Y, -X, +X, six for a
+/// shape without faces), of the faces named or of all (mitcad#2517).
+fn mock_face_sides(shape: &MockShape, faces: &[FaceName]) -> Result<Vec<MockSide>, KernelError> {
+    let Some(bounds) = shape.bounds else {
+        return Ok(Vec::new());
+    };
+    let corner = |i: u32| -> [f64; 3] {
+        std::array::from_fn(|axis| {
+            if (i >> axis) & 1 == 1 {
+                bounds.max[axis]
+            } else {
+                bounds.min[axis]
+            }
+        })
+    };
+    let sides: [([u32; 4], [f64; 3]); 6] = [
+        ([0, 2, 3, 1], [0.0, 0.0, -1.0]),
+        ([4, 5, 7, 6], [0.0, 0.0, 1.0]),
+        ([0, 1, 5, 4], [0.0, -1.0, 0.0]),
+        ([2, 6, 7, 3], [0.0, 1.0, 0.0]),
+        ([0, 4, 6, 2], [-1.0, 0.0, 0.0]),
+        ([1, 3, 7, 5], [1.0, 0.0, 0.0]),
+    ];
+    let count = if shape.faces.is_empty() {
+        6
+    } else {
+        shape.faces.len()
+    };
+    let mut indices: Vec<usize> = Vec::new();
+    if faces.is_empty() {
+        indices.extend(0..count);
+    } else {
+        for name in faces {
+            let found: Vec<usize> = shape
+                .faces
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.matches(name))
+                .map(|(i, _)| i)
+                .collect();
+            if found.is_empty() {
+                return Err(KernelError::failed(format!("the body has no face {name}")));
+            }
+            for i in found {
+                if !indices.contains(&i) {
+                    indices.push(i);
+                }
+            }
+        }
+    }
+    Ok(indices
+        .into_iter()
+        .map(|i| {
+            let (quad, normal) = sides[i % 6];
+            (quad.map(corner), normal)
+        })
+        .collect())
 }
 
 /// A mock path curve's point at `fraction` of its parameter range: lines

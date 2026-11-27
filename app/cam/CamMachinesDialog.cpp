@@ -6,7 +6,9 @@
 #include <array>
 #include <cmath>
 #include <exception>
+#include <functional>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -17,18 +19,25 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLocale>
 #include <QMenu>
+#include <QPaintEvent>
+#include <QPainter>
+#include <QPen>
+#include <QPolygonF>
 #include <QPushButton>
+#include <QRectF>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStringList>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTransform>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtLogging>
@@ -36,7 +45,9 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/ModelMessages.hpp"
 #include "../framework/PanelTree.hpp"
+#include "../framework/Theme.hpp"
 #include "../framework/UserText.hpp"
+#include "../framework/WindowStyle.hpp"
 
 namespace mitcad {
 namespace {
@@ -100,6 +111,80 @@ QString zoneAxis(int axis, bool lathe) {
   return lathe && axis == 0 ? CamMachinesDialog::tr("X (radius)") : QString(QLatin1Char("XYZ"[axis]));
 }
 
+// A turning tool's or boring bar's insert on its holder (mitcad#2502), from
+// `cam_tool_shape`'s outline (`[x, z]` polygons from the controlled point):
+// drawn with Z to the right and X up, the controlled point marked and the
+// axes through it dashed; a boring bar lies below the axis, a left-hand
+// tool towards -Z.
+class ToolPicture : public QWidget {
+public:
+  ToolPicture() {
+    setObjectName(QStringLiteral("camToolPicture"));
+    setMinimumSize(220, 200);
+    setToolTip(CamMachinesDialog::tr("The insert on its holder from the controlled point, Z to the right and X up"));
+  }
+
+  void setOutline(const QJsonObject& outline) {
+    m_insert = polygon(outline.value(QStringLiteral("insert")).toArray());
+    m_holder = polygon(outline.value(QStringLiteral("holder")).toArray());
+    update();
+  }
+
+  bool drawn() const { return !m_insert.isEmpty(); }
+
+protected:
+  void paintEvent(QPaintEvent* /*event*/) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.fillRect(rect(), palette().color(QPalette::Base));
+    if (m_insert.isEmpty()) {
+      painter.setPen(themeColor(ColorRole::TextSecondary, palette()));
+      painter.drawText(rect().adjusted(12, 12, -12, -12), Qt::AlignCenter | Qt::TextWordWrap,
+                       CamMachinesDialog::tr("Type an insert code, a holder code or the angles to see the tool"));
+      return;
+    }
+    QRectF box = m_insert.boundingRect().united(m_holder.boundingRect()).united(QRectF(-1.0, -1.0, 2.0, 2.0));
+    box.adjust(-0.1 * box.width(), -0.1 * box.height(), 0.1 * box.width(), 0.1 * box.height());
+    const double scale = std::min(width() / box.width(), height() / box.height());
+    // (z, x) to the widget: z to the right, x up, the box centred.
+    QTransform transform;
+    transform.translate(width() / 2.0, height() / 2.0);
+    transform.scale(scale, -scale);
+    transform.translate(-box.center().x(), -box.center().y());
+    painter.setTransform(transform);
+    QPen axes(themeColor(ColorRole::TextSecondary, palette()), 0, Qt::DashLine);
+    axes.setCosmetic(true);
+    painter.setPen(axes);
+    painter.drawLine(QPointF(box.left(), 0.0), QPointF(box.right(), 0.0));
+    painter.drawLine(QPointF(0.0, box.top()), QPointF(0.0, box.bottom()));
+    QPen edge(themeColor(ColorRole::Text, palette()), 0);
+    edge.setCosmetic(true);
+    painter.setPen(edge);
+    painter.setBrush(palette().color(QPalette::Button));
+    painter.drawPolygon(m_holder);
+    painter.setBrush(themeColor(ColorRole::TextSecondary, palette()));
+    painter.drawPolygon(m_insert);
+    // The controlled point.
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(themeColor(ColorRole::Handle, palette()));
+    painter.drawEllipse(QPointF(0.0, 0.0), 3.0 / scale, 3.0 / scale);
+  }
+
+private:
+  // `[x, z]` points as (z, x).
+  static QPolygonF polygon(const QJsonArray& points) {
+    QPolygonF out;
+    for (const QJsonValue& point : points) {
+      const QJsonArray xz = point.toArray();
+      out << QPointF(xz.at(1).toDouble(), xz.at(0).toDouble());
+    }
+    return out;
+  }
+
+  QPolygonF m_insert;
+  QPolygonF m_holder;
+};
+
 QLineEdit* field(const QString& objectName, const QString& shown, const QString& tip = QString()) {
   auto* edit = new QLineEdit(shown);
   edit->setObjectName(objectName);
@@ -120,8 +205,18 @@ QLineEdit* field(const QString& objectName, const QString& shown, const QString&
 // a lathe that `mills` (a C axis and live tools, mitcad#2067) the milling
 // shapes are its live tools too, with their milling fields and the holder
 // they sit in on the turret: axial (the face) or radial (the diameter).
+//
+// A turning tool or boring bar also has its insert and holder (mitcad#2502):
+// ISO codes (`CNMG 120408`, `PCLNR 2525 M12`, a boring bar's `S25S-PCLNR
+// 12`), the angles and the hand typed over them, and the back angle and a
+// picture that `query` (`cam_tool_shape`, the same rules as `cam_tool_put`)
+// gives as they are typed. Only what is typed is sent: an empty field is the
+// code's value, shown as its placeholder, so that a tool opened again shows
+// the same fields and Use Code Values goes back to the codes. The nose
+// radius is the insert code's corner radius while its field is empty.
 std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int toolNumber, const QList<int>& taken,
-                                   bool lathe, bool mills) {
+                                   bool lathe, bool mills,
+                                   const std::function<QJsonValue(const QJsonObject&)>& query) {
   QDialog dialog(parent);
   dialog.setObjectName(QStringLiteral("camToolDialog"));
   dialog.setWindowTitle(tool.isEmpty() ? CamMachinesDialog::tr("Add Tool") : CamMachinesDialog::tr("Edit Tool"));
@@ -170,9 +265,16 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
     return shapeJson.contains(QLatin1String(key)) ? plain(numberOf(shapeJson, key)) + QStringLiteral(" mm") : fallback;
   };
   // The lathe's insert: nose radius, width, thread angle, outside or in a
-  // bore.
-  QLineEdit* noseRadius = field(QStringLiteral("camToolNoseRadius"), shapeMm("nose_radius", QStringLiteral("0.4 mm")),
-                                CamMachinesDialog::tr("The insert's corner radius; 0 for a sharp corner"));
+  // bore. A tool whose nose radius is its insert code's (mitcad#2502) shows
+  // the field empty, the code's radius as its placeholder.
+  const QJsonObject insertJson = tool.value(QStringLiteral("insert")).toObject();
+  const QJsonObject typedJson = insertJson.value(QStringLiteral("typed")).toObject();
+  const bool radiusFromCode =
+      !text(insertJson, "insert").isEmpty() && !typedJson.contains(QStringLiteral("nose_radius"));
+  const QString defaultNose = QStringLiteral("0.4 mm");
+  QLineEdit* noseRadius =
+      field(QStringLiteral("camToolNoseRadius"), radiusFromCode ? QString() : shapeMm("nose_radius", defaultNose),
+            CamMachinesDialog::tr("The insert's corner radius; 0 for a sharp corner"));
   form->addRow(CamMachinesDialog::tr("Nose Radius"), noseRadius);
   QLineEdit* width = field(QStringLiteral("camToolWidth"), shapeMm("width", QStringLiteral("3 mm")),
                            CamMachinesDialog::tr("The insert's or the blade's width"));
@@ -186,6 +288,59 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
   inside->setChecked(shapeJson.value(QStringLiteral("inside")).toBool());
   inside->setToolTip(CamMachinesDialog::tr("An insert for the inside of a bore rather than the outside"));
   form->addRow(QString(), inside);
+  // A turning tool's or boring bar's insert and holder (mitcad#2502), beside
+  // the form: the codes, the angles and hand typed over them, the back angle
+  // and the picture.
+  auto* insertPage = new QWidget;
+  insertPage->setObjectName(QStringLiteral("camToolInsertPage"));
+  auto* insertLayout = new QVBoxLayout(insertPage);
+  insertLayout->setContentsMargins(0, 0, 0, 0);
+  insertLayout->addWidget(new SectionTitle(CamMachinesDialog::tr("Insert and holder")));
+  auto* insertForm = new QFormLayout;
+  insertLayout->addLayout(insertForm);
+  QLineEdit* insertCode =
+      field(QStringLiteral("camToolInsertCode"), text(insertJson, "insert"),
+            CamMachinesDialog::tr("The insert's ISO code: its shape, size and corner radius"));
+  insertCode->setPlaceholderText(QStringLiteral("CNMG 120408"));
+  insertForm->addRow(CamMachinesDialog::tr("Insert Code"), insertCode);
+  QLineEdit* holderCode =
+      field(QStringLiteral("camToolHolderCode"), text(insertJson, "holder"),
+            CamMachinesDialog::tr("The holder's ISO code, or a boring bar's such as S25S-PCLNR 12"));
+  holderCode->setPlaceholderText(QStringLiteral("PCLNR 2525 M12"));
+  insertForm->addRow(CamMachinesDialog::tr("Holder Code"), holderCode);
+  // Only typed angles fill their fields; the codes' values are placeholders.
+  const auto typedAngle = [&typedJson](const char* key) {
+    return typedJson.contains(QLatin1String(key)) ? plain(numberOf(typedJson, key)) : QString();
+  };
+  QLineEdit* tipAngle = field(QStringLiteral("camToolTipAngle"), typedAngle("tip_angle"),
+                              CamMachinesDialog::tr("The insert's tip angle in degrees; empty: the insert code's"));
+  insertForm->addRow(CamMachinesDialog::tr("Insert Angle"), tipAngle);
+  QLineEdit* approachAngle =
+      field(QStringLiteral("camToolApproachAngle"), typedAngle("approach_angle"),
+            CamMachinesDialog::tr("From the feed direction to the side cutting edge, in degrees; empty: the holder code's"));
+  insertForm->addRow(CamMachinesDialog::tr("Approach Angle"), approachAngle);
+  auto* hand = new QComboBox;
+  hand->setObjectName(QStringLiteral("camToolHand"));
+  hand->addItem(CamMachinesDialog::tr("From the holder code"), QString());
+  hand->addItem(CamMachinesDialog::tr("Right hand"), QStringLiteral("right"));
+  hand->addItem(CamMachinesDialog::tr("Left hand"), QStringLiteral("left"));
+  hand->addItem(CamMachinesDialog::tr("Neutral"), QStringLiteral("neutral"));
+  hand->setCurrentIndex(std::max(0, hand->findData(text(typedJson, "hand"))));
+  hand->setToolTip(CamMachinesDialog::tr("Which way the holder lies along the spindle; right hand without a holder code"));
+  insertForm->addRow(CamMachinesDialog::tr("Hand"), hand);
+  auto* backAngle = new QLabel;
+  backAngle->setObjectName(QStringLiteral("camToolBackAngle"));
+  backAngle->setWordWrap(true);
+  backAngle->setToolTip(
+      CamMachinesDialog::tr("The steepest wall falling towards the chuck that the tool can follow down"));
+  insertForm->addRow(CamMachinesDialog::tr("Back Angle"), backAngle);
+  auto* useCodes = new QPushButton(CamMachinesDialog::tr("Use Code Values"));
+  useCodes->setObjectName(QStringLiteral("camToolUseCodes"));
+  useCodes->setAutoDefault(false);
+  useCodes->setToolTip(CamMachinesDialog::tr("Clears the typed angles, hand and nose radius so that the codes' values apply"));
+  insertForm->addRow(QString(), useCodes);
+  auto* picture = new ToolPicture;
+  insertLayout->addWidget(picture, 1);
   auto* diameterLabel = new QLabel(CamMachinesDialog::tr("Diameter"));
   QLineEdit* diameter = field(QStringLiteral("camToolDiameter"),
                               mm("diameter", lathe ? QStringLiteral("20 mm") : QStringLiteral("6 mm")),
@@ -245,7 +400,10 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
   message->setWordWrap(true);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
   auto* layout = new QVBoxLayout(&dialog);
-  layout->addLayout(form);
+  auto* columns = new QHBoxLayout;
+  columns->addLayout(form);
+  columns->addWidget(insertPage, 1);
+  layout->addLayout(columns);
   layout->addWidget(message);
   layout->addWidget(buttons);
   // A lathe's tools have no shank, flutes, spindle holder or speeds and
@@ -254,8 +412,104 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
   // A live tool on a lathe (mitcad#2067) has a milling tool's shank,
   // flutes and speeds and feeds, and its holder on the turret.
   form->setRowVisible(holder, !lathe);
+  // The insert and holder as `cam_tool_put` takes them (mitcad#2502): what
+  // is typed only; an angle that is a plain number as a number (degrees).
+  const auto insertOut = [insertCode, holderCode, tipAngle, approachAngle, hand] {
+    QJsonObject out;
+    for (const auto& [key, edit] : {std::pair<const char*, QLineEdit*>{"insert", insertCode},
+                                    std::pair<const char*, QLineEdit*>{"holder", holderCode}}) {
+      if (!edit->text().trimmed().isEmpty()) {
+        out.insert(QLatin1String(key), edit->text().trimmed());
+      }
+    }
+    for (const auto& [key, edit] : {std::pair<const char*, QLineEdit*>{"tip_angle", tipAngle},
+                                    std::pair<const char*, QLineEdit*>{"approach_angle", approachAngle}}) {
+      const QString typed = edit->text().trimmed();
+      if (!typed.isEmpty()) {
+        bool ok = false;
+        const double degrees = typed.toDouble(&ok);
+        out.insert(QLatin1String(key), ok ? QJsonValue(degrees) : QJsonValue(typed));
+      }
+    }
+    if (!hand->currentData().toString().isEmpty()) {
+      out.insert(QStringLiteral("hand"), hand->currentData().toString());
+    }
+    return out;
+  };
+  // A new tool's nose radius stays the default until it is edited; an
+  // insert code typed meanwhile takes its place with the code's radius.
+  auto noseDefault = std::make_shared<bool>(tool.isEmpty());
+  QObject::connect(noseRadius, &QLineEdit::textEdited, &dialog, [noseDefault] { *noseDefault = false; });
+  // The back angle, the picture and the codes' values as placeholders, from
+  // the model as the fields change.
+  const auto geometryChanged = [=] {
+    const QString now = shape->currentData().toString();
+    if (!lathe || (now != QStringLiteral("turning") && now != QStringLiteral("boring"))) {
+      return;
+    }
+    const bool hasCode = !insertCode->text().trimmed().isEmpty();
+    if (*noseDefault) {
+      const QSignalBlocker blocker(noseRadius);
+      if (hasCode && noseRadius->text().trimmed() == defaultNose) {
+        noseRadius->clear();
+      } else if (!hasCode && noseRadius->text().trimmed().isEmpty()) {
+        noseRadius->setText(defaultNose);
+      }
+    }
+    const QJsonObject out = insertOut();
+    tipAngle->setPlaceholderText(QString());
+    approachAngle->setPlaceholderText(QString());
+    noseRadius->setPlaceholderText(QString());
+    if (out.isEmpty() || !query) {
+      backAngle->setText(CamMachinesDialog::tr("Type an insert code, a holder code or the angles"));
+      picture->setOutline(QJsonObject());
+      return;
+    }
+    QJsonObject shapeOut{{QStringLiteral("kind"), now}};
+    if (!noseRadius->text().trimmed().isEmpty()) {
+      shapeOut.insert(QStringLiteral("nose_radius"), noseRadius->text().trimmed());
+    }
+    const QString size = diameter->text().trimmed();
+    const QJsonObject asked{
+        {QStringLiteral("query"), QStringLiteral("cam_tool_shape")},
+        {QStringLiteral("tool"), QJsonObject{{QStringLiteral("number"), 1},
+                                             {QStringLiteral("shape"), shapeOut},
+                                             {QStringLiteral("diameter"), size.isEmpty() ? QStringLiteral("20 mm") : size},
+                                             {QStringLiteral("insert"), out}}}};
+    try {
+      const QJsonObject answer = query(asked).toObject();
+      const QJsonObject kept =
+          answer.value(QStringLiteral("tool")).toObject().value(QStringLiteral("insert")).toObject();
+      tipAngle->setPlaceholderText(plain(numberOf(kept, "tip_angle")));
+      approachAngle->setPlaceholderText(plain(numberOf(kept, "approach_angle")));
+      const QJsonObject code = answer.value(QStringLiteral("insert")).toObject();
+      if (!code.isEmpty()) {
+        noseRadius->setPlaceholderText(CamMachinesDialog::tr("%1 mm from the insert code")
+                                           .arg(plain(numberOf(code, "nose_radius"))));
+      }
+      backAngle->setText(CamMachinesDialog::tr("%1°").arg(plain(numberOf(answer, "back_angle"))));
+      picture->setOutline(answer.value(QStringLiteral("outline")).toObject());
+    } catch (const std::exception& e) {
+      backAngle->setText(modelMessage(userText(QString::fromUtf8(e.what()))));
+      picture->setOutline(QJsonObject());
+    }
+  };
+  for (QLineEdit* edit : {insertCode, holderCode, tipAngle, approachAngle, noseRadius, diameter}) {
+    QObject::connect(edit, &QLineEdit::textChanged, &dialog, geometryChanged);
+  }
+  QObject::connect(hand, &QComboBox::currentIndexChanged, &dialog, geometryChanged);
+  QObject::connect(useCodes, &QPushButton::clicked, &dialog, [=] {
+    tipAngle->clear();
+    approachAngle->clear();
+    hand->setCurrentIndex(0);
+    if (!insertCode->text().trimmed().isEmpty()) {
+      noseRadius->clear();
+    }
+    geometryChanged();
+  });
   const auto shapeChanged = [form, shape, corner, point, angle, tip, noseRadius, width, threadAngle, inside,
-                             diameterLabel, diameter, lathe, mount, shank, count, rpm, feed, plunge] {
+                             diameterLabel, diameter, lathe, mount, shank, count, rpm, feed, plunge, insertPage,
+                             geometryChanged] {
     const QString now = shape->currentData().toString();
     const bool milling = !lathe || shapeKinds().contains(now);
     for (QWidget* row : {static_cast<QWidget*>(shank), static_cast<QWidget*>(count), static_cast<QWidget*>(rpm),
@@ -275,6 +529,8 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
     form->setRowVisible(width, lathe && (grooving || now == QStringLiteral("parting")));
     form->setRowVisible(threadAngle, lathe && threading);
     form->setRowVisible(inside, lathe && (grooving || threading));
+    insertPage->setVisible(lathe && (now == QStringLiteral("turning") || boring));
+    geometryChanged();
     if (milling) {
       diameterLabel->setText(CamMachinesDialog::tr("Diameter"));
       diameter->setToolTip(CamMachinesDialog::tr("The cutting diameter; a length with its unit"));
@@ -360,6 +616,13 @@ std::optional<QJsonObject> askTool(QWidget* parent, const QJsonObject& tool, int
     }
     if (liveTool) {
       result.insert(QStringLiteral("mount"), mount->currentData().toString());
+    }
+    // A turning tool's or boring bar's insert and holder (mitcad#2502).
+    if (lathe && (chosen == QStringLiteral("turning") || chosen == QStringLiteral("boring"))) {
+      const QJsonObject insertFields = insertOut();
+      if (!insertFields.isEmpty()) {
+        result.insert(QStringLiteral("insert"), insertFields);
+      }
     }
     if (!holder->text().trimmed().isEmpty()) {
       result.insert(QStringLiteral("holder"), holder->text().trimmed());
@@ -1825,7 +2088,7 @@ void CamMachinesDialog::addTool() {
   }
   const std::optional<QJsonObject> tool =
       askTool(this, QJsonObject(), next, taken, isLathe(machine.value(QStringLiteral("machine")).toObject()),
-              latheMills(machine.value(QStringLiteral("machine")).toObject()));
+              latheMills(machine.value(QStringLiteral("machine")).toObject()), m_host.query);
   if (!tool) {
     return;
   }
@@ -1860,7 +2123,7 @@ void CamMachinesDialog::editTool() {
   }
   const std::optional<QJsonObject> changed =
       askTool(this, tool, number, taken, isLathe(machineJson(id).value(QStringLiteral("machine")).toObject()),
-              latheMills(machineJson(id).value(QStringLiteral("machine")).toObject()));
+              latheMills(machineJson(id).value(QStringLiteral("machine")).toObject()), m_host.query);
   if (!changed) {
     return;
   }

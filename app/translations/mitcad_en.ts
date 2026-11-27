@@ -236,6 +236,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>%n edge(s) not measured: free edges, or no normal on a face</source>
+        <translation>
+            <numerusform>%n edge not measured: a free edge, or no normal on a face</numerusform>
+            <numerusform>%n edges not measured: free edges, or no normal on a face</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>%n vertex(es)</source>
         <translation>
             <numerusform>%n vertex</numerusform>
@@ -296,6 +303,27 @@
         <translation>
             <numerusform>%n image in the Comments panel</numerusform>
             <numerusform>%n images in the Comments panel</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n face(s), %1 mm²</source>
+        <translation>
+            <numerusform>%n face, %1 mm²</numerusform>
+            <numerusform>%n faces, %1 mm²</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>The best fit settled in %n round(s).</source>
+        <translation>
+            <numerusform>The best fit settled in %n round.</numerusform>
+            <numerusform>The best fit settled in %n rounds.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>The best fit did not settle in %n round(s): its result may still improve.</source>
+        <translation>
+            <numerusform>The best fit did not settle in %n round: its result may still improve.</numerusform>
+            <numerusform>The best fit did not settle in %n rounds: its result may still improve.</numerusform>
         </translation>
     </message>
 </context>
@@ -516,6 +544,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>%1: %n item(s)</source>
+        <translation>
+            <numerusform>%1: %n item</numerusform>
+            <numerusform>%1: %n items</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>%1: %n step(s), shown exploded</source>
         <translation>
             <numerusform>%1: %n step, shown exploded</numerusform>
@@ -534,6 +569,13 @@
         <translation>
             <numerusform>%n degree of freedom</numerusform>
             <numerusform>%n degrees of freedom</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Flat Pattern of %1: %2 mm2, approximate: %n triangle(s), lengths along its edges within %3 mm and across it within %4 mm of the faces&apos;; the light bulb shows it flat</source>
+        <translation>
+            <numerusform>Flat Pattern of %1: %2 mm2, approximate: %n triangle, lengths along its edges within %3 mm and across it within %4 mm of the faces&apos;; the light bulb shows it flat</numerusform>
+            <numerusform>Flat Pattern of %1: %2 mm2, approximate: %n triangles, lengths along its edges within %3 mm and across it within %4 mm of the faces&apos;; the light bulb shows it flat</numerusform>
         </translation>
     </message>
     <message numerus="yes">
@@ -949,6 +991,13 @@ What is not sent within %n seconds is sent the next time the project opens.</num
             <numerusform>Printed the drawing book %1 on %n pages.</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>%n Flat Pattern(s) nested on %1.</source>
+        <translation>
+            <numerusform>%n Flat Pattern nested on %1.</numerusform>
+            <numerusform>%n Flat Patterns nested on %1.</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>mitcad::MaterialsPanel</name>
@@ -1218,6 +1267,13 @@ What is not sent within %n seconds is sent the next time the project opens.</num
 <context>
     <name>mitcad::drawings::DrawingWorkspace</name>
     <message numerus="yes">
+        <source>%1 (%n times)</source>
+        <translation>
+            <numerusform>%1 (%n time)</numerusform>
+            <numerusform>%1 (%n times)</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>Exported %1 (%n component(s)%2).</source>
         <translation>
             <numerusform>Exported %1 (%n component%2).</numerusform>
@@ -1229,6 +1285,27 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>Exported %1 (%n sheet%2).</numerusform>
             <numerusform>Exported %1 (%n sheets%2).</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n loop(s)</source>
+        <translation>
+            <numerusform>%n loop</numerusform>
+            <numerusform>%n loops</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n hole(s)</source>
+        <translation>
+            <numerusform>%n hole</numerusform>
+            <numerusform>%n holes</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Saved the cutting program %1 (%n loop(s)).</source>
+        <translation>
+            <numerusform>Saved the cutting program %1 (%n loop).</numerusform>
+            <numerusform>Saved the cutting program %1 (%n loops).</numerusform>
         </translation>
     </message>
 </context>

@@ -7,11 +7,19 @@
 // their results by the bodies' content and the settings, so showing an
 // analysis again does not compute it again. A shown Draft Analysis
 // (mitcad#2166, app/COMMANDS.md "Draft Analysis") is followed the same way:
-// its three classes drawn over the bodies with their legend.
+// its three classes drawn over the bodies with their legend; a shown
+// Minimum Radius (mitcad#2518) too: its smallest radius marked and its
+// faces under the limit drawn; a shown Minimum Distance (mitcad#2519,
+// app/COMMANDS.md "Minimum Distance"): its line between the closest points
+// with the distance; and the surface quality analyses
+// (mitcad#2517, SurfaceAnalysis.hpp): a Zebra's stripes, a Curvature Map's
+// colors, an Isocurve Analysis' curves and an Environment Map's
+// reflection, computed again when the model changes.
 #include "MainWindow.hpp"
 
 #include <array>
 #include <exception>
+#include <initializer_list>
 #include <memory>
 #include <vector>
 
@@ -22,8 +30,11 @@
 #include <QtLogging>
 
 #include "commands/DraftAnalysis.hpp"
+#include "commands/MinRadiusAnalysis.hpp"
+#include "commands/MinimumDistance.hpp"
 #include "commands/PointCloudDeviation.hpp"
 #include "commands/PrintAnalysis.hpp"
+#include "commands/SurfaceAnalysis.hpp"
 #include "framework/Json.hpp"
 #include "framework/ModelWorker.hpp"
 #include "framework/TestSync.hpp"
@@ -41,25 +52,54 @@ bool isDeviation(const QJsonObject& analysis) {
   return analysis.value(QStringLiteral("type")).toString() == QStringLiteral("point_cloud_deviation");
 }
 
-// The kinds of analysis drawn over the bodies (mitcad#620, mitcad#2166),
-// and Point Cloud Deviation's points (mitcad#2240).
+// Minimum Radius (mitcad#2518).
+bool isMinRadius(const QJsonObject& analysis) {
+  return analysis.value(QStringLiteral("type")).toString() == QStringLiteral("min_radius");
+}
+
+// Minimum Distance (mitcad#2519).
+bool isDistance(const QJsonObject& analysis) {
+  return analysis.value(QStringLiteral("type")).toString() == QStringLiteral("minimum_distance");
+}
+
+// Surface quality analyses (mitcad#2517).
+bool isSurface(const QJsonObject& analysis) {
+  return isSurfaceAnalysis(analysis.value(QStringLiteral("type")).toString());
+}
+
+// The kinds of analysis drawn over the bodies (mitcad#620, mitcad#2166,
+// mitcad#2518), Point Cloud Deviation's points (mitcad#2240), Minimum
+// Distance's line (mitcad#2519) and the surface quality analyses
+// (mitcad#2517).
 bool drawnOverBodies(const QJsonObject& analysis) {
   const QString type = analysis.value(QStringLiteral("type")).toString();
-  return type == QStringLiteral("print") || type == QStringLiteral("draft") || isDeviation(analysis);
+  return type == QStringLiteral("print") || type == QStringLiteral("draft") || isDeviation(analysis) ||
+         isMinRadius(analysis) || isDistance(analysis) || isSurface(analysis);
 }
 
 // The log's words of the kind: "Print analysis", "Draft analysis",
-// "Point cloud deviation".
+// "Point cloud deviation", "Minimum radius", "Minimum distance", "Zebra
+// analysis", ….
 QString kindOf(const QJsonObject& analysis) {
+  if (isSurface(analysis)) {
+    return surfaceAnalysisKind(analysis.value(QStringLiteral("type")).toString());
+  }
   return isDraft(analysis)       ? QStringLiteral("Draft analysis")
          : isDeviation(analysis) ? QStringLiteral("Point cloud deviation")
+         : isMinRadius(analysis) ? QStringLiteral("Minimum radius")
+         : isDistance(analysis)  ? QStringLiteral("Minimum distance")
                                  : QStringLiteral("Print analysis");
 }
 
 // The panel's and the progress' words of the kind.
 QString titleOf(const QJsonObject& analysis) {
+  if (isSurface(analysis)) {
+    return surfaceAnalysisTitle(analysis.value(QStringLiteral("type")).toString());
+  }
   return isDraft(analysis)       ? QObject::tr("Draft Analysis")
          : isDeviation(analysis) ? QObject::tr("Point Cloud Deviation")
+         : isMinRadius(analysis) ? QObject::tr("Minimum Radius")
+         : isDistance(analysis)  ? QObject::tr("Minimum Distance")
                                  : QObject::tr("Print Analysis");
 }
 
@@ -68,6 +108,35 @@ QString titleOf(const QJsonObject& analysis) {
 Inspection analyseShown(const QJsonObject& shown, const QString& name, const BodyNames& bodyName,
                         const PrintQuery& query) {
   Inspection result;
+  if (isMinRadius(shown)) {
+    QJsonObject answer;
+    result.error = runMinRadiusAnalysis(shown, query, answer);
+    if (result.error.isEmpty()) {
+      result.log = minRadiusAnalysisLog(answer, bodyName);
+      result.printOverlay = minRadiusOverlayJson(shown, answer, name);
+    }
+    return result;
+  }
+  // Minimum Distance (mitcad#2519): its line and the distance.
+  if (isDistance(shown)) {
+    QJsonObject answer;
+    result.error = runMinimumDistance(shown, query, answer);
+    if (result.error.isEmpty()) {
+      result.log = minimumDistanceLog(answer);
+      result.printOverlay = minimumDistanceOverlayJson(answer, name);
+    }
+    return result;
+  }
+  // The surface quality analyses (mitcad#2517).
+  if (isSurface(shown)) {
+    QJsonObject answer;
+    result.error = runSurfaceAnalysis(shown, query, answer);
+    if (result.error.isEmpty()) {
+      result.log = surfaceAnalysisLog(answer, bodyName);
+      result.printOverlay = surfaceOverlayJson(shown, answer, name);
+    }
+    return result;
+  }
   if (isDeviation(shown)) {
     QJsonObject answer;
     std::vector<float> places;
@@ -138,10 +207,18 @@ void MainWindow::showPrintOverlay(const QJsonObject& overlay) {
   const std::array<QColor, 3> deviation = {viewColor(ColorRole::DeviationInside, dark),
                                            viewColor(ColorRole::DeviationNeutral, dark),
                                            viewColor(ColorRole::DeviationOutside, dark)};
-  m_viewer->setPrintOverlay(printOverlayOf(overlay, viewColor(ColorRole::PrintOverhang, dark),
-                                           viewColor(ColorRole::PrintThin, dark),
-                                           viewColor(ColorRole::PrintGap, dark), draft, deviation,
-                                           viewColor(ColorRole::DeviationUnmeasured, dark)));
+  // Minimum Distance's line (mitcad#2519): what an inspection points at,
+  // and a problem it found when closer than the clearance.
+  const std::array<QColor, 2> distance = {viewColor(ColorRole::PreviewTarget, dark),
+                                          viewColor(ColorRole::Interference, dark)};
+  PrintOverlay drawn =
+      printOverlayOf(overlay, viewColor(ColorRole::PrintOverhang, dark), viewColor(ColorRole::PrintThin, dark),
+                     viewColor(ColorRole::PrintGap, dark), draft, deviation,
+                     viewColor(ColorRole::DeviationUnmeasured, dark), distance);
+  // A surface quality analysis' stripes, colors, curves or mirrored faces
+  // (mitcad#2517).
+  addSurfaceOverlay(overlay, surfaceColors(), drawn);
+  m_viewer->setPrintOverlay(drawn);
   // A point cloud a shown deviation colours: its measured points are the
   // deviation's (mitcad#2240), the others drawn dimmed (mitcad#2265).
   const DeviationSample sample = deviationSampleOf(overlay);
@@ -164,6 +241,28 @@ void MainWindow::followPrintAnalysis() {
     // A deviation's one body (mitcad#2240).
     if (shown.value(QStringLiteral("body")).isString()) {
       uids.append(shown.value(QStringLiteral("body")));
+    }
+    // A Minimum Radius' faces' bodies too (mitcad#2518).
+    if (isMinRadius(shown)) {
+      uids = minRadiusBodiesOf(shown);
+    }
+    // A minimum distance's picked bodies (mitcad#2519); a component's
+    // bodies change the snapshot's key.
+    for (const char* side : {"first", "second"}) {
+      for (const QJsonValue& pick : shown.value(QLatin1String(side)).toArray()) {
+        const QJsonValue body = pick.toObject().value(QStringLiteral("body"));
+        if (body.isString()) {
+          uids.append(body);
+        }
+      }
+    }
+    // The bodies of a surface analysis' faces (mitcad#2517).
+    if (isSurface(shown)) {
+      for (const QJsonValue& face : shown.value(QStringLiteral("faces")).toArray()) {
+        if (face.toObject().value(QStringLiteral("body")).isString()) {
+          uids.append(face.toObject().value(QStringLiteral("body")));
+        }
+      }
     }
     for (const QJsonValue& uid : uids) {
       std::shared_ptr<geometry::Shape> shape;
@@ -216,8 +315,11 @@ void MainWindow::computePrintAnalysis(quint64 generation) {
     names.insert(body.key(), body->name);
   }
   const BodyNames bodyName = [names](const QString& uid) { return names.value(uid, uid); };
-  const QString stage = isDraft(shown)       ? tr("Draft analysis of %1").arg(name)
+  const QString stage = isSurface(shown)     ? QStringLiteral("%1 %2").arg(titleOf(shown), name) // mitcad#2517
+                        : isDraft(shown)     ? tr("Draft analysis of %1").arg(name)
                         : isDeviation(shown) ? tr("Point cloud deviation %1").arg(name)
+                        : isMinRadius(shown) ? tr("Minimum radius %1").arg(name)
+                        : isDistance(shown)  ? tr("Minimum distance %1").arg(name)
                                              : tr("Print analysis of %1").arg(name);
 
   if (asynchronousCommands()) {

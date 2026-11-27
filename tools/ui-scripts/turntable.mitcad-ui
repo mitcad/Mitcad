@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# Export Turntable (mitcad#2523; app/COMMANDS.md "Export Turntable"), on
+# turntable.json (a block 80 x 40 x 20 about the origin): File › Export
+# Turntable… with 36 frames of a full turn about the design's Z at 12 fps,
+# 320 x 240 pixels in the view's style. Each frame's camera direction is
+# 10 degrees about Z from the one before (measured on the camera the view
+# rendered with), and the 36 frames are written as PNG files.
+# The harness chooses what is saved, by what the machine has:
+#   TURNTABLE_OUTPUT  'MP4 video and PNG frames' with an FFmpeg program
+#                     (MITCAD_FFMPEG), else 'PNG frames'
+#   TURNTABLE_PATH    ${MITCAD_TEST_WORK}/turn.mp4, else
+#                     ${MITCAD_TEST_WORK}/turn-frames
+# Either way the frames go into ${MITCAD_TEST_WORK}/turn-frames; the
+# harness checks the video (its frame count and size) itself.
+# Run by tools/ui-turntable-test.sh (Linux),
+# tools/ui-windows-turntable-test.ps1 (Windows) and
+# tools/ui-macos-turntable-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The dialog: the output, the axis, the size, the frames.
+mark
+command view.export_turntable
+focus-dialog '^Export Turntable$'
+wait-log '^Turntable dialog opened: '
+qt-choice turntableOutput "${TURNTABLE_OUTPUT}"
+qt-choice turntableAxis 'Z axis of the design'
+qt-choice turntableSize 'Custom'
+wait-log '^Turntable dialog: size = custom$'
+focus-widget turntableWidth
+key ctrl+a
+type 320
+focus-widget turntableHeight
+key ctrl+a
+type 240
+focus-widget turntableFps
+key ctrl+a
+type 12
+focus-widget turntableFrames
+key ctrl+a
+type 36
+focus-widget turntablePath
+key ctrl+a
+type "${TURNTABLE_PATH}"
+mark
+button '^Export$' turntableExport
+wait-log '^Turntable dialog: (mp4[+]frames|frames), 36 frames of 360 deg about z at 12 fps, 320 x 240, view style, '
+
+# 2. The frames: 10 degrees a step about Z, all 36 written.
+wait-log '^Turntable started: 36 frames of 360 deg about z through [(][-0-9., ]+[)] along [(]0[.]0000, 0[.]0000, 1[.]0000[)], step 10[.]0000 deg, 320 x 240, view style$'
+wait-log '^Turntable frame 1 of 36: camera direction [(][-0-9., ]+[)], step -$'
+wait-log '^Turntable frame 2 of 36: camera direction [(][-0-9., ]+[)], step 10[.]00 deg$'
+wait-log '^Turntable frame 36 of 36: camera direction [(][-0-9., ]+[)], step 10[.]00 deg$' 120
+expect-no-log '^Turntable frame [0-9]+ of 36: camera direction [(][-0-9., ]+[)], step (?!-$)(?!10[.]00 deg$)'
+wait-log '^Turntable frames saved .*turn-frames: 36 frames, 320 x 240$'
+expect-files ${MITCAD_TEST_WORK}/turn-frames 'frame-*.png' 36
+expect-file ${MITCAD_TEST_WORK}/turn-frames/frame-0001.png
+expect-file ${MITCAD_TEST_WORK}/turn-frames/frame-0036.png
+
+# 3. Done (with a video, once FFmpeg wrote it and its container was read).
+wait-log '^Turntable done: 36 frames' 180
+expect-no-log '^Turntable failed'
+expect-no-log '^Turntable video differs'
+wait-idle

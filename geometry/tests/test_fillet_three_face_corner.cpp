@@ -80,6 +80,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -699,7 +700,7 @@ void test_corner_faces_named() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_three_face_corner) {
   test::guarded("test_radius_of_the_reported_design", test::test_radius_of_the_reported_design);
   test::guarded("test_other_radii", test::test_other_radii);
   test::guarded("test_reported_body", test::test_reported_body);

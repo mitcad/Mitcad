@@ -140,8 +140,14 @@ struct FilletSet {
 // its contact lines on the faces stay, and its bevel becomes a surface of
 // conic (asymmetric) or quintic (G2) cross-sections tangent to the faces,
 // the G2 ones also following the faces' curvature. Their chains must end
-// on planar faces or close on themselves; a chain that meets another
-// rounded edge at a vertex is unsupported.
+// on planar faces or close on themselves, or (G2) meet other rounded edges
+// at a vertex where every edge is rounded: there the roundings stop at
+// planes across their edges and a curvature continuous patch named
+// <feature>:corner(<vertex>) closes the corner, with either corner type
+// (mitcad#2332); where an edge at the vertex is not rounded, the chains
+// that meet there are rounded apart and meet in a mitre that carries on the
+// sharp edge. An asymmetric chain that meets other rounded edges at a
+// vertex where every edge is rounded is unsupported.
 //
 // Without rolling ball corners, a vertex where three or more rounded edges
 // meet gets a setback corner: the roundings stop short of the vertex and a

@@ -323,6 +323,8 @@ fn links(def: &FeatureDef) -> Vec<(LinkKind, &OccurrenceLink)> {
         }
         // A Flex item's nodes on other components' geometry (mitcad#1713).
         FeatureDef::Flex(f) => f.links.values().chain(f.datum_links.values()).collect(),
+        // An Isoparametric Curve on another component's face (mitcad#2554).
+        FeatureDef::IsoparametricCurve(i) => i.links.values().collect(),
         _ => Vec::new(),
     };
     let mut out: Vec<(LinkKind, &OccurrenceLink)> = references

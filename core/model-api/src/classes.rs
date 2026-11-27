@@ -592,6 +592,22 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     // The drawing book's drawings, title and cover page (mitcad#2448): it
     // names linked designs' files, it reads none.
     ("set_drawing_book", Model),
+    // Construction sets (mitcad#2514).
+    ("add_construction_set", Model),
+    ("activate_construction_set", Model),
+    ("deactivate_construction_set", Model),
+    ("set_construction_set_members", Model),
+    ("rename_construction_set", Model),
+    ("delete_construction_set", Model),
+    // Point cloud tools: align, filter, reconstruct (mitcad#2516).
+    ("align_point_cloud", Model),
+    ("filter_point_cloud", Model),
+    ("reconstruct_point_cloud", Model),
+    // A cut sheet's plasma program written to a file (mitcad#2553).
+    ("post_cut_sheet", FileIo),
+    // Profile Boundary: curves of a sketch's automatic face outline that
+    // bound profiles (mitcad#2551).
+    ("sketch.set_profile_boundary", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -910,6 +926,25 @@ const QUERIES: &[(&str, ApiClass)] = &[
     // and the sheets are written as files.
     ("drawing_book", FileIo),
     ("drawing_book_sheets", FileIo),
+    // A point cloud's alignment worked out without moving it (mitcad#2516).
+    ("point_cloud_alignment", Model),
+    // A lathe tool's insert and holder worked out without keeping the tool
+    // (mitcad#2502).
+    ("cam_tool_shape", Model),
+    // Minimum Radius (mitcad#2518).
+    ("min_radius_analysis", Model),
+    // Construction sets (mitcad#2514).
+    ("construction_sets", Model),
+    // Minimum Distance (mitcad#2519).
+    ("minimum_distance", Model),
+    // Continuity Analysis (mitcad#2521).
+    ("edge_continuity", Model),
+    // Surface quality analyses (mitcad#2517).
+    ("surface_analysis", Model),
+    // Curvature combs of sketch curves and edges (mitcad#2520).
+    ("curvature_comb", Model),
+    // A cut sheet's cutting paths (mitcad#2553).
+    ("cut_sheet_cutting", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

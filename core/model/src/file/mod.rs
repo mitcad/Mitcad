@@ -144,13 +144,21 @@
 //! first-sketch settings, mitcad#293, read as on).
 //!
 //! Named views (U5), when there are any: `views` (`name`, `eye`, `target`,
-//! `up`, `height`, `"perspective": true`).
+//! `up`, `height`, `"perspective": true`, `"orthographic_faces": true` for
+//! Perspective with Orthographic Faces, mitcad#2473).
 //!
 //! Analyses (mitcad#41), when there are any: `analyses` (`name`,
 //! `"visible": false`, `type`: `section` with `plane`, `offset`, `flip`;
 //! `print` with `bodies`, `bed_face`, `overhang`, `thin_wall`, `estimate`,
 //! mitcad#620, and `min_gap`, mitcad#1519; `draft` with `bodies`, `pull`,
-//! `occurrence`, `flip`, `angle`, mitcad#2166).
+//! `occurrence`, `flip`, `angle`, mitcad#2166; `min_radius` with `bodies`,
+//! `faces`, `limit`, mitcad#2518; `minimum_distance` with `first`,
+//! `second` (picks: `body`, `face`, `edge`, `vertex`, `occurrence`) and
+//! `clearance`, mitcad#2519; `zebra` with `bodies`, `faces`,
+//! `direction`, `occurrence`, `stripes`, `width`; `curvature` with
+//! `bodies`, `faces`, `kind`, `limit`; `isocurve` with `bodies`, `faces`,
+//! `count`, `curvature`, `limit`; `environment` with `bodies`, `faces`,
+//! `image`, mitcad#2517).
 //!
 //! Motion studies and contact sets (mitcad#454), when there are any:
 //! `motion_studies` (`name`, `steps`, `keys`: `joint`, `motion`, `points`
@@ -178,6 +186,13 @@
 //! the design's own drawing), `drawing`, its id there, and `name`), see
 //! [`crate::DrawingBook`]. A drawing that is gone loads; the book's entries
 //! say so.
+//!
+//! Construction sets (mitcad#2514), when there are any:
+//! `construction_sets` (`name`, `component` unless the root, `"active":
+//! true` on the active one, `members`: each `{"feature": "F5"}` or
+//! `{"body": "F7.b0"}`), see [`crate::ConstructionSet`]. Sets of components
+//! that are gone and members whose items are gone are left out when the
+//! design is read.
 //!
 //! Point clouds (mitcad#2240), when there are any: `point_clouds` (`name`,
 //! `"visible": false`, `occurrence`, `placement` (`linear`, `translation`)
@@ -405,6 +420,19 @@
 //! feature's, a parameter's) are still errors that say where, and so is a
 //! newer `version`. Builds before this rule refuse a design with an
 //! unknown top-level field.
+//!
+//! A `cam` section this build cannot read (mitcad#2581: a value of another
+//! build or of a newer one, two operations with one id) does not keep the
+//! design from opening either: the design opens without its CAM (no
+//! machines, setups or operations), the rest read and checked as always,
+//! and a second warning says what is wrong with it ("the design's CAM
+//! could not be read, so it opened without its machines, setups and
+//! operations: …"). It is kept like the unknown fields
+//! ([`UnknownFields::unreadable_cam`]): saving over the file it was read
+//! from drops it, so the application asks first, and the warnings say
+//! that this MitCad could not read the CAM, not that a newer one wrote it.
+//! A section that reads opens as before, and a file broken anywhere else
+//! is still refused.
 
 mod project;
 // A project's settings, shared and of this computer (mitcad#89).
@@ -530,8 +558,64 @@ impl std::error::Error for FileError {}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnknownFields {
     pub file: Option<PathBuf>,
-    /// Their names, sorted.
+    /// Their names, sorted: the fields a newer MitCad wrote.
     pub fields: Vec<String>,
+    /// What is wrong with the design's CAM section when this build could
+    /// not read it (mitcad#2581): the design opened without its machines,
+    /// setups and operations, and saving over the file drops them. A
+    /// newer build, the same one or another build may have written it.
+    pub unreadable_cam: Option<String>,
+}
+
+impl UnknownFields {
+    /// Every top-level field of the file that was not read, sorted: the
+    /// unknown ones and `cam` when it could not be read.
+    pub fn not_read(&self) -> Vec<String> {
+        let mut all = self.fields.clone();
+        if self.unreadable_cam.is_some() {
+            all.push("cam".to_owned());
+            all.sort();
+        }
+        all
+    }
+
+    /// The warnings on opening the design: the unknown fields
+    /// ([`unknown_fields_warning`]), then the CAM that could not be read
+    /// ([`unreadable_cam_warning`]).
+    pub fn warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if !self.fields.is_empty() {
+            warnings.push(unknown_fields_warning(&self.fields));
+        }
+        if let Some(reason) = &self.unreadable_cam {
+            warnings.push(unreadable_cam_warning(reason));
+        }
+        warnings
+    }
+
+    /// The warning before saving over the file they were read from: what
+    /// the save drops, worded for what was not read (mitcad#1132,
+    /// mitcad#2581). None when nothing was left unread.
+    pub fn dropping_warning(&self) -> Option<String> {
+        match (self.fields.as_slice(), &self.unreadable_cam) {
+            ([], None) => None,
+            (fields, None) => Some(dropped_fields_warning(fields)),
+            ([], Some(_)) => Some(
+                "saving over this design drops its CAM (machines, setups and operations), which \
+                 this MitCad could not read"
+                    .to_owned(),
+            ),
+            ([field], Some(_)) => Some(format!(
+                "saving over this design drops its CAM (machines, setups and operations), which \
+                 this MitCad could not read, and the field `{field}` that a newer MitCad wrote"
+            )),
+            (fields, Some(_)) => Some(format!(
+                "saving over this design drops its CAM (machines, setups and operations), which \
+                 this MitCad could not read, and the fields {} that a newer MitCad wrote",
+                quoted_list(fields)
+            )),
+        }
+    }
 }
 
 /// `` `a`, `b` `` for a message.
@@ -555,6 +639,15 @@ pub fn unknown_fields_warning(fields: &[String]) -> String {
     format!(
         "this design was written by a newer MitCad: the {noun} {} {verb} not read",
         quoted_list(fields)
+    )
+}
+
+/// The warning on opening a design whose CAM section this build could not
+/// read (mitcad#2581), with what is wrong with it.
+pub fn unreadable_cam_warning(reason: &str) -> String {
+    format!(
+        "the design's CAM could not be read, so it opened without its machines, setups and \
+         operations: {reason}"
     )
 }
 
@@ -678,19 +771,23 @@ impl<K: Kernel> Document<K> {
 
     /// The top-level fields of the design file this document was read
     /// from that this build did not read (mitcad#1132): a newer MitCad
-    /// wrote them. Empty for a design without them, and after a save over
-    /// that file.
+    /// wrote them; and its CAM section when it could not be read
+    /// (mitcad#2581). Empty for a design without them, and after a save
+    /// over that file.
     pub fn unknown_fields(&self) -> UnknownFields {
         self.kept_unknown_fields()
     }
 
-    /// The fields saving to `path` drops (mitcad#1132): the unknown
-    /// top-level fields when `path` is the file they were read from, none
-    /// for another file. The application asks before such a save.
+    /// The fields saving to `path` drops (mitcad#1132): the top-level
+    /// fields not read ([`UnknownFields::not_read`]: the unknown ones, and
+    /// `cam` when it could not be read, mitcad#2581) when `path` is the
+    /// file they were read from, none for another file. The application
+    /// asks before such a save.
     pub fn fields_dropped_by_saving(&self, path: &Path) -> Vec<String> {
         let unknown = self.kept_unknown_fields();
+        let not_read = unknown.not_read();
         match &unknown.file {
-            Some(file) if !unknown.fields.is_empty() && same_file(file, path) => unknown.fields,
+            Some(file) if !not_read.is_empty() && same_file(file, path) => not_read,
             _ => Vec::new(),
         }
     }
@@ -802,11 +899,13 @@ impl<K: Kernel> Document<K> {
         // (mitcad#1088): its creation is not known. An empty design's file
         // (a project's New Design writes one) is created when first saved.
         let new = loaded.state.features.is_empty();
-        // The fields a newer MitCad wrote, with the file saving over which
-        // drops them (mitcad#1132).
+        // The fields a newer MitCad wrote and the CAM that could not be
+        // read, with the file saving over which drops them (mitcad#1132,
+        // mitcad#2581).
         let unknown = UnknownFields {
             file: Some(absolute.clone()),
             fields: loaded.unknown_fields,
+            unreadable_cam: loaded.unreadable_cam,
         };
         let document = Document::from_state(kernel, loaded.state)
             .with_warnings(loaded.warnings)
@@ -828,6 +927,7 @@ impl<K: Kernel> Document<K> {
             statistics,
             preview,
             unknown_fields,
+            unreadable_cam,
         } = load_parts(json)?;
         resolve(&mut state, store, &mut warnings);
         Ok(Document::from_state(kernel, state)
@@ -837,6 +937,7 @@ impl<K: Kernel> Document<K> {
             .with_unknown_fields(UnknownFields {
                 file: None,
                 fields: unknown_fields,
+                unreadable_cam,
             }))
     }
 
@@ -876,6 +977,7 @@ impl<K: Kernel> Document<K> {
             .with_unknown_fields(UnknownFields {
                 file: None,
                 fields: loaded.unknown_fields,
+                unreadable_cam: loaded.unreadable_cam,
             }))
     }
 }
@@ -889,14 +991,16 @@ pub fn load_state(json: &str) -> Result<(DocState, Vec<String>), FileError> {
 
 /// What a design file gives: its definition state, what loading changed,
 /// its statistics, if it has any (mitcad#1088), its preview, if it has one
-/// (mitcad#1539), and its top-level fields that this build does not know
-/// (mitcad#1132).
+/// (mitcad#1539), its top-level fields that this build does not know
+/// (mitcad#1132), and what is wrong with its CAM section when this build
+/// could not read it (mitcad#2581).
 struct Loaded {
     state: DocState,
     warnings: Vec<String>,
     statistics: Option<DesignStatistics>,
     preview: Option<DesignPreview>,
     unknown_fields: Vec<String>,
+    unreadable_cam: Option<String>,
 }
 
 /// [`load_state`] with the file's statistics.
@@ -934,13 +1038,38 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
         1 => Vec::new(),
         _ => v2::take_unknown_fields(&mut value),
     };
+    // A CAM section this build cannot read (another build's value, two
+    // operations with one id) does not lock the model out (mitcad#2581):
+    // the design opens without its CAM, says why, and is kept from being
+    // saved over unasked like the unknown fields. Version 1 files have no
+    // CAM.
+    let cam = match version {
+        1 => Ok(None),
+        _ => v2::take_cam(&mut value),
+    };
     let (mut state, mut warnings) = match version {
         1 => v1::load(json),
         _ => v2::load(value),
     }?;
-    if !unknown_fields.is_empty() {
-        warnings.insert(0, unknown_fields_warning(&unknown_fields));
-    }
+    let unreadable_cam = match cam {
+        Ok(None) => None,
+        Ok(Some(cam)) => {
+            state.cam = cam;
+            None
+        }
+        Err(reason) => Some(reason),
+    };
+    let unknown = UnknownFields {
+        file: None,
+        fields: unknown_fields,
+        unreadable_cam,
+    };
+    warnings.splice(0..0, unknown.warnings());
+    let UnknownFields {
+        fields: unknown_fields,
+        unreadable_cam,
+        ..
+    } = unknown;
     let preview = match preview {
         None => None,
         Some(Ok(preview)) => Some(preview),
@@ -969,6 +1098,7 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
         statistics,
         preview,
         unknown_fields,
+        unreadable_cam,
     })
 }
 
@@ -1114,13 +1244,35 @@ pub fn brep_references(json: &str) -> Result<BTreeSet<Sha256>, FileError> {
     Ok(out)
 }
 
+/// Refuses to rewrite a design file's text when it has what this build did
+/// not read and would drop: fields a newer MitCad wrote (mitcad#1132), a
+/// CAM section that could not be read (mitcad#2581).
+fn refuse_not_read(
+    unknown_fields: &[String],
+    unreadable_cam: Option<&str>,
+) -> Result<(), FileError> {
+    if !unknown_fields.is_empty() {
+        return Err(FileError::Invalid(format!(
+            "it has fields a newer MitCad wrote ({}): open and save it in that MitCad first",
+            unknown_fields.join(", ")
+        )));
+    }
+    if let Some(reason) = unreadable_cam {
+        return Err(FileError::Invalid(format!(
+            "its CAM could not be read ({reason}): open it and save it, which drops the CAM, or save \
+             it in the MitCad that wrote it first"
+        )));
+    }
+    Ok(())
+}
+
 /// The text of a project's design file (version 3) as a single file, the
 /// B-rep data it refers to read from `store` and put inside, its
 /// statistics and preview kept: what Remove Project writes before the
 /// project's store goes (mitcad#1562). None when the file refers to no
 /// data (it stays as it is). An error, so that nothing is lost, when data
-/// it refers to cannot be read or the file has fields a newer MitCad
-/// wrote.
+/// it refers to cannot be read, the file has fields a newer MitCad wrote
+/// or its CAM cannot be read ([`refuse_not_read`]).
 pub fn single_file_text(json: &str, store: &dyn BlobStore) -> Result<Option<String>, FileError> {
     if brep_references(json)?.is_empty() {
         return Ok(None);
@@ -1131,13 +1283,9 @@ pub fn single_file_text(json: &str, store: &dyn BlobStore) -> Result<Option<Stri
         statistics,
         preview,
         unknown_fields,
+        unreadable_cam,
     } = load_parts(json)?;
-    if !unknown_fields.is_empty() {
-        return Err(FileError::Invalid(format!(
-            "it has fields a newer MitCad wrote ({}): open and save it in that MitCad first",
-            unknown_fields.join(", ")
-        )));
-    }
+    refuse_not_read(&unknown_fields, unreadable_cam.as_deref())?;
     warnings.clear();
     resolve(&mut state, store, &mut warnings);
     if has_references(&state) {
@@ -1186,8 +1334,8 @@ pub(crate) fn linked_paths(json: &str) -> Vec<String> {
 /// stays), and the B-rep data it refers to read from the store of the
 /// project it is in and put inside, so that the copy stands on its own as
 /// a single file. Its statistics and preview are kept. An error, so that
-/// nothing is lost, when data it refers to cannot be read or it has
-/// fields a newer MitCad wrote.
+/// nothing is lost, when data it refers to cannot be read, it has fields a
+/// newer MitCad wrote or its CAM cannot be read ([`refuse_not_read`]).
 pub(crate) fn relinked_text(
     json: &str,
     path: &Path,
@@ -1199,13 +1347,9 @@ pub(crate) fn relinked_text(
         statistics,
         preview,
         unknown_fields,
+        unreadable_cam,
     } = load_parts(json)?;
-    if !unknown_fields.is_empty() {
-        return Err(FileError::Invalid(format!(
-            "it has fields a newer MitCad wrote ({}): open and save it in that MitCad first",
-            unknown_fields.join(", ")
-        )));
-    }
+    refuse_not_read(&unknown_fields, unreadable_cam.as_deref())?;
     if has_references(&state) {
         warnings.clear();
         if let Some(project) = Project::find(path) {

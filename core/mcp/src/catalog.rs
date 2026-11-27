@@ -664,7 +664,7 @@ fn ui_tools() -> Vec<Value> {
                 "up": point,
                 "height": {"type": "number", "minimum": 0.000001, "description": "Millimeters of the model the view shows at the target, top to bottom"},
                 "fov": {"type": "number", "minimum": 1, "maximum": 170, "description": "Vertical field of view of the perspective camera, degrees"},
-                "projection": {"type": "string", "enum": ["orthographic", "perspective"]},
+                "projection": {"type": "string", "enum": ["orthographic", "perspective", "perspective_orthographic_faces"], "description": "perspective_orthographic_faces: perspective, orthographic while the view looks along one of the six face directions"},
                 "box": {
                     "type": "object",
                     "description": "A box in model coordinates to frame",

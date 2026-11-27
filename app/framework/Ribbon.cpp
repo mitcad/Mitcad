@@ -2011,7 +2011,9 @@ namespace {
     QT_TRANSLATE_NOOP("RibbonName", "Pattern"), QT_TRANSLATE_NOOP("RibbonName", "Curves"),
     QT_TRANSLATE_NOOP("RibbonName", "Joinery"), QT_TRANSLATE_NOOP("RibbonName", "Mesh"),
     // Sketch blocks (mitcad#2110).
-    QT_TRANSLATE_NOOP("RibbonName", "Blocks")};
+    QT_TRANSLATE_NOOP("RibbonName", "Blocks"),
+    // Laser's Nest and the cut sheet's Cutting (mitcad#2553).
+    QT_TRANSLATE_NOOP("RibbonName", "Nest"), QT_TRANSLATE_NOOP("RibbonName", "Cutting")};
 
 // Subgroups shown by another name than their key, which stays in the
 // layout and the user's layer (a "/" would split a place's path): the

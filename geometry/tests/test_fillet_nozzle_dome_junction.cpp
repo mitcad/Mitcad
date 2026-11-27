@@ -83,6 +83,7 @@
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/revolve.hpp"
 #include "mitcad/geometry/target.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -524,7 +525,7 @@ void test_reported_body() {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(fillet_nozzle_dome_junction) {
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--probe") == 0) {
       test::probe = true;

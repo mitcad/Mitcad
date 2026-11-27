@@ -377,6 +377,9 @@ pub struct Output<S> {
     pub drawn: Option<crate::features::construction::DrawnExtent>,
     /// The occurrences an assembly cut machined (mitcad#2131).
     pub machined: Vec<crate::assembly_cut::MachinedChange>,
+    /// The pieces a Split Body made before it kept some, also when it
+    /// failed (mitcad#2504): the panel's dots.
+    pub piece_choices: Vec<crate::features::split_body::PieceChoice>,
 }
 
 pub struct FeatureResult<S> {
@@ -2421,6 +2424,15 @@ pub(crate) fn place(
     Ok(())
 }
 
+/// Whether `MITCAD_LOG_TIMING` (not `0`) asks for a line on standard error
+/// per evaluated feature (mitcad#2444), as the application's timing lines.
+fn log_timing() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("MITCAD_LOG_TIMING").is_some_and(|v| v != "0" && !v.is_empty())
+    })
+}
+
 fn evaluate<K: Kernel>(
     kernel: &K,
     entry: &FeatureEntry,
@@ -2429,6 +2441,9 @@ fn evaluate<K: Kernel>(
 ) -> Arc<Output<K::Shape>> {
     let params = env.params;
     let start = Instant::now();
+    if log_timing() {
+        eprintln!("Timing evaluate {} {}: started", entry.uid, entry.name);
+    }
     let mut ctx = EvalContext::new(kernel, entry.uid, env);
     crate::sheet::footprint(&entry.def, &mut ctx);
     let mut result = entry.def.evaluator::<K>().evaluate(&mut ctx);
@@ -2438,6 +2453,16 @@ fn evaluate<K: Kernel>(
     }
     // (Not the restored shapes it unpacked as it read them, mitcad#886.)
     let time = start.elapsed().saturating_sub(ctx.unpack_time);
+    // Where a recompute's or a preview's time goes, by feature
+    // (mitcad#2444), with MITCAD_LOG_TIMING.
+    if log_timing() {
+        eprintln!(
+            "Timing evaluate {} {}: {:.2} ms",
+            entry.uid,
+            entry.name,
+            time.as_secs_f64() * 1e3
+        );
+    }
     // (Records the memory of pieces as read, mitcad#408.)
     let (split_pieces, changed_pieces) = ctx.finish_pieces();
     let reads = std::mem::take(&mut ctx.reads);
@@ -2453,6 +2478,9 @@ fn evaluate<K: Kernel>(
     // A Flex item's nodes and route, also of one whose solid failed
     // (mitcad#1713).
     let flex = ctx.flex.take().map(Arc::new);
+    // A Split Body's pieces before it kept some, also of one that kept
+    // none (mitcad#2504).
+    let piece_choices = std::mem::take(&mut ctx.piece_choices);
     let version = output_version(entry.uid, def_fp, &reads, params);
     let output = match result {
         Ok(produced) => Output {
@@ -2516,6 +2544,7 @@ fn evaluate<K: Kernel>(
             flex,
             drawn: produced.drawn,
             machined: produced.machined,
+            piece_choices,
         },
         Err(message) => Output {
             sheet_rules: None,
@@ -2561,6 +2590,8 @@ fn evaluate<K: Kernel>(
             flex,
             drawn: None,
             machined: Vec::new(),
+            // The pieces it found, none of which it could keep (mitcad#2504).
+            piece_choices,
         },
     };
     Arc::new(output)

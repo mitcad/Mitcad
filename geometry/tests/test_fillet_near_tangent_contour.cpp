@@ -40,6 +40,7 @@
 #include <gp_Trsf.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -245,7 +246,7 @@ void test_blend_thinner_than_the_vertex_tolerance() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_near_tangent_contour) {
   test::guarded("test_contour_runs_on_into_a_near_tangent_edge", test::test_contour_runs_on_into_a_near_tangent_edge);
   test::guarded("test_blend_thinner_than_the_vertex_tolerance", test::test_blend_thinner_than_the_vertex_tolerance);
   if (test::failures == 0) {

@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: MIT
+# Lofted Flange (mitcad#2512; app/COMMANDS.md "Lofted Flange"), on
+# sheet-lofted-flange.json (rules F1; Sketch F2 on XY: a rectangle 120 x 80;
+# Plane F3 70 up; Sketch F4 on it: a circle of radius 30):
+#   1. Lofted Flange: the rules are the design's; the rectangle picked into
+#      First Profile, the circle into Second Profile: the preview is ok.
+#   2. OK adds the lofted flange F5 (press brake, 4 facets a corner): one
+#      body of the volume cli.sheet_lofted_flange gives its F9
+#      (44583.220053535406 mm3).
+#   3. The lofted flange edited from the timeline loads its profiles (its
+#      preview ok); Esc cancels.
+# Run by tools/ui-sheet-lofted-flange-test.sh (Linux),
+# tools/ui-windows-sheet-lofted-flange-test.ps1 (Windows) and
+# tools/ui-macos-sheet-lofted-flange-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+# Seen from the side and above: the circle 70 mm up does not hide the
+# rectangle's region.
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The rectangle and the circle.
+mark
+command sheet.lofted_flange
+wait-log '^Pick places:' 30
+wait-idle
+expect-choice-text rules '^SheetRules1'
+mark
+click-logged '^Panel Lofted Flange input first at '
+wait-log '^Pick places:' 30
+wait-idle
+mark
+click-pick 'profile F2/'
+wait-idle
+mark
+click-logged '^Panel Lofted Flange input second at '
+wait-log '^Pick places:' 30
+wait-idle
+mark
+click-pick 'profile F4/'
+wait-log '^Preview Lofted Flange: ok' 60
+wait-idle
+expect-no-log '^Panel Lofted Flange error: '
+
+# 2. OK: one sheet.
+mark
+button '^OK$'
+wait-log '^Added lofted flange, press brake, 4 facets per region$' 60
+wait-log '^Added Lofted Flange as F5$' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 44583.220053535406
+
+# 3. The lofted flange edited: its profiles loaded.
+mark
+dblclick-logged '^Timeline SheetLoftedFlange1 at '
+wait-log '^Editing F5 with Lofted Flange$' 30
+wait-log '^Preview Lofted Flange: ok' 60
+wait-idle
+mark
+key Escape
+wait-log '^Command Lofted Flange cancelled$' 30
+wait-idle
+expect-model-bodies 1 44583.220053535406

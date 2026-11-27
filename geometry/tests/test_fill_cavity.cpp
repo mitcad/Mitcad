@@ -25,6 +25,7 @@
 #include "mitcad/geometry/input_check.hpp"
 #include "mitcad/geometry/primitive.hpp"
 #include "mitcad/geometry/query.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -202,7 +203,7 @@ void test_a_box_without_volume_is_refused() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fill_cavity) {
   // The body is read, never changed (T0e).
   mitcad::geometry::enable_input_checks(true);
   test::guarded("test_the_slit_is_closed_by_the_cap", test::test_the_slit_is_closed_by_the_cap);

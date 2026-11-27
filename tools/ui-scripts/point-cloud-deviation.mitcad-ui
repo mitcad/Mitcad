@@ -8,8 +8,12 @@
 # runner writes there: 16 points 0.5 mm above the top face (outside the
 # material) and 16 points 0.3 mm above the bottom face (inside it). ASCII
 # only: the Windows runner copies it as ASCII.
-#   1. Insert > Point Cloud reads scan.xyz: PointCloud1 of 32 points, drawn,
-#      in the Browser's Point Clouds folder.
+#   1. Insert > Point Cloud reads scan.xyz, chosen with Choose File... in
+#      the file dialog (mitcad#2474): the File field shows it at once, the
+#      panel's "Choose a point cloud file." goes and OK becomes available;
+#      OK inserts PointCloud1 of 32 points, drawn, in the Browser's Point
+#      Clouds folder. (The runners start the app with Qt's own file
+#      dialogs, --no-native-dialogs.)
 #   2. Inspect > Point Cloud Deviation with the cloud and the block: signed,
 #      mean 0.1 mm, mean absolute 0.4 mm, RMS 0.412 mm, max 0.5 mm, 16
 #      outside, 16 inside; the view draws the 32 points coloured with the
@@ -32,13 +36,28 @@ wait-idle 600
 command view.fit
 wait-idle
 
-# --- 1. The scan inserted beside the block.
+# --- 1. The scan inserted beside the block, chosen in the file dialog
+# (mitcad#2474: the panel kept its message and OK stayed off until Return).
 mark
 command insert.point_cloud
 wait-log '^Command Point Cloud started' 20
+wait-log '^Panel Point Cloud error: Choose a point cloud file[.]$' 20
 wait-idle
-type-in '^Panel Point Cloud input file at ' '${MITCAD_TEST_WORK}/scan.xyz'
+mark
+click-logged '^Panel Point Cloud action choose[.]0 at '
+focus-dialog '^Insert Point Cloud$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/scan.xyz"
+sleep 300
 key Return
+focus-main
+wait-log '^Point Cloud file chosen: scan[.]xyz$' 20
+wait-log '^Point Cloud File: .*scan[.]xyz$' 10
+wait-log '^Panel Point Cloud message: error gone: Choose a point cloud file[.]$' 20
+expect-input-text file '.*scan[.]xyz$'
+wait-idle
+expect-no-log '^Panel Point Cloud error: '
+button '^OK$'
 wait-log '^Inserted point cloud from scan[.]xyz' 30
 wait-log '^Point clouds drawn: PointCloud1 32 points$' 30
 expect-ever '^Browser Root/Point Clouds/PointCloud1 at ' 30

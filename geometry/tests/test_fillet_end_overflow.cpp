@@ -32,6 +32,7 @@
 #include <gp_Ax2.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -273,7 +274,7 @@ void test_disc_rim_over_a_rounded_hole_mouth() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_end_overflow) {
   test::guarded("test_wall_foot_ending_at_a_sliver", test::test_wall_foot_ending_at_a_sliver);
   test::guarded("test_disc_rim_over_a_rounded_hole_mouth", test::test_disc_rim_over_a_rounded_hole_mouth);
   if (test::failures == 0) {

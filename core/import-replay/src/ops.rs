@@ -368,18 +368,7 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             // An extrusion up to an object is rebuilt at each copy by
             // Adjust (the default) and moved by Identical; by
             // distances both are the same.
-            let to_object = self.doc.feature(uid).is_some_and(|f| match &f.def {
-                mitcad_model::FeatureDef::Extrude(e) => {
-                    use mitcad_model::features::{Extent, Side};
-                    let side = |s: &Side| matches!(s, Side::ToObject { .. });
-                    match &e.extent {
-                        Extent::ToObject { .. } => true,
-                        Extent::TwoSides { side1, side2, .. } => side(side1) || side(side2),
-                        _ => false,
-                    }
-                }
-                _ => false,
-            });
+            let to_object = self.up_to_object(uid);
             // The copies the change asks for (overlaps make it a guess),
             // unless the quantity is decoded.
             let estimate = 1.0 + change / added;
@@ -954,6 +943,86 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             out.extend(bare);
         }
         Ok(out)
+    }
+
+    /// Whether a feature is an extrusion up to an object (on either side):
+    /// Adjust rebuilds it at each copy up to the same object, Identical
+    /// moves the tool the original left; by distances both are the same.
+    fn up_to_object(&self, uid: mitcad_model::FeatureUid) -> bool {
+        self.doc.feature(uid).is_some_and(|f| match &f.def {
+            mitcad_model::FeatureDef::Extrude(e) => {
+                use mitcad_model::features::{Extent, Side};
+                let side = |s: &Side| matches!(s, Side::ToObject { .. });
+                match &e.extent {
+                    Extent::ToObject { .. } => true,
+                    Extent::TwoSides { side1, side2, .. } => side(side1) || side(side2),
+                    _ => false,
+                }
+            }
+            _ => false,
+        })
+    }
+
+    /// The objects of `variants` with each pattern of features among them
+    /// replaced by the features it repeats, once (mitcad#2529). MitCad's
+    /// pattern of a pattern places the inner pattern's originals at every
+    /// place the inner pattern put them; a design saved by an older build
+    /// keeps patterns (a rectangular pattern and a path pattern) of an
+    /// earlier rectangular pattern whose history states copy only that
+    /// pattern's own features, once at each of their copies (six
+    /// operations for one copy of its four cuts, a chamfer and a fillet,
+    /// twelve for two, as the inner pattern made six for its one copy;
+    /// its two elements at every copy would make twice as many). These
+    /// variants come after the others, inferred: the history tells which
+    /// one the file made.
+    fn seed_variants(
+        &self,
+        variants: &[(Value, bool, InputProvenance)],
+    ) -> Vec<(Value, bool, InputProvenance)> {
+        let mut out: Vec<(Value, bool, InputProvenance)> = Vec::new();
+        for (objects, dressed, _) in variants {
+            let Some(list) = objects["features"].as_array() else {
+                continue;
+            };
+            let mut replaced = false;
+            let mut features: Vec<Value> = Vec::new();
+            for f in list {
+                let inner = f
+                    .as_str()
+                    .and_then(|s| s.parse::<mitcad_model::FeatureUid>().ok())
+                    .and_then(|uid| self.doc.feature(uid))
+                    .and_then(|feature| match &feature.def {
+                        mitcad_model::FeatureDef::RectangularPattern(d) => Some(&d.objects),
+                        mitcad_model::FeatureDef::CircularPattern(d) => Some(&d.objects),
+                        mitcad_model::FeatureDef::PathPattern(d) => Some(&d.objects),
+                        _ => None,
+                    });
+                match inner {
+                    Some(mitcad_model::features::PatternObjects::Features { features: seeds }) => {
+                        replaced = true;
+                        for uid in seeds {
+                            let v = json!(uid.to_string());
+                            if !features.contains(&v) {
+                                features.push(v);
+                            }
+                        }
+                    }
+                    _ => {
+                        if !features.contains(f) {
+                            features.push(f.clone());
+                        }
+                    }
+                }
+            }
+            if !replaced {
+                continue;
+            }
+            let seeded = json!({"type": "features", "features": features});
+            if !variants.iter().chain(&out).any(|(o, _, _)| *o == seeded) {
+                out.push((seeded, *dressed, InputProvenance::Inferred));
+            }
+        }
+        out
     }
 
     /// A selection of faces (`objects`, of the face references among
@@ -1735,6 +1804,39 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                             ..dressed_note(def(objects, !combine), *dressed, *provenance)
                         }),
                 );
+                // An extrusion up to an object among the mirrored features
+                // (mitcad#2529): Adjust rebuilds its image up to the same
+                // object, through the body between them where the object
+                // lies on the original's side (a design's mirror of a cut
+                // up to a face removed 1867.6 mm³ that way where the file's
+                // state removes 388.3 and is symmetric again):
+                // its tool mirrored as it is (Identical), a guess after the
+                // others, as for the copies the history suggests.
+                if compute(item) != "identical" {
+                    out.extend(
+                        variants
+                            .iter()
+                            .filter(|(objects, _, _)| {
+                                objects["features"].as_array().is_some_and(|f| {
+                                    f.iter().any(|u| {
+                                        u.as_str()
+                                            .and_then(|s| s.parse().ok())
+                                            .is_some_and(|uid| self.up_to_object(uid))
+                                    })
+                                })
+                            })
+                            .map(|(objects, dressed, provenance)| {
+                                let mut moved = def(objects, combine);
+                                moved["compute"] = json!("identical");
+                                Candidate {
+                                    guess: true,
+                                    note: Some(MOVED_TO_OBJECT.to_owned()),
+                                    input_provenance: crate::InputProvenance::Inferred,
+                                    ..dressed_note(moved, *dressed, *provenance)
+                                }
+                            }),
+                    );
+                }
                 Ok(out)
             }
             "CircularPatternFeature" => {
@@ -1758,17 +1860,24 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 ]
                 .iter()
                 .all(|k| get(k).is_some());
-                Ok(variants
-                    .iter()
-                    .map(|(objects, dressed, provenance)| {
+                let candidate =
+                    |(objects, dressed, provenance): &(Value, bool, InputProvenance)| {
                         let mut def = json!({"type": "circular_pattern", "objects": objects,
-                            "axis": axis, "quantity": quantity, "angle": angle,
-                            "symmetric": flag(item, "isSymmetric").unwrap_or(false),
-                            "compute": compute(item)});
+                        "axis": axis, "quantity": quantity, "angle": angle,
+                        "symmetric": flag(item, "isSymmetric").unwrap_or(false),
+                        "compute": compute(item)});
                         suppressed(&mut def, get("suppressedElementsIds"));
                         read_pattern(dressed_note(def, *dressed, *provenance), settings)
-                    })
-                    .collect())
+                    };
+                let mut out: Vec<Candidate> = variants.iter().map(&candidate).collect();
+                // A pattern among the objects: its features once at each
+                // copy (mitcad#2529), after the read objects.
+                out.extend(
+                    self.seed_variants(&variants)
+                        .iter()
+                        .map(|v| seeded(candidate(v))),
+                );
+                Ok(out)
             }
             "RectangularPatternFeature" => {
                 let variants = self.object_variants(&references(get("inputEntities")))?;
@@ -1843,16 +1952,23 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 if differs {
                     defs.push(by_vector);
                 }
-                Ok(defs
-                    .iter()
-                    .flat_map(|def| {
-                        variants.iter().map(move |(objects, dressed, provenance)| {
-                            let mut def = def.clone();
-                            def["objects"] = objects.clone();
-                            read_pattern(dressed_note(def, *dressed, *provenance), settings)
+                // A pattern among the objects: its features once at each
+                // copy (mitcad#2529), after the read objects.
+                let seeds = self.seed_variants(&variants);
+                let candidates = |variants: &[(Value, bool, InputProvenance)]| -> Vec<Candidate> {
+                    defs.iter()
+                        .flat_map(|def| {
+                            variants.iter().map(move |(objects, dressed, provenance)| {
+                                let mut def = def.clone();
+                                def["objects"] = objects.clone();
+                                read_pattern(dressed_note(def, *dressed, *provenance), settings)
+                            })
                         })
-                    })
-                    .collect())
+                        .collect()
+                };
+                let mut out = candidates(&variants);
+                out.extend(candidates(&seeds).into_iter().map(seeded));
+                Ok(out)
             }
             "PathPatternFeature" => self.path_pattern(&other),
             "ShellFeature" => {
@@ -2322,6 +2438,13 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             .iter()
             .map(|(objects, dressed, p)| candidate(&def, objects, *dressed, *p))
             .collect();
+        // A pattern among the objects: its features once at each copy
+        // (mitcad#2529), after the read objects.
+        out.extend(
+            self.seed_variants(&variants)
+                .iter()
+                .map(|(objects, dressed, p)| seeded(candidate(&def, objects, *dressed, *p))),
+        );
         // The settings not given, each the other way, as guesses the
         // history checks.
         for (key, given, what) in [
@@ -4483,6 +4606,22 @@ fn brings_bodies(object_type: Option<&str>) -> bool {
 /// and in order.
 /// The note of a pattern or mirror that repeats its fillets and chamfers.
 const DRESSED: &str = "its fillets and chamfers repeated on the copies";
+
+/// The note of a pattern that repeats the features of a pattern among its
+/// objects once at each copy (mitcad#2529, [`Importer::seed_variants`]).
+const SEEDS: &str =
+    "the features of the pattern it copies, once at each copy (checked against the history)";
+
+/// The note of a mirror whose extrusions up to an object are moved, not
+/// rebuilt up to the same object (mitcad#2529).
+const MOVED_TO_OBJECT: &str =
+    "its extrusions up to an object mirrored as they are (a guess the history checks)";
+
+/// A candidate of [`Importer::seed_variants`]' objects, with its note.
+fn seeded(mut candidate: Candidate) -> Candidate {
+    candidate.note = Some(SEEDS.to_owned());
+    candidate
+}
 
 /// A pattern's or mirror's candidate; one whose objects have the fillets
 /// and chamfers among them says so (mitcad#105).

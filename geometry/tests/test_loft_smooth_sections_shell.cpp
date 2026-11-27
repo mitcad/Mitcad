@@ -105,6 +105,7 @@
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad/geometry/surfaces.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -1147,7 +1148,7 @@ int check_parts(const std::vector<std::string>& names) {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(loft_smooth_sections_shell) {
   const std::vector<std::string> args(argv + 1, argv + argc);
   if (!args.empty() && args[0] == "--check-parts") {
     return test::check_parts(std::vector<std::string>(args.begin() + 1, args.end()));

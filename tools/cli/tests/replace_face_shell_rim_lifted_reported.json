@@ -1,0 +1,23 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The other way on the design of replace_face_shell_rim_reported.json (mitcad#2541, GitHub mitcad/Mitcad#717; opened with --open, never committed): the rim F12:offset_cap(F2:side(c19[c15,c21])) at z = 0 onto the inner ceiling at z = 3, F12:offset(F10:start(r{…c11…})) (the shell names it by the first of the flange top's names; see that script). The wall between them (the cylinder r = 54 from z = 0 to 3) shrinks to nothing here too; the region between the rim and the ceiling's plane is removed, and the rim's place joins the ceiling at z = 3."},
+  {"preview": {"cmd": "add_feature", "def": {"type": "replace_face", "body": "F2.b0",
+    "faces": ["F12:offset_cap(F2:side(c19[c15,c21]))"],
+    "target": {"body": "F2.b0", "face": "F12:offset(F10:start(r{c1[b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}},c11],c11[c1,b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}}],b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}}[c1,c11]}))"}, "tangent_chain": true}}},
+  {"cmd": "add_feature", "def": {"type": "replace_face", "body": "F2.b0",
+    "faces": ["F12:offset_cap(F2:side(c19[c15,c21]))"],
+    "target": {"body": "F2.b0", "face": "F12:offset(F10:start(r{c1[b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}},c11],c11[c1,b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}}],b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}}[c1,c11]}))"}, "tangent_chain": true}},
+  {"expect": {"feature": "ReplaceFace1", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"body": "F2.b0", "no_face": "F12:offset_cap(F2:side(c19[c15,c21]))"}},
+  {"expect": {"body": "F2.b0", "has_face": "F12:offset(F10:start(r{c1[b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}},c11],c11[c1,b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}}],b{E{F2:side(c11[c9,c13+c21])|F2:side(c13[c11+c21,c15])}}[c1,c11]}))"}},
+  {"expect": {"body": "F2.b0", "no_face": "F12:offset(F2:side(c15[c13,c19]))"}},
+  {"comment": "No wall of radius 54 and nothing facing down at z = 0; the bottom at z = 3 (the ceiling and the rim's place, one face); the outside cylinder r = 59 stays, from z = 3."},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "none": {"surface": "cylinder", "radius": 54}}},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "none": {"surface": "plane", "normal": [0, 0, -1], "origin": [0, 0, 0]}}},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "some": {"surface": "plane", "normal": [0, 0, -1], "origin": [0, 0, 3]}}},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0", "geometry": true},
+    "some": {"surface": "cylinder", "radius": 59}}}
+]

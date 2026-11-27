@@ -141,7 +141,9 @@ def outcomes(out):
 
 
 def specs(out):
-    """Every spec of the dump: (content id, its id, its line)."""
+    """Every spec of the dump: (content id, its id, its line). Only fillets
+    and chamfers: the dump also has the offsets, moves and deletes of faces
+    the kernel failed (mitcad#2573), which are no rounding specs."""
     for path in sorted(glob.glob(os.path.join(out, "specs", "*", "*.jsonl"))):
         cid = os.path.basename(os.path.dirname(path))
         with open(path, encoding="utf-8") as f:
@@ -149,6 +151,8 @@ def specs(out):
                 try:
                     spec = json.loads(line)
                 except ValueError:
+                    continue
+                if spec.get("type") not in ("fillet", "chamfer"):
                     continue
                 spec_input = spec.get("files", {}).get("input", "")
                 spec_id = cid + "/" + (spec_input[: -len(".shape")] if spec_input else "?")

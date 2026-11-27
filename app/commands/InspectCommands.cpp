@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
 // The INSPECT group of the SOLID tab (U4): Measure, Interference, Section
-// Analysis, Print Analysis, Draft Analysis (mitcad#2166) and Physical
+// Analysis, Print Analysis, Draft Analysis (mitcad#2166), Point Cloud
+// Deviation (mitcad#2240), Minimum Radius (mitcad#2518), Continuity
+// Analysis (mitcad#2521), Minimum Distance (mitcad#2519) and Physical
 // Properties, on the model's
 // analysis queries (commands.md, "Analysis queries", "Print analysis").
-// They show answers; only Section, Print and Draft Analysis leave
+// They show answers; only Section, Print and Draft Analysis and the
+// other analyses leave
 // something behind: OK keeps them in the document as analyses (the
 // browser's Analysis folder, mitcad#41, mitcad#620), and while one is shown
-// the bodies stay cut at its plane, or its overhangs and thin walls stay
-// coloured over them.
+// the bodies stay cut at its plane, its overhangs and thin walls stay
+// colored over them, or a minimum distance's closest points stay joined
+// by a line.
 #include "Commands.hpp"
 
 #include <algorithm>
@@ -16,6 +20,7 @@
 #include <cstddef>
 #include <exception>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -72,11 +77,17 @@
 #include "../framework/Numbers.hpp"
 #include "../framework/PanelTree.hpp"
 #include "../framework/Theme.hpp"
+#include "../framework/UserText.hpp"
 #include "CommandSupport.hpp"
+#include "ContinuityAnalysis.hpp"
+#include "CurvatureCombCommand.hpp"
 #include "DraftAnalysis.hpp"
+#include "MinRadiusAnalysis.hpp"
+#include "MinimumDistance.hpp"
 #include "PointCloudDeviation.hpp"
 #include "PrintAnalysis.hpp"
 #include "PropertiesReport.hpp"
+#include "SurfaceAnalysis.hpp"
 #include "mitcad/geometry/datum.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/shape.hpp"
@@ -908,6 +919,20 @@ CommandDef measureCommand() {
 // ---------------------------------------------------------------------------
 // Interference
 
+// The check, which takes minutes over many bodies (mitcad#2577: about 100
+// bodies took 159 s): in the window as a model job on the model's worker,
+// with the progress and its Cancel (CommandHost::jobQuery), as an agent's
+// interference query runs (mitcad#2540); a cancel throws
+// ComputationCancelled, which the panel shows as a cancelled inspection.
+// An inspection of the native window runs on the worker already and asks
+// the document as it is.
+QJsonObject interferenceQuery(const CommandContext& context, const QJsonObject& request) {
+  if (const auto* host = dynamic_cast<const CommandHost*>(&context)) {
+    return const_cast<CommandHost*>(host)->jobQuery(request, QObject::tr("Checking the bodies for interference"));
+  }
+  return context.queryObject(request);
+}
+
 CommandDef interferenceCommand(const CommandContext& context) {
   CommandDef def;
   def.id = QStringLiteral("inspect.interference");
@@ -928,7 +953,7 @@ CommandDef interferenceCommand(const CommandContext& context) {
     if (!bodies.isEmpty()) {
       request.insert(QStringLiteral("bodies"), bodyUids(bodies));
     }
-    const QJsonObject answer = model.queryObject(request);
+    const QJsonObject answer = interferenceQuery(model, request);
     const QJsonArray pairs = answer.value(QStringLiteral("pairs")).toArray();
     TopoDS_Compound overlaps;
     BRep_Builder builder;
@@ -1443,6 +1468,18 @@ QString printStage(const QJsonObject& request) {
   if (query == QStringLiteral("point_cloud_deviation")) {
     return QObject::tr("Measuring the points");
   }
+  // Minimum Radius (mitcad#2518).
+  if (query == QStringLiteral("min_radius_analysis")) {
+    return QObject::tr("Measuring the curvature");
+  }
+  // Minimum Distance (mitcad#2519).
+  if (query == QStringLiteral("minimum_distance")) {
+    return QObject::tr("Measuring the distance");
+  }
+  // The surface quality analyses (mitcad#2517).
+  if (query == QStringLiteral("surface_analysis")) {
+    return QObject::tr("Analyzing the faces");
+  }
   return query == QStringLiteral("print_thickness") ? QObject::tr("Measuring the walls")
                                                     : QObject::tr("Finding the overhangs");
 }
@@ -1567,11 +1604,13 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
           .withTooltip(QObject::tr("The filament's price per kilogram; empty: no cost")),
   };
   // What the selection stands for (a face, edge or vertex its body, an
-  // occurrence the bodies shown in it), else every shown body; each body
-  // once, sheets and empty bodies left out (as 3D Print starts).
+  // occurrence the bodies shown in it), else every shown body; while
+  // Isolate is on, of those the bodies the view shows (mitcad#2490). Each
+  // body once, sheets and empty bodies left out (as 3D Print starts).
   def.preselect = [](const Selection& before, CommandState& state, const CommandContext& context) {
     bool selected = false;
-    const Selection start = printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected);
+    const Selection start =
+        printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected, context.isolation());
     Selection bodies;
     QStringList seen;
     for (const SelectionItem& item : start) {
@@ -1696,11 +1735,13 @@ CommandDef draftAnalysisCommand(const CommandContext& model) {
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("1 deg"))
           .withTooltip(QObject::tr("The least draft a face needs to release from the mold")),
   };
-  // The bodies the selection stands for, else every shown body, as Print
-  // Analysis starts.
+  // The bodies the selection stands for, else every shown body (with
+  // Isolate on, those it leaves shown: mitcad#2490), as Print Analysis
+  // starts.
   def.preselect = [](const Selection& before, CommandState& state, const CommandContext& context) {
     bool selected = false;
-    const Selection start = printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected);
+    const Selection start =
+        printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected, context.isolation());
     Selection bodies;
     QStringList seen;
     for (const SelectionItem& item : start) {
@@ -1846,7 +1887,8 @@ CommandDef pointCloudDeviationCommand() {
           .withTooltip(QObject::tr("At most this many points are measured: one in every few of a larger cloud")),
   };
   // The first point cloud, and the body the selection stands for, else the
-  // first shown body; faces selected of that body are the faces measured
+  // first shown body (with Isolate on, of those it leaves shown:
+  // mitcad#2490); faces selected of that body are the faces measured
   // from (mitcad#2265), else all of them.
   def.preselect = [](const Selection& before, CommandState& state, const CommandContext& context) {
     keepCloudNames(state, context);
@@ -1855,7 +1897,8 @@ CommandDef pointCloudDeviationCommand() {
       state.setChoice(QStringLiteral("cloud"), names.first().toString());
     }
     bool selected = false;
-    const Selection start = printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected);
+    const Selection start =
+        printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected, context.isolation());
     if (!start.isEmpty()) {
       state.setItems(QStringLiteral("body"), {start.first()});
       Selection faces;
@@ -1916,6 +1959,528 @@ CommandDef pointCloudDeviationCommand() {
     state.setChecked(QStringLiteral("signed"), analysis.value(QStringLiteral("signed")).toBool(true));
     state.setText(QStringLiteral("limit"), QStringLiteral("%1 mm").arg(n(deviationLimitOf(analysis))));
     state.setText(QStringLiteral("samples"), QString::number(deviationSamplesOf(analysis)));
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Minimum Radius (mitcad#2518; app/COMMANDS.md "Minimum Radius"): the
+// smallest radius of curvature of the faces of bodies and of faces picked,
+// marked where it is, and the faces under a limit (a milling tool's
+// radius), kept in the document as Draft Analysis is.
+
+// The panel's values as an analysis' definition, or what is wrong.
+Built minRadiusDefinition(const CommandState& state) {
+  // Each body and face once, in the order picked (one shown more than once
+  // is one of the analysis).
+  QJsonArray bodies;
+  for (const SelectionItem& item : state.items(QStringLiteral("bodies"))) {
+    if (!bodies.contains(item.owner)) {
+      bodies.append(item.owner);
+    }
+  }
+  QJsonArray faces;
+  for (const QJsonValue& face : refsOf(state.items(QStringLiteral("faces")))) {
+    if (!faces.contains(face)) {
+      faces.append(face);
+    }
+  }
+  if (bodies.isEmpty() && faces.isEmpty()) {
+    return Built::failure(QObject::tr("Select the bodies or the faces."), QStringLiteral("bodies"));
+  }
+  const double limit = state.value(QStringLiteral("limit"));
+  if (!(limit >= 0.0)) {
+    return Built::failure(QObject::tr("Radius Limit: 0 mm or more."), QStringLiteral("limit"));
+  }
+  return Built::of(minRadiusAnalysisDef(bodies, faces, limit));
+}
+
+CommandDef minRadiusCommand(const CommandContext& model) {
+  CommandDef def;
+  def.id = QStringLiteral("inspect.min_radius");
+  def.name = QObject::tr("Minimum Radius");
+  def.icon = QStringLiteral("min-radius");
+  def.tooltip = QObject::tr("The smallest curvature radius of the faces, and the faces under a radius");
+  def.keywords = {QStringLiteral("minimum radius"), QStringLiteral("curvature"), QStringLiteral("radius"),
+                  QStringLiteral("fillet"), QStringLiteral("milling"), QStringLiteral("tool radius"),
+                  QStringLiteral("cutter"), QStringLiteral("machining")};
+  // OK keeps it in the document as an analysis, shown (mitcad#41).
+  def.keepsSection = true;
+  def.changesNoDesign = true;
+  def.inputs = {
+      selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 0, 0)
+          .withAccepts([&model](const SelectionItem& item) { return model.bodyShape(item.owner) != nullptr; })
+          .withTooltip(QObject::tr("Bodies whose every face is analysed: a click on a body adds or removes it")),
+      selectionInput(QStringLiteral("faces"), QObject::tr("Faces"), SelectKind::Face, 0, 0)
+          .withTooltip(QObject::tr("Faces analysed besides the bodies' faces")),
+      valueInput(QStringLiteral("limit"), QObject::tr("Radius Limit"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withStepMinimum(0.0, false)
+          .withTooltip(QObject::tr("Mark the faces whose smallest radius is under this, e.g. a milling tool's "
+                                   "radius; 0: none")),
+  };
+  // Faces selected before are the faces analysed; else the bodies the
+  // selection stands for, or every shown body (with Isolate on, those it
+  // leaves shown: mitcad#2490), as Draft Analysis starts.
+  def.preselect = [](const Selection& before, CommandState& state, const CommandContext& context) {
+    Selection faces;
+    for (const SelectionItem& item : before) {
+      if (item.kind == SelectKind::Face) {
+        faces.append(item);
+      }
+    }
+    if (!faces.isEmpty()) {
+      state.setItems(QStringLiteral("faces"), faces);
+      return;
+    }
+    bool selected = false;
+    const Selection start =
+        printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected, context.isolation());
+    Selection bodies;
+    QStringList seen;
+    for (const SelectionItem& item : start) {
+      if (!seen.contains(item.owner) && context.bodyShape(item.owner) != nullptr) {
+        seen << item.owner;
+        bodies.append(item);
+      }
+    }
+    state.setItems(QStringLiteral("bodies"), bodies);
+  };
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    Inspection result;
+    const Built built = minRadiusDefinition(state);
+    if (!built.error.isEmpty()) {
+      result.error = built.error;
+      return result;
+    }
+    QJsonObject answer;
+    const QString error = runMinRadiusAnalysis(
+        built.def, [&context](const QJsonObject& request, bool slow) { return printQuery(context, request, slow); },
+        answer);
+    if (!error.isEmpty()) {
+      result.error = error;
+      return result;
+    }
+    const BodyNames name = [&context](const QString& uid) { return context.bodyName(uid); };
+    // The swatch in the panel's colour; the view draws the faces in the
+    // view's (CommandHost::showPrintAnalysis).
+    result.text = minRadiusAnalysisText(answer, name, themeColor(ColorRole::PrintThin));
+    result.log = minRadiusAnalysisLog(answer, name);
+    result.printOverlay = minRadiusOverlayJson(built.def, answer, QObject::tr("Minimum Radius"));
+    return result;
+  };
+  // OK keeps it (add_analysis, or edit_analysis of the one edited;
+  // CommandSession::keepAnalysis).
+  def.build = [](const CommandState& state, const CommandContext&) { return minRadiusDefinition(state); };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    state.setItems(QStringLiteral("bodies"), bodiesOf(analysis.value(QStringLiteral("bodies")).toArray()));
+    Selection faces;
+    for (const QJsonValue& face : analysis.value(QStringLiteral("faces")).toArray()) {
+      const SelectionItem item = itemOf(face, context);
+      if (item.isValid()) {
+        faces.append(item);
+      }
+    }
+    state.setItems(QStringLiteral("faces"), faces);
+    state.setText(QStringLiteral("limit"), QStringLiteral("%1 mm").arg(n(minRadiusLimitOf(analysis))));
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Continuity Analysis (mitcad#2521; app/COMMANDS.md "Continuity Analysis"):
+// how smoothly the faces meet across the picked edges, the edges of the
+// picked faces and every edge of the picked bodies, each edge drawn in the
+// colour of the class it reaches (ContinuityAnalysis.hpp). Nothing is kept.
+
+CommandDef continuityAnalysisCommand(const CommandContext& model) {
+  CommandDef def;
+  def.id = QStringLiteral("inspect.continuity_analysis");
+  def.name = QObject::tr("Continuity Analysis");
+  def.icon = QStringLiteral("continuity-analysis");
+  def.tooltip = QObject::tr("How smoothly faces meet across edges: G0, G1 or G2, colored by class");
+  def.keywords = {QStringLiteral("continuity"), QStringLiteral("curvature"), QStringLiteral("tangency"),
+                  QStringLiteral("tangent"),    QStringLiteral("smoothness"), QStringLiteral("G0"),
+                  QStringLiteral("G1"),         QStringLiteral("G2"),         QStringLiteral("edge check")};
+  def.changesNoDesign = true; // mitcad#2281
+  def.inputs = {
+      selectionInput(QStringLiteral("items"), QObject::tr("Edges"), SelectKind::Edge | SelectKind::Face | SelectKind::Body,
+                     1, 0)
+          .withTooltip(QObject::tr("The edges to check; a face or a body stands for all its edges")),
+      valueInput(QStringLiteral("gap"), QObject::tr("Gap"), ValueKind::Length, QStringLiteral("0.01 mm"))
+          .withTooltip(QObject::tr("Faces at most this far apart along an edge touch: G0")),
+      valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("0.1 deg"))
+          .withTooltip(QObject::tr("Faces whose normals are at most this far apart are tangent: G1")),
+      valueInput(QStringLiteral("curvature"), QObject::tr("Curvature (%)"), ValueKind::Unitless, QStringLiteral("2"))
+          .withTooltip(QObject::tr("Tangent faces whose curvatures across the edge differ at most this much are G2")),
+      valueInput(QStringLiteral("samples"), QObject::tr("Samples"), ValueKind::Unitless, QStringLiteral("16"))
+          .withTooltip(QObject::tr("How many times each edge is measured along its length, besides its start")),
+  };
+  def.enabled = [&model] { return hasBodies(model); };
+  // The edges, faces and bodies the selection has.
+  def.preselect = [](const Selection& before, CommandState& state, const CommandContext&) {
+    Selection picks;
+    for (const SelectionItem& item : before) {
+      if (item.kind == SelectKind::Edge || item.kind == SelectKind::Face || item.kind == SelectKind::Body) {
+        picks.append(item);
+      }
+    }
+    state.setItems(QStringLiteral("items"), picks);
+  };
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    Inspection result;
+    const QJsonArray bodies = continuityBodies(state.items(QStringLiteral("items")));
+    if (bodies.isEmpty()) {
+      result.error = QObject::tr("Select the edges, faces or bodies to check.");
+      return result;
+    }
+    const double gap = state.value(QStringLiteral("gap"));
+    if (!(gap >= 0.0)) {
+      result.error = QObject::tr("Gap: 0 mm or more.");
+      return result;
+    }
+    const double angle = qRadiansToDegrees(state.value(QStringLiteral("angle")));
+    if (!(angle >= 0.0 && angle < 90.0)) {
+      result.error = QObject::tr("Angle: from 0° to less than 90°.");
+      return result;
+    }
+    const double curvature = state.value(QStringLiteral("curvature"));
+    if (!(curvature >= 0.0)) {
+      result.error = QObject::tr("Curvature: 0 % or more.");
+      return result;
+    }
+    const double samples = state.value(QStringLiteral("samples"));
+    if (!(samples >= 1.0 && samples <= 1000.0)) {
+      result.error = QObject::tr("Samples: from 1 to 1000.");
+      return result;
+    }
+    const QJsonObject answer = context.queryObject(
+        continuityQuery(bodies, static_cast<int>(std::lround(samples)), gap, angle, curvature));
+    const QJsonValue error = answer.value(QStringLiteral("error"));
+    if (error.isString()) {
+      result.error = userText(error.toString()); // in plain words (mitcad#1612)
+      return result;
+    }
+    // The legend's swatches in the panel's colors; the view draws the
+    // edges in the view's (OcctViewer::setPreviewEdges).
+    const std::array<QColor, 4> colors = {themeColor(ColorRole::ContinuityG2), themeColor(ColorRole::ContinuityG1),
+                                          themeColor(ColorRole::ContinuityG0), themeColor(ColorRole::ContinuityNone)};
+    result.text = continuityText(answer, colors);
+    result.log = continuityLog(answer);
+    result.coloredEdges = continuityEdges(answer);
+    return result;
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Surface quality analyses (mitcad#2517; app/COMMANDS.md "Zebra", "Curvature
+// Map", "Isocurve Analysis", "Environment Map"): kept in the document as
+// Draft Analysis is, on bodies (all their faces) or on faces of other
+// bodies; refreshed with the model (MainWindowPrintAnalysis.cpp).
+
+// The Bodies and Faces inputs every surface analysis starts with.
+QVector<InputDef> surfaceTargetInputs(const CommandContext& model) {
+  return {
+      selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 0, 0)
+          .withAccepts([&model](const SelectionItem& item) { return model.bodyShape(item.owner) != nullptr; })
+          .withTooltip(QObject::tr("Bodies analyzed with all their faces: a click on a body adds or removes it")),
+      selectionInput(QStringLiteral("faces"), QObject::tr("Faces"), SelectKind::Face, 0, 0)
+          .withTooltip(QObject::tr("Faces analyzed on their own, of bodies not picked whole")),
+  };
+}
+
+// The Bodies and Faces inputs as a definition's `bodies` and `faces`: each
+// body once in the order picked, each face once (one shown by two
+// occurrences is one face of its body) unless its body is picked whole; or
+// what is wrong.
+QString surfaceTargets(const CommandState& state, QJsonArray& bodies, QJsonArray& faces) {
+  for (const SelectionItem& item : state.items(QStringLiteral("bodies"))) {
+    if (!bodies.contains(item.owner)) {
+      bodies.append(item.owner);
+    }
+  }
+  for (const SelectionItem& item : state.items(QStringLiteral("faces"))) {
+    const QJsonValue face = item.reference();
+    if (!bodies.contains(item.owner) && !faces.contains(face)) {
+      faces.append(face);
+    }
+  }
+  return bodies.isEmpty() && faces.isEmpty() ? QObject::tr("Select the bodies or faces.") : QString();
+}
+
+// The faces the selection has, else the bodies it stands for, else every
+// shown body (with Isolate on, those it leaves shown: mitcad#2490).
+void preselectSurfaceTargets(const Selection& before, CommandState& state, const CommandContext& context) {
+  Selection faces;
+  for (const SelectionItem& item : before) {
+    if (item.kind == SelectKind::Face) {
+      faces.append(item);
+    }
+  }
+  if (!faces.isEmpty()) {
+    state.setItems(QStringLiteral("faces"), faces);
+    return;
+  }
+  bool selected = false;
+  const Selection start =
+      printStartBodies(before, context.queryArray(QStringLiteral("instances")), &selected, context.isolation());
+  Selection bodies;
+  QStringList seen;
+  for (const SelectionItem& item : start) {
+    if (!seen.contains(item.owner) && context.bodyShape(item.owner) != nullptr) {
+      seen << item.owner;
+      bodies.append(item);
+    }
+  }
+  state.setItems(QStringLiteral("bodies"), bodies);
+}
+
+// A kept analysis' bodies and faces back in the inputs.
+void loadSurfaceTargets(const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+  state.setItems(QStringLiteral("bodies"), bodiesOf(analysis.value(QStringLiteral("bodies")).toArray()));
+  Selection faces;
+  for (const QJsonValue& face : analysis.value(QStringLiteral("faces")).toArray()) {
+    const SelectionItem item = itemOf(face, context);
+    if (item.isValid()) {
+      faces.append(item);
+    }
+  }
+  state.setItems(QStringLiteral("faces"), faces);
+}
+
+// A definition's analysis in the panel: the result area, the log's line
+// and the overlay the view draws (its legend titled `title`).
+Inspection inspectSurface(const Built& built, const CommandContext& context, const QString& title) {
+  Inspection result;
+  if (!built.error.isEmpty()) {
+    result.error = built.error;
+    return result;
+  }
+  QJsonObject answer;
+  const QString error = runSurfaceAnalysis(
+      built.def, [&context](const QJsonObject& request, bool slow) { return printQuery(context, request, slow); },
+      answer);
+  if (!error.isEmpty()) {
+    result.error = error;
+    return result;
+  }
+  const BodyNames name = [&context](const QString& uid) { return context.bodyName(uid); };
+  const SurfaceColors colors = surfaceColors();
+  result.text = surfaceAnalysisText(answer, name, colors.scale, colors.zebra);
+  result.log = surfaceAnalysisLog(answer, name);
+  result.printOverlay = surfaceOverlayJson(built.def, answer, title);
+  return result;
+}
+
+// A Color Limit's value: none for 0 (the largest magnitude found), else
+// more than 0; false for a negative one.
+bool colorLimitOf(const CommandState& state, std::optional<double>& limit) {
+  const double value = state.value(QStringLiteral("limit"));
+  if (!(value >= 0.0) || !std::isfinite(value)) {
+    return false;
+  }
+  limit = value > 0.0 ? std::optional<double>(value) : std::nullopt;
+  return true;
+}
+
+// The command's common part: OK keeps it in the document as an analysis,
+// shown (mitcad#41); the bodies or faces it starts with.
+CommandDef surfaceCommand(const QString& type, const QString& tooltip, const QStringList& keywords) {
+  CommandDef def;
+  def.id = surfaceAnalysisCommand(type);
+  def.name = surfaceAnalysisTitle(type);
+  def.icon = surfaceAnalysisIcon(type);
+  def.tooltip = tooltip;
+  def.keywords = keywords;
+  def.keepsSection = true;
+  def.preselect = [](const Selection& before, CommandState& state, const CommandContext& context) {
+    preselectSurfaceTargets(before, state, context);
+  };
+  return def;
+}
+
+Built zebraDefinition(const CommandState& state) {
+  QJsonArray bodies;
+  QJsonArray faces;
+  const QString missing = surfaceTargets(state, bodies, faces);
+  if (!missing.isEmpty()) {
+    return Built::failure(missing, QStringLiteral("bodies"));
+  }
+  const double stripes = state.value(QStringLiteral("stripes"));
+  if (!(stripes >= 2.0 && stripes <= 200.0)) {
+    return Built::failure(QObject::tr("Stripes: from 2 to 200."), QStringLiteral("stripes"));
+  }
+  const double width = state.value(QStringLiteral("width"));
+  if (!(width > 0.0 && width < 100.0)) {
+    return Built::failure(QObject::tr("Stripe Width: more than 0 % and less than 100 %."), QStringLiteral("width"));
+  }
+  const Selection& direction = state.items(QStringLiteral("direction"));
+  return Built::of(zebraAnalysisDef(bodies, faces, direction.isEmpty() ? QJsonValue() : refsOf(direction).first(),
+                                    direction.isEmpty() ? QString() : direction.first().occurrence,
+                                    static_cast<int>(std::lround(stripes)), width / 100.0));
+}
+
+CommandDef zebraCommand(const CommandContext& model) {
+  CommandDef def = surfaceCommand(
+      QStringLiteral("zebra"), QObject::tr("Stripes from a direction over the faces, to see how smoothly they join"),
+      {QStringLiteral("zebra"), QStringLiteral("stripes"), QStringLiteral("reflection lines"),
+       QStringLiteral("isophotes"), QStringLiteral("continuity"), QStringLiteral("G2"), QStringLiteral("class A"),
+       QStringLiteral("surface quality")});
+  def.inputs = surfaceTargetInputs(model);
+  def.inputs.push_back(
+      selectionInput(QStringLiteral("direction"), QObject::tr("Direction"), kPlaneKinds | kAxisKinds, 0, 1)
+          .withAccepts(givesPull)
+          .withTooltip(QObject::tr("Where the stripes come from: a plane's normal or a line's direction; none: +Z")));
+  def.inputs.push_back(valueInput(QStringLiteral("stripes"), QObject::tr("Stripes"), ValueKind::Unitless,
+                                  QString::number(kDefaultZebraStripes))
+                           .withTooltip(QObject::tr("How many stripes over the half turn from the direction to its "
+                                                    "reverse: their density")));
+  def.inputs.push_back(valueInput(QStringLiteral("width"), QObject::tr("Stripe Width %"), ValueKind::Unitless,
+                                  QString::number(100.0 * kDefaultZebraWidth))
+                           .withTooltip(QObject::tr("The dark part of each stripe, in percent")));
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    return inspectSurface(zebraDefinition(state), context, QObject::tr("Zebra"));
+  };
+  def.build = [](const CommandState& state, const CommandContext&) { return zebraDefinition(state); };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    loadSurfaceTargets(analysis, state, context);
+    SelectionItem direction = itemOf(analysis.value(QStringLiteral("direction")), context);
+    if (direction.isValid()) {
+      direction.occurrence = analysis.value(QStringLiteral("occurrence")).toString();
+      state.items(QStringLiteral("direction")) = {direction};
+    }
+    state.setText(QStringLiteral("stripes"),
+                  QString::number(analysis.value(QStringLiteral("stripes")).toInt(kDefaultZebraStripes)));
+    state.setText(QStringLiteral("width"),
+                  n(100.0 * analysis.value(QStringLiteral("width")).toDouble(kDefaultZebraWidth)));
+  };
+  return def;
+}
+
+Built curvatureDefinition(const CommandState& state) {
+  QJsonArray bodies;
+  QJsonArray faces;
+  const QString missing = surfaceTargets(state, bodies, faces);
+  if (!missing.isEmpty()) {
+    return Built::failure(missing, QStringLiteral("bodies"));
+  }
+  std::optional<double> limit;
+  if (!colorLimitOf(state, limit)) {
+    return Built::failure(QObject::tr("Color Limit: 0 or more."), QStringLiteral("limit"));
+  }
+  return Built::of(curvatureAnalysisDef(bodies, faces, state.choice(QStringLiteral("kind")), limit));
+}
+
+CommandDef curvatureMapCommand(const CommandContext& model) {
+  CommandDef def = surfaceCommand(
+      QStringLiteral("curvature"), QObject::tr("Faces colored by their curvature, to find bumps, dents and flat spots"),
+      {QStringLiteral("curvature"), QStringLiteral("gaussian"), QStringLiteral("mean curvature"),
+       QStringLiteral("principal curvature"), QStringLiteral("radius"), QStringLiteral("surface quality")});
+  def.inputs = surfaceTargetInputs(model);
+  def.inputs.push_back(choiceInput(QStringLiteral("kind"), QObject::tr("Curvature"),
+                                   {{QStringLiteral("gaussian"), QObject::tr("Gaussian")},
+                                    {QStringLiteral("mean"), QObject::tr("Mean")},
+                                    {QStringLiteral("maximum"), QObject::tr("Largest Principal")},
+                                    {QStringLiteral("minimum"), QObject::tr("Smallest Principal")}},
+                                   QStringLiteral("gaussian"))
+                           .withTooltip(QObject::tr("Gaussian: the two principal curvatures multiplied (1/mm²); "
+                                                    "mean, largest or smallest: in 1/mm")));
+  def.inputs.push_back(valueInput(QStringLiteral("limit"), QObject::tr("Color Limit"), ValueKind::Unitless,
+                                  QStringLiteral("0"))
+                           .withTooltip(QObject::tr("The colors reach their full strength at this curvature either "
+                                                    "way; 0: at the largest one found")));
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    return inspectSurface(curvatureDefinition(state), context, QObject::tr("Curvature Map"));
+  };
+  def.build = [](const CommandState& state, const CommandContext&) { return curvatureDefinition(state); };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    loadSurfaceTargets(analysis, state, context);
+    const QString kind = analysis.value(QStringLiteral("kind")).toString();
+    state.setChoice(QStringLiteral("kind"), kind.isEmpty() ? QStringLiteral("gaussian") : kind);
+    state.setText(QStringLiteral("limit"), n(analysis.value(QStringLiteral("limit")).toDouble(0.0), 9));
+  };
+  return def;
+}
+
+Built isocurveDefinition(const CommandState& state) {
+  QJsonArray bodies;
+  QJsonArray faces;
+  const QString missing = surfaceTargets(state, bodies, faces);
+  if (!missing.isEmpty()) {
+    return Built::failure(missing, QStringLiteral("bodies"));
+  }
+  const double count = state.value(QStringLiteral("count"));
+  if (!(count >= 1.0 && count <= 100.0)) {
+    return Built::failure(QObject::tr("Curves per Face: from 1 to 100."), QStringLiteral("count"));
+  }
+  const bool colored = state.checked(QStringLiteral("curvature"));
+  std::optional<double> limit;
+  if (colored && !colorLimitOf(state, limit)) {
+    return Built::failure(QObject::tr("Color Limit: 0 or more."), QStringLiteral("limit"));
+  }
+  return Built::of(isocurveAnalysisDef(bodies, faces, static_cast<int>(std::lround(count)), colored, limit));
+}
+
+CommandDef isocurveAnalysisCommand(const CommandContext& model) {
+  CommandDef def = surfaceCommand(
+      QStringLiteral("isocurve"), QObject::tr("The faces' u and v iso curves, to see how their surfaces flow"),
+      {QStringLiteral("isocurve"), QStringLiteral("iso curves"), QStringLiteral("isoparametric"),
+       QStringLiteral("parameter lines"), QStringLiteral("UV"), QStringLiteral("surface quality")});
+  def.inputs = surfaceTargetInputs(model);
+  def.inputs.push_back(valueInput(QStringLiteral("count"), QObject::tr("Curves per Face"), ValueKind::Unitless,
+                                  QString::number(kDefaultIsocurves))
+                           .withTooltip(QObject::tr("How many u and how many v iso curves each face gets: their "
+                                                    "density")));
+  def.inputs.push_back(checkInput(QStringLiteral("curvature"), QObject::tr("Color by Curvature"), false)
+                           .withTooltip(QObject::tr("Each curve colored by the surface's curvature along it")));
+  def.inputs.push_back(valueInput(QStringLiteral("limit"), QObject::tr("Color Limit"), ValueKind::Unitless,
+                                  QStringLiteral("0"))
+                           .withVisible([](const CommandState& state) {
+                             return state.checked(QStringLiteral("curvature"));
+                           })
+                           .withTooltip(QObject::tr("The colors' full strength at this curvature (1/mm) either way; "
+                                                    "0: the largest found")));
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    return inspectSurface(isocurveDefinition(state), context, QObject::tr("Isocurve Analysis"));
+  };
+  def.build = [](const CommandState& state, const CommandContext&) { return isocurveDefinition(state); };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    loadSurfaceTargets(analysis, state, context);
+    state.setText(QStringLiteral("count"),
+                  QString::number(analysis.value(QStringLiteral("count")).toInt(kDefaultIsocurves)));
+    state.setChecked(QStringLiteral("curvature"), analysis.value(QStringLiteral("curvature")).toBool());
+    state.setText(QStringLiteral("limit"), n(analysis.value(QStringLiteral("limit")).toDouble(0.0), 9));
+  };
+  return def;
+}
+
+Built environmentDefinition(const CommandState& state) {
+  QJsonArray bodies;
+  QJsonArray faces;
+  const QString missing = surfaceTargets(state, bodies, faces);
+  if (!missing.isEmpty()) {
+    return Built::failure(missing, QStringLiteral("bodies"));
+  }
+  return Built::of(environmentAnalysisDef(bodies, faces, state.text(QStringLiteral("image")).trimmed()));
+}
+
+CommandDef environmentMapCommand(const CommandContext& model) {
+  CommandDef def = surfaceCommand(
+      QStringLiteral("environment"),
+      QObject::tr("A picture reflected in the faces as the view turns, to judge their smoothness"),
+      {QStringLiteral("environment map"), QStringLiteral("reflection"), QStringLiteral("chrome"),
+       QStringLiteral("mirror"), QStringLiteral("highlight"), QStringLiteral("surface quality")});
+  def.inputs = surfaceTargetInputs(model);
+  def.inputs.push_back(textInput(QStringLiteral("image"), QObject::tr("Picture"))
+                           .withTooltip(QObject::tr("A picture file reflected in the faces; empty: the studio "
+                                                    "picture")));
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    return inspectSurface(environmentDefinition(state), context, QObject::tr("Environment Map"));
+  };
+  def.build = [](const CommandState& state, const CommandContext&) { return environmentDefinition(state); };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    loadSurfaceTargets(analysis, state, context);
+    state.setText(QStringLiteral("image"), analysis.value(QStringLiteral("image")).toString());
   };
   return def;
 }
@@ -2342,6 +2907,174 @@ void showProperties(const CommandContext& context, QWidget* window, const Select
   }
 }
 
+// ---------------------------------------------------------------------------
+// Minimum Distance (mitcad#2519; app/COMMANDS.md "Minimum Distance"): the
+// smallest distance between two selections, drawn as a line between the
+// closest points with its value, kept in the document as Draft Analysis is
+// and measured again whenever the model changes; with a clearance, the line
+// is marked when the selections come closer than it.
+
+const QString kDistanceFilter = QStringLiteral("filter");
+const QString kDistanceBodies = QStringLiteral("bodies");
+const QString kDistanceGeometry = QStringLiteral("geometry");
+const QString kCheckClearance = QStringLiteral("check_clearance");
+const QString kClearance = QStringLiteral("clearance");
+
+bool distanceGeometry(const CommandState& state) { return state.choice(kDistanceFilter) == kDistanceGeometry; }
+
+// The selection inputs of the filter chosen: bodies and components, or
+// faces, edges and vertices.
+QString firstInput(const CommandState& state) {
+  return distanceGeometry(state) ? QStringLiteral("first_geometry") : QStringLiteral("first");
+}
+
+QString secondInput(const CommandState& state) {
+  return distanceGeometry(state) ? QStringLiteral("second_geometry") : QStringLiteral("second");
+}
+
+// The panel's values as an analysis' definition, or what is wrong.
+Built distanceDefinition(const CommandState& state) {
+  const QJsonArray first = distancePicks(state.items(firstInput(state)));
+  if (first.isEmpty()) {
+    return Built::failure(QObject::tr("Select the first selection."), firstInput(state));
+  }
+  const QJsonArray second = distancePicks(state.items(secondInput(state)));
+  if (second.isEmpty()) {
+    return Built::failure(QObject::tr("Select the second selection."), secondInput(state));
+  }
+  std::optional<double> clearance;
+  if (state.checked(kCheckClearance)) {
+    const double value = state.value(kClearance);
+    if (!(value > 0.0) || !std::isfinite(value)) {
+      return Built::failure(QObject::tr("Clearance: more than 0 mm."), kClearance);
+    }
+    clearance = value;
+  }
+  return Built::of(minimumDistanceDef(first, second, clearance));
+}
+
+CommandDef minimumDistanceCommand() {
+  CommandDef def;
+  def.id = QStringLiteral("inspect.minimum_distance");
+  def.name = QObject::tr("Minimum Distance");
+  def.icon = QStringLiteral("minimum-distance");
+  def.tooltip = QObject::tr("Smallest distance between two selections, kept and updated, with a clearance");
+  def.keywords = {QStringLiteral("clearance"), QStringLiteral("gap"),      QStringLiteral("closest"),
+                  QStringLiteral("distance"),  QStringLiteral("proximity"), QStringLiteral("min distance")};
+  // OK keeps it in the document as an analysis, shown (mitcad#41).
+  def.keepsSection = true;
+  const SelectFilter bodies = SelectKind::Body | SelectKind::Component;
+  const SelectFilter geometry = SelectKind::Face | SelectKind::Edge | SelectKind::Vertex;
+  const auto onBodies = [](const CommandState& state) { return !distanceGeometry(state); };
+  def.inputs = {
+      choiceInput(kDistanceFilter, QObject::tr("Selection Filter"),
+                  {{kDistanceBodies, QObject::tr("Bodies and Components")},
+                   {kDistanceGeometry, QObject::tr("Faces, Edges and Vertices")}},
+                  kDistanceBodies),
+      selectionInput(QStringLiteral("first"), QObject::tr("Selection 1"), bodies, 1, 0)
+          .withVisible(onBodies)
+          .withTooltip(QObject::tr("Bodies and components measured from: a click adds or removes one")),
+      selectionInput(QStringLiteral("second"), QObject::tr("Selection 2"), bodies, 1, 0)
+          .withVisible(onBodies)
+          .withTooltip(QObject::tr("Bodies and components measured to: a click adds or removes one")),
+      selectionInput(QStringLiteral("first_geometry"), QObject::tr("Selection 1"), geometry, 1, 0)
+          .withVisible(distanceGeometry)
+          .withTooltip(QObject::tr("Faces, edges and vertices measured from")),
+      selectionInput(QStringLiteral("second_geometry"), QObject::tr("Selection 2"), geometry, 1, 0)
+          .withVisible(distanceGeometry)
+          .withTooltip(QObject::tr("Faces, edges and vertices measured to")),
+      checkInput(kCheckClearance, QObject::tr("Check Clearance"), false)
+          .withTooltip(QObject::tr("Mark the selections when they come closer than the clearance")),
+      valueInput(kClearance, QObject::tr("Clearance"), ValueKind::Length, QStringLiteral("1 mm"))
+          .withVisible([](const CommandState& state) { return state.checked(kCheckClearance); })
+          .withTooltip(QObject::tr("Closer than this, the line is drawn as a problem")),
+  };
+  // The selection's first item to measure from and the others to measure
+  // to: bodies and components, else faces, edges and vertices.
+  def.preselect = [](const Selection& before, CommandState& state, const CommandContext&) {
+    Selection parts;
+    Selection picks;
+    for (const SelectionItem& item : before) {
+      if (item.kind == SelectKind::Body || item.kind == SelectKind::Component) {
+        parts.append(item);
+      } else if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex) {
+        picks.append(item);
+      }
+    }
+    const bool onGeometry = parts.isEmpty() && !picks.isEmpty();
+    state.setChoice(kDistanceFilter, onGeometry ? kDistanceGeometry : kDistanceBodies);
+    const Selection& start = onGeometry ? picks : parts;
+    if (!start.isEmpty()) {
+      state.setItems(firstInput(state), {start.first()});
+      state.setItems(secondInput(state), start.mid(1));
+    }
+  };
+  def.inspect = [](const CommandState& state, const CommandContext& context) {
+    Inspection result;
+    const Built built = distanceDefinition(state);
+    if (!built.error.isEmpty()) {
+      result.error = built.error;
+      return result;
+    }
+    QJsonObject answer;
+    const QString error = runMinimumDistance(
+        built.def, [&context](const QJsonObject& request, bool slow) { return printQuery(context, request, slow); },
+        answer);
+    if (!error.isEmpty()) {
+      result.error = error;
+      return result;
+    }
+    // The swatch in the panel's colors; the view draws the line in the
+    // view's (CommandHost::showPrintAnalysis).
+    const std::array<QColor, 2> colors = {themeColor(ColorRole::PreviewTarget), themeColor(ColorRole::Interference)};
+    result.text = minimumDistanceText(
+        answer, [&context](double millimetres) { return lengthText(millimetres, context); }, colors);
+    result.log = minimumDistanceLog(answer);
+    result.printOverlay = minimumDistanceOverlayJson(answer, QObject::tr("Minimum Distance"));
+    return result;
+  };
+  // OK keeps it (add_analysis, or edit_analysis of the one edited;
+  // CommandSession::keepAnalysis).
+  def.build = [](const CommandState& state, const CommandContext&) { return distanceDefinition(state); };
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    // Faces, edges or vertices among the picks: the filter that shows them.
+    bool named = false;
+    for (const char* side : {"first", "second"}) {
+      for (const QJsonValue& pick : analysis.value(QLatin1String(side)).toArray()) {
+        const QJsonObject fields = pick.toObject();
+        named = named || fields.contains(QStringLiteral("face")) || fields.contains(QStringLiteral("edge")) ||
+                fields.contains(QStringLiteral("vertex"));
+      }
+    }
+    state.setChoice(kDistanceFilter, named ? kDistanceGeometry : kDistanceBodies);
+    const auto itemsOf = [&context](const QJsonArray& picks) {
+      Selection items;
+      for (const QJsonValue& value : picks) {
+        const QJsonObject pick = value.toObject();
+        SelectionItem item = distancePickItem(pick);
+        if (!item.isValid() && pick.value(QStringLiteral("occurrence")).isString()) {
+          // A component, as the occurrence it was picked through places it.
+          const QString path = pick.value(QStringLiteral("occurrence")).toString();
+          item = SelectionItem{SelectKind::Component, occurrenceComponent(path, context), QString(), QString()};
+          item.occurrence = path;
+        }
+        if (item.isValid()) {
+          items.append(item);
+        }
+      }
+      return items;
+    };
+    state.setItems(firstInput(state), itemsOf(analysis.value(QStringLiteral("first")).toArray()));
+    state.setItems(secondInput(state), itemsOf(analysis.value(QStringLiteral("second")).toArray()));
+    const std::optional<double> clearance = clearanceOf(analysis);
+    state.setChecked(kCheckClearance, clearance.has_value());
+    if (clearance) {
+      state.setText(kClearance, QStringLiteral("%1 mm").arg(n(*clearance)));
+    }
+  };
+  return def;
+}
+
 } // namespace
 
 void registerInspectCommands(CommandRegistry& registry, const CommandContext& context,
@@ -2352,6 +3085,15 @@ void registerInspectCommands(CommandRegistry& registry, const CommandContext& co
   registry.add(printAnalysisCommand(context));
   registry.add(draftAnalysisCommand(context)); // mitcad#2166
   registry.add(pointCloudDeviationCommand()); // mitcad#2240
+  registry.add(minRadiusCommand(context));    // mitcad#2518
+  registry.add(continuityAnalysisCommand(context)); // mitcad#2521
+  registry.add(minimumDistanceCommand());           // mitcad#2519
+  // Surface quality analyses (mitcad#2517).
+  registry.add(zebraCommand(context));
+  registry.add(curvatureMapCommand(context));
+  registry.add(isocurveAnalysisCommand(context));
+  registry.add(environmentMapCommand(context));
+  registry.add(curvatureCombCommand());       // mitcad#2520
 
   CommandDef properties;
   properties.id = QStringLiteral("inspect.properties");

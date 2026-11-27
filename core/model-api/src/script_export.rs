@@ -113,8 +113,9 @@ fn run_steps<K: Kernel>(
     })?;
     let count = steps.len();
     let mut results = Vec::new();
+    let mut kept = super::script::Kept::new();
     for (i, step) in steps.into_iter().enumerate() {
-        let outcome = match super::script::run_step(doc, step) {
+        let outcome = match super::script::run_step(doc, step, &mut kept) {
             Ok(_) if doc.undo_depth() < depth => Err(ApiError(
                 "it undoes a change made before the script".to_owned(),
             )),

@@ -43,7 +43,20 @@ build/dev/core/mitcad-testrun --build build/dev --schedule --dry-run
 
 # A selection, as ctest takes it:
 build/dev/core/mitcad-testrun --build build/dev --measure -R '^core\.' -E corpus
+
+# The tests a file names, one exact name a line (any number of them):
+build/dev/core/mitcad-testrun --build build/dev --schedule --tests-from run.txt -E corpus
 ```
+
+`--tests-from FILE` keeps the tests of ctest's listing (with the other
+selection arguments) that the file names, and adds the tests that set up
+or clean up the fixtures they require, as ctest adds them to a `-R`
+selection. It is how `tools/check-all.sh` passes its plan (mitcad#2579):
+one `-R` expression of every name grows past what ctest's regular
+expressions take (about 1400 names gave `Expression too big` and an empty
+listing). A list that names no test, or none of the build tree's tests, or
+only tests that cannot run here, is an error (exit 2), never an empty run
+that passes; names the listing does not have are printed and left out.
 
 On Windows (the VM), from a shell where `ctest` is on `PATH` (or with
 `--ctest <path to ctest.exe>`); the UI ctests need the build configured
@@ -511,7 +524,7 @@ A test's sources, from its ctest registration and the tree
   `cargo test --doc -p <package>`) each package's folder, from the
   workspace's members (`core/Cargo.toml`; no globs);
 - for a test program CMake builds (the command's program, e.g.
-  `test_sheet`, `mitcad-cli`) its own target's sources, from CMake's file
+  `test_geometry_sheet`, `mitcad-cli`) its own target's sources, from CMake's file
   API reply in the build folder (`.cmake/api/v1/reply`, which
   `tools/check-all.sh` asks for; without it this part is left out).
 

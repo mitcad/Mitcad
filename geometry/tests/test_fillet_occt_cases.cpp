@@ -41,6 +41,7 @@
 #include <gp_Trsf.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -308,7 +309,7 @@ void test_throat_chamfer_ends_along_a_circle_keep_their_tolerance() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_occt_cases) {
   test::guarded("test_axis_edge_rounded_up_to_the_pole_of_a_partial_revolve",
                 test::test_axis_edge_rounded_up_to_the_pole_of_a_partial_revolve);
   test::guarded("test_meridian_edge_rounded_to_the_pole_of_a_partial_revolve",

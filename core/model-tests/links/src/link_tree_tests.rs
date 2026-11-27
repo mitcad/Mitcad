@@ -243,18 +243,6 @@ fn a_whole_design_comes_in_with_its_components_joint_and_grounding_read_only() {
     )
     .unwrap_err();
     assert!(refused.contains("linked from"), "{refused}");
-    // Not by its envelope, no chosen parts.
-    let refused = command(
-        &mut doc,
-        json!({"cmd": "set_link_parts", "component": "Slider", "base": base(&dir),
-               "parts": {"occurrences": ["O2"]}}),
-    )
-    .unwrap_err();
-    assert!(
-        refused.contains("keeps the components of its design"),
-        "{refused}"
-    );
-
     // Saved and opened: the same.
     let text = doc.to_json();
     let path = dir.join("holder.mitcad");
@@ -265,6 +253,537 @@ fn a_whole_design_comes_in_with_its_components_joint_and_grounding_read_only() {
     let tree = |d: &Document<MockKernel>| d.assembly().component(linked).unwrap().link.clone();
     assert_eq!(tree(&opened), tree(&doc));
     assert_eq!(opened.assembly().occurrences, doc.assembly().occurrences);
+}
+
+#[test]
+fn choosing_one_linked_part_prunes_the_tree_and_reports_the_dropped_joint() {
+    let dir = saved("2252-parts", 40.0);
+    let mut doc = Document::new(MockKernel::default());
+    let (linked, first) = insert(&mut doc, &dir);
+    let joint = joint(&doc, linked);
+    let key = named(&doc, "Key:1");
+    let reply = run(
+        &mut doc,
+        json!({
+            "cmd": "set_link_parts", "component": "Slider", "base": base(&dir),
+            "parts": {"occurrences": ["Key:1"]}
+        }),
+    );
+    assert_eq!(reply["changed"], true, "{reply}");
+    assert!(
+        reply["messages"].to_string().contains("Joint1 was dropped"),
+        "{reply}"
+    );
+    assert!(doc.feature(joint).is_none());
+    let parts: Vec<_> = doc.instances().into_iter().map(|item| item.path).collect();
+    assert_eq!(parts, vec![vec![first, key]]);
+    assert_eq!(doc.undo_label(), Some("Choose Linked Parts of Slider"));
+
+    let mut opened = Document::from_json_at(
+        &doc.to_json(),
+        &dir.join("holder.mitcad"),
+        MockKernel::default(),
+    )
+    .unwrap();
+    write_source(&dir, &slider(25.0, true));
+    opened.update_links(Some(&dir)).unwrap();
+    assert_eq!(opened.instances()[0].path, vec![first, key]);
+    assert!(opened.feature(joint).is_none());
+    let reply = run(
+        &mut opened,
+        json!({
+            "cmd": "set_link_parts", "component": "Slider", "base": base(&dir)
+        }),
+    );
+    assert_eq!(reply["changed"], true, "{reply}");
+    assert_eq!(opened.instances().len(), 2);
+    assert_eq!(named(&opened, "Key:1"), key);
+    assert_eq!(
+        query(&opened, json!({"query": "joints"}))["joints"][0]["solved"],
+        true
+    );
+}
+
+#[test]
+fn a_tree_envelope_preserves_flexible_values_and_the_other_full_occurrence() {
+    let dir = saved("2252-envelope", 40.0);
+    let mut doc = Document::new(MockKernel::default());
+    let (linked, first) = insert(&mut doc, &dir);
+    let second = doc
+        .copy_occurrence(first, Some(Transform::translation([200.0, 0.0, 0.0])))
+        .unwrap();
+    let uid = joint(&doc, linked);
+    let key = named(&doc, "Key:1");
+    doc.set_occurrence_flexible(first, true).unwrap();
+    run(
+        &mut doc,
+        json!({
+            "cmd": "drive_joint", "joint": "Joint1", "occurrence": first.to_string(),
+            "values": {"tx": 20}
+        }),
+    );
+    let show = json!({
+        "cmd": "set_link_envelope", "occurrence": first.to_string(),
+        "detail": 5, "base": base(&dir)
+    });
+    let reply = run(&mut doc, show.clone());
+    assert_eq!(reply["envelope"], true, "{reply}");
+    assert_eq!(reply["bodies"].as_array().unwrap().len(), 1, "{reply}");
+    let no_change = run(&mut doc, show);
+    assert_eq!(no_change["changed"], false, "{no_change}");
+    assert_eq!(
+        doc.instances().iter().filter(|i| i.path == [first]).count(),
+        1
+    );
+    assert_eq!(
+        doc.instances()
+            .iter()
+            .filter(|i| i.path.first() == Some(&second))
+            .count(),
+        2
+    );
+    assert_eq!(own_tx(&doc, first, uid), Some(20.0));
+
+    let mut opened = Document::from_json_at(
+        &doc.to_json(),
+        &dir.join("holder.mitcad"),
+        MockKernel::default(),
+    )
+    .unwrap();
+    write_source(&dir, &slider(30.0, true));
+    opened.update_links(Some(&dir)).unwrap();
+    assert_eq!(
+        opened
+            .instances()
+            .iter()
+            .filter(|i| i.path == [first])
+            .count(),
+        1
+    );
+    let reply = run(
+        &mut opened,
+        json!({
+            "cmd": "set_link_envelope", "occurrence": first.to_string(), "envelope": false
+        }),
+    );
+    assert_eq!(reply["envelope"], false, "{reply}");
+    assert_eq!(opened.instances().len(), 4);
+    assert!(opened.is_flexible(first));
+    assert_eq!(joint(&opened, linked), uid);
+    assert_eq!(named(&opened, "Key:1"), key);
+    assert_eq!(own_tx(&opened, first, uid), Some(20.0));
+    assert_near(key_at(&opened, first), [20.0, 0.0, 10.0], "reopened key");
+    assert_near(key_at(&opened, second), [200.0, 0.0, 10.0], "other key");
+    run(
+        &mut opened,
+        json!({"cmd": "set_link_envelope", "occurrence": second.to_string(),
+               "all": true, "detail": 5, "base": base(&dir)}),
+    );
+    let displayed = opened.instances();
+    assert_eq!(displayed.len(), 2);
+    assert_eq!(displayed[0].body, displayed[1].body);
+    assert_eq!(displayed[0].path.len(), 1);
+    assert_eq!(displayed[1].path.len(), 1);
+    run(
+        &mut opened,
+        json!({"cmd": "set_link_envelope", "occurrence": first.to_string(),
+               "envelope": false}),
+    );
+    assert_eq!(opened.instances().len(), 3);
+    assert_eq!(own_tx(&opened, first, uid), Some(20.0));
+}
+
+#[test]
+fn choosing_children_keeps_a_parent_joints_frame_on_an_unticked_root_body() {
+    let dir = saved("2252-root-attachment", 40.0);
+    let mut source = slider(40.0, true);
+    block(&mut source);
+    write_source(&dir, &source);
+    let mut doc = Document::new(MockKernel::default());
+    let (linked, occurrence) = insert(&mut doc, &dir);
+    let body = doc.component_bodies(linked)[0];
+    let face = doc.body_shape(body).unwrap().faces[0].to_string();
+    doc.kernel().surfaces.borrow_mut().insert(
+        face.clone(),
+        mitcad_model::datum::SurfaceGeometry::Plane {
+            origin: [5.0, 5.0, 0.0],
+            normal: [0.0, 0.0, -1.0],
+        },
+    );
+    let joint = run(
+        &mut doc,
+        json!({
+            "cmd": "add_joint", "kind": "rigid",
+            "a": {"occurrence": occurrence.to_string(), "geometry": {"body": body, "face": face}},
+            "b": {"geometry": {"point": [5, 5, 0]}}
+        }),
+    );
+    let uid: FeatureUid = joint["uid"].as_str().unwrap().parse().unwrap();
+    assert_eq!(joint["solved"], true, "{joint}");
+    run(
+        &mut doc,
+        json!({
+            "cmd": "set_link_parts", "component": "Slider", "base": base(&dir),
+            "parts": {"occurrences": ["Key:1"]}
+        }),
+    );
+    assert!(doc.component_bodies(linked).is_empty());
+    let link = doc
+        .assembly()
+        .component(linked)
+        .unwrap()
+        .link
+        .as_ref()
+        .unwrap();
+    assert_eq!(link.unlinked.len(), 1);
+    let results = query(&doc, json!({"query": "joints"}));
+    assert_eq!(results["joints"][0]["uid"], uid.to_string());
+    assert_eq!(results["joints"][0]["solved"], true, "{results}");
+}
+
+#[test]
+fn repeated_placements_can_select_different_nested_parts_without_losing_a_parent_joint() {
+    let dir = saved("2252-repeated-parts", 40.0);
+    let mut source = Document::new(MockKernel::default());
+    let (subassembly, first_source) = source
+        .create_component(Some("Subassembly"), Transform::IDENTITY, true)
+        .unwrap();
+    source
+        .create_component(Some("Left"), Transform::IDENTITY, true)
+        .unwrap();
+    block(&mut source);
+    source.activate_component(subassembly).unwrap();
+    source
+        .create_component(
+            Some("Right"),
+            Transform::translation([25.0, 0.0, 0.0]),
+            true,
+        )
+        .unwrap();
+    block(&mut source);
+    source.activate_component(ComponentUid::ROOT).unwrap();
+    source
+        .copy_occurrence(
+            first_source,
+            Some(Transform::translation([100.0, 0.0, 0.0])),
+        )
+        .unwrap();
+    write_source(&dir, &source);
+
+    let mut doc = Document::new(MockKernel::default());
+    let (_, linked) = insert(&mut doc, &dir);
+    doc.set_occurrence_grounded(linked, true).unwrap();
+    doc.create_component(
+        Some("Locator"),
+        Transform::translation([125.0, 0.0, 0.0]),
+        false,
+    )
+    .unwrap();
+    let joint = run(
+        &mut doc,
+        json!({
+            "cmd": "add_joint", "kind": "rigid",
+            "a": {"occurrence": "Locator:1", "geometry": {"point": [0, 0, 0]}},
+            "b": {"occurrence": "Slider:1/Subassembly:2/Right:1", "geometry": {"point": [0, 0, 0]}}
+        }),
+    );
+    let joint_uid = joint["uid"].as_str().unwrap().parse().unwrap();
+    assert_eq!(joint["solved"], true, "{joint}");
+    let right_path = doc
+        .assembly()
+        .find_path("Slider:1/Subassembly:2/Right:1")
+        .unwrap();
+    let left_path = doc
+        .assembly()
+        .find_path("Slider:1/Subassembly:1/Left:1")
+        .unwrap();
+    let before = doc.to_json();
+    let refused = command(
+        &mut doc,
+        json!({
+            "cmd": "set_link_parts", "component": "Slider", "base": base(&dir),
+            "parts": {"occurrences": ["Subassembly:1/Right:1", "Subassembly:2/Left:1"]}
+        }),
+    )
+    .unwrap_err();
+    assert!(
+        refused.contains("Joint1 uses a part that this choice would leave out"),
+        "{refused}"
+    );
+    assert_eq!(
+        doc.to_json(),
+        before,
+        "the parent joint's placement must be untouched"
+    );
+    let reply = run(
+        &mut doc,
+        json!({
+            "cmd": "set_link_parts", "component": "Slider", "base": base(&dir),
+            "parts": {"occurrences": ["Subassembly:1/Left:1", "Subassembly:2/Right:1"]}
+        }),
+    );
+    assert_eq!(reply["changed"], true, "{reply}");
+    let kept = doc.instances();
+    assert_eq!(kept.len(), 2);
+    assert_eq!(kept[0].path, left_path);
+    assert_eq!(&kept[1].path[..2], &right_path[..2]);
+    assert_near(kept[0].transform.translation, [0.0, 0.0, 0.0], "left part");
+    assert_near(
+        kept[1].transform.translation,
+        [125.0, 0.0, 0.0],
+        "right part",
+    );
+    let FeatureDef::Joint(joint) = &doc.feature(joint_uid).unwrap().def else {
+        panic!("parent joint")
+    };
+    assert_eq!(joint.b.occurrence.0, kept[1].path);
+    assert_eq!(
+        query(&doc, json!({"query": "joints"}))["joints"][0]["solved"],
+        true
+    );
+
+    let new_right = kept[1].path.clone();
+    let mut reopened = Document::from_json_at(
+        &doc.to_json(),
+        &dir.join("holder.mitcad"),
+        MockKernel::default(),
+    )
+    .unwrap();
+    run(
+        &mut reopened,
+        json!({"cmd": "set_link_parts", "component": "Slider", "base": base(&dir)}),
+    );
+    assert_eq!(reopened.instances().len(), 4);
+    assert!(
+        reopened
+            .instances()
+            .iter()
+            .any(|item| item.path == new_right)
+    );
+    assert_eq!(
+        query(&reopened, json!({"query": "joints"}))["joints"][0]["solved"],
+        true
+    );
+}
+
+#[test]
+fn refreshing_a_whole_link_reuses_a_reparented_part_and_a_new_placement_of_its_definition() {
+    let dir = saved("2252-reparent-update", 40.0);
+    let mut source = Document::new(MockKernel::default());
+    let (_, frame) = source
+        .create_component(Some("Frame"), Transform::IDENTITY, false)
+        .unwrap();
+    let (_, peg) = source
+        .create_component(Some("Peg"), Transform::IDENTITY, true)
+        .unwrap();
+    block(&mut source);
+    source.activate_component(ComponentUid::ROOT).unwrap();
+    write_source(&dir, &source);
+    let mut doc = Document::new(MockKernel::default());
+    insert(&mut doc, &dir);
+    let host_peg = named(&doc, "Peg:1");
+    let host_frame = doc
+        .assembly()
+        .occurrence(named(&doc, "Frame:1"))
+        .unwrap()
+        .component;
+    let host_definition = doc.assembly().occurrence(host_peg).unwrap().component;
+
+    source
+        .copy_occurrence(peg, Some(Transform::translation([50.0, 0.0, 0.0])))
+        .unwrap();
+    run(
+        &mut source,
+        json!({
+            "cmd": "reparent_occurrence", "occurrence": peg.to_string(), "parent": frame.to_string()
+        }),
+    );
+    write_source(&dir, &source);
+    doc.update_links(Some(&dir)).unwrap();
+    let peg = doc.assembly().occurrence(host_peg).unwrap();
+    assert_eq!(peg.component, host_definition);
+    assert_eq!(peg.parent, host_frame);
+    assert_eq!(doc.assembly().occurrences_of(host_definition).count(), 2);
+    assert_eq!(doc.instances().len(), 2);
+}
+
+#[test]
+fn a_flexible_host_ancestor_keeps_its_values_for_the_retained_flexible_definition() {
+    let dir = saved("2252-flexible-ancestor", 40.0);
+    let mut source = Document::new(MockKernel::default());
+    let (rig, first_source) = source
+        .create_component(Some("Rig"), Transform::IDENTITY, true)
+        .unwrap();
+    let (_, base_source) = source
+        .create_component(Some("Base"), Transform::IDENTITY, true)
+        .unwrap();
+    block(&mut source);
+    source.activate_component(rig).unwrap();
+    source.set_occurrence_grounded(base_source, true).unwrap();
+    source
+        .create_component(Some("Key"), Transform::translation([0.0, 0.0, 10.0]), true)
+        .unwrap();
+    block(&mut source);
+    source.activate_component(rig).unwrap();
+    let joint_source = run(
+        &mut source,
+        json!({
+            "cmd": "add_joint", "kind": "slider", "slide_axis": "x",
+            "a": {"occurrence": "Key:1", "geometry": {"point": [0, 0, 0]}},
+            "b": {"occurrence": "Base:1", "geometry": {"point": [0, 0, 10]}}
+        }),
+    );
+    assert_eq!(joint_source["solved"], true, "{joint_source}");
+    source
+        .create_component(
+            Some("Cover"),
+            Transform::translation([0.0, 0.0, 25.0]),
+            true,
+        )
+        .unwrap();
+    block(&mut source);
+    source.activate_component(ComponentUid::ROOT).unwrap();
+    let second_source = source
+        .copy_occurrence(
+            first_source,
+            Some(Transform::translation([100.0, 0.0, 0.0])),
+        )
+        .unwrap();
+    source.set_occurrence_grounded(first_source, true).unwrap();
+    source.set_occurrence_grounded(second_source, true).unwrap();
+    source.set_occurrence_flexible(second_source, true).unwrap();
+    write_source(&dir, &source);
+
+    let mut doc = Document::new(MockKernel::default());
+    let (_, ancestor) = doc
+        .create_component(Some("Frame"), Transform::IDENTITY, true)
+        .unwrap();
+    let (linked, occurrence) = insert(&mut doc, &dir);
+    let second = named(&doc, "Rig:2");
+    let old = joint(&doc, linked);
+    doc.set_occurrence_grounded(occurrence, true).unwrap();
+    doc.set_occurrence_flexible(occurrence, true).unwrap();
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    doc.set_occurrence_grounded(ancestor, true).unwrap();
+    doc.set_occurrence_flexible(ancestor, true).unwrap();
+    run(
+        &mut doc,
+        json!({
+            "cmd": "drive_joint", "joint": old.to_string(), "occurrence": ancestor.to_string(),
+            "values": {"tx": 20}
+        }),
+    );
+    assert_eq!(own_tx(&doc, ancestor, old), Some(20.0));
+
+    run(
+        &mut doc,
+        json!({
+            "cmd": "set_link_parts", "component": "Slider", "base": base(&dir),
+            "parts": {"occurrences": ["Rig:1", "Rig:2/Base:1", "Rig:2/Key:1"]}
+        }),
+    );
+    let second_owner = doc.assembly().occurrence(second).unwrap().component;
+    let new = doc
+        .features()
+        .find(|entry| entry.component == second_owner && matches!(entry.def, FeatureDef::Joint(_)))
+        .unwrap()
+        .uid;
+    assert_ne!(new, old);
+    assert_eq!(own_tx(&doc, ancestor, old), None);
+    assert_eq!(own_tx(&doc, ancestor, new), Some(20.0));
+    assert!(
+        doc.instances()
+            .iter()
+            .any(|item| item.path.get(2) == Some(&second)
+                && (item.transform.translation[0] - 120.0).abs() < 1e-6)
+    );
+}
+
+#[test]
+fn a_source_motion_link_drives_the_linked_slider() {
+    let dir = saved("2252-motion", 40.0);
+    let mut source = slider(40.0, true);
+    source
+        .create_component(
+            Some("Drive"),
+            Transform::translation([0.0, 20.0, 10.0]),
+            true,
+        )
+        .unwrap();
+    block(&mut source);
+    source.activate_component(ComponentUid::ROOT).unwrap();
+    run(
+        &mut source,
+        json!({
+            "cmd": "add_joint", "kind": "slider", "slide_axis": "x",
+            "a": {"occurrence": "Drive:1", "geometry": {"point": [0, 0, 0]}},
+            "b": {"occurrence": "Base:1", "geometry": {"point": [0, 20, 10]}}
+        }),
+    );
+    let coupling = run(
+        &mut source,
+        json!({
+            "cmd": "add_motion_link",
+            "a": {"joint": "Joint2", "motion": "tx"}, "b": {"joint": "Joint1", "motion": "tx"},
+            "coupling": {"type": "ratio", "ratio": 2}
+        }),
+    );
+    assert_eq!(coupling["solved"], true, "{coupling}");
+    write_source(&dir, &source);
+    let mut doc = Document::new(MockKernel::default());
+    let (_, occurrence) = insert(&mut doc, &dir);
+    doc.set_occurrence_flexible(occurrence, true).unwrap();
+    run(
+        &mut doc,
+        json!({
+            "cmd": "drive_joint", "joint": "Joint2", "occurrence": occurrence.to_string(),
+            "values": {"tx": 10}
+        }),
+    );
+    assert_near(
+        key_at(&doc, occurrence),
+        [20.0, 0.0, 10.0],
+        "motion link follower",
+    );
+}
+
+#[test]
+fn a_source_constraint_set_keeps_its_fixed_point_relations_read_only() {
+    let dir = saved("2252-constraints", 40.0);
+    let mut source = slider(40.0, true);
+    let source_joint = source
+        .features()
+        .find(|feature| matches!(feature.def, FeatureDef::Joint(_)))
+        .unwrap()
+        .uid;
+    run(
+        &mut source,
+        json!({"cmd": "delete_feature", "uid": source_joint.to_string()}),
+    );
+    let relation = run(
+        &mut source,
+        json!({
+            "cmd": "add_constraint_set",
+            "rows": [{
+                "type": "align",
+                "a": {"occurrence": "Key:1", "geometry": {"point": [0, 0, 0]}},
+                "b": {"occurrence": "Base:1", "geometry": {"point": [0, 0, 10]}}
+            }]
+        }),
+    );
+    assert_eq!(relation["error"], Value::Null, "{relation}");
+    write_source(&dir, &source);
+    let mut doc = Document::new(MockKernel::default());
+    let (linked, _) = insert(&mut doc, &dir);
+    let relation = joint(&doc, linked);
+    let sets = query(&doc, json!({"query": "joints"}))["constraints"].clone();
+    assert_eq!(sets[0]["solved"], true, "{sets}");
+    let refused = command(
+        &mut doc,
+        json!({"cmd": "delete_feature", "uid": relation.to_string()}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("linked from"), "{refused}");
 }
 
 #[test]

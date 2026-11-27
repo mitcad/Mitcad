@@ -31,7 +31,7 @@ printf '%s' "$png" | base64 -d > "$work/decal.png" || exit 1
 design=$work/decal.mitcad
 "$cli" run "$here/ui-scripts/decal.json" --save "$design" || exit 1
 ui_start_display
-ui_start_app --ui=qt --no-mcp --open "$design"
+ui_start_app --ui=qt --no-mcp --no-native-dialogs --open "$design"
 for _ in $(seq 1 900); do
   kill -0 "$UI_RUNNER" 2> /dev/null || break
   sleep 0.2

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Analyses kept in the document (mitcad#41): section analyses, print
-//! analyses (mitcad#620), draft analyses (mitcad#2166) and point cloud
-//! deviations (mitcad#2240), listed in the
+//! analyses (mitcad#620), draft analyses (mitcad#2166), point cloud
+//! deviations (mitcad#2240), minimum radius analyses (mitcad#2518),
+//! minimum distances (mitcad#2519) and the
+//! surface quality analyses Zebra, Curvature Map, Isocurve Analysis and
+//! Environment Map (mitcad#2517, `surface_analyses.rs`), listed in the
 //! browser's Analysis folder and saved in the design file. They change no
 //! geometry: adding, editing, renaming, showing, hiding and deleting one is
 //! an undo step that recomputes nothing.
@@ -61,6 +64,19 @@ pub enum AnalysisDef {
     /// A point cloud's points by their distance from a body's faces
     /// (mitcad#2240).
     PointCloudDeviation(super::PointCloudDeviation),
+    /// The smallest radius of curvature of faces, and the faces under a
+    /// limit (mitcad#2518).
+    MinRadius(MinRadiusAnalysis),
+    /// The smallest distance between two selections, with a clearance
+    /// (mitcad#2519).
+    MinimumDistance(MinimumDistanceAnalysis),
+    /// Surface quality analyses (mitcad#2517, `surface_analyses.rs`):
+    /// stripes from a direction, the faces colored by their curvature,
+    /// their iso curves, and an environment reflected in them.
+    Zebra(super::ZebraAnalysis),
+    Curvature(super::CurvatureAnalysis),
+    Isocurve(super::IsocurveAnalysis),
+    Environment(super::EnvironmentAnalysis),
 }
 
 impl AnalysisDef {
@@ -71,7 +87,80 @@ impl AnalysisDef {
             Self::Print(_) => "Print",
             Self::Draft(_) => "Draft",
             Self::PointCloudDeviation(_) => "Deviation",
+            Self::MinRadius(_) => "MinRadius",
+            Self::MinimumDistance(_) => "MinDistance",
+            Self::Zebra(_) => "Zebra",
+            Self::Curvature(_) => "Curvature",
+            Self::Isocurve(_) => "Isocurves",
+            Self::Environment(_) => "Environment",
         }
+    }
+}
+
+/// A Minimum Distance analysis (mitcad#2519): the smallest distance between
+/// two selections, each one or more picks of bodies, faces, edges,
+/// vertices and components, measured as the `measure` query measures two
+/// picks (the kernel's exact distance, in the design's coordinates) and
+/// kept, so that it is measured again whenever the model changes. A pick
+/// is a [`MeasurePick`] with a `body` (and a `face`, `edge` or `vertex` of
+/// it), or with only an `occurrence`: a component as placed there, every
+/// body in it and in the components inside it. With a `clearance` the
+/// analysis says whether the selections come closer than it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimumDistanceAnalysis {
+    pub first: Vec<super::MeasurePick>,
+    pub second: Vec<super::MeasurePick>,
+    /// mm, greater than zero; none: no clearance checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<f64>,
+}
+
+impl MinimumDistanceAnalysis {
+    /// Why the settings cannot be kept, if they cannot (not the geometry).
+    fn check(&self) -> Result<(), String> {
+        if self.first.is_empty() {
+            return Err("the minimum distance needs a first selection".to_owned());
+        }
+        if self.second.is_empty() {
+            return Err("the minimum distance needs a second selection".to_owned());
+        }
+        for pick in self.first.iter().chain(&self.second) {
+            check_distance_pick(pick)?;
+        }
+        if let Some(clearance) = self.clearance {
+            check_clearance(clearance)?;
+        }
+        Ok(())
+    }
+}
+
+/// Why a pick cannot be one side of a minimum distance (mitcad#2519): a
+/// datum, a face, edge or vertex without its body, or nothing at all.
+pub fn check_distance_pick(pick: &super::MeasurePick) -> Result<(), String> {
+    if pick.datum.is_some() {
+        return Err(
+            "a minimum distance is measured between bodies, faces, edges, vertices and \
+             components, not datums"
+                .to_owned(),
+        );
+    }
+    let named = pick.face.is_some() || pick.edge.is_some() || pick.vertex.is_some();
+    match (pick.body, &pick.occurrence) {
+        (None, _) if named => Err("a face, edge or vertex needs its body".to_owned()),
+        (None, None) => Err("a pick needs a body, or a component's occurrence".to_owned()),
+        _ => Ok(()),
+    }
+}
+
+/// Why a clearance (mm) is not one: finite and greater than zero.
+pub fn check_clearance(clearance: f64) -> Result<(), String> {
+    if clearance > 0.0 && clearance.is_finite() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the clearance must be greater than zero, got {clearance}"
+        ))
     }
 }
 
@@ -131,6 +220,90 @@ pub fn check_draft_angle(angle: f64) -> Result<(), String> {
     } else {
         Err(format!(
             "the draft angle must be from 0 to less than 90 degrees, got {angle}"
+        ))
+    }
+}
+
+/// A Minimum Radius analysis (mitcad#2518): the smallest radius of
+/// curvature (one over the largest principal curvature,
+/// [`Kernel::face_curvatures`]) of every face of `bodies` and of the faces
+/// `faces`, and where it is; with a `limit`, the faces whose smallest
+/// radius is under it (a milling tool's radius). A face that does not bend
+/// has none. The faces are named by their topological names, as a Point
+/// Cloud Deviation's; the bodies are analysed where Print Analysis analyses
+/// them ([`Document::print_placements`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinRadiusAnalysis {
+    /// Bodies whose every face is analysed.
+    #[serde(default)]
+    pub bodies: Vec<BodyUid>,
+    /// Faces analysed besides those of `bodies`: face references of any
+    /// body (`{"body": "F2.b0", "face": "F2:side0"}`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<GeomRef>,
+    /// The faces whose smallest radius is under this (mm) are marked;
+    /// none: no face is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<f64>,
+}
+
+impl MinRadiusAnalysis {
+    /// Why the settings cannot be kept, if they cannot (not the geometry).
+    fn check(&self) -> Result<(), String> {
+        if self.bodies.is_empty() && self.faces.is_empty() {
+            return Err("the minimum radius analysis needs a body or a face".to_owned());
+        }
+        if let Some(face) = self
+            .faces
+            .iter()
+            .find(|face| !matches!(face, GeomRef::Face { .. }))
+        {
+            return Err(face.error(|what| format!("{what} is not a face of a body")));
+        }
+        match self.limit {
+            Some(limit) => check_min_radius_limit(limit),
+            None => Ok(()),
+        }
+    }
+
+    /// The bodies analysed, each once: those of `bodies`, then those of
+    /// `faces` not among them, in order; with each the faces named of it
+    /// (empty: every face).
+    pub fn targets(&self) -> Vec<(BodyUid, Vec<crate::topo::FaceName>)> {
+        let mut targets: Vec<(BodyUid, Vec<crate::topo::FaceName>)> = Vec::new();
+        for body in &self.bodies {
+            if !targets.iter().any(|(b, _)| b == body) {
+                targets.push((*body, Vec::new()));
+            }
+        }
+        for reference in &self.faces {
+            let GeomRef::Face { body, face } = reference else {
+                continue;
+            };
+            if self.bodies.contains(body) {
+                continue; // every face of it already
+            }
+            match targets.iter_mut().find(|(b, _)| b == body) {
+                Some((_, faces)) => {
+                    if !faces.contains(face) {
+                        faces.push(face.clone());
+                    }
+                }
+                None => targets.push((*body, vec![face.clone()])),
+            }
+        }
+        targets
+    }
+}
+
+/// Why a minimum radius analysis' limit (mm) is not one: greater than zero.
+pub fn check_min_radius_limit(limit: f64) -> Result<(), String> {
+    if limit > 0.0 && limit.is_finite() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the radius limit must be greater than zero, got {limit}"
         ))
     }
 }
@@ -485,6 +658,33 @@ impl Analysis {
                     .check()
                     .map_err(|e| format!("{}: {e}", self.name))?;
             }
+            AnalysisDef::MinRadius(radius) => {
+                radius.check().map_err(|e| format!("{}: {e}", self.name))?;
+            }
+            AnalysisDef::MinimumDistance(distance) => {
+                distance
+                    .check()
+                    .map_err(|e| format!("{}: {e}", self.name))?;
+            }
+            // mitcad#2517
+            AnalysisDef::Zebra(zebra) => {
+                zebra.check().map_err(|e| format!("{}: {e}", self.name))?;
+            }
+            AnalysisDef::Curvature(curvature) => {
+                curvature
+                    .check()
+                    .map_err(|e| format!("{}: {e}", self.name))?;
+            }
+            AnalysisDef::Isocurve(isocurve) => {
+                isocurve
+                    .check()
+                    .map_err(|e| format!("{}: {e}", self.name))?;
+            }
+            AnalysisDef::Environment(environment) => {
+                environment
+                    .check()
+                    .map_err(|e| format!("{}: {e}", self.name))?;
+            }
         }
         Ok(())
     }
@@ -743,6 +943,36 @@ impl<K: Kernel> Document<K> {
                                 value["error"] = json!(error);
                             }
                         }
+                        // Why a body or a face is not there (mitcad#2518).
+                        AnalysisDef::MinRadius(radius) => {
+                            if let Err(error) = self.min_radius_check(radius) {
+                                value["error"] = json!(error);
+                            }
+                        }
+                        // Why a body or a component is not there
+                        // (mitcad#2519); its distance is the
+                        // `minimum_distance` query's.
+                        AnalysisDef::MinimumDistance(distance) => {
+                            if let Err(error) = self.minimum_distance_check(distance) {
+                                value["error"] = json!(error);
+                            }
+                        }
+                        // The stripes' direction at the marker, or why a
+                        // body or the direction is not there (mitcad#2517).
+                        AnalysisDef::Zebra(zebra) => match self.zebra_direction(zebra) {
+                            Ok(direction) => value["stripe_direction"] = json!(direction),
+                            Err(error) => value["error"] = json!(error),
+                        },
+                        // Why a body is not there (mitcad#2517).
+                        AnalysisDef::Curvature(_)
+                        | AnalysisDef::Isocurve(_)
+                        | AnalysisDef::Environment(_) => {
+                            if let Some((bodies, faces)) = analysis.def.surface_inputs()
+                                && let Err(error) = self.surface_targets(bodies, faces)
+                            {
+                                value["error"] = json!(error);
+                            }
+                        }
                     }
                     value
                 })
@@ -770,6 +1000,79 @@ impl<K: Kernel> Document<K> {
                 self.point_cloud_deviation_check(deviation)
                     .map_err(|e| invalid(format!("the deviation: {e}")))?;
             }
+            AnalysisDef::MinRadius(radius) => {
+                self.min_radius_check(radius)
+                    .map_err(|e| invalid(format!("the minimum radius analysis: {e}")))?;
+            }
+            AnalysisDef::MinimumDistance(distance) => {
+                self.minimum_distance_check(distance)
+                    .map_err(|e| invalid(format!("the minimum distance: {e}")))?;
+            }
+            // mitcad#2517
+            AnalysisDef::Zebra(zebra) => {
+                self.zebra_direction(zebra)
+                    .map_err(|e| invalid(format!("the zebra analysis: {e}")))?;
+            }
+            AnalysisDef::Curvature(_) | AnalysisDef::Isocurve(_) | AnalysisDef::Environment(_) => {
+                if let Some((bodies, faces)) = def.surface_inputs() {
+                    self.surface_targets(bodies, faces)
+                        .map_err(|e| invalid(format!("the surface analysis: {e}")))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Why a minimum radius analysis' bodies or faces are not there at the
+    /// marker, if they are not (mitcad#2518).
+    pub fn min_radius_check(&self, def: &MinRadiusAnalysis) -> Result<(), String> {
+        for (body, faces) in def.targets() {
+            let Some(shape) = self.body_shape(body) else {
+                return Err(format!("body {body} does not exist at the timeline marker"));
+            };
+            for face in &faces {
+                // A kernel that cannot count faces leaves it to the query.
+                if self.kernel().count_faces(shape, face).is_ok_and(|n| n == 0) {
+                    return Err(format!(
+                        "body {body} has no face {face} at the timeline marker"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Why a minimum distance's picks are not there at the marker
+    /// (mitcad#2519): a body that does not exist, a component's occurrence
+    /// that does not, or a pick's occurrence that does not place its body.
+    /// Its faces, edges and vertices are looked for when it is measured.
+    pub fn minimum_distance_check(&self, distance: &MinimumDistanceAnalysis) -> Result<(), String> {
+        for pick in distance.first.iter().chain(&distance.second) {
+            check_distance_pick(pick)?;
+            match (pick.body, &pick.occurrence) {
+                (Some(body), occurrence) => {
+                    if self.body_shape(body).is_none() {
+                        return Err(format!("body {body} does not exist at the timeline marker"));
+                    }
+                    if let Some(path) = occurrence {
+                        let component =
+                            path_component(self.assembly(), ComponentUid::ROOT, &path.0)?;
+                        if self
+                            .body_component(body)
+                            .is_some_and(|owner| owner != component)
+                        {
+                            return Err(format!("occurrence {path} does not place body {body}"));
+                        }
+                    }
+                }
+                (None, Some(path)) => {
+                    path_component(self.assembly(), ComponentUid::ROOT, &path.0)?;
+                }
+                (None, None) => {}
+            }
+        }
+        if let Some(clearance) = distance.clearance {
+            check_clearance(clearance)?;
         }
         Ok(())
     }

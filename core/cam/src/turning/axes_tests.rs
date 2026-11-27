@@ -22,6 +22,7 @@ fn station(number: u32) -> TurningTool {
         kind: TurningToolKind::Live,
         nose_radius: 0.0,
         max_depth: 10.0,
+        back_angle: None,
     }
 }
 
@@ -427,6 +428,7 @@ fn hand_over_program() -> TurningProgram {
         kind: TurningToolKind::Parting { width: 3.0 },
         nose_radius: 0.0,
         max_depth: 15.0,
+        back_angle: None,
     };
     let turning = TurningTool {
         number: 1,
@@ -435,6 +437,7 @@ fn hand_over_program() -> TurningProgram {
         kind: TurningToolKind::Turning,
         nose_radius: 0.0,
         max_depth: 4.0,
+        back_angle: None,
     };
     let mut program = TurningProgram::new("Pin", [50.0, 50.0]);
     program.hand_over = Some(HandOver {

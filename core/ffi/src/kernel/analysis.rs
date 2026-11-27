@@ -191,13 +191,17 @@ pub mod ffi {
 
         /// The bodies together against a STEP file's bodies: all of them
         /// with an empty `step_body`, else the one with that name, or that
-        /// 0-based index.
+        /// 0-based index; for at most `seconds` (0: no limit), without the
+        /// boolean differences when no sample lies farther than
+        /// `booleans_above` (0: always with them).
         fn analysis_compare_step(
             bodies: &ShapeList,
             path: &str,
             step_body: &str,
             samples: usize,
             fuzzy: f64,
+            seconds: f64,
+            booleans_above: f64,
         ) -> Result<AnalysisComparison>;
 
         // .f3d import (T1).

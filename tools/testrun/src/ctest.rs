@@ -108,6 +108,88 @@ pub fn parse_tests(json: &str) -> Result<Vec<TestDef>, String> {
     Ok(defs)
 }
 
+/// The tests a list of names selects (`--tests-from`, mitcad#2579), and
+/// the names the listing does not have.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Named {
+    pub tests: Vec<TestDef>,
+    pub missing: Vec<String>,
+}
+
+/// The names of a test list: one exact test name a line; empty lines are
+/// left out and a line's ends trimmed (a list written on Windows).
+pub fn read_names(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The tests of the listing that the list names, in the listing's order,
+/// with the tests that set up or clean up the fixtures they require (as
+/// ctest adds them to a `-R` selection; a setup's own fixtures too). A
+/// list that names no test, or none of the listing's, is refused: a run
+/// that was to run tests never passes by running none.
+pub fn select_named(defs: Vec<TestDef>, names: &[String]) -> Result<Named, String> {
+    use std::collections::HashSet;
+    if names.is_empty() {
+        return Err("the test list names no tests".into());
+    }
+    let wanted: HashSet<&str> = names.iter().map(String::as_str).collect();
+    let mut keep: Vec<bool> = defs
+        .iter()
+        .map(|def| wanted.contains(def.name.as_str()))
+        .collect();
+    let named = keep.iter().filter(|&&k| k).count();
+    if named == 0 {
+        return Err(format!(
+            "none of the {} tests of the test list is in the build tree's selection",
+            wanted.len()
+        ));
+    }
+    // The fixtures' setup and cleanup tests, until no more join.
+    loop {
+        let required: HashSet<&str> = defs
+            .iter()
+            .zip(&keep)
+            .filter(|pair| *pair.1)
+            .flat_map(|(def, _)| def.fixtures_required.iter().map(String::as_str))
+            .collect();
+        let mut added = false;
+        for (def, k) in defs.iter().zip(keep.iter_mut()) {
+            if *k {
+                continue;
+            }
+            let serves = def
+                .fixtures_setup
+                .iter()
+                .chain(&def.fixtures_cleanup)
+                .any(|f| required.contains(f.as_str()));
+            if serves {
+                *k = true;
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    let listed: HashSet<&str> = defs.iter().map(|def| def.name.as_str()).collect();
+    let mut missing: Vec<String> = Vec::new();
+    for name in names {
+        if !listed.contains(name.as_str()) && !missing.contains(name) {
+            missing.push(name.clone());
+        }
+    }
+    let tests = defs
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(def, k)| k.then_some(def))
+        .collect();
+    Ok(Named { tests, missing })
+}
+
 /// The test name as a regular expression that matches only it.
 pub fn exact_regex(name: &str) -> String {
     let mut out = String::from("^");
@@ -308,6 +390,91 @@ mod tests {
             assert_eq!(parse_status(line, "t"), None, "{line}");
         }
         assert_eq!(parse_status("No tests were found!!!", "t.x"), None);
+    }
+
+    fn def(name: &str) -> TestDef {
+        TestDef {
+            name: name.to_owned(),
+            available: true,
+            ..TestDef::default()
+        }
+    }
+
+    fn names_of(tests: &[TestDef]) -> Vec<&str> {
+        tests.iter().map(|t| t.name.as_str()).collect()
+    }
+
+    #[test]
+    fn test_lists_are_read() {
+        let names = read_names("core.model\r\n\n  app.unit  \nx.y\n");
+        assert_eq!(names, ["core.model", "app.unit", "x.y"]);
+        assert!(read_names("\n \n").is_empty());
+    }
+
+    #[test]
+    fn a_list_selects_its_tests_and_their_fixtures() {
+        let mut build = def("core.cargo_build");
+        build.fixtures_setup = vec!["cargo".into()];
+        let mut prepare = def("data.prepare");
+        prepare.fixtures_setup = vec!["data".into()];
+        prepare.fixtures_required = vec!["cargo".into()];
+        let mut tidy = def("data.tidy");
+        tidy.fixtures_cleanup = vec!["data".into()];
+        let mut model = def("core.model");
+        model.fixtures_required = vec!["data".into()];
+        let defs = vec![
+            build,
+            def("core.other"),
+            prepare,
+            model,
+            tidy,
+            def("app.unit"),
+        ];
+        let names = read_names("app.unit\ncore.model\nno.such\napp.unit\n");
+        let named = select_named(defs.clone(), &names).unwrap();
+        // The listing's order; the fixtures' setups (a setup's own too) and
+        // cleanup joined, the tests the list does not name left out.
+        assert_eq!(
+            names_of(&named.tests),
+            [
+                "core.cargo_build",
+                "data.prepare",
+                "core.model",
+                "data.tidy",
+                "app.unit"
+            ]
+        );
+        assert_eq!(named.missing, ["no.such"]);
+        // A test without fixtures alone.
+        let named = select_named(defs.clone(), &["core.other".to_owned()]).unwrap();
+        assert_eq!(names_of(&named.tests), ["core.other"]);
+        assert!(named.missing.is_empty());
+    }
+
+    #[test]
+    fn an_empty_or_unmatched_list_is_refused() {
+        let defs = vec![def("a.b"), def("c.d")];
+        assert!(select_named(defs.clone(), &[]).is_err());
+        assert!(select_named(defs.clone(), &read_names("\n\n")).is_err());
+        assert!(select_named(defs, &read_names("x.y\nz\n")).is_err());
+        // An empty listing (ctest selected nothing) too.
+        assert!(select_named(Vec::new(), &read_names("a.b\n")).is_err());
+    }
+
+    #[test]
+    fn a_long_list_selects_every_test() {
+        // A scoped check's plan of 1500 tests (mitcad#2579: one joined
+        // `-R` expression of about 1400 names was too big for ctest).
+        let defs: Vec<TestDef> = (0..1600)
+            .map(|i| def(&format!("group{}.test_{i}", i % 7)))
+            .collect();
+        let text: String = (0..1500)
+            .map(|i| format!("group{}.test_{i}\n", i % 7))
+            .collect();
+        let named = select_named(defs, &read_names(&text)).unwrap();
+        assert_eq!(named.tests.len(), 1500);
+        assert!(named.missing.is_empty());
+        assert_eq!(named.tests[1499].name, "group1.test_1499");
     }
 
     #[test]

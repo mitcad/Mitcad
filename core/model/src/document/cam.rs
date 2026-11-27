@@ -1085,6 +1085,23 @@ impl<K: Kernel> Document<K> {
             });
             let _ = serde_json::to_writer(&mut f, &(bigger, left));
         }
+        // A finish into undercuts follows the roughings of its side before
+        // it on its spindle (mitcad#2549): what they leave decides whether
+        // an undercut deeper than its insert cuts is refused. Their own
+        // fingerprints (the roughing, its tool, its allowances and the
+        // part), in order; suppressing, moving or editing one changes it.
+        if let OperationKind::TurnFinish { side, plunge } = &op.kind
+            && !plunge.is_none()
+        {
+            for earlier in setup.operations.iter().take_while(|o| o.id != op.id) {
+                if !earlier.suppressed
+                    && earlier.sub_spindle == op.sub_spindle
+                    && matches!(&earlier.kind, OperationKind::TurnRough { side: s, .. } if s == side)
+                {
+                    f.u128(self.cam_fingerprint(setup, sf, machine, earlier));
+                }
+            }
+        }
         // A 3-axis operation without bodies of its own machines the
         // setup's: their versions and placements.
         // So does an operation on a lathe: the turned part is the bodies'.
@@ -1328,6 +1345,18 @@ impl<K: Kernel> Document<K> {
         if let WcsOrigin::Point { at, occurrence } = &setup.wcs.origin {
             self.cam_point(at, occurrence).map_err(invalid)?;
         }
+        // Each manual G-code block after an operation of the setup
+        // (mitcad#2506).
+        for block in setup.lathe.iter().flat_map(|l| &l.manual_code) {
+            if let Some(after) = block.after
+                && !setup.operations.iter().any(|o| o.id == after)
+            {
+                return Err(invalid(format!(
+                    "The manual G-code {} follows an operation the setup does not have.",
+                    block.name
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -1502,6 +1531,7 @@ impl<K: Kernel> Document<K> {
             lathe: None,
         };
         input.apply(&mut setup);
+        crate::cam::check_dialect(setup.dialect.as_deref()).map_err(invalid)?;
         self.check_cam_setup(&cam, &setup)?;
         cam.setups.push(setup);
         self.commit_cam(cam, "Add CAM Setup", id)
@@ -1520,6 +1550,11 @@ impl<K: Kernel> Document<K> {
         let index = self.cam_setup_index(setup)?;
         let mut cam = self.state.cam.clone();
         let mut edited = cam.setups[index].clone();
+        // A dialect is checked when it is set: one the design was read with
+        // stays through other edits (mitcad#2531).
+        if let Some(dialect) = &input.dialect {
+            crate::cam::check_dialect(dialect.as_deref()).map_err(invalid)?;
+        }
         input.apply(&mut edited);
         self.check_cam_setup(&cam, &edited)?;
         cam.setups[index] = edited;
@@ -1655,6 +1690,8 @@ impl<K: Kernel> Document<K> {
     pub fn delete_cam_operation(&mut self, operation: u32) -> Result<(), ModelError> {
         let (s, o) = self.cam_operation_index(operation)?;
         let mut cam = self.state.cam.clone();
+        // The manual G-code after it stays where it was (mitcad#2506).
+        cam.setups[s].operation_leaves(o);
         cam.setups[s].operations.remove(o);
         self.commit_cam(cam, "Delete CAM Operation", ())
     }
@@ -1673,6 +1710,11 @@ impl<K: Kernel> Document<K> {
             None => s,
         };
         let mut cam = self.state.cam.clone();
+        // Into another setup, the manual G-code after it stays where it
+        // was; within its setup it moves with it (mitcad#2506).
+        if target != s {
+            cam.setups[s].operation_leaves(o);
+        }
         let moved = cam.setups[s].operations.remove(o);
         if target != s {
             if cam.setups[target].operations.len() >= MAX_OPERATIONS {

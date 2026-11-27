@@ -14,7 +14,7 @@ use std::f64::consts::TAU;
 
 use mitcad_vec3::vec2::distance as dist;
 
-use super::flat::FlatBend;
+use super::flat::{FlatBend, FlatLine};
 use super::process::{OutputPreset, SheetProcess};
 use super::{BoundedCurve2Ext, MaterialRegion};
 use crate::expr::LengthUnit;
@@ -30,6 +30,9 @@ pub const BEND_UP: &str = "BEND_UP";
 pub const BEND_DOWN: &str = "BEND_DOWN";
 /// Tangent lines at both ends of each bend allowance (optional).
 pub const BEND_TANGENT: &str = "BEND_TANGENT";
+/// A Lofted Flange's lines where its flat regions meet regions formed
+/// smooth (mitcad#2512).
+pub const FACET_LINE: &str = "FACET_LINE";
 
 /// What a Flat Pattern drawing holds and how it is written.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,6 +42,9 @@ pub struct FlatDxfOptions {
     pub unit: LengthUnit,
     /// Also the tangent lines of the bends.
     pub tangents: bool,
+    /// Also the fold lines of a pattern laid flat by triangulation, as
+    /// bend lines (mitcad#2442).
+    pub folds: bool,
     /// The sheet's process profile, whose output preset names the layers
     /// (mitcad#1939): metal's as they always were.
     pub process: SheetProcess,
@@ -49,6 +55,7 @@ impl Default for FlatDxfOptions {
         Self {
             unit: LengthUnit::Millimetre,
             tangents: false,
+            folds: false,
             process: SheetProcess::Metal,
         }
     }
@@ -164,6 +171,17 @@ pub fn drawing(
     bends: &[FlatBend],
     options: &FlatDxfOptions,
 ) -> Result<mitcad_dxf::Drawing, String> {
+    drawing_with_facets(regions, bends, &[], options)
+}
+
+/// [`drawing`] with a Lofted Flange's facet lines (mitcad#2512) on the
+/// layer [`FACET_LINE`], which the drawing has when there are some.
+pub fn drawing_with_facets(
+    regions: &[MaterialRegion],
+    bends: &[FlatBend],
+    facets: &[FlatLine],
+    options: &FlatDxfOptions,
+) -> Result<mitcad_dxf::Drawing, String> {
     use mitcad_dxf::Layer;
 
     let preset = OutputPreset::of(options.process);
@@ -220,6 +238,16 @@ pub fn drawing(
             ));
         }
     }
+    for (i, line) in facets.iter().enumerate() {
+        curves.push((
+            FACET_LINE.to_owned(),
+            format!("facet line {i}"),
+            SegmentGeometry::Line {
+                start: line.start,
+                end: line.end,
+            },
+        ));
+    }
     let mut drawing = crate::exchange::sketch_drawing(
         curves
             .iter()
@@ -238,6 +266,9 @@ pub fn drawing(
     }
     if options.tangents {
         names.push(BEND_TANGENT);
+    }
+    if !facets.is_empty() {
+        names.push(FACET_LINE);
     }
     drawing.layers = names
         .into_iter()

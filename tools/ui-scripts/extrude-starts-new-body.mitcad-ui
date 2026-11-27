@@ -12,6 +12,7 @@ mark
 command solid.extrude
 expect-log 'Extrude Profiles: 1 profile '
 expect-log 'Extrude: automatic operation off by preference'
+type-in '^Panel Extrude input distance at ' '10 mm'
 expect-log 'Preview Extrude: ok' 30
 wait-idle
 expect-no-log 'Extrude: automatic Operation'
@@ -35,6 +36,7 @@ mark
 command solid.extrude
 expect-log 'Extrude Profiles: 1 profile '
 expect-log 'Extrude: automatic operation off by preference'
+type-in '^Panel Extrude input distance at ' '10 mm'
 expect-log 'Preview Extrude: ok' 30
 mark
 focus-widget input_distance

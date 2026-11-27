@@ -51,6 +51,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/faceops.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -230,7 +231,7 @@ void test_round_notches() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(shell_notched_cone) {
   test::guarded("test_box_notch", test::test_box_notch);
   test::guarded("test_round_notches", test::test_round_notches);
   if (test::failures == 0) {

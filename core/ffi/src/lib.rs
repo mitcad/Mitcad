@@ -113,6 +113,8 @@ use mcp::{
 use mcp::{mcp_check_refs, mcp_resolve_entry};
 // Live MCP's print libraries with the user's preference (mitcad#2224).
 use mcp::mcp_uses_print_library;
+// Live MCP's long queries as model jobs (mitcad#2540).
+use mcp::mcp_query_job;
 // The rolled-back features evaluated in the background (mitcad#1267).
 mod background;
 use background::BackgroundRun;
@@ -258,6 +260,9 @@ mod ffi {
         fn set_mcp_print_library_policy(self: &mut LiveMcpSession, allowed: bool);
         /// Whether a command uses the print libraries (mitcad#2224).
         fn mcp_uses_print_library(request: &str) -> bool;
+        /// The name of a live query that runs as a model job (mitcad#2540),
+        /// empty for one read inline.
+        fn mcp_query_job(request: &str) -> String;
         /// Guided tutorials (mitcad#2012): the live guide step resource (the
         /// notification to send, or empty).
         fn set_mcp_guide(self: &mut LiveMcpSession, state: &str) -> Result<String>;

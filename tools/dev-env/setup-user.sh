@@ -22,6 +22,26 @@ if [ "$(id -u)" = 0 ]; then
   exit 1
 fi
 
+# The machine's architecture: x86-64, or aarch64 (Linux on 64-bit ARM:
+# Qt's linux_arm64 build, sccache's aarch64 build, and the render worker
+# without CUDA; CMakeLists.txt takes vcpkg's arm64-linux-dynamic there).
+case "$(uname -m)" in
+  x86_64)
+    SCCACHE_ARCH=x86_64 SCCACHE_SHA256=$SCCACHE_LINUX_X86_64_SHA256
+    QT_HOST=linux QT_ARCH=linux_gcc_64 QT_DIR=gcc_64
+    ;;
+  aarch64)
+    SCCACHE_ARCH=aarch64 SCCACHE_SHA256=$SCCACHE_LINUX_AARCH64_SHA256
+    QT_HOST=linux_arm64 QT_ARCH=linux_gcc_arm64 QT_DIR=gcc_arm64
+    # vcpkg's tool takes the system's CMake and Ninja on ARM Linux.
+    export VCPKG_FORCE_SYSTEM_BINARIES=${VCPKG_FORCE_SYSTEM_BINARIES:-1}
+    ;;
+  *)
+    echo "setup-user.sh: Linux on x86-64 or aarch64 only, not $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
 # The toolchain pinned in rust-toolchain.toml, with its components, so that
 # rustup has nothing to download during builds and tests.
 RUST_TOOLCHAIN=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$REPO/rust-toolchain.toml")
@@ -51,11 +71,11 @@ fi
 # and MITCAD_SCCACHE_DIR on a large build disk rather than a small home.
 echo "== sccache $SCCACHE_LINUX_VERSION"
 if [ "$("$HOME/.local/bin/sccache" --version 2> /dev/null || true)" != "sccache $SCCACHE_LINUX_VERSION" ]; then
-  name=sccache-v$SCCACHE_LINUX_VERSION-x86_64-unknown-linux-musl
+  name=sccache-v$SCCACHE_LINUX_VERSION-$SCCACHE_ARCH-unknown-linux-musl
   work=$(mktemp -d)
   curl -sSfL -o "$work/$name.tar.gz" \
     "https://github.com/mozilla/sccache/releases/download/v$SCCACHE_LINUX_VERSION/$name.tar.gz"
-  echo "$SCCACHE_LINUX_X86_64_SHA256  $work/$name.tar.gz" | sha256sum -c --quiet
+  echo "$SCCACHE_SHA256  $work/$name.tar.gz" | sha256sum -c --quiet
   tar -xzf "$work/$name.tar.gz" -C "$work"
   mkdir -p "$HOME/.local/bin"
   install -m 755 "$work/$name/sccache" "$HOME/.local/bin/sccache"
@@ -81,17 +101,17 @@ git -C "$HOME/vcpkg" checkout --quiet "$VCPKG_COMMIT"
 "$HOME/vcpkg/bootstrap-vcpkg.sh" -disableMetrics > /dev/null
 
 echo "== Qt $QT_VERSION"
-if [ ! -d "$HOME/Qt/$QT_VERSION/gcc_64" ]; then
+if [ ! -d "$HOME/Qt/$QT_VERSION/$QT_DIR" ]; then
   python3 -m venv "$HOME/tools/aqt"
   "$HOME/tools/aqt/bin/pip" install --quiet "$AQT_SPEC"
-  (cd /tmp && "$HOME/tools/aqt/bin/aqt" install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
+  (cd /tmp && "$HOME/tools/aqt/bin/aqt" install-qt "$QT_HOST" desktop "$QT_VERSION" "$QT_ARCH" \
     -O "$HOME/Qt" > /dev/null)
 fi
 # The interface languages (mitcad#1460) need Qt's Linguist tools (lrelease,
 # lupdate) and Qt's translations (qtbase_<code>.qm), which aqt's base
 # install has (qttools, qttranslations).
 for file in bin/lrelease bin/lupdate translations/qtbase_fi.qm; do
-  [ -e "$HOME/Qt/$QT_VERSION/gcc_64/$file" ] || { echo "Qt $QT_VERSION has no $file" >&2; exit 1; }
+  [ -e "$HOME/Qt/$QT_VERSION/$QT_DIR/$file" ] || { echo "Qt $QT_VERSION has no $file" >&2; exit 1; }
 done
 # The Chromium Embedded Framework of the web browser component (Insert >
 # Component from Web, mitcad#1579): the pinned distribution, named in the
@@ -109,8 +129,9 @@ echo "export MITCAD_CEF_ROOT=\"$CEF_ROOT\"" >> "$HOME/.profile"
 # which the releases need; MITCAD_RENDER_CUDA=0 leaves them out on a
 # development machine that does not want the kernels' build (about 10
 # minutes).
+# No CUDA on aarch64 (build-cycles.sh: the CPU device only there).
 CYCLES_ARGS=()
-[ "${MITCAD_RENDER_CUDA:-1}" = 0 ] || CYCLES_ARGS+=(--cuda)
+[ "${MITCAD_RENDER_CUDA:-1}" = 0 ] || [ "$SCCACHE_ARCH" = aarch64 ] || CYCLES_ARGS+=(--cuda)
 echo "== The render worker's libraries (build-cycles.sh ${CYCLES_ARGS[*]})"
 "$SCRIPT_DIR/build-cycles.sh" "${CYCLES_ARGS[@]}"
 
@@ -137,7 +158,7 @@ if [ ! -f "$REPO/CMakeUserPresets.json" ]; then
       "inherits": "linux-debug",
       "environment": {
         "VCPKG_ROOT": "\$penv{HOME}/vcpkg",
-        "QT_ROOT_DIR": "\$penv{HOME}/Qt/$QT_VERSION/gcc_64"
+        "QT_ROOT_DIR": "\$penv{HOME}/Qt/$QT_VERSION/$QT_DIR"
       }
     }
   ],

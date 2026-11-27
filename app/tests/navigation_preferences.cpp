@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: MIT
 #include "UnitTests.hpp"
+#include <algorithm>
 #include <cstdio>
+#include <memory>
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QLabel>
+#include <QMargins>
 #include <QPoint>
 #include <QPushButton>
+#include <QRect>
 #include <QSlider>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
+#include <QVBoxLayout>
 
 #include "view/NavigationPreferences.hpp"
 
@@ -298,6 +306,80 @@ int navigationPreferencesTests() {
     if (reopenedHorizon) reopenedHorizon->setChecked(false);
     CHECK(reopenedChanges == 1 && !reopened.chosen().spaceMouse.lockRotation &&
           reopened.chosen().spaceMouse.buttons == outside.buttons);
+  }
+
+  // The Navigation group in Preferences (mitcad#2561, GitHub
+  // mitcad/Mitcad#738): its tabs stand as far inside the group's frame as
+  // a neighbouring group's form does, on the sides and below, in the
+  // dialog's titled group and in the Settings window's plain area; the
+  // bindings table keeps its minimum in the lowest group and takes the
+  // height a taller one gives.
+  for (const bool titled : {true, false}) {
+    std::unique_ptr<QWidget> group(titled ? new QGroupBox(QStringLiteral("Navigation")) : new QWidget);
+    auto* groupLayout = new QVBoxLayout(group.get());
+    insetPreferencesGroup(groupLayout, titled);
+    auto* page = new NavigationPreferences(initial, schemes);
+    groupLayout->addWidget(page);
+    std::unique_ptr<QWidget> neighbour(titled ? new QGroupBox(QStringLiteral("Assembly")) : new QWidget);
+    auto* neighbourForm = new QFormLayout(neighbour.get());
+    auto* neighbourChoice = new QComboBox;
+    neighbourChoice->addItem(QStringLiteral("Ask"));
+    neighbourForm->addRow(QStringLiteral("Joints:"), neighbourChoice);
+    const QMargins expected = neighbourForm->contentsMargins();
+    const QMargins inset = groupLayout->contentsMargins();
+    CHECK(expected.left() > 0 && expected.right() > 0 && expected.bottom() > 0);
+    CHECK(inset.left() == expected.left() && inset.right() == expected.right() &&
+          inset.bottom() == expected.bottom());
+    CHECK(inset.top() == (titled ? 0 : expected.top()));
+
+    group->setAttribute(Qt::WA_DontShowOnScreen);
+    neighbour->setAttribute(Qt::WA_DontShowOnScreen);
+    neighbour->resize(900, neighbour->sizeHint().height());
+    neighbour->show();
+    // As low as a Preferences page goes: its wrapped labels counted at
+    // this width (PreferencesPageContent, mitcad#1400).
+    group->resize(900, std::max(group->minimumSizeHint().height(), groupLayout->totalMinimumHeightForWidth(900)));
+    group->show();
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    auto* tabs = page->findChild<QTabWidget*>(QStringLiteral("navigationTabs"));
+    auto* bindingsTable = page->findChild<QTableWidget*>(QStringLiteral("navigationBindings"));
+    auto* shortcuts = page->findChild<QComboBox*>(QStringLiteral("navigationScheme"));
+    CHECK(tabs && bindingsTable && shortcuts);
+    if (!tabs || !bindingsTable || !shortcuts) break;
+    const QRect inside = group->contentsRect();
+    const QRect tabsAt(tabs->mapTo(group.get(), QPoint(0, 0)), tabs->size());
+    // The neighbour's label starts its form's margin inside its frame.
+    auto* neighbourLabel = neighbourForm->labelForField(neighbourChoice);
+    CHECK(neighbourLabel != nullptr);
+    if (neighbourLabel) {
+      CHECK(tabsAt.left() - inside.left() == neighbourLabel->x() - neighbour->contentsRect().left());
+    }
+    CHECK(tabsAt.left() - inside.left() >= expected.left());
+    CHECK(inside.right() - tabsAt.right() >= expected.right());
+    CHECK(inside.bottom() - tabsAt.bottom() >= expected.bottom());
+    CHECK(shortcuts->mapTo(group.get(), QPoint(0, 0)).x() - inside.left() >= expected.left());
+    // The lowest group: the table at its minimum at least.
+    CHECK(bindingsTable->height() >= NavigationBindingsTable::kMinimumHeight);
+    const int lowest = bindingsTable->height();
+    group->resize(900, group->height() + 160);
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    CHECK(bindingsTable->height() >= lowest + 150);
+    // The 3D Mouse tab inside the same inset.
+    tabs->setCurrentIndex(1);
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    if (QWidget* spacePage = tabs->currentWidget()) {
+      // The group as it is now, 160 px taller: the shown page fills the
+      // taller tabs (on macOS the hidden page already had their size).
+      const QRect taller = group->contentsRect();
+      const QPoint spaceAt = spacePage->mapTo(group.get(), QPoint(0, 0));
+      CHECK(spaceAt.x() - taller.left() >= expected.left());
+      CHECK(taller.right() - (spaceAt.x() + spacePage->width() - 1) >= expected.right());
+      CHECK(taller.bottom() - (spaceAt.y() + spacePage->height() - 1) >= expected.bottom());
+    } else {
+      CHECK(tabs->currentWidget() != nullptr);
+    }
+    group->hide();
+    neighbour->hide();
   }
   return failures;
 }

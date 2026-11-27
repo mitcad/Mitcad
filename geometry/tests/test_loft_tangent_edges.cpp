@@ -36,6 +36,7 @@
 #include "mitcad/geometry/loft.hpp"
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/surface_sweeps.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -433,7 +434,7 @@ void test_surface_loft_of_curves() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(loft_tangent_edges) {
   test::guarded("circle to slot", test::test_circle_to_slot);
   test::guarded("slot first names its first segment", test::test_slot_first_names_its_first_segment);
   test::guarded("three sections", test::test_three_sections);

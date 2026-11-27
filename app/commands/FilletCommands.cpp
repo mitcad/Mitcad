@@ -483,7 +483,19 @@ CommandDef filletCommand(const CommandContext& context) {
       choiceInput(QStringLiteral("corner"), QObject::tr("Corner Type"),
                   {{QStringLiteral("rolling_ball"), QStringLiteral("Rolling Ball")},
                    {QStringLiteral("setback"), QStringLiteral("Setback")}},
-                  QStringLiteral("rolling_ball")),
+                  QStringLiteral("rolling_ball"))
+          // G2 roundings meet in a free-form patch with either corner type
+          // (mitcad#2332).
+          .withRowNote([](const CommandState& state, const CommandContext&) -> QString {
+            for (int i = 0; i < state.rows(kSets); ++i) {
+              const CommandState row = state.row(kSets, i);
+              if (!fullRound(row) && row.choice(QStringLiteral("continuity")) == QStringLiteral("curvature")) {
+                return QObject::tr("G2 roundings meet in a free-form patch, not a ball; Setback starts it "
+                                   "1.5 times the radius from the corner");
+              }
+            }
+            return QString();
+          }),
   };
   def.enabled = [&context] { return hasBodies(context); };
 
@@ -1103,10 +1115,10 @@ CommandDef pressPullCommand(const CommandContext& context) {
               if (std::optional<Manipulator> along = runHandle(state, model)) {
                 return along;
               }
-              const auto frame = frameOf(items.first(), model);
-              const auto center = centerOf({items.first()}, model);
-              if (frame && center) {
-                Manipulator handle = arrow(*center, frame->normal);
+              // Offset: along the face's normal, on a curved face (a
+              // taper's side) from a point on it (mitcad#2478).
+              if (const auto at = faceNormal(items.first(), model)) {
+                Manipulator handle = arrow(at->first, at->second);
                 handle.scale = itemsScale({items.first()}, model);
                 return handle;
               }

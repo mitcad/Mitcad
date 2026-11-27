@@ -295,7 +295,60 @@ void dropRow(QHash<QString, T>& values, const QString& list, int index) {
   values = kept;
 }
 
+// Gives a list's rows their new places (mitcad#2506): row `from` goes to
+// `to`, the rows between shift by one towards `from`.
+template <typename T>
+void placeRow(QHash<QString, T>& values, const QString& list, int from, int to) {
+  const QString prefix = list + QLatin1Char('.');
+  QHash<QString, T> placed;
+  for (auto it = values.cbegin(); it != values.cend(); ++it) {
+    const QString& key = it.key();
+    if (!key.startsWith(prefix)) {
+      placed.insert(key, it.value());
+      continue;
+    }
+    const int dot = static_cast<int>(key.indexOf(QLatin1Char('.'), prefix.size()));
+    bool number = false;
+    const int row = key.mid(prefix.size(), dot - prefix.size()).toInt(&number);
+    if (!number || dot < 0) {
+      placed.insert(key, it.value());
+      continue;
+    }
+    int now = row;
+    if (row == from) {
+      now = to;
+    } else if (from < to && row > from && row <= to) {
+      now = row - 1;
+    } else if (to < from && row >= to && row < from) {
+      now = row + 1;
+    }
+    placed.insert(prefix + QString::number(now) + key.mid(dot), it.value());
+  }
+  values = placed;
+}
+
 } // namespace
+
+void CommandState::moveRow(const QString& list, int from, int to) {
+  const QString full = key(list);
+  const int count = m_rows.value(full);
+  if (from == to || from < 0 || to < 0 || from >= count || to >= count) {
+    return;
+  }
+  placeRow(m_items, full, from, to);
+  placeRow(m_texts, full, from, to);
+  placeRow(m_objects, full, from, to);
+  placeRow(m_expressions, full, from, to);
+  placeRow(m_values, full, from, to);
+  placeRow(m_parameters, full, from, to);
+  placeRow(m_parameterTips, full, from, to);
+  placeRow(m_itemsTexts, full, from, to);
+  placeRow(m_itemWords, full, from, to);
+  placeRow(m_itemsWords, full, from, to);
+  placeRow(m_missing, full, from, to);
+  placeRow(m_choices, full, from, to);
+  placeRow(m_checks, full, from, to);
+}
 
 void CommandState::removeRow(const QString& list, int index) {
   const QString full = key(list);

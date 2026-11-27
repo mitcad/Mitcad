@@ -9,7 +9,10 @@
 #      print support with the system's libcups, mitcad#1089) with a
 #      qt.conf, OCCT and the licences, the built-in texture images once
 #      (in usr/share/mitcad/textures, no copy built into a program,
-#      mitcad#2218, mitcad#2251); every ELF file finds its libraries
+#      mitcad#2218, mitcad#2251), which the extracted mitcad-cli reads
+#      from there: with one of them changed there it lists the changed
+#      image, so it read no other copy, such as the source tree's on the
+#      build machine (mitcad#2358); every ELF file finds its libraries
 #      inside it or in the system's library folders (ldd with an empty
 #      environment), none in the build's, Qt's or vcpkg's folders, and its
 #      RUNPATHs stay inside it. Static checks of what a user's system must
@@ -60,10 +63,16 @@
 #      stripped: `strings` over its module and helper finds none of the
 #      build machine's folders (the source tree, the built mitcad's build
 #      folder, its CEF distribution; mitcad#1658).
+#   2e. The built-in woods and panels show their textures (mitcad#2358):
+#      `MitCad.AppImage cli run` of a design with a board in Wood - Birch
+#      lists each built-in look with its three images loaded (the SHA-256
+#      of core/model-base/textures' files) and gives the wood's base colour
+#      as JPEG; the AppImage opens the saved design and its view draws the
+#      board with its texture.
 #   3. The automatic update (docs/updates.md): the AppImage, taking itself
 #      for 0.0.0 (MITCAD_TEST_VERSION), finds a release whose manifest signs
-#      this AppImage as the linux-x64 download (mitcad-release, with a key
-#      made for the test), served over HTTPS from 127.0.0.1 with a
+#      this AppImage as the linux-x64 download (linux-arm64 on aarch64;
+#      mitcad-release, with a key made for the test), served over HTTPS from 127.0.0.1 with a
 #      certificate made for the test (tools/update-test-server.py; needs
 #      python3 and openssl), with the AppImage's OpenSSL when it has one
 #      (the logged TLS library is the bundled libcrypto's version, and the
@@ -127,6 +136,13 @@ GLIBC_FLOOR=2.39
 # provides, so a build with g++-14 there is fine.
 GLIBCXX_FLOOR=3.4.33
 CXXABI_FLOOR=1.3.15
+# The AppImage is tested on the architecture it was built for: its release
+# asset's name (cmake/AppImage.cmake) and the platform the automatic
+# updates name it by (app/update/UpdateSettings.cpp).
+case "$(uname -m)" in
+  aarch64) ASSET_ARCH=aarch64 PLATFORM=linux-arm64 ;;
+  *) ASSET_ARCH=x86_64 PLATFORM=linux-x64 ;;
+esac
 # The build folder of the built mitcad (<build>/app/mitcad): a release
 # configure asks for CUDA there (cmake/Render.cmake).
 if [ -n "$BUILT" ] && grep -qE '^MITCAD_RENDER_REQUIRED_DEVICES:[A-Z]+=.*\bCUDA\b' \
@@ -182,6 +198,51 @@ library_ok() {
     /lib/* | /lib64/* | /usr/lib/* | /usr/lib64/* | /lib32/* | /usr/lib32/*) return 0 ;;
   esac
   return 1
+}
+
+# woods_script folder: a mitcad-cli script (tools/cli/tests' form) that
+# gives a board the built-in Wood - Birch (F1.b0) and expects the
+# appearances query to list each built-in look of the folder's images
+# (<id>-color.jpg, -normal.jpg, -roughness.jpg) with its three images
+# loaded, embedded with those files' SHA-256, and appearance_image to give
+# the wood's base colour as JPEG (mitcad#2358). Without the images the
+# looks have no texture, and the expectations fail.
+woods_script() {
+  python3 - "$1" << 'EOF'
+import hashlib
+import json
+import pathlib
+import sys
+
+folder = pathlib.Path(sys.argv[1])
+ids = sorted(p.name[: -len("-color.jpg")] for p in folder.glob("*-color.jpg"))
+if "wood_birch" not in ids:
+    sys.exit(f"no built-in looks' images (wood_birch-color.jpg) in {folder}")
+
+
+def image(name):
+    digest = hashlib.sha256((folder / name).read_bytes()).hexdigest()
+    return {"path": name, "embedded": True, "image_sha256": digest}
+
+
+steps = [
+    {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": 600,
+                                   "width": 200, "height": 18, "operation": "new_body"}},
+    {"cmd": "set_body_appearance", "uid": "F1.b0", "appearance": "wood_birch"},
+    {"expect": {"query": {"query": "bodies"}, "result": [{"uid": "F1.b0", "appearance": "wood_birch"}]}},
+]
+for look in ids:
+    texture = image(f"{look}-color.jpg")
+    texture["normal"] = image(f"{look}-normal.jpg")
+    texture["roughness"] = image(f"{look}-roughness.jpg")
+    steps.append({"expect": {"query": {"query": "appearances"},
+                             "some": {"id": look, "library": True, "texture": texture}}})
+color = image("wood_birch-color.jpg")["image_sha256"]
+steps.append({"expect": {"query": {"query": "appearance_image", "id": "wood_birch"},
+                         "result": {"format": "jpeg", "sha256": color}}})
+json.dump(steps, sys.stdout, indent=1)
+print()
+EOF
 }
 
 echo "--- 1. What the AppImage holds"
@@ -260,7 +321,8 @@ echo "ok   no program in usr/bin carries a copy of the texture images"
 for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6PrintSupport libQt6XcbQpa libQt6DBus libTKernel libTKV3d libTKOpenGl; do
   compgen -G "$DIR/usr/lib/$library.so*" > /dev/null || ui_fail "the AppImage has no $library"
 done
-grep -qx 'Exec=mitcad' "$DIR/mitcad.desktop" || ui_fail "the desktop file does not start mitcad"
+# Exec=mitcad, with a file field code since mitcad#2527 (Exec=mitcad %f).
+grep -qxE 'Exec=mitcad( %[fFuU])?' "$DIR/mitcad.desktop" || ui_fail "the desktop file does not start mitcad"
 # The entry point (packaging/linux/AppRun, mitcad#1170): `cli` runs
 # mitcad-cli, anything else mitcad; behind linuxdeploy's hooks script, if
 # it made one.
@@ -463,6 +525,26 @@ done < <(find "$DIR" -type f -print0)
 [ "$qt_users" -gt 0 ] || ui_fail "no ELF file links Qt"
 echo "ok   $elves ELF files: libraries inside the AppImage or the system's, RUNPATHs inside it, Qt only the AppImage's"
 echo "ok   the AppImage needs glibc $glibc or newer (at most $GLIBC_FLOOR), libstdc++ at most GLIBCXX_$GLIBCXX_FLOOR and CXXABI_$CXXABI_FLOOR"
+# Where the programs find the texture images (mitcad#2358): the model
+# looks beside the running program first (usr/bin/../share/mitcad/textures
+# here), then in the source tree's core/model-base/textures, which a
+# user's system does not have but the machine that built the AppImage
+# does, so the textures of section 2e would show from there too. Here the
+# extracted copy's first base colour image is made the second's: its
+# mitcad-cli, with an empty environment, must list that changed image, as
+# read from usr/share/mitcad/textures, and no other copy.
+installed=$DIR/usr/share/mitcad/textures
+colors=("$installed"/*-color.jpg)
+[ "${#colors[@]}" -ge 2 ] && ! cmp -s "${colors[0]}" "${colors[1]}" ||
+  ui_fail "usr/share/mitcad/textures has not two different base colour images"
+chmod u+w "${colors[0]}" && cp "${colors[1]}" "${colors[0]}" ||
+  ui_fail "could not change ${colors[0]##*/} in the extracted AppImage"
+woods_script "$installed" > "$WORK/woods-extracted.json" || ui_fail "could not write the built-in looks' script"
+mkdir -p "$WORK/home"
+woods=$(cd "$WORK" && env -i HOME="$WORK/home" PATH=/usr/bin:/bin TMPDIR="$TMPDIR" \
+  "$DIR/usr/bin/mitcad-cli" run "$WORK/woods-extracted.json" 2>&1) ||
+  ui_fail "the extracted mitcad-cli did not read the textures of usr/share/mitcad/textures (${colors[0]##*/} there changed to ${colors[1]##*/}): $(tail -5 <<< "$woods")"
+echo "ok   the extracted mitcad-cli reads the ${#colors[@]} built-in looks' textures from usr/share/mitcad/textures, no other copy"
 rm -rf "$DIR"
 
 echo "--- 2. Started with an empty environment"
@@ -511,7 +593,9 @@ wait "$starter" || { cat "$WORK/plain.log"; ui_fail "the screenshot run failed";
 file "$WORK/demo.png" | grep -q 'PNG image data, [1-9]' || ui_fail "no screenshot"
 echo "ok   the demo block's screenshot ($(stat -c %s "$WORK/demo.png") bytes)"
 entry=$WORK/home/.local/share/applications/mitcad.desktop
-grep -qx "Exec=\"$COPY\"" "$entry" || ui_fail "no desktop file running the AppImage in $entry"
+# Exec="<the AppImage>", with the file field code the packaged entry carries
+# since mitcad#2527 (Exec=mitcad %f becomes Exec="<the AppImage>" %f).
+grep -qxF -e "Exec=\"$COPY\"" -e "Exec=\"$COPY\" %f" "$entry" || ui_fail "no desktop file running the AppImage in $entry"
 # The keys AppImage managers list programs by (mitcad#2413).
 grep -qxF "TryExec=$COPY" "$entry" || ui_fail "no TryExec naming the AppImage in $entry"
 grep -qx "X-AppImage-Name=MitCad" "$entry" || ui_fail "no X-AppImage-Name in $entry"
@@ -676,6 +760,25 @@ else
   ui_stop_app
 fi
 
+echo "--- 2e. The built-in woods' textures in the AppImage as a user runs it (mitcad#2358)"
+# The AppImage file itself, with an empty environment: its mitcad-cli lists
+# each built-in wood and panel with its three images loaded, those of
+# core/model-base/textures (which section 1 found in the AppImage
+# unchanged), and saves a design with a board in Wood - Birch, which names
+# the look by its id and embeds no image.
+looks=$(compgen -G "$ROOT/core/model-base/textures/*-color.jpg" | wc -l)
+woods_script "$ROOT/core/model-base/textures" > "$WORK/woods.json" || ui_fail "could not write the built-in looks' script"
+woods=$(cd "$WORK" && plain "$COPY" cli run "$WORK/woods.json" --save "$WORK/woods.mitcad" 2>&1) ||
+  ui_fail "MitCad.AppImage cli run: the built-in looks have not their textures: $(tail -5 <<< "$woods")"
+[ -s "$WORK/woods.mitcad" ] || ui_fail "MitCad.AppImage cli run saved no design"
+echo "ok   MitCad.AppImage cli: the $looks built-in woods and panels with their three texture images each"
+# The application draws the board with the texture (the view's log line,
+# as tools/ui-wood-textures-test.sh checks in a build).
+UI_GDB=0 UI_APP=$COPY ui_start_app --open "$WORK/woods.mitcad"
+ui_expect_log "Opened $WORK/woods.mitcad" "the AppImage opened the design"
+ui_expect_log "View textured body F1.b0: 1 textured looks" "the AppImage's view draws the board in Wood - Birch with its texture"
+ui_stop_app
+
 echo "--- 3. The AppImage updates itself"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 -subj /CN=localhost \
   -addext "subjectAltName=IP:127.0.0.1,DNS:localhost" -keyout "$WORK/key.pem" -out "$WORK/cert.pem" \
@@ -692,12 +795,12 @@ for _ in $(seq 1 100); do
 done
 [ -s "$WORK/port" ] || ui_fail "the HTTPS server did not start"
 BASE=https://127.0.0.1:$(cat "$WORK/port")
-asset=Mitcad-$VERSION-x86_64.AppImage
+asset=Mitcad-$VERSION-$ASSET_ARCH.AppImage
 cp "$IMAGE" "$WWW/release/$asset"
 MITCAD_RELEASE_KEY=$SEED "$RELEASE_TOOL" manifest --version "$VERSION" --date 2026-10-06 \
-  --notes "$BASE/release/notes.html" --asset linux-x64 "$WWW/release/$asset" "$BASE/release/$asset" \
+  --notes "$BASE/release/notes.html" --asset "$PLATFORM" "$WWW/release/$asset" "$BASE/release/$asset" \
   --out "$WWW/release/update-manifest.json" > /dev/null || ui_fail "mitcad-release could not sign the AppImage"
-echo "ok   the AppImage signed as linux-x64 with a key made for the test"
+echo "ok   the AppImage signed as $PLATFORM with a key made for the test"
 
 export MITCAD_UPDATE_URL=$BASE/release/update-manifest.json
 export MITCAD_UPDATE_TEST_KEY=$PUBLIC MITCAD_UPDATE_TEST_CA=$WORK/cert.pem MITCAD_TEST_VERSION=0.0.0
@@ -773,7 +876,7 @@ if [ "$HOOKS" = OFF ]; then
   # A release's AppImage (mitcad#921): its check would go to GitHub, so
   # checks off; its source is logged anyway.
   MITCAD_NO_UPDATE_CHECK=1 UI_GDB=0 UI_APP=$COPY ui_start_app
-  ui_expect_log "Updates: MitCad $VERSION for linux-x64, the AppImage $COPY" "its own version, not MITCAD_TEST_VERSION"
+  ui_expect_log "Updates: MitCad $VERSION for $PLATFORM, the AppImage $COPY" "its own version, not MITCAD_TEST_VERSION"
   ui_expect_log "Update source: manifest at https://github.com/mitcad/Mitcad/releases/latest/download/update-manifest.json, releases at https://api.github.com/repos/mitcad/Mitcad/releases?per_page=20, " \
     "GitHub's addresses, not MITCAD_UPDATE_URL"
   ui_expect_log "Update source: this build ignores MITCAD_UPDATE_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS off)" \
@@ -789,7 +892,7 @@ if [ "$HOOKS" = OFF ]; then
 fi
 inode=$(stat -c %i "$COPY")
 UI_GDB=0 UI_APP=$COPY ui_start_app
-ui_expect_log "Updates: MitCad 0.0.0 for linux-x64, the AppImage $COPY" "the AppImage can update itself"
+ui_expect_log "Updates: MitCad 0.0.0 for $PLATFORM, the AppImage $COPY" "the AppImage can update itself"
 ui_expect_log "Update source: this test build reads MITCAD_UPDATE_URL, MITCAD_UPDATE_TEST_KEY, MITCAD_UPDATE_TEST_CA, MITCAD_TEST_VERSION (MITCAD_UPDATE_TEST_HOOKS)" \
   "a test build reads the update tests' variables"
 ui_expect_log "Update notice (offer): MitCad $VERSION is available (this is 0.0.0). MitCad checks for updates once a day; Tools › Preferences turns that off. [Release Notes, Install, Skip This Version, Later]" \

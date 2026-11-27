@@ -236,7 +236,7 @@ pub(crate) fn piece_at(p: &Piece, k: usize, value: f64) -> Option<PXZ> {
 }
 
 /// A chain from pieces (joined end to start).
-fn chain_of(pieces: &[Piece]) -> Vec<PV> {
+pub(crate) fn chain_of(pieces: &[Piece]) -> Vec<PV> {
     let mut out: Vec<PV> = Vec::new();
     for p in pieces {
         if (p.a[0] - p.b[0]).abs() < EPS && (p.a[1] - p.b[1]).abs() < EPS {

@@ -20,13 +20,22 @@
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepTools_WireExplorer.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <Geom2d_Line.hxx>
+#include <GeomConvert.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_Curve.hxx>
 #include <Geom_CylindricalSurface.hxx>
+#include <Geom_Line.hxx>
 #include <Geom_Surface.hxx>
+#include <Geom_TrimmedCurve.hxx>
 #include <Precision.hxx>
+#include <ShapeBuild_ReShape.hxx>
+#include <ShapeFix_Shape.hxx>
+#include <ShapeFix_Wire.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
@@ -97,6 +106,190 @@ ChainWire chain_wire(const Path& chain) {
     }
     result.edges.emplace_back(edge, name);
   }
+  return result;
+}
+
+// An end of an open chain: whether it is its edge's last parameter, and
+// its point.
+struct ChainEnd {
+  bool at_last = false;
+  gp_Pnt point;
+  bool exact = false; // the end of a line: a sketch's own point
+};
+
+// The two ends of an open chain's wire, its start first.
+std::pair<ChainEnd, ChainEnd> chain_ends(const TopoDS_Wire& wire) {
+  std::vector<TopoDS_Edge> ordered;
+  for (BRepTools_WireExplorer it(wire); it.More(); it.Next()) {
+    ordered.push_back(it.Current());
+  }
+  if (ordered.empty()) {
+    throw std::invalid_argument("a chain has no curves");
+  }
+  const auto end = [](const TopoDS_Edge& edge, bool start) {
+    ChainEnd result;
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, first, last);
+    // Along the wire a reversed edge starts at its last parameter.
+    result.at_last = (edge.Orientation() == TopAbs_REVERSED) == start;
+    result.point = curve->Value(result.at_last ? last : first);
+    occ::handle<Geom_Curve> basis = curve;
+    if (const occ::handle<Geom_TrimmedCurve> trimmed = occ::down_cast<Geom_TrimmedCurve>(basis)) {
+      basis = trimmed->BasisCurve();
+    }
+    result.exact = !occ::down_cast<Geom_Line>(basis).IsNull();
+    return result;
+  };
+  return {end(ordered.front(), true), end(ordered.back(), false)};
+}
+
+// The edge with the end at its last parameter (else its first) moved
+// exactly onto `target`, the rest of it as it was: a B-spline whose pole
+// there is the point (a line's own straight edge to it).
+TopoDS_Edge edge_ending_at(const TopoDS_Edge& edge, bool at_last, const gp_Pnt& target) {
+  double first = 0.0;
+  double last = 0.0;
+  const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, first, last);
+  occ::handle<Geom_BSplineCurve> spline =
+      GeomConvert::CurveToBSplineCurve(new Geom_TrimmedCurve(curve, first, last));
+  spline->SetPole(at_last ? spline->NbPoles() : 1, target);
+  BRepBuilderAPI_MakeEdge maker(spline);
+  if (!maker.IsDone()) {
+    throw std::runtime_error("the sections could not be lofted");
+  }
+  TopoDS_Edge result = maker.Edge();
+  result.Orientation(edge.Orientation());
+  return result;
+}
+
+// Open sections whose ends meet (within the loft's tolerance) made to meet
+// exactly (mitcad#2584): a fan's sections from one point. A sketch arc's
+// end is its circle's point at an angle, a rounding off the sketch's point
+// (7e-15 mm on Windows), and the loft then joins the ends by a side edge
+// that long on a surface that does not quite collapse there. Each meeting
+// is moved onto one point (a line's end where one ends there, those being
+// the sketch's own points), so the loft's side there has no length at all
+// and its surface collapses to the point (made a degenerated edge by
+// with_meeting_points). Whether any ends meet.
+bool join_meeting_ends(std::vector<ChainWire>& wires, double tolerance) {
+  std::vector<std::pair<ChainEnd, ChainEnd>> ends;
+  for (const ChainWire& wire : wires) {
+    ends.push_back(chain_ends(wire.wire));
+  }
+  const auto end_of = [&](std::size_t k) -> ChainEnd& { return k % 2 == 0 ? ends[k / 2].first : ends[k / 2].second; };
+  // The new edge for each edge moved, with its ends to move.
+  std::vector<std::vector<std::pair<bool, gp_Pnt>>> moves(wires.size());
+  std::vector<bool> taken(2 * wires.size(), false);
+  bool any = false;
+  bool met = false;
+  for (std::size_t k = 0; k < 2 * wires.size(); ++k) {
+    if (taken[k]) {
+      continue;
+    }
+    std::vector<std::size_t> meeting{k};
+    for (std::size_t m = k + 1; m < 2 * wires.size(); ++m) {
+      if (!taken[m] && m / 2 != k / 2 && end_of(k).point.Distance(end_of(m).point) <= tolerance) {
+        meeting.push_back(m);
+      }
+    }
+    if (meeting.size() < 2) {
+      continue;
+    }
+    met = true;
+    gp_Pnt target = end_of(meeting.front()).point;
+    for (const std::size_t m : meeting) {
+      taken[m] = true;
+    }
+    for (const std::size_t m : meeting) {
+      if (end_of(m).exact) {
+        target = end_of(m).point;
+        break;
+      }
+    }
+    for (const std::size_t m : meeting) {
+      ChainEnd& end = end_of(m);
+      if (end.point.X() == target.X() && end.point.Y() == target.Y() && end.point.Z() == target.Z()) {
+        continue;
+      }
+      end.point = target;
+      moves[m / 2].emplace_back(m % 2 == 1, target);
+      any = true;
+    }
+  }
+  if (!any) {
+    return met;
+  }
+  for (std::size_t i = 0; i < wires.size(); ++i) {
+    if (moves[i].empty()) {
+      continue;
+    }
+    // The edges in the wire's order, those at a moved end replaced.
+    std::vector<TopoDS_Edge> ordered;
+    for (BRepTools_WireExplorer it(wires[i].wire); it.More(); it.Next()) {
+      ordered.push_back(it.Current());
+    }
+    for (const auto& [at_wire_end, target] : moves[i]) {
+      TopoDS_Edge& edge = at_wire_end ? ordered.back() : ordered.front();
+      const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+      // The wire's start is the edge's first parameter unless reversed.
+      edge = edge_ending_at(edge, at_wire_end != reversed, target);
+    }
+    std::vector<std::pair<gp_Pnt, std::string>> middles;
+    for (const auto& [edge, name] : wires[i].edges) {
+      middles.emplace_back(middle_of(edge), name);
+    }
+    BRepBuilderAPI_MakeWire make;
+    for (const TopoDS_Edge& edge : ordered) {
+      make.Add(edge);
+      if (!make.IsDone()) {
+        throw std::runtime_error("the sections could not be lofted");
+      }
+    }
+    ChainWire joined;
+    joined.wire = make.Wire();
+    for (TopExp_Explorer it(joined.wire, TopAbs_EDGE); it.More(); it.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+      const gp_Pnt middle = middle_of(edge);
+      double best = std::numeric_limits<double>::infinity();
+      std::string name;
+      for (const auto& [point, curve] : middles) {
+        const double d = point.Distance(middle);
+        if (d < best) {
+          best = d;
+          name = curve;
+        }
+      }
+      joined.edges.emplace_back(edge, name);
+    }
+    wires[i] = std::move(joined);
+  }
+  return met;
+}
+
+// The loft's side where open sections meet, an edge of no length on a
+// surface that collapses to the point there, made the degenerated edge of
+// one vertex that the point is (mitcad#2584): the offset of a thicken
+// leaves out a degenerated edge's point where it checks the surface's
+// normals, which the collapsed side has none of, and builds the offset
+// face's apex from it. The faces are those of the loft, repaired.
+TopoDS_Shape with_meeting_points(const TopoDS_Shape& loft, std::vector<std::pair<TopoDS_Shape, std::string>>& named) {
+  ShapeFix_Shape fix(loft);
+  fix.SetPrecision(Precision::Confusion());
+  fix.SetMaxTolerance(1.0e-5);
+  fix.FixWireTool()->ModifyTopologyMode() = true;
+  fix.Perform();
+  const TopoDS_Shape result = fix.Shape();
+  if (result.IsNull()) {
+    return loft;
+  }
+  std::vector<std::pair<TopoDS_Shape, std::string>> renamed;
+  for (const auto& [face, name] : named) {
+    for (TopExp_Explorer it(fix.Context()->Apply(face), TopAbs_FACE); it.More(); it.Next()) {
+      renamed.emplace_back(it.Current(), name);
+    }
+  }
+  named = std::move(renamed);
   return result;
 }
 
@@ -379,6 +572,7 @@ ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& section
         wires[i].edges = merging[i].named.edges;
       }
     }
+    const bool met = open && join_meeting_ends(wires, Precision::Confusion());
     BRepOffsetAPI_ThruSections loft(false, ruled, 1.0e-6);
     loft.CheckCompatibility(!aligned);
     for (const ChainWire& wire : wires) {
@@ -391,13 +585,17 @@ ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& section
     if (!loft.IsDone()) {
       throw std::runtime_error("the sections could not be lofted");
     }
-    SheetParts parts;
-    parts.add(loft.Shape());
+    std::vector<std::pair<TopoDS_Shape, std::string>> named;
     for (const auto& [edge, curve] : wires.front().edges) {
       const TopoDS_Shape face = loft.GeneratedFace(edge);
       if (!face.IsNull()) {
-        parts.name(face, face_name(feature, "side", curve));
+        named.emplace_back(face, face_name(feature, "side", curve));
       }
+    }
+    SheetParts parts;
+    parts.add(met ? with_meeting_points(loft.Shape(), named) : loft.Shape());
+    for (const auto& [face, name] : named) {
+      parts.name(face, name);
     }
     return parts.shape("surface loft");
   });

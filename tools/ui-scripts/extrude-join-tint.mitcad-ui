@@ -4,7 +4,8 @@
 # XY plane and Sketch1 (F2), a square on its top face. Selection Through
 # Bodies is on (the default). Seen from the isometric corner (+x, -y, +z):
 #   1. The block's own color in the middle of its front face (y = -20).
-#   2. Extrude takes the square and joins it to the block, which Local
+#   2. Extrude takes the square, 10 mm typed (a new Extrude starts at 0 mm,
+#      mitcad#2481), and joins it to the block, which Local
 #      bodies holds: the block is tinted faintly, nearer its own color
 #      there than the cut's red (PreviewRemove), and gets no copy through
 #      the bodies; the added material's front face (y = -10), over the
@@ -29,6 +30,7 @@ mark
 command solid.extrude
 expect-log '^Command Extrude started'
 wait-log '^Extrude Profiles: 1 profile \[profile r\{.*\} of F2\]' 30
+type-in '^Panel Extrude input distance at ' '10 mm'
 wait-log '^Extrude: automatic Operation = Join' 30
 wait-log '^Extrude Local bodies: 1 body \[body F1\.b0\]' 30
 wait-log '^Preview Extrude: ok' 30

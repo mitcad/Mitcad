@@ -97,6 +97,14 @@ public:
   // shown, or a command that changes the design). Measure's picks are
   // measured where it shows them.
   virtual QJsonObject shownExplode() const { return QJsonObject(); }
+  // Isolate's items: the bodies and components the view shows alone
+  // (none: all of them; none without a view). The print and analysis
+  // commands start from the bodies it leaves shown, as 3D Print does
+  // (printStartBodies, mitcad#2490).
+  virtual const Selection& isolation() const {
+    static const Selection none;
+    return none;
+  }
 };
 
 enum class ValueKind { Length, Angle, Unitless };
@@ -192,6 +200,26 @@ struct Manipulator {
   // the origin and a ring's arc only while the handle or its box is under
   // the mouse or dragged (an image reference's seven handles, mitcad#1747).
   bool quiet = false;
+  // Arrow: kept clear of its origin on the screen (an Extrude's distance
+  // and its Start Offset, which start at zero on their profile,
+  // mitcad#2481, mitcad#2508): at zero the knob and the head are drawn
+  // more than a click's reach beyond the origin along the arrow (a short
+  // dashed line from the origin), so that a click on what the arrow starts
+  // from (the profile) still picks it. The lift fades out linearly as the
+  // value's point moves away from the origin on the screen, either way,
+  // and is gone four lifts away (ManipulatorOverlay::draw): the knob's
+  // place is a continuous, rising function of the value, so that a drag
+  // moves the value from where the knob is drawn without a jump, the
+  // first move by about the pointer's movement (four thirds of it ahead,
+  // four fifths back), and ends with the knob where the pointer is
+  // released.
+  bool clearOfOrigin = false;
+  // With clearOfOrigin: how many such arrows on the same line it is drawn
+  // past at zero, each a lift and an arrow's length further out (an
+  // Extrude's distance past its Start Offset's arrow, which starts where
+  // the distance's arrow does and points the same way, mitcad#2508), so
+  // that each is grabbed on its own.
+  int clearPast = 0;
 };
 
 // A handle a sketch command shows in the sketch (CommandDef::sketchHandle,
@@ -381,6 +409,11 @@ struct InputDef {
   // A pick of an item already selected keeps it (and still reaches
   // onPick): a face clicked again adds another hole position.
   bool keepOnRepick = false;
+  // Selection that needs no pick (min 0): whenever a choice shows it, it
+  // takes the next picks, as an empty input that needs one does
+  // (mitcad#2565: Align Point Cloud's Point Pairs, whose clicks on a cloud
+  // are no picks).
+  bool activeWhenShown = false;
   // The form a pick is kept in (a face stands for the feature that made it).
   std::function<SelectionItem(const SelectionItem&)> convert;
   // The form a pick is kept in that depends on the state and the model,
@@ -669,6 +702,10 @@ struct InputDef {
   // for it (mitcad#1813: Constraint Set's rows). Without it a row that
   // waits for a pick takes the whole preview away.
   bool previewCompleteRows = false;
+  // List: each row has Move up and Move down beside its remove button, for
+  // rows whose order matters (mitcad#2506: a lathe setup's blocks of manual
+  // G-code); CommandState::moveRow.
+  bool orderedRows = false;
 
   // Shown only while this holds (for a list's input: of its row's state).
   std::function<bool(const CommandState&)> visible;
@@ -855,6 +892,10 @@ struct InputDef {
   }
   InputDef& withAlsoTakes(SelectFilter kinds) {
     alsoTakes = kinds;
+    return *this;
+  }
+  InputDef& withActiveWhenShown() {
+    activeWhenShown = true;
     return *this;
   }
   InputDef& withOnPick(
@@ -1070,6 +1111,10 @@ struct InputDef {
     previewCompleteRows = true;
     return *this;
   }
+  InputDef& withOrderedRows() {
+    orderedRows = true;
+    return *this;
+  }
 
   // A choice's options in a state.
   QVector<QPair<QString, QString>> choicesIn(const CommandState& state) const {
@@ -1204,6 +1249,9 @@ public:
     return all;
   }
   void removeRow(const QString& list, int index);
+  // A row moved to another place in its list, the rows between shifted
+  // (mitcad#2506, InputDef::orderedRows); places past the ends are refused.
+  void moveRow(const QString& list, int from, int to);
   // The key of a row's input in the whole state.
   static QString rowKey(const QString& list, int index, const QString& id) {
     return QStringLiteral("%1.%2.%3").arg(list).arg(index).arg(id);
@@ -1272,6 +1320,10 @@ struct Inspection {
   // axes and axis distance, told apart from the main distance where they
   // overlap; none when null.
   TopoDS_Shape guide;
+  // Edges drawn beside `shape`, each in a colour role of its own
+  // (OcctViewer::setPreviewEdges, mitcad#2521): Continuity Analysis' edges
+  // by the class they reach; none when empty.
+  std::vector<std::pair<TopoDS_Shape, ColorRole>> coloredEdges;
   QJsonValue section; // a plane reference: the bodies are shown cut there
   // Items highlighted besides the inputs' (orange; a component's bodies for
   // a Component item): BUILD's auto-length target (mitcad#375).

@@ -20,6 +20,7 @@
 #include <BRepGProp.hxx>
 #include <BRepGProp_Face.hxx>
 #include <BRepTools.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GProp_GProps.hxx>
@@ -1019,6 +1020,69 @@ SurfacePoint face_point_normal(const Shape& shape, const std::string& face, cons
     }
     return *result;
   });
+}
+
+std::optional<SurfacePoint> face_inner_point(const TopoDS_Face& face) {
+  TopLoc_Location location;
+  if (face.IsNull() || BRep_Tool::Surface(face, location).IsNull()) {
+    return std::nullopt; // a mesh body's triangles
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    double u0 = 0.0;
+    double u1 = 0.0;
+    double v0 = 0.0;
+    double v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    if (!std::isfinite(u0) || !std::isfinite(u1) || !std::isfinite(v0) || !std::isfinite(v1) || !(u1 > u0) ||
+        !(v1 > v0)) {
+      return std::nullopt;
+    }
+    const BRepTopAdaptor_FClass2d classifier(face, Precision::PConfusion());
+    // BRepGProp_Face reads the face's location and turns the normal with
+    // the face's orientation: out of the material.
+    BRepGProp_Face surface(face);
+    const auto at = [&](double u, double v) -> std::optional<SurfacePoint> {
+      if (classifier.Perform(gp_Pnt2d(u, v)) != TopAbs_IN) {
+        return std::nullopt;
+      }
+      gp_Pnt point;
+      gp_Vec normal;
+      surface.Normal(u, v, point, normal);
+      if (normal.Magnitude() <= gp::Resolution()) {
+        return std::nullopt;
+      }
+      return SurfacePoint{point, gp_Dir(normal)};
+    };
+    const double um = 0.5 * (u0 + u1);
+    const double vm = 0.5 * (v0 + v1);
+    if (std::optional<SurfacePoint> middle = at(um, vm)) {
+      return middle;
+    }
+    // A face with a hole in its middle, an L-shaped face, a cone's tip at
+    // the middle: the nearest grid point on the face, by the fractions of
+    // the range.
+    constexpr int kSteps = 16;
+    std::optional<SurfacePoint> best;
+    double nearest = std::numeric_limits<double>::infinity();
+    for (int i = 0; i < kSteps; ++i) {
+      for (int j = 0; j < kSteps; ++j) {
+        const double fu = (i + 0.5) / kSteps;
+        const double fv = (j + 0.5) / kSteps;
+        const double off = (fu - 0.5) * (fu - 0.5) + (fv - 0.5) * (fv - 0.5);
+        if (off >= nearest) {
+          continue;
+        }
+        if (std::optional<SurfacePoint> found = at(u0 + fu * (u1 - u0), v0 + fv * (v1 - v0))) {
+          best = found;
+          nearest = off;
+        }
+      }
+    }
+    return best;
+  } catch (const Standard_Failure&) {
+    return std::nullopt;
+  }
 }
 
 ShapePtr plane_shape(const gp_Pnt& origin, const gp_Dir& normal, const gp_Dir& x_axis,

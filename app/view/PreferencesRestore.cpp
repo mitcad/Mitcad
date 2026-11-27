@@ -140,6 +140,7 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
       m_settings.anaglyph = false;
     }
     m_settings.perspective = fresh.perspective;
+    m_settings.orthographicFaces = fresh.orthographicFaces; // mitcad#2473
     m_settings.cubeProjection = fresh.cubeProjection;
     m_settings.cubeSize = fresh.cubeSize; // mitcad#2071
     m_settings.focalLength = fresh.focalLength;
@@ -209,6 +210,8 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     setBrowserEyePlace(BrowserControlPlace::Classic);
     // The timeline as the strip at the bottom (mitcad#2427).
     setTimelinePresentation(TimelinePresentation::Strip);
+    // The Browser rows as they always were (mitcad#2513).
+    setBrowserRowSpacing(BrowserRowSpacing::Standard);
     drawings::saveCornerDots(drawings::CornerDots());
     saveSmallCircles(SmallCircles::Adaptive);
     saveOriginDisplay(OriginDisplay());

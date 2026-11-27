@@ -776,7 +776,9 @@ Ui-ExpectNew 'Extrude Profiles: 3 profiles' 'all of A'
 Ui-Mark
 Ui-Step 'click the ring b again'         { Ui-ClickPick "profile F1/$ringB" }
 Ui-ExpectNew "Extrude Profiles: 2 profiles [profile $ringA of F1 in O1; profile $squareC of F1 in O1]" 'A minus B plus C'
-Ui-ExpectNew 'Preview Extrude: ok' 'previewed'
+# A new Extrude starts at 0 mm and builds nothing yet (mitcad#2481).
+Ui-Step 'distance 10 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
+Ui-ExpectNew 'Preview Extrude: ok' 'previewed' 30
 if ((Ui-LogLines) | Where-Object { $_.Contains('is listed more than once') }) { Ui-Fail 'a profile was listed twice' }
 Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }

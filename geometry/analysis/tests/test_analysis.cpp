@@ -77,6 +77,21 @@
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec2d.hxx>
 #include <gp_Trsf.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <Message_ProgressRange.hxx>
+#include <Message_ProgressScope.hxx>
+
+#include "bundled_test.hpp"
+
+// windows.h (which OCCT headers such as Message_ProgressIndicator.hxx may
+// bring in on Windows) defines near and far as empty macros, which would
+// break near() below.
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
 
 namespace {
 
@@ -775,6 +790,26 @@ void test_distances() {
   CHECK(!d.parallel_faces && !dv.parallel_faces);
 }
 
+// A cancel pressed before a measurement starts (a cancelled model job).
+class StopAtOnce : public Message_ProgressIndicator {
+public:
+  bool UserBreak() override { return true; }
+  void Show(const Message_ProgressScope&, const bool) override {}
+};
+
+// A distance between detailed bodies stops at its range's user break
+// (mitcad#2577: one measurement in an assembly path's probe could not be
+// interrupted); an empty range measures as before.
+void test_distance_cancelled() {
+  using mitcad::analysis::min_distance;
+  const TopoDS_Shape a = BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, 0), 5.0).Shape();
+  const TopoDS_Shape b = box(8, -5, -5, 10, 10, 10);
+  const occ::handle<Message_ProgressIndicator> stop = new StopAtOnce;
+  CHECK(throws([&] { min_distance(a, b, stop->Start()); }));
+  const auto measured = min_distance(a, b, Message_ProgressRange());
+  CHECK(near(measured.value, 3.0, 1e-6) && !measured.inside);
+}
+
 // A 600 x 2000 x 18 mm plate at height z with 3 x 60 through holes of
 // 5 mm, like a cabinet wall with rows of shelf-pin holes.
 TopoDS_Shape perforated_plate(double z) {
@@ -1322,7 +1357,7 @@ void test_compare() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(geometry_analysis) {
   try {
     test_box_properties();
     test_round_properties();
@@ -1332,6 +1367,7 @@ int main() {
     test_face_past_its_trimmed_surface();
     test_products_and_several_bodies();
     test_distances();
+    test_distance_cancelled();
     test_parallel_faces();
     test_stepped_shell_face_minima();
     test_angles();

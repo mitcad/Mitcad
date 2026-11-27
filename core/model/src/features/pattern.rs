@@ -826,8 +826,9 @@ pub(crate) struct Element {
 }
 
 /// What a pattern or a mirror repeats and the elements it leaves out; None
-/// for other features.
-pub(crate) fn repeated(def: &FeatureDef) -> Option<(&PatternObjects, &[u32])> {
+/// for other features. (The threads query reads which copies carry a
+/// thread feature, mitcad#2537.)
+pub fn repeated(def: &FeatureDef) -> Option<(&PatternObjects, &[u32])> {
     match def {
         FeatureDef::RectangularPattern(d) => Some((&d.objects, &d.suppressed_elements)),
         FeatureDef::CircularPattern(d) => Some((&d.objects, &d.suppressed_elements)),

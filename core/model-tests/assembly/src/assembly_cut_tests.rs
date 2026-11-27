@@ -6,17 +6,23 @@
 //! of its own (`instances`), the others the definition; the pieces keep
 //! where the cut lay on the part when a joint turns it; Update Link applies
 //! the cut again to the new geometry, or warns when it no longer reaches
-//! it; save and reopen keep it all.
+//! it; save and reopen keep it all. Copy and paste and Save Component as
+//! Design keep a Revolve's and a Hole's scope by the copy's paths
+//! (mitcad#2160).
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use mitcad_model::features::extrude_scope::CutScope;
 use mitcad_model::features::{FeatureDef, SketchPlane, ValueInput};
 use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::test_support::{def, num};
 use mitcad_model::testing::{MockKernel, MockShape};
-use mitcad_model::{Document, FeatureStatus, FileFormat, InsertOptions, InstanceView, Transform};
+use mitcad_model::{
+    Document, FeatureStatus, FileFormat, InsertOptions, InstanceView, SaveComponentOptions,
+    Transform,
+};
 use mitcad_model_api::DocumentApi;
 
 /// The mock cuts only what the tool overlaps by its bounds.
@@ -456,4 +462,167 @@ fn a_hole_and_a_revolve_cut_made_in_the_assembly_machine_one_occurrence() {
     let uid = doc.add_feature(&revolve, None).unwrap().uid;
     assert_machined(&doc, plate, first, uid);
     assert!(doc.machined_occurrences().at(&[second]).is_none());
+}
+
+/// An assembly component with a plate (below its XY plane) placed twice in
+/// it, the second far away; the assembly's component and occurrence, the
+/// plate's component and its two occurrences there (mitcad#2160).
+struct Holder {
+    component: ComponentUid,
+    occurrence: OccurrenceUid,
+    plate: ComponentUid,
+    first: OccurrenceUid,
+}
+
+fn holder(doc: &mut Document<MockKernel>) -> Holder {
+    let (component, occurrence) = doc
+        .create_component(Some("Holder"), Transform::IDENTITY, true)
+        .unwrap();
+    let (plate, first) = doc
+        .create_component(
+            Some("Plate"),
+            Transform::translation([0.0, 0.0, -5.0]),
+            true,
+        )
+        .unwrap();
+    block(doc, 0.0);
+    doc.activate_component(component).unwrap();
+    doc.copy_occurrence(first, Some(Transform::translation([100.0, 0.0, -5.0])))
+        .unwrap();
+    Holder {
+        component,
+        occurrence,
+        plate,
+        first,
+    }
+}
+
+/// The scope of a cut made in the holder that includes its first plate.
+fn holder_scope(h: &Holder) -> Value {
+    json!({"context": {"component": h.component, "occurrence": h.occurrence.to_string()},
+        "targets": {"type": "explicit", "included": [{"component": h.plate,
+            "occurrence": format!("{}/{}", h.occurrence, h.first)}]}})
+}
+
+/// The cut scope stored by the feature `uid`.
+fn stored_scope(doc: &Document<MockKernel>, uid: FeatureUid) -> CutScope {
+    let entry = doc.features().find(|f| f.uid == uid).unwrap();
+    match &entry.def {
+        FeatureDef::Revolve(r) => r.cut_scope.clone().unwrap(),
+        FeatureDef::Hole(h) => h.cut_scope.clone().unwrap(),
+        FeatureDef::Extrude(e) => e.cut_scope.clone().unwrap(),
+        _ => panic!("no cut"),
+    }
+}
+
+/// The occurrence at `path` is machined by `cut` alone, as a copy of
+/// `component`'s, and the scope keeps where the cut lies against it.
+fn assert_machined_at(
+    doc: &Document<MockKernel>,
+    path: &[OccurrenceUid],
+    component: ComponentUid,
+    cut: FeatureUid,
+) {
+    assert_eq!(doc.status(cut), Some(&FeatureStatus::Ok));
+    let machined = doc.machined_occurrences().at(path).expect("machined");
+    assert_eq!(machined.component, component);
+    assert_eq!(machined.cuts, vec![cut]);
+    let scope = stored_scope(doc, cut);
+    assert_eq!(scope.frames.len(), 1, "{scope:?}");
+    assert_eq!(scope.frames[0].occurrence.0, path);
+    assert_eq!(scope.frames[0].component, component);
+}
+
+#[test]
+fn copy_and_paste_of_an_assembly_keeps_its_revolve_cut_scope() {
+    let mut doc = Document::new(kernel());
+    let h = holder(&mut doc);
+    // A Revolve Cut in the holder, turning a square round its y axis,
+    // through the first plate only.
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, [3.0, 3.0], &num(4.0), &num(4.0))
+        .unwrap()
+        .region;
+    let revolve = def(json!({"type": "revolve",
+        "profiles": [{"sketch": sketch, "region": region}],
+        "axis": "y", "operation": "cut", "extent": {"type": "full"},
+        "cut_scope": holder_scope(&h)}));
+    let cut = doc.add_feature(&revolve, None).unwrap().uid;
+    assert_machined_at(&doc, &[h.occurrence, h.first], h.plate, cut);
+
+    // The holder copied and pasted as a new component: the copy's cut
+    // machines the copy's first plate, there only, and the original's
+    // stays as it was.
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let (copy, occurrence) = doc
+        .paste_new(h.occurrence, Some(Transform::translation([0.0, 50.0, 0.0])))
+        .unwrap();
+    let copied = doc
+        .features()
+        .find(|f| f.component == copy && f.def.type_name() == "revolve")
+        .unwrap()
+        .uid;
+    let scope = stored_scope(&doc, copied);
+    assert_eq!(scope.context.component, copy);
+    assert_eq!(scope.context.occurrence.0, vec![occurrence]);
+    let targets = scope.stored_targets();
+    assert_eq!(targets.len(), 1, "{scope:?}");
+    let path = targets[0].occurrence.0.clone();
+    assert_eq!(path.len(), 2, "{scope:?}");
+    assert_eq!(path[0], occurrence);
+    assert_ne!(targets[0].component, h.plate, "the copy's own plate");
+    assert_machined_at(&doc, &path, targets[0].component, copied);
+    let others: Vec<_> = doc
+        .instances()
+        .into_iter()
+        .filter(|i| i.path.len() == 2 && i.path[0] == occurrence && i.path != path)
+        .collect();
+    assert!(!others.is_empty());
+    assert!(
+        others
+            .iter()
+            .all(|i| doc.machined_occurrences().at(&i.path).is_none())
+    );
+    assert_machined_at(&doc, &[h.occurrence, h.first], h.plate, cut);
+}
+
+#[test]
+fn save_component_as_design_keeps_a_hole_cut_scope_inside_it() {
+    let mut doc = Document::new(kernel());
+    let h = holder(&mut doc);
+    // A hole from the holder's XY plane down through its first plate.
+    let hole = def(json!({"type": "hole",
+        "placement": {"type": "plane", "plane": "xy", "points": [[5, 5, 0]]},
+        "diameter": 3, "extent": {"type": "through_all"},
+        "cut_scope": holder_scope(&h)}));
+    let cut = doc.add_feature(&hole, None).unwrap().uid;
+    assert_machined_at(&doc, &[h.occurrence, h.first], h.plate, cut);
+
+    // The holder saved as a design: its root's hole drills the first
+    // plate there, by the saved design's own paths.
+    let dir = mitcad_model::testing::unique_temp_path("2160-save");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("holder.mitcad");
+    doc.save_component_as_design(h.component, &path, &SaveComponentOptions::default())
+        .unwrap();
+    let saved = open(&path);
+    let hole = saved
+        .features()
+        .find(|f| f.def.type_name() == "hole")
+        .unwrap()
+        .uid;
+    let scope = stored_scope(&saved, hole);
+    assert_eq!(scope.context.component, ComponentUid::ROOT);
+    assert!(scope.context.occurrence.0.is_empty(), "{scope:?}");
+    let targets = scope.stored_targets();
+    assert_eq!(targets.len(), 1, "{scope:?}");
+    assert_eq!(targets[0].occurrence.0.len(), 1, "{scope:?}");
+    assert_machined_at(
+        &saved,
+        &targets[0].occurrence.0.clone(),
+        targets[0].component,
+        hole,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

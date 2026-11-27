@@ -118,6 +118,7 @@
 #include "mitcad/geometry/pattern.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/io/step.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -1375,7 +1376,7 @@ void test_reported_hub_with_blades_and_ring() {
 } // namespace
 } // namespace test
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(join_holds_inputs) {
   if (argc > 1) {
     test::work_folder = argv[1];
   }

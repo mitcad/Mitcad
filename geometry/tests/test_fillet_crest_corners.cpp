@@ -62,6 +62,7 @@
 #include <gp_Vec2d.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -514,7 +515,7 @@ void test_groove_crest_rounded_up_to_its_floors() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_crest_corners) {
   test::guarded("test_end_on_a_cylinder_stored_turns_down", test::test_end_on_a_cylinder_stored_turns_down);
   test::guarded("test_contour_across_a_stored_smooth_edge", test::test_contour_across_a_stored_smooth_edge);
   test::guarded("test_groove_crest_rounded_up_to_its_floors",

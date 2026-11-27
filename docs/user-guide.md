@@ -62,6 +62,7 @@ search: type the start of a command's name and press Enter.
   - [Sweep](#sweep)
   - [Intersection Curve](#intersection-curve)
   - [Helix Curve](#helix-curve)
+  - [Isoparametric Curve](#isoparametric-curve)
   - [Flex](#flex)
   - [Loft](#loft)
   - [Rib](#rib)
@@ -130,6 +131,7 @@ search: type the start of a command's name and press Enter.
   - [The rendered view](#the-rendered-view)
   - [Lights](#lights)
   - [Render Image](#render-image)
+  - [Turntable animation](#turntable-animation)
   - [The Render workspace](#the-render-workspace)
   - [Render device](#render-device)
 - [Components and assemblies](#components-and-assemblies)
@@ -167,6 +169,7 @@ search: type the start of a command's name and press Enter.
   - [Form](#form)
   - [Convert Mesh](#convert-mesh)
   - [Mesh tools for reverse engineering](#mesh-tools-for-reverse-engineering)
+  - [Mesh tools: Smooth, Combine, Offset, Align and Plane Cut](#mesh-tools-smooth-combine-offset-align-and-plane-cut)
   - [Sheet metal](#sheet-metal)
   - [Mortise and Tenon](#mortise-and-tenon)
 - [Files and projects](#files-and-projects)
@@ -396,6 +399,18 @@ program, **How to fix** shows the commands with **Copy**.
 See [the chat panel](ai-chat.md) for the setup, the approvals, privacy
 and the history.
 
+**Long checks by an agent.** When an agent checks a large design for
+interference, or the path a body slides or turns along into place, the
+check can take minutes. It runs as MitCad's own computations do: the
+window keeps drawing and, after a moment, shows its progress with
+**Cancel**. Cancel stops the check and the agent is told it was
+canceled; the design does not change. Meanwhile other requests of
+agents to the design are told to wait and try again. **Interference**
+on the Inspect group checks the same way: on many bodies the window
+keeps drawing and shows the progress with **Cancel**, and Cancel leaves
+the panel open with the check canceled until you change a body to
+check.
+
 ## Work with an agent through comments
 
 A comment is a note pinned to the place it is about: a face, an edge, a
@@ -490,6 +505,7 @@ Each release on GitHub has these files:
 | `mitcad-<version>-windows-x64.exe` | The Windows installer |
 | `mitcad-<version>-windows-x64.zip` | The portable `.zip` for Windows |
 | `Mitcad-<version>-x86_64.AppImage` | The Linux AppImage |
+| `Mitcad-<version>-aarch64.AppImage` | The Linux AppImage for 64-bit ARM (aarch64) |
 | `Mitcad-<version>-macos-arm64.dmg` | The macOS application disk image |
 | `update-manifest.json` | The signed manifest for automatic updates |
 
@@ -521,7 +537,9 @@ MitCad needs OpenGL 2.1 or newer on Windows. The installer runs as the
 user. It installs in one of two scopes:
 
 - **just for me** (the default): into `%LOCALAPPDATA%\Programs\Mitcad`,
-  with the Start menu shortcut, the `.mitcad` file type and the
+  with the Start menu shortcut, the `.mitcad` file type, MitCad under
+  Open with for the files it imports (STEP, IGES, meshes and the others;
+  which program opens them by default stays as it was) and the
   uninstall entry under `HKCU`. This scope does not need administrator
   rights, so there is no UAC prompt.
 - **for all users**: into `Program Files\Mitcad`, registered under
@@ -573,11 +591,16 @@ update itself. It only announces a new release.
 
 The AppImage is built on Ubuntu 24.04 and needs glibc 2.39 or newer:
 Ubuntu 24.04 or newer, or a distribution based on them. It brings its
-own Qt and does not use the system's.
+own Qt and does not use the system's. The AppImage for 64-bit ARM
+(`aarch64`) needs the same and renders with the CPU only.
 Without FUSE, run it with `--appimage-extract-and-run`. At each start
 the AppImage writes its desktop file and its icons into `$XDG_DATA_HOME`
 if they differ, so docks show the icon. In the desktop file, `Exec` is
-the AppImage and `StartupWMClass=Mitcad`; `TryExec`, `X-AppImage-Name`
+the AppImage with the file to open (`%f`) and `StartupWMClass=Mitcad`;
+its `MimeType` lists designs and the files MitCad imports, so a file
+manager opens a design in MitCad and offers MitCad under Open With for
+STEP, IGES, meshes and the other imports (all but `.sc`, a name other
+programs use too); `TryExec`, `X-AppImage-Name`
 and `X-AppImage-Version` let AppImage managers list MitCad. When the
 desktop file is already there, for example written by an AppImage
 manager, MitCad merges its own keys into it instead of replacing it: the
@@ -602,7 +625,11 @@ In a Wayland session MitCad runs on X11 (XWayland) for now; the
 environment variable `MITCAD_WAYLAND=1` runs it natively on Wayland, so a
 scaled desktop (150 %, 200 %) shows a sharp window, but there the toolbar
 panel does not yet show (mitcad#2031). Elsewhere it runs on X11. The log's `Display platform:` line
-says which one runs and why. On Wayland the system does not let an
+says which one runs and why, its `Graphics environment:` line the
+graphics cards and the variables of the launch that choose one (on a
+laptop with two, such as `__NV_PRIME_RENDER_OFFLOAD=1`), and its `Paint
+check` lines whether the toolbar panel and the other panels over the 3D
+view were drawn after the window opened and after the Start page. On Wayland the system does not let an
 application move the cursor, so an orbit stops at the edge of the screen.
 
 **When the 3D view cannot start.** MitCad draws its window and the 3D
@@ -1294,11 +1321,33 @@ clears it too. The middle button keeps what your scheme gives it (pan or
 orbit): a click of it never sets or moves the center. A 3D mouse keeps
 its own center.
 
+**View › Camera** sets the camera's projection. MitCad remembers it, and
+the same choice is **Camera** in Preferences › Display and in the
+orientation cube's menu:
+
+- **Orthographic** (the default): parallel lines stay parallel, and a
+  part looks as large near the screen as far away. Good for measuring by
+  eye and for flat views.
+- **Perspective**: near parts look larger, as in a photo.
+- **Perspective with Orthographic Faces**: perspective, but orthographic
+  while the view looks straight at one of the six faces: Top, Bottom,
+  Front, Back, Left or Right. You get it from a face of the orientation
+  cube, a standard view, Look At on a face parallel to one of them, or a
+  named view that looks along one. As soon as you orbit away, the view is
+  in perspective again; the cube's edge and corner views are perspective.
+  The model stays as large in the middle of the view at each switch.
+  While a 3D mouse moves the view it stays in perspective (its Fly and
+  Camera modes work as in Perspective); when it stops on a face the view
+  becomes orthographic.
+
+A named view remembers the projection it was saved in, also Perspective
+with Orthographic Faces, and going to it puts it back.
+
 The **orientation cube** turns the view. A click on a face, an edge or
 a corner of the cube turns the view there. Drag the cube to orbit. The
 house returns to the home view. The right button opens the cube's menu:
-Home, Camera (Orthographic, Perspective: the camera's projection, as in
-View › Camera), Cube Size (75 %, 100 %, 125 %, 150 %), Set Current View
+Home, Camera (Orthographic, Perspective, Perspective with Orthographic
+Faces: the camera's projection, as in View › Camera), Cube Size (75 %, 100 %, 125 %, 150 %), Set Current View
 as Home, Reset Home, Fit.
 
 **Cube Size** makes the cube smaller or larger, with its arrows and the
@@ -1359,8 +1408,11 @@ once, and Cancel puts the old one back.
 **View › Anaglyph 3D** shows the view in stereo for red/cyan 3D glasses
 (the red filter over the left eye). It is off by default; select it
 again to turn it off. While it is on, the camera is a perspective one;
-when you turn it off, the camera goes back to Orthographic or
-Perspective as it was before. Choosing **Orthographic** (View › Camera,
+when you turn it off, the camera goes back to Orthographic, Perspective
+or Perspective with Orthographic Faces as it was before. Perspective
+with Orthographic Faces keeps Anaglyph 3D on, as Perspective does: the
+camera stays a stereo one at every direction, also at a face, until you
+turn Anaglyph 3D off. Choosing **Orthographic** (View › Camera,
 the cube's menu or Preferences) turns Anaglyph 3D off. Selecting,
 highlights, handles and the orientation cube work as usual. The
 **Rendered** visual style is not available while Anaglyph 3D is on:
@@ -1416,7 +1468,8 @@ OBJ, Send to Slicer) and the model itself stay the same.
 The **View menu** has the standard views, Look At, Fit, the camera, the
 display styles, the background, Grid and Snaps, and the named views. Its
 **Panels** submenu shows and hides the panels: Projects, Browser,
-Timeline, Command (Docked), Chat and Comments…. Export Snapshot… is in the
+Timeline, Command (Docked), Chat and Comments…. Export Snapshot… and
+Export Turntable… ([Turntable animation](#turntable-animation)) are in the
 File menu, beside Export….
 The display styles are Shaded, Shaded with Visible Edges Only, Shaded
 with Hidden Edges, Wireframe, Wireframe with Hidden Edges and Wireframe
@@ -1982,6 +2035,7 @@ as MitCad has them.
 | OK, Cancel | Enter, Esc | Accept or cancel a command. Esc also clears the selection |
 | Repeat | Enter | With no command running and outside sketches, start the last command again, as Repeat in the context menu does. Its panel starts with the settings of that command's last OK (the appearance, operation, distance and so on); only the selections are empty. Not while you type in a field, rename a row or work in a list: there Enter keeps its own meaning. Repeat also has a row of its own in Tools › Keyboard Shortcuts, with no key: give it another key there, Space for example. That key repeats the same way, only in the 3D view, and a field, a list, a check box or a button with the focus still gets it as before |
 | Hide/Show | V | Outside sketches: hide the selected bodies, components, sketches and construction geometry, in the view or in the Browser. When the first of them is hidden, show them all. One Undo step undoes it ([Browser](#browser)) |
+| Isolate, Unisolate | | Outside sketches: show only the selected bodies and components, or everything again. No key until you give them one in Tools › Keyboard Shortcuts ([Browser](#browser)) |
 | Hide the preview | Hold Ctrl (Cmd) | While a feature command's panel is open: hide its preview while you pick its inputs, and show it again on release ([Command panels](#command-panels)) |
 | Create Sketch | Alt+S (Option+S) | Select a plane or a planar face, or select it before the command. Available outside a sketch |
 | Finish Sketch | Ctrl+Enter | Go back to the 3D view. Esc never leaves a sketch unless you turn on Esc leaves an unchanged sketch in Preferences › Sketch: then Esc does the same as Finish Sketch when it has nothing else to cancel and you changed nothing in the sketch, and a new sketch that is still empty is removed. Everything you did in the sketch becomes one undo step |
@@ -1990,7 +2044,7 @@ as MitCad has them.
 | 2-Point Rectangle | R | Also 3-Point Rectangle, Center Rectangle and the rounded rectangles |
 | Center Diameter Circle | C | Also 2-Point, 3-Point, 2-Tangent and 3-Tangent circles |
 | Sketch Dimension | D | A length, a distance, an angle, a radius or a diameter. A distance is horizontal, vertical or aligned. A horizontal or vertical distance can also be signed. The angle is the one on the side where you put the value. A dimension can also go to a body edge or corner, in the sketch plane or not, to the axes of the sketch and to its origin |
-| Trim | T | Remove the part of a curve between intersections (also Extend) |
+| Trim | T | Remove the part of a curve between intersections; drag across several parts to remove them all at once (also Extend) |
 | Offset, Project, Move/Copy | O, P, M | In a sketch: offset a curve, make a projection, move. Project is also in the context menu of a face, an edge or a vertex |
 | Construction | X | Change the selected curves to construction geometry and back |
 | Sketch constraints | Shift+V, Shift+C, Shift+T, Shift+E, Shift+P, Shift+R, Shift+F, Shift+M, Shift+O, Shift+L, Shift+S, Shift+G | In a sketch: Horizontal/Vertical, Coincident, Tangent, Equal, Parallel, Perpendicular, Fix/Unfix, Midpoint, Concentric, Collinear, Symmetry, Curvature ([Constraints](#constraints)) |
@@ -2056,6 +2110,7 @@ submenus.
   - Helix ([Helix](#helix))
   - Intersection Curve ([Intersection Curve](#intersection-curve))
   - Helix Curve ([Helix Curve](#helix-curve))
+  - Isoparametric Curve ([Isoparametric Curve](#isoparametric-curve))
 - Other features:
   - Plastic Feature ([Plastic part features](#plastic-part-features))
   - Envelope ([Envelope](#envelope))
@@ -2120,7 +2175,11 @@ plane, a face or a body. The faces next to them extend or shorten to
 meet it. When the target is on the far side of the material, for example
 a pocket's floor replaced onto the outside face under it or onto a plane
 beyond that face, the material between them is removed and the pocket
-becomes a hole through the body.
+becomes a hole through the body. When a face next to the source lies
+wholly between the source and the target, it goes. For example, replace
+a pocket's floor onto the top, and the pocket is filled. Or replace a
+shell's inner face onto the rim below it, and the narrow wall between
+them goes. The source joins the target's face.
 
 **Split Face** and **Split Body** cut with a **Splitting Tool**: a plane,
 a face, a body or sketch curves. With **Extend Splitting Tool** (on by
@@ -2135,6 +2194,25 @@ Split Body's tool can be a face or a body of another component. Pick
 it in the view where you see it. The split goes into the component of
 the bodies that you split, and you do not have to activate the other
 component. When you move either component, the cut follows the tool.
+
+Split Body keeps every piece by default (**Keep: All Pieces**). To keep
+only some of the pieces, set **Keep** to **Selected**. A dot shows in
+each piece in the view. Click the dots of the pieces that you want to
+keep. Their numbers show in **Pieces**, for example `1, 3`, and you can
+also type the numbers there. Click a dot again to remove its piece from
+the list. When you click OK, the split removes the other pieces. This is
+one step: one Undo brings the whole body back. The first piece that you
+keep keeps the body's name.
+
+The split finds the kept pieces again after each change. When you split
+one body with one plane, it keeps the side of the plane: move the plane,
+and the same side is still kept. In other cases it keeps the piece that
+holds the point where its dot was. If a kept piece is no longer there,
+the split shows a warning, for example `a piece to keep is gone (no
+piece holds point 2 …)`, and keeps the other pieces. If no kept piece is
+left, the split fails and asks you to pick the pieces again. When you
+select other bodies or another tool, Keep goes back to All Pieces,
+because the pieces are new.
 
 **Assemble:** everything that builds an assembly ([Joints and
 constraints](#joints-and-constraints), [Motion studies and contact
@@ -2262,7 +2340,13 @@ Analysis](#inspect-measure-annotations-and-section-analysis)), Print
 Analysis ([Print Analysis](#print-analysis), also on the 3D Print tab),
 Draft Analysis ([Draft Analysis](#draft-analysis)), Point Cloud
 Deviation ([Point clouds and Point Cloud
-Deviation](#point-clouds-and-point-cloud-deviation)),
+Deviation](#point-clouds-and-point-cloud-deviation)), Minimum Radius
+([Minimum Radius](#minimum-radius)), Continuity Analysis ([Continuity
+Analysis](#continuity-analysis)), Minimum Distance
+([Minimum Distance](#minimum-distance)), Zebra, Curvature
+Map, Isocurve Analysis, Environment Map ([Zebra, Curvature Map, Isocurve
+Analysis and Environment Map](#zebra-curvature-map-isocurve-analysis-and-environment-map)),
+Curvature Comb ([Curvature Comb](#curvature-comb)),
 Physical Properties, Center of Mass ([Physical Properties and Center of
 Mass](#physical-properties-and-center-of-mass)), Add Comment. The Make
 tabs show the same group, and Measure is in the Inspect group of the
@@ -2300,8 +2384,8 @@ choose what to select without going back to Solid.
 
 **Sheet Metal** ([Sheet metal](#sheet-metal)):
 
-- **Create:** Create Sketch; Face, Flange, Hem, Convert to Sheet Metal; Bend,
-  Fold. Buttons: Create Sketch, Face, Flange and Bend.
+- **Create:** Create Sketch; Face, Flange, Hem, Convert to Sheet Metal,
+  Lofted Flange; Bend, Fold. Buttons: Create Sketch, Face, Flange and Bend.
 - **Modify:** Sheet Cut, Perforate; Corner Relief, Corner Round, Corner
   Chamfer; Unfold, Refold, Flat Pattern, Show Flat Pattern; Export Flat
   Pattern and Export Bend Table (also on the Laser tab). Buttons: Unfold
@@ -2457,7 +2541,9 @@ on the layer `CUT_OUTER`, the holes on `CUT_INNER`, the lower left corner
 of the outline at the origin. The design does not change. For a
 sheet-metal part, **Export Flat Pattern…** writes its unfolded flat
 pattern with its bend lines, for the same cutters. To lay several parts out on a sheet of
-material, make a cut sheet ([Drawings](#drawings)).
+material, make a cut sheet ([Drawings](#drawings)); **Nest Flat Patterns…**
+on the same tab lays sheet-metal parts out on one and leads to their plasma
+cutting program ([Cut sheets](#cut-sheets)).
 
 ### Sheet parts by material and process
 
@@ -2579,7 +2665,11 @@ file, and every program starts with the same notice as comments.
    Choose the **Work Offset** (G54 to G59), the **Safe Height**, the
    **Machine**, the **Controller** (the machine's by default) and the
    **Program Units** (millimeters or inches). With MillenniumOS, **Probe
-   the work zero first** starts the program by probing it.
+   the work zero first** starts the program by probing it. The view
+   shows the setup's stock before any cut, see-through round the part
+   with its outline: a mill setup's block in its work coordinates, a
+   lathe setup's bar (a tube when it has a bore) on the spindle axis. It
+   follows the setup as you change its margins, stock or work zero.
 3. An operation: **Facing** (the stock's top, or faces and profiles you
    pick), **Contour** (along faces, sketch profiles, edges or sketch
    curves: outside, inside or on the line), **Pocket** and **Adaptive
@@ -2614,7 +2704,8 @@ file, and every program starts with the same notice as comments.
    or feed beyond its limits, the tool running into a clamp), the status
    line says so.
 5. **Simulate** plays a setup's toolpaths back: drag the slider or click
-   **Play**; the tool is drawn where it is.
+   **Play**; the tool is drawn where it is. While it shows the stock as
+   cut, the uncut stock steps aside; it comes back when Simulate closes.
 6. **Post Process…** asks for the setup, the controller and the units
    (the setup's by default) and the file to write; its type is the
    controller's (`.nc`, `.gcode`, `.tap`, `.ngc`, `.cnc`). The dialog repeats that
@@ -2637,7 +2728,7 @@ right-click menu has **Edit**, **Generate**, **Suppress**, **Move Up**,
 **Move Down** and **Delete** (a setup also **Simulate** and **Post
 Process…**); drag an operation onto another to put it there, or onto a
 setup to move it to the end of that setup. A setup's eye shows and hides
-its toolpaths; the design keeps it, and Undo takes it back.
+its toolpaths and its stock; the design keeps it, and Undo takes it back.
 
 Faces, profiles, edges and points picked inside a placed component are
 machined where that placement puts them. A component placed twice is
@@ -2666,16 +2757,99 @@ one, the design's Z through the middle of the bodies).
    (a boring bar's **Bar Diameter**), **Depth of Cut** and **Overhang**
    left empty take the usual values. **Save to Library** keeps the lathe
    with its turret, chuck and tools for other designs.
+   A turning tool or boring bar also has its **Insert and holder**, beside
+   the other fields: the **Insert Code** (an ISO insert code such as
+   `CNMG 120408`, giving the insert's shape, size and corner radius), the
+   **Holder Code** (an ISO holder code such as `PCLNR 2525 M12`, or a
+   boring bar's such as `S25S-PCLNR 12`), and the **Insert Angle**,
+   **Approach Angle** and **Hand** for a tool without codes or to change
+   what the codes give. An empty field takes the code's value, which it
+   shows as a hint; so does an empty **Nose Radius**, which then follows
+   the insert code's corner radius, while a nose radius you type stays
+   when the code changes. **Back Angle** (180° less the approach and insert angles) is
+   the steepest wall falling towards the chuck that the tool can follow
+   down, and the picture shows the insert on its holder from the
+   controlled point, a boring bar on the bore's side and a left-hand tool
+   facing the other way. A holder that does not take the insert's shape,
+   or a code MitCad cannot read, is named in words. **Use Code Values**
+   clears what you typed over the codes. Tools without an insert work as
+   before.
 3. **New Setup** on the lathe: the stock is a bar, its **Side Margin**
    on the radius, the **Top Margin** in front of the part's face and the
-   **Bottom Margin** behind its back; under **Lathe**, a **Stock Bore**
-   for a tube and the **Program Number**.
+   **Bottom Margin** behind its back. To use a bar of a catalog size,
+   give its **Bar Diameter** and **Bar Length** instead: the diameter
+   takes the place of the side margin, and the length runs from the bar's
+   face (the top margin in front of the part's face) towards the chuck in
+   place of the bottom margin. Either may be left empty to keep its
+   margin, and both can be parameters or values with units. The bar keeps
+   its size when the part changes; a bar thinner or shorter than the part
+   is named in words. With **A body** as the stock, the body's own size
+   counts. **Stock Bore** makes the stock a tube; under **Lathe**, the
+   **Program Number**.
 4. The **Turning** operations: **Turn Facing**, **Turn Roughing**, **Turn
    Finishing**, **Grooving**, **Parting Off** and **Threading**, each
    with the lathe's tool its kind needs by default. **Generate**,
    **Simulate** and **Post Process…** work as for milling; the toolpaths
    are drawn in the plane through the spindle axis, and Simulate shows
    the turned stock.
+5. **Manual G-code** for what no operation computes, such as pulling the
+   bar forward after **Parting Off**: in the setup (**Edit** on it),
+   **Add Manual G-code** under **Manual G-code** adds a block; give it a
+   **Name**, choose the operation it comes **After** (or **Program
+   start**) and type the lines into **G-code**. A setup has as many blocks
+   as it needs: ▲ and ▼ change their order, ✕ removes one. The Browser
+   lists each block under its setup after the operation it follows;
+   double-click it to edit, select it and press Delete (or **Delete** in
+   its menu) to remove it, or drag it to another place among its setup's
+   operations: a line shows where it goes, and it then follows the
+   operation above that line (dropped on the setup's row, it comes first,
+   at the program's start). A block stays in its own setup. The setup
+   keeps the blocks, so the program can be posted again without editing
+   the file.
+   **Post Process…** writes them as they are between `(MANUAL CODE
+   BEGIN: …)` and `(MANUAL CODE END)` comments. Before them the program
+   stops the coolant and the spindle and takes the tool to its change
+   position, with the last operation's tool still indexed; after them it
+   sets the modes and the work offset again and stops the coolant and the
+   spindle, and the next operation starts with its tool change, its
+   spindle and its coolant. Simulate does not show what the lines do, and
+   the check that reads the written program back passes over them. Lines
+   the control would not run as a part of the program are refused with
+   their number: the program's end (M2, M30), a tape mark (`%`), N words
+   (the program numbers its lines itself), and on a Fanuc control O words,
+   M99 and lower case letters. Not between the hand-over to the
+   sub-spindle and its first operation, while both spindles hold the
+   part.
+6. **Plunge** on **Turn Finishing** says how the finish goes into
+   undercuts, walls that fall towards the chuck (a neck, a recess in a
+   bore). **Don't plunge**, the default, bridges them as roughing does.
+   **Tool geometry** goes down walls as steep as the tool's back angle
+   (from its insert and holder) less 2 degrees, so the edge behind the
+   nose clears the wall; a steeper wall is left under a line at that
+   angle. It needs the tool's insert and holder and says so. **Free**
+   goes down every wall: you make sure the tool and its holder reach.
+   The finish takes the undercut in one pass, so an undercut deeper than
+   the insert's **Depth of Cut** is refused, saying how deep it is and
+   by how much it is too deep, unless a roughing before it takes it
+   down first (below). Simulate
+   shows what is left and where the edge behind the nose cuts into the
+   part.
+
+   **Plunge** on **Turn Roughing** takes the same choices. With **Tool
+   geometry** or **Free** the roughing goes into the undercuts: it cuts
+   in levels one **Depth of Cut** apart, pocket by pocket, each to its
+   bottom before the next, going into a pocket down its wall and
+   travelling only over what it has already cut, then once along the
+   contour. It leaves the larger of **Stock to Leave** and **Stock to
+   Leave along Z** all round, on the walls of the pockets too. Such a
+   roughing is written move by move (a G71 cycle cannot go into an
+   undercut); a roughing with **Don't plunge** stays a G71 where the
+   post writes cycles. A **Turn Finishing** that plunges after it, on the
+   same side and spindle, may then take an undercut deeper than its
+   insert cuts, as long as what the roughing leaves there is within the
+   insert's **Depth of Cut**; if it leaves more, the finish says how much
+   is left. Change, suppress or move the roughing and the finish is out
+   of date until you generate again.
 
 #### Live tools on a lathe
 
@@ -2874,6 +3048,22 @@ you start Extrude or Revolve or while the panel is open: its outline
 goes into Profiles, without the areas that you used already. A sketch
 whose closed curves cross adds nothing, and the panel says why.
 
+**It starts at zero.** A new Extrude starts with **Distance** 0, in the
+design's units, so that no preview of a made-up size dwarfs a small part
+or hides in a large one. The distance arrow is there at once: type a
+distance, or drag the arrow up or down from the profile. Until then the
+panel says "Type a distance or drag the arrow." and OK waits. The first
+distance makes the preview, and the Operation is selected from where
+that solid lies, as described below. With **Direction: Two Sides** both
+distances start at 0, and either arrow can be dragged from there.
+At zero an arrow is drawn a little beyond the profile, so that a click
+on the profile still picks the profile; the arrow moves from where you
+grab it, and comes back to its distance as you drag away. With **Start:
+Offset** the start offset's arrow is drawn just off the profile and the
+distance arrow beyond it, so that you can grab either one.
+Editing an extrusion shows its saved distance, and Repeat starts with
+the distance of the last OK.
+
 While you make a new extrusion, MitCad selects the Operation from where
 the solid lies: Join where it touches a body, Cut where it goes into one,
 New Body where it touches none, until you select one yourself. When you
@@ -2914,7 +3104,9 @@ the direction stays as it was and the panel shows the failure; your
 Operation never changes in this case. An extrusion that works is never
 flipped, so a profile inside a body cuts the way you chose, and Symmetric,
 Two Sides, Intersect, New Body and New Component are never flipped. When
-you edit an extrusion, choosing its Operation never flips it.
+you edit an extrusion, choosing its Operation never flips it. If you
+choose Cut or Join while the distance is still 0, the first distance you
+give is your direction, and the same check happens then.
 
 **Join that makes a body of its own.** A part of the solid that touches
 the bodies only along an edge or at a point (two cylinders side by
@@ -2989,6 +3181,33 @@ To Object takes a point or a line too: the hole ends on the plane
 through it at right angles to the hole, and a line must lie in such a
 plane. The point or line must be in the extrusion's own component.
 Revolve's To Object takes neither a point nor a line.
+
+**To Next stops at the next face.** Set Extent (or Extent 2) to To Next
+and the extrusion ends at the first face of the bodies it meets, without
+picking that face. Each part of the profile stops at its own first face:
+a rectangle over a low block and a higher plate beside it steps down onto
+the block and stops on the plate. Only bodies ahead of the profile count,
+in the direction Flip gives; the body the sketch lies on stays behind
+when the extrusion goes out of it, and To Next never turns round as To
+Object does. A Join or Cut ends at its Local bodies when you choose them.
+The faces are found again on every recompute, so when a body changes the
+extrusion follows. If a part of the profile meets no face, the extrusion
+fails with "To Next finds no face ahead of a part of the profile": flip
+it, leave that part out of the profiles or choose another extent.
+Symmetric and Start: Object do not take To Next; choose To Object
+instead to stop at a face of your choice.
+
+**A profile that reaches past the object.** With To Object and
+a face, the extrusion stops only at that face (Extend: To Selected Face
+continues its surface; To Adjacent Faces takes the face and the faces
+next to it). A part of the profile that meets none of them fails the
+extrusion, and the message says which kind of part it is: one that runs
+into the body at other faces (for example a profile that reaches over a
+wall onto the rim of a bowl, where the wall's other faces come first),
+or one that passes beside the target. Point at the message and the start
+of that part is shown in the view. Choose the body as the object to end
+each part at the first face of the body it meets, or leave that part
+out of the profile.
 
 **Start: Object on a curved face.** Start: Object also takes a curved
 face: the side of a cylinder or a cone, a sphere, a torus or any other
@@ -3292,6 +3511,43 @@ Pattern on Path, or a construction plane or point along a path. Project
 and Intersect take it in a later sketch. It shows in the Browser in the
 Construction folder, with a light bulb.
 
+### Isoparametric Curve
+
+**Isoparametric Curve** (Create, Curves, after Helix Curve) makes a 3D
+curve that runs across a face along one of the face's two directions:
+the curve along which one of the face's surface parameters, u or v, stays
+the same. On a cylindrical face the u curve is a straight line along the
+axis and the v curve a circle round it. On a freeform face the curve
+follows the face's own shape. Use it as a path, as a guide for a loft or
+a sketch, or to mark a line on a face.
+
+1. Start **Isoparametric Curve** and click the *Face*.
+2. Choose the *Direction*: **U Direction** or **V Direction**.
+3. Choose the *Place*:
+   - **At Point** (the default): the curve runs through the point where
+     you clicked the face.
+   - **At Position**: give a *Position* from 0 to 1 across the face. 0 is
+     at one edge of the face, 1 at the opposite edge, 0.5 halfway.
+   - **Evenly Spaced**: give a *Count*. The curves divide the face into
+     equal strips; none of them lies on the face's edges.
+4. Click **OK**.
+
+- The curve follows the face. When you change the body, its dimensions
+  or parameters, the curve moves and stretches with the face.
+- The face can belong to another component than the active one. The
+  curve goes into the active component and stays linked to the face: it
+  runs through the place you clicked, also when you move or turn either
+  component.
+- Reorient Design turns the clicked place with the design. An **At
+  Point** curve still runs through the same place on the face.
+- The curve stays inside the face. Where the face has a hole or a notch,
+  the curve stops at it and goes on after it, in pieces.
+- One curve in one piece is a path in the same way as the curve of an
+  Intersection Curve: select it for Sweep, Pipe, Loft, Pattern on Path,
+  or a construction plane or point along a path. Project and Intersect
+  take all its curves in a later sketch.
+- It shows in the Browser in the Construction folder, with a light bulb.
+
 ### Flex
 
 **Flex** (Create, after Envelope) lays a flexible item through the model:
@@ -3403,7 +3659,15 @@ that meet smoothly, such as the lines and arcs of a slot:
 
 Surface Loft has the same choice.
 
-**Rails** are curves that the side of the loft passes through. A rail
+**Rails** are curves that the side of the loft passes through. Between
+the sections, each section's shape is stretched from rail to rail. A
+straight side through a rail moves as the rail does, so a rail at the
+widest point of the sections stays the side's outermost line. Through
+three or more sections, the shape between two neighbouring sections is
+a blend of those two alone, so the side does not bulge past a rail
+between them; it still runs on smoothly through each inner section. With
+two rails the side stays smooth along them; with three or more it can
+turn along a rail. A rail
 can be a chain of curves, such as a spline that goes on as a straight
 line. Where the curves of a rail meet with one tangent, the side stays
 smooth; where they meet at a corner, the side has a crease there, as
@@ -3761,6 +4025,11 @@ A tapped hole has a *Direction*, right hand or left hand, and can take a
 custom thread with a number of starts, as Thread does (below). Its bore
 is the thread's minor diameter.
 
+When you mirror or pattern a hole with a cosmetic thread, each copy has
+the thread too. It has the same size, class, direction and length as
+the original, measured from the copy's own mouth. Change the thread on
+the original hole and every copy follows.
+
 **Clearance holes.** With *Hole Tap Type* **Clearance** the hole is for
 an ISO metric screw: choose its *Screw Size* (M1.6 to M24) and its *Fit*
 (Fine, Normal or Coarse, the series of ISO 273; Normal by default). The
@@ -4024,6 +4293,15 @@ happened:
   behind the face". A hole's wall to the outside is checked the same
   way.
 
+When you mirror or pattern a cosmetic thread together with the feature
+that makes its face, or mirror or pattern the body after the thread,
+each copy of the face has the thread too, drawn where the copy is. It
+has the same size, class, direction, length and offset as the original,
+measured from the copy's own end. Change the thread and every copy
+follows. A copy of the face made without the thread (the boss mirrored
+on its own, or the body mirrored before the thread) is a plain
+cylinder.
+
 ### Patterns
 
 The pattern commands are Rectangular Pattern, Circular Pattern, Pattern
@@ -4150,6 +4428,14 @@ On a flat face, **Continue** sets how the face goes on:
 
 A negative distance cuts into the body instead of adding to it.
 
+Offset also works on a curved face, such as the sloping side of a tapered
+Extrude or of a Loft through two or more circles. Each point of the face moves
+the Distance along the face's normal there, so a small negative Distance
+gives an even clearance for a part that fits over it. The arrow starts on
+the face and points out of the material, and dragging it gives the same
+result as typing the Distance. Straight and Along the Walls need a flat
+face.
+
 With Offset, **Tangent Chain** (on by default) also moves the faces that
 are joined to the selected face through smooth edges, as in Offset Face
 ([Tangent Chain](#tangent-chain)). The hover shows them before the
@@ -4227,13 +4513,33 @@ select the motion as in Move/Copy:
 - Rotate about an axis or an edge
 - Point to Point, with Along ([Move/Copy and Align](#movecopy-and-align))
 - Point to Position
+- To Object: flat faces move along their normal up to an object you pick,
+  without a distance. The object is a flat face or a plane parallel to
+  the faces, a vertex or a point, a straight line, or a body. A body
+  stops the faces at its nearest flat face parallel to them in front of
+  them. If the object moves later, for example because you edit the
+  feature that made it, the faces follow it. If the object gives no
+  stop, for example a plane across the faces, the panel says why.
 
 Each face keeps its surface, moved. The faces around it extend or
 shorten along their own surfaces up to it. Thus an end face pushed out
 makes the block longer. A top face turned about one of its edges tilts
-the top. Sometimes the faces around cannot follow the motion: a face
-would vanish, split or no longer meet its neighbor. Then MitCad
-refuses the motion, and the panel says why.
+the top. To move a boss on the plate it stands on, select all of its
+faces: its wall, its top and any fillet or chamfer at the top. The
+whole boss then moves and turns on the plate as far as the plate
+reaches, in one step, and its foot follows on the plate. Sometimes the
+faces around cannot follow the motion: a face would vanish, split or no
+longer meet its neighbor, or the moved faces would reach past the edge
+of the face they stand on, as a boss slid over the edge of its plate.
+Then MitCad refuses the motion, and the panel says why.
+
+Flat faces moved straight along their normal can also cross a step. For
+example, the end of a raised block moves flush with the side of the base
+under it, or past it so that the block overhangs. The faces around are
+then trimmed where they meet. Flush, the end and the base's side become
+one face. A distance that ends less than a millionth of a millimeter
+from such a face ends exactly on it. Offset Face and Press Pull cross a
+step in the same way.
 
 Rotate's ring turns about the axis that the faces turn about, as in
 Move/Copy. So dragging the ring turns the faces the way the ring shows,
@@ -4266,6 +4572,34 @@ all the edges of that face. Each set has its own Radius Type:
   You do not type a radius
 
 The Radius field holds the first of these values.
+
+**Continuity** is Tangent (G1), a circular rounding, or Curvature (G2):
+the rounding also bends as little as the faces do where it touches them,
+so that light runs over the edge without a visible line. **Tangency
+Weight** (0.1 to 2) shapes a G2 rounding: larger keeps it closer to the
+corner of the edge. **Corner Type** says how roundings that meet at a
+corner are joined: Rolling Ball, as a ball rolling over the edges would
+round the corner, or Setback, where the roundings stop short of the
+corner and a smooth patch closes it.
+
+Where G2 roundings meet at a corner, for example the three edges of a
+box's corner, and every edge there is rounded, the roundings stop
+short of the corner and a free-form patch closes it, curvature continuous
+to them, to the faces and in itself. A G2 corner is never a ball: with
+Rolling Ball the roundings stop as close to the corner as the patch
+needs (1.5 times as far as the roundings reach on a face there, less on a
+short edge), with Setback 1.5 times the largest radius from it. The
+patch is one face for each face at the corner. Where a G1 rounding meets
+a G2 corner, the patch is only tangent continuous to it; the feature's
+details say so. A G2 corner needs flat faces and straight edges at the
+corner, all of them outside edges or all inside edges; otherwise the
+fillet fails with a message that says why, and the corner is highlighted
+when you point at the message. Where an edge at the corner is not rounded,
+for example only the two top edges of a box's corner, each G2 rounding
+runs on to the face beyond and the two meet in a sharp crease that
+carries on the edge you left sharp, as G1 roundings do there. Asymmetric
+roundings cannot meet other roundings at a corner where all its edges
+are rounded.
 
 **Full Round** works out the radius for you. Pick the two edges of the
 face that you want to round away, one on each side of it. MitCad finds
@@ -4476,10 +4810,15 @@ thicknesses are parameters like the shell's own, so editing them (or the
 shell's thickness) rebuilds the shell. Faces that meet smoothly get one
 wall: with *Tangent Chain* on, the faces tangent to a face in a row take
 its thickness; with it off, or where two such faces are in rows of
-different thicknesses, the shell is refused. A Rounded wall rounds only
-between walls of one thickness: where a rounding would join a face of its
-own thickness to a face of another (a box's bottom and sides shelled
-Outside), the shell is refused and asks for one thickness or Sharp. When
+different thicknesses, the shell is refused. A Rounded wall rounds from
+one thickness to the other where walls of different thicknesses meet: a
+box shelled Outside 2 mm with its bottom at 5 mm gets roundings along the
+bottom's edges that run 5 mm down and 2 mm out, tangent to the bottom and
+the sides, and rounded corners to match. Such a rounding is built along
+straight edges between flat faces (or along a cylinder's length), along a
+round rim on a flat end, and at corners where three walls meet square to
+each other; elsewhere (for example a corner where a leaning side meets the
+bottom) the shell is refused and asks for one thickness or Sharp. When
 the walls around a face cannot reach its own thickness (a bottom thicker
 than the box is high), the feature fails and paints that face when you
 move the pointer over the message.
@@ -5029,7 +5368,8 @@ between the face and the direction the mold opens, the pull direction.
 It changes no body and no feature.
 
 The panel starts with the selected bodies, or with every visible solid
-body and mesh body. These are the options:
+body and mesh body. While **Isolate** is on, it starts with the bodies
+that the view shows. These are the options:
 
 - **Pull Direction:** optional. Select a construction plane or a planar
   face (the pull is its normal), or a construction axis, a straight
@@ -5067,8 +5407,8 @@ is red and its tooltip tells why.
 A **point cloud** is the points of a scan: from a laser scanner, a
 structured-light scanner or photogrammetry. MitCad keeps a cloud in the
 design as a reference. You can model from it, and you can compare a made
-part with its design. A point cloud is not a body: nothing is built from
-it and it is not exported.
+part with its design. A point cloud is not a body and it is not
+exported; **Reconstruct Mesh** builds a mesh body of it.
 
 **Insert › Point Cloud** (Insert group) reads a file:
 
@@ -5089,7 +5429,10 @@ or in gray, hidden behind the bodies where they are in front of it.
 The browser lists the clouds in the **Point Clouds** folder. Use the
 light bulb to show or hide a cloud. Right-click a cloud for **Move Point
 Cloud** (a turn about Z, then distances along X, Y and Z, to bring the
-scan onto the part), **New Point Cloud Deviation**, **Rename** and
+scan onto the part), **New Point Cloud Deviation**, **Align Point
+Cloud**, **Filter Point Cloud**, **Reconstruct Mesh** ([Aligning,
+filtering and meshing a point
+cloud](#aligning-filtering-and-meshing-a-point-cloud)), **Rename** and
 **Delete**. Double-click a cloud to move it. When you move its component
 to another parent, the cloud goes with it and stays where it is. The `.serp` and `.solidcraft`
 imports bring the point clouds of their files in the same way.
@@ -5099,7 +5442,8 @@ how far each point of a cloud is from the faces of a body, on the exact
 faces. It changes nothing in the design. These are the options:
 
 - **Point Cloud** and **Body:** what to compare. The panel starts with the
-  first cloud and the selected body, or the first visible body.
+  first cloud and the selected body, or the first visible body (while
+  **Isolate** is on, the first body that the view shows).
 - **Faces:** pick faces of the body to measure from those faces only, for
   example the machined faces of a cast part. With no face picked, every
   face of the body counts. Faces that you selected before you started the
@@ -5130,6 +5474,277 @@ are outside, inside and on the faces, with the farthest points.
 is computed again when the cloud, the body or the design change. Use the
 light bulb to show or hide it, and double-click it to edit it. If the
 cloud or the body is gone, the analysis is red and its tooltip tells why.
+
+#### Aligning, filtering and meshing a point cloud
+
+Right-click a cloud in the **Point Clouds** folder for three more tools.
+You can also find them with the command search.
+
+**Align Point Cloud** moves the cloud onto a body or onto another cloud
+by the best fit of its points: MitCad matches each point with the
+nearest point of the target and moves the cloud until the distances stop
+getting smaller. To bring a cloud that lies far away or turned close
+first, start it from point pairs that you click.
+
+- **Point Cloud:** the cloud to move.
+- **Align To:** **Body** (the faces of a body, or the triangles of a mesh
+  body) or **Point Cloud** (another cloud, chosen in **Target Cloud**).
+- **Body** and **Faces:** the panel starts with the selected body, or
+  the first visible body. Pick faces to match the points to those faces
+  only, for example the machined faces of a cast part.
+- **Start:** **Where It Is** starts from where the cloud lies; move it
+  near the part first with **Move Point Cloud**. **By Shape** first turns
+  the middle and the main directions of the cloud onto those of the
+  target, which finds a cloud that lies far away or turned around.
+  **Point Pairs** starts from points that you click in the view: see
+  below.
+- **Best Fit** (on): refines the start.
+- **Largest Distance** (0 mm): points farther than this from the target
+  are left out of the fit, for example the fixture that was scanned with
+  the part. With 0, MitCad leaves out the points far beyond most others.
+
+With **Start** set to **Point Pairs**, click a point of the cloud, then
+the point where it belongs on the target body (or on the target cloud).
+Do this three times or more, at places far apart, for example three
+corners of a part. A point of a cloud is taken as the view shows it: the
+point of the cloud nearest the pointer, or the front one where several
+lie under it. Each pair is drawn as a line from the cloud's point to the
+target's. Backspace takes the last click back. The pairs give the first
+move; **Best Fit** then refines it. Turn **Best Fit** off to move the
+cloud by the pairs alone.
+
+The panel shows the remaining deviation while you change the options: how
+many points were matched, the RMS, the mean and the largest distance,
+and with point pairs how far apart the pairs lie after the move.
+**OK** moves the cloud, in one undo step.
+
+**Filter Point Cloud** makes a new cloud, *Scan Filtered*, of the points
+that you keep. The cloud that it was made of stays in the design,
+hidden (turn on **Keep Original Shown** to keep it visible).
+
+- **Outliers:** **Statistical** takes out points whose nearest
+  **Neighbors** lie much farther away than they do on average in the
+  cloud (by more than **Spread** standard deviations). **By Radius** takes
+  out points with fewer than **Neighbors** other points within
+  **Radius**. **None** keeps them.
+- **Smooth Noise:** moves each point onto the plane of its neighbors.
+- **Crop:** click round points in the view to draw a lasso; **Keep Inside
+  Lasso** keeps only those points, **Remove Inside Lasso** takes them
+  out. Backspace takes the last click back. **Keep Inside Box** and
+  **Remove Inside Box** crop by a box along the design's axes instead. The
+  box starts a little larger than the cloud: drag the arrows on its sides
+  in the view, or type where it starts and ends along each axis (**X
+  From**, **X To**, **Y From**, **Y To**, **Z From**, **Z To**).
+
+**Reconstruct Mesh** builds a closed mesh body of a cloud, *Scan Mesh*,
+in the cloud's component. The mesh tools then work on it: repair,
+segment and fit surfaces.
+
+- **Detail** (64): how fine the mesh is, as cubes along the longest side
+  of the cloud (8 to 256). A finer mesh takes longer.
+- **Normal Neighbors** (12): how many nearest points tell the direction
+  of the surface at each point.
+
+The mesh closes over small gaps of the scan. A scan of only one side of a
+part, or a flat scan, encloses no volume: MitCad says so and makes no
+mesh. Take out outliers and noise first for a smoother mesh.
+
+#### Minimum Radius
+
+**Minimum Radius** (Inspect group, after Point Cloud Deviation) finds the
+smallest radius of curvature on faces: the place where they bend most.
+Use it to check fillets and rounded corners before machining: a milling
+tool cannot cut an inside corner tighter than its own radius. It changes
+no body and no feature.
+
+The radius is measured on the exact faces, not on the mesh. Where a face
+bends differently in two directions (a torus, a free-form face), the
+tighter bend counts. Convex and concave faces count alike. A flat face
+has no radius.
+
+These are the options:
+
+- **Bodies:** every face of these bodies is checked. The panel starts
+  with the selected bodies, or with every visible body. While **Isolate**
+  is on, it starts with the bodies that the view shows.
+- **Faces:** faces checked besides the bodies' faces. Faces that you
+  selected before you started the command are picked already, and then
+  Bodies starts empty: only those faces are checked.
+- **Radius Limit** (0 mm): every face whose smallest radius is under this
+  is marked, for example the radius of your smallest milling tool. With
+  0, no face is marked.
+
+The view marks the place of the smallest radius with its value. With a
+limit, the faces under it are drawn over the body in magenta, and the
+legend in the lower left corner tells the limit. The panel shows the
+smallest radius and its body; click the value to see where it is. With a
+limit, it shows how many faces are under it and their area.
+
+**OK** keeps the analysis in the **Analysis** folder as `MinRadius1`. It
+is computed again when the bodies or the design change. Use the light
+bulb to show or hide it, and double-click it to edit it. If a body or a
+face is gone, the analysis is red and its tooltip tells why.
+
+#### Minimum Distance
+
+**Minimum Distance** (Inspect group, after Continuity Analysis) finds
+the smallest distance between two selections and keeps it up to date:
+when you change the model, the distance is measured again. Use it to
+watch the clearance between parts of an assembly while you design them.
+It changes no body and no feature.
+
+- **Selection Filter:** **Bodies and Components** (the default) or
+  **Faces, Edges and Vertices**, as in Measure.
+- **Selection 1** and **Selection 2:** what the distance is measured
+  from and to. Each can hold several items: click a body in the view or
+  in the browser to add or remove it, or click a component in the
+  browser to measure all of its bodies. If you select items before you
+  start the command, the first one goes to Selection 1 and the others to
+  Selection 2.
+- **Check Clearance** and **Clearance** (1 mm): when the selections come
+  closer than the clearance, they are marked as too close.
+
+The view draws a line between the two closest points with a dot at each
+end and the distance at its middle. The line is teal, or red when the
+selections are closer than the clearance; the legend in the lower left
+corner tells which. The panel shows the distance, the body and point at
+each end of the line, whether the selections touch, and the clearance's
+result. When the selections touch or overlap, the distance is 0.
+
+**OK** keeps the analysis in the **Analysis** folder of the browser as
+`MinDistance1`. Use the light bulb to show or hide it; one analysis is
+shown at a time. Double-click it to edit it, and rename or delete it from
+its context menu. Faces and edges follow the model when it changes. If a
+body or a component is gone, the analysis is red and its tooltip tells
+why.
+
+#### Continuity Analysis
+
+**Continuity Analysis** (Inspect group, after Minimum Radius)
+shows how smoothly faces meet across edges, for example where a rounding
+meets the faces beside it. It changes nothing in the design and keeps
+nothing.
+
+- **Edges:** pick edges. A picked face stands for all its edges, and a
+  body (picked in the view or in the browser) for all of its edges. Edges,
+  faces and bodies that you selected before you started the command are
+  picked already.
+- **Gap** (0.01 mm): faces at most this far apart along the edge touch.
+- **Angle** (0.1 degree): faces whose normals are at most this far apart
+  are tangent.
+- **Curvature (%)** (2): tangent faces whose curvatures across the edge
+  differ by at most this share are curvature continuous.
+- **Samples** (16): how many times each edge is measured along its
+  length; its start is measured too.
+
+At each sample, MitCad measures on the exact faces: the gap between the
+two faces, the angle between their normals and how much their curvature
+across the edge differs. It keeps the worst value of each along the
+edge. An edge gets the best class whose tolerance it keeps, together
+with the classes before it:
+
+- **G0** (violet): the faces touch.
+- **G1** (blue): they touch and are tangent.
+- **G2** (teal): they are tangent and their curvature is the same across
+  the edge.
+- **Not touching** (magenta): there is a gap.
+
+In the view, each edge has the color of its class, lighter on a dark
+view background. The panel shows the tolerances, how many edges are in
+each class and the worst values, and lists the worst edges. A box's
+edges are G0, at 90 degrees. A rounding's edges along the faces beside
+it are G1 when the rounding is tangent (its curvature jumps by 1 / the
+radius there) and G2 when it is curvature continuous. A free edge of a
+surface (with a face on one side only) is not measured. The curvature
+difference is a share of the larger curvature, or of the curvature of a
+circle as large as the body when both faces are flatter than that.
+
+#### Zebra, Curvature Map, Isocurve Analysis and Environment Map
+
+These four analyses (Inspect group, after Minimum Distance) show the
+quality of curved faces: how smoothly faces join, and how their surfaces
+bend. They change nothing in the design. Each one works on **Bodies**
+(all their faces) or on **Faces** that you pick of other bodies. Faces
+that you selected before you started the command are picked already;
+else the panel starts with the selected bodies, or with every visible
+body (while **Isolate** is on, the bodies that the view shows).
+
+- **Zebra** draws dark and light stripes over the faces, as if a set of
+  light stripes shone on them from a direction. Look where two faces
+  meet: when the stripes jump, the faces meet at an edge; when the
+  stripes meet but turn sharply, the faces are only tangent; when the
+  stripes run on smoothly, the faces are curvature continuous.
+  - **Direction:** a plane or planar face (its normal), an axis, a
+    straight edge or a sketch line. With none, the stripes come from +Z.
+  - **Stripes** (12): how many stripes over the half turn from the
+    direction to the opposite one. More stripes are narrower.
+  - **Stripe Width %** (50): the dark part of each stripe.
+- **Curvature Map** colors the faces by their curvature: gray where a face
+  is flat, shading to magenta where it bulges outwards and to blue where
+  it is hollow. Small bumps, dents and flat spots on a curved face show
+  as patches of another color.
+  - **Curvature:** **Gaussian** (the two principal curvatures multiplied,
+    in 1/mm²: positive on a dome or bowl, zero on a plane or a cylinder,
+    negative on a saddle), **Mean**, **Largest Principal** or **Smallest
+    Principal** (in 1/mm; a curvature of 0.1/mm is a radius of 10 mm).
+  - **Color Limit** (0): the curvature where the colors reach their full
+    strength. With 0, the largest curvature found sets it.
+  The panel shows the smallest and largest curvature of each body with
+  its radius; click a point to see where it is.
+- **Isocurve Analysis** draws the u and v lines of each face's surface,
+  the lines that its surface is built along. Their flow shows how the
+  surface is made; lines that crowd together or twist show a surface
+  that is uneven.
+  - **Curves per Face** (10): how many lines each way.
+  - **Color by Curvature:** each line colored by how its surface bends
+    along it, as in the Curvature Map, with its **Color Limit**.
+- **Environment Map** reflects a picture of surroundings in the faces, as
+  a polished part reflects a room. Turn the view: the reflection moves
+  over the faces. Where it bends sharply or breaks, the faces do not join
+  smoothly.
+  - **Picture:** the path of a picture file to reflect. With none, a
+    studio picture is used: a pale sky with light bands over a dark floor.
+
+A legend in the lower left corner of the view tells the colors. **OK**
+keeps the analysis in the **Analysis** folder as `Zebra1`, `Curvature1`,
+`Isocurves1` or `Environment1`. It is computed again when the bodies or
+the design change. As with the other analyses, only one is shown at a
+time: use the light bulb to show or hide it, and double-click it to edit
+it. If a body or a face is gone, the analysis is red and its tooltip
+tells why.
+
+#### Curvature Comb
+
+**Curvature Comb** (Inspect group, after Environment Map) shows how
+sharply curves bend, so that you can check that a spline or an edge is
+smooth. Along each curve it draws a comb: short lines at right angles to
+the curve, each as long as the curve's curvature there, on the outer side
+of the bend. A line joins the tips of the teeth. Where the comb grows
+quickly, the bend tightens quickly; a dent in the line through the tips is
+a dent in the curve's smoothness. Where the curve's bend turns from one
+side to the other, the comb changes sides: that is an **inflection
+point**, and it is marked. A circle's comb has teeth of one length; a
+straight line has no comb. Curvature Comb changes nothing in the design.
+
+- **Curves:** pick sketch curves and edges. A click adds or removes one.
+  What you selected before you started the command is picked already.
+- **Density** (50): the number of teeth along each curve, from 2 to 1000.
+- **Scale** (1): the size of the comb. With 1, the longest tooth is a
+  quarter of the size of the picked curves; 2 makes every tooth twice as
+  long.
+
+The panel shows how many curves are combed, how many inflection points
+they have and the smallest radius of curvature, the tightest bend. The
+comb shows while the panel is open; **Close** or Esc closes it.
+
+**In a sketch**, check **Curvature comb** in the Sketch Palette, beside
+Show profiles. The sketch then shows the comb of the curves that you
+select, or of all its splines, conics and ellipses when nothing is
+selected. The comb follows the curves as you change them: drag a spline's
+point and the comb changes with the drag. During a drag the scale stays as
+it was, so the teeth grow where the bend tightens. The comb uses the
+Density and Scale that you last used in Curvature Comb. The box is
+remembered for the next sketches.
 
 ### Physical Properties and Center of Mass
 
@@ -5270,6 +5885,18 @@ Settings on macOS). The face's edges then still bound the sketch's
 profiles. **Redefine Sketch Plane** keeps the outline as a projection of
 the old face.
 
+The face's outline does not cut up what you draw: a circle across the
+face's edge is one profile, and a shape you draw or offset around the
+circles of bosses standing on the face is one profile without holes. To
+leave such footprints out of a profile, select their circles of the
+outline and use **Profile Boundary** (Modify, or the context menu of the
+curves): the selected outline curves then bound profiles like curves you
+drew, so the circles make holes in the shape around them and are profiles
+of their own, while they stay linked to the face's edges and follow the
+body. Choose only some circles to leave only those footprints out. Use
+Profile Boundary again on the same curves to turn it off. The choice is
+saved with the design.
+
 While you edit a sketch, the timeline at the bottom shows the sketch's
 own work steps instead, in the order you made them: one icon for each
 time you used a tool. A Project of a chain of edges, a rectangle with its
@@ -5407,6 +6034,12 @@ with it off, turn off **Show profiles when a sketch opens** in
 Preferences › Sketch. *Show profiles* in the palette still turns the
 shading on or off, for the sketch that is open only.
 
+*Curvature comb*, beside *Show profiles*, draws the curvature comb of the
+selected curves, or of the splines, conics and ellipses when nothing is
+selected, with their inflection points, and follows them as you drag
+(refer to [Curvature Comb](#curvature-comb)). It is off at first and
+remembered for the next sketches.
+
 The *Create* section of the palette, above *Constraints*, has two rows
 of buttons for the sketch tools that you use most, for drawing and for
 modifying. Before you have used the tools, it shows Line, Rectangle,
@@ -5527,6 +6160,14 @@ When you drag one of several selected curves or points, the whole
 selection moves together and keeps its shape, as far as fixed geometry
 and constraints to other geometry permit. A drag that starts on geometry that is not selected moves only
 that geometry. The drag is one undo step.
+
+The value of a dimension moves with its geometry: when a drag or
+Move/Copy's Translate moves everything a dimension measures the same
+way, its value moves as far as the geometry went and stays where you
+put it beside the geometry, also after you dragged the value by hand. A
+dimension to geometry that does not move, or to geometry that changes
+shape, keeps its value where it is and still measures between its own
+references.
 
 When you drag a single point, such as the end of a line, it snaps to
 points, curve ends, midpoints and curves as a point you draw does, and
@@ -5858,6 +6499,19 @@ the curves that cross it. The new ends obey these rules:
 - If a new end lies in the middle of a curve, the end stays on that
   curve.
 - A projected point holds the new end with a coincident constraint.
+
+To remove several pieces at once, hold the left mouse button and drag
+across them (press **T** or choose **Trim** first). While you drag, Trim
+shows the path of the pointer and marks every piece that it crosses or
+passes over. When you release the button, all the marked pieces are
+removed, by the same rules as a click, and Undo takes them all back in
+one step. A piece that you pass over more than once is removed once. A
+press that does not move more than a few pixels is a click: it removes
+only the piece where you pressed, when you release the button. The drag
+can also start on a curve; nothing is removed before the release. Press
+**Esc** before you release the button to cancel the drag: the marks go
+away and the release removes nothing. When Trim is not active, a left
+drag from empty space selects with a window as usual.
 
 Trim also cuts the lines and arcs that Offset made. They stay linked to
 their source until you change their shape: when you trim one of them,
@@ -7897,6 +8551,16 @@ Browser's right edge, the eyes left of the radio buttons, whatever the
 row's depth or the length of its name. A long name is cut short before
 them. **Classic** puts them back. Press F2 to rename a row.
 
+**Row spacing.** To see more rows in a short Browser, or to make the
+rows easier to read and click, set **Browser row spacing** in
+Preferences › Display (beside **Timeline**). **Compact** makes the rows
+lower, but never so low that an icon, a name, an eye or a radio button is
+cut. **Comfortable** makes them higher. **Standard**, the default, is the
+usual height of each layout. The Browser changes at once in every window
+and both layouts, and keeps its selection, its scroll position and its
+open folders. MitCad keeps the choice for the next start; **Restore
+Defaults** for Display sets it back to **Standard**.
+
 **Sketches under their features.** A sketch has a row in the Sketches
 folder, and the features that use it are rows under it. You can also see
 it the other way round: turn on **Show used sketches under their
@@ -7951,6 +8615,15 @@ does what the eye of its row does. **Hide** and **Show** in the context
 menu of a Browser row do the same for all the rows that are selected
 with it. Give the command another key in Tools › Keyboard Shortcuts.
 V works outside sketches; in a sketch, Shift+V is Horizontal/Vertical.
+
+**Isolate and Unisolate with a key.** **Isolate** and **Unisolate**
+are also commands of their own, in the command search and in Tools ›
+Keyboard Shortcuts. They have no key until you give them one there.
+Select bodies or components, in the view or in the Browser, and run
+Isolate: the view shows only them. A face, an edge or a vertex stands
+for its body. Unisolate shows everything again as the eyes say. Each is
+one Undo step, and neither changes the eyes of the items. They work
+outside sketches, in both window layouts.
 
 **See inside: Transparent.** The context menu of a body or a component
 has the entry **Transparent**, in the view and in the Browser. It
@@ -8099,6 +8772,52 @@ When you delete an item, it leaves every set. When you move a feature or
 a body into another component, or move a component into another one, its
 sets follow it to the new place. Each change of a set is one Undo step,
 and the design keeps its sets.
+
+**Construction sets.** When you model with surfaces, you first make
+curves and planes, then the surfaces through them. A construction set
+keeps them together in the Browser as you make them: the sketches, the 3D
+sketches for guide curves, the construction planes, axes and points, and
+the surface bodies.
+
+1. In the Surface tab, choose **Construct › New Construction Set**. You
+   can also right-click the row of a component and choose **New
+   Construction Set**.
+2. Type the name of the set (MitCad proposes ConstructionSet1,
+   ConstructionSet2, …) and press Enter.
+
+The new set is the **active** set: its name is bold in the Browser. While
+it is active, each new sketch, 3D sketch, construction plane, axis and
+point of its component, and each new surface body, goes into the set. Its
+row comes before the Bodies folder of the component, and its items are
+under it, in the order you made them. They are no longer in the Bodies,
+Sketches or Construction folder. A solid body stays in the Bodies folder.
+The feature that makes a surface stays in the timeline, and its body goes
+into the set.
+
+A set changes only the Browser. Its items stay in their component and in
+the timeline, and they use the same inputs. You edit them as before, and
+their geometry updates as before. The eyes of the Bodies, Sketches and
+Construction folders still hide the items of their kind in the sets.
+
+- **Deactivate** in the menu of the set's row, or **Construct ›
+  Deactivate Construction Set** in the Surface tab, ends the set. New
+  items then go to their usual folders. The items in the set stay there.
+- **Activate** in the menu of another set's row makes that set the active
+  set. Only one set is active at a time. A new set is active at once.
+- A set is active only in its component. When you activate another
+  component, no set is active. **Activate** on the set also activates its
+  component again.
+- **Move to Construction Set** in the menu of a body, a sketch or a
+  construction row puts it (with the rows of the same component that you
+  selected with it) into another set. **Remove from Construction Set**
+  puts it back in its usual folder.
+- **Rename** renames the set. **Ungroup** deletes the set only: its items
+  go back to their usual folders.
+
+When you undo the creation of an item, it also leaves its set, and Redo
+puts it back. Each change of a set is one Undo step. The design keeps its
+sets and which set is active. A design without sets shows the Browser as
+before.
 
 **The order of the components.** The components of a component are in
 the order in which you made them. To change it, drag the row of a
@@ -10646,6 +11365,39 @@ dialog shows the image as it refines, the samples and the time left.
 **Close** also stops a pending or running render and closes the dialog.
 **Save…** writes the finished image. MitCad saves these choices with the design too.
 
+### Turntable animation
+
+**File › Export Turntable…** saves a video or a sequence of images of the
+camera turning about the model, as on a turntable.
+
+| Option | Choices |
+|---|---|
+| Save as | MP4 video, WebM video, either with its frames as PNG images too, or PNG frames only |
+| File | The video file; for PNG frames only, the folder of the frames |
+| Axis | The Z, Y or X axis of the design or the view's up, through the middle of the shown bodies; with a round face, a circle, an arc or an axis selected, the axis of the selection |
+| Angle | 360° by default; a negative angle turns the other way |
+| Frames, Frame rate, Duration | The number of frames and how many a second; a duration sets the frames for the frame rate |
+| Size | The view's size, 1280 × 720, 1920 × 1080, 3840 × 2160, or a width and a height |
+| Style | The view's visual style, or Rendered with the settings of Render Image |
+
+The turn starts from the current view. A full turn (or several) is cut
+into equal steps so that the video loops smoothly: 36 frames of 360°
+turn the camera 10° a frame. Any other angle ends on its last frame.
+The frames of a video go into a folder named after the video, beside it
+(`frame-0001.png`, `frame-0002.png`, …). Rendered frames take as long as
+Render Image takes for each of them; lower the samples in Render Image
+for a quicker turntable. **Cancel** in the progress window stops the
+export.
+
+MitCad makes the video with **FFmpeg**, a free program that it does not
+include: install it (from your package manager, Homebrew on a Mac, or
+the FFmpeg website on Windows), or show MitCad where it is with
+**Locate FFmpeg…** in the dialog. Without FFmpeg you can still save the
+PNG frames. MP4 videos are H.264 where your FFmpeg has an H.264
+encoder, which plays everywhere; WebM videos are VP9 or VP8. After
+writing a video MitCad checks its frame count and size and says so when
+they differ.
+
 ### The Render workspace
 
 The **Render** workspace is where the images of the design are made.
@@ -10985,14 +11737,24 @@ nothing selected) returns to the assembly, which takes the new bodies as
 one step that Undo takes back; undo it after saving the linked design and
 the message band offers **Update** to take the saved edits again. Edits you
 did not save are written when you save the assembly, and MitCad asks about
-them when you close it. Library parts and the components inside a design
+them when you close it. They never go over the design's own saves
+without a question: opening the design in a tab of its own asks first
+whether to save them (**Don't Save** opens the design as it was saved),
+and if the file changed on disk since it was read, or the design is open
+in its own tab, saving the assembly asks before writing them. While you
+edit a design in place without its tab, it does not open in a tab. Library parts and the components inside a design
 linked with its components are not edited in place.
 
 **A linked design with components.** When you link a whole design that
 has components, such as a key that slides on its base, the linked
 component keeps them. The Browser shows its components under it, placed
 as the design places them, with the design's joints, rigid groups and
-grounding. They are read only, like the linked component: they change
+grounding. Constraint sets that use points, axes and planes also come
+along, as do motion links with numeric coupling sizes. Constraints that
+depend on round geometry and motion links that use picked sizes or cam
+profiles need the source geometry and are left out. A machined occurrence
+in the source shows its component's plain bodies in the linked tree.
+These relationships are read only, like the linked component. They change
 only with the design's file. Right-click the linked component's row and
 select **Flexible** to let its parts move in your assembly, as in a
 [flexible subassembly](#flexible-subassemblies): drag the key along the
@@ -11007,9 +11769,14 @@ longer has a part that a joint of your assembly uses, the part stays
 where it was ("Key:1 is no longer in slider.mitcad; it stays where it
 was, as this design uses it"). A design without components, and a
 design linked in an earlier version of MitCad, keep its bodies as one
-component. Choose Linked Parts… and Show as Envelope… are not available
-for a design linked with its components; to link only some of its parts,
-insert it again with **Choose parts…**.
+component. Use **Choose Linked Parts…** on a linked tree to keep particular
+parts and their relationships. The message band names joints dropped when
+their parts are left out. A part used by a joint of your assembly stays
+where it was when its existing placement can still be used. When
+placements of a source component keep different nested parts, each
+choice gets its own component definition. If that split would detach
+a joint in your assembly, MitCad keeps the existing selection and names
+the joint. **Whole Design** brings the tree back in one step.
 
 **Link part of a design.** You can link only some components or bodies
 of a design, for example one bracket of a board. In Insert Component,
@@ -11024,9 +11791,12 @@ occurrence that you want: only that one comes in. A component ticked
 inside a component that is not ticked comes in alone, at its place in
 the design. Update Link and Update All Links then take only the changes
 of the ticked parts; a change elsewhere in the design changes nothing
-here. If the design no longer has a ticked part, the component keeps the
+here. If a flat link's design no longer has a ticked part, the component keeps the
 part as it was saved, and the message band says so ("Bracket:1 is no
-longer in board.mitcad; its saved shape is kept"). To change the choice
+longer in board.mitcad; its saved shape is kept"). A linked tree reports a
+missing selected part and removes it unless your assembly uses it. When
+there are no selected bodies left, the update keeps the saved link.
+To change the choice
 later, right-click the linked component's row in the browser, or the
 component in the view, and choose **Choose Linked Parts…**; **Whole
 Design** in that list links the whole design again. The change is one
@@ -11039,26 +11809,33 @@ whole design.
 such as a machine in a production-line layout, can be heavy. Right-click
 its row in the browser and choose **Show as Envelope…**. Type a detail
 size in millimeters, or leave the field empty for 1 % of the design's
-diagonal (at least 5 mm), and click **OK**. The component then holds only
+diagonal (at least 5 mm), and click **OK**. The occurrence shows
 the [envelope](#envelope) of the design's bodies: one light body in the
 shape of its outside, with openings larger than the detail size kept
-open. MitCad does not keep the design's bodies in memory or in this
+open. For a flat link, only the envelope is kept in memory and in the
 design's file while the component shows its envelope. When the linked
 design changes, MitCad makes the envelope again. **Show in Full** on the
 same row brings the design's bodies back. Both are one step of Undo. A
 library part and a design linked with options cannot show an envelope.
 
+For a design linked with its components, **Show as Envelope…** hides that
+occurrence's detailed bodies and Browser rows behind the envelope. The
+linked geometry and relationships stay in the document, including joints
+that connect to a part under the envelope. **Show in Full** recovers the
+same tree, its Flexible setting and its joint values.
+
 Each occurrence chooses for itself. If a linked design is placed more
 than once, **Show as Envelope…** changes only the occurrence whose row
 you right-clicked: for example, the machine in front of a production line
-in full and the others as envelopes. Such an occurrence goes into a
+in full and the others as envelopes. An occurrence of a flat link goes into a
 component of its own that links the same file, such as **Machine
 Envelope**, so its row is then **Machine Envelope:2**. It stays where it
 is, with its joints. If you leave the detail size empty, the occurrence
 takes the detail size that the other occurrences of the design are shown
 at. **Show All as Envelope…** changes every occurrence of the component
 at once. **Show in Full** brings that one occurrence back to the design's
-bodies.
+bodies. A design linked with its components keeps the occurrence in
+its original component while showing its envelope.
 
 Joints to faces, edges and vertices of the linked design keep their
 places while the design is shown by its envelope. MitCad finds the faces
@@ -11197,8 +11974,8 @@ this. You make the cut in the assembly, and it changes the parts that it
 reaches there only. Each part's own design keeps its undersized hole.
 
 1. Activate the assembly component, or keep the root active.
-2. Start **Extrude** with **Operation: Cut** from a sketch in the
-   assembly.
+2. Start **Extrude** or **Revolve** with **Operation: Cut** from a sketch
+   in the assembly, or **Hole**.
 3. **Affected components** lists the parts that the tool reaches. A
    linked part, and a part that is placed more than once, start
    unchecked. Their rows say why.
@@ -11228,10 +12005,13 @@ timeline after the parts it cuts.
   parts: STEP, meshes and 3MF, mass properties, interference and contact
   sets. The Bill of Materials still counts each machined occurrence as
   its part, in one row per part.
-- **Revolve and Hole** can cut across components in the same way through
-  the model's commands and agents (`cut_scope`). Their panels do not list
-  Affected components yet. A hole that machines other components has a
-  cosmetic thread only.
+- **Hole** shows **Affected components** in place of **Objects to Cut**
+  when you make the hole in a component that has components in it. A
+  hole that machines other components has a cosmetic thread only: with
+  **Modeled** checked, or a tapering thread, the hole cuts the bodies of
+  its own component, and the panel shows **Objects to Cut** again.
+- **Copy and paste** of the assembly, and **Save Component as Design**,
+  keep the cuts: the copy's cuts machine the copy's parts.
 
 Features that you add later to the part's own definition, in the same
 design, do not reach its machined occurrences. Add them before the cut
@@ -12764,6 +13544,15 @@ neighboring edge cannot be continued, the plane continues square to
 the edge: the neighbor turns back into the face, or it meets the new
 end edge at less than 15 degrees.
 
+With Natural, Extend also works past a curved, trimmed boundary, for
+example the rounded corners of the outer rim of an offset surface. The
+surface continues the way it runs, and the new end edge lies the
+distance from the edge, measured along the surface. The face keeps its
+other edges. The sides of the extension continue the neighboring
+edges, so the extension of a corner meets the extensions of the
+straight sides next to it. A flat face extends past a curved edge in
+the same way, with every option.
+
 The open edges of a surface body are edges of one face only. You select
 them as other edges: click an open edge with no command, or in Patch,
 Ruled Surface, Extend, Blend Surface, Boundary Surface and Match Surface.
@@ -12821,8 +13610,13 @@ MitCad joins them end to end round the loop and tells you if the loop
 does not close. If you ask, the surface is tangent to the plane of each
 planar sketch (Tangent to Sketch Plane, shown when you picked curves of
 a planar sketch) or to the faces beside the edges (Edge Continuity,
-shown when you picked edges). Boundary Surface can also run through a
-network. The network has curves one way, lofted through in order, and
+shown when you picked edges). To shape the inside of the loop, pick
+sketch curves inside it into Guide Curves: the surface runs through
+them, but they do not cut it, and the loop stays its only boundary. A
+spoon's bowl, for example, is its rim filled through the curves that set
+its depth. If the rim's sketch has other curves joined to the rim, turn
+Chain Selection off and pick the rim's curves one by one. Boundary
+Surface can also run through a network. The network has curves one way, lofted through in order, and
 curves that cross them. Each curve one way must cross each crossing
 curve, but the curves may run on past the outer curves of the other
 way: the surface ends at the outer crossings. If a curve one way misses
@@ -12874,7 +13668,10 @@ example, two open edges that meet at a corner and a sketch line between
 their other ends close a triangle of the opening. The ends of each curve
 must meet the ends of the edges or of another curve. The patch only
 passes through the curves; the continuity is for the edges. With
-Stitch, the patch of open edges is sewn onto their body.
+Stitch, the patch of open edges is sewn onto their body. Sketch curves
+alone do not make a patch: for a flat patch, select the enclosed profile
+instead, and for a loop of curves alone, use Boundary Surface with Type
+Fill a Loop.
 
 The patch can meet the faces beside the loop in three ways:
 
@@ -12895,7 +13692,9 @@ stitched with a patch of its opening becomes a solid box.
 their faces. With a negative thickness, the wall goes the other way.
 Thicken can also put half of the wall on each side. Like an extrusion,
 the result is a new body, or MitCad joins it to, cuts it from or
-intersects it with other bodies. The surfaces stay.
+intersects it with other bodies. The surfaces stay. Select the surfaces
+in the view or in the Browser. A surface of a single face, such as one
+ruled strip, is selected as a whole body in the view too.
 
 The faces that these features make have names that later features
 follow. A patch's face gets its name from the patch. The front, back and
@@ -12935,12 +13734,44 @@ moulded plastic parts. Its **Type** selects the feature:
 **Manage › Rules › Plastic Rules** opens Plastic Feature with its type
 set to Plastic Rule.
 
-A boss, a rest and a groove name a plastic rule. The rule is the newest
-one before the feature, or None. Where the feature's own draft or gap is
-0, the feature takes the draft or the clearance of the rule. The
+A boss, a rest, a lip and a groove name a plastic rule. The rule is the
+newest one before the feature, or None. Where the feature's own draft or
+gap is 0, the feature takes the draft or the clearance of the rule. The
 timeline shows a warning when a draft is below the smallest draft of the
 rule. The timeline also shows a warning when a wall is outside the walls
 of the rule.
+
+A lip or a groove has two sides: the side along the edge of the rim and
+the side further into the rim face.
+
+- **Follow Tangency:** the side along the edge continues the face beside
+  the edge. For example, the inside wall of a shelled body that curves
+  or leans at the rim goes on into the lip in the same direction, with
+  no crease. A groove along a wall that leans out below the rim then
+  cuts through that wall.
+- **Side Draft:** the other side leans by **Side Draft Angle**. A lip
+  becomes narrower as it rises. A groove becomes narrower as it goes
+  down. Give the lip and the groove of two mating parts the same draft,
+  so that the lip goes into the groove. At 0, the angle is the draft of
+  the plastic rule.
+
+A boss has more settings for its ribs and its hole:
+
+- **Rib Angle:** the angle of the first rib around the boss. The other
+  ribs follow at equal angles.
+- **Rib Draft** and **Rib Draft Angle:** the ribs lean and become
+  thinner towards their tops. The rib thickness is measured at the face.
+- **Rib Ends:** each row is one rib, the first rib first. **Up to the
+  Wall** takes the rib to the wall or face that it meets, also a slanted
+  or curved one. **Short of the Wall** stops it that distance before the
+  wall. **At Its Length** keeps the Rib Length. A rib without a row ends
+  at its length.
+- **Hole Draft** and **Hole Draft Angle:** the hole becomes narrower
+  towards its bottom. The hole diameter is measured at the top.
+
+When MitCad cannot make a lip, a groove or a boss with these values, it
+says why, and the view shows the face it is about. For example, a draft
+that closes a lip before its top is refused.
 
 A boss, a snap fit and a rest grow out of the face from the point you
 click. You can type the coordinates of the point. MitCad measures the
@@ -13742,6 +14573,67 @@ Scripts, `mitcad-cli run` and MCP use the same features and the
 `mesh_section` command
 ([commands.md](../core/model-api/src/commands.md#mesh-tools-for-reverse-engineering)).
 
+### Mesh tools: Smooth, Combine, Offset, Align and Plane Cut
+
+Five more tools in the same **Mesh** submenu change a mesh's shape: they
+smooth a scan, put meshes together, make walls of them, line one up with
+another and cut them in two. Like the tools above, each is a feature in
+the timeline that makes new mesh bodies and hides the mesh bodies it
+started from; the timeline says what it did. When a mesh is one a tool
+cannot work on (it has holes, or its triangles cross each other), the
+tool says so, and moving the pointer over the message shows where: a box
+round each hole, a point where triangles cross. **Repair Mesh** closes
+holes.
+
+- **Smooth Mesh** takes the noise out of a scan. Each of the **Passes**
+  (5) moves every corner of the mesh part of the way (**Amount**, 0.5)
+  towards its neighbors and a little back, so the shape does not shrink.
+  With **Keep Sharp Edges**, edges sharper than the **Sharp Edge Angle**
+  (30°) stay sharp: corners on them only slide along them, and the
+  corners of a box stay where they are. With **Keep Volume**, a closed
+  mesh keeps the volume it encloses. Set **Region** to **Brush** and
+  click on the mesh to smooth only the triangles near your clicks.
+- **Combine Meshes** joins, cuts or intersects closed meshes: pick the
+  **Target Mesh**, then one or more **Tool Meshes**, and the
+  **Operation**. The result is a new closed mesh; the timeline gives its
+  volume. **Merge** puts the meshes into one body as they are, without
+  cutting where they overlap, and also works on open meshes.
+- **Offset Mesh** moves the surface of a mesh: with **Offset Surface**
+  every face moves the **Distance** (1 mm) **Outward** or **Inward**
+  (sharp corners stay sharp), or **Both Ways**, which gives a closed wall
+  round the old surface. The timeline says how far the new surface lies
+  from the mesh. With **Shell** the mesh becomes a closed wall of the
+  **Thickness** (2 mm), inside, outside or on both sides of the surface;
+  set **Openings** to **Brush** and click where the wall is to be open,
+  for example the top of a box. Where the moved surface would turn over
+  (inward, beside a sharp edge whose triangles are narrower than the
+  distance, as on a scan), the offset or the shell's inner side of a
+  closed mesh is trimmed there: it comes out as the surface at the
+  distance from the mesh, its sharp edges sharp, and the timeline says
+  it was trimmed. A distance the part cannot take is refused, with the
+  places: where the part is thinner than twice the distance the surface
+  moves inward (a Shell's whole thickness inside, half of it Both Ways),
+  or a hole narrower than twice the distance it moves outward, so that
+  the offset would split apart, close the hole or vanish. On an open mesh,
+  a distance at which the moved triangles turn over is refused, with
+  the places where they would.
+- **Align Mesh** moves a mesh onto another body (a mesh, a solid or a
+  surface body), for example a scan onto its design. Under **Point
+  Pairs**, click a point on the mesh, then the point where it belongs on
+  the **Target**, three times or more; Backspace takes the last click
+  back. **Best Fit** then moves the mesh until it lies as close to the
+  target as it can; with best fit alone, the mesh should already lie
+  near the target. The timeline says how far the mesh moved and turned,
+  and how far it still lies from the target at most and on average.
+- **Plane Cut** cuts a mesh by a **Plane** (an origin or construction
+  plane, or a flat face) into the piece above it and the piece below.
+  **Keep** both or one of them. With **Cap the Cut** each piece is closed
+  where it was cut, holes and all, so that a closed mesh gives two closed
+  meshes; the timeline gives their volumes.
+
+The same features are in scripts, `mitcad-cli run` and MCP
+([commands.md](../core/model-api/src/commands.md#mesh-tools-smooth-combine-offset-and-shell-align-plane-cut)).
+
 ### Sheet metal
 
 The Sheet Metal tab holds the commands for sheet metal bodies: Face, Flange,
@@ -14027,6 +14919,87 @@ rectangle to a circle, cannot be laid flat without stretching the
 material: MitCad marks the face and says so. Form such a part another
 way, or model it of flat, cylindrical and conical faces.
 
+Duct transitions (square-to-round, rectangle-to-round, offset
+transitions) have such faces, and duct work lays them out approximately,
+by triangulation. Set **Development** to **Approximate** to do the same:
+pick one face of the transition as the Face and the others in **Further
+Faces**, and set the number of **Triangles**. The faces are cut by
+straight lines between their two edges (the transition's ends) into thin
+triangles, laid flat one by one, each with its sides' true lengths. Faces
+that run all round are opened at a seam at the start of the Face, the
+**Corner Gap** wide. The body must be the sheet itself: a transition
+shelled to the thickness of the rules, both ends open. The panel says how
+close the pattern is: how much a length along its edges, and across it,
+differs from the same length on the faces. More triangles bring it
+closer. The Flat Pattern's row in the Browser says the
+same in its tooltip, and **Export Flat Pattern** offers to write the
+lines the triangles fold along on the bend layers too. A flat,
+cylindrical or conical face needs no approximation: it is developed
+exactly, and the panel says so. A sheet laid flat this way is not changed
+by other sheet-metal features. Holes in the faces are laid out with the
+triangles they lie on, and so is the outline of a face cut out of a
+larger surface; their lengths count in how close the panel says the
+pattern is. A face whose two edges meet at a point (a fan, as at a
+transition's corner) is laid flat from that point. Where the edges meet
+part way along the faces, the pattern is two fans side by side, touching
+at that point. A transition built of flat triangles and cones (a
+square-to-round whose sides are planes) is laid flat in one piece with
+its cones: each flat face runs between the edges it shares with the
+faces beside it.
+
+Other duct work converts exactly, as cylinders and cones do. Each gore of
+a mitered elbow, a tube cut at an angle at one or both ends, converts on
+its own body: the cut is
+laid out where it meets the neutral surface, so the gores' blanks fit
+together when rolled. An elbow modeled as one body converts the same way
+without splitting it first: pick the outer (or inner) face of any gore,
+and the body is cut at its miter joints into its gores, each a sheet with
+its own flat pattern. The gore you picked stays the body; the others
+become new bodies. An eccentric (offset) reducer, a cone whose apex
+does not lie above the center of its base, such as a ruled loft between
+two circles of different sizes in parallel planes that are offset from
+each other, converts too: it is laid out along its straight lines, each
+kept at its length. When its side is made of several faces on the same
+cone, picking one converts them all as one piece.
+
+**Lofted Flange** (SHEET METAL group) makes a transition directly as
+sheet between two profiles: a duct from a rectangle to a circle, a hood,
+a hopper. Draw the two profiles in two sketches, for example a rectangle
+on one plane and a circle on a plane above it, and pick them as **First
+Profile** and **Second Profile**: a profile, or curves of a sketch that
+join end to end. Both must be closed, or both open. The profiles lie on
+the surface of the sheet; its thickness lies outside a closed transition
+(**Flip** puts it inside). Choose the **Method**:
+
+- **Press Brake** makes the rounded parts of flat facets that a press
+  brake folds: set the **Facets** of each region around a corner or an
+  arc, or a **Chord Tolerance**. Each facet is exact, so the Flat Pattern
+  is exact, with a bend line and its angle between each two facets. The
+  facets meet at sharp folds; turn on **Bends** to make each fold a bend
+  of the rules' bend radius. The Flat Pattern then has each bend's
+  allowance, its center line and its tangent lines. Bends need facets
+  with four sides: two rectangles, two circles or two rounded rectangles.
+  Where folds meet in a point, as at the corners of a rectangle joined to
+  a circle, bends would run into each other, and MitCad says so.
+- **Die Formed** makes the smooth surface. Between profiles in parallel
+  planes that bend one way (a rectangle and a circle, two rectangles, two
+  circles even off center) the surface is made of flat triangles and
+  cones, which lie flat without stretching: the Flat Pattern is exact,
+  with the lines where flat parts meet rounded ones. Other profiles, for
+  example on planes at an angle, have no such surface: MitCad says so.
+  Choose Press Brake for them, or set **Development** to **Approximate**:
+  the smooth surface between them is laid flat in **Triangles**, and
+  MitCad says how far the lengths of the Flat Pattern are from the
+  surface's.
+
+A closed transition opens at a seam: by default along the shortest line
+between the profiles, or where **Own Seam** puts it along the first
+profile, with a **Gap** (the thickness of the sheet unless you set your
+own). Holes cut through the sheet with **Hole** or a cutting **Extrude**
+at right angles to it show in the Flat Pattern where they lie flat. Cuts
+that reach the edge of the sheet and other sheet features on a lofted
+flange are not supported yet.
+
 Contour Flange, Convert to Sheet Metal and Perforate keep the body a
 sheet. The sheet unfolds, refolds and has a Flat Pattern like any other
 sheet. The details are in `sheet-metal.md` in the docs folder, a
@@ -14192,6 +15165,18 @@ A save to another file does not ask. `mitcad-cli` saves over such a file
 without a question and writes a warning. An agent's `document_save`
 (MCP) does not save over such a file: it is refused, and you save the
 design in MitCad yourself.
+
+**A design whose CAM cannot be read.** Sometimes this MitCad cannot read
+the CAM of a design: another build or a newer MitCad wrote a value that
+this one does not take, or the CAM data is damaged. MitCad then opens the
+design without its CAM: the model, the drawings and everything else are
+there, but no machines, setups or operations. A warning says what is
+wrong with the CAM. Before **Save** writes over the file, MitCad asks as
+above: **Save and Drop Them** writes the design without the CAM, **Save
+As…** keeps the old file with its CAM as it is, and **Cancel** saves
+nothing. **Save** while you edit a linked design in place asks the same,
+without Save As. You can then set up the CAM again in this MitCad, or
+open the old file in the MitCad that wrote it.
 
 **Autosave** writes the unsaved changes every 5 minutes to a recovery
 folder in your user data. It never writes next to your design. The
@@ -17176,7 +18161,8 @@ you send it to a slicer. It also estimates the weight, the filament and
 the cost. It changes no body, no feature and no export.
 
 The panel starts with the selected bodies, or with every visible solid
-body and mesh body. These are the options:
+body and mesh body. While **Isolate** is on, it starts with the bodies
+that the view shows, as **Send to Slicer** does. These are the options:
 
 - **Bed face:** optional. Select a planar face of a body. The face lies
   on the bed, so it sets the print direction. The body does not move.
@@ -17473,7 +18459,12 @@ Its width and its pattern combine: a thick or extra thick line drawn by
 hand can be dashed or a center line too, on a layer of its own in a DXF
 or DWG file (`HIDDEN_THICK`, `HIDDEN_EXTRA_THICK`, `SECTION_LINE_THICK`,
 `SECTION_LINE_EXTRA_THICK`).
-The sheet on the screen, the PDF and the SVG file use the same widths. Lines closer together than twice the visible line's width
+The sheet on the screen, the PDF and the SVG file use the same widths.
+On the screen a line is never narrower than a pixel; a dashed line
+widened so keeps its dashes where the paper has them, the same length
+and spacing at every zoom, as File › Print, the PDF and the SVG file
+draw them: hidden edges 3 mm dashes 1 mm apart, a dashed circle's
+dashes starting at the same point. Lines closer together than twice the visible line's width
 (0.7 mm on the sheet) would run into a blot, so a view leaves out what
 is smaller than that at its scale. A fillet or chamfer smaller than
 0.7 mm on the sheet is drawn as a sharp corner: the edges on either
@@ -17578,7 +18569,14 @@ made again.
 
 A section view takes its letters (A, B and so on) and hatches the cut
 faces. *Look the Other Way* turns the view round. The section line
-with its arrows and letters shows on the view you drew it on. A detail
+with its arrows and letters shows on the view you drew it on. A section
+cuts the whole part through the plane of its line, and its line then
+runs across the whole view, however short you drew it. Check *Only Along
+the Line* to cut only along the line you drew: the part is cut and
+hatched there, the rest stays whole and is drawn as seen from outside,
+and the section line shows just that stretch. A flange cut along one
+radius, for example, shows that side's profile hatched and the other
+side's outline. A detail
 view is twice the scale of its view. Its circle and letter show on
 that view.
 
@@ -17588,16 +18586,24 @@ view: they move only along it. A view projected from a detail lines up
 with the detail's middle. A view that moves takes the views made from
 it along. A break shortens its own view only: the views in line with
 it keep their full length. The panel shows the selected view's
-properties:
+properties. When they are more than the screen or the window has room
+for, they scroll in the panel. When bodies or occurrences that a view
+shows have been deleted from the design, the panel says so in amber
+above the properties, each warning once with how many times it applies,
+such as *an occurrence is gone (49 times)*:
 
 - A base view: its orientation (*Current View* takes the 3D view's
   direction again), and what it shows (*Shows*, the same list as the
-  tool's). Each box you check or clear redraws the view, and the list
-  stays unfolded and scrolled where it was, so you can clear one body
-  after another. A Flat Pattern view names the Flat Pattern it shows and has
-  *Bend Notes* instead.
+  tool's). The heading *Shows* says how many of the bodies the view
+  draws; click its arrow to open the list under it, and again to fold
+  it. The open list takes the room the panel has beside the other
+  settings and scrolls when there are more rows, so a large assembly
+  never covers them. Each box you check or clear redraws the view, and
+  the list stays open, unfolded and scrolled where it was, so you can
+  clear one body after another. A Flat Pattern view names the Flat
+  Pattern it shows and has *Bend Notes* instead.
 - A projected view: the side of its view it is on.
-- A section: its letter, its hatching and *Look the Other Way*.
+- A section: its letter, its hatching, *Only Along the Line* and *Look the Other Way*.
 - A detail: its letter, its circle's radius and its circle's center
   (*Center X* and *Center Y*, in millimeters on the sheet). While the
   detail is selected, its circle shows in blue on its view: drag the
@@ -18000,8 +19006,9 @@ company's block with its logo:
 2. **Line**: click the two ends of a line. **Field**: click two
    opposite corners of its cell, then type its **Label** (written small
    in the corner) and its **Text**, where names in braces are filled in
-   from the design: `{material}`, `{mass}`, `{Customer}`; **Text Height
-   (mm)** sets its letters' height (3.5 when empty).
+   from the design: `{material}`, `{mass}`, `{Customer}`, a parameter's
+   value `{param:Length}` (see *Parameters in texts* below); **Text
+   Height (mm)** sets its letters' height (3.5 when empty).
 3. **Image…**: choose a PNG, JPEG or SVG file (a logo, 4 MB at most),
    then click two opposite corners of its box. The image is drawn whole
    in the box, keeping its proportions.
@@ -18034,6 +19041,23 @@ the drawing has a revision, the latest on top, and the title block
 shows the latest letter. The sheet's panel lists the revisions: a click
 on one edits or deletes it.
 
+**Parameters in texts.** A Text, a Note and a title block field can show
+the value of one of the design's parameters, so that you keep values such
+as a length, a customer or a finish in Edit Parameters and every drawing
+that shows them follows. Right-click the text you are typing (the Text
+and Note tools' Text, a note's Edit Text…, a title block field's Text),
+or press the Menu key, and choose **Insert Parameter…**: pick a parameter
+in the list (type part of its name to filter it) and it goes in at the
+cursor as `{param:Length}`. You can type the same by hand and mix it
+with other words: `L={param:Length} BY {param:Maker}` shows `L=120 mm BY
+ACME`, a number with its unit and a text parameter's text. Change the
+parameter in Edit Parameters and the sheet, its PDF, SVG, DXF and DWG
+files and its printout show the new value; rename it and the texts
+follow. Each drawing shows the parameters its own texts name. A template
+saved with Save as Template… keeps the references; in a design that has
+no such parameter the sheet shows the reference as written, and the
+editor says under the text which parameter is missing.
+
 #### Cut sheets
 
 A cut sheet lays flat components out at 1:1 on a sheet of material and writes
@@ -18055,7 +19079,8 @@ as components and opens it.
 its body seen square on to its largest flat face: the outer boundary of
 the whole body and the holes and cut-outs that go right through it. A
 blind hole or a pocket is not cut. MitCad places new components in free room
-from the top left of the sheet; it does not nest them.
+from the top left of the sheet; **Nest Components…** on the Cut Sheet tab
+lays them all out again (below).
 
 - Drag a component to move it.
 - Turn it from its menu (Rotate 90° Left, Rotate 90° Right) or type an
@@ -18086,6 +19111,44 @@ Bézier curves). Check **Component
 Names on the LABEL Layer** in the same menu to write each component's name
 as text on a layer `LABEL` (for engraving, or to tell the components apart).
 
+**Nesting sheet metal from Make.** Make › Laser › **Nest Flat Patterns…**
+lists the design's sheet-metal components: tick those to cut (the ones
+selected in the design are ticked first, else all) and set their
+**Copies** (as many as the design has of each). Choose **New Cut Sheet**
+or one of the design's cut sheets, the sheet's **Width** and **Height**
+(2500 × 1250 mm at first), the **Spacing** between the components and from
+the sheet's edges, and the **Kerf**, the width the cut takes away. **Nest**
+puts their Flat Patterns on the cut sheet, turns each so that its longer
+side lies along the sheet, places them in rows from the lower left corner,
+the tallest first, and opens the cut sheet. Move and turn the components
+there as you like; **Nest Components…** lays them out again with another
+spacing. A component whose Flat Pattern cannot be made is listed with the
+reason and cannot be ticked.
+
+**Cutting with a plasma torch.** The Cut Sheet tab's **Show Cutting Paths**
+draws over the sheet what the torch does: each outline's cutting path,
+moved half the kerf off the component so that the component comes out at
+its size, the lead-in from the pierce point (a small circle, numbered in
+the cutting order) and, dashed, the moves between cuts. Each component's
+holes are cut before its outer outline, and a component lying in another's
+hole before that hole, so nothing falls out before it is cut; each outline
+is cut with the component on the torch's right, and the lead-in starts in
+the scrap. Bend lines and engraved or scored marks are not cut. While
+something keeps the sheet from being cut, the status bar and the panel say
+what: components that overlap or lie closer together than the kerf, a
+component past the sheet's edge, a hole or notch narrower than the kerf, a
+component whose body is gone. **Cutting Program…** shows the torch's
+settings (**Kerf**, **Feed**, **Pierce height**, **Pierce delay**, **Cut
+height**, **Travel height**, **Lead-in** and **Units**), says whether the
+sheet can be cut with them, keeps them with the cut sheet and saves the
+program (**Save Program…**) as a G-code file (`.nc`) for a plasma table on
+a grbl 1.1 controller: the torch switched on with `M3` and off with `M5`,
+its height on Z, the work zero at the sheet's lower left corner on its top
+surface. Round holes, rounded corners and other arcs are cut as arcs
+(`G2` and `G3`), so the table follows them smoothly; other curves are cut
+as short straight moves (`G1`). MitCad CAM is highly experimental: check the program in a
+simulator and run it first without the torch firing.
+
 #### Export Drawing
 
 File › Export Drawing writes the bodies as a drawing on a sheet. The
@@ -18107,7 +19170,9 @@ MitCad removes the edges behind faces. An isometric view and a section
 view are available on request. Third-angle projection puts the top
 view above the front view and the right view to its right. First-angle
 projection puts them the other way round. *Hidden Edges* draws
-the edges behind faces as dashed lines. *Tangent Edges* draws the
+the edges behind faces as dashed lines. An isometric view and a section
+view never draw them: there *Hidden Edges* is off and unavailable, in the
+view's panel and in its menu, and its tooltip says why. *Tangent Edges* draws the
 edges where faces meet smoothly, such as the edges of fillets, as thin
 lines; without it they are left out, however the body was made. The
 seam of a round face is never drawn. The lines, small
@@ -18419,7 +19484,7 @@ guide that explains its settings.
 |---|---|---|
 | **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). **Show used sketches under their features** (off by default; see [Browser](#browser)). **Extrude starts with**: Operation from the bodies it touches (the default) or New Body (see [Extrude](#extrude)). **Save of a new design**: Ask (the default), On this computer or To a project (see [Saving and recovery](#saving-and-recovery)). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts), [Extrude](#extrude) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube** (with its **Size**), **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Timeline** ([The History list](#the-history-list)), **Browser background** (with **Rows at most**), **Browser Activate button** and **Browser Show eye**, **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube** (with its **Size**), **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Timeline** ([The History list](#the-history-list)), **Browser row spacing**, **Browser background** (with **Rows at most**), **Browser Activate button** and **Browser Show eye**, **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |
@@ -18676,10 +19741,14 @@ at most five. GitHub's downloads redirect to its CDN. More:
 
 ### Feedback and error reports
 
-**Help › Send Feedback** reports a problem or a wish. You do not leave
-MitCad. The report has:
+**Help › Send Feedback** reports a problem or suggests an improvement.
+You do not leave MitCad. The report has:
 
-- The kind: bug report, wish or other
+- The kind, which starts the issue's title (`Bug:`, `Tweak:` or
+  `Feature:`):
+  - **Bug**: something is broken.
+  - **Tweak**: changes how an existing tool works.
+  - **Feature**: makes a wholly new tool in MitCad.
 - A summary
 - A description
 - A contact address, if you want one. The issue tracker is public.

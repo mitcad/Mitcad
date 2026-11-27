@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Fetches the Chromium Embedded Framework's binary distribution pinned in
 # versions.sh (CEF_VERSION, the "minimal" distribution) for this platform
-# (Linux x86-64, macOS arm64), checks its SHA-1 (the pin, else the digest
+# (Linux x86-64, Linux aarch64, macOS arm64), checks its SHA-1 (the pin, else the digest
 # cef-builds publishes beside the archive), and unpacks it into
 # ~/cef/<CEF_VERSION>/; prints the folder, which the build takes as
 # MITCAD_CEF_ROOT (Insert > Component from Web's web browser component,
@@ -17,6 +17,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) platform=linux64 pin=$CEF_LINUX64_SHA1 ;;
+  Linux-aarch64) platform=linuxarm64 pin=$CEF_LINUXARM64_SHA1 ;;
   Darwin-arm64) platform=macosarm64 pin=$CEF_MACOSARM64_SHA1 ;;
   *) echo "fetch-cef.sh: no CEF distribution for $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac

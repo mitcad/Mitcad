@@ -17,6 +17,7 @@
 #include "mitcad/geometry/guard.hpp"
 #include "mitcad/geometry/user_error.hpp"
 #include "mitcad/io/step.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -47,7 +48,7 @@ bool fails_in_words(const char* what, const std::string& path, Read read) {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+MITCAD_BUNDLED_TEST_ARGS(step_read_crash) {
   if (argc != 2) {
     std::fprintf(stderr, "usage: test_step_read_crash <directory>\n");
     return 2;

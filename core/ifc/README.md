@@ -81,7 +81,7 @@ the limits of mitcad#930 (a record of 100 000 nested parentheses,
 40-level self-doubling booleans and composite curves, B-spline
 multiplicities that would wrap).
 
-The corpus test (`tests/corpus.rs`) reads every `.ifc` that the index of
+The corpus test (`tests/read/corpus.rs`) reads every `.ifc` that the index of
 `MITCAD_IFC_CORPUS` lists (`index.tsv`; files named by the first 8 hex
 digits of their SHA-256): each opens without records it cannot read, its
 schema is the one the index gives, it has a project, units and readable

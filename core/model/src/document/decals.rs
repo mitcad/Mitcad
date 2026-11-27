@@ -10,7 +10,11 @@
 //! A decal lies on a planar, cylindrical or conical face, which it follows
 //! by the face's topological name: the face is found again at the timeline
 //! marker whenever the decal is asked for, and when it is gone the decal
-//! says why instead of where it lies. Its place on the face is its centre
+//! says why instead of where it lies. The face's occurrence path, from the
+//! design root, follows the edits that move occurrences or bodies
+//! (`DocState::follow`, mitcad#2527): Reparent Occurrence, Move into
+//! Component, a link that comes back with its root (mitcad#2441) and Save
+//! Component as Design with Replace. Its place on the face is its centre
 //! in the face's coordinates (mm), an angle about the face's normal and a
 //! flip (mirrored left to right); its size is its width and height (mm),
 //! kept in the image's proportions while Lock Aspect is on.
@@ -22,7 +26,11 @@
 //! (`mitcad_model::developed`, as a sketch on such a face has it), `x`
 //! around the axis and `y` along it from the face's low end, so that the
 //! decal wraps onto the face keeping its width along the developed face.
-//! Seen from outside the material, a decal that is not flipped reads as
+//! These start from the component's origin and axes, so Move Features
+//! into an existing component placed elsewhere (mitcad#2555), which
+//! rebuilds the bodies in the destination's coordinates, rewrites the
+//! centres and angles of their decals (`Document::decals_rebased`) and
+//! the decals lie where they lay. Seen from outside the material, a decal that is not flipped reads as
 //! its image does in a picture viewer.
 //!
 //! The `decals` query gives each decal's corners and a grid of points on
@@ -50,10 +58,12 @@ use serde_json::{Value, json};
 
 use super::image_references::{EmbeddedImage, ImageSource};
 use super::{Document, ModelError, invalid};
+use crate::assembly::inverse;
 use crate::datum::{DatumPlane, SurfaceGeometry, Vec3};
 use crate::developed::{DevelopedSurface, Development};
 use crate::features::geom_ref::{GeomRef, Resolver};
 use crate::features::{OccurrencePath, is_false};
+use crate::ids::{BodyUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::topo::TopoName;
 use crate::transform::Transform;
@@ -737,11 +747,32 @@ impl<K: Kernel> Document<K> {
         face: &GeomRef,
         occurrence: Option<&OccurrencePath>,
     ) -> Result<(FaceMap, Vec<Vec<Vec3>>), String> {
+        self.decal_face_rebased(face, occurrence, &Transform::IDENTITY)
+    }
+
+    /// [`Self::decal_face`] as the face's component would have the face's
+    /// coordinates with its body rebuilt in other coordinates, `rebase`
+    /// taking the component's coordinates to them, the face staying where
+    /// it is in the design (Move Features into an existing component
+    /// placed elsewhere, mitcad#2555): a planar face's origin and a curved
+    /// face's reference direction and end start from that component's own
+    /// origin and axes.
+    fn decal_face_rebased(
+        &self,
+        face: &GeomRef,
+        occurrence: Option<&OccurrencePath>,
+        rebase: &Transform,
+    ) -> Result<(FaceMap, Vec<Vec<Vec3>>), String> {
         let GeomRef::Face { body, face: name } = face else {
             return Err("a decal goes on a face of a body".to_owned());
         };
         let path = self.analysis_occurrence(face, occurrence, "decal's face")?;
         let transform = self.path_transform(&path.0);
+        let placed = if *rebase == Transform::IDENTITY {
+            transform
+        } else {
+            transform.after(&inverse(rebase))
+        };
         let mut resolver = self.resolver();
         let shape = resolver.shape(*body)?;
         let found = crate::features::renamed::face_for(&mut resolver, &shape, name)?;
@@ -755,10 +786,13 @@ impl<K: Kernel> Document<K> {
                     Ok(plane) if dot(plane.normal, *normal) < 0.0 => scale(*normal, -1.0),
                     _ => *normal,
                 };
-                FaceMap::Plane(DatumPlane::on_plane(*origin, outward))
+                FaceMap::Plane(DatumPlane::on_plane(
+                    rebase.apply_point(*origin),
+                    rebase.apply_vector(outward),
+                ))
             }
             Ok(SurfaceGeometry::Cylinder { .. } | SurfaceGeometry::Cone { .. }) | Err(_) => {
-                match curved(kernel, &shape, &found) {
+                match curved(kernel, &shape, &found, rebase) {
                     Some(map) => map?,
                     None => {
                         return Err(match &geometry {
@@ -786,7 +820,7 @@ impl<K: Kernel> Document<K> {
             .into_iter()
             .map(|run| run.into_iter().map(|p| transform.apply_point(p)).collect())
             .collect();
-        Ok((map.moved(&transform), runs))
+        Ok((map.moved(&placed), runs))
     }
 
     /// A decal's grid on its face at the marker, or why it has none.
@@ -794,6 +828,83 @@ impl<K: Kernel> Document<K> {
         let (map, runs) = self.decal_face(&decal.face, decal.occurrence.as_ref())?;
         let mesh = decal_mesh(&map, &decal.placement(), &runs)?;
         Ok((map.surface(), mesh))
+    }
+
+    /// The new centres and angles (by name) of the decals on faces of
+    /// `bodies` placed through `from` (a path from the root) that keep them
+    /// where they lie in the design once those bodies are rebuilt in other
+    /// coordinates, `rebase` taking their component's coordinates to the
+    /// new ones (Move Features into an existing component placed
+    /// elsewhere, mitcad#2555). A face's coordinates start from its
+    /// component's origin and axes (a planar face's origin, a curved face's
+    /// reference direction and the end it is measured from), so the same
+    /// face seen from another component's coordinates has its coordinates
+    /// shifted and turned. Decals whose coordinates stay and decals whose
+    /// face is not there at the marker are not listed.
+    pub(crate) fn decals_rebased(
+        &self,
+        bodies: &[BodyUid],
+        from: &[OccurrenceUid],
+        rebase: &Transform,
+    ) -> Vec<(String, [f64; 2], f64)> {
+        let mut rebased = Vec::new();
+        for decal in &self.state.decals {
+            let GeomRef::Face { body, .. } = &decal.face else {
+                continue;
+            };
+            if !bodies.contains(body) {
+                continue;
+            }
+            let occurrence = decal.occurrence.as_ref();
+            if !self
+                .analysis_occurrence(&decal.face, occurrence, "decal's face")
+                .is_ok_and(|path| path.0 == from)
+            {
+                continue;
+            }
+            let (Ok((old, _)), Ok((new, _))) = (
+                self.decal_face(&decal.face, occurrence),
+                self.decal_face_rebased(&decal.face, occurrence, rebase),
+            ) else {
+                continue;
+            };
+            if old.surface() != new.surface() {
+                continue;
+            }
+            // The decal's centre and a point 1 mm along its columns (its
+            // angle's direction), where they lie in the design, read in
+            // the new coordinates: a face's coordinates in two frames
+            // differ by a shift and a turn.
+            let [x, y] = decal.center;
+            let Some(center) = new.coordinates_near(old.point(decal.center), decal.center) else {
+                continue;
+            };
+            let (sin, cos) = decal.angle.to_radians().sin_cos();
+            let Some(ahead) = new.coordinates_near(old.point([x + cos, y + sin]), center) else {
+                continue;
+            };
+            let center = if (center[0] - x).abs() < 1e-9 && (center[1] - y).abs() < 1e-9 {
+                decal.center
+            } else {
+                center
+            };
+            let turned = (ahead[1] - center[1])
+                .atan2(ahead[0] - center[0])
+                .to_degrees();
+            let mut turn = turned - decal.angle;
+            turn -= 360.0 * (turn / 360.0).round();
+            let angle = if turn.abs() < 1e-9 {
+                decal.angle
+            } else {
+                let mut angle = decal.angle + turn;
+                angle -= 360.0 * (angle / 360.0).round();
+                angle
+            };
+            if center != decal.center || angle != decal.angle {
+                rebased.push((decal.name.clone(), center, angle));
+            }
+        }
+        rebased
     }
 
     /// The `decals` query: each decal's settings without its bytes, with
@@ -1080,17 +1191,19 @@ fn curved<K: Kernel>(
     kernel: &K,
     shape: &K::Shape,
     face: &crate::topo::FaceName,
+    rebase: &Transform,
 ) -> Option<Result<FaceMap, String>> {
     use crate::features::emboss::counted;
     if let Ok(cylinder) = kernel.face_cylinder(shape, face) {
-        let Some(along) = unit(cylinder.axis.direction) else {
+        let Some(along) = unit(rebase.apply_vector(cylinder.axis.direction)) else {
             return Some(Err("the cylindrical face has no axis".to_owned()));
         };
+        let origin = rebase.apply_point(cylinder.axis.origin);
         let up = counted(along);
         let start = if dot(up, along) > 0.0 {
-            cylinder.axis.origin
+            origin
         } else {
-            add(cylinder.axis.origin, scale(along, cylinder.length))
+            add(origin, scale(along, cylinder.length))
         };
         return Some(
             Development::new(
@@ -1110,7 +1223,11 @@ fn curved<K: Kernel>(
         );
     }
     if let Ok(cone) = kernel.face_cone(shape, face) {
-        let up = counted(cone.axis);
+        // Heights along the axis from the apex are the same in any
+        // coordinates; the apex and the axis are taken into `rebase`'s.
+        let apex = rebase.apply_point(cone.apex);
+        let axis = rebase.apply_vector(cone.axis);
+        let up = counted(axis);
         let curves = match kernel.curves_of(shape, &TopoName::Face(face.clone())) {
             Ok(curves) => curves,
             Err(e) => return Some(Err(format!("the conical face: {e}"))),
@@ -1128,7 +1245,7 @@ fn curved<K: Kernel>(
             ));
         }
         let size = high.abs().max(1.0);
-        let (first, other) = if dot(up, cone.axis) > 0.0 {
+        let (first, other) = if dot(up, axis) > 0.0 {
             (low, high)
         } else {
             (high, low)
@@ -1139,8 +1256,8 @@ fn curved<K: Kernel>(
                 DevelopedSurface::Cone {
                     half_angle: cone.half_angle,
                 },
-                cone.apex,
-                cone.axis,
+                apex,
+                axis,
                 cone.internal,
                 start,
                 crate::datum::default_x_axis(up),

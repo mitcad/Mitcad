@@ -61,6 +61,7 @@
 #include <TopoDS_Compound.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -302,7 +303,7 @@ void test_stored_state() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_fin_end_strips) {
   test::guarded("test_strips_rolled_on_past_their_edges", test::test_strips_rolled_on_past_their_edges);
   test::guarded("test_end_arc_strip_either_way", test::test_end_arc_strip_either_way);
   test::guarded("test_stored_state", test::test_stored_state);

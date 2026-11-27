@@ -93,7 +93,11 @@ WORK=$BUILD/appimage
 APPDIR=$WORK/AppDir
 # GLib's libraries (see the header), which stay the system's.
 GLIB_FAMILY="libglib-2.0 libgobject-2.0 libgio-2.0 libgmodule-2.0 libgthread-2.0"
-RUNTIME=$TOOLS/runtime-x86_64
+# The machine's architecture (x86_64, or aarch64 for Linux on 64-bit ARM):
+# the AppImage is built where it runs, with the tools and the runtime of
+# that architecture.
+ARCH=$(uname -m)
+RUNTIME=$TOOLS/runtime-$ARCH
 
 for tool in linuxdeploy linuxdeploy-plugin-qt appimagetool; do
   if [ ! -x "$TOOLS/bin/$tool" ]; then
@@ -316,6 +320,6 @@ done < <(find "$APPDIR/usr" -type f -print0)
 # There is no AppStream metadata to check, and no update information of
 # AppImage's tools is written: Mitcad updates itself (docs/updates.md).
 rm -f "$OUT.part"
-ARCH=x86_64 appimagetool --no-appstream --runtime-file "$RUNTIME" "$APPDIR" "$OUT.part"
+ARCH=$ARCH appimagetool --no-appstream --runtime-file "$RUNTIME" "$APPDIR" "$OUT.part"
 mv -f "$OUT.part" "$OUT"
 echo "Made $OUT ($(du -h "$OUT" | cut -f1))"

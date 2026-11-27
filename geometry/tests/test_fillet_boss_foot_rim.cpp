@@ -37,6 +37,7 @@
 #include <TopoDS.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -195,7 +196,7 @@ void test_seam_below_the_top() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_boss_foot_rim) {
   test::guarded("test_seam_on_the_top", test::test_seam_on_the_top);
   test::guarded("test_seam_at_the_foot_end", test::test_seam_at_the_foot_end);
   test::guarded("test_seam_below_the_top", test::test_seam_below_the_top);

@@ -215,7 +215,34 @@ const TestDriver::StepSpec kStepSpecs[] = {
     // The 3D view's background, top and bottom: `dark` or `light` (Follow
     // System's two gradients) or two colours (mitcad#2145).
     {"expect-view-background", 1, 2, TestDriver::kIdle},
+    // What a see-through object does to what is behind it, a line's
+    // contrast on the background, two colours alike (the uncut stock,
+    // mitcad#2569).
+    {"capture-view-point-tint", 3, 3, TestDriver::kIdle},
+    {"capture-view-edge-contrast", 3, -1, TestDriver::kIdle},
+    {"expect-colors-near", 3, 3, TestDriver::kPlain},
 };
+
+// A model point written x,y,z (mm).
+bool modelPoint(const QString& text, gp_Pnt& point) {
+  const QStringList coordinates = text.split(QLatin1Char(','));
+  if (coordinates.size() != 3) {
+    return false;
+  }
+  double xyz[3] = {0.0, 0.0, 0.0};
+  for (int i = 0; i < 3; ++i) {
+    if (!toNumber(coordinates.at(i).trimmed(), xyz[i])) {
+      return false;
+    }
+  }
+  point.SetCoord(xyz[0], xyz[1], xyz[2]);
+  return true;
+}
+
+// A colour's brightness, 0 to 255.
+double brightnessOf(const QColor& color) {
+  return 0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue();
+}
 
 } // namespace
 
@@ -680,6 +707,158 @@ void TestDriver::runViewPixelStep(const QString& name, const QStringList& a, int
       qDebug().noquote() << QStringLiteral("TestDriver: view Background %1").arg(shown);
       return true;
     }, 6, QStringLiteral("the view's background is not %1").arg(wanted));
+  } else if (name == QLatin1String("capture-view-point-tint")) {
+    // capture-view-point-tint <var> <x,y,z> <x,y,z> (mitcad#2569): how much
+    // what the view draws at the first model point differs in brightness
+    // (0 to 255) from what it draws at the second, beside it on the
+    // screen: a see-through object over the background (the uncut
+    // stock), 0 where nothing is drawn over it.
+    gp_Pnt at;
+    gp_Pnt beside;
+    if (!modelPoint(a.at(1), at) || !modelPoint(a.at(2), beside)) {
+      fail(line, QStringLiteral("capture-view-point-tint <var> <x,y,z> <beside x,y,z>"));
+      return;
+    }
+    const QString variable = a.at(0);
+    const auto tint = std::make_shared<double>(0.0);
+    whenReady(
+        [this, at, beside, tint] {
+          auto* view = qobject_cast<OcctViewer*>(viewer());
+          if (view == nullptr || m_main.isNull()) {
+            m_waitDetail = QStringLiteral("no 3D view");
+            return false;
+          }
+          view->settleCamera();
+          const QImage frame = view->grabFramebuffer();
+          const qreal ratio = view->devicePixelRatioF();
+          const QPoint here = (view->toWidgetF(at) * ratio).toPoint();
+          const QPoint there = (view->toWidgetF(beside) * ratio).toPoint();
+          if (frame.isNull() || !frame.rect().contains(here) || !frame.rect().contains(there)) {
+            m_waitDetail = QStringLiteral("%1,%2 or %3,%4 is outside the view's frame")
+                               .arg(here.x())
+                               .arg(here.y())
+                               .arg(there.x())
+                               .arg(there.y());
+            return false;
+          }
+          const QColor drawn = frame.pixelColor(here);
+          const QColor behind = frame.pixelColor(there);
+          *tint = std::abs(brightnessOf(drawn) - brightnessOf(behind));
+          m_waitDetail = QStringLiteral("%1: %2 at %3,%4 beside %5 at %6,%7")
+                             .arg(*tint, 0, 'f', 1)
+                             .arg(drawn.name())
+                             .arg(here.x())
+                             .arg(here.y())
+                             .arg(behind.name())
+                             .arg(there.x())
+                             .arg(there.y());
+          return true;
+        },
+        6, QStringLiteral("no view pixels at %1 and %2").arg(a.at(1), a.at(2)),
+        [this, variable, tint] {
+          m_vars.insert(variable, QString::number(*tint, 'f', 1));
+          qDebug().noquote() << QStringLiteral("TestDriver: view point tint %1 %2").arg(variable, m_waitDetail);
+        });
+  } else if (name == QLatin1String("capture-view-edge-contrast")) {
+    // capture-view-edge-contrast <var> <beside x,y,z> <x,y,z>...
+    // (mitcad#2569): the contrast ratio (WCAG) of a line the view draws
+    // through the model points with the background at the first point,
+    // beside it on the screen. At each point the pixel within two logical
+    // pixels of it that is most unlike the background is the line's; the
+    // highest ratio among the points is taken, since a thin line covers a
+    // pixel wholly only where it runs through its middle (multisampling).
+    gp_Pnt beside;
+    std::vector<gp_Pnt> points;
+    bool parsed = modelPoint(a.at(1), beside);
+    for (int i = 2; parsed && i < a.size(); ++i) {
+      gp_Pnt point;
+      parsed = modelPoint(a.at(i), point);
+      points.push_back(point);
+    }
+    if (!parsed) {
+      fail(line, QStringLiteral("capture-view-edge-contrast <var> <beside x,y,z> <x,y,z>..."));
+      return;
+    }
+    const QString variable = a.at(0);
+    const auto contrast = std::make_shared<double>(0.0);
+    whenReady(
+        [this, beside, points, contrast] {
+          auto* view = qobject_cast<OcctViewer*>(viewer());
+          if (view == nullptr || m_main.isNull()) {
+            m_waitDetail = QStringLiteral("no 3D view");
+            return false;
+          }
+          view->settleCamera();
+          const QImage frame = view->grabFramebuffer();
+          const qreal ratio = view->devicePixelRatioF();
+          const QPoint there = (view->toWidgetF(beside) * ratio).toPoint();
+          if (frame.isNull() || !frame.rect().contains(there)) {
+            m_waitDetail = QStringLiteral("the background's %1,%2 is outside the view's frame").arg(there.x()).arg(there.y());
+            return false;
+          }
+          const QColor background = frame.pixelColor(there);
+          const int reach = std::max(1, static_cast<int>(std::lround(2.0 * ratio)));
+          double best = 0.0;
+          QColor lineColour;
+          QPoint found;
+          for (const gp_Pnt& point : points) {
+            const QPoint centre = (view->toWidgetF(point) * ratio).toPoint();
+            for (int dy = -reach; dy <= reach; ++dy) {
+              for (int dx = -reach; dx <= reach; ++dx) {
+                const QPoint pixel = centre + QPoint(dx, dy);
+                if (!frame.rect().contains(pixel)) {
+                  continue;
+                }
+                const QColor colour = frame.pixelColor(pixel);
+                const double ratioHere = contrastRatio(colour, background);
+                if (ratioHere > best) {
+                  best = ratioHere;
+                  lineColour = colour;
+                  found = pixel;
+                }
+              }
+            }
+          }
+          if (best <= 0.0) {
+            m_waitDetail = QStringLiteral("no point of the line inside the view's frame");
+            return false;
+          }
+          *contrast = best;
+          m_waitDetail = QStringLiteral("%1: %2 at %3,%4 on %5 at %6,%7")
+                             .arg(best, 0, 'f', 2)
+                             .arg(lineColour.name())
+                             .arg(found.x())
+                             .arg(found.y())
+                             .arg(background.name())
+                             .arg(there.x())
+                             .arg(there.y());
+          return true;
+        },
+        6, QStringLiteral("no line at %1").arg(a.mid(2).join(QLatin1Char(' '))),
+        [this, variable, contrast] {
+          m_vars.insert(variable, QString::number(*contrast, 'f', 2));
+          qDebug().noquote() << QStringLiteral("TestDriver: view edge contrast %1 %2").arg(variable, m_waitDetail);
+        });
+  } else if (name == QLatin1String("expect-colors-near")) {
+    // expect-colors-near <#rrggbb> <#rrggbb> <most> (mitcad#2569): two
+    // colours (captured ones as ${var}) apart by at most that much, the
+    // sum of their channels' differences.
+    const QColor first(a.at(0));
+    const QColor second(a.at(1));
+    double most = 0.0;
+    if (!first.isValid() || !second.isValid() || !toNumber(a.at(2), most) || most < 0.0) {
+      fail(line, QStringLiteral("expect-colors-near <#rrggbb> <#rrggbb> <most>, not '%1'").arg(a.join(QLatin1Char(' '))));
+      return;
+    }
+    const int off = std::abs(first.red() - second.red()) + std::abs(first.green() - second.green()) +
+                    std::abs(first.blue() - second.blue());
+    qDebug().noquote() << QStringLiteral("TestDriver: colors %1 and %2 off by %3").arg(first.name(), second.name()).arg(off);
+    if (off > most) {
+      fail(line, QStringLiteral("%1 and %2 are off by %3, more than %4")
+                     .arg(first.name(), second.name())
+                     .arg(off)
+                     .arg(most));
+    }
   }
 }
 

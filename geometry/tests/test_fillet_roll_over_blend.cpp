@@ -43,6 +43,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -233,7 +234,7 @@ void test_rounding_turns_past_the_seam_other_version() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_roll_over_blend) {
   test::guarded("test_rounding_rolls_on_the_far_edges", test::test_rounding_rolls_on_the_far_edges);
   test::guarded("test_rounding_rolls_on_the_far_edges_other_version", test::test_rounding_rolls_on_the_far_edges_other_version);
   test::guarded("test_rounding_turns_past_the_seam", test::test_rounding_turns_past_the_seam);

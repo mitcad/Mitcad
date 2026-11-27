@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A design for tools/ui-scripts/sketch-busy-edits.mitcad-ui (mitcad#2500, GitHub mitcad/Mitcad#706): Sketch1 on XY with two free points that frame the view's fit at (-40, -30) and (40, 30); c3, a line from (-20, 0) to (20, 0), its length dimensioned 40 mm with the value at (0, 8); c6, a line from (-20, -15) to (10, -15), its length dimensioned 30 mm with the value at (-5, -23). The values stand off the lines, clear of the clicks on them."},
+  {"cmd":"sketch.create","plane":"xy"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-20,0],"end":[20,0]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-20,-15],"end":[10,-15]},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"length","line":"c3"},"value":40,"text":[0,8]},
+  {"cmd":"sketch.add_dimension","sketch":"F1","dimension":{"type":"length","line":"c6"},"value":30,"text":[-5,-23]}
+]

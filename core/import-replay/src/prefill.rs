@@ -131,5 +131,12 @@ impl<K: Kernel> Importer<'_, K> {
         }
         self.doc.set_import_scopes(Vec::new());
         self.doc.set_import_focus(HashMap::new());
+        // Its occurrences by their object ids, with those of the documents
+        // filled in, for a design that inserts this one (mitcad#2528).
+        self.report.components.object_guids = std::sync::Arc::new(crate::references::object_guids(
+            self.doc,
+            &self.report.components,
+            self.sources,
+        ));
     }
 }

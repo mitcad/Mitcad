@@ -56,6 +56,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -281,7 +282,7 @@ void test_facade_chamfers_ending_against_a_chamfer() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(chamfer_end_against_chamfer) {
   test::guarded("test_chamfer_of_a_chain_ending_against_a_chamfer",
                 test::test_chamfer_of_a_chain_ending_against_a_chamfer);
   test::guarded("test_facade_chamfers_ending_against_a_chamfer", test::test_facade_chamfers_ending_against_a_chamfer);

@@ -38,6 +38,9 @@
 #include <QMouseEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScreen>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSizePolicy>
 #include <QSpinBox>
@@ -54,6 +57,7 @@
 #include "../browser/DocumentHost.hpp"
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/CommandDockWidth.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/Numbers.hpp"
 #include "../framework/PanelTree.hpp"
@@ -63,6 +67,7 @@
 #include "../view/VersionWatermark.hpp"
 #include "DrawingPreferences.hpp"
 #include "DrawingSheetView.hpp"
+#include "ParameterInsert.hpp"
 #include "SheetSizeRows.hpp"
 #include "../framework/UiSizes.hpp"
 #include "../framework/UserText.hpp"
@@ -76,8 +81,9 @@ constexpr int kPanelMinWidth = 230;
 constexpr int kPanelMaxWidth = 640;
 const char* const kPanelWidthKey = "drawings/panelWidth";
 
-// The rows a base view's Shows list has in sight at most before it
-// scrolls (mitcad#1692), and at least.
+// The rows a base view's open Shows list has in sight at most before it
+// scrolls (mitcad#1692; fewer when the panel has no room for them,
+// mitcad#2498), and at least.
 constexpr int kShowsMinRows = 3;
 constexpr int kShowsMaxRows = 14;
 
@@ -318,6 +324,43 @@ private:
   std::function<void()> m_done;
 };
 
+// Fits a base view's Shows tree to the room the panel has (mitcad#2498):
+// calls `fit` when the tree is shown (before a ShowsPlaceKeeper made before
+// it scrolls it: the filter installed last runs first), when the panel's
+// page view (`room`) is resized and when the page (`page`) is laid out
+// again. The first time the tree is shown, `fit` gets `keptHeight`, the
+// height of the tree before the panel was built again (0: none): the rows
+// under the tree are shown only after it, so the room is known only when
+// the page is laid out with them. Otherwise it gets 0: fitted to the room.
+// Owned by the tree.
+class ShowsFitter : public QObject {
+public:
+  ShowsFitter(QTreeWidget* tree, QWidget* room, QWidget* page, int keptHeight, std::function<void(int)> fit)
+      : QObject(tree), m_tree(tree), m_room(room), m_page(page), m_keptHeight(keptHeight), m_fit(std::move(fit)) {
+    tree->installEventFilter(this);
+    room->installEventFilter(this);
+    page->installEventFilter(this);
+  }
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == m_tree && event->type() == QEvent::Show) {
+      m_fit(std::exchange(m_keptHeight, 0));
+    } else if ((watched == m_room && event->type() == QEvent::Resize) ||
+               (watched == m_page && event->type() == QEvent::LayoutRequest)) {
+      m_fit(0);
+    }
+    return false;
+  }
+
+private:
+  QTreeWidget* m_tree;
+  QWidget* m_room;
+  QWidget* m_page;
+  int m_keptHeight;
+  std::function<void(int)> m_fit;
+};
+
 QString compact(const QJsonObject& object) {
   return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
@@ -541,6 +584,12 @@ QString placedText(const QJsonObject& answer, bool freely) {
   return parts.join(QStringLiteral(", "));
 }
 
+// The design's parameters for Insert Parameter (mitcad#2483): the model's
+// `parameters` query, asked when the menu's entry is chosen.
+ParameterList designParameters(DocumentHost& host) {
+  return [&host] { return host.model().queryArray(QStringLiteral("parameters")); };
+}
+
 // A window's command on the bar as the log names it: its name without the
 // mnemonic and the "…" ("Edit Parameters", mitcad#1582).
 QString loggedName(const QAction* action) {
@@ -550,6 +599,67 @@ QString loggedName(const QAction* action) {
     name.chop(1);
   }
   return name;
+}
+
+// The drawing panel's scroll area (GitHub mitcad/Mitcad#694). Its
+// minimum height is what its fields need while the screen has room for
+// that, so the window makes room for them as it did before the panel
+// scrolled; beyond what the screen leaves it (its available height less
+// the rest of the window), it scrolls, and the panel never asks the
+// window to be taller than its screen: a view's 141 warnings did, and the
+// window stopped answering.
+class PanelScroll : public QScrollArea {
+public:
+  QSize minimumSizeHint() const override {
+    QSize hint = QScrollArea::minimumSizeHint();
+    const QWidget* inner = widget();
+    const QScreen* shownOn = screen();
+    if (inner == nullptr || shownOn == nullptr) {
+      return hint;
+    }
+    int content = inner->minimumSizeHint().height();
+    // Word-wrapped text is taller the narrower it is: at the width it has.
+    if (const QLayout* layout = inner->layout(); layout != nullptr && layout->hasHeightForWidth()) {
+      content = std::max(content, layout->totalHeightForWidth(std::max(1, viewport()->width())));
+    }
+    content += 2 * frameWidth();
+    const QWidget* top = window();
+    const int rest = top == this ? 0 : std::max(0, top->frameGeometry().height() - height());
+    const int room = shownOn->availableGeometry().height() - rest;
+    hint.setHeight(std::max(hint.height(), std::min(content, room)));
+    return hint;
+  }
+
+protected:
+  // A change of its fields (the panel built again) makes its hint, which
+  // the panel's layout keeps, stale.
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == widget() && event->type() == QEvent::LayoutRequest) {
+      updateGeometry();
+    }
+    return QScrollArea::eventFilter(watched, event);
+  }
+};
+
+// A warning as the panel and the status bar say it: one that came more
+// than once with how many times (GitHub mitcad/Mitcad#694).
+QString timesText(const RepeatedText& warning) {
+  return warning.count > 1 ? DrawingWorkspace::tr("%1 (%n times)", nullptr, warning.count).arg(warning.text)
+                           : warning.text;
+}
+
+// Why a view of the `drawing` query draws no hidden edges whatever its
+// style's Hidden Edges (its `no_hidden_lines`, mitcad#2447), for the
+// switch's tooltip; empty when its style decides.
+QString noHiddenLinesReason(const QJsonObject& view) {
+  const QString why = view.value(QStringLiteral("no_hidden_lines")).toString();
+  if (why == QStringLiteral("isometric")) {
+    return QCoreApplication::translate("DrawingWorkspace", "An isometric view shows no hidden edges");
+  }
+  if (why == QStringLiteral("section")) {
+    return QCoreApplication::translate("DrawingWorkspace", "A section view shows no hidden edges");
+  }
+  return QString();
 }
 
 } // namespace
@@ -787,20 +897,53 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
         qDebug().noquote() << QStringLiteral("Drawing panel width %1 remembered").arg(width);
         QTimer::singleShot(0, this, [this] { logButtons(); });
       });
-  // A click on a field of it gives the field the keys (mitcad#1841).
-  new PanelFieldFocus(m_panel);
   auto* panel = new QVBoxLayout(m_panel);
   panel->setContentsMargins(8, 8, 8, 8);
   m_panelTitle = new QLabel;
   m_panelTitle->setFont(bold);
   panel->addWidget(m_panelTitle);
+  // Its fields under its title, in a scroll area that scrolls them up and
+  // down (never sideways) only where the screen has no room for them all
+  // (PanelScroll, GitHub mitcad/Mitcad#694), and in a window lower than
+  // they need (mitcad#2498, GitHub mitcad/Mitcad#703): no field overlaps
+  // another, each stays reachable. See-through: the panel's own background
+  // shows.
+  auto* scroll = new PanelScroll;
+  m_panelScroll = scroll;
+  scroll->setObjectName(QStringLiteral("drawingPanelScroll"));
+  scroll->setWidgetResizable(true);
+  scroll->setFrameShape(QFrame::NoFrame);
+  scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  auto* fields = new QWidget;
+  fields->setObjectName(QStringLiteral("drawingPanelFields"));
+  // An explicit minimum width: the scroll area makes the fields as wide as
+  // its viewport, not as wide as they ask.
+  fields->setMinimumWidth(1);
+  auto* fieldColumn = new QVBoxLayout(fields);
+  fieldColumn->setContentsMargins(0, 0, 0, 0);
   m_form = new QFormLayout;
   // Its fields take the panel's width on every platform (macOS's style
   // keeps them at their size otherwise), as a command's panel does: a
   // wider panel widens a base view's Shows (mitcad#1692).
   m_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-  panel->addLayout(m_form);
-  panel->addStretch(1);
+  fieldColumn->addLayout(m_form);
+  fieldColumn->addStretch(1);
+  scroll->setWidget(fields);
+  scroll->viewport()->setAutoFillBackground(false);
+  fields->setAutoFillBackground(false);
+  keepUnscrolledSideways(scroll);
+  // While the scroll bar shows, the fields keep a gap before it.
+  connect(scroll->verticalScrollBar(), &QScrollBar::rangeChanged, fields, [fieldColumn](int minimum, int maximum) {
+    fieldColumn->setContentsMargins(0, 0, maximum > minimum ? 6 : 0, 0);
+  });
+  panel->addWidget(scroll, 1);
+  // A click on a field of it gives the field the keys (mitcad#1841).
+  new PanelFieldFocus(fields);
+  // The fields scrolled, or their view higher or lower (the window
+  // resized, mitcad#2498): their places logged again.
+  connect(scroll->verticalScrollBar(), &QScrollBar::valueChanged, this,
+          [this] { QTimer::singleShot(0, this, [this] { logButtons(); }); });
+  new PlaceWatcher(scroll->viewport(), [this] { logButtons(); });
   body->addWidget(m_panel);
   column->addLayout(body, 1);
 
@@ -989,6 +1132,10 @@ void DrawingWorkspace::refresh() {
   const QString title = m_title ? m_title() : QString();
   if (!title.isEmpty()) {
     query.insert(QStringLiteral("title"), title);
+  }
+  // A cut sheet's cutting paths over its parts (mitcad#2553).
+  if (m_cuttingPaths) {
+    query.insert(QStringLiteral("cutting_paths"), true);
   }
   // From the projection cache when it holds every view (mitcad#1997): a
   // sheet whose views the kernel has to project is drawn in a job.
@@ -1182,6 +1329,8 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
       qDebug().noquote() << QStringLiteral("Cut sheet warnings: %1").arg(told.isEmpty() ? QStringLiteral("none") : told);
       setStatus(told, true);
     }
+    // Its cutting paths' state (mitcad#2553).
+    showCutting(answer);
   }
   for (const QJsonValue& value : sheet.value(QStringLiteral("views")).toArray()) {
     if (m_cutSheet) {
@@ -1193,9 +1342,14 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
                       .arg(mitcad::modelMessage(mitcad::userText(view.value(QStringLiteral("error")).toString())));
     }
     // What of the bodies it keeps is gone from the design (mitcad#1293): a
-    // warning, the rest drawn.
+    // warning, the rest drawn; each once, with how many times it came
+    // (GitHub mitcad/Mitcad#694: one for each of 141 bodies gone).
+    QStringList warnings;
     for (const QJsonValue& warning : view.value(QStringLiteral("warnings")).toArray()) {
-      gone << tr("View %1: %2").arg(view.value(QStringLiteral("id")).toInt()).arg(userText(warning.toString()));
+      warnings << userText(warning.toString());
+    }
+    for (const RepeatedText& warning : repeatedTexts(warnings)) {
+      gone << tr("View %1: %2").arg(view.value(QStringLiteral("id")).toInt()).arg(timesText(warning));
     }
   }
   const QString said = (problems + gone).join(QStringLiteral("; "));
@@ -1435,6 +1589,21 @@ void DrawingWorkspace::fillPanel() {
   // A base view's Shows tree goes with its row: its place is kept for the
   // one built next (mitcad#2434).
   keepShowsPlace();
+  // The page at its top for something else (mitcad#2498); the same thing
+  // built again keeps where its page was scrolled.
+  const QString subject = QStringLiteral("%1/%2/%3/%4/%5/%6/%7/%8")
+                              .arg(m_drawing)
+                              .arg(m_sheet)
+                              .arg(m_sheetView->selectedView())
+                              .arg(m_sheetView->selectedAnnotation())
+                              .arg(m_sheetView->selectionSize())
+                              .arg(m_tool != nullptr ? m_tool->id : QString())
+                              .arg(m_blockEditor ? 1 : 0)
+                              .arg(m_cutSheet ? 1 : 0);
+  if (subject != m_panelSubject) {
+    m_panelSubject = subject;
+    m_panelScroll->verticalScrollBar()->setValue(0);
+  }
   while (m_form->rowCount() > 0) {
     m_form->removeRow(0);
   }
@@ -1663,6 +1832,11 @@ void DrawingWorkspace::fillToolPanel(const DrawingToolDef& tool) {
         m_options[toolId].insert(id, text);
         qDebug().noquote() << QStringLiteral("Drawing option %1: %2").arg(id, text);
       });
+      // A Text's or a Note's words may show parameters (mitcad#2483).
+      if (id == QStringLiteral("text") &&
+          (toolId == QStringLiteral("drawing.text") || toolId == QStringLiteral("drawing.note"))) {
+        addInsertParameter(edit, designParameters(m_host));
+      }
       field = edit;
       break;
     }
@@ -1840,12 +2014,28 @@ void DrawingWorkspace::fillViewPanel(int id) {
     setErrorStyleSheet(why); // the view is missing (mitcad#1041)
     m_form->addRow(why);
   }
-  // Bodies or occurrences it keeps that are gone (mitcad#1293).
+  // Bodies or occurrences it keeps that are gone (mitcad#1293): each
+  // warning once, with how many times it came (GitHub mitcad/Mitcad#694:
+  // a label for each of 141 bodies gone made the panel far taller than the
+  // window).
+  QStringList warnings;
   for (const QJsonValue& warning : json.value(QStringLiteral("warnings")).toArray()) {
-    auto* gone = new QLabel(userText(warning.toString()));
+    warnings << userText(warning.toString());
+  }
+  QStringList said;
+  for (const RepeatedText& warning : repeatedTexts(warnings)) {
+    auto* gone = new QLabel(timesText(warning));
     gone->setWordWrap(true);
     setWarningStyleSheet(gone);
     m_form->addRow(gone);
+    said << gone->text();
+  }
+  if (!said.isEmpty()) {
+    // How many warnings, and the labels that say them ("; " between).
+    qDebug().noquote() << QStringLiteral("Drawing view %1 panel warnings (%2 of them): %3")
+                              .arg(id)
+                              .arg(warnings.size())
+                              .arg(said.join(QStringLiteral("; ")));
   }
   const QJsonObject subject = json.value(QStringLiteral("subject")).toObject();
   const bool flat = subject.value(QStringLiteral("type")).toString() == QStringLiteral("flat_pattern");
@@ -1893,10 +2083,9 @@ void DrawingWorkspace::fillViewPanel(int id) {
     // What it shows (mitcad#1293): the occurrences and bodies it keeps,
     // checked in a list of the component's; each change one undo step.
     // Update from Model takes what the 3D view shows now. Both span the
-    // panel under the label (mitcad#1692): the names have its whole width,
-    // and the button its whole text.
-    m_form->addRow(new QLabel(tr("Shows")));
-    m_form->addRow(named(showsList(id, json.value(QStringLiteral("subject")).toObject()), "drawingViewShows"));
+    // panel (mitcad#1692): the names have its whole width, and the button
+    // its whole text. The list folds under its heading (mitcad#2498).
+    addShows(id, json.value(QStringLiteral("subject")).toObject());
     auto* update = new QPushButton(tr("Update from Model"));
     update->setToolTip(tr("Shows the occurrences and bodies the 3D view shows now"));
     connect(update, &QPushButton::clicked, this, [edit, id] {
@@ -1940,6 +2129,15 @@ void DrawingWorkspace::fillViewPanel(int id) {
     connect(hatch, &QCheckBox::toggled, this,
             [edit](bool on) { edit(QStringLiteral("hatch"), on ? QStringLiteral("true") : QStringLiteral("false")); });
     m_form->addRow(tr("Hatching"), named(hatch, "drawingViewHatch"));
+    // Limited to its line, or of the whole plane (mitcad#2479); a section
+    // without a line on a parent view has only the whole plane.
+    auto* bounded = new QCheckBox;
+    bounded->setChecked(json.value(QStringLiteral("bounded")).toBool(false));
+    bounded->setEnabled(json.value(QStringLiteral("span")).isArray());
+    bounded->setToolTip(tr("Cut only along the section line, not across the whole view"));
+    connect(bounded, &QCheckBox::toggled, this,
+            [edit](bool on) { edit(QStringLiteral("bounded"), on ? QStringLiteral("true") : QStringLiteral("false")); });
+    m_form->addRow(tr("Only Along the Line"), named(bounded, "drawingViewBounded"));
     auto* flip = new QPushButton(tr("Look the Other Way"));
     connect(flip, &QPushButton::clicked, this, [edit] { edit(QStringLiteral("flip"), QStringLiteral("true")); });
     m_form->addRow(QString(), named(flip, "drawingViewFlip"));
@@ -2044,6 +2242,14 @@ void DrawingWorkspace::fillViewPanel(int id) {
     auto* check = new QCheckBox;
     check->setObjectName(QStringLiteral("drawingViewStyle_") + name);
     check->setChecked(viewStyle.value(name).toBool());
+    // An isometric view and a section draw no hidden edges whatever their
+    // style (mitcad#2447): the switch is off and says why.
+    const QString noHidden = noHiddenLinesReason(json);
+    if (name == QStringLiteral("hidden_lines") && !noHidden.isEmpty()) {
+      check->setChecked(false);
+      check->setEnabled(false);
+      check->setToolTip(noHidden);
+    }
     connect(check, &QCheckBox::toggled, this,
             [edit, name](bool on) { edit(name, on ? QStringLiteral("true") : QStringLiteral("false")); });
     m_form->addRow(tr(label), check);
@@ -2184,7 +2390,7 @@ QList<QPair<QString, QString>> DrawingWorkspace::explodeChoices() const {
   return choices;
 }
 
-QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
+void DrawingWorkspace::addShows(int view, const QJsonObject& subject) {
   const QString component = m_answer.value(QStringLiteral("component")).toString();
   QJsonObject components;
   QJsonArray bodies;
@@ -2195,6 +2401,7 @@ QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
     qDebug().noquote() << QStringLiteral("Drawing subjects not listed: %1").arg(QString::fromUtf8(e.what()));
   }
   auto* tree = new QTreeWidget;
+  tree->setObjectName(QStringLiteral("drawingViewShows"));
   tree->setHeaderHidden(true);
   tree->setColumnCount(1);
   tree->setRootIsDecorated(true);
@@ -2241,8 +2448,11 @@ QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
   tree->setProperty(kShowsPlaceKey, placeKey);
   tree->setProperty(kShowsView, view);
   const auto kept = m_showsPlaces.constFind(placeKey);
+  const bool shown = kept != m_showsPlaces.constEnd() && kept.value().shown;
+  int keptHeight = 0;
   if (kept != m_showsPlaces.constEnd()) {
     const ShowsPlace& place = kept.value();
+    keptHeight = place.height;
     for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
       if ((*it)->childCount() > 0 && place.open.contains(showsRowKey(*it))) {
         (*it)->setExpanded(true);
@@ -2253,10 +2463,50 @@ QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
           << QStringLiteral("Drawing view %1 Shows place after the rebuild: %2").arg(view).arg(showsPlaceText(tree));
     });
   }
-  // Its height follows the rows in sight (those under a folded occurrence
-  // not counted), up to kShowsMaxRows; more scroll (mitcad#1692). Again
-  // when an occurrence is unfolded or folded.
-  const auto fitRows = [tree] {
+  // Compact under its heading (mitcad#2498, GitHub #703): Shows, with how
+  // many of the bodies the view draws, and an arrow that opens the list
+  // under it. Folded at first; once opened, the list stays open for the
+  // drawing's view through every rebuild of the panel (each visibility edit
+  // builds it again), until it is folded.
+  auto* heading = new QToolButton;
+  heading->setObjectName(QStringLiteral("drawingViewShowsToggle"));
+  heading->setText(tr("Shows: %1 of %2 bodies").arg(bodiesShown).arg(bodiesListed));
+  heading->setToolTip(tr("Shows or hides the list of the occurrences and bodies the view draws"));
+  heading->setCheckable(true);
+  heading->setChecked(shown);
+  heading->setAutoRaise(true);
+  heading->setArrowType(shown ? Qt::DownArrow : Qt::RightArrow);
+  heading->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  heading->setIconSize(QSize(9, 9));
+  heading->setFocusPolicy(Qt::TabFocus);
+  {
+    // A section heading (UI conventions, Typography): 0.85, DemiBold, dim.
+    QFont font = heading->font();
+    if (font.pointSizeF() > 0) {
+      font.setPointSizeF(font.pointSizeF() * 0.85);
+    }
+    font.setWeight(QFont::DemiBold);
+    heading->setFont(font);
+  }
+  setRoleStyleSheet(heading, ColorRole::TextSecondary,
+                    QStringLiteral("QToolButton { color: %1; border: none; background: transparent; padding: 2px 0px; }"));
+  // The list's height follows the rows in sight (those under a folded
+  // occurrence not counted), up to kShowsMaxRows (mitcad#1692) and up to
+  // the height the panel's page has left over and under its other settings
+  // (mitcad#2498); more scroll in the list. At least kShowsMinRows rows:
+  // a panel lower than that scrolls its page. Fitted when it is shown
+  // (opened, or the panel built again), when the panel's height changes,
+  // when the page is laid out again and when an occurrence is unfolded or
+  // folded; a folded list is not fitted. `given` (the height it had before
+  // the panel was built again) is its height instead of the room: when the
+  // list is shown in a panel built again, the rows under it are not shown
+  // yet and the page has more room than it will have (the room is fitted
+  // again once they are laid out, and is then the same), and its kept row
+  // at the top is scrolled to with its height as it was.
+  const auto fitRows = [this, tree, view](int given) {
+    if (tree->isHidden()) {
+      return;
+    }
     int inSight = 0;
     for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
       bool open = true;
@@ -2265,14 +2515,60 @@ QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
       }
       inSight += open ? 1 : 0;
     }
-    const int rows = std::clamp(inSight, kShowsMinRows, kShowsMaxRows);
     const int rowHeight =
         std::max(tree->fontMetrics().height() + 6, tree->topLevelItemCount() > 0 ? tree->sizeHintForRow(0) : 0);
-    tree->setFixedHeight(rows * rowHeight + 2 * tree->frameWidth() + 2);
+    const int frame = 2 * tree->frameWidth() + 2;
+    const int wanted = std::clamp(inSight, kShowsMinRows, kShowsMaxRows) * rowHeight + frame;
+    const int least = kShowsMinRows * rowHeight + frame;
+    // The page's other rows: its height as laid out now, less the list's
+    // (fixed, so the layout's hint has it whole).
+    int room = wanted;
+    if (given > 0) {
+      room = given;
+    } else if (QLayout* page = m_panelScroll->widget()->layout()) {
+      page->activate();
+      // Wrapped texts (a view's warnings) as high as the page's width makes
+      // them.
+      const int pageHeight = page->hasHeightForWidth() ? page->totalHeightForWidth(m_panelScroll->widget()->width())
+                                                       : page->totalSizeHint().height();
+      room = m_panelScroll->viewport()->height() - (pageHeight - tree->maximumHeight());
+    }
+    const int height = std::clamp(room, least, wanted);
+    if (height != tree->maximumHeight() || height != tree->minimumHeight()) {
+      tree->setFixedHeight(height);
+    }
+    // Logged when it changes (the UI tests compare it with the page's).
+    const QString fitted = QStringLiteral("Drawing view %1 Shows list height %2 (at least %3, at most %4, room %5)")
+                               .arg(view)
+                               .arg(height)
+                               .arg(least)
+                               .arg(wanted)
+                               .arg(room);
+    if (tree->property("mitcadShowsFit").toString() != fitted) {
+      tree->setProperty("mitcadShowsFit", fitted);
+      qDebug().noquote() << fitted;
+    }
   };
-  fitRows();
-  connect(tree, &QTreeWidget::itemExpanded, tree, fitRows);
-  connect(tree, &QTreeWidget::itemCollapsed, tree, fitRows);
+  // At its least until it is fitted.
+  tree->setFixedHeight(kShowsMinRows * (tree->fontMetrics().height() + 6) + 2 * tree->frameWidth() + 2);
+  new ShowsFitter(tree, m_panelScroll->viewport(), m_panelScroll->widget(), keptHeight, fitRows);
+  connect(tree, &QTreeWidget::itemExpanded, tree, [fitRows] { fitRows(0); });
+  connect(tree, &QTreeWidget::itemCollapsed, tree, [fitRows] { fitRows(0); });
+  // Hidden before it has a parent: a folded list stays hidden when the form
+  // takes it (setVisible(true) now would make it a window of its own).
+  if (!shown) {
+    tree->hide();
+  }
+  connect(heading, &QToolButton::toggled, this, [this, heading, tree, placeKey, view](bool open) {
+    heading->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+    m_showsPlaces[placeKey].shown = open;
+    tree->setVisible(open);
+    qDebug().noquote()
+        << QStringLiteral("Drawing view %1 Shows %2").arg(view).arg(open ? QStringLiteral("opened") : QStringLiteral("folded"));
+    QTimer::singleShot(0, this, [this] { logButtons(); });
+  });
+  m_form->addRow(heading);
+  m_form->addRow(tree);
   // Its rows' places logged again once it is laid out (the UI tests click
   // them), and when a row is unfolded.
   new PlaceWatcher(tree, [this] { logButtons(); });
@@ -2299,13 +2595,13 @@ QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
       editView(view, QStringLiteral("subject"), compact(chosenSubject(chosen)));
     });
   });
-  return tree;
 }
 
 void DrawingWorkspace::keepShowsPlace() {
   auto* tree = m_panel->findChild<QTreeWidget*>(QStringLiteral("drawingViewShows"));
   // A tree not shown yet (a rebuild right after another, before it was
-  // laid out) has no place of its own: the one kept before it stays.
+  // laid out), or folded under its heading (mitcad#2498: the heading keeps
+  // that), has no place of its own: the one kept before it stays.
   if (tree == nullptr || !tree->isVisible()) {
     return;
   }
@@ -2314,6 +2610,10 @@ void DrawingWorkspace::keepShowsPlace() {
     return;
   }
   ShowsPlace place;
+  // A list in sight is an open one (a folded one is hidden), and its height
+  // is the one its rebuilt list starts with (mitcad#2498).
+  place.shown = true;
+  place.height = tree->height();
   for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
     if ((*it)->childCount() > 0 && (*it)->isExpanded()) {
       place.open.insert(showsRowKey(*it));
@@ -2893,7 +3193,7 @@ bool DrawingWorkspace::askAnnotationFields(const DrawingToolDef& tool, QHash<QSt
     if (!optionValue(tool, options, QStringLiteral("text")).trimmed().isEmpty()) {
       return true;
     }
-    const std::optional<QString> text = askNoteText(this, what);
+    const std::optional<QString> text = askNoteText(this, what, QString(), designParameters(m_host));
     if (!text) {
       return false;
     }
@@ -3522,7 +3822,8 @@ void DrawingWorkspace::editNoteText(int id) {
     return;
   }
   const QString text = shown->json.value(QStringLiteral("text")).toString();
-  const std::optional<QString> chosen = askNoteText(this, tr("%1 %2").arg(annotationName(shown->type)).arg(id), text);
+  const std::optional<QString> chosen =
+      askNoteText(this, tr("%1 %2").arg(annotationName(shown->type)).arg(id), text, designParameters(m_host));
   if (chosen && *chosen != text) {
     editAnnotation(annotationEdit(m_drawing, id, QStringLiteral("text"), *chosen));
   }
@@ -3788,8 +4089,18 @@ void DrawingWorkspace::contextMenu(QPointF at, const QPoint& global) {
       });
       action->setCheckable(true);
       action->setChecked(on);
+      return action;
     };
-    toggle(tr("Hidden Edges"), QStringLiteral("hidden_lines"), style.value(QStringLiteral("hidden_lines")).toBool());
+    // As in the panel (mitcad#2447): off and disabled where the view
+    // draws no hidden edges, its tooltip saying why.
+    const QString noHidden = noHiddenLinesReason(json);
+    QAction* hidden = toggle(tr("Hidden Edges"), QStringLiteral("hidden_lines"),
+                             noHidden.isEmpty() && style.value(QStringLiteral("hidden_lines")).toBool());
+    if (!noHidden.isEmpty()) {
+      hidden->setEnabled(false);
+      hidden->setToolTip(noHidden);
+      menu.setToolTipsVisible(true);
+    }
     toggle(tr("Tangent Edges"), QStringLiteral("tangent_edges"), style.value(QStringLiteral("tangent_edges")).toBool());
     toggle(tr("Shaded"), QStringLiteral("shaded"), style.value(QStringLiteral("shaded")).toBool());
     toggle(tr("Center Marks"), QStringLiteral("center_marks"), json.value(QStringLiteral("center_marks")).toBool());
@@ -4508,14 +4819,33 @@ void DrawingWorkspace::fillTitleBlockPanel() {
     auto* text = new QLineEdit(field.text);
     text->setObjectName(QStringLiteral("titleBlockFieldText"));
     text->setPlaceholderText(QStringLiteral("{title}"));
-    text->setToolTip(tr("Its value: names in braces, such as {material}, are filled in from the design"));
-    connect(text, &QLineEdit::textEdited, this, [this](const QString& value) {
+    text->setToolTip(tr("Its value: names in braces, such as {material} or {param:Length}, come from the design"));
+    // A reference to a parameter the design lacks (mitcad#2483: a template
+    // from another design) is named under the field.
+    QJsonArray parameters;
+    try {
+      parameters = m_host.model().queryArray(QStringLiteral("parameters"));
+    } catch (const std::exception&) {
+      // None known: nothing is named missing.
+    }
+    QLabel* missing = missingParametersLabel(QStringLiteral("titleBlockFieldMissing"));
+    const auto edited = [this, missing, parameters](const QString& value) {
       if (m_blockEditor && m_blockEditor->setFieldText(value)) {
         m_sheetView->titleBlockChanged();
       }
-    });
+      showMissingParameters(missing, value, parameters);
+    };
+    connect(text, &QLineEdit::textEdited, this, edited);
     connect(text, &QLineEdit::editingFinished, this, logField);
+    // Insert Parameter… in its menu (mitcad#2483): the reference at the
+    // cursor, the field's text then as typed.
+    addInsertParameter(text, designParameters(m_host), [text, edited, logField] {
+      edited(text->text());
+      logField();
+    });
     m_form->addRow(tr("Text"), text);
+    m_form->addRow(QString(), missing);
+    showMissingParameters(missing, field.text, parameters);
     auto* letters = new QLineEdit(field.height > 0.0 ? QString::number(field.height, 'g', 6) : QString());
     letters->setObjectName(QStringLiteral("titleBlockFieldHeight"));
     letters->setPlaceholderText(QStringLiteral("3.5"));
@@ -4560,6 +4890,9 @@ void DrawingWorkspace::fillTitleBlockPanel() {
   done->setToolTip(tr("Stores the title block in the sheet; Save as Template… then keeps it in a library"));
   connect(done, &QPushButton::clicked, this, [this] { QTimer::singleShot(0, this, [this] { finishTitleBlock(true); }); });
   m_form->addRow(QString(), done);
+  // Done moves when a field's warning of a missing parameter shows or goes
+  // (mitcad#2483): its place logged again.
+  new PlaceWatcher(done, [this] { logButtons(); });
   auto* cancel = new QPushButton(tr("Cancel"));
   cancel->setObjectName(QStringLiteral("titleBlockCancel"));
   cancel->setToolTip(tr("Leaves the title block as it was"));
@@ -5064,6 +5397,19 @@ void DrawingWorkspace::logButtons() {
   if (m_panel->layout() != nullptr) {
     m_panel->layout()->activate();
   }
+  // Its fields in their scroll area (GitHub mitcad/Mitcad#694): laid out,
+  // then the area sized to them, before their places are read. The area
+  // hears of fields added only through a chain of posted layout requests
+  // that may come after this.
+  QWidget* page = m_panelScroll->widget();
+  if (page->layout() != nullptr) {
+    page->layout()->activate();
+  }
+  m_form->activate();
+  {
+    QEvent request(QEvent::LayoutRequest);
+    QCoreApplication::sendEvent(m_panelScroll, &request);
+  }
   QStringList lines;
   const auto at = [this](const QWidget* widget) {
     const QPoint p = widget->mapTo(window(), widget->rect().center());
@@ -5149,6 +5495,56 @@ void DrawingWorkspace::logButtons() {
     lines << QStringLiteral("Drawing panel edge at %1").arg(at(edge));
   }
   lines << QStringLiteral("Drawing panel width %1").arg(m_panel->width());
+  // The page of its fields (mitcad#2498): how high it is, how much of it
+  // is in sight and how far it is scrolled; and the fields and labels that
+  // overlap one another ("none": each has a place of its own).
+  QWidget* pageView = m_panelScroll->viewport();
+  lines << QStringLiteral("Drawing panel page height %1, in sight %2, scrolled %3")
+               .arg(page->height())
+               .arg(pageView->height())
+               .arg(m_panelScroll->verticalScrollBar()->value());
+  // Its scroll bar while it has one: the wheel over it scrolls the page.
+  if (const QScrollBar* bar = m_panelScroll->verticalScrollBar(); bar->isVisible()) {
+    lines << QStringLiteral("Drawing panel page bar at %1").arg(at(bar));
+  }
+  {
+    QList<QPair<QString, QRect>> placed;
+    for (int i = 0; i < m_form->count(); ++i) {
+      QLayoutItem* item = m_form->itemAt(i);
+      if (item == nullptr || item->isEmpty() || item->geometry().isEmpty()) {
+        continue;
+      }
+      QString name = QStringLiteral("item %1").arg(i);
+      if (const QWidget* widget = item->widget()) {
+        if (const auto* label = qobject_cast<const QLabel*>(widget); label != nullptr && widget->objectName().isEmpty()) {
+          name = label->text().left(40);
+        } else if (!widget->objectName().isEmpty()) {
+          name = widget->objectName();
+        }
+      }
+      placed.append({name, item->geometry()});
+    }
+    QStringList overlaps;
+    for (int i = 0; i < placed.size(); ++i) {
+      for (int j = i + 1; j < placed.size(); ++j) {
+        if (placed.at(i).second.intersects(placed.at(j).second)) {
+          overlaps << QStringLiteral("%1 and %2").arg(placed.at(i).first, placed.at(j).first);
+        }
+      }
+    }
+    lines << QStringLiteral("Drawing panel overlaps: %1")
+                 .arg(overlaps.isEmpty() ? QStringLiteral("none") : overlaps.join(QStringLiteral("; ")));
+  }
+  // A place in the page's part in sight (mitcad#2498: the page scrolls).
+  const auto inPage = [pageView](const QWidget* widget, const QPoint& local) {
+    return pageView->rect().contains(widget->mapTo(pageView, local));
+  };
+  // Its fields' height and how much of it is in sight (GitHub
+  // mitcad/Mitcad#694: they scroll, the window keeps its size).
+  lines << QStringLiteral("Drawing panel fields %1 px high, %2 px in sight%3")
+               .arg(page->height())
+               .arg(pageView->height())
+               .arg(m_panelScroll->verticalScrollBar()->isVisible() ? QStringLiteral(", scrolled") : QString());
   for (int row = 0; row < m_form->rowCount(); ++row) {
     // A field beside its label, or one that spans the panel (a base
     // view's Shows and Update from Model, mitcad#1692).
@@ -5157,9 +5553,15 @@ void DrawingWorkspace::logButtons() {
       item = m_form->itemAt(row, QFormLayout::SpanningRole);
     }
     if (item != nullptr && item->widget() != nullptr && !item->widget()->objectName().isEmpty()) {
+      const QWidget* field = item->widget();
+      // A folded Shows list (mitcad#2498), or a field the page is scrolled
+      // away from: no place to click.
+      if (field->isHidden() || !inPage(field, field->rect().center())) {
+        lines << QStringLiteral("Drawing panel %1 out of sight").arg(field->objectName());
+        continue;
+      }
       // A check box takes a click on its box and label only, not
       // across the row it stretches over: its place is its box.
-      const QWidget* field = item->widget();
       QString place = at(field);
       if (qobject_cast<const QCheckBox*>(field) != nullptr) {
         const QPoint box = field->mapTo(window(), QPoint(field->height() / 2, field->height() / 2));
@@ -5192,7 +5594,8 @@ void DrawingWorkspace::logButtons() {
       if (auto* list = qobject_cast<QTreeWidget*>(item->widget())) {
         for (QTreeWidgetItemIterator it(list); *it != nullptr; ++it) {
           const QRect box = list->visualItemRect(*it);
-          if (box.isValid() && list->viewport()->rect().contains(box.center())) {
+          if (box.isValid() && list->viewport()->rect().contains(box.center()) &&
+              inPage(list->viewport(), box.center())) {
             const QPoint p = list->viewport()->mapTo(window(), box.center());
             lines << QStringLiteral("Drawing panel %1 row %2 at %3,%4")
                          .arg(field->objectName(), (*it)->text(0))
@@ -5369,6 +5772,8 @@ void DrawingWorkspace::fillCutSheetPanel() {
   connect(material, &QPushButton::clicked, this,
           [this] { QTimer::singleShot(0, this, [this] { editCutSheet(); }); });
   m_form->addRow(QString(), material);
+  // Nesting, the cutting paths and the program (mitcad#2553).
+  addCuttingRows();
 }
 
 void DrawingWorkspace::fillPartPanel(int id) {

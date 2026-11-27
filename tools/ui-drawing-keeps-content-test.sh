@@ -12,7 +12,8 @@
 #     drawing opened again: the view still draws both.
 #   - Close Drawing, Plate:1 copied and pasted in the browser, 100 mm along
 #     X (Plate:3, O3), the drawing opened again: the view still draws two.
-#   - The view's Shows: Plate:3 checked (its row, Space): three bodies, one
+#   - The view's Shows opened under its heading (mitcad#2498): Plate:3
+#     checked (its row, Space): three bodies, one
 #     undo step; Ctrl+Z takes it away.
 #   - Plate:2 shown again; Update from Model: the three shown, one undo
 #     step (Update view 1 of Drawing1); Ctrl+Z takes Plate:3 away again.
@@ -205,8 +206,14 @@ ui_mark
 ui_step "select the front view"            ui_click_logged "Drawing view 1"
 ui_expect_new "Drawing view 1 selected" "the front view selected"
 ui_expect_new "Drawing view 1 shows 2 of 3 bodies" "its Shows: Plate:1 and Plate:2 of the three"
-ui_expect_new "Drawing panel drawingViewShows row Plate:3 at" "Plate:3's row in its Shows"
 ui_expect_new "Drawing panel drawingViewUpdate at" "Update from Model beside it"
+# The list folded under its heading at first (mitcad#2498): opened.
+ui_expect_new "Drawing panel drawingViewShowsToggle at" "its Shows heading"
+settled "Drawing panel drawingViewShowsToggle"
+ui_mark
+ui_step "open its Shows"                   ui_click_logged "Drawing panel drawingViewShowsToggle"
+ui_expect_new "Drawing view 1 Shows opened" "the list opened under its heading"
+ui_expect_new "Drawing panel drawingViewShows row Plate:3 at" "Plate:3's row in its Shows"
 settled "Drawing panel drawingViewShows row Plate:3"
 ui_mark
 ui_step "Plate:3's row"                    ui_click_logged "Drawing panel drawingViewShows row Plate:3"

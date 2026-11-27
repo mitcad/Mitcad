@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <exception>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -17,6 +19,7 @@
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Curve2d.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
@@ -29,21 +32,37 @@
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
+#include <Extrema_ExtPC.hxx>
+#include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <GeomConvert.hxx>
 #include <GeomConvert_ApproxCurve.hxx>
 #include <Geom_BSplineCurve.hxx>
+#include <Geom_Curve.hxx>
 #include <Geom_BezierCurve.hxx>
+#include <HLRAlgo_BiPoint.hxx>
+#include <HLRAlgo_EdgesBlock.hxx>
+#include <HLRAlgo_PolyAlgo.hxx>
+#include <HLRAlgo_PolyShellData.hxx>
 #include <HLRAlgo_Projector.hxx>
+#include <HLRAlgo_WiresBlock.hxx>
 #include <HLRBRep_Algo.hxx>
+#include <HLRBRep_Data.hxx>
+#include <HLRBRep_EdgeData.hxx>
+#include <HLRBRep_FaceData.hxx>
+#include <HLRBRep_FaceIterator.hxx>
 #include <HLRBRep_HLRToShape.hxx>
 #include <HLRBRep_PolyAlgo.hxx>
 #include <HLRBRep_PolyHLRToShape.hxx>
+#include <NCollection_Array1.hxx>
+#include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_IndexedMap.hxx>
+#include <NCollection_List.hxx>
 #include <OSD_Parallel.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
@@ -55,9 +74,11 @@
 #include <gp_Circ.hxx>
 #include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
+#include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 
 #include "mitcad/analysis/section.hpp"
+#include "drawing_outline.hpp"
 #include "mitcad/geometry/trimmed_box.hpp"
 #include "util.hpp"
 
@@ -73,11 +94,13 @@ constexpr double kTurn = 2.0 * kPi;
 // standard error, with the parts' faces and edges and the milliseconds of
 // each phase. Its value may also ask for more work, done only to measure:
 // "compare" times the other algorithm on the same parts (its lines thrown
-// away), "parts" projects each part alone with the exact algorithm.
+// away), "parts" projects each part alone with the exact algorithm, "edges"
+// prints the exact algorithm's flags on each face's edges (trace_hlr_edges).
 struct TraceMode {
   bool on = false;
   bool compare = false;
   bool parts = false;
+  bool edges = false;
 };
 
 const TraceMode& trace_mode() {
@@ -102,6 +125,7 @@ const TraceMode& trace_mode() {
     m.on = true;
     m.compare = text.find("compare") != std::string::npos;
     m.parts = text.find("parts") != std::string::npos;
+    m.edges = text.find("edges") != std::string::npos;
     return m;
   }();
   return mode;
@@ -275,6 +299,22 @@ analysis::Plane analysis_plane(const DrawingSection& section) {
   plane.origin = {section.origin.X(), section.origin.Y(), section.origin.Z()};
   plane.normal = {section.normal.X(), section.normal.Y(), section.normal.Z()};
   return plane;
+}
+
+analysis::Strip analysis_strip(const DrawingSectionBound& bound) {
+  analysis::Strip strip;
+  strip.along = {bound.along.X(), bound.along.Y(), bound.along.Z()};
+  strip.from = bound.from;
+  strip.to = bound.to;
+  return strip;
+}
+
+// A shape as a section view shows it: what lies on the plane's normal side
+// taken away, within the bound when it has one (mitcad#2479).
+TopoDS_Shape section_clip(const TopoDS_Shape& shape, const DrawingSection& section,
+                          const std::optional<DrawingSectionBound>& bound) {
+  return bound ? analysis::clip_within(shape, analysis_plane(section), analysis_strip(*bound))
+               : analysis::clip(shape, analysis_plane(section));
 }
 
 double normalized_angle(double a) {
@@ -1065,13 +1105,460 @@ constexpr double kTangentAngle = 1e-3;
 // surface (a face split in two, a seam) is drawn only with the view's
 // tangent edges, or not at all, but edges made by fillets, booleans or
 // imports mostly carry none and were drawn as sharp edges. Edges already
-// encoded keep theirs. Mesh bodies (faces without surfaces) stay as they
-// are.
+// encoded keep theirs, except that a smooth one is told apart from one
+// within a surface (raise_smooth_edges); those OCCT's encoding leaves
+// without any are taken by their faces' normals (encode_tangent_edges).
+// Mesh bodies (faces without surfaces) stay as they are.
+void encode_tangent_edges(TopoDS_Shape& copy);
+void raise_smooth_edges(TopoDS_Shape& copy);
+bool is_seam(const TopoDS_Edge& edge, const TopoDS_Face& face);
+
 void encode_regularity(TopoDS_Shape& copy) {
   if (detail::has_mesh_faces(copy)) {
     return;
   }
   BRepLib::EncodeRegularity(copy, kTangentAngle);
+  encode_tangent_edges(copy);
+  raise_smooth_edges(copy);
+}
+
+// The outward normal of the face at the point `uv` of its surface (as the
+// face faces); false where the surface has none (a degenerate point).
+bool face_normal(const BRepAdaptor_Surface& surface, const TopoDS_Face& face, const gp_Pnt2d& uv, gp_Dir& normal) {
+  gp_Pnt point;
+  gp_Vec du;
+  gp_Vec dv;
+  surface.D1(uv.X(), uv.Y(), point, du, dv);
+  const gp_Vec cross = du.Crossed(dv);
+  if (cross.Magnitude() <= 1e-9 * std::max(1.0, du.Magnitude() * dv.Magnitude())) {
+    return false;
+  }
+  normal = gp_Dir(cross);
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+  return true;
+}
+
+// Whether two faces meet tangentially all along the edge between them,
+// as the drawings take it (commands.md, mitcad#1438): their normals within
+// kTangentAngle of each other at points along it, each face's normal at the
+// edge's own place on it (`side1` and `side2`: the edge as it lies in each
+// face, the two sides of a seam). Points where a face has no normal (where a
+// fillet runs out to a point) are passed over; at least half must have one.
+bool tangent_all_along(const TopoDS_Edge& side1, const TopoDS_Face& face1, const TopoDS_Edge& side2,
+                       const TopoDS_Face& face2) {
+  const BRepAdaptor_Curve2d on1(side1, face1);
+  const BRepAdaptor_Curve2d on2(side2, face2);
+  const BRepAdaptor_Surface surface1(face1, false);
+  const BRepAdaptor_Surface surface2(face2, false);
+  const double first = on1.FirstParameter();
+  const double last = on1.LastParameter();
+  if (!(last > first)) {
+    return false;
+  }
+  constexpr int kPoints = 32;
+  int compared = 0;
+  for (int k = 1; k < kPoints; ++k) {
+    const double t = first + (last - first) * k / kPoints;
+    gp_Dir n1;
+    gp_Dir n2;
+    if (!face_normal(surface1, face1, on1.Value(t), n1) || !face_normal(surface2, face2, on2.Value(t), n2)) {
+      continue;
+    }
+    if (n1.Angle(n2) > kTangentAngle) {
+      return false;
+    }
+    ++compared;
+  }
+  return 2 * compared >= kPoints - 1;
+}
+
+// The edges OCCT's encoding leaves without a continuity (C0) whose faces
+// meet tangentially all along them (tangent_all_along), encoded G1 on the
+// copy (mitcad#2447); a seam whose face meets itself so, CN (drawn never).
+// OCCT's test (BRepLib::ContinuityOfFaces) compares a derivative of each
+// face across the edge, taken square to the edge in each face's own
+// parameters rather than in space: on a fillet whose boundary runs
+// slantwise through its surface's parameters (a free-form fillet where two
+// tori meet) those point different ways within the one tangent plane, and
+// faces whose normals agree within 0.02 degrees were taken as meeting at an
+// angle, their edge drawn as a sharp one where the fillet had not stored G1
+// on it (half of a fillet's boundary in a reported drawing).
+void encode_tangent_edges(TopoDS_Shape& copy) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndUniqueAncestors(copy, TopAbs_EDGE, TopAbs_FACE, faces);
+  BRep_Builder builder;
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(faces.FindKey(i));
+    const NCollection_List<TopoDS_Shape>& around = faces.FindFromIndex(i);
+    if (BRep_Tool::Degenerated(edge) || around.IsEmpty() || around.Extent() > 2) {
+      continue;
+    }
+    const TopoDS_Face& first = TopoDS::Face(around.First());
+    const TopoDS_Face& second = TopoDS::Face(around.Last());
+    const bool seam = around.Extent() == 1;
+    if (seam && !is_seam(edge, first)) {
+      continue;
+    }
+    try {
+      if (BRep_Tool::Continuity(edge, first, second) > GeomAbs_C0) {
+        continue;
+      }
+      TopoDS_Edge side1 = edge;
+      TopoDS_Edge side2 = edge;
+      if (seam) {
+        side1.Orientation(TopAbs_FORWARD);
+        side2.Orientation(TopAbs_REVERSED);
+      }
+      if (tangent_all_along(side1, first, side2, second)) {
+        builder.Continuity(edge, first, second, seam ? GeomAbs_CN : GeomAbs_G1);
+      }
+    } catch (const Standard_Failure&) {
+      // The edge keeps what it carries.
+    }
+  }
+}
+
+// Whether the edge lies twice in the face, once each way: the face's seam.
+bool is_seam(const TopoDS_Edge& edge, const TopoDS_Face& face) {
+  bool forward = false;
+  bool reversed = false;
+  for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+    if (it.Current().IsSame(edge)) {
+      const TopAbs_Orientation o = it.Current().Orientation();
+      forward = forward || o == TopAbs_FORWARD;
+      reversed = reversed || o == TopAbs_REVERSED;
+    }
+  }
+  return forward && reversed;
+}
+
+// The smooth edges (G1 or C1 stored on them) that lie within a surface,
+// encoded as such on the copy (mitcad#2447). The builders that encode the
+// edges they make store G1 on smooth ones without telling a seam or an
+// edge within one surface apart: a sweep stores G1 on the seam of its
+// closed section's faces (a tube's cylinders and tori; OCCT's
+// BRepFill_Sweep), so that seam was drawn as a tangent edge, and the
+// encoding above keeps what an edge carries. A seam where the face meets
+// itself tangentially is drawn never (CN); an edge between two faces is
+// encoded as its faces' continuity found as for an edge without any
+// (G2 and up within one surface or where the curvature runs on, never
+// drawn), and keeps its G1 otherwise, also where that finds less.
+void raise_smooth_edges(TopoDS_Shape& copy) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndUniqueAncestors(copy, TopAbs_EDGE, TopAbs_FACE, faces);
+  BRep_Builder builder;
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(faces.FindKey(i));
+    const NCollection_List<TopoDS_Shape>& around = faces.FindFromIndex(i);
+    if (BRep_Tool::Degenerated(edge) || around.IsEmpty() || around.Extent() > 2) {
+      continue;
+    }
+    const TopoDS_Face& first = TopoDS::Face(around.First());
+    const TopoDS_Face& second = TopoDS::Face(around.Last());
+    const bool seam = around.Extent() == 1;
+    if (seam && !is_seam(edge, first)) {
+      continue;
+    }
+    try {
+      const GeomAbs_Shape stored = BRep_Tool::Continuity(edge, first, second);
+      if (stored < GeomAbs_G1 || stored >= GeomAbs_G2) {
+        continue;
+      }
+      GeomAbs_Shape found = GeomAbs_CN;
+      if (!seam) {
+        found = BRepLib::ContinuityOfFaces(edge, first, second, kTangentAngle);
+      }
+      if (found >= GeomAbs_G2) {
+        builder.Continuity(edge, first, second, found);
+      }
+    } catch (const Standard_Failure&) {
+      // The edge keeps what it carries.
+    }
+  }
+}
+
+const char* surface_kind(const TopoDS_Face& face) {
+  switch (BRepAdaptor_Surface(face, false).GetType()) {
+  case GeomAbs_Plane:
+    return "plane";
+  case GeomAbs_Cylinder:
+    return "cylinder";
+  case GeomAbs_Cone:
+    return "cone";
+  case GeomAbs_Sphere:
+    return "sphere";
+  case GeomAbs_Torus:
+    return "torus";
+  case GeomAbs_BSplineSurface:
+    return "bspline";
+  default:
+    return "other";
+  }
+}
+
+// MITCAD_DRAWING_TRACE=edges (mitcad#2447): the exact algorithm's flags on
+// each face's smooth edges and those along its outline after hiding, one
+// "drawing-trace: hlr" line each: the
+// face (its surface, seen from behind, seen edge on), the edge (its start,
+// middle and end), smooth (G1 and up stored on it: rg1; G2 and up: rgn),
+// and whether the face's outline runs along it (outline: the algorithm
+// draws such an edge as a sharp one even when it is smooth), an outline
+// inside the face (internal) or an iso line.
+void trace_hlr_edges(const HLRBRep_Algo& algo) {
+  const occ::handle<HLRBRep_Data> data = algo.DataStructure();
+  if (data.IsNull()) {
+    return;
+  }
+  for (int f = 1; f <= data->NbFaces(); ++f) {
+    HLRBRep_FaceData& fd = data->FDataArray().ChangeValue(f);
+    const TopoDS_Face& face = TopoDS::Face(data->FaceMap()(f));
+    HLRBRep_FaceIterator it;
+    for (it.InitEdge(fd); it.MoreEdge(); it.NextEdge()) {
+      const int ie = it.Edge();
+      const HLRBRep_EdgeData& ed = data->EDataArray().Value(ie);
+      const TopoDS_Edge& edge = TopoDS::Edge(data->EdgeMap()(ie));
+      // The smooth ones and those along an outline only.
+      if (BRep_Tool::Degenerated(edge) || (!ed.Rg1Line() && !it.OutLine())) {
+        continue;
+      }
+      try {
+        const BRepAdaptor_Curve curve(edge);
+        const double t0 = curve.FirstParameter();
+        const double t1 = curve.LastParameter();
+        const gp_Pnt a = curve.Value(t0);
+        const gp_Pnt m = curve.Value((t0 + t1) / 2.0);
+        const gp_Pnt b = curve.Value(t1);
+        std::fprintf(stderr,
+                     "drawing-trace: hlr face %d %s back=%d side=%d edge %d (%.3f, %.3f, %.3f) (%.3f, %.3f, %.3f) "
+                     "(%.3f, %.3f, %.3f) rg1=%d rgn=%d outline=%d internal=%d iso=%d\n",
+                     f, surface_kind(face), fd.Back() ? 1 : 0, fd.Side() ? 1 : 0, ie, a.X(), a.Y(), a.Z(), m.X(),
+                     m.Y(), m.Z(), b.X(), b.Y(), b.Z(), ed.Rg1Line() ? 1 : 0, ed.RgNLine() ? 1 : 0,
+                     it.OutLine() ? 1 : 0, it.Internal() ? 1 : 0, it.IsoLine() ? 1 : 0);
+      } catch (const Standard_Failure&) {
+        std::fprintf(stderr, "drawing-trace: hlr face %d edge %d: no curve\n", f, ie);
+      }
+    }
+  }
+  std::fflush(stderr);
+}
+
+// How far from square to the view a face's normal may be along an edge its
+// outline runs along: |normal . view direction|, about half a degree.
+constexpr double kOutlineSlack = 1e-2;
+
+// Whether the face's normal is square to the view (within `slack`) at
+// points all along the edge, as it is where the face's outline runs along
+// it; points where the face has no normal are passed over.
+bool square_to_view_along(const TopoDS_Edge& edge, const TopoDS_Face& face, const gp_Vec& eye, double slack) {
+  const BRepAdaptor_Curve2d on(edge, face);
+  const BRepAdaptor_Surface surface(face, false);
+  const double first = on.FirstParameter();
+  const double last = on.LastParameter();
+  constexpr int kPoints = 10;
+  for (int k = 1; k < kPoints; ++k) {
+    gp_Dir normal;
+    if (face_normal(surface, face, on.Value(first + (last - first) * k / kPoints), normal) &&
+        std::abs(gp_Vec(normal).Dot(eye)) > slack) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// How far from square to the view a face's normal may be all along a smooth
+// edge for the edge to be taken as the face's outline where OCCT's contour
+// search left it out (mitcad#2539): |normal . view direction|, about 0.006
+// degrees. Farther off, the outline runs inside one of the faces, clear of
+// the edge, where the contour search finds it.
+constexpr double kOnOutlineSlack = 1e-4;
+
+// How near an outline line inside a face must run to the edge, across the
+// view (in the view's plane), for the edge to count as drawn by it.
+constexpr double kOutlineDrawn = 1e-3;
+
+// Whether outline lines inside the faces (`outlines`, the contour search's
+// lines) run along the edge in the view: points along it lie within
+// kOutlineDrawn of one of them, measured in the view's plane.
+bool drawn_by_outlines(const TopoDS_Edge& edge, const std::vector<TopoDS_Edge>& outlines, const gp_Vec& eye) {
+  if (outlines.empty()) {
+    return false;
+  }
+  const BRepAdaptor_Curve curve(edge);
+  const double first = curve.FirstParameter();
+  const double last = curve.LastParameter();
+  constexpr int kPoints = 8;
+  for (int k = 1; k < kPoints; ++k) {
+    const gp_Pnt p = curve.Value(first + (last - first) * k / kPoints);
+    bool close_by = false;
+    for (const TopoDS_Edge& outline : outlines) {
+      double a = 0.0;
+      double b = 0.0;
+      const occ::handle<Geom_Curve> line = BRep_Tool::Curve(outline, a, b);
+      if (line.IsNull()) {
+        continue;
+      }
+      GeomAPI_ProjectPointOnCurve projection(p, line, a, b);
+      if (projection.NbPoints() == 0) {
+        continue;
+      }
+      gp_Vec off(p, projection.NearestPoint());
+      off.Subtract(eye.Multiplied(off.Dot(eye)));
+      if (off.Magnitude() <= kOutlineDrawn) {
+        close_by = true;
+        break;
+      }
+    }
+    if (!close_by) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The outline flag set on smooth edges that lie on their faces' outline
+// where OCCT's contour search left it off (mitcad#2539), before hiding, as
+// that search sets it on an outline along a face's boundary. The view draws
+// a smooth edge (G1 and up stored on it, or encoded by encode_regularity)
+// only with its tangent edges unless it is flagged so: a shaft whose round
+// face is split in two halves along its length (as many imported bodies
+// are), or whose seam runs, along the view's outline, lost those outline
+// lines in a reported view of an assembly, wholly or in parts, the contour
+// search finding the outline neither on the boundary nor inside either half
+// when it lies on the boundary within rounding (an occurrence's placement).
+// The flag is set where the face's normal is square to the view all along
+// the edge (within kOnOutlineSlack) and no outline line the search found
+// inside the edge's faces runs along it already.
+void flag_missed_outlines(const HLRBRep_Algo& algo, const gp_Dir& toward_eye) {
+  const occ::handle<HLRBRep_Data> data = algo.DataStructure();
+  if (data.IsNull()) {
+    return;
+  }
+  const gp_Vec eye(toward_eye);
+  const int face_count = data->NbFaces();
+  // Each face's outline lines inside it, and the faces along each edge.
+  std::vector<std::vector<TopoDS_Edge>> inside(static_cast<std::size_t>(face_count) + 1);
+  std::vector<std::vector<int>> faces_at(static_cast<std::size_t>(data->NbEdges()) + 1);
+  for (int f = 1; f <= face_count; ++f) {
+    const occ::handle<HLRAlgo_WiresBlock>& wires = data->FDataArray().ChangeValue(f).Wires();
+    if (wires.IsNull()) {
+      continue;
+    }
+    for (int w = 1; w <= wires->NbWires(); ++w) {
+      const occ::handle<HLRAlgo_EdgesBlock>& block = wires->Wire(w);
+      if (block.IsNull()) {
+        continue;
+      }
+      for (int k = 1; k <= block->NbEdges(); ++k) {
+        const int ie = block->Edge(k);
+        if (block->IsoLine(k) || ie < 1 || ie > data->NbEdges()) {
+          continue;
+        }
+        if (block->Internal(k)) {
+          inside[static_cast<std::size_t>(f)].push_back(TopoDS::Edge(data->EdgeMap()(ie)));
+        } else {
+          faces_at[static_cast<std::size_t>(ie)].push_back(f);
+        }
+      }
+    }
+  }
+  for (int f = 1; f <= face_count; ++f) {
+    HLRBRep_FaceData& fd = data->FDataArray().ChangeValue(f);
+    const occ::handle<HLRAlgo_WiresBlock>& wires = fd.Wires();
+    if (wires.IsNull()) {
+      continue;
+    }
+    const TopoDS_Face& face = TopoDS::Face(data->FaceMap()(f));
+    for (int w = 1; w <= wires->NbWires(); ++w) {
+      const occ::handle<HLRAlgo_EdgesBlock>& block = wires->Wire(w);
+      if (block.IsNull()) {
+        continue;
+      }
+      for (int k = 1; k <= block->NbEdges(); ++k) {
+        const int ie = block->Edge(k);
+        if (block->OutLine(k) || block->Internal(k) || block->IsoLine(k) || ie < 1 || ie > data->NbEdges()) {
+          continue;
+        }
+        const HLRBRep_EdgeData& ed = data->EDataArray().Value(ie);
+        if (!ed.Rg1Line() || ed.Vertical()) {
+          continue;
+        }
+        TopoDS_Edge edge = TopoDS::Edge(data->EdgeMap()(ie));
+        if (BRep_Tool::Degenerated(edge)) {
+          continue;
+        }
+        edge.Orientation(block->Orientation(k));
+        try {
+          if (!square_to_view_along(edge, face, eye, kOnOutlineSlack)) {
+            continue;
+          }
+          std::vector<TopoDS_Edge> outlines;
+          for (const int g : faces_at[static_cast<std::size_t>(ie)]) {
+            const std::vector<TopoDS_Edge>& found = inside[static_cast<std::size_t>(g)];
+            outlines.insert(outlines.end(), found.begin(), found.end());
+          }
+          if (!drawn_by_outlines(edge, outlines, eye)) {
+            block->OutLine(k, true);
+          }
+        } catch (const Standard_Failure&) {
+          // The flag stays as the algorithm set it.
+        }
+      }
+    }
+  }
+}
+
+// The exact algorithm's outline flags on smooth edges, kept where they are
+// true (mitcad#2447). OCCT's contour search on a face takes some of its
+// boundary edges for its outline (an outline on its restriction), and the
+// algorithm draws a smooth edge so flagged as a sharp one, with or without
+// the view's tangent edges: in a reported drawing the boundary of the
+// free-form fillet where two tori meet was flagged on both its faces seen
+// from above and on the fillet seen from the side, the faces' normals up
+// to 0.74 off square to the view along it, and drawn as a sharp edge. The
+// flag stays on a smooth edge along which the face's normal is square to
+// the view, as along the circle where a torus meets a cylinder seen end on
+// (the outline of both); on the others it is cleared, and they are drawn
+// as the smooth edges they are. Sharp edges are drawn as sharp ones anyway.
+void keep_true_outlines(const HLRBRep_Algo& algo, const gp_Dir& toward_eye) {
+  const occ::handle<HLRBRep_Data> data = algo.DataStructure();
+  if (data.IsNull()) {
+    return;
+  }
+  const gp_Vec eye(toward_eye);
+  for (int f = 1; f <= data->NbFaces(); ++f) {
+    HLRBRep_FaceData& fd = data->FDataArray().ChangeValue(f);
+    const occ::handle<HLRAlgo_WiresBlock>& wires = fd.Wires();
+    if (wires.IsNull()) {
+      continue;
+    }
+    const TopoDS_Face& face = TopoDS::Face(data->FaceMap()(f));
+    for (int w = 1; w <= wires->NbWires(); ++w) {
+      const occ::handle<HLRAlgo_EdgesBlock>& block = wires->Wire(w);
+      if (block.IsNull()) {
+        continue;
+      }
+      for (int k = 1; k <= block->NbEdges(); ++k) {
+        if (!block->OutLine(k)) {
+          continue;
+        }
+        const int ie = block->Edge(k);
+        if (!data->EDataArray().Value(ie).Rg1Line()) {
+          continue;
+        }
+        TopoDS_Edge edge = TopoDS::Edge(data->EdgeMap()(ie));
+        edge.Orientation(block->Orientation(k));
+        try {
+          if (!square_to_view_along(edge, face, eye, kOutlineSlack)) {
+            block->OutLine(k, false);
+          }
+        } catch (const Standard_Failure&) {
+          // The flag stays as the algorithm set it.
+        }
+      }
+    }
+  }
 }
 
 void project_exact(const std::vector<TopoDS_Shape>& parts, const std::vector<std::size_t>& sources,
@@ -1091,10 +1578,231 @@ void project_exact(const std::vector<TopoDS_Shape>& parts, const std::vector<std
   trace.mark("load");
   algo->Update();
   trace.mark("update");
+  flag_missed_outlines(*algo, spec.toward_eye);
   algo->Hide();
   trace.mark("hide");
+  keep_true_outlines(*algo, spec.toward_eye);
+  if (trace_mode().edges) {
+    trace_hlr_edges(*algo);
+  }
   HLRBRep_HLRToShape out(algo);
   collect(out, loaded, sources, spec, view, trace);
+}
+
+// The parameter of the curve's point nearest `p` (an end of the curve when
+// no extremum is nearer) and the distance between them.
+double nearest_parameter(const BRepAdaptor_Curve& curve, const gp_Pnt& p, double& distance) {
+  const double first = curve.FirstParameter();
+  const double last = curve.LastParameter();
+  double t = first;
+  double best = p.SquareDistance(curve.Value(first));
+  const double at_last = p.SquareDistance(curve.Value(last));
+  if (at_last < best) {
+    best = at_last;
+    t = last;
+  }
+  const Extrema_ExtPC extrema(p, curve, first, last);
+  if (extrema.IsDone()) {
+    for (int i = 1; i <= extrema.NbExt(); ++i) {
+      if (extrema.SquareDistance(i) < best) {
+        best = extrema.SquareDistance(i);
+        t = extrema.Point(i).Parameter();
+      }
+    }
+  }
+  distance = std::sqrt(best);
+  return t;
+}
+
+// How far apart the outward normals of the two faces at a smooth edge may
+// be at a point and still be taken for the one normal they share there: a
+// face running out to a point may have one there that points anywhere.
+constexpr double kNormalsAgree = 0.05;
+
+// Steps from a point of a smooth edge toward its middle in which
+// EdgeFaces::normal looks for the nearest point where its faces agree.
+constexpr int kAgreeSteps = 32;
+
+// A smooth edge's faces (one for a seam), each with the edge on it, for
+// their normals along the edge; `first` and `last` its parameters.
+struct EdgeFaces {
+  int count = 0;
+  double first = 0.0;
+  double last = 0.0;
+  TopoDS_Face face[2];
+  BRepAdaptor_Curve2d on[2];
+  BRepAdaptor_Surface surface[2];
+
+  // The faces' normals at parameter t of the edge (has[i] false where face
+  // i has none) and whether they are the one normal they share there.
+  bool both(double t, gp_Dir n[2], bool has[2]) const {
+    has[0] = false;
+    has[1] = false;
+    for (int i = 0; i < count; ++i) {
+      has[i] = face_normal(surface[i], face[i], on[i].Value(t), n[i]);
+    }
+    return has[0] && has[1] && n[0].Angle(n[1]) <= kNormalsAgree;
+  }
+
+  // The faces' outward normal at parameter t of the edge: the one they
+  // share there, or one face's where the other has none (a fillet running
+  // out to a point). Where both have one and they disagree (next to the
+  // point where a fillet runs out, whose normal there may point anywhere
+  // while its neighbour's runs on smoothly), the one nearer the normal they
+  // share at the nearest point toward the edge's middle where they agree
+  // (mitcad#2510: on a fillet's boundary running along the view's outline
+  // up to its tip, the chords there were taken off the outline); false
+  // where none has one or no such point is found.
+  bool normal(double t, gp_Dir& out) const {
+    gp_Dir n[2];
+    bool has[2] = {false, false};
+    if (both(t, n, has)) {
+      out = n[0];
+      return true;
+    }
+    if (has[0] != has[1]) {
+      out = has[0] ? n[0] : n[1];
+      return true;
+    }
+    if (!has[0]) {
+      return false;
+    }
+    const double middle = 0.5 * (first + last);
+    for (int k = 1; k <= kAgreeSteps; ++k) {
+      gp_Dir m[2];
+      bool there[2] = {false, false};
+      if (both(t + (middle - t) * k / kAgreeSteps, m, there)) {
+        out = n[0].Angle(m[0]) <= n[1].Angle(m[0]) ? n[0] : n[1];
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+// Points checked along each chord the polygonal algorithm flags as outline
+// on a smooth edge: its ends and the points between.
+constexpr int kChordPoints = 4;
+
+// The polygonal algorithm's outline flags on chords of smooth edges, kept
+// where the faces' normal along the chord comes within the triangulation's
+// angle of square to the view (mitcad#2510), as keep_true_outlines keeps
+// the exact algorithm's. That algorithm flags a chord of an edge as outline
+// where the triangles beside it on its two faces face opposite ways, and
+// draws a smooth edge so flagged as a sharp one. Where the view's outline
+// crosses the edge, the triangles there do, and the chord or two beside the
+// crossing are drawn as a part of the outline; but where a fillet runs out
+// to a point, its last triangles are slivers whose way is that of their
+// other corners, and chords next to the tip were drawn as short lines (0.3
+// to 0.4 mm, seen and hidden) that are neither an outline nor a sharp edge.
+// There the faces' shared normal is off square to the view by more than the
+// triangulation's angle; their flag is cleared, and they are drawn as the
+// smooth edges they are (with the view's tangent edges only).
+//
+// The chords are the algorithm's segments on edges (HLRAlgo_BiPoint, their
+// points in the model's coordinates), found before it hides them; an edge
+// is known by its index among the edges of the shapes as loaded, in a
+// compound in the order loaded (HLRBRep_PolyAlgo::Update). A chord whose
+// points do not lie on its edge keeps its flag. Returns the flags cleared.
+int keep_true_polygonal_outlines(HLRBRep_PolyAlgo& algo, const std::vector<TopoDS_Shape>& loaded,
+                                 const gp_Dir& toward_eye, double angle, double deflection) {
+  const occ::handle<HLRAlgo_PolyAlgo>& data = algo.Algo();
+  if (data.IsNull()) {
+    return 0;
+  }
+  BRep_Builder builder;
+  TopoDS_Compound all;
+  builder.MakeCompound(all);
+  for (const TopoDS_Shape& shape : loaded) {
+    builder.Add(all, shape);
+  }
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+  TopExp::MapShapes(all, TopAbs_EDGE, edges);
+  // The flagged chords of each smooth edge, by its index.
+  std::map<int, std::vector<HLRAlgo_BiPoint*>> chords;
+  NCollection_Array1<occ::handle<HLRAlgo_PolyShellData>>& shells = data->ChangePolyShell();
+  for (int s = shells.Lower(); s <= shells.Upper(); ++s) {
+    if (shells.Value(s).IsNull()) {
+      continue;
+    }
+    for (NCollection_List<HLRAlgo_BiPoint>::Iterator it(shells.ChangeValue(s)->Edges()); it.More(); it.Next()) {
+      HLRAlgo_BiPoint& chord = it.ChangeValue();
+      const int index = chord.Indices().ShapeIndex;
+      if (chord.IntLine() || !chord.Rg1Line() || !chord.OutLine() || index < 1 || index > edges.Extent()) {
+        continue;
+      }
+      chords[index].push_back(&chord);
+    }
+  }
+  if (chords.empty()) {
+    return 0;
+  }
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndUniqueAncestors(all, TopAbs_EDGE, TopAbs_FACE, faces);
+  const gp_Vec eye(toward_eye);
+  const double band = std::max(std::sin(angle), kOutlineSlack);
+  int cleared = 0;
+  for (const auto& [index, flagged] : chords) {
+    const TopoDS_Edge& edge = TopoDS::Edge(edges.FindKey(index));
+    const NCollection_List<TopoDS_Shape>* around = faces.Seek(edge);
+    double first = 0.0;
+    double last = 0.0;
+    if (around == nullptr || around->IsEmpty() || BRep_Tool::Degenerated(edge) ||
+        BRep_Tool::Curve(edge, first, last).IsNull()) {
+      continue;
+    }
+    try {
+      const BRepAdaptor_Curve curve(edge);
+      EdgeFaces sides;
+      sides.first = curve.FirstParameter();
+      sides.last = curve.LastParameter();
+      bool mesh = false;
+      for (NCollection_List<TopoDS_Shape>::Iterator it(*around); it.More() && sides.count < 2; it.Next()) {
+        const TopoDS_Face& face = TopoDS::Face(it.Value());
+        TopLoc_Location location;
+        if (BRep_Tool::Surface(face, location).IsNull()) {
+          mesh = true; // a mesh body's face: no surface to take normals on
+          break;
+        }
+        sides.face[sides.count] = face;
+        sides.on[sides.count].Initialize(edge, face);
+        sides.surface[sides.count].Initialize(face, false);
+        ++sides.count;
+      }
+      if (mesh) {
+        continue;
+      }
+      // The chord's points lie on the edge within the triangulation's
+      // deviation (its ends on it).
+      const double reach = 10.0 * deflection + 2.0 * BRep_Tool::Tolerance(edge) + 1e-6;
+      for (HLRAlgo_BiPoint* chord : flagged) {
+        const gp_XYZ& a = chord->Points().Pnt1;
+        const gp_XYZ& b = chord->Points().Pnt2;
+        bool keep = false;
+        for (int k = 0; k <= kChordPoints && !keep; ++k) {
+          const gp_Pnt p(a + (b - a) * (static_cast<double>(k) / kChordPoints));
+          double distance = 0.0;
+          const double t = nearest_parameter(curve, p, distance);
+          if (distance > reach) {
+            keep = true; // not on the edge: left as the algorithm flagged it
+            break;
+          }
+          // No normal found (the two faces' normals opposite all the way to
+          // the edge's middle, as on a face the modelling left the wrong way
+          // round, mitcad#2583): the flag stays as the algorithm set it.
+          gp_Dir normal;
+          keep = !sides.normal(t, normal) || std::abs(gp_Vec(normal).Dot(eye)) <= band;
+        }
+        if (!keep) {
+          chord->OutLine(false);
+          ++cleared;
+        }
+      }
+    } catch (const Standard_Failure&) {
+      // The edge's flags stay as the algorithm set them.
+    }
+  }
+  return cleared;
 }
 
 // The polygonal algorithm works on triangles: of copies of the shapes, so
@@ -1135,6 +1843,13 @@ void project_polygonal(const std::vector<TopoDS_Shape>& parts, const std::vector
   algo->Projector(projector);
   algo->Update();
   trace.mark("update");
+  const int cleared = detail::polygonal_true_outlines()
+                          ? keep_true_polygonal_outlines(*algo, loaded, spec.toward_eye, angle, deflection)
+                          : 0;
+  trace.mark("outlines");
+  if (trace.on()) {
+    trace.note("outline-chords-cleared=" + std::to_string(cleared));
+  }
   HLRBRep_PolyHLRToShape out;
   out.Update(algo);
   trace.mark("hide");
@@ -1181,11 +1896,13 @@ void trace_parts(const std::vector<TopoDS_Shape>& parts, const std::vector<std::
   }
 }
 
-// The loops of the faces where the plane cuts the shape, in view
-// coordinates.
-void add_cuts(const TopoDS_Shape& shape, const DrawingSection& section, const ViewFrame& frame,
-              double deflection, DrawnView& view) {
-  const analysis::Section cut = analysis::section(shape, analysis_plane(section));
+// The loops of the faces where the plane cuts the shape (within the
+// bound when it has one, mitcad#2479), in view coordinates.
+void add_cuts(const TopoDS_Shape& shape, const DrawingSection& section,
+              const std::optional<DrawingSectionBound>& bound, const ViewFrame& frame, double deflection,
+              DrawnView& view) {
+  const analysis::Section cut = bound ? analysis::section_within(shape, analysis_plane(section), analysis_strip(*bound))
+                                      : analysis::section(shape, analysis_plane(section));
   if (cut.faces.IsNull()) {
     return;
   }
@@ -1448,8 +2165,8 @@ DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpe
       }
       TopoDS_Shape part = shape->occt();
       if (spec.section) {
-        part = analysis::clip(part, analysis_plane(*spec.section));
-        add_cuts(shape->occt(), *spec.section, frame, spec.deflection, view);
+        part = section_clip(part, *spec.section, spec.section_bound);
+        add_cuts(shape->occt(), *spec.section, spec.section_bound, frame, spec.deflection, view);
       }
       bool empty = true;
       for (TopExp_Explorer it(part, TopAbs_EDGE); it.More(); it.Next()) {
@@ -1623,5 +2340,20 @@ std::vector<RoundHole> round_holes(const Shape& shape) {
     return holes;
   });
 }
+
+namespace detail {
+
+namespace {
+std::atomic<bool>& true_outlines_switch() {
+  static std::atomic<bool> on{true};
+  return on;
+}
+} // namespace
+
+bool polygonal_true_outlines() { return true_outlines_switch().load(); }
+
+void set_polygonal_true_outlines(bool on) { true_outlines_switch().store(on); }
+
+} // namespace detail
 
 } // namespace mitcad::geometry

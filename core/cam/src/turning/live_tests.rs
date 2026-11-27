@@ -21,6 +21,7 @@ fn station(number: u32, name: &str) -> TurningTool {
         kind: TurningToolKind::Live,
         nose_radius: 0.0,
         max_depth: 10.0,
+        back_angle: None,
     }
 }
 
@@ -161,6 +162,7 @@ fn flange_program() -> TurningProgram {
         kind: TurningToolKind::Turning,
         nose_radius: 0.0,
         max_depth: 4.0,
+        back_angle: None,
     };
     let mut program = TurningProgram::new("Flange", [50.0, 50.0]);
     program.operations = vec![

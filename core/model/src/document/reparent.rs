@@ -10,9 +10,10 @@
 //! cut scopes, Envelopes' sources (mitcad#1276), joints and assembly
 //! constraints, section analyses,
 //! Isolate, the model's annotations and the drawings' views, dimensions
-//! and balloons (mitcad#743), and the point clouds placed in it or below
+//! and balloons (mitcad#743), the point clouds placed in it or below
 //! it (mitcad#2265), which so stay where they are in the design and keep
-//! their Point Cloud Deviations measuring the same points.
+//! their Point Cloud Deviations measuring the same points, and the decals
+//! on faces of bodies placed through it (mitcad#2527).
 //!
 //! The timeline features that place the occurrence (mitcad#301) go with
 //! it in the same step: its joints, as-built joints, assembly constraint
@@ -74,6 +75,7 @@ use super::components::check_transform;
 use super::{DocState, Document, Follow, ModelError, invalid, same_placement};
 use crate::assembly::{Assembly, inverse, matrix_rows};
 use crate::document::AnalysisDef;
+use crate::document::MinimumDistanceAnalysis;
 use crate::drawing::def::Drawing;
 use crate::features::extrude_scope::CutScope;
 use crate::features::moves::MoveSpec;
@@ -177,6 +179,9 @@ struct Rewritten {
     drawings: Vec<(usize, Drawing)>,
     /// Placing features that go into the new parent whole.
     components: Vec<(usize, ComponentUid)>,
+    /// Minimum Distance analyses (mitcad#2519) whose picks' occurrence
+    /// paths follow it: the analysis and its definition with the new paths.
+    minimum_distances: Vec<(usize, MinimumDistanceAnalysis)>,
     /// New features of the new parent, each right after the feature at
     /// the index it was split from.
     inserted: Vec<(usize, FeatureEntry)>,
@@ -351,6 +356,13 @@ impl Rewrite<'_> {
             }
             FeatureDef::Sweep(s) => {
                 for link in s.body_links.values_mut() {
+                    changed |= self.link(link)?;
+                }
+            }
+            // An Isoparametric Curve on another component's face
+            // (mitcad#2554).
+            FeatureDef::IsoparametricCurve(i) => {
+                for link in i.links.values_mut() {
                     changed |= self.link(link)?;
                 }
             }
@@ -604,6 +616,38 @@ fn rewrite_references(
             // A cloud by its name and a body by its uid (mitcad#2240): no
             // occurrence path.
             AnalysisDef::PointCloudDeviation(_) => {}
+            // Bodies and faces by uid and name (mitcad#2518): no
+            // occurrence path.
+            AnalysisDef::MinRadius(_) => {}
+            // Each pick's occurrence path (mitcad#2519), a component's or
+            // the one placing a body.
+            AnalysisDef::MinimumDistance(distance) => {
+                let mut moved = distance.clone();
+                let mut changed = false;
+                for pick in moved.first.iter_mut().chain(moved.second.iter_mut()) {
+                    if let Some(path) = &mut pick.occurrence {
+                        changed |= absolute_all(rewrites, &mut path.0);
+                    }
+                }
+                if changed {
+                    out.minimum_distances.push((i, moved));
+                    updates.push(analysis.name.clone());
+                }
+            }
+            // A Zebra's direction's path (mitcad#2517), as Draft
+            // Analysis' pull.
+            AnalysisDef::Zebra(zebra) => {
+                if let Some(path) = &zebra.occurrence {
+                    let mut moved = path.0.clone();
+                    if absolute_all(rewrites, &mut moved) {
+                        out.analyses.push((i, false, OccurrencePath(moved)));
+                        updates.push(analysis.name.clone());
+                    }
+                }
+            }
+            // Bodies and faces by uid and name (mitcad#2517): no
+            // occurrence path.
+            AnalysisDef::Curvature(_) | AnalysisDef::Isocurve(_) | AnalysisDef::Environment(_) => {}
         }
     }
     for (i, item) in state.display.isolated.iter().enumerate() {
@@ -737,6 +781,17 @@ fn rewrite_references(
             .is_some_and(|path| through_any(&path.0[..]))
         {
             updates.push(cloud.name.clone());
+        }
+    }
+    // Decals on faces of bodies placed through it (mitcad#2527): their
+    // occurrence paths follow it, also when taken.
+    for decal in &state.decals {
+        if decal
+            .occurrence
+            .as_ref()
+            .is_some_and(|path| through_any(&path.0[..]))
+        {
+            updates.push(decal.name.clone());
         }
     }
     // Explode views whose steps lead through it (mitcad#2328): their paths
@@ -1314,7 +1369,8 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
     }
     take_changes(state, &plan.changes);
     // Print plate items and comment targets (mitcad#1318), selection set
-    // members and point clouds' occurrences (mitcad#2265).
+    // members, point clouds' occurrences (mitcad#2265) and decals'
+    // (mitcad#2527).
     for moved in &plan.moved {
         let new = plan.path_of(moved);
         state.follow(&Follow::Moved {
@@ -1368,6 +1424,16 @@ fn take_changes(state: &mut DocState, changes: &Rewritten) {
             AnalysisDef::Print(_) => {}
             AnalysisDef::Draft(draft) => draft.occurrence = Some(path.clone()),
             AnalysisDef::PointCloudDeviation(_) => {}
+            AnalysisDef::MinRadius(_) => {}
+            // Rewritten whole below (mitcad#2519).
+            AnalysisDef::MinimumDistance(_) => {}
+            AnalysisDef::Zebra(zebra) => zebra.occurrence = Some(path.clone()),
+            AnalysisDef::Curvature(_) | AnalysisDef::Isocurve(_) | AnalysisDef::Environment(_) => {}
+        }
+    }
+    for (i, moved) in &changes.minimum_distances {
+        if let AnalysisDef::MinimumDistance(distance) = &mut state.analyses[*i].def {
+            distance.clone_from(moved);
         }
     }
     for (i, text) in &changes.isolated {

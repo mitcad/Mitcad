@@ -23,6 +23,7 @@ fn station(number: u32) -> TurningTool {
         kind: TurningToolKind::Live,
         nose_radius: 0.0,
         max_depth: 10.0,
+        back_angle: None,
     }
 }
 
@@ -95,6 +96,7 @@ pub(super) fn sub_program() -> TurningProgram {
         kind: TurningToolKind::Parting { width: 3.0 },
         nose_radius: 0.0,
         max_depth: 15.0,
+        back_angle: None,
     };
     let turning = TurningTool {
         number: 1,
@@ -103,6 +105,7 @@ pub(super) fn sub_program() -> TurningProgram {
         kind: TurningToolKind::Turning,
         nose_radius: 0.0,
         max_depth: 4.0,
+        back_angle: None,
     };
     let flat = Toolpath {
         moves: vec![
@@ -540,6 +543,102 @@ fn the_lathe_check_knows_the_sub_spindle() {
     assert!(
         messages.contains(&"Back face: the tool goes beyond the machine's travel.".to_owned()),
         "{messages:?}"
+    );
+}
+
+/// The main spindle's part-off under the hand-over (mitcad#2527): the
+/// sub-spindle grips before it and turns with the main spindle through
+/// it, so the part-off is held to both spindles' speeds.
+#[test]
+fn the_part_off_under_the_hand_over_is_held_to_the_sub_spindle_s_speeds() {
+    let placement = check::TurnPlacement {
+        work_z: -200.0,
+        chuck_z: None,
+    };
+    let findings = |m: &Machine, p: &TurningProgram| -> Vec<(String, usize)> {
+        check_lathe(m, p, &placement)
+            .into_iter()
+            .map(|f| (f.message, f.operation))
+            .collect()
+    };
+    // The main spindle up to 4000 rpm, the sub-spindle up to 2000; the
+    // back faced within the sub-spindle's.
+    let mut lathe = sub_lathe();
+    if let Some(l) = &mut lathe.lathe {
+        l.sub_spindle.max_rpm = 2000.0;
+    }
+    let mut program = sub_program();
+    program.operations[1].spindle = TurnSpindle::Css {
+        surface_speed: 200.0,
+        max_rpm: 2000.0,
+    };
+    assert!(
+        findings(&lathe, &program).is_empty(),
+        "{:?}",
+        findings(&lathe, &program)
+    );
+    // The part-off at a constant surface speed under the main spindle's
+    // limit: the post limits it after the grip, above the sub-spindle's.
+    program.operations[0].spindle = TurnSpindle::Css {
+        surface_speed: 80.0,
+        max_rpm: 4000.0,
+    };
+    let text = turning_post(&program, &FanucTurning, &PostSettings::default()).unwrap();
+    let grip = text
+        .find("(HAND-OVER TO THE SUB-SPINDLE)")
+        .expect("the grip");
+    let limit = text.find("G50 S4000").expect("the part-off's limit");
+    assert!(grip < limit, "{text}");
+    assert_eq!(
+        findings(&lathe, &program),
+        vec![(
+            "Part off: the spindle limit is above what the sub-spindle can do.".to_owned(),
+            0
+        )]
+    );
+    // At a constant speed above the sub-spindle's.
+    program.operations[0].spindle = TurnSpindle::Rpm { rpm: 2500.0 };
+    assert_eq!(
+        findings(&lathe, &program),
+        vec![(
+            "Part off: the spindle speed is outside what the sub-spindle can do.".to_owned(),
+            0
+        )]
+    );
+    // Above the main spindle's too: the main spindle's finding.
+    program.operations[0].spindle = TurnSpindle::Css {
+        surface_speed: 80.0,
+        max_rpm: 5000.0,
+    };
+    assert_eq!(
+        findings(&lathe, &program),
+        vec![(
+            "Part off: the spindle limit is above what the spindle can do.".to_owned(),
+            0
+        )]
+    );
+    // Within the sub-spindle's: none.
+    program.operations[0].spindle = TurnSpindle::Css {
+        surface_speed: 80.0,
+        max_rpm: 2000.0,
+    };
+    assert!(
+        findings(&lathe, &program).is_empty(),
+        "{:?}",
+        findings(&lathe, &program)
+    );
+    // Without the hand-over the part-off turns the main spindle alone.
+    let mut alone = sub_program();
+    alone.operations.truncate(1);
+    alone.hand_over = None;
+    alone.operations[0].spindle = TurnSpindle::Css {
+        surface_speed: 80.0,
+        max_rpm: 4000.0,
+    };
+    assert!(
+        findings(&lathe, &alone).is_empty(),
+        "{:?}",
+        findings(&lathe, &alone)
     );
 }
 

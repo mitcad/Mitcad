@@ -38,6 +38,7 @@ impl DocState {
         count("drawings", self.drawings.len());
         count("comments", self.comments.len());
         count("selection sets", self.selection_sets.len());
+        count("construction sets", self.construction_sets.len());
         count("flat patterns", self.flat_patterns.len());
         count("print profiles", self.print_profiles.len());
         count("print plates", self.print_plates.len());

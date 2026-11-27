@@ -111,7 +111,7 @@ impl<P> SketchDef<P> {
 
     /// The points and curves a dimension refers to (an equal spacing's
     /// dimension: its constraint's).
-    fn dimension_refs(&self, d: &Dimension<P>) -> Vec<Ref> {
+    pub(crate) fn dimension_refs(&self, d: &Dimension<P>) -> Vec<Ref> {
         match d.kind {
             DimensionKind::Spacing { constraint } => self
                 .constraints

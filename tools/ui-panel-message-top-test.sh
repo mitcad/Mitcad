@@ -9,7 +9,7 @@
 # tools/ui-windows-panel-message-top-test.ps1) on a cube that mitcad-cli
 # makes (tools/ui-scripts/panel-message-top.json), in a 1280 x 800 window,
 # in the Docked layout and then in the Floating one: Extrude1 edited, its
-# distance 0 fails the preview, and the panel's error box shows its text
+# distance -5 (Symmetric) fails the preview, and the panel's error box shows its text
 # from the first line, not scrolled down it ("Panel Extrude message
 # <w>x<h>, ..." or "... scrolling, at 0 of <n>, ..."). The box had opened
 # scrolled in the Docked layout, its "Failed:" line cut off.
@@ -39,7 +39,7 @@ run_layout() {
   done
   kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail "$1: the panel message driver timed out"; exit 1; }
   wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; ui_fail "$1: the panel message driver failed"; exit 1; }
-  ui_expect_log 'Preview Extrude: failed' "$1: a distance of 0 fails the preview"
+  ui_expect_log 'Preview Extrude: failed' "$1: a symmetric distance of -5 fails the preview"
   ui_expect_log 'Panel Extrude message box: error: ' "$1: its error in the panel's box"
   grep -E 'Panel Extrude message [0-9]+x[0-9]+' "$UI_LOG" | tail -1
   ui_expect_log 'TestDriver: done' "$1: the error box opens at its first line"

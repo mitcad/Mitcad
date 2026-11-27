@@ -54,7 +54,10 @@
 # Mitcad's configure finds the default prefix itself; another one is given
 # with -DMITCAD_RENDER_DEPS=<prefix> or the environment variable.
 #
-# Linux only for now. Pins: tools/dev-env/versions.sh. Re-running it is
+# Linux on x86-64 and on 64-bit ARM (aarch64, vcpkg's arm64-linux-dynamic,
+# with sse2neon for Cycles' SSE code and ISPC's aarch64 release; the CPU
+# device only: --cuda and --optix are x86-64 only). Pins:
+# tools/dev-env/versions.sh. Re-running it is
 # cheap: finished steps are skipped, and Cycles and Open Image Denoise are
 # built again when the devices change (delete the prefix's build/ and
 # install/ folders, by their literal paths, to build again).
@@ -110,10 +113,30 @@ if [ -n "$OPTIX_SDK" ]; then
   WITH_CUDA=1
 fi
 
-if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
-  echo "build-cycles.sh builds for x86-64 Linux only (so far)." >&2
-  exit 1
-fi
+# The machine's vcpkg triplet (the one CMakeLists.txt takes for it) and its
+# ISPC release.
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64)
+    TRIPLET=x64-linux-dynamic
+    ISPC_NAME=ispc-v$ISPC_VERSION-linux
+    ISPC_SHA256=$ISPC_LINUX_SHA256
+    ;;
+  Linux-aarch64)
+    TRIPLET=arm64-linux-dynamic
+    ISPC_NAME=ispc-v$ISPC_VERSION-linux.aarch64
+    ISPC_SHA256=$ISPC_LINUX_AARCH64_SHA256
+    # vcpkg's tool takes the system's CMake and Ninja on ARM Linux.
+    export VCPKG_FORCE_SYSTEM_BINARIES=${VCPKG_FORCE_SYSTEM_BINARIES:-1}
+    if [ "$WITH_CUDA" = 1 ]; then
+      echo "build-cycles.sh: no CUDA (or OptiX) device on aarch64 Linux; Cycles has its CPU device there." >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "build-cycles.sh builds for x86-64 and aarch64 Linux only (so far)." >&2
+    exit 1
+    ;;
+esac
 
 if [ -n "$OPTIX_SDK" ]; then
   # A prefix of its own: the ordinary one (MITCAD_RENDER_DEPS) stays
@@ -131,7 +154,6 @@ else
 fi
 JOBS=${MITCAD_RENDER_JOBS:-12}
 VCPKG_ROOT=${VCPKG_ROOT:-$HOME/vcpkg}
-TRIPLET=x64-linux-dynamic
 mkdir -p "$PREFIX"
 PREFIX=$(cd "$PREFIX" && pwd)
 DOWNLOADS=$PREFIX/downloads
@@ -262,11 +284,17 @@ DEVICES_STAMP=$(printf '%s' "$DEVICES" | sha256sum | cut -c1-12)
 echo "== Devices: $DEVICES$([ "$OIDN_GPU" = 1 ] && echo ", Open Image Denoise on the GPUs")"
 
 echo "== ISPC $ISPC_VERSION (build tool)"
-ISPC_DIR=$SRC/ispc-v$ISPC_VERSION-linux
-fetch "https://github.com/ispc/ispc/releases/download/v$ISPC_VERSION/ispc-v$ISPC_VERSION-linux.tar.gz" \
-  "ispc-v$ISPC_VERSION-linux.tar.gz" "$ISPC_LINUX_SHA256"
+ISPC_DIR=$SRC/$ISPC_NAME
+fetch "https://github.com/ispc/ispc/releases/download/v$ISPC_VERSION/$ISPC_NAME.tar.gz" \
+  "$ISPC_NAME.tar.gz" "$ISPC_SHA256"
 if [ ! -x "$ISPC_DIR/bin/ispc" ]; then
-  tar -xzf "$DOWNLOADS/ispc-v$ISPC_VERSION-linux.tar.gz" -C "$SRC"
+  # Unpacked into its own folder whatever the archive's top folder is called.
+  mkdir -p "$ISPC_DIR"
+  tar -xzf "$DOWNLOADS/$ISPC_NAME.tar.gz" -C "$ISPC_DIR" --strip-components=1
+fi
+if [ ! -x "$ISPC_DIR/bin/ispc" ]; then
+  echo "No $ISPC_DIR/bin/ispc in ISPC's archive" >&2
+  exit 1
 fi
 
 echo "== Open Image Denoise $OIDN_VERSION"
@@ -367,6 +395,12 @@ fi
 if [ "$WITH_ONEAPI" = 1 ]; then
   CYCLES_GPU_ARGS+=(-DWITH_CYCLES_DEVICE_ONEAPI=ON -DWITH_CYCLES_ONEAPI_BINARIES=ON)
 fi
+# On aarch64 Cycles builds its SSE code with sse2neon (vcpkg.json's
+# dependency on ARM), whose header vcpkg puts in include/sse2neon.
+CYCLES_ARCH_ARGS=()
+if [ "$TRIPLET" = arm64-linux-dynamic ]; then
+  CYCLES_ARCH_ARGS+=(-DSSE2NEON_INCLUDE_DIR="$DEPS/include/sse2neon")
+fi
 if [ ! -f "$CYCLES_DONE" ]; then
   rm -f "$INSTALL"/cycles/.done-*
   # The CPU device with Embree and Open Image Denoise, and the GPU devices
@@ -385,7 +419,7 @@ if [ ! -f "$CYCLES_DONE" ]; then
     -DWITH_CYCLES_NANOVDB=OFF -DWITH_CYCLES_OSL=OFF -DWITH_CYCLES_USD=OFF \
     -DWITH_CYCLES_HYDRA_RENDER_DELEGATE=OFF -DWITH_CYCLES_LOGGING=OFF \
     -DWITH_CYCLES_PATH_GUIDING=OFF -DWITH_CYCLES_STANDALONE_GUI=OFF \
-    "${CYCLES_GPU_ARGS[@]}" \
+    "${CYCLES_GPU_ARGS[@]}" "${CYCLES_ARCH_ARGS[@]}" \
     -DEMBREE_ROOT_DIR="$DEPS" -DTBB_ROOT_DIR="$DEPS" -DOPENIMAGEDENOISE_ROOT_DIR="$INSTALL/oidn" \
     -DZSTD_ROOT_DIR="$DEPS" -DPUGIXML_ROOT_DIR="$DEPS" \
     -DCMAKE_INSTALL_RPATH="$DEPS/lib;$INSTALL/oidn/lib" > "$PREFIX/cycles-configure.log"

@@ -317,3 +317,48 @@ pub(super) fn simulate<K: Kernel>(
     };
     Ok(doc.cam_simulate_json(&query.setup, &options)?)
 }
+
+/// The `cam_tool_shape` query (mitcad#2502): a tool as `cam_tool_put`
+/// would keep it, resolved by the same rules, with a turning tool's or
+/// boring bar's insert and holder: the back angle, the codes as read and
+/// the outline from the controlled point. Nothing is kept.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ToolShapeQuery {
+    tool: Box<CamToolInput>,
+}
+
+/// The `cam_tool_shape` query.
+pub(super) fn tool_shape<K: Kernel>(
+    doc: &Document<K>,
+    query: &ToolShapeQuery,
+) -> Result<Value, ApiError> {
+    use mitcad_model::cam::ToolKind;
+    let tool = query.tool.resolve(doc.parameters()).map_err(ApiError)?;
+    let (nose_radius, inside) = match tool.shape {
+        ToolKind::Turning { nose_radius } => (nose_radius, false),
+        ToolKind::Boring { nose_radius } => (nose_radius, true),
+        _ => return Ok(json!({"tool": tool})),
+    };
+    let Some(geometry) = &tool.insert else {
+        return Ok(json!({"tool": tool}));
+    };
+    let insert = if geometry.insert.is_empty() {
+        Value::Null
+    } else {
+        json!(engine::turning::parse_insert(&geometry.insert).map_err(ApiError)?)
+    };
+    let holder = if geometry.holder.is_empty() {
+        Value::Null
+    } else {
+        json!(engine::turning::parse_holder(&geometry.holder).map_err(ApiError)?)
+    };
+    Ok(json!({
+        "tool": tool,
+        "back_angle": geometry.back_angle(),
+        "insert": insert,
+        "holder": holder,
+        "nose_radius_from_code": geometry.typed.nose_radius.is_none() && !geometry.insert.is_empty(),
+        "outline": geometry.outline(nose_radius, inside, tool.diameter),
+    }))
+}

@@ -6,7 +6,8 @@
 //! toolpaths generated and marked out of date by a change of the model
 //! (and up to date again by its undo), the G-code in millimetres and
 //! inches, a pocket on a round face whose arcs stay arcs, refusals in
-//! words, the design file's `cam` section read back (and read tolerantly)
+//! words, the design file's `cam` section read back (and read tolerantly;
+//! one that cannot be read opens the design without its CAM, mitcad#2581)
 //! and the machine library's files; a setup's eye kept in the design and
 //! undone; inputs picked in each placement of a component placed twice
 //! outlined where that placement puts them; values that name a parameter
@@ -15,6 +16,7 @@
 use serde_json::{Value, json};
 
 use mitcad_model::cam::library::set_user_cam_library;
+use mitcad_model::file::{FileError, FileFormat};
 use mitcad_model::kernel::Curve3;
 use mitcad_model::testing::MockKernel;
 use mitcad_model::testing::temp::{remove_temp, unique_temp_dir};
@@ -565,10 +567,210 @@ fn the_cam_section_is_saved_and_read_back() {
     let read = Document::from_json(&newer.to_string(), MockKernel::default()).unwrap();
     assert_eq!(read.to_json(), saved);
 
-    // Two setups with one id are refused.
+    // Two operations with one id: the section cannot be read, and the
+    // design opens without it (mitcad#2581, the next test).
     let mut twice = file.clone();
     twice["cam"]["setups"][0]["operations"][1]["id"] = json!(2);
-    assert!(Document::from_json(&twice.to_string(), MockKernel::default()).is_err());
+    let read = Document::from_json(&twice.to_string(), MockKernel::default()).unwrap();
+    assert_eq!(
+        read.unknown_fields().unreadable_cam.as_deref(),
+        Some("two setups or operations have the same id")
+    );
+    assert!(!read.to_json().contains("\"cam\""));
+}
+
+/// The open warning of a design whose CAM section could not be read
+/// (mitcad#2581), before what is wrong with it.
+const UNREADABLE: &str = "the design's CAM could not be read, so it opened without its machines, \
+                          setups and operations: ";
+
+fn file_value(path: &std::path::Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// A design whose CAM section this build cannot read (mitcad#2581: a
+/// value of another build, two operations with one id) opens with its
+/// model and drawings as the file has them and without its CAM, with a
+/// warning that says what is wrong; Save As leaves the file as it is,
+/// saving over it drops the CAM (the save path's flag the application
+/// asks by). A section that reads, and a controller of another build
+/// (mitcad#2531), open with their CAM; a file broken elsewhere, invalid
+/// JSON and an unsupported version are still refused.
+#[test]
+fn a_cam_section_that_cannot_be_read_opens_the_design_without_it() {
+    let mut doc = machined();
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    command(&mut doc, json!({"cmd": "cam_generate"}));
+    let file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    assert_eq!(file["drawings"].as_array().unwrap().len(), 1);
+    // What the design opens as: the file without its CAM.
+    let mut without = file.clone();
+    without.as_object_mut().unwrap().remove("cam");
+    let model_only = Document::from_json(&without.to_string(), MockKernel::default())
+        .unwrap()
+        .to_json();
+    assert!(model_only.contains("\"drawings\""));
+
+    let mut twice = file.clone();
+    twice["cam"]["setups"][0]["operations"][1]["id"] = json!(2);
+    let mut malformed = file.clone();
+    malformed["cam"]["setups"] = json!("none");
+    let mut not_a_section = file.clone();
+    not_a_section["cam"] = json!(5);
+    let cases = [
+        (
+            "two operations with one id",
+            &twice,
+            Some("two setups or operations have the same id"),
+        ),
+        ("a malformed value", &malformed, None),
+        ("not a section", &not_a_section, None),
+    ];
+    for (what, case, reason) in cases {
+        let mut opened = Document::from_json(&case.to_string(), MockKernel::default())
+            .unwrap_or_else(|e| panic!("{what}: the design does not open: {e}"));
+        assert_eq!(
+            opened.to_json(),
+            model_only,
+            "{what}: the model and drawings as written"
+        );
+        let warnings = opened.load_warnings().to_vec();
+        assert_eq!(warnings.len(), 1, "{what}: {warnings:?}");
+        let said = warnings[0]
+            .strip_prefix(UNREADABLE)
+            .unwrap_or_else(|| panic!("{what}: {}", warnings[0]));
+        assert!(!said.is_empty(), "{what}: the warning says what is wrong");
+        if let Some(reason) = reason {
+            assert_eq!(said, reason, "{what}");
+        }
+        let unknown = opened.unknown_fields();
+        assert_eq!(unknown.unreadable_cam.as_deref(), Some(said), "{what}");
+        assert!(unknown.fields.is_empty(), "{what}");
+        assert_eq!(unknown.not_read(), ["cam"], "{what}");
+        opened.recompute();
+        let cam = query(&opened, json!({"query": "cam_setups"}));
+        assert_eq!(cam["machines"], json!([]), "{what}");
+        assert_eq!(cam["setups"], json!([]), "{what}");
+        let answer = query(&opened, json!({"query": "unknown_fields"}));
+        assert_eq!(answer["fields"], json!(["cam"]), "{what}");
+        assert_eq!(
+            answer["unreadable"],
+            json!([{"field": "cam", "reason": said}]),
+            "{what}"
+        );
+        assert_eq!(answer["message"], json!(warnings[0]), "{what}");
+    }
+
+    // With a field a newer MitCad wrote too: both warnings, each worded
+    // for its own case, and the save's warning names both.
+    let mut both = twice.clone();
+    both["future_notes"] = json!([]);
+    let opened = Document::from_json(&both.to_string(), MockKernel::default()).unwrap();
+    assert_eq!(
+        opened.load_warnings(),
+        [
+            "this design was written by a newer MitCad: the field `future_notes` was not read"
+                .to_owned(),
+            format!("{UNREADABLE}two setups or operations have the same id"),
+        ]
+    );
+    let unknown = opened.unknown_fields();
+    assert_eq!(unknown.not_read(), ["cam", "future_notes"]);
+    assert_eq!(
+        unknown.dropping_warning().as_deref(),
+        Some(
+            "saving over this design drops its CAM (machines, setups and operations), which this \
+             MitCad could not read, and the field `future_notes` that a newer MitCad wrote"
+        )
+    );
+
+    // Read from a file: Save As keeps that file as it is, saving over it
+    // drops the CAM, and the save path's flag says so first.
+    let dir = unique_temp_dir("unreadable-cam");
+    let path = dir.join("design.mitcad");
+    let other = dir.join("copy.mitcad");
+    let text = twice.to_string();
+    std::fs::write(&path, &text).unwrap();
+    let opened = Document::load_design(&path, MockKernel::default()).unwrap();
+    assert_eq!(opened.fields_dropped_by_saving(&path), ["cam"]);
+    assert!(opened.fields_dropped_by_saving(&other).is_empty());
+    let answer = query(
+        &opened,
+        json!({"query": "unknown_fields", "path": path.display().to_string()}),
+    );
+    assert_eq!(answer["fields"], json!(["cam"]));
+    assert_eq!(
+        answer["unreadable"],
+        json!([{"field": "cam", "reason": "two setups or operations have the same id"}])
+    );
+    assert_eq!(
+        answer["message"],
+        "saving over this design drops its CAM (machines, setups and operations), which this \
+         MitCad could not read"
+    );
+    let answer = query(
+        &opened,
+        json!({"query": "unknown_fields", "path": other.display().to_string()}),
+    );
+    assert_eq!(answer, json!({"fields": [], "file": answer["file"]}));
+    opened.save_file(&other, FileFormat::Single).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "Save As");
+    assert!(file_value(&other).get("cam").is_none());
+    assert_eq!(opened.fields_dropped_by_saving(&path), ["cam"]);
+    opened.save_file(&path, FileFormat::Single).unwrap();
+    let written = file_value(&path);
+    assert!(written.get("cam").is_none());
+    assert_eq!(written["drawings"], file["drawings"]);
+    assert_eq!(written["features"], file["features"]);
+    assert!(opened.fields_dropped_by_saving(&path).is_empty());
+    let reopened = Document::load_design(&path, MockKernel::default()).unwrap();
+    assert!(
+        reopened.load_warnings().is_empty(),
+        "{:?}",
+        reopened.load_warnings()
+    );
+    remove_temp(&dir);
+
+    // A section that reads opens with it, and so does a controller of
+    // another build (mitcad#2531): nothing to warn about.
+    let mut controller = file.clone();
+    controller["cam"]["machines"][0]["machine"]["controller"] = json!("another_build_router");
+    for case in [&file, &controller] {
+        let mut opened = Document::from_json(&case.to_string(), MockKernel::default()).unwrap();
+        assert!(
+            opened.load_warnings().is_empty(),
+            "{:?}",
+            opened.load_warnings()
+        );
+        assert_eq!(opened.unknown_fields().unreadable_cam, None);
+        let saved: Value = serde_json::from_str(&opened.to_json()).unwrap();
+        assert_eq!(saved["cam"]["setups"], case["cam"]["setups"]);
+        opened.recompute();
+        let cam = query(&opened, json!({"query": "cam_setups"}));
+        assert_eq!(
+            cam["machines"][0]["controller"],
+            case["cam"]["machines"][0]["machine"]["controller"]
+        );
+        assert_eq!(cam["setups"].as_array().unwrap().len(), 1);
+    }
+
+    // Broken elsewhere: refused as before, a broken CAM or not.
+    let mut elsewhere = twice.clone();
+    elsewhere["features"][1]["radus"] = json!("d1");
+    match Document::from_json(&elsewhere.to_string(), MockKernel::default()) {
+        Err(FileError::Schema(message)) => assert!(message.contains("radus"), "{message}"),
+        other => panic!("a broken feature must be refused: {:?}", other.err()),
+    }
+    let mut newer_version = twice.clone();
+    newer_version["version"] = json!(99);
+    assert!(matches!(
+        Document::from_json(&newer_version.to_string(), MockKernel::default()),
+        Err(FileError::Version(_))
+    ));
+    assert!(matches!(
+        Document::from_json("{\"format\": ", MockKernel::default()),
+        Err(FileError::Syntax(_))
+    ));
 }
 
 #[test]

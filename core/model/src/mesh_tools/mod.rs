@@ -14,7 +14,21 @@
 //! - [`segment`]: the mesh split into regions by its curvature: planes,
 //!   cylinders and free-form regions;
 //! - [`fit`]: a plane, a cylinder, a cone, a sphere or a B-spline surface
-//!   fitted to a region, bounded as a face of a surface body.
+//!   fitted to a region, bounded as a face of a surface body;
+//! - [`smooth`] (mitcad#2515): the noise of a scan taken out, a sharp edge
+//!   kept sharp, the volume kept;
+//! - [`offset`] (mitcad#2515): the surface moved by a distance, or made a
+//!   closed wall of a thickness with openings; where the moved triangles
+//!   turn over, a closed mesh's offset built from its distance
+//!   (`offset_field`, mitcad#2564);
+//! - [`align`] (mitcad#2515): points moved onto a mesh by picked pairs and
+//!   a best fit, the deviation left measured;
+//! - [`plane_cut`] (mitcad#2515): a mesh cut by a plane into two pieces,
+//!   the cut capped or open;
+//! - [`check`] (mitcad#2515): where a mesh is open or crosses itself, for
+//!   the tools that need a closed mesh to refuse it with the places;
+//! - [`merged`] (mitcad#2515): meshes put together into one; Combine's
+//!   booleans themselves are the kernel's, on faceted solids.
 //!
 //! The features (`features/mesh_tools.rs`) make new mesh and surface bodies
 //! of their results; the mesh they start from stays as it was.
@@ -25,7 +39,19 @@ pub mod region;
 pub mod repair;
 pub mod section;
 pub mod segment;
+// Smooth, Offset and Shell, Align, Plane Cut and the checks Combine needs
+// (mitcad#2515).
+pub mod align;
+pub(crate) mod bvh;
+pub mod check;
+pub mod offset;
+// An offset that turns over, built from the distance (mitcad#2564).
+pub(crate) mod offset_field;
+pub mod plane_cut;
+pub mod smooth;
 
+#[cfg(test)]
+mod shape_tests;
 #[cfg(test)]
 pub(crate) mod synthetic;
 #[cfg(test)]
@@ -141,6 +167,42 @@ pub(crate) fn signed_volume(mesh: &TriangleMesh, triangles: &[usize]) -> f64 {
             dot(p[0], cross(p[1], p[2])) / 6.0
         })
         .sum()
+}
+
+/// The volume the mesh encloses (mm³; positive when its triangles face
+/// out), summed about the middle of its box to keep the sum's error small.
+pub fn volume(mesh: &TriangleMesh) -> f64 {
+    let Some(first) = mesh.vertices.first() else {
+        return 0.0;
+    };
+    let mut min = *first;
+    let mut max = *first;
+    for p in &mesh.vertices {
+        for i in 0..3 {
+            min[i] = min[i].min(p[i]);
+            max[i] = max[i].max(p[i]);
+        }
+    }
+    let middle: Point = std::array::from_fn(|i| 0.5 * (min[i] + max[i]));
+    (0..mesh.triangles.len())
+        .map(|t| {
+            let p = corners(mesh, t).map(|q| sub(q, middle));
+            dot(p[0], cross(p[1], p[2])) / 6.0
+        })
+        .sum()
+}
+
+/// The meshes put together into one, each as it is (no boolean: where they
+/// overlap, they still do).
+pub fn merged(meshes: &[TriangleMesh]) -> TriangleMesh {
+    let mut out = TriangleMesh::default();
+    for mesh in meshes {
+        let base = out.vertices.len() as u32;
+        out.vertices.extend_from_slice(&mesh.vertices);
+        out.triangles
+            .extend(mesh.triangles.iter().map(|t| t.map(|v| v + base)));
+    }
+    out
 }
 
 /// The mesh with the corners its triangles share joined: vertices within a

@@ -157,7 +157,7 @@ $solidCreate = 'New Component | Create Sketch | - | Extrude | Revolve | Sweep | 
   ' | - | Hole | Cell Grid | Thread' +
   ' | - | Box | Cylinder | Cone | Sphere | Torus | Coil | Pipe' +
   ' | - | Pattern > [Rectangular Pattern | Circular Pattern | Pattern on Path | Pattern at Points] | Mirror | Thicken | Boundary Fill' +
-  ' | - | Curves > [Helix | Intersection Curve | Helix Curve]' +
+  ' | - | Curves > [Helix | Intersection Curve | Helix Curve | Isoparametric Curve]' +
   ' | - | Plastic Feature | Envelope | Form | Flex' +
   ' | - | Machine Elements > [Gear | Gear Pair | Pulley | Belt Drive | Bearing'
 Ui-Mark

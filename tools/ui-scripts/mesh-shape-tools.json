@@ -1,0 +1,23 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The design of tools/ui-scripts/mesh-shape-tools.mitcad-ui (mitcad#2515): two boxes 20 on a side, one at the origin (F1) and one moved by 10 along X and Y (F3), a cylinder 20 across and 10 high at x 60 (F5) and a third box where the first is (F7), written to cube.stl, cube2.stl, cyl.stl and cube3.stl in the working directory and read back as the mesh bodies cube (Base1, F2.b0), cube2 (Base2, F4.b0), cyl (Base3, F6.b0) and cube3 (Base4, F8.b0), the solids removed (RemoveBody1, F9), and Plane1 (F10) 5 above XY. The wrappers run this in their work folder."},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[0,0],"length":20,"width":20,"height":20,"operation":"new_body"}},
+  {"cmd":"export","path":"cube.stl","bodies":["F1.b0"]},
+  {"cmd":"import_file","path":"cube.stl"},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[10,10],"length":20,"width":20,"height":20,"operation":"new_body"}},
+  {"cmd":"export","path":"cube2.stl","bodies":["F3.b0"]},
+  {"cmd":"import_file","path":"cube2.stl"},
+  {"cmd":"add_feature","def":{"type":"cylinder","plane":"xy","center":[60,0],"diameter":20,"height":10,"operation":"new_body"}},
+  {"cmd":"export","path":"cyl.stl","bodies":["F5.b0"]},
+  {"cmd":"import_file","path":"cyl.stl"},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[0,0],"length":20,"width":20,"height":20,"operation":"new_body"}},
+  {"cmd":"export","path":"cube3.stl","bodies":["F7.b0"]},
+  {"cmd":"import_file","path":"cube3.stl"},
+  {"cmd":"add_feature","def":{"type":"remove_body","bodies":["F1.b0","F3.b0","F5.b0","F7.b0"]}},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":5}}},
+  {"expect":{"feature":"Base3","status":"ok","body":"cyl","faces":1,"edges":0}},
+  {"expect":{"feature":"Base4","status":"ok","body":"cube3"}},
+  {"expect":{"query":{"query":"mesh_stats","body":"F2.b0"},"result":{"closed":true,"volume":8000}}},
+  {"expect":{"query":{"query":"mesh_stats","body":"F4.b0"},"result":{"closed":true,"volume":8000}}},
+  {"expect":{"feature":"F10","status":"ok"}}
+]

@@ -134,6 +134,17 @@ struct BrowserNode {
     // double-click shows the design exploded by it, or assembled again.
     ExplodeViews,
     ExplodeView,
+    // A lathe setup's block of manual G-code (mitcad#2506), among the
+    // setup's operations where the program writes it: uid "<setup>:<n>"
+    // (its place from 0 in the setup's `lathe.manual_code`), camSetup its
+    // setup's id, name its name. It opens the setup's panel.
+    CamManualCode,
+    // Construction sets (mitcad#2514): a component's sets, before its
+    // Bodies folder (uid and name the set's name; `active` the set new
+    // items join), each with the rows of its items under it: the item's
+    // own Body, Sketch or Datum rows, whose `constructionSet` names the
+    // set, moved there from their usual folders.
+    ConstructionSet,
   };
 
   Type type = Type::None;
@@ -179,6 +190,12 @@ struct BrowserNode {
   // (clicks, menu), but Find in Browser, owner marks, drags and folders
   // never take it for that row.
   QString selectionSet;
+  // A body's, sketch's or construction feature's row in a construction set
+  // (mitcad#2514): the set's name; empty when the item is in none. The row
+  // is the item's own row, listed under its set; a set's row: whether it is
+  // the active set.
+  QString constructionSet;
+  bool active = false;
 
   bool isValid() const { return type != Type::None; }
   bool isSetMember() const { return !selectionSet.isEmpty(); }
@@ -188,7 +205,8 @@ struct BrowserNode {
            type == Type::MotionLinks || type == Type::Measurements || type == Type::Drawings ||
            type == Type::ImageReferences || type == Type::Features || type == Type::CamFolder ||
            type == Type::BodyFolder || type == Type::SketchBlocks || type == Type::ComponentFolder ||
-           type == Type::SelectionSets || type == Type::PointClouds || type == Type::Decals;
+           type == Type::SelectionSets || type == Type::PointClouds || type == Type::Decals ||
+           type == Type::ConstructionSet;
   }
   // The selection item the row stands for; invalid for folders and settings.
   SelectionItem item() const;
@@ -257,7 +275,10 @@ public:
   // after it with `lowerHalf` (the pointer below the row's middle), in its
   // group (mitcad#2104). False when they cannot go there (another
   // component's row or folder, rows of different kinds or parents, every
-  // row already there, onto one of themselves).
+  // row already there, onto one of themselves). A lathe setup's block of
+  // manual G-code (mitcad#2532), alone, within its own setup: on the
+  // setup's row after it (the program's start), on an operation's or another
+  // block's row before it, or after it with `lowerHalf`.
   static bool dropFor(const QVector<BrowserNode>& sources, const BrowserNode& target, bool lowerHalf,
                       BrowserDrop* place);
 
@@ -420,6 +441,18 @@ public:
   void setControlPlaces(BrowserControlPlace activate, BrowserControlPlace eye);
   BrowserControlPlace activatePlace() const { return m_activatePlace; }
   BrowserControlPlace eyePlace() const { return m_eyePlace; }
+  // The rows' spacing (mitcad#2513, Preferences > Display > Browser row
+  // spacing): Standard, the default, each layout's row height as it always
+  // was (Floating at least 26 px, Docked at least panel::kRowHeight);
+  // Compact a fifth less, never so little that the icon, the name or the
+  // light bulb and radio button are cut; Comfortable a quarter more
+  // (spacedBrowserRowHeight). Applied at once: the rows laid out again, the
+  // row at the top of the view kept there, the selection, the open folders
+  // and the controls' places as they were; the card's height follows
+  // (contentHeightChanged). Logged with the rows ("Browser row spacing
+  // compact: rows 21 px high").
+  void setRowSpacing(BrowserRowSpacing spacing);
+  BrowserRowSpacing rowSpacing() const { return m_rowSpacing; }
   // Where a row's parts are in the tree's viewport (for tests): its name,
   // light bulb and radio button (empty without one), whether the name is
   // cut short; all empty for a row not laid out or no row at `path`
@@ -526,7 +559,8 @@ signals:
   // Body or component rows dragged and let go where they may go
   // (mitcad#2103, dropFor): `sources` the rows dragged (the selected rows
   // of the pressed row's kind when it is one of them, else that row), in
-  // the tree's order; `target` the row they were let go on.
+  // the tree's order; `target` the row they were let go on. A block of
+  // manual G-code is dragged alone (mitcad#2532).
   void rowsDropped(const QVector<mitcad::BrowserNode>& sources, const mitcad::BrowserNode& target,
                    mitcad::BrowserDrop place);
   // The rows' looks changed in place, without a rebuild (mitcad#1352): the
@@ -566,7 +600,7 @@ private:
                           const QString& tooltip = QString());
   void addComponentRows(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot,
                         const QString& component, const QString& occurrence, bool shown,
-                        const SketchUses& uses);
+                        const SketchUses& uses, const QString& envelope = QString());
   // The rows of the features that use a sketch, under its row (mitcad#177).
   void addFeatureRows(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot,
                       const DocumentSnapshot::Feature& sketch, const QString& occurrence, bool shown,
@@ -647,6 +681,8 @@ private:
   // last logged (mitcad#2113).
   QString m_shownExplodeView;
   QString m_loggedExplodeViews;
+  // Each component's construction sets as last logged (mitcad#2514).
+  QHash<QString, QString> m_loggedConstructionSets;
   // The rows whose transparent eye was logged last, by path (mitcad#1093).
   QSet<QString> m_loggedTransparent;
   // The Sketch Blocks folder's rows as last logged (mitcad#2110).
@@ -684,6 +720,7 @@ private:
   // setControlPlaces (mitcad#2223).
   BrowserControlPlace m_activatePlace = BrowserControlPlace::Classic;
   BrowserControlPlace m_eyePlace = BrowserControlPlace::Classic;
+  BrowserRowSpacing m_rowSpacing = BrowserRowSpacing::Standard; // setRowSpacing (mitcad#2513)
   // setScrollBarOnLeft (mitcad#425): the bar at the left, and its place.
   void placeLeftScrollBar();
   bool m_scrollBarLeft = false;

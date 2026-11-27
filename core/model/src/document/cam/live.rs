@@ -507,6 +507,7 @@ impl<K: Kernel> Document<K> {
                 kind: TurningToolKind::Live,
                 nose_radius: 0.0,
                 max_depth: milled.tool.flute_length.max(1e-3),
+                back_angle: None,
             },
             spindle: TurnSpindle::Rpm {
                 rpm: milled.spindle_rpm,

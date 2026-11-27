@@ -118,6 +118,15 @@ pub mod flex_drape;
 pub mod surface_groups;
 // Point Cloud Deviation: closest points on a body's faces (mitcad#2240).
 pub mod point_clouds;
+// Minimum Radius: the largest curvature of each face (mitcad#2518).
+pub mod min_radius;
+// Sheet faces sampled for an approximate development (mitcad#2442).
+pub mod sheet_grid;
+// Continuity Analysis: the continuity across a body's edges (mitcad#2521).
+pub mod edge_continuity;
+// Surface quality analyses: curvature at a face mesh's vertices and the
+// faces' iso curves (mitcad#2517).
+pub mod surface_quality;
 
 use std::sync::Arc;
 
@@ -1155,6 +1164,8 @@ impl Kernel for OcctKernel {
             options.step_body.as_deref().unwrap_or(""),
             options.samples,
             options.fuzzy,
+            options.seconds.unwrap_or(0.0),
+            options.booleans_above,
         )
         .map(analysis::comparison)
         .map_err(failed)
@@ -2358,6 +2369,8 @@ impl Kernel for OcctKernel {
             free: spec.free,
             start: spec.start,
             end: spec.end,
+            tangent: spec.tangent,
+            side_taper: spec.side_taper,
         };
         plastic::ffi::rim_band(&list, &band).map_err(failed)
     }
@@ -2391,14 +2404,15 @@ impl Kernel for OcctKernel {
         spec: &mitcad_model::BoundarySpec<'_, Self::Shape>,
     ) -> Result<Self::Shape, KernelError> {
         use mitcad_model::BoundaryCurves;
-        let (u, v, fill) = match spec.curves {
-            BoundaryCurves::Loop(curves) => (curves, &[][..], true),
-            BoundaryCurves::Network { u, v } => (u, v, false),
+        let (u, v, guides, fill) = match spec.curves {
+            BoundaryCurves::Loop { boundary, guides } => (boundary, &[][..], guides, true),
+            BoundaryCurves::Network { u, v } => (u, v, &[][..], false),
         };
         let mut bodies: Vec<&Self::Shape> = Vec::new();
         let mut pieces = Vec::new();
         let u = surface_fills::boundary_data(u, &mut bodies, &mut pieces);
         let v = surface_fills::boundary_data(v, &mut bodies, &mut pieces);
+        let guides = surface_fills::boundary_data(guides, &mut bodies, &mut pieces);
         let list = shape_list(&bodies)?;
         surface_fills::ffi::boundary_surface(
             &spec.feature.to_string(),
@@ -2407,6 +2421,7 @@ impl Kernel for OcctKernel {
             fill,
             &u,
             &v,
+            &guides,
         )
         .map_err(failed)
     }
@@ -3550,6 +3565,225 @@ impl Kernel for OcctKernel {
         face: &FaceName,
     ) -> Result<mitcad_model::sheet::FaceBending, KernelError> {
         sheet::face_bending(shape, face)
+    }
+
+    // Minimum Radius: the largest curvature of each face (mitcad#2518;
+    // min_radius.rs).
+
+    fn face_curvatures(
+        &self,
+        shape: &Self::Shape,
+        faces: &[FaceName],
+    ) -> Result<Vec<mitcad_model::kernel::FaceCurvature>, KernelError> {
+        let found =
+            min_radius::ffi::face_curvatures(occt(shape)?, &face_names(faces)).map_err(failed)?;
+        Ok(found
+            .into_iter()
+            .map(|f| mitcad_model::kernel::FaceCurvature {
+                face: f.face,
+                curvature: f.curvature,
+                at: f.at,
+            })
+            .collect())
+    }
+
+    // Isoparametric curves of faces (mitcad#2522; intersection_curve.rs).
+
+    fn iso_curves(
+        &self,
+        shape: &Self::Shape,
+        face: &FaceName,
+        held: mitcad_model::kernel::IsoParameter,
+        place: &mitcad_model::kernel::IsoPlace,
+    ) -> Result<Vec<mitcad_model::kernel::IsoCurve>, KernelError> {
+        use mitcad_model::kernel::{IsoCurve, IsoParameter, IsoPlace};
+        let (fractions, through): (&[f64], Vec<f64>) = match place {
+            IsoPlace::Fractions(fractions) => (fractions, Vec::new()),
+            IsoPlace::Through(point) => (&[], point.to_vec()),
+        };
+        let mut index = Vec::new();
+        let pieces = intersection_curve::ffi::iso_curves(
+            occt(shape)?,
+            &face.to_string(),
+            held == IsoParameter::U,
+            fractions,
+            &through,
+            &mut index,
+        )
+        .map_err(failed)?;
+        let mut curves: Vec<IsoCurve> = Vec::new();
+        for (piece, &curve) in pieces.iter().zip(index.iter()) {
+            while curves.len() <= curve {
+                curves.push(IsoCurve { pieces: Vec::new() });
+            }
+            curves[curve].pieces.push(intersection_curve::curve(piece));
+        }
+        Ok(curves)
+    }
+
+    // Sheet faces sampled for an approximate development by triangulation
+    // (mitcad#2442; sheet_grid.rs).
+
+    fn sheet_face_grid(
+        &self,
+        shape: &Self::Shape,
+        face: &FaceName,
+        columns: usize,
+        rows: usize,
+        edge_steps: usize,
+    ) -> Result<Vec<mitcad_model::kernel::SheetFaceGrid>, KernelError> {
+        use mitcad_model::kernel::{SheetFaceEdge, SheetFaceGrid, SheetFaceWire};
+        let pieces = sheet_grid::ffi::sheet_face_grid(
+            occt(shape)?,
+            &face.to_string(),
+            columns,
+            rows,
+            edge_steps,
+        )
+        .map_err(failed)?;
+        let triples = |values: &[f64]| -> Vec<[f64; 3]> { values.as_chunks::<3>().0.to_vec() };
+        let pairs = |values: &[f64]| -> Vec<[f64; 2]> { values.as_chunks::<2>().0.to_vec() };
+        Ok(pieces
+            .iter()
+            .map(|grid| SheetFaceGrid {
+                columns,
+                rows,
+                points: triples(&grid.points),
+                normals: triples(&grid.normals),
+                area: grid.area,
+                wires: grid
+                    .wires
+                    .iter()
+                    .map(|wire| SheetFaceWire {
+                        outer: wire.outer,
+                        edges: wire
+                            .edges
+                            .iter()
+                            .map(|edge| SheetFaceEdge {
+                                cells: pairs(&edge.cells),
+                                points: triples(&edge.points),
+                                normals: triples(&edge.normals),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect())
+    }
+
+    // Continuity Analysis: the continuity across a body's edges
+    // (mitcad#2521; edge_continuity.rs).
+
+    fn edge_continuity(
+        &self,
+        shape: &Self::Shape,
+        edges: &[EdgeName],
+        faces: &[FaceName],
+        spec: &mitcad_model::kernel::ContinuitySpec,
+    ) -> Result<Vec<mitcad_model::kernel::EdgeContinuity>, KernelError> {
+        use mitcad_model::kernel::{ContinuityClass, EdgeContinuity, EdgeSides};
+        let params = edge_continuity::ffi::ContinuityParams {
+            samples: u32::try_from(spec.samples.clamp(1, 1000)).unwrap_or(1000),
+            gap: spec.gap,
+            angle: spec.angle,
+            curvature: spec.curvature,
+        };
+        let found = edge_continuity::ffi::edge_continuity(
+            occt(shape)?,
+            &names(edges),
+            &face_names(faces),
+            &params,
+        )
+        .map_err(failed)?;
+        Ok(found
+            .into_iter()
+            .map(|edge| EdgeContinuity {
+                name: edge.name,
+                sides: match edge.sides {
+                    0 => EdgeSides::Shared,
+                    1 => EdgeSides::Seam,
+                    _ => EdgeSides::Open,
+                },
+                class: match edge.reached {
+                    0 => ContinuityClass::None,
+                    1 => ContinuityClass::G0,
+                    2 => ContinuityClass::G1,
+                    3 => ContinuityClass::G2,
+                    _ => ContinuityClass::Unmeasured,
+                },
+                samples: edge.samples as usize,
+                gap: edge.gap,
+                angle: edge.angle,
+                curvature: edge.curvature,
+                curvature_share: edge.curvature_share,
+                gap_at: edge.gap_at,
+                angle_at: edge.angle_at,
+                curvature_at: edge.curvature_at,
+                points: edge.points.as_chunks::<3>().0.to_vec(),
+            })
+            .collect())
+    }
+
+    // Surface quality analyses: curvature at a face mesh's vertices and the
+    // faces' iso curves (mitcad#2517; surface_quality.rs).
+
+    fn surface_samples(
+        &self,
+        shape: &Self::Shape,
+        faces: &[FaceName],
+        tolerance: &mitcad_model::exchange::MeshTolerance,
+    ) -> Result<mitcad_model::surface_quality::SurfaceSamples, KernelError> {
+        let mesh = surface_quality::ffi::surface_samples(
+            occt(shape)?,
+            &face_names(faces),
+            tolerance.deviation,
+            tolerance.angle,
+            tolerance.face_triangles,
+        )
+        .map_err(failed)?;
+        Ok(mitcad_model::surface_quality::SurfaceSamples {
+            vertices: mesh.vertices.as_chunks::<3>().0.to_vec(),
+            normals: mesh.normals.as_chunks::<3>().0.to_vec(),
+            curvatures: mesh.curvatures.as_chunks::<2>().0.to_vec(),
+            triangles: mesh.triangles.as_chunks::<3>().0.to_vec(),
+            face_triangles: mesh.face_triangles,
+        })
+    }
+
+    fn face_isocurves(
+        &self,
+        shape: &Self::Shape,
+        faces: &[FaceName],
+        count: u32,
+        deviation: f64,
+    ) -> Result<Vec<mitcad_model::surface_quality::IsoCurve>, KernelError> {
+        let set = surface_quality::ffi::face_isocurves(
+            occt(shape)?,
+            &face_names(faces),
+            count,
+            deviation,
+        )
+        .map_err(failed)?;
+        let points = set.points.as_chunks::<3>().0;
+        let normals = set.normals.as_chunks::<3>().0;
+        let mut start = 0usize;
+        let mut curves = Vec::with_capacity(set.counts.len());
+        for (i, &count) in set.counts.iter().enumerate() {
+            let end = start + count as usize;
+            if end > points.len() || end > normals.len() || end > set.curvatures.len() {
+                return Err(KernelError::failed("the iso curves came back short"));
+            }
+            curves.push(mitcad_model::surface_quality::IsoCurve {
+                face: set.faces[i],
+                along_u: set.along_u[i] != 0,
+                at: set.at[i],
+                points: points[start..end].to_vec(),
+                normals: normals[start..end].to_vec(),
+                curvatures: set.curvatures[start..end].to_vec(),
+            });
+            start = end;
+        }
+        Ok(curves)
     }
 }
 

@@ -18,6 +18,7 @@
 #include <gp_Pln.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -71,7 +72,7 @@ void projection_crossing_plane_bounds(double first, double span) {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(projection_boundary) {
   try {
     projection_crossing_plane_bounds(1.0, 1e-6);
     projection_crossing_plane_bounds(1e6, 1e-6);

@@ -38,6 +38,7 @@
 
 #include "../src/skin.hpp"
 #include "check.hpp"
+#include "loft_outermost.hpp"
 #include "mitcad/geometry/user_error.hpp"
 
 namespace test {
@@ -218,6 +219,89 @@ void test_hermite() {
   const occ::handle<Geom_BSplineCurve> uneven = hermite_curve(three, {0, 1, 3}, false);
   CHECK(uneven->Degree() == 2 && uneven->NbPoles() == 3);
   CHECK(near_point(uneven->Value(2.0), gp_Pnt(7.0 / 3.0, 7.0 / 3.0, 0)));
+}
+
+// The curve of the blend between neighbouring points (mitcad#2533) with
+// the end derivatives.
+occ::handle<Geom_BSplineCurve> blend_curve(const std::vector<gp_Pnt>& points, const std::vector<double>& parameters,
+                                           const EndDerivatives& start, const EndDerivatives& end) {
+  const detail::BlendInterpolation basis(parameters, start.count(), end.count());
+  const auto derivatives = [](const EndDerivatives& at, int c) {
+    std::vector<double> d;
+    if (at.first) {
+      d.push_back(at.first->Coord(c));
+    }
+    if (at.second) {
+      d.push_back(at.second->Coord(c));
+    }
+    return d;
+  };
+  std::array<std::vector<double>, 3> coordinates;
+  for (int c = 1; c <= 3; ++c) {
+    std::vector<double> values;
+    for (const gp_Pnt& point : points) {
+      values.push_back(point.Coord(c));
+    }
+    coordinates[static_cast<std::size_t>(c) - 1] = basis.solve(values, derivatives(start, c), derivatives(end, c));
+  }
+  NCollection_Array1<gp_Pnt> poles(1, basis.pole_count());
+  for (int i = 1; i <= basis.pole_count(); ++i) {
+    const std::size_t k = static_cast<std::size_t>(i) - 1;
+    poles(i) = gp_Pnt(coordinates[0][k], coordinates[1][k], coordinates[2][k]);
+  }
+  return new Geom_BSplineCurve(poles, basis.knots(), basis.multiplicities(), basis.degree());
+}
+
+void test_blend() {
+  // Three points whose x is 1, 1 and 0.2 (a rail's side of two rectangles
+  // and a circle that curves in, GitHub #607's case in one coordinate).
+  // One interpolation through all three (a quadratic) gives the third a
+  // weight of -0.125 halfway between the first two and carries x to 1.1
+  // there; the blend keeps every x between its neighbours' values.
+  const std::vector<gp_Pnt> points{gp_Pnt(1, 0, 0), gp_Pnt(1, 0, 100), gp_Pnt(0.2, 0, 200)};
+  const std::vector<double> params{0.0, 1.0, 2.0};
+  const occ::handle<Geom_BSplineCurve> once = detail::interpolate_with_ends(points, params, {}, {});
+  CHECK(near(once->Value(0.5).X(), 1.1, 1e-12));
+  const occ::handle<Geom_BSplineCurve> blend = blend_curve(points, params, {}, {});
+  CHECK(blend->Degree() == 3 && blend->NbPoles() == 7);
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    CHECK(near_point(blend->Value(params[i]), points[i]));
+  }
+  double most = 0.0;
+  double least = 1.0;
+  for (int k = 0; k <= 200; ++k) {
+    const double x = blend->Value(0.01 * k).X();
+    if (k <= 100) {
+      most = std::max(most, x);
+    } else {
+      least = std::min(least, x);
+    }
+  }
+  CHECK(most <= 1.0 + 1e-12 && least >= 0.2 - 1e-12);
+  // Halfway along each span the two neighbours' mean (the smooth step
+  // 3t^2 - 2t^3 at a half); still at the inner point and the free ends.
+  CHECK(near_point(blend->Value(1.5), gp_Pnt(0.6, 0, 150)));
+  CHECK(near_vec(blend->DN(1.0, 1), gp_Vec(0, 0, 0)) && near_vec(blend->DN(1.0 - 1e-9, 1), gp_Vec(0, 0, 0), 1e-6));
+  CHECK(near_vec(blend->DN(0.0, 1), gp_Vec(0, 0, 0)) && near_vec(blend->DN(2.0, 1), gp_Vec(0, 0, 0)));
+
+  // End derivatives at the ends (an end condition's takeoff), cubic with
+  // first ones, quintic with a second one, still at the inner points.
+  EndDerivatives up;
+  up.first = gp_Vec(0, 0, 150);
+  EndDerivatives in;
+  in.first = gp_Vec(-1, 0, 80);
+  const occ::handle<Geom_BSplineCurve> taken = blend_curve(points, params, up, in);
+  CHECK(taken->Degree() == 3);
+  CHECK(near_vec(taken->DN(0.0, 1), *up.first) && near_vec(taken->DN(2.0, 1), *in.first));
+  CHECK(near_vec(taken->DN(1.0, 1), gp_Vec(0, 0, 0)));
+  EndDerivatives curving = up;
+  curving.second = gp_Vec(2, 0, -40);
+  const occ::handle<Geom_BSplineCurve> fifth = blend_curve(points, params, curving, {});
+  CHECK(fifth->Degree() == 5 && fifth->NbPoles() == 11);
+  CHECK(near_vec(fifth->DN(0.0, 1), *curving.first) && near_vec(fifth->DN(0.0, 2), *curving.second, 1e-8));
+  CHECK(near_vec(fifth->DN(1.0, 1), gp_Vec(0, 0, 0)) && near_vec(fifth->DN(1.0, 2), gp_Vec(0, 0, 0), 1e-8));
+  CHECK(near_point(fifth->Value(1.0), points[1]) && near_point(fifth->Value(2.0), points[2]));
+  CHECK(throws_with([] { detail::BlendInterpolation({0.0, 0.0}, 0, 0); }, "must increase"));
 }
 
 void test_fields() {
@@ -910,13 +994,37 @@ double off_mirror(const Shape& body) {
   return worst;
 }
 
+// How far the body's side stands out beyond either of its two mirrored
+// rails in the plane y = 0 (mitcad#2374), at the levels from z0 to z1 in
+// `steps` steps (the sections' heights among them), printed: the largest
+// amount on either side, or 1e9 where a level could not be cut.
+double beyond_rails(const Shape& body, double z0, double z1, int steps) {
+  const std::vector<loft_outermost::Level> levels = loft_outermost::levels(body.occt(), z0, z1, steps);
+  double worst = 0.0;
+  double at = z0;
+  for (const loft_outermost::Level& level : levels) {
+    const double beyond = std::max(level.right_beyond, level.left_beyond);
+    if (beyond > worst) {
+      worst = beyond;
+      at = level.z;
+    }
+  }
+  std::fprintf(stderr, "  the side beyond its rails: %.3g mm at most (z = %.4g, %zu of %d levels)\n", worst, at,
+               levels.size(), steps - 1);
+  return levels.size() + 1 == static_cast<std::size_t>(steps) ? worst : 1.0e9;
+}
+
 // Two mirrored rails, bent, through rounded rectangles to a circle
 // (mitcad#2320, GitHub #607): 100 x 50 at z = 0 and 150 x 75 at z = 100,
 // rounded by 10, to a circle of radius 15 at z = 200, the rails through
 // the middles of the short sides and opposite points of the circle. The
 // body is its own mirror image in x and passes through both rails, with
 // Tangent Edges Merge (each section one closed edge, its seam off the
-// rails) and Keep (the circle starting off the rails too).
+// rails) and Keep (the circle starting off the rails too). The section is
+// stretched between the rails (mitcad#2374), the short sides' straight runs
+// moving with their rails, and the loft without the bend blends
+// neighbouring sections (mitcad#2533): each rail is the side's outermost
+// line at and between all sections (below).
 void test_loft_rails_rounded() {
   const std::array<gp_Pnt, 4> right{gp_Pnt(50, 0, 0), gp_Pnt(100, 0, 50), gp_Pnt(235.0 / 3, 0, 150),
                                     gp_Pnt(15, 0, 200)};
@@ -948,6 +1056,20 @@ void test_loft_rails_rounded() {
     const BoundingBox box = bounding_box(*body);
     CHECK(near(box.max.X(), -box.min.X(), 1e-6));
     CHECK(volume(*body) > 0);
+    // Each rail the side's outermost line at and between the sections
+    // (mitcad#2374, mitcad#2533), every 10 mm, within the rail tolerance.
+    // The stretch moves a straight run through a rail as the rail
+    // (mitcad#2374), and the loft without the bend blends the two sections
+    // on either side of each place with weights that are never negative
+    // (mitcad#2533), so its rails' vertex lines stay outermost between the
+    // sections. Before mitcad#2533 the three sections were interpolated
+    // along the loft by one quadratic, whose weight of the circle is -0.125
+    // halfway between the rectangles; next to the rail the circle curves
+    // in where the rectangles' short sides run straight, and the side
+    // stood out by 0.107 mm merged and 0.0818 kept at z = 50 (GitHub #607's
+    // design 0.108 mm; 2.69 mm before mitcad#2374).
+    CHECK(beyond_rails(*body, 100, 200, 10) < 1e-4);
+    CHECK(beyond_rails(*body, 0, 100, 10) < 1e-4);
   }
 }
 
@@ -1037,7 +1159,8 @@ double off_points(const Shape& body, const std::vector<gp_Pnt>& points) {
 // towards a rail missed it near the middle sections, where the arc length
 // along the rail (a cubic per span) changes its second derivative. Built
 // with Tangent Edges Merge and Keep, it is its own mirror image in x and
-// passes through both rails.
+// passes through both rails, each the side's outermost line at and between
+// all sections (mitcad#2374, mitcad#2533).
 void test_loft_rails_four_sections() {
   const Spline right = spline_through({gp_Pnt(50, 0, 0), gp_Pnt(75, 0, 100), gp_Pnt(30, 0, 130),
                                        gp_Pnt(15, 0, 170), gp_Pnt(15, 0, 200), gp_Pnt(15, 0, 230)},
@@ -1067,6 +1190,13 @@ void test_loft_rails_four_sections() {
     const BoundingBox box = bounding_box(*body);
     CHECK(near(box.max.X(), -box.min.X(), 1e-6));
     CHECK(volume(*body) > 0);
+    // How far the side stands out beyond the rails (mitcad#2374), every
+    // 10 mm: nowhere, within the rail tolerance, the loft without the bend
+    // blending neighbouring sections (mitcad#2533; as in
+    // test_loft_rails_rounded). The cubic interpolation of the four
+    // sections along the loft before put the side 0.315 mm merged and
+    // 0.235 kept beyond the rails between the rectangles, at z = 50.
+    CHECK(beyond_rails(*body, 0, 230, 23) < 1e-4);
   }
 }
 
@@ -1262,6 +1392,7 @@ void test_loft_face_holes() {
 void skin_tests() {
   guarded("interpolation with end derivatives", test_interpolation);
   guarded("piecewise cubic Hermite interpolation", test_hermite);
+  guarded("blends between neighbouring values", test_blend);
   guarded("fields along curves", test_fields);
   guarded("gordon surfaces", test_gordon);
   guarded("lofts with end conditions", test_loft_conditions);

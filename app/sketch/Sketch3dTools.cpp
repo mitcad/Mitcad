@@ -33,7 +33,7 @@ namespace mitcad::sketch {
 namespace {
 
 constexpr double kSnapPixels = 10.0;  // the snaps' reach on the screen
-constexpr double kClickPixels = 6.0;  // a press and its release this close are a click
+constexpr double kSketch3dClickPixels = 6.0;  // a press and its release this close are a click
 constexpr double kPlanePixels = 70.0; // the temporary plane's half size on the screen
 
 const char* toolIcon(Sketch3dTool tool) {
@@ -939,7 +939,7 @@ bool Sketch3dController::rotationMouse(QEvent* event) {
       return false; // the view turns, pans or zooms
     }
     if (!m_rotation.active && m_rotation.pressed && (e->buttons() & Qt::LeftButton) != 0 &&
-        QLineF(e->position(), m_pressAt).length() > kClickPixels) {
+        QLineF(e->position(), m_pressAt).length() > kSketch3dClickPixels) {
       // Past a click from a ring: its drag turns the plane about its axis
       // through the anchor.
       const Axis3 axis = *m_rotation.pressed;
@@ -2098,7 +2098,7 @@ bool Sketch3dController::toolMouse(QEvent* event) {
       return false;
     }
     if (m_tool == Sketch3dTool::Text && m_leftPressed && m_textPress && !m_textDragging &&
-        QLineF(e->position(), m_pressAt).length() > kClickPixels) {
+        QLineF(e->position(), m_pressAt).length() > kSketch3dClickPixels) {
       // Past a click: a frame is dragged, previewed from the press on.
       m_textDragging = true;
       toolLog(QStringLiteral("3D sketch Text: frame preview from %1").arg(xyzText(*m_textPress)));
@@ -2140,10 +2140,10 @@ bool Sketch3dController::toolMouse(QEvent* event) {
     if (m_tool == Sketch3dTool::Fillet) {
       m_pointerInView = !m_viewer.isCovered(e->position());
       pointerAt(e->position());
-      filletRelease(QLineF(e->position(), m_pressAt).length() <= kClickPixels);
+      filletRelease(QLineF(e->position(), m_pressAt).length() <= kSketch3dClickPixels);
       return true;
     }
-    if (QLineF(e->position(), m_pressAt).length() <= kClickPixels) {
+    if (QLineF(e->position(), m_pressAt).length() <= kSketch3dClickPixels) {
       // A click posted without a move before it (Windows UI tests) is in
       // the view where it is: it snaps there.
       m_pointerInView = !m_viewer.isCovered(e->position());

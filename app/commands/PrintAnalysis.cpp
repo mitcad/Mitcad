@@ -555,7 +555,8 @@ QColor deviationColor(double distance, double tolerance, double limit, const std
 
 PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor, const QColor& thinColor,
                             const QColor& gapColor, const std::array<QColor, 3>& draftColors,
-                            const std::array<QColor, 3>& deviationColors, const QColor& unmeasuredColor) {
+                            const std::array<QColor, 3>& deviationColors, const QColor& unmeasuredColor,
+                            const std::array<QColor, 2>& distanceColors) {
   PrintOverlay overlay;
   overlay.overhangColor = overhangColor;
   overlay.thinColor = thinColor;
@@ -683,6 +684,50 @@ PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor
                                   .arg(fixed(deviation.value(QStringLiteral("farthest_distance")).toDouble(), 3));
     }
   }
+  // Minimum Radius (mitcad#2518, MinRadiusAnalysis.hpp): the smallest
+  // radius marked as the thinnest wall is, the faces under the limit drawn
+  // as thin walls are, in the same colour, and the legend.
+  const QJsonObject radius = json.value(QStringLiteral("min_radius")).toObject();
+  if (!radius.isEmpty()) {
+    const QJsonArray at = radius.value(QStringLiteral("at")).toArray();
+    if (radius.value(QStringLiteral("smallest")).isDouble() && at.size() == 3) {
+      overlay.thinnest = std::array<double, 3>{at.at(0).toDouble(), at.at(1).toDouble(), at.at(2).toDouble()};
+      overlay.thinnestLabel =
+          QObject::tr("Smallest radius %1 mm").arg(fixed(radius.value(QStringLiteral("smallest")).toDouble(), 2));
+      overlay.legend.emplace_back(thinColor, overlay.thinnestLabel);
+    } else {
+      overlay.legend.emplace_back(thinColor, QObject::tr("No face bends"));
+    }
+    const double limit = radius.value(QStringLiteral("limit")).toDouble();
+    if (limit > 0.0) {
+      flatten(radius.value(QStringLiteral("parts")), overlay.thin);
+      overlay.legend.emplace_back(thinColor, QObject::tr("Radius under %1 mm").arg(plain(limit)));
+    }
+  }
+  // Minimum Distance (mitcad#2519): the line between the closest points,
+  // its distance at its middle, in the clearance's color when closer.
+  const QJsonObject distance = json.value(QStringLiteral("minimum_distance")).toObject();
+  const QJsonArray line = distance.value(QStringLiteral("points")).toArray();
+  if (!distance.isEmpty() && line.size() == 6) {
+    const bool within = distance.value(QStringLiteral("within")).toBool();
+    overlay.distanceLine = true;
+    overlay.closerThanClearance = within;
+    overlay.gapColor = distanceColors[within ? 1 : 0];
+    for (const QJsonValue& coordinate : line) {
+      overlay.gaps.push_back(static_cast<float>(coordinate.toDouble()));
+    }
+    overlay.narrowest = std::array<double, 3>{(line.at(0).toDouble() + line.at(3).toDouble()) / 2.0,
+                                              (line.at(1).toDouble() + line.at(4).toDouble()) / 2.0,
+                                              (line.at(2).toDouble() + line.at(5).toDouble()) / 2.0};
+    overlay.narrowestLabel =
+        QObject::tr("%1 mm").arg(fixed(distance.value(QStringLiteral("distance")).toDouble(), 2));
+    const QJsonValue clearance = distance.value(QStringLiteral("clearance"));
+    const QString words =
+        !clearance.isDouble() ? QObject::tr("Minimum distance")
+        : within              ? QObject::tr("Closer than the clearance, %1 mm").arg(plain(clearance.toDouble()))
+                              : QObject::tr("Minimum distance, clear of %1 mm").arg(plain(clearance.toDouble()));
+    overlay.legend.emplace_back(overlay.gapColor, words);
+  }
   return overlay;
 }
 
@@ -696,7 +741,17 @@ QString printOverlayLog(const PrintOverlay& overlay) {
     marker = QStringLiteral("marker %1 at (%2, %3, %4)")
                  .arg(overlay.thinnestLabel, plain(p[0]), plain(p[1]), plain(p[2]));
   }
-  if (!overlay.gaps.empty()) {
+  if (overlay.distanceLine) {
+    // A Minimum Distance's line (mitcad#2519).
+    marker += QStringLiteral(", minimum distance %1%2")
+                  .arg(overlay.gapColor.name(),
+                       overlay.closerThanClearance ? QStringLiteral(" closer than the clearance") : QString());
+    if (overlay.narrowest) {
+      const std::array<double, 3>& g = *overlay.narrowest;
+      marker += QStringLiteral(", marker %1 at (%2, %3, %4)")
+                    .arg(overlay.narrowestLabel, plain(g[0]), plain(g[1]), plain(g[2]));
+    }
+  } else if (!overlay.gaps.empty()) {
     marker += QStringLiteral(", %1 narrow gap(s) %2")
                   .arg(static_cast<qulonglong>(overlay.gaps.size() / 6))
                   .arg(overlay.gapColor.name());
@@ -722,6 +777,32 @@ QString printOverlayLog(const PrintOverlay& overlay) {
                   .arg(static_cast<qulonglong>(overlay.cloudPoints.size() / 3))
                   .arg(overlay.deviationColors[0].name(), overlay.deviationColors[1].name(),
                        overlay.deviationColors[2].name());
+  }
+  // Surface quality analyses (mitcad#2517), each when it has anything.
+  if (!overlay.zebra[0].empty() || !overlay.zebra[1].empty()) {
+    marker += QStringLiteral(", zebra %1 dark %2, %3 light %4")
+                  .arg(static_cast<qulonglong>(overlay.zebra[0].size() / 9))
+                  .arg(overlay.zebraColors[0].name())
+                  .arg(static_cast<qulonglong>(overlay.zebra[1].size() / 9))
+                  .arg(overlay.zebraColors[1].name());
+  }
+  if (!overlay.shaded.empty()) {
+    marker += QStringLiteral(", curvature %1 triangle(s)").arg(static_cast<qulonglong>(overlay.shaded.size() / 9));
+  }
+  if (!overlay.isoLines.empty()) {
+    std::size_t points = 0;
+    for (const std::vector<float>& line : overlay.isoLines) {
+      points += line.size() / 3;
+    }
+    marker += QStringLiteral(", isocurves %1 curve(s) %2 point(s)")
+                  .arg(static_cast<qulonglong>(overlay.isoLines.size()))
+                  .arg(static_cast<qulonglong>(points));
+  }
+  if (!overlay.mirror.empty()) {
+    marker += QStringLiteral(", environment %1 triangle(s) %2x%3 picture")
+                  .arg(static_cast<qulonglong>(overlay.mirror.size() / 9))
+                  .arg(overlay.environment.width())
+                  .arg(overlay.environment.height());
   }
   QStringList legend;
   for (const auto& [color, words] : overlay.legend) {

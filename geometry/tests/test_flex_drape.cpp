@@ -75,6 +75,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/flex.hpp"
 #include "mitcad/geometry/flex_drape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -746,7 +747,7 @@ void test_work_per_step() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(flex_drape) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   test::guarded("over a cylinder", test::test_over_a_cylinder);
   test::guarded("one end free", test::test_one_end_free);

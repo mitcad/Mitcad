@@ -2,7 +2,10 @@
 //! The dressup failure dump (mitcad#107, mitcad#322): with
 //! `MITCAD_IMPORT_DRESSUPS` set to a directory, every fillet or chamfer
 //! definition that fails in the geometry kernel is written there, to study
-//! what the kernel does not build. Per design, `<dir>/<design>.jsonl` gets
+//! what the kernel does not build, and so is every offset, move or delete
+//! of faces (`offset_face`, `move_face`, `delete_face`) that the kernel
+//! fails (mitcad#2573: their failing inputs as geometry test cases). Per
+//! design, `<dir>/<design>.jsonl` gets
 //! one line per failure (the item, the definition, the error) and
 //! `<dir>/<design>/T<item>-<n>.shape` the input body with its face names
 //! (the kernel's stored-result bytes, `Kernel::shape_bytes`), which the
@@ -49,6 +52,52 @@ const PER_ITEM: usize = 4;
 /// Past those, failures with an error not written before, up to this many
 /// in all.
 const PER_ITEM_NEW: usize = 12;
+
+/// The definition types whose failures are written as dressups: fillets
+/// and chamfers.
+const DRESSUPS: [&str; 2] = ["fillet", "chamfer"];
+
+/// The definition types whose kernel failures are written as face
+/// operations (mitcad#2573): the offset, move and delete of a body's faces
+/// (`geometry/src/faceops.cpp`).
+const FACE_OPERATIONS: [&str; 3] = ["offset_face", "move_face", "delete_face"];
+
+/// Whether a failed candidate of definitions `defs` with `error` is
+/// written: fillets and chamfers that the kernel failed, or offsets, moves
+/// and deletes of faces that it failed, each definition on a body of its
+/// own (a candidate of several definitions has each written, the error
+/// being one of theirs, mitcad#323).
+fn written(error: &str, defs: &[serde_json::Value]) -> bool {
+    if defs.is_empty() || defs.iter().any(|def| !def["body"].is_string()) {
+        return false;
+    }
+    let all = |types: &[&str]| {
+        defs.iter()
+            .all(|def| def["type"].as_str().is_some_and(|t| types.contains(&t)))
+    };
+    if all(&DRESSUPS) {
+        // ("the fillet would leave the body open: ...", mitcad#1336, is a
+        // failure of the kernel's result too.)
+        let error_of =
+            |kind: &str| error.starts_with(kind) || error.starts_with(&format!("the {kind}"));
+        return error_of("fillet") || error_of("chamfer");
+    }
+    all(&FACE_OPERATIONS) && face_operation_failure(error)
+}
+
+/// Whether an offset, move or delete of faces failed in the geometry
+/// kernel (`geometry/src/faceops.cpp`): an invalid or open result, faces
+/// the kernel's offset refuses or cannot rebuild the body around, or a gap
+/// their neighbours do not close; not a face that was not found, nor a
+/// result that is not the file's, nor another operation's failure (a
+/// fillet, chamfer, boolean or taper that [`crate::kernel_failure`] counts
+/// too is no failure of the face operation).
+fn face_operation_failure(error: &str) -> bool {
+    error.contains("produced an invalid shape")
+        || error.contains("the kernel's offset")
+        || error.contains("the faces cannot be")
+        || error.contains("the faces around the moved faces")
+}
 
 /// A file name of a design's label.
 fn file_name(label: &str) -> String {
@@ -139,8 +188,9 @@ impl<K: ImportKernel> Importer<'_, K> {
 
     /// Candidate `c` of item `index` failed with `error` (`states`: the
     /// history's states before and after the item, when known): written to
-    /// the dump when it is one fillet or chamfer definition that the
-    /// geometry kernel failed.
+    /// the dump when its definitions are fillets and chamfers, or offsets,
+    /// moves and deletes of faces, that the geometry kernel failed
+    /// ([`written`]).
     pub(crate) fn dump_dressup_failure(
         &mut self,
         index: i64,
@@ -150,20 +200,7 @@ impl<K: ImportKernel> Importer<'_, K> {
         states: Option<geometric::States>,
     ) {
         let Some(dir) = directory() else { return };
-        // ("the fillet would leave the body open: ...", mitcad#1336, is a
-        // failure of the kernel's result too.)
-        let error_of =
-            |kind: &str| error.starts_with(kind) || error.starts_with(&format!("the {kind}"));
-        if !(error_of("fillet") || error_of("chamfer")) {
-            return;
-        }
-        // (A candidate of several definitions, each on its own body: each
-        // is written, the error being one of theirs, mitcad#323.)
-        if c.defs.is_empty()
-            || c.defs.iter().any(|def| {
-                (def["type"] != "fillet" && def["type"] != "chamfer") || !def["body"].is_string()
-            })
-        {
+        if !written(error, &c.defs) {
             return;
         }
         let design = file_name(&self.report.label);
@@ -193,7 +230,8 @@ impl<K: ImportKernel> Importer<'_, K> {
         }
     }
 
-    /// Writes one fillet or chamfer definition of a failed candidate.
+    /// Writes one fillet, chamfer or face-operation definition of a failed
+    /// candidate.
     #[allow(clippy::too_many_arguments)]
     fn dump_definition(
         &mut self,
@@ -255,12 +293,19 @@ impl<K: ImportKernel> Importer<'_, K> {
                 }
             }
         }
-        // The values of the parameters the sizes name.
+        // The values of the parameters the sizes (a dressup's sets) or the
+        // distance (an offset of faces) name.
         let parameters = self.doc.parameters();
         let mut values = serde_json::Map::new();
-        for set in def["sets"].as_array().into_iter().flatten() {
+        let sizes = def["sets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|set| &set["size"])
+            .chain(std::iter::once(&def["distance"]));
+        for size in sizes {
             let mut named = Vec::new();
-            crate::strings(&set["size"], &mut named);
+            crate::strings(size, &mut named);
             for name in named {
                 if let Some(v) = parameters.find(name).and_then(|id| parameters.value(id)) {
                     values.insert(name.to_owned(), json!(v));
@@ -288,5 +333,81 @@ impl<K: ImportKernel> Importer<'_, K> {
         {
             let _ = writeln!(f, "{line}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::written;
+    use serde_json::json;
+
+    /// The fillets and chamfers the kernel failed are written as before,
+    /// and the offsets, moves and deletes of faces it failed now too
+    /// (mitcad#2573), with the kernel's own messages of
+    /// `geometry/src/faceops.cpp`; a face that was not found, a result that
+    /// is not the file's or another type is not.
+    #[test]
+    fn kernel_failures_of_dressups_and_face_operations_are_written() {
+        let fillet = json!({"type": "fillet", "body": "b1", "sets": []});
+        let chamfer = json!({"type": "chamfer", "body": "b2", "sets": []});
+        assert!(written(
+            "fillet failed: the edges",
+            std::slice::from_ref(&fillet)
+        ));
+        assert!(written(
+            "the chamfer would leave the body open",
+            &[fillet.clone(), chamfer.clone()]
+        ));
+        assert!(!written(
+            "the extrusion does not cut into any participant body",
+            std::slice::from_ref(&fillet)
+        ));
+
+        let offset = json!({"type": "offset_face", "body": "b1", "faces": ["F2"], "distance": 1.0});
+        let delete = json!({"type": "delete_face", "body": "b1", "faces": ["F2", "F3"]});
+        let moved = json!({"type": "move_face", "body": "b1", "faces": ["F2"]});
+        for error in [
+            "the kernel's offset of the body with F2 moved gave no shape: its rebuilt faces leave \
+             free edges and the shell that does not close up was dropped",
+            "the faces cannot be moved: the body rebuilt around them does not close up",
+            "the kernel's offset refuses the body: the surface of F2 cannot be offset",
+            "the faces cannot be moved by this distance: the offset surfaces cross",
+            "the offset face produced an invalid shape",
+        ] {
+            assert!(written(error, std::slice::from_ref(&offset)), "{error}");
+            assert!(written(error, std::slice::from_ref(&moved)), "{error}");
+        }
+        assert!(written(
+            "the faces cannot be deleted: the neighbouring faces do not close the gap",
+            std::slice::from_ref(&delete)
+        ));
+        // Not the kernel's failure.
+        assert!(!written(
+            "a face was not found",
+            std::slice::from_ref(&delete)
+        ));
+        assert!(!written(
+            crate::NOT_IN_HISTORY,
+            std::slice::from_ref(&offset)
+        ));
+        assert!(!written(crate::OUT_OF_TIME, std::slice::from_ref(&offset)));
+        // A face operation with a fillet's error, a fillet with a face
+        // operation's, a mix of both, another type, a definition without
+        // its body.
+        assert!(!written("fillet failed", std::slice::from_ref(&offset)));
+        assert!(!written(
+            "the faces cannot be deleted: the neighbouring faces do not close the gap",
+            std::slice::from_ref(&fillet)
+        ));
+        assert!(!written("fillet failed", &[fillet.clone(), offset.clone()]));
+        assert!(!written(
+            "the faces cannot be moved: the body rebuilt around them does not close up",
+            &[json!({"type": "shell", "body": "b1"})]
+        ));
+        assert!(!written(
+            "the faces cannot be deleted: the neighbouring faces do not close the gap",
+            &[json!({"type": "delete_face", "faces": ["F2"]})]
+        ));
+        assert!(!written("fillet failed", &[]));
     }
 }

@@ -52,6 +52,7 @@
 #include <gp_XYZ.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -304,7 +305,7 @@ void test_cut_by_a_flat_shell() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(classifier_far_plane) {
   test::guarded("point_in_the_plane_of_a_far_face", test_point_in_the_plane_of_a_far_face);
   test::guarded("block_with_the_two_cavities", test_block_with_the_two_cavities);
   test::guarded("point_in_the_plane_of_a_flat_shell", test_point_in_the_plane_of_a_flat_shell);

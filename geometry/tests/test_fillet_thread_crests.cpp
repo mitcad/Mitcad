@@ -54,6 +54,7 @@
 #include <gp_Trsf.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -282,7 +283,7 @@ void test_crest_narrower_than_both_roundings() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_thread_crests) {
   test::guarded("test_crest_narrower_than_both_roundings", test::test_crest_narrower_than_both_roundings);
   if (test::failures == 0) {
     std::puts("test_fillet_thread_crests: all checks passed");

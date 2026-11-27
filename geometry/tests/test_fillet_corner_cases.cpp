@@ -37,6 +37,7 @@
 #include <gp_Trsf.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -259,7 +260,7 @@ void test_rounding_end_prolonged_across_a_seam() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_corner_cases) {
   test::guarded("test_rounding_past_an_end_piece_it_consumes", test::test_rounding_past_an_end_piece_it_consumes);
   test::guarded("test_rounding_end_prolonged_across_a_seam", test::test_rounding_end_prolonged_across_a_seam);
   if (test::failures == 0) {

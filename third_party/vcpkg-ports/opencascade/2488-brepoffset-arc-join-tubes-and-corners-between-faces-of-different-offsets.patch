@@ -1,0 +1,906 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: the arc join (rounded) joins faces of different offsets with a tube
+whose section runs from the one offset to the other, and corners of three
+such faces with an ellipsoid (mitcad#2488).
+
+A body offset with offsets of their own on faces (SetOffsetOnFace) and the
+arc join: UpdateFaceOffset gave every face a tube or a corner joins to a
+face with its own offset that offset too (AddFaces across the edges of the
+tubes' type), since the tube was a pipe of one radius and the corner a
+sphere. A box shelled outside by 2 mm with its bottom at 5 mm and the
+rounded join came out 5 mm all round (MitCad refused it beforehand).
+
+Where the offsets of the two faces of a tube's edge differ, BuildOffsetByArc
+now makes the tube with BRepOffset_Offset's new Init (Path, Edge1, Edge2,
+Face1, Face2, Offset1, Offset2, ...): its section is the conic from the one
+offset to the other, tangent to both offsets (the rational quadratic arc
+whose middle pole is where the two tangents meet, weighted as the circle's:
+the affine image of the circle of the tube of one offset, that circle where
+the offsets are equal). It is exact and the same all along the edge where
+the edge is a line along which neither face turns (the section extruded)
+or a circle about whose axis both faces turn (the section revolved), one
+parameter from Edge1 to Edge2 and the other the path's (u along the
+section and v along the path for the extruded section, as the pipe's;
+the other way round for the revolved one, whose u is its angle, as a pipe
+with ExchangeUV), the face built as the pipe's (initTube, the old Init's body; its new end edges get
+their iso-curves as 3d curves, IsoCurve3d). Where the offsets of
+the faces round a corner of three faces differ, the corner is the unit
+sphere about the vertex stretched along the faces' normals to their
+offsets (new Init (Vertex, LEdge, Faces, Offsets)): an ellipsoid through
+the tubes' ends and tangent there to the offsets where the three faces are
+square to each other, as an exact rational surface; the tubes' end edges
+are projected onto it (initCorner, the old Init's body for the sphere).
+
+BRepOffset_Offset::JoinsOffsets(Path, Face1, Face2) and
+JoinsOffsets(Vertex, Faces) tell where these can be built.
+UpdateFaceOffset (AddFacesJoinedByArc) still gives the faces of a tube's
+edge one offset where the tube cannot join different offsets (a curved
+edge other than such a circle, a face turning along a straight edge), and
+the faces round a corner where it cannot (other than three faces square to
+each other), as before; tangential faces as before.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2488.
+
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index 35e64d0d..b6a1d77f 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -2714,8 +2714,30 @@ void BRepOffset_MakeOffset::BuildOffsetByArc(
+               Find = true;
+             }
+           }
+-          BRepOffset_Offset OF(E, EOn1, EOn2, CurOffset, E1f, E1l);
+-          MapSF.Bind(E, OF);
++          const double anOffset2 =
++            myFaceOffset.IsBound(Anc.Last()) ? myFaceOffset(Anc.Last()) : myOffset;
++          if (std::abs(anOffset2 - CurOffset) > Precision::Confusion())
++          {
++            // Faces of different offsets: the tube from the one offset to
++            // the other (mitcad#2488; UpdateFaceOffset leaves different
++            // offsets only where it can be built).
++            BRepOffset_Offset OF;
++            OF.Init(E,
++                    EOn1,
++                    EOn2,
++                    TopoDS::Face(Anc.First()),
++                    TopoDS::Face(Anc.Last()),
++                    CurOffset,
++                    anOffset2,
++                    E1f,
++                    E1l);
++            MapSF.Bind(E, OF);
++          }
++          else
++          {
++            BRepOffset_Offset OF(E, EOn1, EOn2, CurOffset, E1f, E1l);
++            MapSF.Bind(E, OF);
++          }
+         }
+       }
+       else
+@@ -2772,9 +2794,38 @@ void BRepOffset_MakeOffset::BuildOffsetByArc(
+         {
+           CurOffset = myFaceOffset(FF);
+         }
++        // The faces around the corner and their offsets: where they differ,
++        // the corner from the one offset to the others (mitcad#2488;
++        // UpdateFaceOffset leaves different offsets only where it can be
++        // built).
++        NCollection_List<TopoDS_Shape> aCornerFaces;
++        NCollection_List<double>       aCornerOffsets;
++        bool                           isMixed = false;
++        for (it.Initialize(LE); it.More(); it.Next())
++        {
++          for (NCollection_List<TopoDS_Shape>::Iterator itF(myAnalyse.Ancestors(it.Value()));
++               itF.More();
++               itF.Next())
++          {
++            const double aFOffset =
++              myFaceOffset.IsBound(itF.Value()) ? myFaceOffset(itF.Value()) : myOffset;
++            isMixed = isMixed || std::abs(aFOffset - CurOffset) > Precision::Confusion();
++            aCornerFaces.Append(itF.Value());
++            aCornerOffsets.Append(aFOffset);
++          }
++        }
+ 
+-        BRepOffset_Offset OF(V, LOE, CurOffset);
+-        MapSF.Bind(V, OF);
++        if (isMixed)
++        {
++          BRepOffset_Offset OF;
++          OF.Init(V, LOE, aCornerFaces, aCornerOffsets);
++          MapSF.Bind(V, OF);
++        }
++        else
++        {
++          BRepOffset_Offset OF(V, LOE, CurOffset);
++          MapSF.Bind(V, OF);
++        }
+       }
+       //--------------------------------------------------------------
+       // Particular processing if V is at least a free border.
+@@ -3077,6 +3128,97 @@ void BRepOffset_MakeOffset::ToContext(
+   }
+ }
+ 
++//=======================================================================
++// function : AddFacesJoinedByArc
++// purpose  : The faces the arc join gives the offset of <theFace>
++//            (mitcad#2488): those meeting it tangentially, those a tube
++//            joins to it (along edges of the type <theRT>) where the tube
++//            cannot join different offsets, and those around a corner
++//            (a vertex all of whose edges are of the type <theRT>) that
++//            cannot join different offsets (BRepOffset_Offset::
++//            JoinsOffsets); and so on from them.
++//=======================================================================
++
++static void AddFacesJoinedByArc(const BRepOffset_Analyse&                               theAnalyse,
++                                const TopoDS_Face&                                      theFace,
++                                const ChFiDS_TypeOfConcavity                            theRT,
++                                TopoDS_Compound&                                        theCo,
++                                NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>& theMap)
++{
++  BRep_Builder                   aBB;
++  NCollection_List<TopoDS_Shape> aQueue;
++  theMap.Add(theFace);
++  aQueue.Append(theFace);
++  const auto anAdd = [&](const TopoDS_Shape& theF) {
++    if (theMap.Add(theF))
++    {
++      aBB.Add(theCo, theF);
++      aQueue.Append(theF);
++    }
++  };
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aCorners;
++  while (!aQueue.IsEmpty())
++  {
++    const TopoDS_Face aF = TopoDS::Face(aQueue.First());
++    aQueue.RemoveFirst();
++    const NCollection_List<TopoDS_Shape>* pLE = theAnalyse.Descendants(aF);
++    if (pLE == nullptr)
++    {
++      continue;
++    }
++    for (NCollection_List<TopoDS_Shape>::Iterator anIt(*pLE); anIt.More(); anIt.Next())
++    {
++      const TopoDS_Edge&                           anE = TopoDS::Edge(anIt.Value());
++      const NCollection_List<BRepOffset_Interval>& aLI = theAnalyse.Type(anE);
++      const NCollection_List<TopoDS_Shape>&        aLA = theAnalyse.Ancestors(anE);
++      if (aLI.IsEmpty() || aLA.Extent() != 2)
++      {
++        continue;
++      }
++      const ChFiDS_TypeOfConcavity aType = aLI.First().Type();
++      if (aType == ChFiDS_Tangential
++          || (aType == theRT
++              && !BRepOffset_Offset::JoinsOffsets(anE,
++                                                  TopoDS::Face(aLA.First()),
++                                                  TopoDS::Face(aLA.Last()))))
++      {
++        anAdd(aLA.First().IsSame(aF) ? aLA.Last() : aLA.First());
++      }
++    }
++    for (TopExp_Explorer anExpV(aF, TopAbs_VERTEX); anExpV.More(); anExpV.Next())
++    {
++      const TopoDS_Shape& aV = anExpV.Current();
++      if (!aCorners.Add(aV) || !theAnalyse.HasAncestor(aV))
++      {
++        continue;
++      }
++      NCollection_List<TopoDS_Shape> aLE;
++      theAnalyse.Edges(TopoDS::Vertex(aV), theRT, aLE);
++      if (aLE.Extent() < 3 || aLE.Extent() != theAnalyse.Ancestors(aV).Extent())
++      {
++        continue;
++      }
++      NCollection_List<TopoDS_Shape> aLF;
++      for (NCollection_List<TopoDS_Shape>::Iterator anItE(aLE); anItE.More(); anItE.Next())
++      {
++        for (NCollection_List<TopoDS_Shape>::Iterator anItF(theAnalyse.Ancestors(anItE.Value()));
++             anItF.More();
++             anItF.Next())
++        {
++          aLF.Append(anItF.Value());
++        }
++      }
++      if (!BRepOffset_Offset::JoinsOffsets(TopoDS::Vertex(aV), aLF))
++      {
++        for (NCollection_List<TopoDS_Shape>::Iterator anItF(aLF); anItF.More(); anItF.Next())
++        {
++          anAdd(anItF.Value());
++        }
++      }
++    }
++  }
++}
++
+ //=================================================================================================
+ 
+ void BRepOffset_MakeOffset::UpdateFaceOffset()
+@@ -3107,7 +3249,9 @@ void BRepOffset_MakeOffset::UpdateFaceOffset()
+     Build.Add(Co, F);
+     if (myJoin == GeomAbs_Arc)
+     {
+-      myAnalyse.AddFaces(F, Co, Dummy, ChFiDS_Tangential, RT);
++      // A tube or a corner joins faces of different offsets where it can
++      // (mitcad#2488); elsewhere the faces it joins take one offset.
++      AddFacesJoinedByArc(myAnalyse, F, RT, Co, Dummy);
+     }
+     else
+     {
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.cxx
+index 1a169f8f..d85b0d03 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.cxx
+@@ -17,6 +17,15 @@
+ #include <BRepOffset_Offset.hxx>
+ 
+ #include <Adaptor3d_CurveOnSurface.hxx>
++#include <BRepAdaptor_Surface.hxx>
++#include <ElCLib.hxx>
++#include <Geom_BSplineCurve.hxx>
++#include <Geom_BSplineSurface.hxx>
++#include <GeomAdaptor_Curve.hxx>
++#include <GeomConvert.hxx>
++#include <gp_Ax1.hxx>
++#include <gp_Circ.hxx>
++#include <NCollection_Array1.hxx>
+ #include <BRep_Builder.hxx>
+ #include <BRep_GCurve.hxx>
+ #include <BRep_TEdge.hxx>
+@@ -387,6 +396,36 @@ static void ComputeCurve3d(const TopoDS_Edge&               Edge,
+ 
+ //=================================================================================================
+ 
++//=======================================================================
++// function : IsoCurve3d
++// purpose  : The 3d curve of an end edge of a tube on a given surface
++//            (mitcad#2488) that ComputeCurve3d has not given one: the
++//            iso-curve its pcurve <Curve> runs on (along u or along v).
++//=======================================================================
++
++static void IsoCurve3d(const TopoDS_Edge&               Edge,
++                       const occ::handle<Geom2d_Line>&  Curve,
++                       const occ::handle<Geom_Surface>& Surf,
++                       const double                     Tol)
++{
++  TopLoc_Location Loc;
++  double          f = 0.0, l = 0.0;
++  if (Surf.IsNull() || !BRep_Tool::Curve(Edge, Loc, f, l).IsNull())
++  {
++    return;
++  }
++  if (Curve->Direction().IsEqual(gp::DX2d(), Precision::Angular()))
++  {
++    UpdateEdge(Edge, Surf->VIso(Curve->Location().Y()), TopLoc_Location(), Tol);
++  }
++  else if (Curve->Direction().IsEqual(gp::DY2d(), Precision::Angular()))
++  {
++    UpdateEdge(Edge, Surf->UIso(Curve->Location().X()), TopLoc_Location(), Tol);
++  }
++}
++
++//=================================================================================================
++
+ BRepOffset_Offset::BRepOffset_Offset() = default;
+ 
+ //=================================================================================================
+@@ -1222,6 +1261,31 @@ void BRepOffset_Offset::Init(const TopoDS_Edge&  Path,
+                              const bool          Polynomial,
+                              const double        Tol,
+                              const GeomAbs_Shape Conti)
++{
++  initTube(Path,
++           Edge1,
++           Edge2,
++           Offset,
++           FirstEdge,
++           LastEdge,
++           Polynomial,
++           Tol,
++           Conti,
++           occ::handle<Geom_Surface>());
++}
++
++//=================================================================================================
++
++void BRepOffset_Offset::initTube(const TopoDS_Edge&               Path,
++                                 const TopoDS_Edge&               Edge1,
++                                 const TopoDS_Edge&               Edge2,
++                                 const double                     Offset,
++                                 const TopoDS_Edge&               FirstEdge,
++                                 const TopoDS_Edge&               LastEdge,
++                                 const bool                       Polynomial,
++                                 const double                     Tol,
++                                 const GeomAbs_Shape              Conti,
++                                 const occ::handle<Geom_Surface>& theTube)
+ {
+   bool C1Denerated = false;
+   bool C2Denerated = false;
+@@ -1295,17 +1359,33 @@ void BRepOffset_Offset::Init(const TopoDS_Edge&  Path,
+   }
+ 
+   // Calcul du tuyau
+-  GeomFill_Pipe Pipe(HCP, HEdge1, HEdge2, std::abs(Offset));
+-  Pipe.Perform(Tol, Polynomial, Conti);
+-  if (!Pipe.IsDone())
++  double                    ErrorPipe = 0.0;
++  occ::handle<Geom_Surface> S;
++  bool                      ExchUV = false;
++  if (!theTube.IsNull())
+   {
+-    throw Standard_ConstructionError("GeomFill_Pipe : Cannot make a surface");
++    // The tube between offsets of their own (mitcad#2488): exact, one
++    // parameter from Edge1 to Edge2, the other the parameter of the path,
++    // which is the u of a revolved section (its angle).
++    S = theTube;
++    occ::handle<Geom_RectangularTrimmedSurface> aTrimmed =
++      occ::down_cast<Geom_RectangularTrimmedSurface>(theTube);
++    ExchUV = !aTrimmed.IsNull()
++             && aTrimmed->BasisSurface()->IsKind(STANDARD_TYPE(Geom_SurfaceOfRevolution));
+   }
+-  double ErrorPipe = Pipe.ErrorOnSurf();
+-
+-  occ::handle<Geom_Surface> S      = Pipe.Surface();
+-  bool                      ExchUV = Pipe.ExchangeUV();
+-  double                    f1, l1, f2, l2;
++  else
++  {
++    GeomFill_Pipe Pipe(HCP, HEdge1, HEdge2, std::abs(Offset));
++    Pipe.Perform(Tol, Polynomial, Conti);
++    if (!Pipe.IsDone())
++    {
++      throw Standard_ConstructionError("GeomFill_Pipe : Cannot make a surface");
++    }
++    ErrorPipe = Pipe.ErrorOnSurf();
++    S         = Pipe.Surface();
++    ExchUV    = Pipe.ExchangeUV();
++  }
++  double f1, l1, f2, l2;
+   S->Bounds(f1, l1, f2, l2);
+ 
+   // Perform the face
+@@ -1516,6 +1596,7 @@ void BRepOffset_Offset::Init(const TopoDS_Edge&  Path,
+     else if (FirstEdge.IsNull())
+     { // then the 3d curve has not been yet computed
+       ComputeCurve3d(Edge3, L1, S, Id, TolApp);
++      IsoCurve3d(Edge3, L1, theTube, TolApp);
+     }
+   }
+   else
+@@ -1582,6 +1663,7 @@ void BRepOffset_Offset::Init(const TopoDS_Edge&  Path,
+     else if (FirstEdge.IsNull())
+     { // then the 3d curve has not been yet computed
+       ComputeCurve3d(Edge3, L1, S, Id, TolApp);
++      IsoCurve3d(Edge3, L1, theTube, TolApp);
+     }
+ 
+     if (ExchUV)
+@@ -1612,6 +1694,7 @@ void BRepOffset_Offset::Init(const TopoDS_Edge&  Path,
+     else if (LastEdge.IsNull())
+     { // then the 3d curve has not been yet computed
+       ComputeCurve3d(Edge4, L2, S, Id, TolApp);
++      IsoCurve3d(Edge4, L2, theTube, TolApp);
+     }
+   }
+ 
+@@ -1666,9 +1749,73 @@ void BRepOffset_Offset::Init(const TopoDS_Vertex&                  Vertex,
+                              const bool                            Polynomial,
+                              const double                          TolApp,
+                              const GeomAbs_Shape                   Conti)
++{
++  initCorner(Vertex, LEdge, Offset, Polynomial, TolApp, Conti, occ::handle<Geom_Surface>());
++}
++
++//=================================================================================================
++
++void BRepOffset_Offset::initCorner(const TopoDS_Vertex&                  Vertex,
++                                   const NCollection_List<TopoDS_Shape>& LEdge,
++                                   const double                          Offset,
++                                   const bool                            Polynomial,
++                                   const double                          TolApp,
++                                   const GeomAbs_Shape                   Conti,
++                                   const occ::handle<Geom_Surface>&      theCorner)
+ {
+   myStatus = BRepOffset_Good;
+   myShape  = Vertex;
++  if (!theCorner.IsNull())
++  {
++    // The corner between offsets of their own (mitcad#2488): its surface
++    // is given, the edges of the tubes lie on it.
++    double          Tol = BRep_Tool::Tolerance(Vertex);
++    TopLoc_Location Loc;
++    BRep_Builder    aBuilder;
++    aBuilder.MakeFace(myFace);
++    aBuilder.UpdateFace(myFace, theCorner, Loc, Tol);
++    TopoDS_Wire W;
++    aBuilder.MakeWire(W);
++    for (NCollection_List<TopoDS_Shape>::Iterator anIt(LEdge); anIt.More(); anIt.Next())
++    {
++      TopoDS_Edge             E = TopoDS::Edge(anIt.Value());
++      double                  f = 0.0, l = 0.0;
++      occ::handle<Geom_Curve> C = BRep_Tool::Curve(E, Loc, f, l);
++      if (C.IsNull())
++      {
++        BRepLib::BuildCurve3d(E, BRep_Tool::Tolerance(E));
++        C = BRep_Tool::Curve(E, Loc, f, l);
++      }
++      if (C.IsNull())
++      {
++        throw Standard_ConstructionError("BRepOffset_Offset: an edge of the corner has no curve");
++      }
++      C = new Geom_TrimmedCurve(C, f, l);
++      C->Transform(Loc.Transformation());
++      double                    aTolProj = Tol;
++      occ::handle<Geom2d_Curve> PCurve   = GeomProjLib::Curve2d(C, f, l, theCorner, aTolProj);
++      if (PCurve.IsNull())
++      {
++        throw Standard_ConstructionError("BRepOffset_Offset: an edge of the corner is not on it");
++      }
++      UpdateEdge(E, PCurve, myFace, std::max(Tol, aTolProj));
++      aBuilder.Range(E, myFace, f, l);
++      aBuilder.SameParameter(E, false);
++      BRepLib::SameParameter(E, std::max(Tol, aTolProj));
++      aBuilder.Add(W, E);
++    }
++    if (Offset < 0.)
++    {
++      aBuilder.Add(myFace, W.Oriented(TopAbs_REVERSED));
++      myFace.Reverse();
++    }
++    else
++    {
++      aBuilder.Add(myFace, W);
++    }
++    BRepTools::Update(myFace);
++    return;
++  }
+ 
+   // evaluate the Ax3 of the Sphere
+   // find 3 different vertices in LEdge
+@@ -1797,6 +1944,348 @@ void BRepOffset_Offset::Init(const TopoDS_Vertex&                  Vertex,
+   BRepTools::Update(myFace);
+ }
+ 
++//=================================================================================================
++// Tubes and corners between offsets of their own (mitcad#2488)
++//=================================================================================================
++
++namespace
++{
++// The angle within which normals are taken for the same direction.
++constexpr double THE_JOIN_ANGLE = 1.0e-7;
++
++// The normal of <theFace> out of its material at the point of <theEdge> at
++// <theT>.
++bool normalAlongEdge(const TopoDS_Edge& theEdge,
++                     const TopoDS_Face& theFace,
++                     const double       theT,
++                     gp_Dir&            theNormal)
++{
++  double                    aFirst = 0.0, aLast = 0.0;
++  occ::handle<Geom2d_Curve> aPCurve = BRep_Tool::CurveOnSurface(theEdge, theFace, aFirst, aLast);
++  if (aPCurve.IsNull())
++  {
++    return false;
++  }
++  const gp_Pnt2d      aUV = aPCurve->Value(theT);
++  BRepAdaptor_Surface aSurf(theFace, false);
++  gp_Pnt              aP;
++  gp_Vec              aDU, aDV;
++  aSurf.D1(aUV.X(), aUV.Y(), aP, aDU, aDV);
++  const gp_Vec aN = aDU.Crossed(aDV);
++  if (aN.Magnitude() <= gp::Resolution())
++  {
++    return false;
++  }
++  theNormal = gp_Dir(aN);
++  if (theFace.Orientation() == TopAbs_REVERSED)
++  {
++    theNormal.Reverse();
++  }
++  return true;
++}
++
++// The normal of <theFace> out of its material at <theVertex>.
++bool normalAtVertex(const TopoDS_Vertex& theVertex, const TopoDS_Face& theFace, gp_Dir& theNormal)
++{
++  const gp_Pnt2d      aUV = BRep_Tool::Parameters(theVertex, theFace);
++  BRepAdaptor_Surface aSurf(theFace, false);
++  gp_Pnt              aP;
++  gp_Vec              aDU, aDV;
++  aSurf.D1(aUV.X(), aUV.Y(), aP, aDU, aDV);
++  const gp_Vec aN = aDU.Crossed(aDV);
++  if (aN.Magnitude() <= gp::Resolution())
++  {
++    return false;
++  }
++  theNormal = gp_Dir(aN);
++  if (theFace.Orientation() == TopAbs_REVERSED)
++  {
++    theNormal.Reverse();
++  }
++  return true;
++}
++
++// The section of the tube at the point <theP> of its path between the
++// offset <theD1> of a face of normal <theN1> and <theD2> of a face of normal
++// <theN2>: the conic from theP + theD1 theN1 to theP + theD2 theN2, tangent
++// to both offsets there, the affine image of the circle of the tube of one
++// offset (a rational quadratic arc whose middle pole is where the two
++// tangents meet, weighted as the circle's). Null for faces meeting
++// tangentially.
++occ::handle<Geom_BSplineCurve> tubeSection(const gp_Pnt& theP,
++                                           const gp_Dir& theN1,
++                                           const gp_Dir& theN2,
++                                           const double  theD1,
++                                           const double  theD2)
++{
++  const double aCos  = theN1.Dot(theN2);
++  const double aSin2 = 1.0 - aCos * aCos;
++  if (aSin2 <= THE_JOIN_ANGLE)
++  {
++    return occ::handle<Geom_BSplineCurve>();
++  }
++  const double               aA = (theD1 - aCos * theD2) / aSin2;
++  const double               aB = (theD2 - aCos * theD1) / aSin2;
++  NCollection_Array1<gp_Pnt> aPoles(1, 3);
++  aPoles(1) = theP.Translated(gp_Vec(theN1) * theD1);
++  aPoles(2) = theP.Translated(gp_Vec(theN1) * aA + gp_Vec(theN2) * aB);
++  aPoles(3) = theP.Translated(gp_Vec(theN2) * theD2);
++  NCollection_Array1<double> aWeights(1, 3);
++  aWeights(1) = 1.0;
++  aWeights(2) = std::sqrt(std::max(0.0, (1.0 + aCos) * 0.5));
++  aWeights(3) = 1.0;
++  NCollection_Array1<double> aKnots(1, 2);
++  aKnots(1) = 0.0;
++  aKnots(2) = 1.0;
++  NCollection_Array1<int> aMults(1, 2);
++  aMults(1) = 3;
++  aMults(2) = 3;
++  return new Geom_BSplineCurve(aPoles, aWeights, aKnots, aMults, 2);
++}
++
++// The surface of the tube along <thePath> from the offset <theD1> of
++// <theFace1> to <theD2> of <theFace2>: one parameter along the section (0 on
++// the offset of theFace1, 1 on that of theFace2), the other the parameter of
++// the path. Where the path is a line along which neither face turns, the
++// section extruded along the line (u along the section, v along the path);
++// where it is a circle about whose axis both faces turn, the section
++// revolved about the axis (u the angle, the path's parameter; v along the
++// section). Null elsewhere.
++occ::handle<Geom_Surface> tubeSurface(const TopoDS_Edge& thePath,
++                                      const TopoDS_Face& theFace1,
++                                      const TopoDS_Face& theFace2,
++                                      const double       theD1,
++                                      const double       theD2)
++{
++  TopLoc_Location         aLoc;
++  double                  aFirst = 0.0, aLast = 0.0;
++  occ::handle<Geom_Curve> aCurve = BRep_Tool::Curve(thePath, aLoc, aFirst, aLast);
++  if (aCurve.IsNull() || BRep_Tool::Degenerated(thePath))
++  {
++    return occ::handle<Geom_Surface>();
++  }
++  aCurve = occ::down_cast<Geom_Curve>(aCurve->Transformed(aLoc.Transformation()));
++  const GeomAdaptor_Curve aPath(aCurve, aFirst, aLast);
++  const bool              isLine = aPath.GetType() == GeomAbs_Line;
++  if (!isLine && aPath.GetType() != GeomAbs_Circle)
++  {
++    return occ::handle<Geom_Surface>();
++  }
++  // The normals at the start of the path's parameter (0), checked to be
++  // the same all along it (on a circle, turned about its axis).
++  gp_Ax1 anAxis;
++  if (!isLine)
++  {
++    anAxis = aPath.Circle().Axis();
++  }
++  const auto atZero = [&](const gp_Dir& theN, const double theT) {
++    return isLine ? theN : theN.Rotated(anAxis, -theT);
++  };
++  gp_Dir    aN1, aN2;
++  const int aNbSamples = 5;
++  for (int i = 0; i < aNbSamples; ++i)
++  {
++    const double aT = aFirst + (aLast - aFirst) * i / (aNbSamples - 1);
++    gp_Dir       aS1, aS2;
++    if (!normalAlongEdge(thePath, theFace1, aT, aS1) || !normalAlongEdge(thePath, theFace2, aT, aS2))
++    {
++      return occ::handle<Geom_Surface>();
++    }
++    aS1 = atZero(aS1, aT);
++    aS2 = atZero(aS2, aT);
++    if (i == 0)
++    {
++      aN1 = aS1;
++      aN2 = aS2;
++    }
++    else if (aS1.Angle(aN1) > THE_JOIN_ANGLE || aS2.Angle(aN2) > THE_JOIN_ANGLE)
++    {
++      return occ::handle<Geom_Surface>();
++    }
++  }
++  if (isLine)
++  {
++    const gp_Lin                   aLin     = aPath.Line();
++    occ::handle<Geom_BSplineCurve> aSection = tubeSection(aLin.Location(), aN1, aN2, theD1, theD2);
++    if (aSection.IsNull())
++    {
++      return occ::handle<Geom_Surface>();
++    }
++    return new Geom_RectangularTrimmedSurface(new Geom_SurfaceOfLinearExtrusion(aSection, aLin.Direction()),
++                                              0.0,
++                                              1.0,
++                                              aFirst,
++                                              aLast);
++  }
++  const gp_Circ                  aCirc    = aPath.Circle();
++  occ::handle<Geom_BSplineCurve> aSection = tubeSection(ElCLib::Value(0.0, aCirc), aN1, aN2, theD1, theD2);
++  if (aSection.IsNull())
++  {
++    return occ::handle<Geom_Surface>();
++  }
++  return new Geom_RectangularTrimmedSurface(new Geom_SurfaceOfRevolution(aSection, anAxis),
++                                            aFirst,
++                                            aLast,
++                                            0.0,
++                                            1.0);
++}
++
++// The faces of <theFaces> once each, with their normals at <theVertex>,
++// where they are three square to each other there.
++bool squareCorner(const TopoDS_Vertex&                  theVertex,
++                  const NCollection_List<TopoDS_Shape>& theFaces,
++                  NCollection_List<TopoDS_Shape>&       theOnce,
++                  gp_Dir                                theNormals[3])
++{
++  theOnce.Clear();
++  for (NCollection_List<TopoDS_Shape>::Iterator anIt(theFaces); anIt.More(); anIt.Next())
++  {
++    bool isNew = true;
++    for (NCollection_List<TopoDS_Shape>::Iterator anIt2(theOnce); anIt2.More() && isNew; anIt2.Next())
++    {
++      isNew = !anIt2.Value().IsSame(anIt.Value());
++    }
++    if (isNew)
++    {
++      theOnce.Append(anIt.Value());
++    }
++  }
++  if (theOnce.Extent() != 3)
++  {
++    return false;
++  }
++  int i = 0;
++  for (NCollection_List<TopoDS_Shape>::Iterator anIt(theOnce); anIt.More(); anIt.Next(), ++i)
++  {
++    if (!normalAtVertex(theVertex, TopoDS::Face(anIt.Value()), theNormals[i]))
++    {
++      return false;
++    }
++  }
++  for (i = 0; i < 3; ++i)
++  {
++    if (std::abs(theNormals[i].Dot(theNormals[(i + 1) % 3])) > THE_JOIN_ANGLE)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++} // namespace
++
++//=================================================================================================
++
++bool BRepOffset_Offset::JoinsOffsets(const TopoDS_Edge& Path,
++                                     const TopoDS_Face& Face1,
++                                     const TopoDS_Face& Face2)
++{
++  return !tubeSurface(Path, Face1, Face2, 1.0, 2.0).IsNull();
++}
++
++//=================================================================================================
++
++bool BRepOffset_Offset::JoinsOffsets(const TopoDS_Vertex&                  Vertex,
++                                     const NCollection_List<TopoDS_Shape>& Faces)
++{
++  NCollection_List<TopoDS_Shape> aOnce;
++  gp_Dir                         aNormals[3];
++  return squareCorner(Vertex, Faces, aOnce, aNormals);
++}
++
++//=================================================================================================
++
++void BRepOffset_Offset::Init(const TopoDS_Edge& Path,
++                             const TopoDS_Edge& Edge1,
++                             const TopoDS_Edge& Edge2,
++                             const TopoDS_Face& Face1,
++                             const TopoDS_Face& Face2,
++                             const double       Offset1,
++                             const double       Offset2,
++                             const TopoDS_Edge& FirstEdge,
++                             const TopoDS_Edge& LastEdge)
++{
++  if (Offset1 * Offset2 <= 0.0)
++  {
++    throw Standard_ConstructionError("BRepOffset_Offset: a tube between offsets on both sides");
++  }
++  const occ::handle<Geom_Surface> aTube = tubeSurface(Path, Face1, Face2, Offset1, Offset2);
++  if (aTube.IsNull())
++  {
++    throw Standard_ConstructionError("BRepOffset_Offset: no tube between these offsets");
++  }
++  initTube(Path, Edge1, Edge2, Offset1, FirstEdge, LastEdge, false, 1.0e-4, GeomAbs_C1, aTube);
++}
++
++//=================================================================================================
++
++void BRepOffset_Offset::Init(const TopoDS_Vertex&                  Vertex,
++                             const NCollection_List<TopoDS_Shape>& LEdge,
++                             const NCollection_List<TopoDS_Shape>& Faces,
++                             const NCollection_List<double>&       Offsets)
++{
++  if (Faces.Extent() != Offsets.Extent())
++  {
++    throw Standard_ConstructionError("BRepOffset_Offset: a corner's faces without their offsets");
++  }
++  NCollection_List<TopoDS_Shape> aOnce;
++  gp_Dir                         aNormals[3];
++  if (!squareCorner(Vertex, Faces, aOnce, aNormals))
++  {
++    throw Standard_ConstructionError("BRepOffset_Offset: no corner between these offsets");
++  }
++  // The offset of each of the three faces.
++  double aD[3] = {0.0, 0.0, 0.0};
++  int    i     = 0;
++  for (NCollection_List<TopoDS_Shape>::Iterator anOnce(aOnce); anOnce.More(); anOnce.Next(), ++i)
++  {
++    NCollection_List<double>::Iterator anOff(Offsets);
++    for (NCollection_List<TopoDS_Shape>::Iterator aF(Faces); aF.More(); aF.Next(), anOff.Next())
++    {
++      if (aF.Value().IsSame(anOnce.Value()))
++      {
++        aD[i] = anOff.Value();
++      }
++    }
++  }
++  const double aSign = aD[0] > 0.0 ? 1.0 : -1.0;
++  for (i = 0; i < 3; ++i)
++  {
++    if (aD[i] * aSign <= 0.0)
++    {
++      throw Standard_ConstructionError("BRepOffset_Offset: a corner between offsets on both sides");
++    }
++  }
++  // The unit sphere about the vertex, around the eighth of it the corner
++  // takes (along the normals on the side of the offsets; its axis, as the
++  // sphere of the vertex's, away from it), stretched along each normal to
++  // the offset of its face: an ellipsoid through the ends of the tubes,
++  // tangent there to the offsets, as a rational surface (exactly).
++  const gp_Pnt anOrigin = BRep_Tool::Pnt(Vertex);
++  const gp_Vec aMiddle  = (gp_Vec(aNormals[0]) + gp_Vec(aNormals[1]) + gp_Vec(aNormals[2])) * aSign;
++  const gp_Dir aXDir(aMiddle.Reversed());
++  const gp_Dir aZDir(gp_Vec(aXDir).Crossed(gp_Vec(aNormals[0])));
++  occ::handle<Geom_SphericalSurface> aSphere = new Geom_SphericalSurface(gp_Ax3(anOrigin, aZDir, aXDir), 1.0);
++  // The eighth lies within 55 degrees of the middle (u = pi, v = 0).
++  const double aHalf = 1.2;
++  occ::handle<Geom_RectangularTrimmedSurface> aPart =
++    new Geom_RectangularTrimmedSurface(aSphere, M_PI - aHalf, M_PI + aHalf, -aHalf, aHalf);
++  occ::handle<Geom_BSplineSurface> aCorner = GeomConvert::SurfaceToBSplineSurface(aPart);
++  for (int aU = 1; aU <= aCorner->NbUPoles(); ++aU)
++  {
++    for (int aV = 1; aV <= aCorner->NbVPoles(); ++aV)
++    {
++      const gp_Vec aR(anOrigin, aCorner->Pole(aU, aV));
++      gp_Vec       aStretched(0.0, 0.0, 0.0);
++      for (i = 0; i < 3; ++i)
++      {
++        aStretched += gp_Vec(aNormals[i]) * (std::abs(aD[i]) * aR.Dot(gp_Vec(aNormals[i])));
++      }
++      aCorner->SetPole(aU, aV, anOrigin.Translated(aStretched));
++    }
++  }
++  initCorner(Vertex, LEdge, aSign, false, 1.0e-4, GeomAbs_C1, aCorner);
++}
++
+ //=================================================================================================
+ 
+ void BRepOffset_Offset::Init(const TopoDS_Edge& Edge, const double Offset)
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.hxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.hxx
+index 22251e2e..c7dcec83 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.hxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Offset.hxx
+@@ -31,6 +31,7 @@
+ #include <NCollection_List.hxx>
+ class TopoDS_Edge;
+ class TopoDS_Vertex;
++class Geom_Surface;
+ 
+ // resolve name collisions with X11 headers
+ #ifdef Status
+@@ -142,6 +143,48 @@ public:
+   //! Only used in Rolling Ball. Pipe on Free Boundary
+   Standard_EXPORT void Init(const TopoDS_Edge& Edge, const double Offset);
+ 
++  //! The tube along <Path> joining the offsets of its faces <Face1>
++  //! (by <Offset1>, whose image of <Path> is <Edge1>) and <Face2> (by
++  //! <Offset2>, <Edge2>) where the offsets differ (mitcad#2488): its section
++  //! is the conic from the one offset to the other, tangent to both, which
++  //! is the circle of the tube for equal offsets (the affine image of that
++  //! circle). Built where JoinsOffsets(Path, Face1, Face2); raises
++  //! Standard_ConstructionError elsewhere.
++  Standard_EXPORT void Init(const TopoDS_Edge& Path,
++                            const TopoDS_Edge& Edge1,
++                            const TopoDS_Edge& Edge2,
++                            const TopoDS_Face& Face1,
++                            const TopoDS_Face& Face2,
++                            const double       Offset1,
++                            const double       Offset2,
++                            const TopoDS_Edge& FirstEdge,
++                            const TopoDS_Edge& LastEdge);
++
++  //! The corner at <Vertex> joining the tubes of its edges (their edges at
++  //! the vertex, <LEdge>) where its faces <Faces> have different offsets
++  //! <Offsets> (mitcad#2488): the sphere of the vertex stretched along the
++  //! faces' normals to the offsets of the faces, an ellipsoid tangent to
++  //! the faces' offsets along the tubes' ends. Built where
++  //! JoinsOffsets(Vertex, Faces); raises Standard_ConstructionError
++  //! elsewhere.
++  Standard_EXPORT void Init(const TopoDS_Vertex&                  Vertex,
++                            const NCollection_List<TopoDS_Shape>& LEdge,
++                            const NCollection_List<TopoDS_Shape>& Faces,
++                            const NCollection_List<double>&       Offsets);
++
++  //! Whether the tube along the edge <Path> between its faces <Face1> and
++  //! <Face2> can join offsets of the two faces that differ: a straight edge
++  //! along which neither face turns, or a circle about whose axis both
++  //! faces turn (the tube's section is then the same all along it).
++  Standard_EXPORT static bool JoinsOffsets(const TopoDS_Edge& Path,
++                                           const TopoDS_Face& Face1,
++                                           const TopoDS_Face& Face2);
++
++  //! Whether the corner at <Vertex> of the faces <Faces> can join offsets
++  //! of the faces that differ: three faces square to each other there.
++  Standard_EXPORT static bool JoinsOffsets(const TopoDS_Vertex&                  Vertex,
++                                           const NCollection_List<TopoDS_Shape>& Faces);
++
+   const TopoDS_Shape& InitialShape() const;
+ 
+   Standard_EXPORT const TopoDS_Face& Face() const;
+@@ -151,6 +194,32 @@ public:
+   Standard_EXPORT BRepOffset_Status Status() const;
+ 
+ private:
++  //! The tube's face: on <theTube> where it is given (one parameter from
++  //! <Edge1> to <Edge2>, the other along <Path> by the parameter of <Path>:
++  //! the u of a surface of revolution, else the v), else on the pipe of
++  //! radius <Offset> about <Path>.
++  void initTube(const TopoDS_Edge&               Path,
++                const TopoDS_Edge&               Edge1,
++                const TopoDS_Edge&               Edge2,
++                const double                     Offset,
++                const TopoDS_Edge&               FirstEdge,
++                const TopoDS_Edge&               LastEdge,
++                const bool                       Polynomial,
++                const double                     Tol,
++                const GeomAbs_Shape              Conti,
++                const occ::handle<Geom_Surface>& theTube);
++
++  //! The corner's face: on <theCorner> where it is given (its normal away
++  //! from <Vertex>, as the sphere's), else on the sphere of radius <Offset>
++  //! about <Vertex>.
++  void initCorner(const TopoDS_Vertex&                  Vertex,
++                  const NCollection_List<TopoDS_Shape>& LEdge,
++                  const double                          Offset,
++                  const bool                            Polynomial,
++                  const double                          TolApp,
++                  const GeomAbs_Shape                   Conti,
++                  const occ::handle<Geom_Surface>&      theCorner);
++
+   TopoDS_Shape                                                             myShape;
+   BRepOffset_Status                                                        myStatus;
+   TopoDS_Face                                                              myFace;

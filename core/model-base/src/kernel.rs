@@ -90,9 +90,11 @@ pub trait Kernel: Send {
     /// Rounds the edge sets. New faces are named `<feature>:fillet(<edge>)`
     /// (also along the edges a tangent chain adds) and
     /// `<feature>:corner(<vertex>)`. Without rolling ball corners, a vertex
-    /// where three rounded edges meet gets a setback corner. Asymmetric and
-    /// curvature continuous sets whose chains meet other rounded edges are
-    /// unsupported.
+    /// where three rounded edges meet gets a setback corner. Where curvature
+    /// continuous chains meet other rounded edges, every edge there
+    /// rounded, a curvature continuous corner patch closes the corner
+    /// (mitcad#2332); asymmetric sets whose chains meet other rounded edges
+    /// are unsupported.
     fn fillet(
         &self,
         feature: FeatureUid,
@@ -2401,7 +2403,9 @@ pub trait Kernel: Send {
 
     /// The faces `faces` of `shape` (every piece of each name), all on one
     /// cylinder or cone (stored so or as another surface within 1e-6 mm of
-    /// it) and joined at shared edges, developed at the neutral surface of
+    /// it), or on one oblique cone (straight lines meeting at one apex over
+    /// a circle, mitcad#2491), and joined at shared edges, developed at the
+    /// neutral surface of
     /// a sheet `thickness` thick whose front they are, `neutral_depth` (K t)
     /// from its inner surface, in the chart
     /// [`crate::sheet_charts::SheetFaceDevelopment`] describes: the angle
@@ -2429,6 +2433,140 @@ pub trait Kernel: Send {
     ) -> Result<crate::sheet_charts::FaceBending, KernelError> {
         Err(KernelError::Unsupported("the bending of faces"))
     }
+
+    // Surface quality analyses (mitcad#2517; `surface_quality.rs`): the
+    // curvature at a face mesh's vertices and the faces' iso curves.
+
+    /// The faces named (every face of the shape when none is named, in the
+    /// order [`Kernel::faces`] lists them) triangulated within the
+    /// tolerance as [`Kernel::face_meshes`] triangulates them, each vertex
+    /// with the surface's outward normal and its two principal curvatures
+    /// ([`crate::surface_quality`]). A mesh body's faces are faceted, their
+    /// curvatures NaN. A name that finds no face of the shape is an error.
+    fn surface_samples(
+        &self,
+        _shape: &Self::Shape,
+        _faces: &[FaceName],
+        _tolerance: &MeshTolerance,
+    ) -> Result<crate::surface_quality::SurfaceSamples, KernelError> {
+        Err(KernelError::Unsupported("the curvature of faces"))
+    }
+
+    /// The iso curves of the faces named (every face when none is named):
+    /// `count` along u and `count` along v per face, the held parameter at
+    /// (i + 1) / (count + 1) of the face's range, trimmed to the face, as
+    /// polylines within `deviation` mm of the curve, each point with the
+    /// outward normal and the surface's normal curvature along the curve.
+    /// A face without a surface (a mesh body's) has none; a name that finds
+    /// no face of the shape is an error.
+    fn face_isocurves(
+        &self,
+        _shape: &Self::Shape,
+        _faces: &[FaceName],
+        _count: u32,
+        _deviation: f64,
+    ) -> Result<Vec<crate::surface_quality::IsoCurve>, KernelError> {
+        Err(KernelError::Unsupported("iso curves of faces"))
+    }
+
+    // Minimum Radius: the smallest radius of curvature of faces
+    // (mitcad#2518; `FaceCurvature`).
+
+    /// Each face's largest principal curvature over the face (its
+    /// magnitude, 1/mm: one over the smallest radius of curvature) and the
+    /// point where it is, in the shape's coordinates: every face of the
+    /// shape when `faces` is empty, else every piece of each name, each
+    /// face once, by its index in the order [`Kernel::faces`] lists the
+    /// faces. A face that does not bend (a plane) has 0. A name of no face
+    /// is an error.
+    fn face_curvatures(
+        &self,
+        _shape: &Self::Shape,
+        _faces: &[FaceName],
+    ) -> Result<Vec<FaceCurvature>, KernelError> {
+        Err(KernelError::Unsupported("the curvature of faces"))
+    }
+
+    // Isoparametric curves: a face's u or v curves as 3D curves
+    // (mitcad#2522; `features::isoparametric_curve`).
+
+    /// The curves of the face `face` of `shape` (every piece of the name,
+    /// over the range of all of them) along which its surface parameter
+    /// `held` keeps one value: one at each fraction (0 to 1) of the face's
+    /// range of that parameter, or the one through the face's point
+    /// nearest to a point ([`IsoPlace`]). Each curve is its pieces inside
+    /// the face (a hole or a notch cuts it), in order along the other
+    /// parameter: the surface's own iso curve, exact where it is a line,
+    /// a circle or a B-spline. A fraction outside 0 to 1, a curve that
+    /// runs nowhere inside the face and a name of no face are errors. The
+    /// shape is left as it is.
+    fn iso_curves(
+        &self,
+        _shape: &Self::Shape,
+        _face: &FaceName,
+        _held: IsoParameter,
+        _place: &IsoPlace,
+    ) -> Result<Vec<IsoCurve>, KernelError> {
+        Err(KernelError::Unsupported("isoparametric curves"))
+    }
+
+    // Sheet faces sampled for an approximate development by triangulation
+    // (mitcad#2442; `sheet/folded/triangulated.rs`).
+
+    /// Every piece of the face `face` of `shape` (a face the kernel split,
+    /// as a loft splits a side where the other section has a vertex, has
+    /// several), in the shape's face order, sampled over its surface's
+    /// parameters ([`SheetFaceGrid`]): `rows + 1` rows of `columns + 1`
+    /// points, at equal steps of each parameter over the piece's parameter
+    /// bounds, with the normals out of the body and the piece's own area;
+    /// with `edge_steps` above 0 also the piece's boundary, each edge at
+    /// `edge_steps` equal steps of its parameter (mitcad#2558). A name of
+    /// no face, and fewer than one column or row, are errors.
+    fn sheet_face_grid(
+        &self,
+        _shape: &Self::Shape,
+        _face: &FaceName,
+        _columns: usize,
+        _rows: usize,
+        _edge_steps: usize,
+    ) -> Result<Vec<SheetFaceGrid>, KernelError> {
+        Err(KernelError::Unsupported(
+            "faces sampled over their parameters",
+        ))
+    }
+
+    // Continuity Analysis: the continuity across a body's edges
+    // (mitcad#2521; the `edge_continuity` query).
+
+    /// The continuity across the edges named and every edge of the faces
+    /// named (every edge of the shape when neither names any; degenerate
+    /// edges left out): at `spec.samples` + 1 points along each edge, its
+    /// ends included, the gap between its two faces, the angle between
+    /// their normals and the difference of their normal curvatures across
+    /// it, the worst of each, and the class it reaches within the
+    /// tolerances ([`EdgeContinuity`]). A name that finds nothing on the
+    /// shape is an error.
+    fn edge_continuity(
+        &self,
+        _shape: &Self::Shape,
+        _edges: &[EdgeName],
+        _faces: &[FaceName],
+        _spec: &ContinuitySpec,
+    ) -> Result<Vec<EdgeContinuity>, KernelError> {
+        Err(KernelError::Unsupported("continuity analysis"))
+    }
+}
+
+/// A face's largest curvature ([`Kernel::face_curvatures`], mitcad#2518).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceCurvature {
+    /// The face's index in the order [`Kernel::faces`] lists the faces.
+    pub face: usize,
+    /// The largest magnitude of a principal curvature found on the face,
+    /// 1/mm; 0 for a face that does not bend.
+    pub curvature: f64,
+    /// Where it is (a point of the face for one that does not bend), mm.
+    pub at: [f64; 3],
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -2488,6 +2626,22 @@ pub struct FontSource {
 /// they follow, or its number in the loop when it has no name),
 /// `<feature>:band_top` at `end` and `<feature>:band_bottom` at `start`; a
 /// wall the offset made of no edge of the loop is `<feature>:band_wall(<k>)`.
+///
+/// Its two walls (mitcad#2511): the one along the loop (`band_edge`) rises
+/// along the face's normal unless `tangent`: then each of its points lies
+/// on the line through the loop's point that continues the face beside the
+/// loop there (the body's other face at that edge) along its tangent, at
+/// right angles to the edge, so that the wall goes on from that face
+/// without a crease (`free` is measured in the plane at each height from
+/// where that line passes). The other wall (`band_side`) leans by
+/// `side_taper` (radians): at a height `z` along the outward normal it lies
+/// `width - z tan(side_taper)` into the face from the loop's point at the
+/// face, so that a positive lean narrows the band as it rises (a lip's
+/// draft) and a negative one as it goes down (a groove's). With neither
+/// (`tangent` false, `side_taper` 0) the band is the straight one above.
+/// The band must not close: where its walls would meet (a lean or a face
+/// beside it that slopes into the band) the band is refused, the rim face
+/// painted.
 #[derive(Debug, Clone, Copy)]
 pub struct RimBandSpec<'a, S> {
     pub feature: FeatureUid,
@@ -2498,6 +2652,8 @@ pub struct RimBandSpec<'a, S> {
     pub free: f64,
     pub start: f64,
     pub end: f64,
+    pub tangent: bool,
+    pub side_taper: f64,
 }
 
 /// Two bodies, each placed by a rigid transform from its own coordinates
@@ -2830,7 +2986,8 @@ pub struct ShellSpec<'a> {
 /// A face whose shell wall has a thickness of its own (mitcad#2443):
 /// `inside` and `outside` in place of the shell's, each greater than zero
 /// exactly where the shell's is. The kernel offsets faces that meet
-/// smoothly as one (and, rounded, the faces a rounding joins): with the
+/// smoothly as one (and, rounded, the faces a rounding joins where it
+/// cannot run from one thickness to the other, mitcad#2488): with the
 /// tangent chain the faces tangent to one take its thickness, and a face
 /// joined so to one of another thickness is refused, both painted.
 #[derive(Debug, Clone, PartialEq)]
@@ -4000,4 +4157,158 @@ pub struct FaceRun {
     pub normal: [f64; 3],
     pub reach: f64,
     pub along: FaceAlong,
+}
+
+// Isoparametric curves (mitcad#2522).
+
+/// The surface parameter an isoparametric curve keeps ([`Kernel::iso_curves`]):
+/// `u` (the curve runs along v: on a cylinder a line along its axis) or `v`
+/// (it runs along u: on a cylinder a circle about its axis).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IsoParameter {
+    #[default]
+    U,
+    V,
+}
+
+/// Where [`Kernel::iso_curves`] puts its curves.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IsoPlace {
+    /// One curve at each fraction (0 to 1) of the face's range of the held
+    /// parameter, 0 at its least.
+    Fractions(Vec<f64>),
+    /// One curve, through the face's point nearest to this point.
+    Through(Vec3),
+}
+
+/// One curve of [`Kernel::iso_curves`]: its pieces inside the face, in
+/// order along it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IsoCurve {
+    pub pieces: Vec<Curve3>,
+}
+
+/// A face sampled over its surface's parameters ([`Kernel::sheet_face_grid`],
+/// mitcad#2442): column `i` at the `i`-th of `columns` equal steps of the
+/// first parameter over the face's bounds, row `j` likewise of the second.
+/// A face bounded by its surface's parameter lines (a loft's or a ruled
+/// face) is the whole grid; a face cut out of its surface is less than it,
+/// which its `area` shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetFaceGrid {
+    pub columns: usize,
+    pub rows: usize,
+    /// Row by row: point `(i, j)` at `j * (columns + 1) + i`.
+    pub points: Vec<[f64; 3]>,
+    /// The unit normals out of the body there (the face's orientation);
+    /// where the surface has none (an apex, a collapsed edge), the normal a
+    /// little way inside the face.
+    pub normals: Vec<[f64; 3]>,
+    /// The face's own area (mm²).
+    pub area: f64,
+    /// The face's boundary (mitcad#2558): its outer wire and its holes,
+    /// when asked for (`edge_steps` above 0), else none.
+    pub wires: Vec<SheetFaceWire>,
+}
+
+/// A wire of a face's boundary in a [`SheetFaceGrid`] (mitcad#2558).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetFaceWire {
+    /// The face's outer wire; else a hole.
+    pub outer: bool,
+    /// The wire's edges in the order it runs, edges of no length (a
+    /// surface's collapsed side) left out.
+    pub edges: Vec<SheetFaceEdge>,
+}
+
+/// An edge of a face's boundary sampled at equal steps of its parameter,
+/// in the direction its wire runs (mitcad#2558).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetFaceEdge {
+    /// Each point's place in the face's grid: `[x, y]`, column `i` at `x =
+    /// i`, row `j` at `y = j` (fractions between them).
+    pub cells: Vec<[f64; 2]>,
+    /// The points on the face.
+    pub points: Vec<[f64; 3]>,
+    /// The unit normals out of the body there.
+    pub normals: Vec<[f64; 3]>,
+}
+
+// Continuity Analysis (mitcad#2521).
+
+/// What [`Kernel::edge_continuity`] measures with: the samples along each
+/// edge (1 to 1000; the points are one more, the ends included) and the
+/// tolerances of the classes: the gap (mm), the angle between the normals
+/// (radians) and the curvature difference as a share of the larger
+/// curvature (0.02: 2 %; of 1 / the body's size where both faces are
+/// flatter).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContinuitySpec {
+    pub samples: usize,
+    pub gap: f64,
+    pub angle: f64,
+    pub curvature: f64,
+}
+
+/// What is between the faces at an edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeSides {
+    /// Two faces.
+    Shared,
+    /// One closed face, both its sides.
+    Seam,
+    /// One face: a free edge.
+    Open,
+}
+
+/// The class an edge reaches within the tolerances: each needs the ones
+/// before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ContinuityClass {
+    /// The faces do not touch within the gap tolerance.
+    None,
+    /// They touch.
+    G0,
+    /// And are tangent.
+    G1,
+    /// And curvature continuous.
+    G2,
+    /// Nothing to compare: a free edge, or no sample measured.
+    Unmeasured,
+}
+
+impl ContinuityClass {
+    /// The class's word in the api: `none`, `g0`, `g1`, `g2`, `unmeasured`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::G0 => "g0",
+            Self::G1 => "g1",
+            Self::G2 => "g2",
+            Self::Unmeasured => "unmeasured",
+        }
+    }
+}
+
+/// One edge measured by [`Kernel::edge_continuity`]: the worst values along
+/// it (the gap in mm, the angle in radians, the curvature difference in
+/// 1/mm and as its share) with where they are, the samples measured (where
+/// both faces have a normal), the class reached and the edge's points at
+/// the samples, in order along it, in the shape's coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeContinuity {
+    /// The edge's name; empty when a face at it has none.
+    pub name: String,
+    pub sides: EdgeSides,
+    pub class: ContinuityClass,
+    pub samples: usize,
+    pub gap: f64,
+    pub angle: f64,
+    pub curvature: f64,
+    pub curvature_share: f64,
+    pub gap_at: [f64; 3],
+    pub angle_at: [f64; 3],
+    pub curvature_at: [f64; 3],
+    pub points: Vec<[f64; 3]>,
 }

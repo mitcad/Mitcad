@@ -4,7 +4,9 @@
 # HEIF image references through macOS' own decoder, ImageIO (mitcad#1304),
 # in the default (Qt) frontend, on a 60 x 60 x 3 plate:
 #   1. tools/heif-test-photo.sh's HEIF file (64 x 32 pixels, turned a
-#      quarter by its irot) inserted 32 mm wide on the plate's top: decoded
+#      quarter by its irot) chosen with Choose Image... in Qt's own file
+#      dialog (mitcad#2474: taken at once, the panel's message gone) and
+#      inserted 32 mm wide on the plate's top: decoded
 #      upright (32 x 64 pixels) when it is chosen, no message, drawn
 #      32 x 64 mm; saved (tools/ui-scripts/image-references-heif.mitcad-ui).
 #   2. The saved design embeds it as a PNG file of 32 x 64 pixels.
@@ -45,7 +47,7 @@ heif_test_photo "$MITCAD_TEST_WORK/photo.heic" || {
 }
 
 MITCAD_TEST_INPUT=$here/ui-scripts/image-references-heif.mitcad-ui MITCAD_TEST_STEP_MS=100 \
-  ui_run_app heif-insert --ui=qt --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/plate.mitcad"
+  ui_run_app heif-insert --ui=qt --no-recovery --no-mcp --no-native-dialogs --open "$MITCAD_TEST_WORK/plate.mitcad"
 ui_expect_log '^TestDriver: done' 'a HEIF file inserted through ImageIO, upright, and saved'
 ui_expect_no_log 'TestDriver: FAIL' 'no failed HEIF insert assertion'
 [ "$UI_FAILURES" = 0 ] || exit 1

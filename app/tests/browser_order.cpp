@@ -7,7 +7,8 @@
 // Bodies folder, never onto another component's folder. The order among
 // siblings (mitcad#2104): Move Up and Move Down within a row's group and
 // at its ends, the commands of a move (a folder's rows kept together where
-// its first one is), and rows dropped before or after a sibling.
+// its first one is), and rows dropped before or after a sibling. A lathe
+// setup's block of manual G-code dragged within its setup (mitcad#2532).
 #include "UnitTests.hpp"
 #include "browser/BrowserOrder.hpp"
 #include "browser/BrowserPanel.hpp"
@@ -162,6 +163,32 @@ void dropTests() {
       row(Type::BodyFolder, QStringLiteral("Glass"), QStringLiteral("O1"), QStringLiteral("C1"));
   CHECK(!BrowserPanel::dropFor({pane}, railGlass, false, &place));
   CHECK(!BrowserPanel::dropFor({}, glass, false, &place));
+
+  // A lathe setup's block of manual G-code (mitcad#2532): within its own
+  // setup, below the setup's row, before or after an operation or another
+  // block; not onto itself, another setup's rows or other rows, not two
+  // at once.
+  const auto cam = [](Type type, const QString& uid, const QString& setup) {
+    BrowserNode node = row(type, uid, QString(), QStringLiteral("C0"));
+    node.camSetup = setup;
+    return node;
+  };
+  const BrowserNode setup1 = cam(Type::CamSetup, QStringLiteral("1"), QString());
+  const BrowserNode setup2 = cam(Type::CamSetup, QStringLiteral("2"), QString());
+  const BrowserNode facing = cam(Type::CamOperation, QStringLiteral("3"), QStringLiteral("1"));
+  const BrowserNode other = cam(Type::CamOperation, QStringLiteral("4"), QStringLiteral("2"));
+  const BrowserNode pull = cam(Type::CamManualCode, QStringLiteral("1:0"), QStringLiteral("1"));
+  const BrowserNode dwell = cam(Type::CamManualCode, QStringLiteral("1:1"), QStringLiteral("1"));
+  CHECK(BrowserPanel::dropFor({pull}, setup1, false, &place) && place == BrowserDrop::After);
+  CHECK(BrowserPanel::dropFor({pull}, facing, false, &place) && place == BrowserDrop::Before);
+  CHECK(BrowserPanel::dropFor({pull}, facing, true, &place) && place == BrowserDrop::After);
+  CHECK(BrowserPanel::dropFor({pull}, dwell, false, &place) && place == BrowserDrop::Before);
+  CHECK(BrowserPanel::dropFor({pull}, dwell, true, &place) && place == BrowserDrop::After);
+  CHECK(!BrowserPanel::dropFor({pull}, pull, true, &place));
+  CHECK(!BrowserPanel::dropFor({pull}, setup2, false, &place));
+  CHECK(!BrowserPanel::dropFor({pull}, other, false, &place));
+  CHECK(!BrowserPanel::dropFor({pull}, frame, false, &place));
+  CHECK(!BrowserPanel::dropFor({pull, dwell}, facing, false, &place));
 }
 
 // The order among siblings (mitcad#2104): A (O1), C (O3) and H (O6) in no

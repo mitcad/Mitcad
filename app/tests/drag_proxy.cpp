@@ -40,6 +40,7 @@
 #include "commands/ExtrudeDragProxy.hpp"
 #include "commands/MoveDragMotion.hpp"
 #include "framework/DragProxy.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -309,6 +310,10 @@ void testExtrudeRules() {
   CommandState all = shown;
   all.setChoice(QStringLiteral("extent"), QStringLiteral("through_all"));
   CHECK(!extrudeDragProxy(all, all, distance, 7.0));
+  // To Next (GitHub mitcad/Mitcad#674) ends where the bodies are: none.
+  CommandState next = shown;
+  next.setChoice(QStringLiteral("extent"), QStringLiteral("to_next"));
+  CHECK(!extrudeDragProxy(next, next, distance, 7.0));
   CommandState wrapped = shown;
   mitcad::SelectionItem face;
   face.kind = mitcad::SelectKind::Face;
@@ -835,7 +840,7 @@ void testFreeSplit() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(drag_proxy) {
   testMeshCopy();
   testStretches();
   testAxes();

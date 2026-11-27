@@ -542,3 +542,21 @@ pub const DERIVED_CONTEXT: &str = "428956BD-1956-4BAF-A4F8-D01D0C465FF1";
 /// their own feature of a class based on [`BASE_FEATURE`], which holds the
 /// copied bodies.
 pub const BODY: &str = "D3937028-C20C-4E65-B010-94AD418A5C20";
+
+// Holes of printed circuit boards (mitcad#2493).
+
+/// The hole feature's class (`HoleFeature`).
+pub const HOLE: &str = "1C037A07-4A15-43F6-ABFC-BBF61B9038D4";
+/// A printed circuit board's hole (the timeline's `PCBHole<n>`): its class
+/// derives from [`HOLE`]'s and its record is a hole's, after a part of its
+/// own (a reference to a key point on the board's other face, which the
+/// item's input list repeats at its end). Its parameters are a hole's
+/// (`HoleDiameter`, `TipAngle`, `HoleDepth`: the board's thickness).
+pub const PCB_HOLE: &str = "3E2187AA-75CC-4375-A509-3909CA4BFA26";
+
+/// The decoder's type name of an item whose class it does not know by
+/// its GUID but by the class it derives from and whose record it keeps:
+/// [`PCB_HOLE`] is read as a `HoleFeature`.
+pub fn derived_name(guid: &str) -> Option<&'static str> {
+    (guid == PCB_HOLE).then_some("HoleFeature")
+}

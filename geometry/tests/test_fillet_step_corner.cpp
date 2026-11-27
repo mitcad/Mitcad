@@ -64,6 +64,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/io/step.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -634,7 +635,7 @@ void test_three_fillet_corner() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_step_corner) {
   test::guarded("test_check_on_placed_faces", test::test_check_on_placed_faces);
   test::guarded("test_check_runs_onto_a_rounding", test::test_check_runs_onto_a_rounding);
   test::guarded("test_three_fillet_corner", test::test_three_fillet_corner);

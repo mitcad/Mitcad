@@ -295,6 +295,8 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Plastic Rule"), QT_TRANSLATE_NOOP("Choice", "Rectangle"),
     QT_TRANSLATE_NOOP("Choice", "Rest"), QT_TRANSLATE_NOOP("Choice", "Round"),
     QT_TRANSLATE_NOOP("Choice", "Snap Fit"),
+    // A boss's rib ends (mitcad#2511).
+    QT_TRANSLATE_NOOP("Choice", "At Its Length"), QT_TRANSLATE_NOOP("Choice", "Up to the Wall"),
     // commands/PulleyCommands.cpp.
     QT_TRANSLATE_NOOP("Choice", "Idler"), QT_TRANSLATE_NOOP("Choice", "Library"),
     QT_TRANSLATE_NOOP("Choice", "Toothed"), QT_TRANSLATE_NOOP("Choice", "Toothed Idler"),
@@ -464,7 +466,17 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Fine"), QT_TRANSLATE_NOOP("Choice", "Coarse"),
     // Rib's Direction Normal to Curves (mitcad#2398); its Corners are
     // Sharp and Round, above.
-    QT_TRANSLATE_NOOP("Choice", "Normal to Curves")};
+    QT_TRANSLATE_NOOP("Choice", "Normal to Curves"),
+    // Split Body's Keep (mitcad#2504).
+    QT_TRANSLATE_NOOP("Choice", "All Pieces"), QT_TRANSLATE_NOOP("Choice", "Selected"),
+    // commands/MeshShapeCommands.cpp: Smooth Mesh's region, Offset Mesh's
+    // type and direction, Plane Cut's pieces (mitcad#2515; Brush, Join,
+    // Cut, Intersect, Merge and None are above).
+    QT_TRANSLATE_NOOP("Choice", "Whole Mesh"), QT_TRANSLATE_NOOP("Choice", "Offset Surface"),
+    QT_TRANSLATE_NOOP("Choice", "Shell"), QT_TRANSLATE_NOOP("Choice", "Outward"),
+    QT_TRANSLATE_NOOP("Choice", "Inward"), QT_TRANSLATE_NOOP("Choice", "Both Ways"),
+    QT_TRANSLATE_NOOP("Choice", "Both Pieces"), QT_TRANSLATE_NOOP("Choice", "Above the Plane"),
+    QT_TRANSLATE_NOOP("Choice", "Below the Plane")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -944,6 +956,12 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
     auto call = CommandPresenter::actions().rowRemoved;
     if (call) {
       call(key, index);
+    }
+  });
+  connect(this, &CommandPanel::rowMoved, this, [this](const QString& key, int from, int to) {
+    auto call = CommandPresenter::actions().rowMoved;
+    if (call) {
+      call(key, from, to);
     }
   });
   connect(this, &CommandPanel::buttonClicked, this, [this](const QString& key) {
@@ -1938,6 +1956,26 @@ void CommandPanel::rebuildList(Row& list, const CommandState& state) {
     remove->setEnabled(count > input.minRows);
     const QString key = list.key;
     connect(remove, &QToolButton::clicked, this, [this, key, i] { emit rowRemoved(key, i); });
+    // Rows whose order matters (InputDef::orderedRows, mitcad#2506): Move
+    // up and Move down before ✕, in one widget at the row's end.
+    QWidget* trail = remove;
+    if (input.orderedRows) {
+      trail = new QWidget;
+      auto* trailLayout = new QHBoxLayout(trail);
+      trailLayout->setContentsMargins(0, 0, 0, 0);
+      trailLayout->setSpacing(0);
+      QToolButton* up = smallButton(QStringLiteral("▲"), tr("Move up"));
+      QToolButton* down = smallButton(QStringLiteral("▼"), tr("Move down"));
+      up->setObjectName(QStringLiteral("row_up_%1.%2").arg(list.key).arg(i));
+      down->setObjectName(QStringLiteral("row_down_%1.%2").arg(list.key).arg(i));
+      up->setEnabled(i > 0);
+      down->setEnabled(i + 1 < count);
+      connect(up, &QToolButton::clicked, this, [this, key, i] { emit rowMoved(key, i, i - 1); });
+      connect(down, &QToolButton::clicked, this, [this, key, i] { emit rowMoved(key, i, i + 1); });
+      trailLayout->addWidget(up);
+      trailLayout->addWidget(down);
+      trailLayout->addWidget(remove);
+    }
     if (table) {
       // The name, the values and ✕ on one line while every field can be
       // read there; in a narrower panel each value on a line of its own
@@ -1949,14 +1987,14 @@ void CommandPanel::rebuildList(Row& list, const CommandState& state) {
         Row* cell = createRow(child, CommandState::rowKey(list.key, i, child.id), nullptr, state, list.key, i);
         line->addCell(cell->label, cell->field, cell->edit);
       }
-      line->setTrail(remove);
+      line->setTrail(trail);
       frameLayout->addLayout(line);
       list.valueLines.push_back(line);
     } else {
       auto* header = new QHBoxLayout;
       header->setSpacing(3);
       header->addWidget(name, 1);
-      header->addWidget(remove);
+      header->addWidget(trail);
       frameLayout->addLayout(header);
       auto* form = new QFormLayout;
       form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -2634,6 +2672,12 @@ void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
       }
     }
     return;
+  }
+  // An error the panel no longer shows, for UI tests (mitcad#2474: a file
+  // chosen with Choose File… takes away "Choose a point cloud file.").
+  if (m_messageLevel == NoticeLevel::Error && !m_messageText.isEmpty() &&
+      (level != NoticeLevel::Error || message.isEmpty())) {
+    qDebug().noquote() << QStringLiteral("Panel %1 message: error gone: %2").arg(m_def.name, m_messageText);
   }
   m_messageText = message;
   m_messageLevel = level;

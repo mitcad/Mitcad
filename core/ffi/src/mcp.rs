@@ -268,6 +268,16 @@ pub fn validate_mcp_query(
     Ok(request.to_string())
 }
 
+/// The name of a checked live query that runs as a model job, off the
+/// window's UI thread (mitcad#2540, `mitcad_mcp::query_jobs`); empty for
+/// one read inline and for text that is not a query object.
+pub fn mcp_query_job(request: &str) -> String {
+    serde_json::from_str::<Value>(request)
+        .ok()
+        .and_then(|request| mitcad_mcp::query_jobs::job_query(&request).map(str::to_owned))
+        .unwrap_or_default()
+}
+
 /// Whether a command uses the print libraries in a form the live
 /// preference permits (mitcad#2224): the application's managers read the
 /// libraries again after an agent's call. False for text that is not a

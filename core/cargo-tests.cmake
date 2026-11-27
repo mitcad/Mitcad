@@ -20,12 +20,21 @@
 #     Runs the package's test binaries in the package's folder, as cargo
 #     test does, with libtest's arguments (a filter, --skip <filter>); on
 #     Windows with a temporary folder of the run's own (see below), named
-#     after TEST_NAME, the package and the arguments.
+#     after TEST_NAME, the package and the arguments. An integration test
+#     binary (tests/<group>/main.rs, several files of tests as its modules,
+#     mitcad#2496) runs each of its tests in a process of its own (see
+#     below); the unit tests of a library or program run in one process,
+#     as cargo test runs them.
 #   cmake -DLIST=<file> -P cargo-tests.cmake -- parts <package> <filter>...
 #     Checks the parts a package's tests run in: those of each filter, and
 #     the rest (--skip of every filter). Together they must list each test
 #     of the package's binaries (--list) exactly once, and each filter must
 #     match a test (else it is left from a module renamed or removed).
+#   cmake -DLIST=<file> -P cargo-tests.cmake -- names <out file> [<package>...]
+#     Writes the tests of the binaries in LIST (of the packages, or all),
+#     a line per test: the package, the target and the test, separated by
+#     tabs. For comparing the tests of two builds
+#     (tools/rust-test-groups/check-rust-test-groups.py --compare).
 cmake_minimum_required(VERSION 3.24)
 
 # The arguments after "--".
@@ -588,6 +597,33 @@ elseif(mode STREQUAL "run")
     set(ENV{TMP} "${native}")
     set(ENV{TEMP} "${native}")
   endif()
+  # An integration test binary holds the tests of several files
+  # (tests/<group>/main.rs and its modules, mitcad#2496), which ran as
+  # binaries of their own before. Each of its tests runs in a process of
+  # its own, so that no test shares the process's state with another (the
+  # environment, the working folder, statics set up once, the geometry
+  # kernel's globals) and a crash stops only its own test: the binary
+  # lists the tests the arguments select (--list), and each runs by its
+  # exact name with the arguments' options, less their filters (a
+  # positional filter, --skip and its filter), which the list has applied.
+  set(one_args)
+  set(keep_next FALSE)
+  set(drop_next FALSE)
+  foreach(arg IN LISTS args)
+    if(drop_next)
+      set(drop_next FALSE)
+    elseif(keep_next)
+      list(APPEND one_args "${arg}")
+      set(keep_next FALSE)
+    elseif(arg STREQUAL "--skip")
+      set(drop_next TRUE)
+    elseif(arg MATCHES "^(--test-threads|--logfile|--format|--color|--shuffle-seed|-Z)$")
+      list(APPEND one_args "${arg}")
+      set(keep_next TRUE)
+    elseif(arg MATCHES "^-")
+      list(APPEND one_args "${arg}")
+    endif()
+  endforeach()
   set(failed)
   foreach(entry IN LISTS entries)
     string(REPLACE "|" ";" fields "${entry}")
@@ -595,10 +631,30 @@ elseif(mode STREQUAL "run")
     list(GET fields 1 target)
     list(GET fields 2 binary)
     message("${target}")
-    execute_process(COMMAND "${binary}" --quiet ${args} WORKING_DIRECTORY "${folder}" RESULT_VARIABLE status)
-    if(NOT status EQUAL 0)
-      list(APPEND failed "${target} (${status})")
+    if(NOT target MATCHES "^test ")
+      execute_process(COMMAND "${binary}" --quiet ${args} WORKING_DIRECTORY "${folder}" RESULT_VARIABLE status)
+      if(NOT status EQUAL 0)
+        list(APPEND failed "${target} (${status})")
+      endif()
+      continue()
     endif()
+    execute_process(COMMAND "${binary}" --list --format terse ${args} WORKING_DIRECTORY "${folder}"
+      OUTPUT_VARIABLE listed RESULT_VARIABLE status)
+    if(NOT status EQUAL 0)
+      list(APPEND failed "${target} --list (${status})")
+      continue()
+    endif()
+    string(REGEX MATCHALL "[^\n]+: test" tests "${listed}")
+    list(TRANSFORM tests REPLACE ": test$" "")
+    list(LENGTH tests count)
+    message("${target}: ${count} tests, each in a process of its own")
+    foreach(test IN LISTS tests)
+      execute_process(COMMAND "${binary}" --exact "${test}" ${one_args} WORKING_DIRECTORY "${folder}"
+        RESULT_VARIABLE status)
+      if(NOT status EQUAL 0)
+        list(APPEND failed "${target} ${test} (${status})")
+      endif()
+    endforeach()
   endforeach()
   if(failed)
     list(JOIN failed ", " failed)
@@ -680,6 +736,43 @@ elseif(mode STREQUAL "parts")
     message(FATAL_ERROR "${package}'s parts:\n  ${problems}")
   endif()
 
+elseif(mode STREQUAL "names")
+  # Every test of the binaries in LIST (of the packages given, or all), for
+  # comparing two builds' tests (mitcad#2496).
+  list(POP_FRONT args out)
+  if(NOT out)
+    message(FATAL_ERROR "names: no output file")
+  endif()
+  if(NOT EXISTS "${LIST}")
+    message(FATAL_ERROR "${LIST} is missing: the test binaries were not built")
+  endif()
+  file(READ "${LIST}" text)
+  string(REPLACE "\n" ";" lines "${text}")
+  set(names)
+  set(total 0)
+  foreach(line IN LISTS lines)
+    if(line STREQUAL "")
+      continue()
+    endif()
+    string(REPLACE "\t" ";" fields "${line}")
+    list(GET fields 0 package)
+    list(GET fields 1 folder)
+    list(GET fields 2 target)
+    list(GET fields 3 binary)
+    if(args AND NOT package IN_LIST args)
+      continue()
+    endif()
+    list_tests("${binary}" "${folder}" tests)
+    foreach(test IN LISTS tests)
+      list(APPEND names "${package}\t${target}\t${test}")
+      math(EXPR total "${total} + 1")
+    endforeach()
+  endforeach()
+  list(SORT names)
+  list(JOIN names "\n" text)
+  file(WRITE "${out}" "${text}\n")
+  message("${total} tests written to ${out}")
+
 else()
-  message(FATAL_ERROR "usage: cmake [-D...] -P cargo-tests.cmake -- build|run|parts ...")
+  message(FATAL_ERROR "usage: cmake [-D...] -P cargo-tests.cmake -- build|run|parts|names ...")
 endif()

@@ -90,6 +90,7 @@ const SettingsRule kRules[] = {
     {"extrude/startOperation", "preferences", PathKind::None},
     // Display.
     {"view/perspective", "preferences", PathKind::None},
+    {"view/orthographicFaces", "preferences", PathKind::None}, // mitcad#2473
     {"view/cubeProjection", "preferences", PathKind::None},
     {"view/cubeSize", "preferences", PathKind::None},
     {"view/focalLength", "preferences", PathKind::None},
@@ -119,6 +120,7 @@ const SettingsRule kRules[] = {
     {"browser/activateButtonPlace", "preferences", PathKind::None}, // mitcad#2223
     {"browser/showEyePlace", "preferences", PathKind::None},
     {"timeline/presentation", "preferences", PathKind::None}, // mitcad#2427
+    {"browser/rowSpacing", "preferences", PathKind::None},    // mitcad#2513
     // The View menu.
     {"view/style", "preferences", PathKind::None},
     {"view/componentColors", "preferences", PathKind::None},

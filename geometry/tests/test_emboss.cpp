@@ -48,6 +48,7 @@
 #include "mitcad/geometry/split.hpp"
 #include "mitcad/geometry/tool.hpp"
 #include "mitcad/geometry/text.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -1265,7 +1266,7 @@ void test_curves_refused() {
   CHECK(refused(deep));
 }
 
-int main() {
+MITCAD_BUNDLED_TEST(emboss) {
   test::guarded("a rectangle raised and sunk", test_a_rectangle_raised_and_sunk);
   test::guarded("curves, holes and a rotated axis", test_curves_holes_and_a_rotated_axis);
   test::guarded("a bore and a sketch off the cylinder", test_a_bore_and_a_sketch_off_the_cylinder);

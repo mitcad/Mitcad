@@ -40,6 +40,7 @@
 #include <gp_Lin.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -572,7 +573,7 @@ void test_lens_end_rolling_on_both_edges(double zs, double xq, double tail) {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_lens_overflow) {
   test::guarded("test_rounding_rolling_into_a_vertex_where_it_vanishes",
                 test::test_rounding_rolling_into_a_vertex_where_it_vanishes);
   test::guarded("test_chain_through_points_where_the_rounding_vanishes",

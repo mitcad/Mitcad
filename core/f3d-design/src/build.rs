@@ -53,6 +53,8 @@ pub(crate) mod settings;
 #[cfg(test)]
 pub(crate) mod tests_support {
     pub(crate) use super::joints::kind_fits;
+    pub(crate) use super::joints::{JointState, Motion, kind_of_slots, rigid_group};
+    pub(crate) use super::joints::{Level, level, occurrence_keys};
 }
 
 /// Name of this decoder in `generator.decoder`.
@@ -1036,9 +1038,10 @@ pub struct OccurrenceInfo {
     pub container: Option<u64>,
     /// `None`: no transform decoded; `Some(None)`: identity.
     pub matrix: Option<Option<[f64; 16]>>,
-    /// The GUIDs (`str16`) in its data, lower case: occurrence paths name
-    /// it by one of them (captured positions, relationships), also from a
-    /// design that inserted this one (mitcad#196).
+    /// The GUIDs (`str16`) in its data, then its text keys (a part a
+    /// circuit board placed, mitcad#2530), lower case: occurrence paths
+    /// name it by one of them (captured positions, relationships), also
+    /// from a design that inserted this one (mitcad#196).
     pub guids: Vec<String>,
 }
 
@@ -1093,7 +1096,7 @@ pub fn occurrence_info(seg: &Segment, id: u64) -> Option<OccurrenceInfo> {
         context,
         container,
         matrix,
-        guids: joints::guid_strings(d),
+        guids: joints::occurrence_keys(d),
     })
 }
 
@@ -1216,16 +1219,21 @@ fn made_result(seg: &Segment, id: u64) -> Option<i32> {
 /// feature that holds the bodies the item brings (mitcad#641): a paste of
 /// bodies and a derive from another design keep them in such a base
 /// feature, listed among the item's sub-features, whose result number is
-/// the item's state.
+/// the item's state. A derive of a body at two placements keeps one base
+/// feature per placement, each with an operation of its own (mitcad#2529:
+/// the first brings the body at one placement, the next, which no other
+/// item names, the body at the other): the item's state is the last of
+/// them, where both bodies are.
 fn sub_base_result(seg: &Segment, tail: &decode::ItemTail) -> Option<i32> {
     tail.sub_features
         .iter()
         .flatten()
         .filter(|&&s| seg.is_kind_of(s, BASE_FEATURE))
-        .find_map(|&s| {
+        .filter_map(|&s| {
             let t = decode::feature_tail(seg, seg.object(s)?)?;
             (t.result_no > 0).then_some(t.result_no)
         })
+        .max()
 }
 
 /// The operation of a tapped hole's modelled thread (mitcad#719): the
@@ -1299,6 +1307,34 @@ fn name_tokens(s: &str) -> impl Iterator<Item = &str> {
         }
         None
     })
+}
+
+/// The item a loose sketch (mitcad#2493, [`Builder::loose_sketches`])
+/// stands for: a sketch item with the sketch object as its feature, at the
+/// position of the item `user` that names it first. It has no item tail;
+/// its name is the sketch's own, else `Sketch`.
+fn loose_sketch_entry(seg: &Segment, user: &TimelineEntry, sketch: u64) -> Option<TimelineEntry> {
+    let o = seg.object(sketch)?;
+    let name = sketch::sketch_name(seg, o)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "Sketch".to_owned());
+    Some(TimelineEntry {
+        pos: user.pos,
+        id: sketch,
+        class: SKETCH.to_owned(),
+        class_version: seg.version(o).unwrap_or(0),
+        type_name: Some("SketchFeature"),
+        name: Some(name),
+        tail: None,
+        extrude: None,
+    })
+}
+
+/// The component a sketch's frame (its [`SKETCH_TRANSFORM`] object) names
+/// as its last reference to a component.
+fn sketch_component(seg: &Segment, sketch: u64) -> Option<u64> {
+    let frame = *inputs_of(seg, sketch, SKETCH_TRANSFORM).first()?;
+    inputs_of(seg, frame, COMPONENT).last().copied()
 }
 
 /// The sketch whose object id a profile source (`4BD53E5A`) holds as text.
@@ -1532,6 +1568,29 @@ impl Builder<'_> {
             }
         }
         sketch_id
+    }
+
+    /// Sketches that no sketch item holds (mitcad#2493), each with the
+    /// first item (by object id, in timeline order) whose profile names
+    /// it. Six designs of a reported package (written by builds 2.0.6670
+    /// to 2.0.20981) whose first extrusion made a generated gear keep its
+    /// sketch with a null feature reference (a single zero byte where the
+    /// other sketches hold the reference to their sketch feature, just
+    /// before the sketch's GUID text): no sketch item and no feature names
+    /// it; the extrusion's profile source names it by its id. (The sketch
+    /// item that follows the extrusion there is another sketch, on its
+    /// face.)
+    fn loose_sketches(&self, items: &[TimelineEntry]) -> Vec<(u64, u64)> {
+        let mut out: Vec<(u64, u64)> = Vec::new();
+        for it in items {
+            let Some(s) = self.profile_sketch(it.id) else {
+                continue;
+            };
+            if !self.feat_of_sk.contains_key(&s) && !out.iter().any(|&(_, o)| o == s) {
+                out.push((it.id, s));
+            }
+        }
+        out
     }
 
     /// The profile reference a profile source ([`PROFILE_SOURCE`]) names: its
@@ -2239,6 +2298,11 @@ impl Builder<'_> {
                     .map(|s| s.detail.clone())
                     .unwrap_or_default();
                 sd.name = Some(it.name.clone());
+                // A loose sketch (mitcad#2493) has no feature with inputs:
+                // its frame alone places it.
+                if sid == fid {
+                    return Detail::Sketch(Box::new(sd));
+                }
                 if let Some(e) = inputs_of(seg, fid, ENTITY_REF).first() {
                     sd.reference_plane = self.plane_ref(*e);
                 }
@@ -2577,6 +2641,16 @@ impl Builder<'_> {
             }
             Some("ChamferFeature") => {
                 let mut x = ChamferDetail::default();
+                // An equal-distance chamfer's size: `Distance`, or in older
+                // designs `leftDistance` (mitcad#2493: builds 2.0.6670 to
+                // 2.0.9512 of a reported package, one such parameter per
+                // set, with no other parameter of the chamfer; the sets
+                // and their edges as those of `Distance`).
+                let equal = if rl.len() == 1 && rl.contains_key("leftDistance") {
+                    "leftDistance"
+                } else {
+                    "Distance"
+                };
                 if rl.contains_key("Distance 1") && rl.contains_key("Distance 2") {
                     x.chamfer_type = Some("TwoDistancesChamferType".into());
                     x.edge_sets = Some(vec![EdgeSet {
@@ -2591,7 +2665,7 @@ impl Builder<'_> {
                         angle: pr("Rotate Angle"),
                         ..EdgeSet::default()
                     }]);
-                } else if let Some(ds) = rl.get("Distance").filter(|d| !d.is_empty()) {
+                } else if let Some(ds) = rl.get(equal).filter(|d| !d.is_empty()) {
                     x.chamfer_type = Some("EqualDistanceChamferType".into());
                     x.edge_sets = Some(
                         ds.iter()
@@ -2607,7 +2681,7 @@ impl Builder<'_> {
                     Some("TwoDistancesChamferType") => rl
                         .get("Distance 1")
                         .map(|v| v.iter().take(1).copied().collect()),
-                    Some(_) => rl.get("Distance").map(|v| match x.edge_sets.as_ref() {
+                    Some(_) => rl.get(equal).map(|v| match x.edge_sets.as_ref() {
                         Some(s) if s.len() == 1 => v.iter().take(1).copied().collect(),
                         _ => v.clone(),
                     }),
@@ -2680,6 +2754,19 @@ impl Builder<'_> {
                     is_default_direction: hole_flipped(seg, fid).map(|f| !f),
                     ..HoleDetail::default()
                 };
+                // A board's hole (mitcad#2493) keeps the straight angle of
+                // its flat bottom in degrees where the angle's value is in
+                // radians: 179.9993 (its expression reads `10313.2 deg`).
+                // The history state of a reported package's board hole (3 mm
+                // through a 0.5994 mm board) removes 4.237 mm³, the
+                // flat-bottomed cylinder of the hole's diameter and depth:
+                // read as the straight angle, the flat bottom.
+                if it.class == PCB_HOLE
+                    && let Some(Reference::Parameter(p)) = x.tip_angle.as_mut()
+                    && p.value.is_some_and(|v| (179.0..=180.0).contains(&v))
+                {
+                    p.value = Some(std::f64::consts::PI);
+                }
                 // Type, points and extent (mitcad#67).
                 x.hole_type = Some(
                     if x.counterbore_diameter.is_some() {
@@ -3471,6 +3558,14 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
             b.feat_of_sk.insert(s, f.id);
         }
     }
+    // Sketches no sketch item holds that an item's profile names
+    // (mitcad#2493): each stands for its own item (the sketch object's id
+    // as the feature's), given before the first item that names it.
+    let loose = b.loose_sketches(items);
+    for &(_, s) in &loose {
+        b.sk_of_feat.insert(s, s);
+        b.feat_of_sk.insert(s, s);
+    }
     let (mut sketch_infos, local_ids) = sketch::sketch_details(seg);
     b.tags = sweeps::EntityTags::new(seg, &local_ids);
     b.local_ids = local_ids;
@@ -3582,18 +3677,48 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
     let item_parts = parts::item_parts(seg);
     let mut tl_items = Vec::new();
     // The parts of items in other components follow their items, numbered
-    // after the timeline's items (mitcad#169).
-    let mut next_index = items.len() as i64;
+    // after the timeline's items (mitcad#169); a loose sketch (mitcad#2493)
+    // comes before the item that first names it, numbered the same way.
     let mut entries: Vec<(&TimelineEntry, Option<TimelineEntry>)> = Vec::new();
     for it in items {
+        for &(_, s) in loose.iter().filter(|(user, _)| *user == it.id) {
+            if let Some(entry) = loose_sketch_entry(seg, it, s) {
+                entries.push((it, Some(entry)));
+            }
+        }
         entries.push((it, None));
         for part in parts::part_entries(seg, it, &item_parts, &b.pos_of, &owners) {
             entries.push((it, Some(part)));
         }
     }
-    for (master, part) in &entries {
+    let mut next_index = items.len() as i64;
+    let indices: Vec<i64> = entries
+        .iter()
+        .map(|(master, part)| match part {
+            Some(_) => {
+                next_index += 1;
+                next_index - 1
+            }
+            None => master.pos as i64,
+        })
+        .collect();
+    // A loose sketch's index and name, which the items naming it refer to.
+    for ((_, part), &index) in entries.iter().zip(&indices) {
+        if let Some(p) = part.as_ref().filter(|p| p.class == SKETCH) {
+            b.pos_of.insert(p.id, index as usize);
+            b.name_of.insert(p.id, p.name.clone());
+        }
+    }
+    for ((master, part), &index) in entries.iter().zip(&indices) {
         let it = part.as_ref().unwrap_or(master);
-        let owner = owners.get(&it.id).copied();
+        let loose_sketch = it.class == SKETCH;
+        // A loose sketch is in the component its frame names, else in its
+        // item's.
+        let owner = if loose_sketch {
+            sketch_component(seg, it.id).or_else(|| owners.get(&master.id).copied())
+        } else {
+            owners.get(&it.id).copied()
+        };
         let mut f3d = ItemF3d {
             class: Some(it.class.clone()),
             class_version: Some(it.class_version),
@@ -3623,13 +3748,11 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         {
             f3d.datum_code = datum_code(seg, it.id);
         }
-        let index = if part.is_some() {
+        if loose_sketch {
+            f3d.sketch_for = Some(master.pos as i64);
+        } else if part.is_some() {
             f3d.part_of = Some(master.pos as i64);
-            next_index += 1;
-            next_index - 1
-        } else {
-            it.pos as i64
-        };
+        }
         if let Some(ex) = &it.extrude {
             f3d.extrude = Some(ExtrudeF3d {
                 operation_code: Some(ex.operation_code),
@@ -3657,8 +3780,12 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         }
         // The light bulb (mitcad#6), where it is decoded; beyond the
         // reference decoder, so checked against the reference dumps of the
-        // reference models instead (tests/design_models.rs).
+        // reference models instead (core/f3d/tests/read/design_models.rs).
         let bulb = match it.type_name {
+            // A loose sketch's own (mitcad#2493).
+            Some("SketchFeature") if loose_sketch => seg
+                .object(it.id)
+                .and_then(|s| sketch::loose_light_bulb(seg, s)),
             Some("SketchFeature") => b
                 .sk_of_feat
                 .get(&it.id)
@@ -3674,6 +3801,9 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         // Items without a name of their own: occurrences are named after
         // their component, groups by their own name (mitcad#43).
         let object_type = match classes::object_type(&it.class) {
+            _ if loose_sketch => Some("Sketch"),
+            // A board's hole read as a hole (mitcad#2493).
+            None if it.type_name == Some("HoleFeature") => Some("HoleFeature"),
             // An as-built joint of the rigid group type (mitcad#81).
             Some("AsBuiltJoint") if b.is_rigid_group(it.id) => Some("RigidGroup"),
             t => t,
@@ -3721,8 +3851,10 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
         });
     }
 
+    // (Loose sketches, mitcad#2493, are no items of the file's timeline.)
     let marker = tl_items
         .iter()
+        .filter(|t| t.f3d.as_ref().is_none_or(|f| f.sketch_for.is_none()))
         .position(|t| t.is_rolled_back == Some(true))
         .map(|p| p as i64);
 
@@ -3826,7 +3958,15 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
                     key: Some(format!("{:016x}", x.key)),
                     urn: Some(x.urn.clone()),
                     version: urn_version(&x.urn),
-                    guids: Some(vec![x.guid_a.to_lowercase(), x.guid_b.to_lowercase()]),
+                    // (An external document of the older layout has the
+                    // role GUID only, mitcad#2492.)
+                    guids: Some(
+                        [&x.guid_a, &x.guid_b]
+                            .into_iter()
+                            .filter(|g| !g.is_empty())
+                            .map(|g| g.to_lowercase())
+                            .collect(),
+                    ),
                     document_guid: Some(x.guid_c.to_lowercase()),
                     ..ExternalDocument::default()
                 })

@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <utility>
@@ -17,8 +18,11 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepLib.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepTools.hxx>
@@ -31,6 +35,9 @@
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <NCollection_List.hxx>
+#include <ShapeUpgrade_ShapeDivideClosed.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -40,14 +47,20 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pnt2d.hxx>
+#include <gp_Torus.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
+#include "../src/drawing_outline.hpp"
 #include "check.hpp"
 #include "mitcad/geometry/drawing.hpp"
+#include "mitcad/geometry/path_sweep.hpp"
 #include "mitcad/geometry/query.hpp"
+#include "mitcad/geometry/sketch_ref.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -222,6 +235,82 @@ void test_section_view() {
   // The hole's walls in the cut, seen.
   CHECK(has_line(cut, 16.7, 0.0, 13.2, true));
   CHECK(has_line(cut, 25.5, 13.2, 20.0, true));
+}
+
+// A stepped annular flange about Z (mitcad#2479): a disc of radius 150 from
+// z 0 to 20, a hub of radius 100 on it up to z 50, a bore of radius 80
+// through both, and eight bolt holes of radius 10 on a circle of radius
+// 130, one of them at (0, 130) and one at (0, -130).
+ShapePtr stepped_flange() {
+  TopoDS_Shape flange = BRepAlgoAPI_Fuse(cylinder(0.0, 0.0, 0.0, 20.0, 150.0), cylinder(0.0, 0.0, 20.0, 50.0, 100.0)).Shape();
+  flange = BRepAlgoAPI_Cut(flange, cylinder(0.0, 0.0, -1.0, 51.0, 80.0)).Shape();
+  for (int i = 0; i < 8; ++i) {
+    const double a = test::kPi / 4.0 * i;
+    flange = BRepAlgoAPI_Cut(flange, cylinder(130.0 * std::cos(a), 130.0 * std::sin(a), -1.0, 21.0, 10.0)).Shape();
+  }
+  return std::make_shared<Shape>(flange);
+}
+
+// The cut faces' total area and their lowest x.
+std::pair<double, double> cut_extent(const DrawnView& drawn) {
+  double total = 0.0;
+  double lowest = 1e9;
+  for (const CutFace& face : drawn.cuts) {
+    double face_area = 0.0;
+    for (const std::vector<Point2>& loop : face) {
+      face_area += area(loop);
+      for (const Point2& p : loop) {
+        lowest = std::min(lowest, p[0]);
+      }
+    }
+    total += std::abs(face_area);
+  }
+  return {total, lowest};
+}
+
+void test_bounded_section_view() {
+  // The line drawn on a view looking down the flange's axis from just
+  // outside its upper rim (0, 160) to near its middle (0, 5): the plane
+  // x = 0 seen from +x, the view's x the model's y, its y the model's z.
+  const ShapePtr flange = stepped_flange();
+  DrawingViewSpec spec = view(gp_Dir(1, 0, 0), gp_Dir(0, 1, 0), false);
+  spec.section = DrawingSection{gp_Pnt(0.0, 160.0, 0.0), gp_Dir(1, 0, 0)};
+  const DrawnView full = project_view({flange}, spec);
+  DrawingSectionBound bound;
+  bound.along = gp_Dir(0, -1, 0);
+  bound.from = 0.0;
+  bound.to = 155.0;
+  spec.section_bound = bound;
+  const DrawnView bounded = project_view({flange}, spec);
+
+  // The whole plane: the upper and the lower profile, the bolt holes on
+  // both sides cut open.
+  const auto [full_area, full_lowest] = cut_extent(full);
+  CHECK(full.cuts.size() == 4);
+  CHECK_NEAR_TOL(full_area, 2.0 * (70.0 * 20.0 - 20.0 * 20.0 + 20.0 * 30.0), 1e-6);
+  CHECK(full_lowest < -149.0);
+  CHECK(has_line(full, 120.0, 0.0, 20.0, true) && has_line(full, 140.0, 0.0, 20.0, true));
+  CHECK(has_line(full, -120.0, 0.0, 20.0, true) && has_line(full, -140.0, 0.0, 20.0, true));
+
+  // Limited to the line: the upper profile alone is cut and hatched, the
+  // lower half stays whole, seen from outside (its bolt hole hidden).
+  const auto [bounded_area, bounded_lowest] = cut_extent(bounded);
+  CHECK(bounded.cuts.size() == 2);
+  CHECK_NEAR_TOL(bounded_area, 70.0 * 20.0 - 20.0 * 20.0 + 20.0 * 30.0, 1e-6);
+  CHECK(bounded_lowest > 80.0 - 1e-6);
+  CHECK(has_line(bounded, 120.0, 0.0, 20.0, true) && has_line(bounded, 140.0, 0.0, 20.0, true));
+  CHECK(!has_line(bounded, -120.0, 0.0, 20.0, true) && !has_line(bounded, -140.0, 0.0, 20.0, true));
+  // The lower half's outline is seen: its rim from z 0 to 20.
+  CHECK(has_line(bounded, -150.0, 0.0, 20.0, true));
+
+  // A line beyond the rim cuts nothing: the flange seen whole from +x.
+  bound.from = -100.0;
+  bound.to = -50.0;
+  spec.section_bound = bound;
+  const DrawnView beyond = project_view({flange}, spec);
+  CHECK(beyond.cuts.empty());
+  CHECK(!has_line(beyond, 120.0, 0.0, 20.0, true) && !has_line(beyond, -120.0, 0.0, 20.0, true));
+  CHECK(has_line(beyond, 150.0, 0.0, 20.0, true) && has_line(beyond, -150.0, 0.0, 20.0, true));
 }
 
 void test_round_holes() {
@@ -841,14 +930,97 @@ bool normals_at(const TopoDS_Edge& edge, const TopoDS_Face& face1, const TopoDS_
 // no edge a drawing shows as sharp: a seam (a face's edge with itself), or
 // an edge whose two faces meet tangentially all along it (their normals
 // within kTangent of each other at points along it).
+const char* continuity_name(GeomAbs_Shape c) {
+  switch (c) {
+  case GeomAbs_C0:
+    return "C0";
+  case GeomAbs_G1:
+    return "G1";
+  case GeomAbs_C1:
+    return "C1";
+  case GeomAbs_G2:
+    return "G2";
+  case GeomAbs_C2:
+    return "C2";
+  case GeomAbs_C3:
+    return "C3";
+  default:
+    return "CN";
+  }
+}
+
+const char* surface_name(const TopoDS_Face& face) {
+  switch (BRepAdaptor_Surface(face, false).GetType()) {
+  case GeomAbs_Plane:
+    return "plane";
+  case GeomAbs_Cylinder:
+    return "cylinder";
+  case GeomAbs_Cone:
+    return "cone";
+  case GeomAbs_Sphere:
+    return "sphere";
+  case GeomAbs_Torus:
+    return "torus";
+  case GeomAbs_BSplineSurface:
+    return "bspline";
+  default:
+    return "other";
+  }
+}
+
 struct EdgeLine {
   std::vector<gp_Pnt> points;
   bool smooth = false;
   bool seam = false;
+  // Its index among the shape's edges (test_drawing --edges) and its faces'
+  // surfaces with the continuity stored on it, for the checks' messages.
+  int index = 0;
+  std::string what;
+  // Between two faces of one surface, or where the curvature runs on from
+  // one face to the other (G2 and up, as OCCT finds it): drawn never.
+  bool within = false;
   // At the smooth edge's points, the face's normal (at right angles to a
   // view all along, the edge lies on that view's outline).
   std::vector<gp_Vec> normals;
+  // A smooth edge's face normal at each of its points (zero where the face
+  // has none).
+  std::vector<gp_Vec> point_normals;
 };
+
+// How far apart two faces' normals at a point of the edge between them may
+// be and still be the one normal they share there (as the drawings take it).
+constexpr double kNormalsAgree = 0.05;
+
+// The normal two faces share at each point of the edge between them, from
+// each face's (zero where it has none): where they agree, or one face's
+// where the other has none; where they disagree (next to the point where a
+// fillet runs out to a point, whose normal there may point anywhere), the
+// one nearer the normal they share at the nearest point toward the edge's
+// middle where they agree; zero where none is found (mitcad#2510).
+std::vector<gp_Vec> shared_normals(const std::vector<gp_Vec>& a, const std::vector<gp_Vec>& b) {
+  const auto has = [](const gp_Vec& n) { return n.Magnitude() > 0.5; };
+  const auto agree = [&](std::size_t k) { return has(a[k]) && has(b[k]) && a[k].Angle(b[k]) <= kNormalsAgree; };
+  std::vector<gp_Vec> out(a.size(), gp_Vec(0.0, 0.0, 0.0));
+  const std::size_t middle = a.size() / 2;
+  for (std::size_t k = 0; k < a.size(); ++k) {
+    if (agree(k) || !has(b[k])) {
+      out[k] = a[k];
+      continue;
+    }
+    if (!has(a[k])) {
+      out[k] = b[k];
+      continue;
+    }
+    for (std::size_t j = k; j != middle;) {
+      j = j < middle ? j + 1 : j - 1;
+      if (agree(j)) {
+        out[k] = a[k].Angle(a[j]) <= b[k].Angle(a[j]) ? a[k] : b[k];
+        break;
+      }
+    }
+  }
+  return out;
+}
 
 std::vector<EdgeLine> edge_lines(const TopoDS_Shape& shape) {
   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
@@ -872,6 +1044,12 @@ std::vector<EdgeLine> edge_lines(const TopoDS_Shape& shape) {
     const bool seam = !face1.IsNull() && face2.IsNull() && faces.FindFromIndex(i).Extent() > 1;
     EdgeLine line;
     line.seam = seam;
+    line.index = i;
+    if (!face1.IsNull()) {
+      const TopoDS_Face& other = face2.IsNull() ? face1 : face2;
+      line.what = std::string(surface_name(face1)) + "/" + surface_name(other) + " stored " +
+                  continuity_name(BRep_Tool::Continuity(edge, face1, other));
+    }
     const BRepAdaptor_Curve curve(edge);
     const double first = curve.FirstParameter();
     const double last = curve.LastParameter();
@@ -891,6 +1069,27 @@ std::vector<EdgeLine> edge_lines(const TopoDS_Shape& shape) {
     }
     if (!line.smooth) {
       line.normals.clear();
+    }
+    if (line.smooth) {
+      std::vector<gp_Vec> of_first;
+      std::vector<gp_Vec> of_second;
+      for (int k = 0; k <= kPoints; ++k) {
+        const double t = first + (last - first) * k / kPoints;
+        gp_Vec n1;
+        gp_Vec n2;
+        const bool found = normals_at(edge, face1, face1, t, n1, n2);
+        of_first.push_back(found ? n1 : gp_Vec(0.0, 0.0, 0.0));
+        const bool found2 = !face2.IsNull() && normals_at(edge, face2, face2, t, n1, n2);
+        of_second.push_back(found2 ? n1 : gp_Vec(0.0, 0.0, 0.0));
+      }
+      line.point_normals = shared_normals(of_first, of_second);
+    }
+    if (line.smooth && !seam) {
+      try {
+        line.within = BRepLib::ContinuityOfFaces(edge, face1, face2, kTangent) >= GeomAbs_G2;
+      } catch (const Standard_Failure&) {
+        line.within = false;
+      }
     }
     out.push_back(std::move(line));
   }
@@ -1069,6 +1268,57 @@ struct TangentViewCounts {
   int sharp_lost = 0;    // other sharp lines of the shape as it is no longer drawn
 };
 
+// Whether a line of a polygonal projection along a smooth edge is that
+// algorithm's outline, not the edge drawn as a sharp one (mitcad#2447). The
+// polygonal outline runs along the triangles' edges, so it may run along a
+// chord or two of a tangent edge where the view's outline crosses the edge:
+// at every point of the line, the faces' normal along the edge it lies along
+// is within the triangulation's angle of square to the view
+// (spec.quick_chord_angle). Nowhere else: next to the point where a fillet
+// runs out to a point, the chords that algorithm flagged as outline (its
+// sliver triangles there facing whichever way their other corners make
+// them) are no longer drawn (mitcad#2510).
+bool on_polygonal_outline(const std::vector<Point2>& line, const std::vector<EdgeLine>& edges,
+                          const DrawingViewSpec& spec, double tolerance) {
+  const double band = std::sin(spec.quick_chord_angle);
+  const gp_Vec eye(spec.toward_eye);
+  for (const Point2& p : line) {
+    bool in_band = false;
+    for (const EdgeLine& edge : edges) {
+      if (!edge.smooth || edge.point_normals.size() != edge.points.size()) {
+        continue;
+      }
+      for (std::size_t k = 0; k + 1 < edge.points.size() && !in_band; ++k) {
+        if (segment_distance(p, projected(edge.points[k], spec), projected(edge.points[k + 1], spec)) > tolerance) {
+          continue;
+        }
+        const gp_Vec& n = edge.point_normals[k];
+        const gp_Vec& m = edge.point_normals[k + 1];
+        in_band = (n.Magnitude() > 0.5 && std::abs(n.Dot(eye)) <= band) ||
+                  (m.Magnitude() > 0.5 && std::abs(m.Dot(eye)) <= band);
+      }
+      if (in_band) {
+        break;
+      }
+    }
+    if (!in_band) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The six orthographic views and the isometric one (toward the eye, the x
+// axis) the tangent edge checks project.
+std::vector<std::pair<gp_Dir, gp_Dir>> view_directions() {
+  const double r2 = 1.0 / std::sqrt(2.0);
+  const double r3 = 1.0 / std::sqrt(3.0);
+  return {{gp_Dir(0, -1, 0), gp_Dir(1, 0, 0)},  {gp_Dir(0, 1, 0), gp_Dir(-1, 0, 0)},
+          {gp_Dir(0, 0, 1), gp_Dir(1, 0, 0)},   {gp_Dir(0, 0, -1), gp_Dir(1, 0, 0)},
+          {gp_Dir(1, 0, 0), gp_Dir(0, 1, 0)},   {gp_Dir(-1, 0, 0), gp_Dir(0, -1, 0)},
+          {gp_Dir(r3, -r3, r3), gp_Dir(r2, r2, 0)}};
+}
+
 // Every orthographic view and an isometric one of the shape, checked for
 // smooth edges drawn: with Tangent Edges off none (exact and polygonal),
 // with it on thin ones and no sharp ones, and every other sharp line of the
@@ -1082,14 +1332,8 @@ TangentViewCounts check_tangent_edges(const ShapePtr& shape, const std::string& 
     tangent += e.smooth && !e.seam ? 1 : 0;
     seams += e.seam ? 1 : 0;
   }
-  const double r2 = 1.0 / std::sqrt(2.0);
-  const double r3 = 1.0 / std::sqrt(3.0);
-  const std::vector<std::pair<gp_Dir, gp_Dir>> directions{
-      {gp_Dir(0, -1, 0), gp_Dir(1, 0, 0)},  {gp_Dir(0, 1, 0), gp_Dir(-1, 0, 0)}, {gp_Dir(0, 0, 1), gp_Dir(1, 0, 0)},
-      {gp_Dir(0, 0, -1), gp_Dir(1, 0, 0)},  {gp_Dir(1, 0, 0), gp_Dir(0, 1, 0)},  {gp_Dir(-1, 0, 0), gp_Dir(0, -1, 0)},
-      {gp_Dir(r3, -r3, r3), gp_Dir(r2, r2, 0)}};
   TangentViewCounts counts;
-  for (const auto& [eye, x] : directions) {
+  for (const auto& [eye, x] : view_directions()) {
     const DrawingViewSpec spec = view(eye, x, false);
     char from[64];
     std::snprintf(from, sizeof from, "from (%.3f, %.3f, %.3f)", eye.X(), eye.Y(), eye.Z());
@@ -1129,8 +1373,12 @@ TangentViewCounts check_tangent_edges(const ShapePtr& shape, const std::string& 
     polygonal.exact = false;
     const DrawnView quick = project_view({shape}, polygonal);
     const SmoothLines quick_lines = smooth_lines(seen_lines(quick, DrawnKind::Sharp), edges, spec, 0.1);
-    counts.off_polygonal += quick_lines.count;
     for (const std::vector<Point2>& line : quick_lines.lines) {
+      // That algorithm's outline along a chord of the edge (mitcad#2447).
+      if (on_polygonal_outline(line, edges, polygonal, 0.1)) {
+        continue;
+      }
+      ++counts.off_polygonal;
       std::fprintf(stderr, "%s: a tangent edge drawn polygonal %s: (%.3f, %.3f) to (%.3f, %.3f)\n", name.c_str(), from,
                    line.front()[0], line.front()[1], line.back()[0], line.back()[1]);
     }
@@ -1154,6 +1402,76 @@ TangentViewCounts check_tangent_edges(const ShapePtr& shape, const std::string& 
   // The shape is as it was: the continuity on its edges unchanged.
   CHECK(continuities(shape->occt()) == before);
   return counts;
+}
+
+// How far a polygonal view's line may lie from a point of the exact view's
+// and still be taken for it in check_polygonal_outline: a quarter of a
+// millimetre, the triangulation's deviation and the fitting with room to
+// spare, under half the chord of a round edge beside a crossing of the
+// outline that a cleared outline flag would leave out.
+constexpr double kOutlineGap = 0.25;
+
+// The distance from p to the nearest of the view's lines.
+double nearest_line(const DrawnView& drawn, const Point2& p) {
+  double nearest = 1e300;
+  for (const DrawnCurve& c : drawn.curves) {
+    nearest = std::min(nearest, distance_to(c, p));
+  }
+  return nearest;
+}
+
+// Nothing of the outline left out by the polygonal view's outline rule
+// (mitcad#2510), in every orthographic view and an isometric one, Tangent
+// Edges off: the polygonal view keeps its algorithm's outline flags on
+// chords of a smooth edge only where the faces come near square to the view.
+// Where that algorithm by itself (the rule turned off) draws a line within
+// kOutlineGap of a point of a line the exact algorithm draws seen, the view
+// draws one too (seen or hidden in both, so that the two algorithms' hiding
+// near the outline does not count). Points of the exact lines that the
+// polygonal algorithm misses by itself (its triangulated outline off the
+// exact one) are counted and printed, not checked.
+void check_polygonal_outline(const ShapePtr& shape, const std::string& name) {
+  int dropped = 0;
+  int missed = 0;
+  for (const auto& [eye, x] : view_directions()) {
+    const DrawnView exact = project_view({shape}, view(eye, x, false));
+    DrawingViewSpec spec = view(eye, x, true);
+    spec.exact = false;
+    const DrawnView polygonal = project_view({shape}, spec);
+    mitcad::geometry::detail::set_polygonal_true_outlines(false);
+    const DrawnView by_itself = project_view({shape}, spec);
+    mitcad::geometry::detail::set_polygonal_true_outlines(true);
+    CHECK(!exact.polygonal);
+    CHECK(polygonal.polygonal);
+    CHECK(by_itself.polygonal);
+    for (const DrawnCurve& c : exact.curves) {
+      if (!c.visible) {
+        continue;
+      }
+      bool line_missed = false;
+      for (const Point2& p : samples(c)) {
+        const double off = nearest_line(polygonal, p);
+        if (off <= kOutlineGap) {
+          continue;
+        }
+        if (nearest_line(by_itself, p) > kOutlineGap) {
+          line_missed = true;
+          continue;
+        }
+        ++dropped;
+        std::fprintf(stderr, "%s: from (%.3f, %.3f, %.3f) the polygonal view leaves out the line near (%.3f, %.3f) "
+                             "of %s its algorithm draws, %.3f off\n",
+                     name.c_str(), eye.X(), eye.Y(), eye.Z(), p[0], p[1],
+                     c.kind == DrawnKind::Outline ? "the outline" : "a sharp edge", off);
+        break;
+      }
+      missed += line_missed ? 1 : 0;
+    }
+  }
+  std::printf("%s: in 7 views, %d exact lines with a point left out by the polygonal outline rule, %d with a point "
+              "the polygonal algorithm misses by itself\n",
+              name.c_str(), dropped, missed);
+  CHECK(dropped == 0);
 }
 
 // A block 40 x 30 x 20 with its upright edges rounded 5 and its top edges
@@ -1185,9 +1503,373 @@ void test_tangent_edges_of_a_filleted_block() {
   // The continuity as a later operation leaves it: none.
   clear_continuities(block);
   const TangentViewCounts counts = check_tangent_edges(std::make_shared<Shape>(block), "filleted block");
+  // The outline crosses the tangent edges at the corners' blends.
+  check_polygonal_outline(std::make_shared<Shape>(block), "filleted block");
   // The test's premise: as it is, the shape's tangent edges are drawn as
   // sharp ones.
   CHECK(counts.raw > counts.raw_seams);
+}
+
+// --- Hidden edges and seams of smooth shapes (mitcad#2447) ---------------------
+
+// Every line of the view along edges, seen and hidden: sharp and smooth,
+// not the faces' outlines, which are no edges.
+std::vector<std::vector<Point2>> edge_lines_of(const DrawnView& drawn) {
+  std::vector<std::vector<Point2>> out;
+  for (const DrawnCurve& c : drawn.curves) {
+    if (c.kind != DrawnKind::Outline) {
+      out.push_back(samples(c));
+    }
+  }
+  return out;
+}
+
+// The seams whose stored continuity makes them smooth edges (G1 or C1),
+// as a sweep leaves the seams of a closed section's faces.
+int seams_stored_smooth(const TopoDS_Shape& shape) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE, faces);
+  int count = 0;
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    const NCollection_List<TopoDS_Shape>& around = faces.FindFromIndex(i);
+    if (around.Extent() != 1) {
+      continue;
+    }
+    const TopoDS_Edge& edge = TopoDS::Edge(faces.FindKey(i));
+    const TopoDS_Face& face = TopoDS::Face(around.First());
+    bool forward = false;
+    bool reversed = false;
+    for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+      if (it.Current().IsSame(edge)) {
+        forward = forward || it.Current().Orientation() == TopAbs_FORWARD;
+        reversed = reversed || it.Current().Orientation() == TopAbs_REVERSED;
+      }
+    }
+    const GeomAbs_Shape stored = BRep_Tool::Continuity(edge, face, face);
+    count += forward && reversed && stored >= GeomAbs_G1 && stored < GeomAbs_G2 ? 1 : 0;
+  }
+  return count;
+}
+
+struct HiddenViewCounts {
+  int tangent_off = 0; // lines along tangent edges or seams with Tangent Edges off, seen or hidden
+  int seams = 0;       // lines along seams with Tangent Edges on, seen or hidden
+  int partial = 0;     // edges not drawn over their whole length with both on
+  int checked = 0;     // edges checked for it in all views
+  int outline_chords = 0; // polygonal outline lines along a tangent edge where it crosses the outline
+};
+
+// The shape's edges with Hidden Edges on in every orthographic view and an
+// isometric one, exact, on the quick path as a view at 1:1 takes it, and
+// polygonal at a reduced view's coarsest triangulation (mitcad#2014): with
+// Tangent Edges off no line along a tangent edge or a seam, seen or
+// hidden; with it on no line
+// along a seam, and every other edge drawn over its whole length, seen or
+// hidden (tangent edges and their hidden parts too), but those within one
+// surface, which are never drawn. The faces' outlines are no edges and
+// are not counted along one: a cylinder's outline may run where a tangent
+// edge seen edge on lies.
+HiddenViewCounts check_hidden_edges(const ShapePtr& shape, const std::string& name) {
+  const std::vector<EdgeLine> edges = edge_lines(shape->occt());
+  // The polygonal lines lie within one and a half times the
+  // triangulation's deviation, a 2000th of the shape's size.
+  const BoundingBox box = bounding_box(*shape);
+  const double polygonal_tolerance = 0.01 + 2.0 * 5e-4 * box.min.Distance(box.max);
+  HiddenViewCounts counts;
+  // The exact algorithm; the quick path as a view at 1:1 on its sheet
+  // takes it (ViewSpec::quick_deviation and quick_chord_angle: the
+  // polygonal algorithm on shapes with free-form faces, as the reported
+  // views of mitcad#2447 were drawn); the polygonal algorithm at a reduced
+  // view's coarsest triangulation (mitcad#2014).
+  enum class Mode { Exact, Quick, Polygonal };
+  for (const auto& [eye, x] : view_directions()) {
+    for (const Mode mode : {Mode::Exact, Mode::Quick, Mode::Polygonal}) {
+      DrawingViewSpec spec = view(eye, x, true);
+      double tolerance = 0.01;
+      const char* how = "";
+      if (mode == Mode::Quick) {
+        spec.quick = true;
+        spec.quick_deviation = 0.02;
+        spec.quick_chord_angle = 0.2;
+        tolerance = 0.05;
+        how = " quick";
+      } else if (mode == Mode::Polygonal) {
+        spec.exact = false;
+        spec.quick_chord_angle = 3.14159265358979 / 6.0;
+        tolerance = polygonal_tolerance;
+        how = " polygonal";
+      }
+      char from[96];
+      std::snprintf(from, sizeof from, "from (%.3f, %.3f, %.3f)%s", eye.X(), eye.Y(), eye.Z(), how);
+
+      const DrawnView off = project_view({shape}, spec);
+      for (const DrawnCurve& c : off.curves) {
+        // A face's outline is no edge: one may run where a tangent edge
+        // seen edge on lies (the generator of a cylinder behind a fillet's
+        // end, in the reported design of mitcad#1438), and it is drawn.
+        if (c.kind == DrawnKind::Outline) {
+          continue;
+        }
+        const std::vector<Point2> line = samples(c);
+        if (smooth_lines({line}, edges, spec, tolerance).count == 0) {
+          continue;
+        }
+        if (mode != Mode::Exact && on_polygonal_outline(line, edges, spec, tolerance)) {
+          ++counts.outline_chords;
+          continue;
+        }
+        ++counts.tangent_off;
+        std::fprintf(stderr, "%s: a tangent edge drawn %s %s as %s: (%.3f, %.3f) to (%.3f, %.3f)\n", name.c_str(),
+                     c.visible ? "seen" : "hidden", from, c.kind == DrawnKind::Sharp ? "sharp" : "smooth",
+                     line.front()[0], line.front()[1], line.back()[0], line.back()[1]);
+        // The smooth edges it lies along: where they run in the model,
+        // their faces and the angle between the view and the faces.
+        for (const EdgeLine& edge : edges) {
+          if (!edge.smooth || !along(line, edge, spec, tolerance)) {
+            continue;
+          }
+          const gp_Pnt& a = edge.points.front();
+          const gp_Pnt& m = edge.points[edge.points.size() / 2];
+          const gp_Pnt& b = edge.points.back();
+          double facing = 0.0;
+          for (const gp_Vec& n : edge.normals) {
+            facing = std::max(facing, std::abs(n.Dot(gp_Vec(eye))));
+          }
+          std::fprintf(stderr,
+                       "  along edge %d (%s%s): (%.3f, %.3f, %.3f) (%.3f, %.3f, %.3f) (%.3f, %.3f, %.3f), "
+                       "normals at most %.4f toward the eye\n",
+                       edge.index, edge.what.c_str(), edge.seam ? ", seam" : "", a.X(), a.Y(), a.Z(), m.X(), m.Y(),
+                       m.Z(), b.X(), b.Y(), b.Z(), facing);
+        }
+      }
+
+      DrawingViewSpec with_tangents = spec;
+      with_tangents.smooth = true;
+      const DrawnView on = project_view({shape}, with_tangents);
+      const SmoothLines seams = smooth_lines(edge_lines_of(on), edges, spec, tolerance);
+      counts.seams += seams.seams;
+      for (const EdgeLine& edge : edges) {
+        if (edge.seam || edge.within) {
+          continue;
+        }
+        ++counts.checked;
+        // Away from its ends, where another edge's line meets it.
+        constexpr std::size_t kMargin = 8;
+        for (std::size_t k = kMargin; k + kMargin < edge.points.size(); k += 4) {
+          const Point2 p = projected(edge.points[k], spec);
+          double nearest = 1e300;
+          for (const DrawnCurve& c : on.curves) {
+            nearest = std::min(nearest, distance_to(c, p));
+          }
+          if (nearest > tolerance) {
+            ++counts.partial;
+            std::fprintf(stderr, "%s: a%s edge not drawn %s at (%.3f, %.3f), %.3f off\n", name.c_str(),
+                         edge.smooth ? " tangent" : "n", from, p[0], p[1], nearest);
+            break;
+          }
+        }
+      }
+    }
+  }
+  std::printf("%s: with Hidden Edges, %d lines along tangent edges or seams with Tangent Edges off (and %d "
+              "polygonal outline chords along them), %d lines along seams with it on, %d of %d edges not drawn "
+              "whole\n",
+              name.c_str(), counts.tangent_off, counts.outline_chords, counts.seams, counts.partial, counts.checked);
+  CHECK(counts.tangent_off == 0);
+  CHECK(counts.seams == 0);
+  CHECK(counts.partial == 0);
+  CHECK(counts.checked > 0);
+  return counts;
+}
+
+// A tube of 20 mm with a 2 mm wall bent by a quarter circle of radius 30
+// between two straight lengths of 50 mm (mitcad#2447, GitHub #686: such a
+// tube's drawing): its faces cylinders and tori, meeting tangentially at
+// the bend's ends.
+ShapePtr bent_tube() {
+  ModelCurve in;
+  in.kind = ModelCurveKind::Line;
+  in.start = gp_Pnt(0.0, 0.0, 0.0);
+  in.end = gp_Pnt(50.0, 0.0, 0.0);
+  ModelCurve bend;
+  bend.kind = ModelCurveKind::Conic;
+  bend.center = gp_Pnt(50.0, 30.0, 0.0);
+  bend.normal = gp_Dir(0.0, 0.0, 1.0);
+  bend.x_axis = gp_Dir(0.0, -1.0, 0.0);
+  bend.major = 30.0;
+  bend.minor = 30.0;
+  bend.first = 0.0;
+  bend.last = 3.14159265358979323846 / 2.0;
+  ModelCurve out;
+  out.kind = ModelCurveKind::Line;
+  out.start = gp_Pnt(80.0, 30.0, 0.0);
+  out.end = gp_Pnt(80.0, 80.0, 0.0);
+  PipeSpec spec;
+  spec.feature = "F2";
+  spec.path = {{"c1", in}, {"c2", bend}, {"c3", out}};
+  spec.size = 20.0;
+  spec.thickness = 2.0;
+  return pipe(spec);
+}
+
+// The bent tube's views (mitcad#2447): with Tangent Edges off no line
+// along the bend's ends, seen or hidden; with it on those drawn whole and
+// thin, and the seams of the cylinders and the tori never, which the
+// sweep had stored as smooth edges (G1) so that they were drawn as tangent
+// edges; the same with the continuity left out, as a later operation or
+// an import leaves it.
+void test_tangent_edges_of_a_bent_tube() {
+  const ShapePtr tube = bent_tube();
+  // The premise: the sweep stores G1 on the seams it makes.
+  const int smooth_seams = seams_stored_smooth(tube->occt());
+  std::printf("bent tube: %d seams stored as smooth edges\n", smooth_seams);
+  CHECK(smooth_seams > 0);
+  check_tangent_edges(tube, "bent tube");
+  check_hidden_edges(tube, "bent tube");
+  // The outline crosses the circles where the bend meets the straight
+  // lengths.
+  check_polygonal_outline(tube, "bent tube");
+  const ShapePtr bare = bent_tube();
+  clear_continuities(bare->occt());
+  check_tangent_edges(bare, "bent tube without continuity");
+  check_hidden_edges(bare, "bent tube without continuity");
+}
+
+// GitHub #686's shape without its shell (mitcad#2447): a circle of 20 mm
+// swept up 25 mm from the origin and on round a quarter circle of radius
+// 30 towards -X, joined with its mirror image across the YZ plane (two
+// bent tubes on a common stem, a Y), the edges where the two tori meet at
+// the crotch rounded 10 mm. The fillet is free-form and its boundaries run
+// slantwise through its own and the tori's parameters. Null when a step
+// fails.
+ShapePtr crotch_filleted_y() {
+  ModelCurve stem;
+  stem.kind = ModelCurveKind::Line;
+  stem.start = gp_Pnt(0.0, 0.0, 0.0);
+  stem.end = gp_Pnt(0.0, 0.0, 25.0);
+  ModelCurve bend;
+  bend.kind = ModelCurveKind::Conic;
+  bend.center = gp_Pnt(-30.0, 0.0, 25.0);
+  bend.normal = gp_Dir(0.0, -1.0, 0.0);
+  bend.x_axis = gp_Dir(1.0, 0.0, 0.0);
+  bend.major = 30.0;
+  bend.minor = 30.0;
+  bend.first = 0.0;
+  bend.last = 3.14159265358979323846 / 2.0;
+  PipeSpec spec;
+  spec.feature = "F3";
+  spec.path = {{"c1", stem}, {"c4", bend}};
+  spec.size = 20.0;
+  const TopoDS_Shape left = pipe(spec)->occt();
+  gp_Trsf mirror;
+  mirror.SetMirror(gp_Ax2(gp::Origin(), gp_Dir(1.0, 0.0, 0.0)));
+  const TopoDS_Shape right = BRepBuilderAPI_Transform(left, mirror, true).Shape();
+  BRepAlgoAPI_Fuse fuse(left, right);
+  if (!fuse.IsDone()) {
+    std::fprintf(stderr, "crotch: the fuse failed\n");
+    return nullptr;
+  }
+  ShapeUpgrade_UnifySameDomain unify(fuse.Shape(), true, true, false);
+  unify.Build();
+  const TopoDS_Shape joined = unify.Shape();
+  // The crotch: the edges between faces of the two tori.
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndUniqueAncestors(joined, TopAbs_EDGE, TopAbs_FACE, faces);
+  BRepFilletAPI_MakeFillet fillet(joined);
+  int crotch = 0;
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    const NCollection_List<TopoDS_Shape>& around = faces.FindFromIndex(i);
+    if (around.Extent() != 2) {
+      continue;
+    }
+    const BRepAdaptor_Surface a(TopoDS::Face(around.First()), false);
+    const BRepAdaptor_Surface b(TopoDS::Face(around.Last()), false);
+    if (a.GetType() == GeomAbs_Torus && b.GetType() == GeomAbs_Torus &&
+        a.Torus().Location().Distance(b.Torus().Location()) > 1.0) {
+      fillet.Add(10.0, TopoDS::Edge(faces.FindKey(i)));
+      ++crotch;
+    }
+  }
+  if (crotch == 0) {
+    std::fprintf(stderr, "crotch: no edge between the two tori\n");
+    return nullptr;
+  }
+  try {
+    fillet.Build();
+  } catch (const Standard_Failure&) {
+    std::fprintf(stderr, "crotch: the fillet failed\n");
+    return nullptr;
+  }
+  if (!fillet.IsDone()) {
+    std::fprintf(stderr, "crotch: the fillet failed\n");
+    return nullptr;
+  }
+  return std::make_shared<Shape>(fillet.Shape());
+}
+
+// The edges between two faces that meet tangentially all along them (their
+// normals within kTangent at points along it) that OCCT's own test
+// (BRepLib::ContinuityOfFaces at that angle) takes as meeting at an angle.
+int tangent_edges_occt_misses(const TopoDS_Shape& shape) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE, faces);
+  int count = 0;
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    const NCollection_List<TopoDS_Shape>& around = faces.FindFromIndex(i);
+    const TopoDS_Edge& edge = TopoDS::Edge(faces.FindKey(i));
+    if (around.Extent() != 2 || BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    const TopoDS_Face& face1 = TopoDS::Face(around.First());
+    const TopoDS_Face& face2 = TopoDS::Face(around.Last());
+    const BRepAdaptor_Curve curve(edge);
+    bool tangent = true;
+    for (int k = 1; k < 16 && tangent; ++k) {
+      gp_Vec n1;
+      gp_Vec n2;
+      const double t = curve.FirstParameter() + (curve.LastParameter() - curve.FirstParameter()) * k / 16.0;
+      tangent = normals_at(edge, face1, face2, t, n1, n2) && n1.Dot(n2) > 0.0 && n1.Crossed(n2).Magnitude() <= kTangent;
+    }
+    if (!tangent) {
+      continue;
+    }
+    try {
+      count += BRepLib::ContinuityOfFaces(edge, face1, face2, kTangent) < GeomAbs_G1 ? 1 : 0;
+    } catch (const Standard_Failure&) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+// The filleted crotch's views (mitcad#2447): its fillet's boundaries are
+// tangent edges all along, none drawn with Tangent Edges off, seen or
+// hidden, and drawn whole and thin with it on, exact, on the quick path
+// and polygonal; also with the continuity left out, as a later operation
+// (the reported design's Shell) leaves it, where OCCT's own test takes some
+// of them for edges at an angle (half of the fillet's boundary drawn as a
+// sharp edge in the reported drawing).
+void test_tangent_edges_of_a_filleted_crotch() {
+  const ShapePtr y = crotch_filleted_y();
+  CHECK(y != nullptr);
+  if (y == nullptr) {
+    return;
+  }
+  check_tangent_edges(y, "filleted crotch");
+  check_hidden_edges(y, "filleted crotch");
+  // Nothing of the outline left out next to the fillet's tips.
+  check_polygonal_outline(y, "filleted crotch");
+  const ShapePtr bare = crotch_filleted_y();
+  if (bare == nullptr) {
+    return;
+  }
+  clear_continuities(bare->occt());
+  // The premise: OCCT's own test misses tangent edges of the fillet.
+  const int missed = tangent_edges_occt_misses(bare->occt());
+  std::printf("filleted crotch: %d tangent edges OCCT's own test takes for edges at an angle\n", missed);
+  CHECK(missed > 0);
+  check_tangent_edges(bare, "filleted crotch without continuity");
+  check_hidden_edges(bare, "filleted crotch without continuity");
 }
 
 // The reported design of mitcad#1438 (a bearing block with fillets), its
@@ -1220,10 +1902,93 @@ int check_brep_file(const char* path) {
     // drawn as sharp ones by OCCT's hidden-line removal alone.
     CHECK(counts.raw > counts.raw_seams);
   });
+  test::guarded("the reported design's hidden edges and seams", [&] {
+    // mitcad#2447: hidden tangent edges left out with Tangent Edges off,
+    // seams never drawn, every other edge drawn whole with both on.
+    TopoDS_Shape again;
+    if (BRepTools::Read(again, path, builder) && !again.IsNull()) {
+      check_hidden_edges(std::make_shared<Shape>(again), path);
+    }
+  });
   if (test::failures == 0) {
     std::puts("test_drawing: all checks passed");
   }
   return test::failures == 0 ? 0 : 1;
+}
+
+// `test_drawing --edges <file.brep>`, a look at a body's edges for a
+// drawing that draws them wrongly (mitcad#2447):
+// each edge between two faces (or a seam) with its faces' surfaces, the
+// continuity stored on it, OCCT's continuity of its faces at the drawings'
+// angle, the largest angle between their normals along it (degrees) and
+// its length.
+// `test_drawing --project <file.brep> <x> <y> <z>`, a probe (mitcad#2447):
+// the body seen toward the eye (x, y, z) with the exact algorithm, hidden
+// edges and without tangent edges, each drawn line with its kind, whether
+// it is seen and its ends; with MITCAD_DRAWING_TRACE=edges the algorithm's
+// flags on each face's edges too.
+int print_view(const char* path, const gp_Dir& eye) {
+  TopoDS_Shape shape;
+  BRep_Builder builder;
+  if (!BRepTools::Read(shape, path, builder) || shape.IsNull()) {
+    std::fprintf(stderr, "test_drawing: cannot read %s\n", path);
+    return 1;
+  }
+  const gp_Ax2 axes(gp::Origin(), eye);
+  const DrawnView drawn = project_view({std::make_shared<Shape>(shape)}, view(eye, axes.XDirection(), true));
+  for (const DrawnCurve& c : drawn.curves) {
+    const std::vector<Point2> points = samples(c);
+    std::printf("line %s %s: (%.3f, %.3f) to (%.3f, %.3f)\n", c.visible ? "seen" : "hidden",
+                c.kind == DrawnKind::Sharp ? "sharp" : (c.kind == DrawnKind::Outline ? "outline" : "smooth"),
+                points.front()[0], points.front()[1], points.back()[0], points.back()[1]);
+  }
+  return 0;
+}
+
+int print_edges(const char* path) {
+  TopoDS_Shape shape;
+  BRep_Builder builder;
+  if (!BRepTools::Read(shape, path, builder) || shape.IsNull()) {
+    std::fprintf(stderr, "test_drawing: cannot read %s\n", path);
+    return 1;
+  }
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE, faces);
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(faces.FindKey(i));
+    const NCollection_List<TopoDS_Shape>& around = faces.FindFromIndex(i);
+    if (BRep_Tool::Degenerated(edge) || around.IsEmpty()) {
+      continue;
+    }
+    const TopoDS_Face& face1 = TopoDS::Face(around.First());
+    const TopoDS_Face& face2 = TopoDS::Face(around.Last());
+    const BRepAdaptor_Curve curve(edge);
+    const double first = curve.FirstParameter();
+    const double last = curve.LastParameter();
+    double angle = 0.0;
+    for (int k = 1; k < 32; ++k) {
+      gp_Vec n1;
+      gp_Vec n2;
+      if (normals_at(edge, face1, face2, first + (last - first) * k / 32.0, n1, n2)) {
+        angle = std::max(angle, n1.Angle(n2));
+      }
+    }
+    const char* found = "-";
+    try {
+      found = continuity_name(BRepLib::ContinuityOfFaces(edge, face1, face2, kTangent));
+    } catch (const Standard_Failure&) {
+      found = "failed";
+    }
+    const gp_Pnt a = curve.Value(first);
+    const gp_Pnt b = curve.Value(last);
+    std::printf("edge %d: %s faces %d (%s, %s) stored %s found %s normals %.4f deg ends (%.3f, %.3f, %.3f) "
+                "(%.3f, %.3f, %.3f)\n",
+                i, curve.GetType() == GeomAbs_Line ? "line" : (curve.GetType() == GeomAbs_Circle ? "circle" : "curve"),
+                around.Extent(), surface_name(face1), surface_name(face2),
+                continuity_name(BRep_Tool::Continuity(edge, face1, face2)), found, angle * 180.0 / 3.14159265358979,
+                a.X(), a.Y(), a.Z(), b.X(), b.Y(), b.Z());
+  }
+  return 0;
 }
 
 // A 30 x 20 x 10 box from model_render's isometric camera, as its line art
@@ -1352,14 +2117,139 @@ void test_small_round_edges_at_a_small_scale() {
   CHECK(there <= spec.quick_deviation && back <= spec.quick_deviation);
 }
 
+// --- Outlines along the edges of split round faces (mitcad#2539) ---------------
+
+constexpr double kShaftRadius = 6.35;
+
+// A shaft of radius kShaftRadius along z from -60 to 260 whose round face
+// is split in two halves along x = +-kShaftRadius (`split`, as many
+// imported bodies are), or whole with its seam at x = kShaftRadius, turned
+// by `turn` radians about its axis (an occurrence's placement within
+// rounding). Seen from the front or the back, those edges lie on its
+// outline.
+TopoDS_Shape shaft_along_z(bool split, double turn) {
+  TopoDS_Shape shaft =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0.0, 0.0, -60.0), gp_Dir(0, 0, 1), gp_Dir(1, 0, 0)), kShaftRadius, 320.0)
+          .Shape();
+  if (split) {
+    ShapeUpgrade_ShapeDivideClosed divide(shaft);
+    divide.SetNbSplitPoints(1);
+    divide.Perform();
+    shaft = divide.Result();
+  }
+  if (turn != 0.0) {
+    gp_Trsf rotation;
+    rotation.SetRotation(gp_Ax1(gp::Origin(), gp_Dir(0, 0, 1)), turn);
+    shaft = BRepBuilderAPI_Transform(shaft, rotation, true).Shape();
+  }
+  return shaft;
+}
+
+int round_faces(const TopoDS_Shape& shape) {
+  int n = 0;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    n += BRepAdaptor_Surface(TopoDS::Face(it.Current())).GetType() == GeomAbs_Cylinder ? 1 : 0;
+  }
+  return n;
+}
+
+// The points every half millimetre along x = `x` from y0 to y1 that no
+// curve of the view (seen or hidden, `visible`) passes within 0.01 of.
+int gaps_along(const DrawnView& drawn, double x, double y0, double y1, bool visible) {
+  int gaps = 0;
+  for (double y = y0 + 0.25; y < y1; y += 0.5) {
+    double nearest = 1e300;
+    for (const DrawnCurve& c : drawn.curves) {
+      if (c.visible == visible) {
+        nearest = std::min(nearest, distance_to(c, {x, y}));
+      }
+    }
+    gaps += nearest > 0.01 ? 1 : 0;
+  }
+  return gaps;
+}
+
+// The reported view (GitHub #729): a subassembly's projected view at 1:5
+// without tangent edges drew its shafts with gaps in their outline lines,
+// wholly missing beside a frame's upright and in parts elsewhere. A shaft
+// whose round face is split along its outline, or whose seam lies on it,
+// through a plate 10 thick (z from 0 to 10, the upright), seen from the
+// front and the back: both its outline lines are drawn seen all along
+// outside the plate and hidden inside it (with hidden edges), whatever
+// small turn its placement gives it. Seen from the isometric view, where
+// those edges are no outline, they are not drawn without tangent edges.
+void test_outlines_along_split_round_faces() {
+  TopoDS_Shape plate = BRepPrimAPI_MakeBox(gp_Pnt(-30.0, -20.0, 0.0), 60.0, 40.0, 10.0).Shape();
+  plate = BRepAlgoAPI_Cut(plate, cylinder(0.0, 0.0, -1.0, 11.0, 6.5)).Shape();
+  const ShapePtr upright = std::make_shared<Shape>(plate);
+  const std::vector<std::pair<gp_Dir, gp_Dir>> sides = {{gp_Dir(0, -1, 0), gp_Dir(1, 0, 0)},
+                                                        {gp_Dir(0, 1, 0), gp_Dir(-1, 0, 0)}};
+  const double r2 = 1.0 / std::sqrt(2.0);
+  const double r3 = 1.0 / std::sqrt(3.0);
+  for (const bool split : {true, false}) {
+    for (const double turn : {0.0, 1e-9, 1e-7, -1e-7, 1e-6}) {
+      const TopoDS_Shape body = shaft_along_z(split, turn);
+      CHECK(round_faces(body) == (split ? 2 : 1));
+      const ShapePtr shaft = std::make_shared<Shape>(body);
+      char name[96];
+      std::snprintf(name, sizeof name, "a %s shaft turned %g", split ? "split" : "seamed", turn);
+      for (const auto& [eye, x] : sides) {
+        for (const bool hidden : {false, true}) {
+          DrawingViewSpec spec = view(eye, x, hidden);
+          spec.quick = true;
+          spec.quick_deviation = 0.1; // 0.02 mm on the sheet at 1:5
+          const DrawnView drawn = project_view({upright, shaft}, spec);
+          CHECK(!drawn.polygonal);
+          for (const double side : {-kShaftRadius, kShaftRadius}) {
+            const int seen = gaps_along(drawn, side, -60.0, -0.5, true) + gaps_along(drawn, side, 10.5, 260.0, true);
+            const int behind = hidden ? gaps_along(drawn, side, 0.5, 9.5, false) : 0;
+            if (seen != 0 || behind != 0) {
+              std::fprintf(stderr,
+                           "%s from (%.0f, %.0f, %.0f)%s: the outline at x = %.2f has %d seen and %d hidden gaps\n",
+                           name, eye.X(), eye.Y(), eye.Z(), hidden ? " with hidden edges" : "", side, seen, behind);
+            }
+            CHECK(seen == 0);
+            CHECK(behind == 0);
+          }
+        }
+      }
+      // From the isometric view the edges along x = +-kShaftRadius are no
+      // outline: nothing is drawn along them halfway up the shaft.
+      const DrawingViewSpec iso = view(gp_Dir(r3, -r3, r3), gp_Dir(r2, r2, 0), false);
+      const DrawnView drawn = project_view({upright, shaft}, iso);
+      for (const double side : {-kShaftRadius, kShaftRadius}) {
+        const gp_Pnt on_edge = gp_Pnt(side * std::cos(turn), side * std::sin(turn), 100.0);
+        const Point2 p = projected(on_edge, iso);
+        double nearest = 1e300;
+        for (const DrawnCurve& c : drawn.curves) {
+          if (c.visible) {
+            nearest = std::min(nearest, distance_to(c, p));
+          }
+        }
+        if (nearest <= 0.05) {
+          std::fprintf(stderr, "%s, isometric: a line along the edge at x = %.2f\n", name, side);
+        }
+        CHECK(nearest > 0.05);
+      }
+    }
+  }
+}
+
 } // namespace
 
-int main(int argc, char* argv[]) {
+MITCAD_BUNDLED_TEST_ARGS(drawing) {
   if (argc == 3 && std::string(argv[1]) == "--tangent-edges") {
     return check_brep_file(argv[2]);
   }
+  if (argc == 3 && std::string(argv[1]) == "--edges") {
+    return print_edges(argv[2]);
+  }
+  if (argc == 6 && std::string(argv[1]) == "--project") {
+    return print_view(argv[2], gp_Dir(std::atof(argv[3]), std::atof(argv[4]), std::atof(argv[5])));
+  }
   test::guarded("three views", test_three_views);
   test::guarded("a section view", test_section_view);
+  test::guarded("a section limited to its line", test_bounded_section_view);
   test::guarded("round holes", test_round_holes);
   test::guarded("lines and arcs from segments", test_fit_segments);
   test::guarded("a line into an arc", test_fit_a_line_into_an_arc);
@@ -1371,6 +2261,9 @@ int main(int argc, char* argv[]) {
   test::guarded("a box from the iso view", test_box_from_the_iso_view);
   test::guarded("many parts on the quick path", test_many_parts_on_the_quick_path);
   test::guarded("small round edges at a small scale", test_small_round_edges_at_a_small_scale);
+  test::guarded("the tangent edges, seams and hidden edges of a bent tube", test_tangent_edges_of_a_bent_tube);
+  test::guarded("the tangent edges of a filleted crotch", test_tangent_edges_of_a_filleted_crotch);
+  test::guarded("outlines along split round faces", test_outlines_along_split_round_faces);
   if (test::failures == 0) {
     std::puts("test_drawing: all checks passed");
   }

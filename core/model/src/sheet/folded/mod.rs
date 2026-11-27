@@ -37,6 +37,12 @@ pub(crate) mod flange_edges;
 // Convert to Sheet Metal of cylindrical and conical faces and their Flat
 // Pattern (mitcad#2435).
 pub(crate) mod curved;
+// Approximate flat patterns of curved faces by triangulation (mitcad#2442).
+pub(crate) mod triangulated;
+// Lofted Flange: a transition made as sheet between two profiles
+// (mitcad#2512).
+pub(crate) mod lofted;
+pub(crate) use lofted::lofted_flange;
 
 use super::*;
 use crate::features::sheet::SheetRulesDef;
@@ -52,9 +58,21 @@ pub(super) fn read<K: Kernel>(
 ) -> Result<(SheetState, SheetRulesDef<f64>), String> {
     ctx.body(body)?;
     let state = ctx.require_sheet(body)?;
+    // A sheet laid flat by triangulation is not changed (mitcad#2442).
+    triangulated::refuse(&state)?;
     let rules = ctx.sheet_rules(state.rules)?;
     if state.algorithm != ALGORITHM_VERSION || state.charts.is_empty() {
         return Err("sheet material charts require recomputation".into());
+    }
+    // A Lofted Flange's transition (mitcad#2512) is made by its feature
+    // alone.
+    if lofted::lofted_panel(&state).is_some() {
+        return Err(
+            "a lofted flange's sheet takes no other sheet metal features yet (flanges, bends, \
+             sheet cuts, unfolds): edit the lofted flange itself, or cut holes in it with Hole \
+             or a cutting Extrude"
+                .into(),
+        );
     }
     if state.rules_version != format!("{:032x}", rules.version) {
         return Err("sheet material rules do not match current rules".into());

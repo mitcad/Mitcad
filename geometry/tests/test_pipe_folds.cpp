@@ -82,6 +82,7 @@
 
 #include "../src/pipe_folds.hpp"
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -1151,7 +1152,7 @@ void test_helix_bend() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(pipe_folds) {
   test::guarded("tight ellipse", test::test_ellipse_bend);
   test::guarded("tight spline", test::test_spline_bend);
   test::guarded("tight helix", test::test_helix_bend);

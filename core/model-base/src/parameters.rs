@@ -504,6 +504,11 @@ pub fn slot_unit(slot: &str) -> Unit {
     if field == "text" && slot.starts_with("texts[") {
         return Unit::TEXT;
     }
+    // A triangulated sheet development's triangles (mitcad#2442): a count,
+    // though its name has `angle` in it.
+    if slot == "triangles" {
+        return Unit::NONE;
+    }
     if field.contains("angle") || field.ends_with("taper") {
         Unit::DEG
     } else if field == "revolutions"
@@ -690,6 +695,9 @@ pub fn slot_limits(feature_type: &str, slot: &str) -> Option<Bounds> {
         }),
         // A mortise and tenon's tenons (`mortise_tenon.rs`, `MAX_TENONS`).
         ("mortise_tenon", "count") if slot == "count" => whole(1.0, Some(100.0)),
+        // A triangulated sheet development's triangles (`sheet_convert.rs`,
+        // mitcad#2442).
+        ("sheet_convert", "triangles") if slot == "triangles" => whole(2.0, Some(4000.0)),
         _ => None,
     }
 }
@@ -839,5 +847,17 @@ mod tests {
             "2.5 teeth: use floor(…) or round(…) for a whole number"
         );
         assert_eq!(count_error("0 teeth".to_owned(), 0.0), "0 teeth");
+    }
+
+    #[test]
+    fn a_sheet_developments_triangles_are_a_count() {
+        // Its name has `angle` in it (mitcad#2442).
+        assert_eq!(slot_unit("triangles"), Unit::NONE);
+        assert_eq!(slot_unit("extent.angle"), Unit::DEG);
+        let limits = slot_limits("sheet_convert", "triangles").expect("limits");
+        assert_eq!(
+            (limits.min, limits.max, limits.step),
+            (Some(2.0), Some(4000.0), Some(1.0))
+        );
     }
 }

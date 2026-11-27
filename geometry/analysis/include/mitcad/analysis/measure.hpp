@@ -5,6 +5,8 @@
 
 #include <optional>
 
+#include <Message_ProgressRange.hxx>
+
 #include "mitcad/analysis/common.hpp"
 
 namespace mitcad::analysis {
@@ -26,8 +28,12 @@ struct Distance {
 // (a point inside it, its vertices) whose foot on the other's plane lies in
 // the other face: the planes' gap, the same minimum the full extrema give,
 // without pairing every edge and vertex of the two faces; when no such
-// point is found, the full extrema as for any other pair.
-Distance min_distance(const TopoDS_Shape& a, const TopoDS_Shape& b);
+// point is found, the full extrema as for any other pair. `range`'s user
+// break stops the full extrema inside (a cancelled model job, mitcad#2577:
+// one distance between detailed bodies in an assembly path's probe), and
+// the measurement then throws Error.
+Distance min_distance(const TopoDS_Shape& a, const TopoDS_Shape& b,
+                      const Message_ProgressRange& range = Message_ProgressRange());
 
 // Angle between two planar faces (between their outward normals, in
 // [0, pi]), two linear edges (in [0, pi/2]; edges with a common vertex are

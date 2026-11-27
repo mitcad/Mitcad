@@ -579,8 +579,27 @@ limit. Give
 `"triangles": true` for them, with `max_triangles` to cap them
 (mitcad#689).
 
+**Long analyses** (mitcad#2540): `interference`, `assembly_path`,
+`contact_check` and the print and shape analyses (`print_overhangs`,
+`print_thickness`, `print_min_gap`, `draft_analysis`,
+`point_cloud_deviation`, `min_radius_analysis`) can run for minutes on a
+large design. They run on the model's worker as a model job, as a
+recompute does: the window keeps drawing and, after a moment, shows the
+progress with its Cancel. The client can cancel the call too (below).
+Their result is the same as before. While one runs, the design computes:
+another client's `model_query` or `model_command` to it is answered at
+once with `busy: true` and `retry_after_ms`, and works again once the
+design is idle. Bounded (mitcad#2577): `assembly_path` measures a body
+flush against its neighbours (its contacts at the start) once a step, not
+halved, and stops at `time_limit` (default 300 s) or `max_probes` with a
+partial answer that says so in `stopped`; a Cancel ends a running probe
+within a second, inside its distance measurement too; `interference`
+without `bodies` over more than 1000 pairs adds a `warning` to its answer
+(give `bodies` to check only those that can meet).
+
 **Cancelling a call** (mitcad#1917): while a client's `tools/call` computes
-(a `model_command`, an open, an export), the client's
+(a `model_command`, a long analysis `model_query`, an open, an export),
+the client's
 `notifications/cancelled` with that call's `requestId` cancels the
 computation as the progress dialog's Cancel does, also inside a fillet,
 chamfer, shell, offset, sweep, loft or healing whose geometry kernel call
@@ -590,7 +609,9 @@ call. Such a feature whose kernel call runs longer than the kernel's time
 limit (300 s, `MITCAD_KERNEL_TIME_LIMIT`) fails
 with `the geometry kernel did not finish within N s; the operation was
 given up` among the call's `failed_features`. Other messages of the
-client wait until the call has answered.
+client wait until the call has answered. Other clients' messages wait too,
+but for their model requests to a design that computes, which are
+answered busy at once (mitcad#2540).
 
 **Model commands** (`model_command`) are refused, with the reason, in
 these states:
@@ -845,7 +866,9 @@ Afterwards, the document is that file. An existing file must have
 - The save would write over the file of a design that a newer MitCad
   wrote, and drop its fields that this MitCad did not read (mitcad#1132).
   The error names the fields. Save the design in the application, which
-  asks first, or give another `path`.
+  asks first, or give another `path`. The same holds for a design whose
+  CAM this MitCad could not read (mitcad#2581): the save would drop its
+  machines, setups and operations.
 - The `path` is the file of a design that another window has open
   (mitcad#1323). The error names that window's document, also as
   `open_document`.
@@ -1088,12 +1111,21 @@ command logged. For a `view.*` command, `camera` is as the camera of
 **`ui_camera`** without arguments reads the camera. `eye`, `target` and
 `up` are each `[x, y, z]` in mm. `height` is the mm of the model shown
 at the target, from top to bottom. `fov` is the vertical field of view
-of the perspective, 1 to 170 degrees. `projection` is `orthographic` or
-`perspective`. `box` is `{"min": [x, y, z], "max": [x, y, z]}`.
+of the perspective, 1 to 170 degrees. `projection` is `orthographic`,
+`perspective` or `perspective_orthographic_faces` (Perspective with
+Orthographic Faces: perspective, orthographic while the view looks
+along one of the six face directions). `box` is
+`{"min": [x, y, z], "max": [x, y, z]}`.
 
 In the result, `camera` holds `eye`, `target`, `up`, `direction`,
-`distance`, `height`, `width`, `projection`, `fov`, `focal_length` and
-`view_size`. `direction` is a unit vector from the eye to the target.
+`distance`, `height`, `width`, `projection`, `projection_mode`, `fov`,
+`focal_length` and `view_size`. `direction` is a unit vector from the
+eye to the target. `projection` is the projection in use
+(`orthographic` or `perspective`) and `projection_mode` the mode it
+comes from (`orthographic`, `perspective` or
+`perspective_orthographic_faces`): with
+`perspective_orthographic_faces`, `projection` is `orthographic` while
+the view looks along a face direction.
 `width` is the mm at the target. `focal_length` is `fov` as the focal
 length in mm on a 35 mm frame, 12 / tan(fov / 2). `view_size` is the
 pixels of the view.

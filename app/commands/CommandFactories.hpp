@@ -196,4 +196,15 @@ CommandDef cellGridCommand(const CommandContext& context);
 // edited from the Explode panel.
 CommandDef explodeStepCommand(const CommandContext& context);
 
+// SweepCommands.cpp (mitcad#2522): Isoparametric Curve, a face's u or v
+// curve as a 3D curve that follows the face.
+CommandDef isoparametricCurveCommand(const CommandContext& context);
+// MeshShapeCommands.cpp (mitcad#2515): mesh tools that change a mesh's
+// shape, each a feature making new mesh bodies.
+CommandDef meshSmoothCommand(const CommandContext& context);
+CommandDef meshCombineCommand(const CommandContext& context);
+CommandDef meshOffsetCommand(const CommandContext& context);
+CommandDef meshAlignCommand(const CommandContext& context);
+CommandDef meshPlaneCutCommand(const CommandContext& context);
+
 } // namespace mitcad::cmd

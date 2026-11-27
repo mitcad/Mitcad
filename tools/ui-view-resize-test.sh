@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp tools/ui-image-stats.py
 # check-all sources: app/framework/GraphicsStart.cpp app/framework/DisplayPlatform.cpp
+# check-all sources: app/DocumentFrame.cpp app/ViewerVisibility.cpp
 # The 3D view follows a resized window (mitcad#2422, GitHub
 # mitcad/Mitcad#672): on X11 with GLX, where the view draws in its own EGL
 # context and is read back into the window (mitcad#2292), a window made
@@ -26,6 +27,20 @@
 #     whose drawn size stayed would keep the origin where it was;
 #   - made larger: the view's right and bottom edges are drawn, not black;
 #   - the XY plane, clicked where the view says it is, is picked.
+# Then two designs in the window's tabs (mitcad#2471), each with a view of
+# its own (on the GLX path in an EGL context of its own): the first design
+# edited so that New Design opens a second tab beside it, the window made
+# larger, the second design opened, the first chosen again (Ctrl+Tab), the
+# window made smaller with both open, and the tabs switched twice. A view
+# hidden in its tab follows the window when it is shown again: after each
+# step the shown view's sizes, the origin's place against that design's own
+# last one, the edges drawn and a pick of the XY plane. The GLX run does
+# the two designs once more in the Floating layout, the one the report's
+# session log shows, where the view fills the window under the floating
+# panels (in both layouts the tabs are in the top bar's title row, so a
+# tab switch alone does not resize the view). The UI tests start new
+# designs with their origin hidden (MITCAD_NEW_DESIGN_VIEW=0): the test
+# shows each design's origin by its light bulb.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-view-resize-test.sh
@@ -80,7 +95,7 @@ expect_sizes() {
   [ "$widget" = "${aw}x${ah}" ] || ui_fail "$1 $2: '$line', but the view area is ${aw}x${ah}"
   [ -n "$device" ] && [ "$drawn" = "$device" ] ||
     ui_fail "$1 $2: '$line': OCCT draws and picks at another size than the view's"
-  if [ "$1" = glx ]; then
+  if [[ $1 == glx* ]]; then
     [ "$back" = "$device" ] || ui_fail "$1 $2: '$line': the frame read back is not the view's size"
   fi
   tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "^3D view: drawn at " &&
@@ -167,9 +182,136 @@ pick_xy() {
   ui_step "$1: clear the selection (Esc)" ui_key Escape
 }
 
+# expect_since run what regex: within six seconds a line since the mark
+# that matches the regular expression.
+expect_since() {
+  for _ in $(seq 1 30); do
+    grep -qE -- "$3" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && { echo "ok   $1: $2"; return 0; }
+    sleep 0.2
+  done
+  ui_fail "$1: $2: no line '$3' since the mark"
+}
+
+# expect_shown run design: the window's title is the first design's
+# (changed: "Untitled* - MitCad") or the second's (unchanged) within four
+# seconds: the tab shown is that design's.
+expect_shown() {
+  local title=""
+  for _ in $(seq 1 20); do
+    title=$(ui_window_title)
+    if [ "$2" = 1 ]; then
+      [[ $title == *"* - MitCad" ]] && break
+    else
+      [[ $title == *" - MitCad" && $title != *"* - MitCad" ]] && break
+    fi
+    sleep 0.2
+  done
+  if [ "$2" = 1 ]; then
+    [[ $title == *"* - MitCad" ]] || ui_fail "$1: the first design's tab is not shown (title '$title')"
+  else
+    [[ $title == *" - MitCad" && $title != *"* - MitCad" ]] ||
+      ui_fail "$1: the second design's tab is not shown (title '$title')"
+  fi
+  echo "ok   $1: design $2's tab shown ('$title')"
+}
+
+# The view's area and the origin's place of each design as it was last
+# shown (two_tabs), and the design shown now.
+declare -A tab_area tab_origin
+shown_design=1
+
+# keep_shown: the shown design's view area and origin's place kept, before
+# its tab is hidden.
+keep_shown() {
+  tab_area[$shown_design]=$(view_area)
+  tab_origin[$shown_design]=$(origin_at)
+  [ -n "${tab_origin[$shown_design]}" ] || ui_fail "design $shown_design: the origin's place is not logged"
+}
+
+# shown_tab: where the shown design's tab is, from the last "Document tab
+# shown at x,y" (DocumentFrame::logShownTab), as "x,y".
+shown_tab() {
+  grep -o "^Document tab shown at [0-9-]*,[0-9-]*" "$UI_LOG" | tail -1 | sed 's/^Document tab shown at //'
+}
+
+# switch_tab run step: Ctrl+Tab shows the other design's tab. Its view,
+# hidden while the window changed, follows the window: its sizes, the
+# origin's place against the one it had when it was last shown, the edges
+# drawn and a pick of the XY plane.
+switch_tab() {
+  local other=$((3 - shown_design))
+  keep_shown
+  local before now=""
+  before=$(shown_tab)
+  ui_mark
+  ui_step "$1: $2 (Ctrl+Tab)" ui_key ctrl+Tab
+  ui_sync
+  # The other design's tab shown: the shown tab's place moved to it (both
+  # designs are changed by now, so their titles are alike).
+  for _ in $(seq 1 20); do
+    now=$(shown_tab)
+    [ -n "$now" ] && [ "$now" != "$before" ] && break
+    sleep 0.2
+  done
+  [ -n "$now" ] && [ "$now" != "$before" ] ||
+    ui_fail "$1 $2: Ctrl+Tab did not show the other design's tab (the shown tab stays at '$before')"
+  echo "ok   $1 $2: design $other's tab shown, at $now (was at $before)"
+  shown_design=$other
+  eval "$(xdotool getwindowgeometry --shell "$UI_WINDOW")"
+  expect_since "$1 $2" "the view is shown again" "^Document viewer .*: visible, frames "
+  expect_sizes "$1" "$2"
+  expect_origin "$1" "$2" "${tab_area[$other]}" "${tab_origin[$other]}"
+  expect_edges_drawn "$1" "$2"
+  pick_xy "$1" "$2"
+}
+
+# two_tabs run larger-width larger-height: two designs in the window's tabs
+# (mitcad#2471, GitHub mitcad/Mitcad#672), each view checked after the
+# window changed and as its tab is shown again.
+two_tabs() {
+  shown_design=1
+  # A change to the first design (its origin's light bulb off and on, two
+  # undo steps): New Design opens beside a design, but replaces the
+  # untouched untitled one (WindowManager::reusable).
+  ui_mark
+  ui_step "$1: hide the origin (light bulb)" ui_click_logged "Browser eye Root/Origin"
+  ui_expect_new "Visibility Root/Origin: hidden" "$1: the first design's origin hidden"
+  ui_mark
+  ui_step "$1: show the origin again (light bulb)" ui_click_logged "Browser eye Root/Origin"
+  ui_expect_new "Visibility Root/Origin: shown" "$1: the first design's origin shown again"
+  ui_expect_new "Datum origin at" "$1: the origin in the view again"
+  ui_sync
+  expect_shown "$1 the first design changed" 1
+  resize_to "$1" "one design, larger" "$2" "$3" grown
+  pick_xy "$1" "one design, larger"
+  keep_shown
+  ui_mark
+  ui_step "$1: new design (Ctrl+N)" ui_key ctrl+n
+  ui_expect_new "New document" "$1: a new design"
+  expect_since "$1" "the new design opened beside the first, not in its place" \
+    "^Document window created: .* \(2 open\)$"
+  expect_since "$1" "both designs' tabs shown" "^Document tabs shown: '[^']*' '[^']*'$"
+  expect_shown "$1 second design" 2
+  shown_design=2
+  eval "$(xdotool getwindowgeometry --shell "$UI_WINDOW")"
+  # Its origin shown by its light bulb, as the first design's: the UI tests
+  # start new designs without it (MITCAD_NEW_DESIGN_VIEW=0, ui-test-lib.sh).
+  # A change, so its title gets the change mark too.
+  ui_show_origin
+  ui_expect_new "Datum origin at" "$1 second design: its origin in the view"
+  expect_sizes "$1" "second design opened"
+  expect_edges_drawn "$1" "second design opened"
+  pick_xy "$1" "second design opened"
+  switch_tab "$1" "back to the first design"
+  resize_to "$1" "two designs, smaller" $((900 * UI_SCALE)) $((680 * UI_SCALE))
+  pick_xy "$1" "two designs, smaller"
+  switch_tab "$1" "the second design, hidden while the window became smaller"
+  switch_tab "$1" "the first design again, the window as it was"
+}
+
 # run name: one start, the window resized and checked.
 run() {
-  local width height screen_width screen_height
+  local width height screen_width screen_height larger_width larger_height
   ui_start_app --no-mcp
   if [ "$1" = glx ]; then
     ui_expect_log '3D view: drawn in its own EGL context and read back into the window' \
@@ -187,8 +329,9 @@ run() {
   width=$WIDTH
   height=$HEIGHT
   read -r screen_width screen_height <<< "$(xdotool getdisplaygeometry)"
-  resize_to "$1" "larger" $((width + 300 * UI_SCALE > screen_width - 40 * UI_SCALE ? screen_width - 40 * UI_SCALE : width + 300 * UI_SCALE)) \
-    $((height + 150 * UI_SCALE > screen_height - 40 * UI_SCALE ? screen_height - 40 * UI_SCALE : height + 150 * UI_SCALE)) grown
+  larger_width=$((width + 300 * UI_SCALE > screen_width - 40 * UI_SCALE ? screen_width - 40 * UI_SCALE : width + 300 * UI_SCALE))
+  larger_height=$((height + 150 * UI_SCALE > screen_height - 40 * UI_SCALE ? screen_height - 40 * UI_SCALE : height + 150 * UI_SCALE))
+  resize_to "$1" "larger" "$larger_width" "$larger_height" grown
   pick_xy "$1" "larger"
   resize_to "$1" "smaller" $((900 * UI_SCALE)) $((680 * UI_SCALE))
   pick_xy "$1" "smaller"
@@ -196,7 +339,28 @@ run() {
   pick_xy "$1" "as large as the screen"
   resize_to "$1" "its first size again" "$width" "$height"
   pick_xy "$1" "its first size again"
+  two_tabs "$1" "$larger_width" "$larger_height"
   grep -q '^3D view: no graphics: ' "$UI_LOG" && ui_fail "$1: the view logged a graphics failure"
+  ui_stop_app
+}
+
+# floating_tabs name: the two designs again in the Floating layout, the
+# default one the report's session log shows (GitHub mitcad/Mitcad#672):
+# the view fills the window under the floating panels, the designs' tabs
+# in the top bar's title row.
+floating_tabs() {
+  local screen_width screen_height
+  ui_start_app --no-mcp --chrome=floating
+  [ "$1" = glx ] && ui_expect_log '3D view: drawn in its own EGL context and read back into the window' \
+    "$1 floating: the view draws in its own EGL context"
+  ui_expect_log 'View size: ' "$1 floating: the view drew its first frame"
+  ui_show_origin
+  ui_sync
+  read -r screen_width screen_height <<< "$(xdotool getdisplaygeometry)"
+  two_tabs "$1 floating" \
+    $((WIDTH + 300 * UI_SCALE > screen_width - 40 * UI_SCALE ? screen_width - 40 * UI_SCALE : WIDTH + 300 * UI_SCALE)) \
+    $((HEIGHT + 150 * UI_SCALE > screen_height - 40 * UI_SCALE ? screen_height - 40 * UI_SCALE : HEIGHT + 150 * UI_SCALE))
+  grep -q '^3D view: no graphics: ' "$UI_LOG" && ui_fail "$1 floating: the view logged a graphics failure"
   ui_stop_app
 }
 
@@ -208,6 +372,8 @@ run egl
 echo '--- glx: X11 with GLX, the 3D view in its own EGL context, read back'
 export QT_XCB_GL_INTEGRATION=xcb_glx
 run glx
+echo '--- glx, Floating: two designs in the title row'"'"'s tabs, as in the report'
+floating_tabs glx
 unset QT_XCB_GL_INTEGRATION
 
-ui_finish '3D view and picks follow a resized window, with Qt'"'"'s EGL context and the view'"'"'s own'
+ui_finish '3D view and picks follow a resized window, also in two design tabs, with Qt'"'"'s EGL context and the view'"'"'s own'

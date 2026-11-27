@@ -88,6 +88,19 @@ pub(super) fn main_after_sub(setup: &CamSetup) -> Vec<u32> {
         .collect()
 }
 
+/// A finish refused for an undercut deeper than its insert cuts
+/// (mitcad#2503): the depths in words for the person, the deepest point of
+/// the contour (`deep.at`, work `[x, z]` in `frame`) as its place, its Z in
+/// the detail for agents.
+fn too_deep_refusal(frame: &WorkFrame, deep: &turn::ops::TooDeep) -> String {
+    let at = frame.to_model([deep.at[0], 0.0, deep.at[1]]);
+    crate::notice::placed(
+        deep.message(),
+        crate::notice::NoticePlace::point(at),
+        deep.detail(),
+    )
+}
+
 /// The inverse of a placement's linear part (a placement is invertible).
 fn inverse(linear: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let m = linear;
@@ -480,12 +493,46 @@ impl<K: Kernel> Document<K> {
         let face = outside.first().map_or(0.0, |v| v.z);
         let back = outside.last().map_or(0.0, |v| v.z);
         let radius = outside.iter().map(|v| v.x).fold(0.0, f64::max);
+        let lathe = setup.lathe.clone().unwrap_or_default();
         let (stock_radius, stock_face, stock_back) = match &setup.stock {
-            Stock::AroundBodies { side, top, bottom } => (
-                radius + length(side)?,
-                face + length(top)?,
-                back - length(bottom)?,
-            ),
+            // A bar of a given size (mitcad#2550): its diameter in place of
+            // the side margin, its length from the stock's face (the top
+            // margin in front of the part's face) towards the chuck in
+            // place of the bottom margin; each margin where its size is
+            // left out. A stock body keeps its own size.
+            Stock::AroundBodies { side, top, bottom } => {
+                let stock_face = face + length(top)?;
+                let mm = |v: f64| (v * 1000.0).round() / 1000.0;
+                let stock_radius = match &lathe.stock_diameter {
+                    Some(v) => {
+                        let bar = length(v)?;
+                        if bar / 2.0 < radius - 1e-9 {
+                            return Err(format!(
+                                "The bar ({bar} mm) is thinner than the part ({part} mm).",
+                                bar = mm(bar),
+                                part = mm(2.0 * radius)
+                            ));
+                        }
+                        bar / 2.0
+                    }
+                    None => radius + length(side)?,
+                };
+                let stock_back = match &lathe.stock_length {
+                    Some(v) => {
+                        let bar = length(v)?;
+                        if stock_face - bar > back + 1e-9 {
+                            return Err(format!(
+                                "The bar ({bar} mm) is shorter than the part and the stock in front of its face ({needed} mm).",
+                                bar = mm(bar),
+                                needed = mm(stock_face - back)
+                            ));
+                        }
+                        stock_face - bar
+                    }
+                    None => back - length(bottom)?,
+                };
+                (stock_radius, stock_face, stock_back)
+            }
             Stock::Body { body, occurrence } => {
                 let placed = self.cam_body_placed(&crate::cam::CamBody {
                     body: *body,
@@ -507,7 +554,6 @@ impl<K: Kernel> Document<K> {
                 (r, zf.max(face), zb)
             }
         };
-        let lathe = setup.lathe.clone().unwrap_or_default();
         let bore = match &lathe.stock_bore {
             Some(v) => length(v)? / 2.0,
             None => 0.0,
@@ -581,12 +627,53 @@ impl<K: Kernel> Document<K> {
         Ok((z, x))
     }
 
-    /// One turning operation's toolpath and its program entry.
+    /// A Turn Roughing's engine operation and tool, from the operation
+    /// whose kind has `side` and `plunge`: for the roughing itself and for
+    /// the finishes after it (mitcad#2549).
+    fn turn_rough_op(
+        &self,
+        machine: &CamMachine,
+        op: &CamOperation,
+        side: TurnSide,
+        plunge: crate::cam::Plunge,
+    ) -> Result<(RoughOp, TurningTool), String> {
+        use ValueKind::Length;
+        let tool = machine.tools.get(op.tool).ok_or_else(|| {
+            "The operation's tool is not in the machine's tool library.".to_owned()
+        })?;
+        let engine_tool: TurningTool = tool.turning_engine()?;
+        let t = op.turning.clone().unwrap_or_default();
+        let allowance = self.cam_value(&op.stock_to_leave, Length)?.unwrap_or(0.2);
+        let rough_op = RoughOp {
+            side,
+            depth: self
+                .cam_value(&t.depth_of_cut, Length)?
+                .unwrap_or_else(|| engine_tool.max_depth.min(2.0)),
+            retract: self.cam_value(&op.heights.retract, Length)?.unwrap_or(0.5),
+            allowance_x: allowance,
+            allowance_z: self
+                .cam_value(&t.stock_to_leave_z, Length)?
+                .unwrap_or(allowance / 2.0),
+            clearance: self
+                .cam_value(&op.heights.clearance, Length)?
+                .unwrap_or(2.0),
+            feed: self.cam_value(&t.feed_per_rev, Length)?.unwrap_or(0.25),
+            // Into undercuts as the Plunge choice and the tool allow.
+            plunge: plunge.angle(tool)?,
+        };
+        Ok((rough_op, engine_tool))
+    }
+
+    /// One turning operation's toolpath and its program entry; `earlier`
+    /// the setup's operations before it that run (not suppressed, not
+    /// refused for their place), for a finish into undercuts after a
+    /// roughing (mitcad#2549).
     fn turn_compute_operation(
         &self,
         tf: &TurnFrame,
         machine: &CamMachine,
         op: &CamOperation,
+        earlier: &[&CamOperation],
     ) -> Result<TurningProgramOp, String> {
         use ValueKind::{Length, Number};
         let tool = machine.tools.get(op.tool).ok_or_else(|| {
@@ -598,7 +685,6 @@ impl<K: Kernel> Document<K> {
         let clearance = self
             .cam_value(&op.heights.clearance, Length)?
             .unwrap_or(2.0);
-        let retract = self.cam_value(&op.heights.retract, Length)?.unwrap_or(0.5);
         let feed_default = match op.kind {
             OperationKind::TurnFace => 0.2,
             OperationKind::TurnRough { .. } => 0.25,
@@ -612,17 +698,17 @@ impl<K: Kernel> Document<K> {
             .cam_value(&t.depth_of_cut, Length)?
             .unwrap_or_else(|| engine_tool.max_depth.min(2.0));
         let peck = self.cam_value(&t.peck, Length)?.unwrap_or(0.0);
-        let leave = self.cam_value(&op.stock_to_leave, Length)?;
-        let leave_z = self.cam_value(&t.stock_to_leave_z, Length)?;
         let max_rpm = self
             .cam_value(&t.max_rpm, Number)?
             .unwrap_or(machine.machine.spindle.max_rpm);
         let speed_default = match op.kind {
             OperationKind::TurnRough {
                 side: TurnSide::Inside,
+                ..
             }
             | OperationKind::TurnFinish {
                 side: TurnSide::Inside,
+                ..
             } => 150.0,
             OperationKind::TurnGroove { .. } | OperationKind::TurnThread { .. } => 100.0,
             OperationKind::TurnPartOff { .. } => 80.0,
@@ -666,37 +752,54 @@ impl<K: Kernel> Document<K> {
                 ),
                 spindle_for(part.stock_radius),
             ),
-            OperationKind::TurnRough { side } => {
-                let allowance = leave.unwrap_or(0.2);
+            OperationKind::TurnRough { side, plunge } => {
+                // Into undercuts too (mitcad#2549): written as moves then.
+                let (rough_op, _) = self.turn_rough_op(machine, op, *side, *plunge)?;
                 (
-                    turn::rough(
-                        part,
-                        &RoughOp {
-                            side: *side,
-                            depth,
-                            retract,
-                            allowance_x: allowance,
-                            allowance_z: leave_z.unwrap_or(allowance / 2.0),
-                            clearance,
-                            feed,
-                        },
-                        &engine_tool,
-                    ),
+                    turn::rough(part, &rough_op, &engine_tool),
                     spindle_for(part.stock_radius),
                 )
             }
-            OperationKind::TurnFinish { side } => (
-                turn::finish(
-                    part,
-                    &FinishOp {
-                        side: *side,
-                        clearance,
-                        feed,
-                    },
-                    &engine_tool,
-                ),
-                spindle_for(part.stock_radius),
-            ),
+            OperationKind::TurnFinish { side, plunge } => {
+                let mut finish_op = FinishOp {
+                    side: *side,
+                    clearance,
+                    feed,
+                    // Into undercuts as the Plunge choice and the tool
+                    // allow (mitcad#2503).
+                    plunge: plunge.angle(tool)?,
+                    roughed: false,
+                };
+                // The roughings of the side before it on its spindle
+                // (mitcad#2549): what they leave in an undercut deeper
+                // than the insert cuts is what the finish takes. One that
+                // cannot be computed leaves nothing known.
+                let roughings: Vec<(RoughOp, TurningTool)> = earlier
+                    .iter()
+                    .filter(|o| !o.suppressed && o.sub_spindle == op.sub_spindle)
+                    .filter_map(|o| match &o.kind {
+                        OperationKind::TurnRough { side: s, plunge: p } if s == side => {
+                            self.turn_rough_op(machine, o, *s, *p).ok()
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                // An undercut deeper than the insert cuts, or than it
+                // cuts after the roughings: the depths in words, the
+                // deepest point as the place, its Z in the detail.
+                if let Some(deep) =
+                    turn::ops::too_deep_after(part, &finish_op, &engine_tool, &roughings)
+                        .map_err(|e| e.message)?
+                {
+                    return Err(too_deep_refusal(&tf.frame, &deep));
+                }
+                // Checked with the roughings: the engine need not refuse.
+                finish_op.roughed = true;
+                (
+                    turn::finish(part, &finish_op, &engine_tool),
+                    spindle_for(part.stock_radius),
+                )
+            }
             OperationKind::TurnGroove { side, z_from, z_to } => {
                 let (from, to) = match (
                     self.cam_value(z_from, Length)?,
@@ -856,6 +959,17 @@ impl<K: Kernel> Document<K> {
             .filter(|op| only.is_none_or(|ids| ids.contains(&op.id)))
             .map(|op| {
                 let fingerprint = self.cam_fingerprint(setup, &sf, Some(machine), op);
+                // The operations before it that run, for a finish after a
+                // roughing (mitcad#2549).
+                let at = setup
+                    .operations
+                    .iter()
+                    .position(|o| o.id == op.id)
+                    .unwrap_or(0);
+                let earlier: Vec<&CamOperation> = setup.operations[..at]
+                    .iter()
+                    .filter(|o| !o.suppressed && !misplaced.contains(&o.id))
+                    .collect();
                 let result = (!op.suppressed).then(|| match (&frame, &sub_frame) {
                     _ if misplaced.contains(&op.id) => Err(MAIN_AFTER_SUB.to_owned()),
                     (Err(e), _) => Err(e.clone()),
@@ -864,7 +978,7 @@ impl<K: Kernel> Document<K> {
                         // Turning, or a live tool on the sub-spindle's C
                         // axis (mitcad#2375), in its work coordinates.
                         let mut turned = if op.kind.is_turning() {
-                            self.turn_compute_operation(sub, machine, op)?
+                            self.turn_compute_operation(sub, machine, op, &earlier)?
                         } else {
                             self.live_compute_operation(setup, sub, machine, op)?
                         };
@@ -872,7 +986,7 @@ impl<K: Kernel> Document<K> {
                         Ok(turned)
                     }
                     (Ok(tf), _) if op.kind.is_turning() => {
-                        self.turn_compute_operation(tf, machine, op)
+                        self.turn_compute_operation(tf, machine, op, &earlier)
                     }
                     // A live tool on the C axis (mitcad#2067).
                     (Ok(tf), _) => self.live_compute_operation(setup, tf, machine, op),
@@ -1001,16 +1115,44 @@ impl<K: Kernel> Document<K> {
         if let Some(hand_over) = &run.hand_over {
             program.hand_over = Some(hand_over.clone()?);
         }
+        // Where each operation's manual G-code goes (mitcad#2506): after
+        // the operations written up to it, a suppressed one's where it
+        // would be.
+        let mut written_after: Vec<(u32, usize)> = Vec::new();
         for computed in &run.operations {
             match &computed.result {
                 None => {}
                 Some(Ok(op)) => program.operations.push(op.clone()),
                 Some(Err(e)) => return Err(format!("{}: {e}", computed.name)),
             }
+            written_after.push((computed.id, program.operations.len()));
         }
         if program.operations.is_empty() {
             return Err("The setup has no operations to write.".to_owned());
         }
+        for block in setup.lathe.iter().flat_map(|l| &l.manual_code) {
+            let at = match block.after {
+                None => 0,
+                Some(after) => written_after
+                    .iter()
+                    .find(|(id, _)| *id == after)
+                    .map(|&(_, at)| at)
+                    .ok_or_else(|| {
+                        format!(
+                            "The manual G-code {} follows an operation the setup does not have.",
+                            block.name
+                        )
+                    })?,
+            };
+            program.manual.push(turn::ManualBlock {
+                name: block.name.clone(),
+                at,
+                lines: block.lines(),
+            });
+        }
+        // The program in the order the blocks are written: by place, and
+        // in the setup's order at one place.
+        program.manual.sort_by_key(|b| b.at);
         Ok(program)
     }
 
@@ -1286,14 +1428,26 @@ impl<K: Kernel> Document<K> {
                     e.message
                 ))
             })?;
-        Ok(json!({
+        // The manual G-code's lines (mitcad#2506): not simulated, not read
+        // back; from the comment that opens each to the one that closes it.
+        let manual: Vec<Value> = program
+            .manual
+            .iter()
+            .zip(&check.manual)
+            .map(|(block, [from, to])| json!({"name": block.name, "from": from, "to": to}))
+            .collect();
+        let mut value = json!({
             "text": text,
             "extension": post.extension(),
             "dialect": post.id(),
             "label": post.label(),
             "units": settings.units,
             "cycles": check.cycles,
-        }))
+        });
+        if !manual.is_empty() {
+            value["manual"] = json!(manual);
+        }
+        Ok(value)
     }
 
     /// `cam_simulate` of a lathe setup: the turned stock's section (radii
@@ -1576,6 +1730,7 @@ mod tests {
             kind: turn::TurningToolKind::Turning,
             nose_radius: 0.8,
             max_depth: 4.0,
+            back_angle: None,
         };
         let roughing = turn::rough(
             &part,
@@ -1587,6 +1742,7 @@ mod tests {
                 allowance_z: 0.1,
                 clearance: 2.0,
                 feed: 0.25,
+                plunge: 0.0,
             },
             &tool,
         )
@@ -1597,6 +1753,8 @@ mod tests {
                 side: TurnSide::Outside,
                 clearance: 2.0,
                 feed: 0.1,
+                plunge: 0.0,
+                roughed: false,
             },
             &tool,
         )
@@ -1679,4 +1837,75 @@ mod tests {
         }
         assert!(checked > 100, "{checked} nodes on the fillet");
     }
+
+    /// A finish into a neck 2 mm deep with a 1 mm insert (mitcad#2503):
+    /// the person reads the depths in words, never the Z; the deepest
+    /// point (the wall's foot, x 13 at z -12) is the place, in the model
+    /// through the work frame; the detail gives the Z to agents.
+    #[test]
+    fn a_too_deep_undercut_is_refused_in_words_with_its_place() {
+        let part = TurnPart {
+            outside: vec![
+                turn::PV::new(0.0, 0.0),
+                turn::PV::new(15.0, 0.0),
+                turn::PV::new(15.0, -10.0),
+                turn::PV::new(13.0, -12.0),
+                turn::PV::new(13.0, -25.0),
+                turn::PV::new(15.0, -25.0),
+                turn::PV::new(15.0, -40.0),
+            ],
+            inside: vec![],
+            stock_radius: 16.0,
+            stock_inner_radius: 0.0,
+            stock_face: 0.0,
+        };
+        let tool = TurningTool {
+            number: 1,
+            offset: 0,
+            name: "Turning tool".into(),
+            kind: turn::TurningToolKind::Turning,
+            nose_radius: 0.4,
+            max_depth: 1.0,
+            back_angle: None,
+        };
+        let op = FinishOp {
+            side: TurnSide::Outside,
+            clearance: 2.0,
+            feed: 0.1,
+            plunge: 90.0,
+            roughed: false,
+        };
+        let deep = turn::ops::too_deep(&part, &op, &tool).unwrap().unwrap();
+        // The work's Z along the design's -Y, X along its X, 5 up.
+        let frame = WorkFrame {
+            origin: [0.0, 0.0, 5.0],
+            x: [1.0, 0.0, 0.0],
+            y: [0.0, 0.0, 1.0],
+            z: [0.0, -1.0, 0.0],
+        };
+        let error = crate::notice::FeatureError::from_text(&too_deep_refusal(&frame, &deep));
+        assert_eq!(
+            error.message,
+            "The undercut is 2 mm deep (radius), 1 mm deeper than the insert's depth of cut (1 mm): rough it first with a Turn Roughing that plunges, finish it with Don't plunge, or with an insert that cuts that deep."
+        );
+        assert_eq!(crate::notice::user_text_leaks(&error.message), None);
+        assert_eq!(
+            error.places,
+            vec![crate::notice::NoticePlace::point([13.0, 12.0, 5.0])]
+        );
+        assert_eq!(
+            error.detail,
+            "The undercut at Z -12 is 2 mm deep (radius), 1 mm deeper than the insert's depth of cut (1 mm)."
+        );
+        // The engine refuses with the same words.
+        assert_eq!(
+            turn::finish(&part, &op, &tool).unwrap_err().message,
+            error.message
+        );
+    }
 }
+
+// A finish into undercuts after the roughings before it (mitcad#2549).
+#[cfg(test)]
+#[path = "turning_rough_tests.rs"]
+mod turning_rough_tests;

@@ -208,6 +208,7 @@ fn panel_beside_bend() -> SheetState {
         gaps: Vec::new(),
         invalidated: None,
         blockers: Vec::new(),
+        approximation: None,
     }
 }
 

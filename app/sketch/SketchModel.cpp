@@ -147,6 +147,10 @@ bool SketchModel::load(const QJsonObject& sketch) {
     }
     projection.stale = stale;
     projection.section = flag(p, "section");
+    projection.automatic = flag(p, "automatic");
+    for (const QJsonValue& id : p.value(QStringLiteral("boundaries")).toArray()) {
+      projection.boundaries << id.toString();
+    }
     const QJsonArray described = p.value(QStringLiteral("candidate_curves")).toArray();
     for (int i = 0; i < candidates.size(); ++i) {
       const QJsonObject curve = described.at(i).toObject();
@@ -554,6 +558,18 @@ const OffsetData* SketchModel::offsetOf(const QString& curve) const {
     }
   }
   return nullptr;
+}
+
+bool SketchModel::automaticCurve(const QString& curve) const {
+  return std::any_of(projections.cbegin(), projections.cend(), [&curve](const ProjectionData& p) {
+    return p.automatic && p.entities.contains(curve);
+  });
+}
+
+bool SketchModel::profileBoundary(const QString& curve) const {
+  return std::any_of(projections.cbegin(), projections.cend(), [&curve](const ProjectionData& p) {
+    return p.automatic && p.boundaries.contains(curve);
+  });
 }
 
 const EquationData* SketchModel::equationOf(const QString& curve) const {

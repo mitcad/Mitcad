@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -58,6 +59,18 @@
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 #include <gp_Vec2d.hxx>
+
+// Extend past trimmed boundaries of curved faces (mitcad#2525).
+#include <BRepLib.hxx>
+#include <Geom2dAPI_Interpolate.hxx>
+#include <Geom2d_BSplineCurve.hxx>
+#include <Geom_BezierSurface.hxx>
+#include <Geom_OffsetSurface.hxx>
+#include <NCollection_Array2.hxx>
+#include <Precision.hxx>
+#include <TopoDS_Iterator.hxx>
+#include <TopoDS_Wire.hxx>
+#include <gp_Trsf.hxx>
 
 #include "face_select.hpp"
 #include "free_loops.hpp"
@@ -776,6 +789,656 @@ TopoDS_Face extended_face(const TopoDS_Face& face, const std::array<bool, 4>& si
   return result;
 }
 
+// --- Extend past trimmed boundaries (mitcad#2525, GitHub mitcad/Mitcad#689)
+//
+// A face whose picked edges do not run along the sides of its surface's
+// parameter range, or whose surface reaches past its trims (a rounded
+// corner of an offset shell, a curved edge of a plane), is extended
+// Natural along its surface: the surface continued as it runs (an analytic
+// surface is itself, a B-spline its end spans' polynomials carried on, an
+// offset surface the offset of its continued basis), and on it, from each
+// point of the edge, a geodesic square to the edge `distance` long. The
+// face keeps its other edges (its trims elsewhere); the picked edges give
+// way to the far curve through the geodesics' ends and two sides, one at
+// each end of a run of picked edges, that continue the face's neighbouring
+// edges as the planar path's sides do.
+
+// Far corners of the extensions of neighbouring faces closer than this are
+// sewn together: the import's geometric tolerance (mitcad#224). Two
+// surfaces tangent along their shared edge, each continued its own way,
+// part a little past the edge's end.
+constexpr double kJoin = 0.01;
+
+// The tolerance of the edges built on a continued surface.
+constexpr double kEdgeTolerance = 1.0e-6;
+
+// The length of a geodesic's steps (fourth order: 0.05 mm keeps a path on
+// a 1 mm radius within a nanometre).
+constexpr double kWalkStep = 0.05;
+
+// A control point in homogeneous coordinates: x w, y w, z w, w.
+using Homogeneous = std::array<double, 4>;
+
+// The control points of the Bezier polynomial `points` over [0, t] (`left`)
+// or over [t, 1]: its de Casteljau triangle at t. A t outside [0, 1]
+// carries the polynomial on past that end.
+std::vector<Homogeneous> subdivided(std::vector<Homogeneous> points, double t, bool left) {
+  const std::size_t n = points.size();
+  std::vector<Homogeneous> result(n);
+  for (std::size_t level = 0; level < n; ++level) {
+    if (left) {
+      result[level] = points.front();
+    } else {
+      result[n - 1 - level] = points[n - 1 - level];
+    }
+    for (std::size_t i = 0; i + 1 < n - level; ++i) {
+      for (std::size_t k = 0; k < 4; ++k) {
+        points[i][k] = (1.0 - t) * points[i][k] + t * points[i + 1][k];
+      }
+    }
+  }
+  return result;
+}
+
+// The B-spline continued `delta` (in its parameter) past the start or the
+// end (`after`) of its U or V range, not periodic that way: its end span's
+// polynomial carried on. Over its own range it is the same surface of the
+// same parameters.
+occ::handle<Geom_BSplineSurface> continued(const occ::handle<Geom_BSplineSurface>& spline, bool in_u, bool after,
+                                           double delta) {
+  const occ::handle<Geom_BSplineSurface> s = occ::down_cast<Geom_BSplineSurface>(spline->Copy());
+  const int degree = in_u ? s->UDegree() : s->VDegree();
+  const int knots = in_u ? s->NbUKnots() : s->NbVKnots();
+  // The end span's inner knot raised to the degree: the span's own poles
+  // are then its polynomial's (a Bezier piece).
+  const int inner = after ? knots - 1 : 2;
+  int inner_multiplicity = degree;
+  if (knots > 2) {
+    inner_multiplicity = in_u ? s->UMultiplicity(inner) : s->VMultiplicity(inner);
+  }
+  if (inner_multiplicity < degree) {
+    if (in_u) {
+      s->IncreaseUMultiplicity(inner, degree);
+    } else {
+      s->IncreaseVMultiplicity(inner, degree);
+    }
+  }
+  const int nu = s->NbUPoles();
+  const int nv = s->NbVPoles();
+  NCollection_Array2<gp_Pnt> poles(1, nu, 1, nv);
+  NCollection_Array2<double> weights(1, nu, 1, nv);
+  for (int i = 1; i <= nu; ++i) {
+    for (int j = 1; j <= nv; ++j) {
+      poles(i, j) = s->Pole(i, j);
+      weights(i, j) = s->Weight(i, j);
+    }
+  }
+  NCollection_Array1<double> uknots(1, s->NbUKnots());
+  NCollection_Array1<int> umults(1, s->NbUKnots());
+  for (int i = 1; i <= s->NbUKnots(); ++i) {
+    uknots(i) = s->UKnot(i);
+    umults(i) = s->UMultiplicity(i);
+  }
+  NCollection_Array1<double> vknots(1, s->NbVKnots());
+  NCollection_Array1<int> vmults(1, s->NbVKnots());
+  for (int i = 1; i <= s->NbVKnots(); ++i) {
+    vknots(i) = s->VKnot(i);
+    vmults(i) = s->VMultiplicity(i);
+  }
+  NCollection_Array1<double>& along = in_u ? uknots : vknots;
+  const double lo = along(after ? knots - 1 : 1);
+  const double hi = along(after ? knots : 2);
+  // The span [lo, hi] as [0, 1]: the polynomial over [lo, hi + delta] is
+  // its left part at t > 1, over [lo - delta, hi] its right part at t < 0.
+  const double t = after ? (hi + delta - lo) / (hi - lo) : -delta / (hi - lo);
+  const int count = in_u ? nu : nv;
+  const int across = in_u ? nv : nu;
+  const int first = after ? count - degree : 1;
+  for (int j = 1; j <= across; ++j) {
+    std::vector<Homogeneous> bezier;
+    for (int i = first; i <= first + degree; ++i) {
+      const gp_Pnt& p = in_u ? poles(i, j) : poles(j, i);
+      const double w = in_u ? weights(i, j) : weights(j, i);
+      bezier.push_back({p.X() * w, p.Y() * w, p.Z() * w, w});
+    }
+    const std::vector<Homogeneous> part = subdivided(bezier, t, after);
+    for (int k = 0; k <= degree; ++k) {
+      const Homogeneous& h = part[static_cast<std::size_t>(k)];
+      if (!(h[3] > 0.0)) {
+        throw std::runtime_error("extend: the surface could not be continued (its weights turn negative)");
+      }
+      const gp_Pnt p(h[0] / h[3], h[1] / h[3], h[2] / h[3]);
+      if (in_u) {
+        poles(first + k, j) = p;
+        weights(first + k, j) = h[3];
+      } else {
+        poles(j, first + k) = p;
+        weights(j, first + k) = h[3];
+      }
+    }
+  }
+  along(after ? knots : 1) = after ? hi + delta : lo - delta;
+  occ::handle<Geom_BSplineSurface> result;
+  if (s->IsURational() || s->IsVRational()) {
+    result = new Geom_BSplineSurface(poles, weights, uknots, vknots, umults, vmults, s->UDegree(), s->VDegree(),
+                                     s->IsUPeriodic(), s->IsVPeriodic());
+  } else {
+    result = new Geom_BSplineSurface(poles, uknots, vknots, umults, vmults, s->UDegree(), s->VDegree(),
+                                     s->IsUPeriodic(), s->IsVPeriodic());
+  }
+  // The inner knot back to its own multiplicity: the surface did not
+  // change there (left as it is where the removal finds it would).
+  if (knots > 2 && inner_multiplicity < degree) {
+    if (in_u) {
+      result->RemoveUKnot(inner, inner_multiplicity, Precision::Confusion());
+    } else {
+      result->RemoveVKnot(inner, inner_multiplicity, Precision::Confusion());
+    }
+  }
+  return result;
+}
+
+// How far past the start or the end of its U or V parameters the B-spline
+// must be continued to run `reach` on along the surface: by the slowest
+// speed of the parameter across that end, no more than 19 times the end
+// span (the continued span's control points grow as that ratio to the
+// power of the degree).
+double parameter_reach(const Geom_BSplineSurface& spline, bool in_u, bool after, double reach) {
+  double u1 = 0, u2 = 0, v1 = 0, v2 = 0;
+  spline.Bounds(u1, u2, v1, v2);
+  double slowest = std::numeric_limits<double>::max();
+  double fastest = 0.0;
+  for (int i = 0; i <= 8; ++i) {
+    const double s = i / 8.0;
+    const double u = in_u ? (after ? u2 : u1) : u1 + (u2 - u1) * s;
+    const double v = in_u ? v1 + (v2 - v1) * s : (after ? v2 : v1);
+    gp_Pnt p;
+    gp_Vec du;
+    gp_Vec dv;
+    spline.D1(u, v, p, du, dv);
+    const double speed = (in_u ? du : dv).Magnitude();
+    slowest = std::min(slowest, speed);
+    fastest = std::max(fastest, speed);
+  }
+  const int knots = in_u ? spline.NbUKnots() : spline.NbVKnots();
+  const auto knot = [&](int i) { return in_u ? spline.UKnot(i) : spline.VKnot(i); };
+  const double span = after ? knot(knots) - knot(knots - 1) : knot(2) - knot(1);
+  const double speed = std::max(slowest, 1.0e-3 * fastest);
+  if (!(speed > 1.0e-12)) {
+    return span;
+  }
+  return std::min(1.5 * reach / speed, 19.0 * span);
+}
+
+// The surface continued past its bounds as it runs (Natural), at least
+// `reach` along it where it is bounded: an analytic surface is itself
+// (unbounded or periodic, a sphere stops at its poles), a B-spline or a
+// Bezier its end spans' polynomials carried on, an offset surface the
+// offset of its basis continued. Of the same parameters over its own
+// range, so that a face's curves on it stay.
+occ::handle<Geom_Surface> natural_surface(const occ::handle<Geom_Surface>& surface, double reach) {
+  const occ::handle<Geom_RectangularTrimmedSurface> trimmed = occ::down_cast<Geom_RectangularTrimmedSurface>(surface);
+  if (!trimmed.IsNull()) {
+    return natural_surface(trimmed->BasisSurface(), reach);
+  }
+  const occ::handle<Geom_OffsetSurface> offset = occ::down_cast<Geom_OffsetSurface>(surface);
+  if (!offset.IsNull()) {
+    const occ::handle<Geom_Surface> basis = natural_surface(offset->BasisSurface(), reach);
+    if (basis == offset->BasisSurface()) {
+      return surface;
+    }
+    return new Geom_OffsetSurface(basis, offset->Offset(), true);
+  }
+  occ::handle<Geom_BSplineSurface> spline = occ::down_cast<Geom_BSplineSurface>(surface);
+  if (spline.IsNull()) {
+    const occ::handle<Geom_BezierSurface> bezier = occ::down_cast<Geom_BezierSurface>(surface);
+    if (bezier.IsNull()) {
+      return surface;
+    }
+    spline = GeomConvert::SurfaceToBSplineSurface(bezier);
+  }
+  const occ::handle<Geom_BSplineSurface> own = spline;
+  for (const bool in_u : {true, false}) {
+    if (in_u ? spline->IsUPeriodic() : spline->IsVPeriodic()) {
+      continue;
+    }
+    for (const bool after : {false, true}) {
+      spline = continued(spline, in_u, after, parameter_reach(*spline, in_u, after, reach));
+    }
+  }
+  // The same surface over its own range.
+  double u1 = 0, u2 = 0, v1 = 0, v2 = 0;
+  own->Bounds(u1, u2, v1, v2);
+  for (int i = 0; i <= 4; ++i) {
+    for (int j = 0; j <= 4; ++j) {
+      const double u = u1 + (u2 - u1) * i / 4.0;
+      const double v = v1 + (v2 - v1) * j / 4.0;
+      const gp_Pnt was = own->Value(u, v);
+      if (was.Distance(spline->Value(u, v)) > 1.0e-6 + 1.0e-12 * gp_Vec(was.XYZ()).Magnitude()) {
+        throw std::runtime_error("extend: the surface could not be continued");
+      }
+    }
+  }
+  return spline;
+}
+
+// Geodesics on a surface: paths that run straight on along it, in its
+// parameters (the geodesic equations, fourth-order Runge-Kutta by arc
+// length).
+class Walk {
+public:
+  explicit Walk(occ::handle<Geom_Surface> surface) : m_surface(std::move(surface)) {
+    m_surface->Bounds(m_u1, m_u2, m_v1, m_v2);
+  }
+
+  gp_Pnt point(const gp_Pnt2d& uv) const { return m_surface->Value(uv.X(), uv.Y()); }
+
+  // The unit normal at uv, of the surface's parameters.
+  gp_Vec normal(const gp_Pnt2d& uv) const {
+    gp_Pnt p;
+    gp_Vec du;
+    gp_Vec dv;
+    m_surface->D1(uv.X(), uv.Y(), p, du, dv);
+    const gp_Vec n = du.Crossed(dv);
+    if (n.Magnitude() < 1.0e-12) {
+      throw std::runtime_error("extend: the surface has no normal where the extension starts");
+    }
+    return n.Normalized();
+  }
+
+  // The geodesic leaving uv along `direction` (put into the tangent
+  // plane), `length` long: its points in the parameters, uv first.
+  std::vector<gp_Pnt2d> path(const gp_Pnt2d& uv, const gp_Vec& direction, double length) const {
+    gp_Pnt p;
+    gp_Vec su;
+    gp_Vec sv;
+    m_surface->D1(uv.X(), uv.Y(), p, su, sv);
+    const gp_Vec n = normal(uv);
+    gp_Vec d = direction - n * direction.Dot(n);
+    if (d.Magnitude() < 1.0e-12) {
+      throw std::runtime_error("extend: a direction across an edge leaves the surface");
+    }
+    d.Normalize();
+    const double e = su.Dot(su);
+    const double f = su.Dot(sv);
+    const double g = sv.Dot(sv);
+    const double det = e * g - f * f;
+    const double a = d.Dot(su);
+    const double b = d.Dot(sv);
+    State y{uv.X(), uv.Y(), (g * a - f * b) / det, (e * b - f * a) / det};
+    const int steps = std::clamp(static_cast<int>(std::ceil(length / kWalkStep)), 16, 512);
+    const double h = length / steps;
+    std::vector<gp_Pnt2d> points{uv};
+    for (int i = 0; i < steps; ++i) {
+      const State k1 = rate(y);
+      const State k2 = rate(moved(y, k1, h / 2));
+      const State k3 = rate(moved(y, k2, h / 2));
+      const State k4 = rate(moved(y, k3, h));
+      for (std::size_t k = 0; k < 4; ++k) {
+        y[k] += h / 6.0 * (k1[k] + 2.0 * k2[k] + 2.0 * k3[k] + k4[k]);
+      }
+      inside(y[0], y[1]);
+      points.emplace_back(y[0], y[1]);
+    }
+    return points;
+  }
+
+private:
+  // u, v and their rates by arc length.
+  using State = std::array<double, 4>;
+
+  static State moved(const State& y, const State& rate, double h) {
+    return {y[0] + rate[0] * h, y[1] + rate[1] * h, y[2] + rate[2] * h, y[3] + rate[3] * h};
+  }
+
+  // The geodesic's rates: the surface's acceleration along the path has
+  // no part in its tangent plane.
+  State rate(const State& y) const {
+    inside(y[0], y[1]);
+    gp_Pnt p;
+    gp_Vec su;
+    gp_Vec sv;
+    gp_Vec suu;
+    gp_Vec svv;
+    gp_Vec suv;
+    m_surface->D2(y[0], y[1], p, su, sv, suu, svv, suv);
+    const double e = su.Dot(su);
+    const double f = su.Dot(sv);
+    const double g = sv.Dot(sv);
+    const double det = e * g - f * f;
+    if (!(det > 1.0e-18 * std::max(1.0, e * g))) {
+      throw std::runtime_error("extend: the surface has no direction where the extension reaches");
+    }
+    const gp_Vec acceleration = suu * (y[2] * y[2]) + suv * (2.0 * y[2] * y[3]) + svv * (y[3] * y[3]);
+    const double ru = -acceleration.Dot(su);
+    const double rv = -acceleration.Dot(sv);
+    return {y[2], y[3], (g * ru - f * rv) / det, (e * rv - f * ru) / det};
+  }
+
+  void inside(double u, double v) const {
+    const double tu = 1.0e-9 * std::max(1.0, std::abs(u));
+    const double tv = 1.0e-9 * std::max(1.0, std::abs(v));
+    if ((!m_surface->IsUPeriodic() && (u < m_u1 - tu || u > m_u2 + tu)) ||
+        (!m_surface->IsVPeriodic() && (v < m_v1 - tv || v > m_v2 + tv))) {
+      throw std::invalid_argument("unsupported: extend past where the face's surface ends");
+    }
+  }
+
+  occ::handle<Geom_Surface> m_surface;
+  double m_u1 = 0.0;
+  double m_u2 = 0.0;
+  double m_v1 = 0.0;
+  double m_v2 = 0.0;
+};
+
+// The tangent of the edge, as its wire runs, where the wire enters it or
+// leaves it (`at_end`).
+gp_Vec running(const TopoDS_Edge& edge, bool at_end) {
+  const BRepAdaptor_Curve curve(edge);
+  const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+  gp_Pnt p;
+  gp_Vec d;
+  curve.D1(at_end != reversed ? curve.LastParameter() : curve.FirstParameter(), p, d);
+  if (reversed) {
+    d.Reverse();
+  }
+  return d;
+}
+
+// A picked edge of a curved face's wire and its extension.
+struct Reach {
+  TopoDS_Edge edge; // as the wire runs
+  occ::handle<Geom2d_Curve> pcurve;
+  double from = 0.0; // its parameters where the wire enters it
+  double to = 0.0;   // and leaves it
+  std::vector<gp_Pnt2d> far; // `distance` across it, as the wire runs
+  gp_Vec out_from;           // across it, away from the face, at its ends
+  gp_Vec out_to;
+};
+
+Reach reach_of(const TopoDS_Edge& edge, const TopoDS_Face& face, const Walk& walk, double distance) {
+  Reach reach;
+  reach.edge = edge;
+  double first = 0.0;
+  double last = 0.0;
+  reach.pcurve = BRep_Tool::CurveOnSurface(edge, face, first, last);
+  if (reach.pcurve.IsNull()) {
+    throw std::runtime_error("extend: an edge has no curve on its face");
+  }
+  const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+  reach.from = reversed ? last : first;
+  reach.to = reversed ? first : last;
+  constexpr int samples = 32;
+  for (int i = 0; i <= samples; ++i) {
+    const double t = reach.from + (reach.to - reach.from) * i / samples;
+    const gp_Vec out(detail::across_edge(edge, face, t));
+    reach.far.push_back(walk.path(reach.pcurve->Value(t), out, distance).back());
+    if (i == 0) {
+      reach.out_from = out;
+    }
+    if (i == samples) {
+      reach.out_to = out;
+    }
+  }
+  return reach;
+}
+
+// sin(kMinEndAngleDegrees): a side continues a neighbouring edge, and two
+// picked edges meet in a mitre, only as steep as this to the end line.
+double flattest() { return std::sin(kMinEndAngleDegrees * std::acos(-1.0) / 180.0); }
+
+// Where the extensions of two picked edges of a face that follow each
+// other in a wire meet, `a` entering their vertex and `b` leaving it: the
+// mitre, along the geodesic between their directions across them. Smooth
+// there, `distance` across both.
+gp_Pnt2d joint(const Reach& a, const Reach& b, const Walk& walk, double distance) {
+  const gp_Pnt2d uv = a.pcurve->Value(a.to);
+  const double cosine = std::clamp(a.out_to.Dot(b.out_from), -1.0, 1.0);
+  if (cosine < 1.0 - 1.0e-6) {
+    if (running(b.edge, false).Dot(a.out_to) > 0.0) {
+      throw std::invalid_argument("unsupported: extend round an inner corner between picked edges of a curved face");
+    }
+    // The mitre meets the end lines at half the turn.
+    if (std::sqrt((1.0 + cosine) / 2.0) < flattest()) {
+      throw std::invalid_argument("unsupported: extend round a sharp corner between picked edges of a curved face");
+    }
+  }
+  return walk.path(uv, a.out_to + b.out_from, distance * std::sqrt(2.0 / (1.0 + cosine))).back();
+}
+
+// The side of a run of picked edges at its end `vertex` (at uv), where the
+// face's unpicked edge `neighbour` meets it: the geodesic that continues
+// the neighbour up to the end line (as far as `distance` across the
+// edge), or square to the edge (`out`, away from the face) where the
+// neighbour turns back into the face or meets the end line more flatly
+// than kMinEndAngleDegrees.
+std::vector<gp_Pnt2d> side(const TopoDS_Edge& neighbour, const TopoDS_Vertex& vertex, const gp_Pnt2d& uv,
+                           const gp_Vec& out, const Walk& walk, double distance) {
+  gp_Vec along;
+  if (!neighbour.IsNull() && !BRep_Tool::Degenerated(neighbour) &&
+      continuation(neighbour, vertex, gp_Dir(walk.normal(uv)), along)) {
+    const double rise = along.Dot(out);
+    if (rise >= flattest()) {
+      return walk.path(uv, along, distance / rise);
+    }
+  }
+  return walk.path(uv, out, distance);
+}
+
+TopoDS_Vertex vertex_at(const gp_Pnt& point) {
+  TopoDS_Vertex vertex;
+  BRep_Builder().MakeVertex(vertex, point, kEdgeTolerance);
+  return vertex;
+}
+
+// An edge of the face (built on its continued surface) from `from` to `to`
+// through the points in its parameters.
+TopoDS_Edge edge_through(const std::vector<gp_Pnt2d>& points, const TopoDS_Vertex& from, const TopoDS_Vertex& to,
+                         const TopoDS_Face& face) {
+  std::vector<gp_Pnt2d> kept;
+  for (const gp_Pnt2d& p : points) {
+    if (kept.empty() || kept.back().Distance(p) > 1.0e-12) {
+      kept.push_back(p);
+    }
+  }
+  if (kept.size() < 2) {
+    throw std::runtime_error("extend: an edge of the extension has no length");
+  }
+  occ::handle<NCollection_HArray1<gp_Pnt2d>> array =
+      new NCollection_HArray1<gp_Pnt2d>(1, static_cast<int>(kept.size()));
+  for (std::size_t i = 0; i < kept.size(); ++i) {
+    array->SetValue(static_cast<int>(i) + 1, kept[i]);
+  }
+  Geom2dAPI_Interpolate interpolate(array, false, 1.0e-12);
+  interpolate.Perform();
+  if (!interpolate.IsDone()) {
+    throw std::runtime_error("extend: an edge of the extension could not be fitted");
+  }
+  const occ::handle<Geom2d_BSplineCurve> curve = interpolate.Curve();
+  BRep_Builder builder;
+  TopoDS_Edge edge;
+  builder.MakeEdge(edge);
+  builder.UpdateEdge(edge, curve, face, kEdgeTolerance);
+  builder.Add(edge, from.Oriented(TopAbs_FORWARD));
+  builder.Add(edge, to.Oriented(TopAbs_REVERSED));
+  builder.Range(edge, curve->FirstParameter(), curve->LastParameter());
+  if (!BRepLib::BuildCurve3d(edge, kEdgeTolerance)) {
+    throw std::runtime_error("extend: an edge of the extension could not be built");
+  }
+  return edge;
+}
+
+bool among(const std::vector<TopoDS_Shape>& shapes, const TopoDS_Shape& shape) {
+  return std::any_of(shapes.begin(), shapes.end(), [&](const TopoDS_Shape& s) { return s.IsSame(shape); });
+}
+
+// A wire of the face (`forward`: the face's own orientation) for `result`
+// (the face on its continued surface): each run of picked edges replaced
+// by a side from its first vertex, the far curves and a side back to its
+// last vertex; a wire of picked edges only by its far curves.
+TopoDS_Wire extended_wire(const TopoDS_Wire& wire, const TopoDS_Face& forward, const TopoDS_Face& result,
+                          const std::vector<TopoDS_Shape>& picked, const Walk& walk, double distance) {
+  std::vector<TopoDS_Edge> order;
+  for (BRepTools_WireExplorer x(wire, forward); x.More(); x.Next()) {
+    order.push_back(x.Current());
+  }
+  const std::size_t n = order.size();
+  std::vector<bool> marks;
+  for (const TopoDS_Edge& edge : order) {
+    marks.push_back(among(picked, edge));
+  }
+  const bool all = std::all_of(marks.begin(), marks.end(), [](bool m) { return m; });
+  if (n == 0 || std::none_of(marks.begin(), marks.end(), [](bool m) { return m; })) {
+    return wire;
+  }
+  // From an unpicked edge, so that no run wraps round the start.
+  std::size_t start = 0;
+  while (!all && marks[start]) {
+    ++start;
+  }
+  BRep_Builder builder;
+  TopoDS_Wire made;
+  builder.MakeWire(made);
+  std::size_t i = 0;
+  while (i < n) {
+    const std::size_t at = (start + i) % n;
+    if (!marks[at]) {
+      builder.Add(made, order[at]);
+      ++i;
+      continue;
+    }
+    std::vector<Reach> run;
+    while (i < n && marks[(start + i) % n]) {
+      run.push_back(reach_of(order[(start + i) % n], forward, walk, distance));
+      ++i;
+    }
+    // The far vertices where the run's edges meet (a closed run: also its
+    // last and first).
+    std::vector<TopoDS_Vertex> joints;
+    const std::size_t m = run.size();
+    for (std::size_t k = 0; k + 1 < m || (all && k < m); ++k) {
+      Reach& a = run[k];
+      Reach& b = run[(k + 1) % m];
+      const gp_Pnt2d uv = joint(a, b, walk, distance);
+      a.far.back() = uv;
+      b.far.front() = uv;
+      joints.push_back(vertex_at(walk.point(uv)));
+    }
+    if (all) {
+      for (std::size_t k = 0; k < m; ++k) {
+        builder.Add(made, edge_through(run[k].far, joints[(k + m - 1) % m], joints[k], result));
+      }
+      continue;
+    }
+    const TopoDS_Edge& before = order[(at + n - 1) % n];
+    const TopoDS_Edge& after = order[(start + i) % n];
+    const TopoDS_Vertex first = TopExp::FirstVertex(run.front().edge, true);
+    const TopoDS_Vertex last = TopExp::LastVertex(run.back().edge, true);
+    const std::vector<gp_Pnt2d> rise = side(before, first, run.front().pcurve->Value(run.front().from),
+                                            run.front().out_from, walk, distance);
+    std::vector<gp_Pnt2d> fall =
+        side(after, last, run.back().pcurve->Value(run.back().to), run.back().out_to, walk, distance);
+    run.front().far.front() = rise.back();
+    run.back().far.back() = fall.back();
+    const TopoDS_Vertex rise_end = vertex_at(walk.point(rise.back()));
+    const TopoDS_Vertex fall_end = vertex_at(walk.point(fall.back()));
+    builder.Add(made, edge_through(rise, first, rise_end, result));
+    for (std::size_t k = 0; k < m; ++k) {
+      builder.Add(made, edge_through(run[k].far, k == 0 ? rise_end : joints[k - 1],
+                                     k + 1 == m ? fall_end : joints[k], result));
+    }
+    std::reverse(fall.begin(), fall.end());
+    builder.Add(made, edge_through(fall, fall_end, last, result));
+  }
+  return made;
+}
+
+// The face extended Natural `distance` along its surface past the picked
+// edges (see above), its other edges kept. Built on a copy: the input face
+// is only read.
+TopoDS_Face extended_past_trims(const TopoDS_Face& face, const std::vector<TopoDS_Edge>& edges, double distance) {
+  BRepBuilderAPI_Copy copier(face, true, false);
+  const TopoDS_Face copy = TopoDS::Face(copier.Shape());
+  std::vector<TopoDS_Shape> picked;
+  for (const TopoDS_Edge& edge : edges) {
+    picked.push_back(copier.ModifiedShape(edge));
+  }
+  TopLoc_Location location;
+  const occ::handle<Geom_Surface> own = BRep_Tool::Surface(copy, location);
+  if (own.IsNull()) {
+    throw std::invalid_argument("extend: a face has no surface");
+  }
+  // Long enough for a side that continues a neighbour at the flattest.
+  const occ::handle<Geom_Surface> surface = natural_surface(own, 4.0 * distance);
+  const Walk walk(location.IsIdentity()
+                      ? surface
+                      : occ::handle<Geom_Surface>(
+                            occ::down_cast<Geom_Surface>(surface->Transformed(location.Transformation()))));
+  BRep_Builder builder;
+  TopoDS_Face result;
+  builder.MakeFace(result, surface, location, BRep_Tool::Tolerance(copy));
+  const TopoDS_Face forward = TopoDS::Face(copy.Oriented(TopAbs_FORWARD));
+  // The kept edges on the continued surface, with their curves on the
+  // face's own (of the same parameters).
+  for (TopExp_Explorer x(forward, TopAbs_EDGE); x.More(); x.Next()) {
+    const TopoDS_Edge& edge = TopoDS::Edge(x.Current());
+    if (among(picked, edge)) {
+      continue;
+    }
+    const double tolerance = BRep_Tool::Tolerance(edge);
+    double a = 0.0;
+    double b = 0.0;
+    if (BRep_Tool::IsClosed(edge, forward)) {
+      const occ::handle<Geom2d_Curve> c1 =
+          BRep_Tool::CurveOnSurface(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD)), forward, a, b);
+      const occ::handle<Geom2d_Curve> c2 =
+          BRep_Tool::CurveOnSurface(TopoDS::Edge(edge.Oriented(TopAbs_REVERSED)), forward, a, b);
+      builder.UpdateEdge(edge, c1, c2, result, tolerance);
+    } else {
+      builder.UpdateEdge(edge, BRep_Tool::CurveOnSurface(edge, forward, a, b), result, tolerance);
+    }
+    builder.Range(edge, result, a, b);
+  }
+  for (TopoDS_Iterator w(forward); w.More(); w.Next()) {
+    if (w.Value().ShapeType() == TopAbs_WIRE) {
+      builder.Add(result, extended_wire(TopoDS::Wire(w.Value()), forward, result, picked, walk, distance));
+    }
+  }
+  BRepLib::UpdateTolerances(result);
+  result.Orientation(face.Orientation());
+  return result;
+}
+
+// The tolerance the faces are sewn with after an extension: kSewing, or,
+// where far corners of the extensions of different faces lie a little
+// apart (two surfaces tangent along their shared edge, each continued its
+// own way), up to kJoin, as far apart as they lie.
+double joining_tolerance(const Shape& body, const std::vector<TopoDS_Shape>& extended) {
+  std::vector<gp_Pnt> old;
+  for (int i = 0; i < body.vertex_count(); ++i) {
+    old.push_back(BRep_Tool::Pnt(body.vertex(i)));
+  }
+  std::vector<std::pair<std::size_t, gp_Pnt>> fresh;
+  for (std::size_t k = 0; k < extended.size(); ++k) {
+    for (TopExp_Explorer v(extended[k], TopAbs_VERTEX); v.More(); v.Next()) {
+      const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(v.Current()));
+      if (std::none_of(old.begin(), old.end(), [&](const gp_Pnt& q) { return q.Distance(p) <= kSewing; })) {
+        fresh.emplace_back(k, p);
+      }
+    }
+  }
+  double gap = 0.0;
+  for (std::size_t i = 0; i < fresh.size(); ++i) {
+    for (std::size_t j = i + 1; j < fresh.size(); ++j) {
+      const double d = fresh[i].second.Distance(fresh[j].second);
+      if (fresh[i].first != fresh[j].first && d > kSewing && d <= kJoin) {
+        gap = std::max(gap, d);
+      }
+    }
+  }
+  return gap > 0.0 ? std::min(kJoin, 1.5 * gap) : kSewing;
+}
+
 } // namespace
 
 ShapePtr offset_surface(const std::string& feature, const Shape& body, const std::vector<std::string>& faces,
@@ -1001,6 +1664,12 @@ ShapePtr extend_surface(const Shape& body, const std::vector<std::string>& edges
     // Planar faces trimmed inside their planes -> their edges to extend
     // past (mitcad#1955).
     std::map<int, std::vector<TopoDS_Edge>> planes;
+    // Faces extended Natural past edges that need not run along their
+    // parameter range's sides -> those edges (mitcad#2525): curved faces
+    // trimmed inside their surfaces, and planes past curved edges.
+    std::map<int, std::vector<TopoDS_Edge>> trims;
+    // The picked edges by face, in the order picked.
+    std::map<int, std::vector<int>> by_face;
     for (const int e : picked_edges(body, edges, openings)) {
       const std::vector<int> faces = edge_faces.at(e);
       if (faces.size() != 1 || BRep_Tool::IsClosed(body.edge(e), body.face(faces.front()))) {
@@ -1008,33 +1677,62 @@ ShapePtr extend_surface(const Shape& body, const std::vector<std::string>& edges
         throw std::invalid_argument(
             edge_error(body.edge_name(e), "extend: an edge" + why, "extend: edge " + body.edge_name(e) + why));
       }
-      const TopoDS_Face& face = body.face(faces.front());
+      by_face[faces.front()].push_back(e);
+    }
+    for (const auto& [f, picked] : by_face) {
+      const TopoDS_Face& face = body.face(f);
+      std::vector<TopoDS_Edge> list;
+      for (const int e : picked) {
+        list.push_back(body.edge(e));
+      }
       if (planar(face) && !untrimmed(face)) {
-        planes[faces.front()].push_back(body.edge(e));
+        // Straight edges as the planar path takes them; past a curved one
+        // the plane continues as itself in every mode.
+        const bool straight = std::all_of(list.begin(), list.end(), [](const TopoDS_Edge& edge) {
+          return BRepAdaptor_Curve(edge).GetType() == GeomAbs_Line;
+        });
+        (straight ? planes : trims)[f] = list;
         continue;
       }
-      const int side = side_of(body.edge(e), body.face(faces.front()));
-      if (side < 0) {
-        const std::string why = ", which does not run along a side of its face's parameter range";
-        throw std::invalid_argument(edge_error(body.edge_name(e), "unsupported: extend of an edge" + why,
-                                               "unsupported: extend of edge " + body.edge_name(e) + why));
+      std::vector<int> along;
+      for (const int e : picked) {
+        along.push_back(side_of(body.edge(e), face));
       }
-      sides[faces.front()][static_cast<std::size_t>(side)] = true;
+      if (mode == ExtendMode::Natural &&
+          (!untrimmed(face) || std::any_of(along.begin(), along.end(), [](int side) { return side < 0; }))) {
+        trims[f] = list;
+        continue;
+      }
+      for (std::size_t i = 0; i < picked.size(); ++i) {
+        const int e = picked[i];
+        if (along[i] < 0) {
+          const std::string why = ", which does not run along a side of its face's parameter range";
+          throw std::invalid_argument(edge_error(body.edge_name(e), "unsupported: extend of an edge" + why,
+                                                 "unsupported: extend of edge " + body.edge_name(e) + why));
+        }
+        sides[f][static_cast<std::size_t>(along[i])] = true;
+      }
     }
     std::vector<TopoDS_Shape> parts;
     std::vector<Shape::NamedFace> named;
+    std::vector<TopoDS_Shape> extended;
     for (int f = 0; f < body.face_count(); ++f) {
       const auto found = sides.find(f);
       const auto plane = planes.find(f);
+      const auto trim = trims.find(f);
       const TopoDS_Shape face =
-          plane != planes.end() ? TopoDS_Shape(extended_planar_face(body.face(f), plane->second, distance))
+          plane != planes.end()  ? TopoDS_Shape(extended_planar_face(body.face(f), plane->second, distance))
+          : trim != trims.end()  ? TopoDS_Shape(extended_past_trims(body.face(f), trim->second, distance))
           : found == sides.end() ? TopoDS_Shape(body.face(f))
                                  : TopoDS_Shape(extended_face(body.face(f), found->second, distance, mode));
       parts.push_back(face);
       named.push_back({face, body.face_names(f)});
+      if (plane != planes.end() || trim != trims.end() || found != sides.end()) {
+        extended.push_back(face);
+      }
     }
     const Shape faces(detail::compound_or_single(parts), named);
-    return stitch({&faces}, kSewing);
+    return stitch({&faces}, joining_tolerance(body, extended));
   });
 }
 

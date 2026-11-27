@@ -165,7 +165,27 @@ impl<P> MoveDef<P> {
     }
 }
 
+/// The rows of the identity matrix.
+const IDENTITY_ROWS: [[f64; 4]; 3] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+];
+
 impl<P> MoveSpec<P> {
+    /// No motion: a free move by the identity matrix (the motion a Move
+    /// Face up to an object leaves out, mitcad#2548).
+    pub fn still() -> Self {
+        MoveSpec::Free {
+            matrix: IDENTITY_ROWS,
+        }
+    }
+
+    /// Whether this is [`MoveSpec::still`].
+    pub fn is_still(&self) -> bool {
+        matches!(self, MoveSpec::Free { matrix } if *matrix == IDENTITY_ROWS)
+    }
+
     /// Converts the value fields (slots `transform.x`, ...).
     // Written by hand: an enum, its slots by kind.
     pub(crate) fn map_params<Q, E>(

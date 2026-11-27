@@ -1,0 +1,12 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for Trim's drag (mitcad#2524): two free points that frame the view's fit (p1, p2); two horizontal lines from x = -25 to 25 at y = 10 and y = -10; and three vertical lines from y = -20 to 20 at x = -16, -4 and 12, each crossing both horizontal lines, so that the piece of each vertical line between y = -10 and 10 is bounded by two crossings."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-25,10],"end":[25,10]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-25,-10],"end":[25,-10]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-16,-20],"end":[-16,20]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-4,-20],"end":[-4,20]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[12,-20],"end":[12,20]}
+]

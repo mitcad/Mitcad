@@ -19,7 +19,13 @@ textures"), shipped with MitCad as files and read at run time
   into the programs with `include_bytes!`, as before mitcad#2218, each
   program linking the model carried its own copy: `mitcad` and
   `mitcad-cli` (`mitcad-render` and `mitcad-thumbnailer` do not link the
-  model), so the packages had the images twice.
+  model), so the packages had the images twice. `tools/appimage-test.sh`
+  also checks that the installed programs find and load them
+  (mitcad#2358): the AppImage's `mitcad-cli` lists every look with its
+  three images, its view draws a board in Wood - Birch with the texture,
+  and the extracted `mitcad-cli` lists an image changed in
+  `usr/share/mitcad/textures`, so it read that folder and not the
+  source tree's copy, which the build machine also has.
 
 - **Source:** MitCad's own images, made from noise by
   [`tools/wood-textures/generate.rs`](../../../tools/wood-textures/generate.rs)

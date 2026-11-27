@@ -137,6 +137,8 @@ QJsonObject sectionView(const QString& drawing, int sheet, const ToolPicks& pick
   }
   command.insert(QStringLiteral("flip"), yes(optionValue(tool, options, QStringLiteral("flip"))));
   command.insert(QStringLiteral("hatch"), yes(optionValue(tool, options, QStringLiteral("hatch"))));
+  // Only along the two clicks (mitcad#2479); the whole plane otherwise.
+  command.insert(QStringLiteral("bounded"), yes(optionValue(tool, options, QStringLiteral("bounded"))));
   const QString letter = optionValue(tool, options, QStringLiteral("letter")).trimmed();
   if (!letter.isEmpty()) {
     command.insert(QStringLiteral("letter"), letter);
@@ -825,7 +827,9 @@ QVector<DrawingToolDef> makeTools() {
                 Text::tr("Cuts a view along a line drawn on it"), SheetPick::Line,
                 Text::tr("Click the two ends of the section line on a view (Shift: no snap)"),
                 {text(QStringLiteral("letter"), Text::tr("Letter")), check(QStringLiteral("hatch"), Text::tr("Hatching"), true),
-                 check(QStringLiteral("flip"), Text::tr("Look the Other Way"), false)},
+                 check(QStringLiteral("flip"), Text::tr("Look the Other Way"), false),
+                 // A section limited to its line (mitcad#2479).
+                 check(QStringLiteral("bounded"), Text::tr("Only Along the Line"), false)},
                 &sectionView, true, Text::tr("Click where the section view goes"), nullptr, nullptr, false});
   tools.append({QStringLiteral("drawing.detail_view"), Text::tr("Detail View"), QStringLiteral("drawing-detail-view"),
                 Text::tr("Enlarges a circle of a view"), SheetPick::Circle,
@@ -1389,7 +1393,8 @@ QJsonObject viewEdit(const QString& drawing, int view, const QString& field, con
     changed.insert(field, yes(value));
     command.insert(QStringLiteral("style"), changed);
   } else if (field == QStringLiteral("aligned") || field == QStringLiteral("hatch") ||
-             field == QStringLiteral("flip") || field == QStringLiteral("center_marks") ||
+             field == QStringLiteral("flip") || field == QStringLiteral("bounded") ||
+             field == QStringLiteral("center_marks") ||
              field == QStringLiteral("retrieved_dimensions") || field == QStringLiteral("model_annotations") ||
              field == QStringLiteral("bend_notes")) {
     command.insert(field, yes(value));
@@ -1992,6 +1997,21 @@ QHash<QString, QString> weldFields(const QJsonObject& weld) {
           {QStringLiteral("all_around"), onOff(weld.value(QStringLiteral("all_around")).toBool())},
           {QStringLiteral("field"), onOff(weld.value(QStringLiteral("field")).toBool())},
           {QStringLiteral("tail"), weld.value(QStringLiteral("tail")).toString()}};
+}
+
+QVector<RepeatedText> repeatedTexts(const QStringList& texts) {
+  QVector<RepeatedText> out;
+  QHash<QString, qsizetype> at;
+  for (const QString& text : texts) {
+    const auto found = at.constFind(text);
+    if (found != at.constEnd()) {
+      ++out[found.value()].count;
+      continue;
+    }
+    at.insert(text, out.size());
+    out.append({text, 1});
+  }
+  return out;
 }
 
 } // namespace mitcad::drawings

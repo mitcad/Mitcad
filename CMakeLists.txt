@@ -7,6 +7,25 @@ if(POLICY CMP0141)
   cmake_policy(SET CMP0141 NEW)
 endif()
 
+# Linux on 64-bit ARM (aarch64): the Linux presets name the x86-64 triplet
+# x64-linux-dynamic; on an aarch64 machine the build takes vcpkg's
+# arm64-linux-dynamic instead (the same settings for the other
+# architecture), so the same presets build there. vcpkg's tool then uses
+# the system's CMake and Ninja (install-packages.sh), as it needs on ARM
+# Linux. Before project(), where the vcpkg toolchain installs the manifest.
+# An x86-64 machine keeps its triplet as it is.
+cmake_host_system_information(RESULT mitcad_host_os QUERY OS_NAME)
+cmake_host_system_information(RESULT mitcad_host_machine QUERY OS_PLATFORM)
+if(mitcad_host_os STREQUAL "Linux" AND mitcad_host_machine MATCHES "^(aarch64|arm64)$")
+  if(VCPKG_TARGET_TRIPLET STREQUAL "x64-linux-dynamic")
+    set(VCPKG_TARGET_TRIPLET arm64-linux-dynamic CACHE STRING
+        "vcpkg's triplet (arm64-linux-dynamic on an aarch64 Linux machine)" FORCE)
+  endif()
+  if(NOT DEFINED ENV{VCPKG_FORCE_SYSTEM_BINARIES})
+    set(ENV{VCPKG_FORCE_SYSTEM_BINARIES} 1)
+  endif()
+endif()
+
 # The Cycles render worker (View > Rendered, docs/rendering.md) is part of
 # every build: its prebuilt libraries must be there before the toolchain's
 # vcpkg install (vcpkg.json's dependencies include the renderer's).
@@ -30,7 +49,7 @@ endif()
 include(cmake/VcpkgCompilerCache.cmake)
 
 project(Mitcad
-  VERSION 0.74.0
+  VERSION 0.75.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 mitcad_vcpkg_compiler_cache_done()
@@ -289,6 +308,8 @@ target_compile_options(mitcad_warnings INTERFACE
 
 # Windows executables with the UTF-8 code page (mitcad_utf8_code_page).
 include(cmake/Utf8CodePage.cmake)
+# The C++ test bundles (mitcad_add_test_bundle, mitcad#2497).
+include(cmake/TestBundles.cmake)
 add_subdirectory(geometry)
 add_subdirectory(core)
 add_subdirectory(app)
@@ -347,6 +368,9 @@ if(BUILD_TESTING)
   # Every fixed choice's label is marked for the catalogues
   # (tools/choice-labels).
   add_subdirectory(tools/choice-labels)
+  # Every Rust test file is a module of a test binary
+  # (tools/rust-test-groups, mitcad#2496).
+  add_subdirectory(tools/rust-test-groups)
   # Every widget of the app that paints itself names its AppKit
   # presentation (tools/native-coverage). Not in this branch: the AppKit
   # frontend is not built, macOS uses the shared Qt UI

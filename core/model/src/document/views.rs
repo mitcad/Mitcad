@@ -26,6 +26,11 @@ pub struct NamedView {
     /// A perspective projection; orthographic when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub perspective: bool,
+    /// Perspective with Orthographic Faces (mitcad#2473): the view is
+    /// perspective, orthographic while it looks along one of the six face
+    /// directions; `perspective` then says what it was saved in.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub orthographic_faces: bool,
     /// How much of the model the view shows: its height at the target.
     pub height: f64,
 }

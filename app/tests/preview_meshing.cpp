@@ -90,6 +90,7 @@
 #include "mitcad/io/mesh.hpp"
 #include "report/CrashHandler.hpp"
 #include "view/ViewTessellation.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -866,7 +867,9 @@ void testAbandonedFaceAtExit() {
   QProcess child;
   child.setProcessEnvironment(environment);
   child.setProcessChannelMode(QProcess::ForwardedChannels);
-  child.start(QCoreApplication::applicationFilePath(), QStringList{QStringLiteral("--abandon-at-exit")});
+  // This test of its bundle (test_app_view preview_meshing), started again.
+  child.start(QCoreApplication::applicationFilePath(),
+              QStringList{QStringLiteral("preview_meshing"), QStringLiteral("--abandon-at-exit")});
   CHECK(child.waitForStarted(30000));
   const bool finished = child.waitForFinished(120000);
   CHECK(finished);
@@ -1542,7 +1545,7 @@ void testRemeshSmallCircles() {
   CHECK(again == adaptive);
 }
 
-int main(int argc, char** argv) {
+MITCAD_BUNDLED_TEST_ARGS(preview_meshing) {
   if (argc > 1 && std::strcmp(argv[1], "--abandon-at-exit") == 0) {
     return mitcad::endProcess(abandonFaceAtExit(argc, argv));
   }

@@ -66,6 +66,7 @@
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/pattern.hpp"
 #include "mitcad/geometry/query.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -597,7 +598,7 @@ void test_reported_join_of_all_bodies() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(join_many_bodies) {
   test::guarded("test_groups_of_meeting_boxes", test::test_groups_of_meeting_boxes);
   test::guarded("test_near_miss_in_a_row", test::test_near_miss_in_a_row);
   test::guarded("test_reported_nut_in_a_threaded_carriage", test::test_reported_nut_in_a_threaded_carriage);

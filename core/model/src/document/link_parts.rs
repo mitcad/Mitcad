@@ -500,14 +500,6 @@ impl<K: Kernel> Document<K> {
     ) -> Result<LinkPartsSet, ModelError> {
         let link = self.plain_design_link(component)?;
         let name = self.state.assembly.name(component);
-        // Kept with its components (mitcad#2209): the parent's joints may
-        // join them, which chosen parts would take apart.
-        if link.tree.is_some() {
-            return Err(invalid(format!(
-                "{name} keeps the components of its design; to link chosen parts of it, insert \
-                 the design again with Choose parts"
-            )));
-        }
         let folder = base
             .map(Path::to_path_buf)
             .or_else(|| self.source_directory());
@@ -528,6 +520,104 @@ impl<K: Kernel> Document<K> {
                 changed: false,
                 parts: link.parts,
                 messages: Vec::new(),
+            });
+        }
+        if let Some(tree) = &link.tree {
+            let origin = CopySource::Document(file.parent());
+            // Standing for the design's one component while it keeps that
+            // shape (mitcad#2429); the parts' paths are from its root.
+            let top = super::link_tree::top_now(tree, &source);
+            let read = self.design_tree(
+                &source,
+                &link.path,
+                &origin,
+                wanted.as_deref(),
+                Some((component, tree)),
+                top.as_ref(),
+            )?;
+            for part in read.parts.iter().flatten().filter(|part| part.gone) {
+                if link
+                    .parts
+                    .as_deref()
+                    .is_none_or(|old| !old.iter().any(|p| p.same_part(part)))
+                {
+                    check_found(std::slice::from_ref(part), &link.path)?;
+                }
+            }
+            let parts = read.parts.clone();
+            let numbers: BTreeSet<u32> = read
+                .root
+                .iter()
+                .zip(0u32..)
+                .map(|(body, index)| body.number.unwrap_or(index))
+                .collect();
+            let feature = link.feature;
+            let frames =
+                crate::joints::envelope_frames(&self.kernel, &self.state, &self.result, component);
+            let going = frames
+                .into_iter()
+                .filter(|frame| {
+                    frame_body(&frame.geometry).is_some_and(|body| {
+                        body.feature == feature && !numbers.contains(&body.index)
+                    })
+                })
+                .collect();
+            let protected: Vec<_> = self
+                .state
+                .features
+                .iter()
+                .filter(|entry| entry.component != component && !tree.holds(entry.component))
+                .filter(|entry| {
+                    self.result
+                        .result(entry.uid)
+                        .is_some_and(|result| result.status.is_ok())
+                })
+                .map(|entry| (entry.uid, entry.name.clone()))
+                .collect();
+            let update = super::link_tree::TreeUpdate {
+                component,
+                digest: digest(&text),
+                file: file_label(&link.path),
+                envelopes: self.read_tree_envelopes(
+                    &source,
+                    &link.path,
+                    read.parts.as_deref(),
+                    tree,
+                    read.top.as_ref(),
+                )?,
+                read,
+            };
+            let messages = self.apply_checked(
+                |state| {
+                    let mut messages = Vec::new();
+                    state.update_link_tree(update, &mut messages)?;
+                    if let Some(link) = state
+                        .assembly
+                        .component_mut(component)
+                        .and_then(|c| c.link.as_mut())
+                    {
+                        retain_unlinked_frames(link, &numbers, going);
+                    }
+                    Ok((format!("Choose Linked Parts of {name}"), messages))
+                },
+                |_, result| {
+                    for (uid, name) in protected {
+                        if !result
+                            .result(uid)
+                            .is_some_and(|result| result.status.is_ok())
+                        {
+                            return Err(invalid(format!(
+                                "{name} would no longer work with these linked parts"
+                            )));
+                        }
+                    }
+                    Ok(())
+                },
+            )?;
+            return Ok(LinkPartsSet {
+                changed: true,
+                parts,
+                messages,
             });
         }
         let position = self.state.require(link.feature)?;
@@ -649,14 +739,7 @@ impl<K: Kernel> Document<K> {
                 l.parts = saved_parts;
                 // Frames of origins whose bodies are back are dropped;
                 // those of bodies that went are kept.
-                l.unlinked.retain(|f| {
-                    frame_body(&f.geometry).is_none_or(|b| !numbers.contains(&b.index))
-                });
-                for frame in going {
-                    if !l.unlinked.iter().any(|f| f.geometry == frame.geometry) {
-                        l.unlinked.push(frame);
-                    }
-                }
+                retain_unlinked_frames(l, &numbers, going);
             }
             Ok((label, ()))
         })?;
@@ -766,6 +849,25 @@ fn frame_body(geometry: &GeomRef) -> Option<BodyUid> {
             Some(*body)
         }
         _ => None,
+    }
+}
+
+fn retain_unlinked_frames(
+    link: &mut crate::assembly::ExternalLink,
+    numbers: &BTreeSet<u32>,
+    going: Vec<EnvelopeFrame>,
+) {
+    link.unlinked.retain(|frame| {
+        frame_body(&frame.geometry).is_none_or(|body| !numbers.contains(&body.index))
+    });
+    for frame in going {
+        if !link
+            .unlinked
+            .iter()
+            .any(|saved| saved.geometry == frame.geometry)
+        {
+            link.unlinked.push(frame);
+        }
     }
 }
 

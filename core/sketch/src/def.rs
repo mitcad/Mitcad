@@ -918,7 +918,9 @@ impl<P> SketchDef<P> {
     /// as the user's own curves and those of the face's outline that the
     /// sketch got when it was made ([`Projection::automatic`], mitcad#2197),
     /// which bound profiles only outside the areas of the own curves
-    /// ([`crate::regions::own_area_regions`]).
+    /// ([`crate::regions::own_area_regions`]). The outline's curves the
+    /// user chose to bound profiles ([`Projection::boundaries`],
+    /// mitcad#2551) are own curves.
     pub fn split_automatic(
         &self,
         curves: Vec<RegionCurve>,
@@ -927,9 +929,13 @@ impl<P> SketchDef<P> {
             .projections
             .iter()
             .filter(|p| p.automatic)
-            .flat_map(|p| &p.entities)
-            .filter(|r| !r.is_point())
-            .map(|r| r.uid())
+            .flat_map(|p| {
+                p.entities
+                    .iter()
+                    .filter(|r| !r.is_point())
+                    .map(|r| r.uid())
+                    .filter(|id| !p.boundaries.contains(id))
+            })
             .collect();
         if automatic.is_empty() {
             return (curves, Vec::new());

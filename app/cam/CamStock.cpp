@@ -241,7 +241,13 @@ StockMesh turnedStockMesh(const QJsonObject& stock, const WorkFrame& frame, int 
     }
     for (int k = 0; k < segments; ++k) {
       const int a = first + 2 * k;
-      mesh.triangles.insert(mesh.triangles.end(), {a, a + 2, a + 3, a, a + 3, a + 1});
+      // Wound round the normal: (a, a + 2, a + 3) turns about the outward
+      // one, the bore's (towards the axis) the other way.
+      if (sign > 0.0) {
+        mesh.triangles.insert(mesh.triangles.end(), {a, a + 2, a + 3, a, a + 3, a + 1});
+      } else {
+        mesh.triangles.insert(mesh.triangles.end(), {a, a + 3, a + 2, a, a + 1, a + 3});
+      }
     }
   };
   // A flat ring at `h` from `r0` to `r1`, facing along the axis (`sign`).
@@ -260,7 +266,12 @@ StockMesh turnedStockMesh(const QJsonObject& stock, const WorkFrame& frame, int 
     }
     for (int k = 0; k < segments; ++k) {
       const int a = first + 2 * k;
-      mesh.triangles.insert(mesh.triangles.end(), {a, a + 1, a + 3, a, a + 3, a + 2});
+      // Wound round the normal: (a, a + 1, a + 3) turns about the work +Z.
+      if (sign > 0.0) {
+        mesh.triangles.insert(mesh.triangles.end(), {a, a + 1, a + 3, a, a + 3, a + 2});
+      } else {
+        mesh.triangles.insert(mesh.triangles.end(), {a, a + 3, a + 1, a, a + 2, a + 3});
+      }
     }
   };
   for (std::size_t k = 0; k < kept.size(); ++k) {
@@ -363,6 +374,141 @@ QString remainingLog(const QString& setup, const QJsonObject& remaining) {
   return QStringLiteral("CAM remaining material: %1: max %2, mean %3, gouge %4, beside %5, %6 place(s)")
       .arg(setup, value("max"), value("mean"), value("gouge"), value("beside"))
       .arg(remaining.value(QStringLiteral("thickest")).toArray().size());
+}
+
+UncutStock uncutStock(const QJsonObject& work, int segments) {
+  UncutStock stock;
+  const WorkFrame frame = WorkFrame::of(work);
+  if (!frame.valid || segments < 3) {
+    return stock;
+  }
+  const auto segment = [&stock, &frame](const Point3& a, const Point3& b) {
+    push3(stock.edges, frame.toModel(a));
+    push3(stock.edges, frame.toModel(b));
+  };
+  if (work.contains(QStringLiteral("turning"))) {
+    // A lathe's bar: the same section turnedStockMesh revolves for
+    // Simulate, before any cut (one ring from the back to the face).
+    const QJsonObject turning = work.value(QStringLiteral("turning")).toObject();
+    const QJsonObject part = turning.value(QStringLiteral("part")).toObject();
+    const double outer = part.value(QStringLiteral("stock_radius")).toDouble();
+    const double inner = std::max(0.0, part.value(QStringLiteral("stock_inner_radius")).toDouble());
+    const double face = part.value(QStringLiteral("stock_face")).toDouble();
+    const double back = turning.value(QStringLiteral("stock_back")).toDouble();
+    if (!(outer > inner + kEmpty) || !(face > back + kEmpty)) {
+      return stock;
+    }
+    stock.surface = turnedStockMesh({{QStringLiteral("z"), QJsonArray{back, face}},
+                                     {QStringLiteral("inner"), QJsonArray{inner, inner}},
+                                     {QStringLiteral("outer"), QJsonArray{outer, outer}}},
+                                    frame, segments);
+    if (stock.surface.empty()) {
+      return stock;
+    }
+    stock.kinds << (inner > kEmpty ? QStringLiteral("tube") : QStringLiteral("bar"));
+    const double step = 2.0 * 3.14159265358979323846 / segments;
+    for (const double h : {back, face}) {
+      for (const double r : {outer, inner}) {
+        if (r < kEmpty) {
+          continue;
+        }
+        for (int k = 0; k < segments; ++k) {
+          segment({r * std::cos(step * k), r * std::sin(step * k), h},
+                  {r * std::cos(step * (k + 1)), r * std::sin(step * (k + 1)), h});
+        }
+      }
+    }
+    return stock;
+  }
+  // A mill's box, its bounds in the work frame.
+  const QJsonArray lo = work.value(QStringLiteral("stock_min")).toArray();
+  const QJsonArray hi = work.value(QStringLiteral("stock_max")).toArray();
+  if (lo.size() != 3 || hi.size() != 3) {
+    return stock;
+  }
+  const Point3 min{lo.at(0).toDouble(), lo.at(1).toDouble(), lo.at(2).toDouble()};
+  const Point3 max{hi.at(0).toDouble(), hi.at(1).toDouble(), hi.at(2).toDouble()};
+  for (std::size_t k = 0; k < 3; ++k) {
+    if (!(max[k] > min[k] + kEmpty)) {
+      return stock;
+    }
+  }
+  // A corner by its bits: 1 at the most X, 2 at the most Y, 4 at the most Z.
+  const auto corner = [&min, &max](int bits) {
+    return Point3{(bits & 1) != 0 ? max[0] : min[0], (bits & 2) != 0 ? max[1] : min[1],
+                  (bits & 4) != 0 ? max[2] : min[2]};
+  };
+  StockMesh& mesh = stock.surface;
+  // Each face across an axis, on its least (side 0) or most side: its
+  // corners base, +a, +a+b, +b turn about the axis's + direction (a, b
+  // the next two axes in turn), so the least side takes them the other
+  // way round to face out.
+  for (int axis = 0; axis < 3; ++axis) {
+    const int a = 1 << ((axis + 1) % 3);
+    const int b = 1 << ((axis + 2) % 3);
+    for (int side = 0; side < 2; ++side) {
+      const int base = side != 0 ? (1 << axis) : 0;
+      Point3 normal{0.0, 0.0, 0.0};
+      normal[static_cast<std::size_t>(axis)] = side != 0 ? 1.0 : -1.0;
+      const Point3 n = unitOr(frame.directionToModel(normal), {0.0, 0.0, 1.0});
+      const int first = mesh.vertices();
+      const std::array<int, 4> corners = side != 0 ? std::array<int, 4>{base, base | a, base | a | b, base | b}
+                                                   : std::array<int, 4>{base, base | b, base | a | b, base | a};
+      for (const int bits : corners) {
+        push3(mesh.points, frame.toModel(corner(bits)));
+        push3(mesh.normals, n);
+        mesh.shades.push_back(0.0f);
+      }
+      mesh.triangles.insert(mesh.triangles.end(), {first, first + 1, first + 2, first, first + 2, first + 3});
+    }
+  }
+  // The twelve edges: from each corner to the corner one bit higher.
+  for (int bits = 0; bits < 8; ++bits) {
+    for (int axis = 0; axis < 3; ++axis) {
+      if ((bits & (1 << axis)) == 0) {
+        segment(corner(bits), corner(bits | (1 << axis)));
+      }
+    }
+  }
+  stock.kinds << QStringLiteral("box");
+  return stock;
+}
+
+UncutStock uncutStockOfSetups(const QJsonArray& setups, int segments) {
+  UncutStock all;
+  for (const QJsonValue& value : setups) {
+    const QJsonObject setup = value.toObject();
+    // Its eye off: its stock is not drawn.
+    if (!setup.value(QStringLiteral("visible")).toBool(true)) {
+      continue;
+    }
+    all.add(uncutStock(setup.value(QStringLiteral("work")).toObject(), segments));
+  }
+  return all;
+}
+
+void UncutStock::add(const UncutStock& other) {
+  const int first = surface.vertices();
+  surface.points.insert(surface.points.end(), other.surface.points.begin(), other.surface.points.end());
+  surface.normals.insert(surface.normals.end(), other.surface.normals.begin(), other.surface.normals.end());
+  surface.shades.insert(surface.shades.end(), other.surface.shades.begin(), other.surface.shades.end());
+  for (const int v : other.surface.triangles) {
+    surface.triangles.push_back(first + v);
+  }
+  edges.insert(edges.end(), other.edges.begin(), other.edges.end());
+  kinds << other.kinds;
+}
+
+QString UncutStock::log() const {
+  if (empty()) {
+    return QStringLiteral("CAM uncut stock: none");
+  }
+  return QStringLiteral("CAM uncut stock: %1 setup(s): %2; %3 vertices, %4 triangles, %5 edge(s)")
+      .arg(kinds.size())
+      .arg(kinds.join(QStringLiteral(", ")))
+      .arg(surface.vertices())
+      .arg(surface.triangleCount())
+      .arg(edgeCount());
 }
 
 } // namespace mitcad::cam

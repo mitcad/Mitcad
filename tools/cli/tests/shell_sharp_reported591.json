@@ -1,0 +1,17 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #720's design (triage card 591, mitcad#2542; opened with --open, never committed; tools/cli/shell-sharp-reported-test.cmake) at its saved marker, after Fillet1: Body1 (F2.b0), a disk of radius 72 cut flat at y = +-48 and 60 high (Extrude1), a channel of radius 5 along y at the bottom (Extrude2), on each flat side a groove of radius 5 revolved from half a slot (Revolve1, Mirror1: a cylinder from the bottom up to z = 32 ending in a quarter sphere whose pole lies on the side's edge), the top's long edges rounded 12 (Fillet1). Shell with both round ends removed, Inside, Sharp, Tangent Chain on, as the report's picture has it. Before, it failed at 2 and 3 mm ('the shell produced an invalid shape'): the edge where the flat side meets the groove's sphere is split at the pole, each half got a whole circle of its own as its offset and the side's inside was a disc (BRepCheck_BadOrientationOfSubshape); the two sides of each groove, both between the flat side and the groove's wall, shared one intersection that kept only one side's line, so the grooves' walls were left out (OCCT port patch 2542)."},
+  {"cmd": "add_feature", "uid": "F22", "def": {"type": "shell", "body": "F2.b0",
+    "faces": ["F2:side(c16[c17,c19])", "F2:side(c16[c19,c17])"],
+    "inside": 2, "tangent_chain": true, "rounded": false}},
+  {"expect": {"feature": "F22", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"comment": "The wall of the body less the cavity of the points 2 mm or more inside every kept face: 74600.0 mm3 in the OCCT lab on the body made of OCCT's primitives (case 2542-channel-meets-groove, the same by the closed offset with the ends kept); without the grooves' walls it would be about 3400 mm3 less."},
+  {"expect": {"body": "Body1", "volume": 74600.0, "tolerance": 1e-3}},
+  {"comment": "3 mm, the thickness of the design's own Shell2 (left out at the import for the same invalid shape): 110813 mm3 in the lab."},
+  {"cmd": "edit_feature", "uid": "F22", "def": {"type": "shell", "body": "F2.b0",
+    "faces": ["F2:side(c16[c17,c19])", "F2:side(c16[c19,c17])"],
+    "inside": 3, "tangent_chain": true, "rounded": false}},
+  {"expect": {"feature": "F22", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"body": "Body1", "volume": 110813.0, "tolerance": 1e-3}}
+]

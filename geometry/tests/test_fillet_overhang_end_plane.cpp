@@ -53,6 +53,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/profile.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -359,7 +360,7 @@ void test_too_large_in_words() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_overhang_end_plane) {
   test::guarded("test_kernel_alone", test::test_kernel_alone);
   test::guarded("test_overhang_rounded_from_end_plane", test::test_overhang_rounded_from_end_plane);
   test::guarded("test_too_large_in_words", test::test_too_large_in_words);

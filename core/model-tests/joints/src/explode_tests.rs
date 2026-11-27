@@ -394,3 +394,74 @@ fn explode_views_survive_the_design_file() {
         .unwrap();
     assert!(error.to_string().contains("explode_views[0]"), "{error}");
 }
+
+/// Edit Explode View changes the steps once a command (mitcad#2527): two
+/// changes together, whose indexes would name steps the other one moved
+/// (a panic before), are refused in words, as is an index past the steps;
+/// the view and the undo steps stay as they were. One change with the
+/// trail lines still goes, the step added where it was asked.
+#[test]
+fn one_change_of_the_steps_a_command_and_no_index_past_them() {
+    let mut rig = rig();
+    rig.run(json!({"cmd": "add_explode_view", "steps": [
+        {"name": "Up", "occurrences": ["Lid:1"], "distance": 40, "direction": "z"},
+        {"name": "Out", "occurrences": ["Wall:1"], "distance": 10, "direction": "x"},
+        {"name": "Turn", "occurrences": ["Wall:1"], "angle": 90, "axis": "z"},
+    ]}));
+    let before = query(&rig.doc, json!({"query": "explode_views"}));
+    let depth = rig.doc.undo_depth();
+    let added = json!({"name": "New", "occurrences": ["Lid:1"], "distance": 5, "direction": "z"});
+    for edit in [
+        json!({"cmd": "edit_explode_view", "name": "Explode1", "remove_step": 2,
+               "move_step": 2, "to": 0}),
+        json!({"cmd": "edit_explode_view", "name": "Explode1",
+               "steps": [{"occurrences": ["Lid:1"], "distance": 5, "direction": "z"}],
+               "step": 2, "set": {"distance": 20}}),
+        json!({"cmd": "edit_explode_view", "name": "Explode1", "add_step": added,
+               "at": 0, "remove_step": 0}),
+    ] {
+        let error = refused(&mut rig.doc, edit.clone());
+        assert!(
+            error.contains("one change of the steps a command"),
+            "{edit}: {error}"
+        );
+        assert_eq!(
+            query(&rig.doc, json!({"query": "explode_views"})),
+            before,
+            "{edit}"
+        );
+        assert_eq!(rig.doc.undo_depth(), depth, "{edit}");
+    }
+    for edit in [
+        json!({"cmd": "edit_explode_view", "name": "Explode1", "remove_step": 3}),
+        json!({"cmd": "edit_explode_view", "name": "Explode1", "move_step": 3, "to": 0,
+               "trails": false}),
+        json!({"cmd": "edit_explode_view", "name": "Explode1", "step": 3,
+               "set": {"distance": 20}}),
+    ] {
+        let error = refused(&mut rig.doc, edit.clone());
+        assert!(
+            error.contains("Explode1 has no step 4 (it has 3)"),
+            "{edit}: {error}"
+        );
+        assert_eq!(
+            query(&rig.doc, json!({"query": "explode_views"})),
+            before,
+            "{edit}"
+        );
+        assert_eq!(rig.doc.undo_depth(), depth, "{edit}");
+    }
+    rig.run(
+        json!({"cmd": "edit_explode_view", "name": "Explode1", "add_step": added,
+                   "at": 0, "trails": false}),
+    );
+    assert_eq!(rig.doc.undo_depth(), depth + 1);
+    let views = query(&rig.doc, json!({"query": "explode_views"}));
+    let names: Vec<&str> = views[0]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["New", "Up", "Out", "Turn"]);
+}

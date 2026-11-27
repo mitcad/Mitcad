@@ -380,14 +380,24 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
   sheetMoved();
   int items = 0;
   int marks = 0;
+  // A cut sheet's cutting paths drawn over it (mitcad#2570): the loops the
+  // torch cuts, one polyline each.
+  int cutPaths = -1;
   bool frame = false;
   bool titleBlock = false;
   for (const QJsonValue& group : std::as_const(m_groups)) {
     const QJsonObject g = group.toObject();
-    items += static_cast<int>(g.value(QStringLiteral("items")).toArray().size());
+    const QJsonArray groupItems = g.value(QStringLiteral("items")).toArray();
+    items += static_cast<int>(groupItems.size());
     const QString kind = g.value(QStringLiteral("class")).toString();
     if (kind == QStringLiteral("center-mark")) {
       ++marks;
+    }
+    if (kind == QStringLiteral("cut-path")) {
+      cutPaths = std::max(cutPaths, 0);
+      for (const QJsonValue& item : groupItems) {
+        cutPaths += item.toObject().contains(QStringLiteral("polyline")) ? 1 : 0;
+      }
     }
     frame = frame || kind == QStringLiteral("frame");
     titleBlock = titleBlock || kind == QStringLiteral("title-block");
@@ -396,6 +406,9 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
                             .arg(m_views.size())
                             .arg(items)
                             .arg(marks);
+  if (cutPaths >= 0) {
+    qDebug().noquote() << QStringLiteral("Drawing cutting paths drawn: %1 loops").arg(cutPaths);
+  }
   // Whether the sheet shows a frame and a title block (mitcad#2325: a
   // template may leave either out), when it changes.
   const QString border = QStringLiteral("Drawing sheet border: frame %1, title block %2")
@@ -640,6 +653,61 @@ int DrawingSheetView::annotationAt(const QPointF& sheet) const {
     }
   }
   return best;
+}
+
+QPen DrawingSheetView::sheetPen(const QJsonObject& pens, const QString& name, double zoom) {
+  QPen pen = penOf(pens, name);
+  const double own = pen.widthF();
+  // At least a pixel wide on the screen.
+  const double width = zoom > 0.0 ? std::max(own, 1.0 / zoom) : own;
+  if (width <= own) {
+    return pen;
+  }
+  pen.setWidthF(width);
+  if (pen.style() != Qt::CustomDashLine) {
+    return pen;
+  }
+  // The pattern in sheet mm (penOf gives it in widths of the pen's own
+  // width). Qt's dashes are in widths of the pen it paints with, and its
+  // round caps reach half a width past each dash's ends: kept in widths of
+  // the own width, a widened pen's dashes grew with it, longer the farther
+  // out the sheet was zoomed (mitcad#2477). Each dash is shortened by what
+  // its caps reach farther and moved by half of that, its gaps lengthened
+  // as much.
+  QVector<qreal> pattern = pen.dashPattern();
+  for (qreal& d : pattern) {
+    d *= own;
+  }
+  const int count = static_cast<int>(pattern.size());
+  if (count < 2 || count % 2 != 0) {
+    return pen;
+  }
+  const double grown = width - own;
+  // A dash no shorter than this (mm); Qt paints a dash of almost no length
+  // as its caps alone, a dot.
+  constexpr double kLeast = 1e-4;
+  QVector<qreal> shortened(count / 2);
+  for (int i = 0; i < count; i += 2) {
+    shortened[i / 2] = pattern[i] - std::max(pattern[i] - grown, kLeast);
+  }
+  QVector<qreal> dashes(count);
+  double period = 0.0;
+  for (int i = 0; i < count; i += 2) {
+    const double before = shortened[i / 2];
+    const double after = shortened[((i + 2) % count) / 2];
+    dashes[i] = pattern[i] - before;
+    dashes[i + 1] = pattern[i + 1] + before / 2.0 + after / 2.0;
+    period += pattern[i] + pattern[i + 1];
+  }
+  for (qreal& d : dashes) {
+    d /= width;
+  }
+  pen.setDashPattern(dashes);
+  // The line's start is half the first dash's shortening before the
+  // pattern's start: an offset of a period less that (Qt's offset runs
+  // into the pattern).
+  pen.setDashOffset((period - shortened[0] / 2.0) / width);
+  return pen;
 }
 
 double DrawingSheetView::markWidth(const QJsonObject& item, bool picked) const {
@@ -1710,11 +1778,9 @@ void DrawingSheetView::paintItems(QPainter& painter, const QJsonArray& groups, c
   }
   bool dim = false;
   const auto withPen = [&](const QString& name) {
-    QPen pen = penOf(m_pens, name);
-    // At least a pixel wide on the screen.
-    if (pen.widthF() * m_zoom < 1.0) {
-      pen.setWidthF(1.0 / m_zoom);
-    }
+    // At least a pixel wide on the screen, the dashes where the paper has
+    // them (mitcad#2477).
+    QPen pen = sheetPen(m_pens, name, m_zoom);
     if (dim) {
       pen.setColor(kUpdatingInk);
     }

@@ -1,0 +1,857 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: a rounding whose sides are chains of edges vanishes beside a
+removed face, and a cap section split at a seam is joined (mitcad#2494).
+
+Where the wall is thicker than a rounding beside a removed face (a cap),
+FindVanishingFaces (patch 0100, 2433) took faces of exactly four edges
+only. A rounding whose boundary other faces cut into many edges (GitHub
+#645's loft with its top rounded 2 mm, shelled 3 mm with the top open: one
+rounding of 47 edges and a sliver of 13 between two others) was kept, its
+offset turned inside out and the offsets did not close. Now a face of more
+edges whose boundary turns sharply (more than 30 degrees) at four vertices
+only has four sides, the chains of edges between those corners
+(FourSides); opposite sides are tested station by station along each of
+their edges (VanishesBetweenSides), and the pairs across are given edge by
+edge. Across the cap, every edge of a kept face to the vanishing faces
+gets the face's section with the cap as its image (ContextIntByInt), the
+walk round the face's wire counts consecutive edges of one image once
+(Inter2d ConnexIntByInt), and a smooth edge ending beside a vanishing face
+that touches a cap is extended to that section instead of being cut within
+its offset (the walls of a slot meet tangentially). BRepAlgo_Loop no longer
+merges two vertices of the face's own boundary, however near: a cap edge
+shorter than the tolerance was closed on one vertex in place, and the kept
+faces sharing it got open wires.
+
+In the arc join, ExtentFace takes of a section of a face extended to a cap
+that comes in a run of pieces sharing their ends (split where it crosses
+the extended face's seam and where its curve was computed in two) the
+whole run, glued into one edge (JoinRunAcrossSeams), where SelectEdge kept
+one piece that stopped short of the edge's end (the slot's round end on
+#645's loft without its rounding, top open, Rounded, 1 to 3 mm).
+ConcatPCurves moves the second curve by the period where it continues the
+first across a seam.
+
+Not covered: #645's rounded loft at 3 mm with the arc join (an exception in
+ContextIntByArc); a wall exactly as thick as a circular rounding (see the
+topic doc).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2494.
+
+diff --git a/src/ModelingAlgorithms/TKBool/BRepAlgo/BRepAlgo_Loop.cxx b/src/ModelingAlgorithms/TKBool/BRepAlgo/BRepAlgo_Loop.cxx
+index b0d3bbd2..7656cc76 100644
+--- a/src/ModelingAlgorithms/TKBool/BRepAlgo/BRepAlgo_Loop.cxx
++++ b/src/ModelingAlgorithms/TKBool/BRepAlgo/BRepAlgo_Loop.cxx
+@@ -40,6 +40,7 @@
+ #include <NCollection_DataMap.hxx>
+ #include <NCollection_List.hxx>
+ #include <NCollection_IndexedDataMap.hxx>
++#include <NCollection_IndexedMap.hxx>
+ #include <NCollection_Map.hxx>
+ #include <NCollection_Sequence.hxx>
+ 
+@@ -479,7 +480,8 @@ static void StoreInMVE(
+                                                                             MVE,
+   bool&                                                                     YaCouture,
+   NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>& VerticesForSubstitute,
+-  const double                                                              theTolConf)
++  const double                                                              theTolConf,
++  const NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>&      theFaceVertices)
+ {
+   TopoDS_Vertex                  V1, V2, V;
+   NCollection_List<TopoDS_Shape> Empty;
+@@ -501,7 +503,14 @@ static void StoreInMVE(
+     {
+       V1 = TopoDS::Vertex(itl.Value());
+       P1 = BRep_Tool::Pnt(V1);
+-      if (P.IsEqual(P1, theTolConf) && !V.IsSame(V1))
++      // (mitcad#2494) Two vertices of the face's own boundary stay apart,
++      // however near: the edges between them (shorter than the tolerance,
++      // where other faces cut the face's boundary) are shared with faces
++      // outside the loop (a removed face's edges bound the kept faces
++      // beside it), and closed on one vertex in place they left those
++      // faces' wires open.
++      if (P.IsEqual(P1, theTolConf) && !V.IsSame(V1)
++          && !(theFaceVertices.Contains(V) && theFaceVertices.Contains(V1)))
+       {
+         V.Orientation(V1.Orientation());
+         if (VerticesForSubstitute.IsBound(V1))
+@@ -618,6 +627,9 @@ void BRepAlgo_Loop::Perform()
+   //-----------------------------------
+   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+     MVE;
++  // the vertices of the face's own boundary (StoreInMVE keeps them apart, mitcad#2494)
++  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aFaceVertices;
++  TopExp::MapShapes(myFace, TopAbs_VERTEX, aFaceVertices);
+ 
+   // add cut edges.
+   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> Emap;
+@@ -633,7 +645,7 @@ void BRepAlgo_Loop::Perform()
+         {
+           continue;
+         }
+-        StoreInMVE(myFace, E, MVE, YaCouture, myVerticesForSubstitute, myTolConf);
++        StoreInMVE(myFace, E, MVE, YaCouture, myVerticesForSubstitute, myTolConf, aFaceVertices);
+       }
+     }
+   }
+@@ -647,7 +659,7 @@ void BRepAlgo_Loop::Perform()
+     TopoDS_Edge& E = TopoDS::Edge(itl.ChangeValue());
+     if (DejaVu.Add(E))
+     {
+-      StoreInMVE(myFace, E, MVE, YaCouture, myVerticesForSubstitute, myTolConf);
++      StoreInMVE(myFace, E, MVE, YaCouture, myVerticesForSubstitute, myTolConf, aFaceVertices);
+     }
+   }
+ 
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+index 613ce85b..6e61f348 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+@@ -1900,6 +1900,26 @@ void BRepOffset_Inter2d::Compute(
+   }
+ }
+ 
++//=======================================================================
++// function : HasEdgeOfOneFace
++// purpose  : Whether a face of the analysed shape has an edge that bounds it
++//            alone there, not degenerated: an edge of a removed face (a cap)
++//            or a free edge (mitcad#2494).
++//=======================================================================
++static bool HasEdgeOfOneFace(const TopoDS_Face& theF, const BRepOffset_Analyse& theAnalyse)
++{
++  for (TopExp_Explorer aExp(theF, TopAbs_EDGE); aExp.More(); aExp.Next())
++  {
++    const TopoDS_Edge& aE = TopoDS::Edge(aExp.Current());
++    if (!BRep_Tool::Degenerated(aE) && theAnalyse.HasAncestor(aE)
++        && theAnalyse.Ancestors(aE).Extent() == 1)
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
+ //=======================================================================
+ // function : MeetAlongTangentEdge
+ // purpose  : Whether the offsets of the faces beyond theE1 and theE2
+@@ -2191,7 +2211,12 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+         for (NCollection_List<TopoDS_Shape>::Iterator itA(Analyse.Ancestors(aEB)); itA.More();
+              itA.Next())
+         {
+-          bAcrossVanished = bAcrossVanished || theVanished->Contains(itA.Value());
++          // (mitcad#2494) not where the vanishing face lies beside a removed
++          // face: the image is then the section with that face, beyond the
++          // offset of the smooth edge, which is extended to meet it
++          bAcrossVanished = bAcrossVanished
++                            || (theVanished->Contains(itA.Value())
++                                && !HasEdgeOfOneFace(TopoDS::Face(itA.Value()), Analyse));
+         }
+       }
+     }
+@@ -2269,15 +2294,49 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+     // offset vanishes, which have no image: the edges on both sides of them
+     // become consecutive, meeting at the image of their vertices
+     // (aDropV: for each edge kept, a vertex of the edges dropped before it).
++    // (mitcad#2494) Consecutive edges with one image (the edges of a face
++    // across faces whose offset vanishes from a removed face, whose sides
++    // are chains of edges: all of them have the face's section with the
++    // removed face as their image) count once, the vertex at the end of
++    // their run standing for the vertices dropped; the walk starts outside
++    // such a run.
+     NCollection_Sequence<TopoDS_Edge>   aSeq;
+     NCollection_Sequence<TopoDS_Vertex> aDropV;
+     {
+-      TopoDS_Vertex aPendingV;
+-      TopoDS_Edge   aPrevE, aFirstDropped, aLastE;
++      NCollection_Sequence<TopoDS_Edge> aWireEdges;
+       for (; wexp.More(); wexp.Next())
+       {
+-        TopoDS_Edge aE    = wexp.Current();
++        aWireEdges.Append(wexp.Current());
++      }
++      const auto aSameImage = [&Build](const TopoDS_Shape& theE1, const TopoDS_Shape& theE2) {
++        const TopoDS_Shape* pI1 = Build.Seek(theE1);
++        const TopoDS_Shape* pI2 = Build.Seek(theE2);
++        return pI1 != nullptr && pI2 != nullptr && pI1->IsSame(*pI2);
++      };
++      const int aNbW   = aWireEdges.Length();
++      int       aStart = 1;
++      while (aStart <= aNbW && aSameImage(aWireEdges(aStart), aWireEdges(aStart > 1 ? aStart - 1 : aNbW)))
++      {
++        ++aStart;
++      }
++      if (aStart > aNbW)
++      {
++        aStart = 1;
++      }
++      TopoDS_Vertex aPendingV;
++      TopoDS_Edge   aPrevE, aFirstDropped, aLastE, aLastCollapsed;
++      TopoDS_Shape  aRunImage;
++      for (int iW = 0; iW < aNbW; ++iW)
++      {
++        TopoDS_Edge aE    = aWireEdges((aStart - 1 + iW) % aNbW + 1);
+         bool        bDrop = false;
++        if (!aRunImage.IsNull() && Build.IsBound(aE) && Build(aE).IsSame(aRunImage))
++        {
++          aLastCollapsed = aE;
++          aPrevE         = aE;
++          aLastE         = aE;
++          continue;
++        }
+         if (theVanished && !Build.IsBound(aE) && Analyse.HasAncestor(aE))
+         {
+           for (NCollection_List<TopoDS_Shape>::Iterator itA(Analyse.Ancestors(aE)); itA.More();
+@@ -2288,6 +2347,7 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+         }
+         if (bDrop)
+         {
++          aRunImage.Nullify();
+           if (aSeq.IsEmpty() && aFirstDropped.IsNull())
+           {
+             aFirstDropped = aE;
+@@ -2299,9 +2359,15 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+         }
+         else
+         {
++          if (aPendingV.IsNull() && !aLastCollapsed.IsNull())
++          {
++            aPendingV = CommonVertex(aLastCollapsed, aE);
++          }
+           aSeq.Append(aE);
+           aDropV.Append(aPendingV);
+           aPendingV.Nullify();
++          aLastCollapsed.Nullify();
++          aRunImage = Build.IsBound(aE) ? Build(aE) : TopoDS_Shape();
+         }
+         aPrevE = aE;
+         aLastE = aE;
+@@ -2318,6 +2384,10 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+       {
+         aDropV(1) = CommonVertex(aLastE, aFirstDropped);
+       }
++      else if (!aLastCollapsed.IsNull())
++      {
++        aDropV(1) = CommonVertex(aLastCollapsed, aSeq(1));
++      }
+     }
+     int anIdx = 1;
+     CurE = FirstE = aSeq(1);
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+index b7abd76e..768725a7 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+@@ -1859,6 +1859,9 @@ void BRepOffset_Inter3d::ContextIntByInt(
+   const NCollection_List<TopoDS_Shape>*                                                theAcross)
+ {
+   NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> MV;
++  // The section of a kept face's enlarged offset with the cap, across faces
++  // whose offset vanishes, by that offset (mitcad#2494).
++  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aSectionAcross;
+   TopExp_Explorer                                        exp;
+   TopoDS_Face                                            OF, NF, WCF;
+   TopoDS_Edge                                            OE;
+@@ -1889,6 +1892,7 @@ void BRepOffset_Inter3d::ContextIntByInt(
+       return;
+     }
+     const TopoDS_Face& CF = TopoDS::Face(ContextFaces(i));
++    aSectionAcross.Clear(); // (per cap)
+     if (ExtentContext)
+     {
+       WCF = TopoDS::Face(MES(CF));
+@@ -2082,16 +2086,27 @@ void BRepOffset_Inter3d::ContextIntByInt(
+               }
+               Build.Bind(aS, C);
+             }
+-            if (!EAcross.IsNull())
++            if (!aSectionAcross.IsBound(NF))
++            {
++              TopoDS_Compound aCS;
++              B.MakeCompound(aCS);
++              for (it.Initialize(LInt1); it.More(); it.Next())
++              {
++                B.Add(aCS, it.Value());
++              }
++              aSectionAcross.Bind(NF, aCS);
++            }
++            if (!EAcross.IsNull() && !Build.IsBound(EAcross))
+             {
+               // the kept face's edge to the vanishing faces ends there too
++              Build.Bind(EAcross, aSectionAcross(NF));
++            }
++            else if (!EAcross.IsNull())
++            {
+               B.MakeCompound(C);
+-              if (Build.IsBound(EAcross))
++              for (exp.Init(Build(EAcross), TopAbs_EDGE); exp.More(); exp.Next())
+               {
+-                for (exp.Init(Build(EAcross), TopAbs_EDGE); exp.More(); exp.Next())
+-                {
+-                  B.Add(C, exp.Current());
+-                }
++                B.Add(C, exp.Current());
+               }
+               for (it.Initialize(LInt1); it.More(); it.Next())
+               {
+@@ -2105,6 +2120,13 @@ void BRepOffset_Inter3d::ContextIntByInt(
+             Failed.Append(aS);
+           }
+         }
++        else if (!EAcross.IsNull() && !Build.IsBound(EAcross) && aSectionAcross.IsBound(NF))
++        {
++          // (mitcad#2494) Another edge of the kept face to the vanishing
++          // faces, across them from another edge of the cap (a rounding
++          // whose sides are chains of edges): its image is the same section.
++          Build.Bind(EAcross, aSectionAcross(NF));
++        }
+       }
+     }
+   }
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+index d43623ec..b1ec675d 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_MakeOffset.cxx
+@@ -1913,6 +1913,216 @@ static bool OrderedEdges(const TopoDS_Face& theF, NCollection_Sequence<TopoDS_Ed
+   }
+   return true;
+ }
++
++//! The angle by which the boundary of a face turns from the edge theE1 to
++//! the next edge theE2 of its wire (both as oriented in the wire), at their
++//! common vertex; -1 where it cannot be computed.
++static double TurnBetween(const TopoDS_Edge& theE1, const TopoDS_Edge& theE2)
++{
++  gp_Vec aT[2];
++  for (int k = 0; k < 2; ++k)
++  {
++    const TopoDS_Edge& aE = k == 0 ? theE1 : theE2;
++    if (BRep_Tool::Degenerated(aE))
++    {
++      return -1.;
++    }
++    const BRepAdaptor_Curve aC(aE);
++    // the end of theE1 and the start of theE2, as oriented
++    const bool bLast = (k == 0) == (aE.Orientation() != TopAbs_REVERSED);
++    gp_Pnt     aP;
++    aC.D1(bLast ? aC.LastParameter() : aC.FirstParameter(), aP, aT[k]);
++    if (aE.Orientation() == TopAbs_REVERSED)
++    {
++      aT[k].Reverse();
++    }
++    if (aT[k].Magnitude() < gp::Resolution())
++    {
++      return -1.;
++    }
++  }
++  return aT[0].Angle(aT[1]);
++}
++
++//! The four sides of a face of more than four edges whose boundary turns
++//! sharply at four vertices only (by more than 30 degrees; elsewhere its
++//! edges join smoothly): the chains of edges between those corners, in the
++//! order of the wire. False where there are not four such corners
++//! (mitcad#2494: a rounding whose boundary was split into many edges, where
++//! other faces cut it).
++static bool FourSides(const NCollection_Sequence<TopoDS_Edge>& theEdges,
++                      NCollection_Sequence<TopoDS_Edge>        theSides[4])
++{
++  const int                 aNb = theEdges.Length();
++  NCollection_Sequence<int> aCorners; // a corner after the edge of that index
++  for (int i = 1; i <= aNb; ++i)
++  {
++    const double aTurn = TurnBetween(theEdges(i), theEdges(i % aNb + 1));
++    if (aTurn < 0.)
++    {
++      return false;
++    }
++    if (aTurn > M_PI / 6.)
++    {
++      aCorners.Append(i);
++    }
++  }
++  if (aCorners.Length() != 4)
++  {
++    return false;
++  }
++  for (int k = 1; k <= 4; ++k)
++  {
++    const int aLast = aCorners(k % 4 + 1);
++    for (int i = aCorners(k) % aNb + 1;; i = i % aNb + 1)
++    {
++      theSides[k - 1].Append(theEdges(i));
++      if (i == aLast)
++      {
++        break;
++      }
++    }
++  }
++  return true;
++}
++
++//! As VanishesBetween, between two opposite sides of the face that are
++//! chains of edges (FourSides): at stations along each edge of both sides,
++//! with the nearest point of the other side. Where it vanishes at every
++//! station (1), thePairs gets the pairs of edges, one of theA and one of
++//! theB, that a station and its nearest point lie on (mitcad#2494).
++static int VanishesBetweenSides(
++  const TopoDS_Face&                                                                   theF,
++  const NCollection_Sequence<TopoDS_Edge>&                                             theA,
++  const NCollection_Sequence<TopoDS_Edge>&                                             theB,
++  const BRepOffset_Analyse&                                                            theAnalyse,
++  const GeomAbs_JoinType                                                               theJoin,
++  NCollection_DataMap<TopoDS_Shape, occ::handle<Geom_Surface>, TopTools_ShapeMapHasher>& theOffsetSurfaces,
++  const NCollection_DataMap<TopoDS_Shape, double, TopTools_ShapeMapHasher>& theFaceOffset,
++  const double                                                              theOffset,
++  NCollection_List<TopoDS_Shape>&                                           thePairs)
++{
++  const double   aDF         = std::abs(FaceOffsetValue(theF, theFaceOffset, theOffset));
++  const int      aNbStations = 3;
++  int            aNbVanished = 0, aNbKept = 0;
++  NCollection_List<TopoDS_Shape> aPairs;
++  for (int s = 0; s < 2; ++s)
++  {
++    const NCollection_Sequence<TopoDS_Edge>& aFrom = s == 0 ? theA : theB;
++    const NCollection_Sequence<TopoDS_Edge>& aTo   = s == 0 ? theB : theA;
++    for (int i = 1; i <= aFrom.Length(); ++i)
++    {
++      const TopoDS_Edge&             aE = aFrom(i);
++      double                         aF, aL;
++      const occ::handle<Geom_Curve>& aC = BRep_Tool::Curve(aE, aF, aL);
++      if (aC.IsNull())
++      {
++        return -1;
++      }
++      for (int iS = 0; iS < aNbStations; ++iS)
++      {
++        const double aT = aF + (aL - aF) * (iS + 0.5) / aNbStations;
++        gp_Pnt       aP, aIm;
++        if (!ImageOnOffsetBoundary(aE,
++                                   theF,
++                                   aT,
++                                   theAnalyse,
++                                   theJoin,
++                                   theOffsetSurfaces,
++                                   theFaceOffset,
++                                   theOffset,
++                                   aP,
++                                   aIm))
++        {
++          return -1;
++        }
++        // the nearest point of the other side (inside an edge or at an end)
++        int    aJ    = 0;
++        double aTO   = 0.;
++        double aDist = RealLast();
++        for (int j = 1; j <= aTo.Length(); ++j)
++        {
++          double                         aFO, aLO;
++          const occ::handle<Geom_Curve>& aCO = BRep_Tool::Curve(aTo(j), aFO, aLO);
++          if (aCO.IsNull())
++          {
++            return -1;
++          }
++          for (const double aTEnd : {aFO, aLO})
++          {
++            const double aD = aP.Distance(aCO->Value(aTEnd));
++            if (aD < aDist)
++            {
++              aDist = aD;
++              aJ    = j;
++              aTO   = aTEnd;
++            }
++          }
++          GeomAPI_ProjectPointOnCurve aProj(aP, aCO, aFO, aLO);
++          if (aProj.NbPoints() > 0 && aProj.LowerDistance() < aDist)
++          {
++            aDist = aProj.LowerDistance();
++            aJ    = j;
++            aTO   = aProj.LowerDistanceParameter();
++          }
++        }
++        if (aJ == 0)
++        {
++          return -1;
++        }
++        // too wide a face to vanish at this offset
++        if (aDist > 10. * aDF)
++        {
++          return 0;
++        }
++        gp_Pnt aPO, aImO;
++        if (!ImageOnOffsetBoundary(aTo(aJ),
++                                   theF,
++                                   aTO,
++                                   theAnalyse,
++                                   theJoin,
++                                   theOffsetSurfaces,
++                                   theFaceOffset,
++                                   theOffset,
++                                   aPO,
++                                   aImO))
++        {
++          return -1;
++        }
++        const gp_Vec aW(aP, aPO);
++        const gp_Vec aWI(aIm, aImO);
++        if (aWI.Magnitude() < Precision::Confusion() || aWI.Dot(aW) < 0.)
++        {
++          ++aNbVanished;
++        }
++        else
++        {
++          ++aNbKept;
++        }
++        const TopoDS_Edge& aEA = s == 0 ? aE : aTo(aJ);
++        const TopoDS_Edge& aEB = s == 0 ? aTo(aJ) : aE;
++        bool               bKnown = false;
++        for (NCollection_List<TopoDS_Shape>::Iterator aIt(aPairs); aIt.More() && !bKnown; aIt.Next())
++        {
++          const TopoDS_Shape& aPA = aIt.Value();
++          aIt.Next();
++          bKnown = aPA.IsSame(aEA) && aIt.Value().IsSame(aEB);
++        }
++        if (!bKnown)
++        {
++          aPairs.Append(aEA);
++          aPairs.Append(aEB);
++        }
++      }
++    }
++  }
++  if (aNbKept == 0 && aNbVanished > 0)
++  {
++    thePairs.Append(aPairs);
++    return 1;
++  }
++  return aNbVanished == 0 ? 0 : -1;
++}
+ } // namespace
+ 
+ //=======================================================================
+@@ -1943,7 +2153,22 @@ static void FindVanishingFaces(
+   {
+     const TopoDS_Face&                aF = TopoDS::Face(aExpF.Current());
+     NCollection_Sequence<TopoDS_Edge> aLE;
+-    if (!OrderedEdges(aF, aLE) || aLE.Length() != 4)
++    // The four sides of the face: its four edges, or (mitcad#2494) the
++    // chains of edges between the four corners of a face of more edges.
++    NCollection_Sequence<TopoDS_Edge> aSides[4];
++    if (!OrderedEdges(aF, aLE) || aLE.Length() < 4)
++    {
++      continue;
++    }
++    const bool bFourEdges = aLE.Length() == 4;
++    if (bFourEdges)
++    {
++      for (int k = 0; k < 4; ++k)
++      {
++        aSides[k].Append(aLE(k + 1));
++      }
++    }
++    else if (!FourSides(aLE, aSides))
+     {
+       continue;
+     }
+@@ -1964,10 +2189,24 @@ static void FindVanishingFaces(
+       }
+     }
+     // The face vanishes where its offset turns inside out between two
+-    // opposite edges all along them, whatever happens in the other direction.
++    // opposite sides all along them, whatever happens in the other direction.
+     NCollection_List<TopoDS_Shape> aPairs;
+     for (int i = 1; i <= 2; ++i)
+     {
++      if (!bFourEdges)
++      {
++        // sides of several edges: the pairs of edges across, edge by edge
++        VanishesBetweenSides(aF,
++                             aSides[i - 1],
++                             aSides[i + 1],
++                             theAnalyse,
++                             theJoin,
++                             theOffsetSurfaces,
++                             theFaceOffset,
++                             theOffset,
++                             aPairs);
++        continue;
++      }
+       const TopoDS_Edge& aEA = aLE(i);
+       const TopoDS_Edge& aEB = aLE(i + 2);
+       if (aEA.IsSame(aEB) || BRep_Tool::Degenerated(aEA) || BRep_Tool::Degenerated(aEB))
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+index adde5c1a..43cd62ad 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Tool.cxx
+@@ -1129,13 +1129,61 @@ static occ::handle<Geom2d_Curve> ConcatPCurves(const TopoDS_Edge& E1,
+     PCurve2 = occ::down_cast<Geom2d_TrimmedCurve>(PCurve2)->BasisCurve();
+   }
+ 
+-  if (PCurve1 == PCurve2)
++  // (mitcad#2494) Two pieces of a section that crosses the seam of the
++  // face's periodic surface between them: the second curve moved by the
++  // period, so that it continues the first one in the parameters.
++  bool bShifted = false;
++  {
++    const BRepAdaptor_Surface aBAS(F, false);
++    const double              aTU = aBAS.IsUPeriodic() ? aBAS.UPeriod() : 0.;
++    const double              aTV = aBAS.IsVPeriodic() ? aBAS.VPeriod() : 0.;
++    if (aTU > 0. || aTV > 0.)
++    {
++      const gp_Pnt2d aEnds1[2] = {PCurve1->Value(first1), PCurve1->Value(last1)};
++      const gp_Pnt2d aEnds2[2] = {PCurve2->Value(first2), PCurve2->Value(last2)};
++      double         aRaw      = RealLast();
++      double         aMoved    = RealLast();
++      gp_Vec2d       aShift(0., 0.);
++      for (int i = 0; i < 2; ++i)
++      {
++        for (int j = 0; j < 2; ++j)
++        {
++          const gp_Vec2d aD(aEnds2[j], aEnds1[i]);
++          aRaw            = std::min(aRaw, aD.Magnitude());
++          const double aKU = aTU > 0. ? std::round(aD.X() / aTU) : 0.;
++          const double aKV = aTV > 0. ? std::round(aD.Y() / aTV) : 0.;
++          if (aKU == 0. && aKV == 0.)
++          {
++            continue;
++          }
++          const gp_Vec2d aRest(aD.X() - aKU * aTU, aD.Y() - aKV * aTV);
++          if (aRest.Magnitude() < aMoved)
++          {
++            aMoved = aRest.Magnitude();
++            aShift = gp_Vec2d(aKU * aTU, aKV * aTV);
++          }
++        }
++      }
++      if (aMoved < aRaw && aMoved < Precision::PConfusion() * 100.)
++      {
++        occ::handle<Geom2d_Curve> aMovedCurve(
++          occ::down_cast<Geom2d_Curve>(PCurve2->Translated(aShift)));
++        if (!aMovedCurve.IsNull())
++        {
++          PCurve2  = aMovedCurve;
++          bShifted = true;
++        }
++      }
++    }
++  }
++
++  if (!bShifted && PCurve1 == PCurve2)
+   {
+     newPCurve = PCurve1;
+     newFirst  = std::min(first1, first2);
+     newLast   = std::max(last1, last2);
+   }
+-  else if (PCurve1->DynamicType() == PCurve2->DynamicType()
++  else if (!bShifted && PCurve1->DynamicType() == PCurve2->DynamicType()
+            && (PCurve1->IsInstance(STANDARD_TYPE(Geom2d_Line))
+                || PCurve1->IsKind(STANDARD_TYPE(Geom2d_Conic))))
+   {
+@@ -4549,6 +4597,196 @@ static void SelectEdge(const TopoDS_Face& /*F*/,
+   LInt.Append(GE);
+ }
+ 
++//=======================================================================
++// function : JoinRunAcrossSeams
++// purpose  : The section of a face extended to a cap (ExtentFace) may come
++//           in a run of pieces sharing their ends (the offset of a slot's
++//           round end cut by the periodic surface of a loft whose top is
++//           removed: three pieces, split where the section crosses the
++//           extended face's seam and where its curve was computed in two).
++//           SelectEdge keeps one piece, which may stop short of an end of
++//           the edge to extend: the extended face then found no vertex there
++//           and got no wire. The pieces running on from the one selected
++//           through their common vertices, a simple run (two free ends, no
++//           branch, not closed), are glued into one edge with its curves on
++//           both faces (mitcad#2494); the pieces of a section lie in both
++//           faces, so a run of them is one section. Unchanged where there is
++//           no such run or it cannot be glued.
++//=======================================================================
++static void JoinRunAcrossSeams(const NCollection_List<TopoDS_Shape>& theAll,
++                               const TopoDS_Face&                    theF1,
++                               const TopoDS_Face&                    theF2,
++                               const TopAbs_State                    theSide,
++                               NCollection_List<TopoDS_Shape>&       theSelected)
++{
++  if (theAll.Extent() < 2 || theSelected.Extent() != 1)
++  {
++    return;
++  }
++  // the run, grown from the selected piece at both its free ends, one piece
++  // at a time, through the vertices it shares with one other piece
++  NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> aPiecesAt;
++  for (NCollection_List<TopoDS_Shape>::Iterator aIt(theAll); aIt.More(); aIt.Next())
++  {
++    TopoDS_Vertex aV1, aV2;
++    TopExp::Vertices(TopoDS::Edge(aIt.Value()), aV1, aV2);
++    for (const TopoDS_Vertex& aV : {aV1, aV2})
++    {
++      if (aV.IsNull())
++      {
++        return;
++      }
++      if (NCollection_List<TopoDS_Shape>* pL = aPiecesAt.ChangeSeek(aV))
++      {
++        pL->Append(aIt.Value());
++      }
++      else
++      {
++        NCollection_List<TopoDS_Shape> aL;
++        aL.Append(aIt.Value());
++        aPiecesAt.Bind(aV, aL);
++      }
++    }
++  }
++  NCollection_Sequence<TopoDS_Shape> aRun;
++  aRun.Append(theSelected.First());
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aUsed;
++  aUsed.Add(theSelected.First());
++  TopoDS_Vertex aEnds[2];
++  TopExp::Vertices(TopoDS::Edge(theSelected.First()), aEnds[0], aEnds[1]);
++  if (aEnds[0].IsNull() || aEnds[0].IsSame(aEnds[1]))
++  {
++    return; // a closed piece
++  }
++  for (int aSide = 0; aSide < 2; ++aSide)
++  {
++    for (int aGuard = 0; aGuard < theAll.Extent(); ++aGuard)
++    {
++      const TopoDS_Edge  aEnd = TopoDS::Edge(aSide == 0 ? aRun.First() : aRun.Last());
++      const TopoDS_Shape aV   = aEnds[aSide];
++      const NCollection_List<TopoDS_Shape>* pL = aPiecesAt.Seek(aV);
++      if (pL == nullptr)
++      {
++        break;
++      }
++      TopoDS_Shape                          aNext;
++      int                                   aNbNext = 0;
++      for (NCollection_List<TopoDS_Shape>::Iterator aIt(*pL); aIt.More(); aIt.Next())
++      {
++        if (!aIt.Value().IsSame(aEnd))
++        {
++          aNext = aIt.Value();
++          ++aNbNext;
++        }
++      }
++      if (aNbNext == 0)
++      {
++        break;
++      }
++      if (aNbNext > 1 || aUsed.Contains(aNext))
++      {
++        return; // a branch, or a closed run
++      }
++      if (aSide == 0)
++      {
++        aRun.Prepend(aNext);
++      }
++      else
++      {
++        aRun.Append(aNext);
++      }
++      aUsed.Add(aNext);
++      TopoDS_Vertex aV1, aV2;
++      TopExp::Vertices(TopoDS::Edge(aNext), aV1, aV2);
++      if (aV1.IsNull() || aV1.IsSame(aV2))
++      {
++        return;
++      }
++      aEnds[aSide] = aV1.IsSame(aV) ? aV2 : aV1;
++      if (aEnds[aSide].IsSame(aEnds[1 - aSide]))
++      {
++        return; // a closed run
++      }
++    }
++  }
++  if (aRun.Length() < 2)
++  {
++    return;
++  }
++  bool addPCurve[2] = {true, true};
++  for (int k = 0; k < 2; ++k)
++  {
++    occ::handle<Geom_Surface> aS = BRep_Tool::Surface(k == 0 ? theF1 : theF2);
++    if (aS->IsInstance(STANDARD_TYPE(Geom_RectangularTrimmedSurface)))
++    {
++      aS = occ::down_cast<Geom_RectangularTrimmedSurface>(aS)->BasisSurface();
++    }
++    addPCurve[k] = !aS->IsInstance(STANDARD_TYPE(Geom_Plane));
++  }
++  TopoDS_Edge aCur = TopoDS::Edge(aRun.First());
++  for (int j = 2; j <= aRun.Length(); ++j)
++  {
++    const TopoDS_Edge aE = TopoDS::Edge(aRun(j));
++    TopoDS_Vertex     aCV, aV11, aV12, aV21, aV22, aVfirst, aVlast;
++    if (!TopExp::CommonVertex(aCur, aE, aCV))
++    {
++      return;
++    }
++    TopExp::Vertices(aCur, aV11, aV12);
++    TopExp::Vertices(aE, aV21, aV22);
++    if (aV11.IsSame(aV12) || aV21.IsSame(aV22))
++    {
++      return;
++    }
++    if (aV11.IsSame(aCV) && aV21.IsSame(aCV))
++    {
++      aVfirst = aV22;
++      aVlast  = aV12;
++    }
++    else if (aV11.IsSame(aCV) && aV22.IsSame(aCV))
++    {
++      aVfirst = aV21;
++      aVlast  = aV12;
++    }
++    else if (aV12.IsSame(aCV) && aV21.IsSame(aCV))
++    {
++      aVfirst = aV11;
++      aVlast  = aV22;
++    }
++    else
++    {
++      aVfirst = aV11;
++      aVlast  = aV21;
++    }
++    const double aGlueTol = std::max(BRep_Tool::Tolerance(aCV), Precision::Confusion());
++    const TopoDS_Edge aNew =
++      Glue(aCur, aE, aVfirst, aVlast, false, theF1, addPCurve[0], theF2, addPCurve[1], aGlueTol);
++    if (aNew.IsNull())
++    {
++      return;
++    }
++    aCur = aNew;
++  }
++  BRepLib::SameParameter(aCur, Precision::Confusion(), true);
++  if (BRep_Tool::Tolerance(aCur) >= 1.e-4)
++  {
++    ReconstructPCurves(aCur);
++    BRepLib::SameParameter(aCur, Precision::Confusion(), true);
++  }
++  if (BRep_Tool::Tolerance(aCur) > 1.e-2)
++  {
++    return;
++  }
++  TopAbs_Orientation aO1, aO2;
++  BRepOffset_Tool::OrientSection(aCur, theF1, theF2, aO1, aO2);
++  if (theSide == TopAbs_OUT)
++  {
++    aO1 = TopAbs::Reverse(aO1);
++  }
++  theSelected.Clear();
++  theSelected.Append(aCur.Oriented(aO1));
++}
++
+ //=================================================================================================
+ 
+ //! True for a spindle torus (its major radius smaller than its minor one),
+@@ -6014,7 +6252,9 @@ void BRepOffset_Tool::ExtentFace(
+         if (LInt1.Extent() > 1)
+         {
+           // l intersection est en plusieurs edges (franchissement de couture)
++          const NCollection_List<TopoDS_Shape> aPieces = LInt1;
+           SelectEdge(F, EF, E, LInt1);
++          JoinRunAcrossSeams(aPieces, EF, StopFace, Side, LInt1);
+         }
+         NE                          = TopoDS::Edge(LInt1.First());
+         occ::handle<BRep_TEdge>& TE = *((occ::handle<BRep_TEdge>*)&NE.TShape());

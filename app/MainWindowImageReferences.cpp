@@ -20,6 +20,7 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
@@ -361,9 +362,6 @@ std::optional<Manipulator> centreArrow(const CommandState& state, const CommandC
 } // namespace
 
 CommandDef MainWindow::imageReferenceCommand() {
-  // The file chosen with Choose Image…, taken into the File input when the
-  // panel shows its inputs again (modelChanged).
-  auto chosen = std::make_shared<QString>();
   CommandDef def;
   def.id = kInsertId;
   def.name = tr("Image Reference");
@@ -381,7 +379,7 @@ CommandDef MainWindow::imageReferenceCommand() {
       noteInput(
           QStringLiteral("choose"),
           [](const CommandState&) { return InputNote{QString(), {tr("Choose Image…")}, {}}; },
-          [this, chosen](int, const CommandState&, const CommandContext&) {
+          [this](int, const CommandState&, const CommandContext&) {
             // HEIF on every platform (mitcad#1304): a decoder is looked for
             // only when such a file is chosen.
             const QString filter = imageFileFilter();
@@ -390,8 +388,12 @@ CommandDef MainWindow::imageReferenceCommand() {
                 dialogOpenFileName(this, tr("Insert Image Reference"), dialogFolder(DialogGroup::Import), filter);
             if (!path.isEmpty()) {
               rememberDialogFolder(DialogGroup::Import, path);
-              *chosen = path;
               qDebug().noquote() << QStringLiteral("Image Reference file chosen: %1").arg(QFileInfo(path).fileName());
+              // Into Image as if typed (mitcad#2474): the panel is evaluated
+              // again at once, its message, preview and OK follow the file.
+              if (!chooseInCommand(kInsertId, QStringLiteral("file"), QDir::toNativeSeparators(path))) {
+                qInfo().noquote() << QStringLiteral("Image Reference: the file chosen was not taken");
+              }
             }
           })
           .withFieldColumn()
@@ -500,12 +502,6 @@ CommandDef MainWindow::imageReferenceCommand() {
   def.ended = [this, open](bool) {
     *open = false;
     setImageReferencePanel(std::nullopt);
-  };
-  def.modelChanged = [chosen](CommandState& state, const CommandContext&) {
-    if (!chosen->isEmpty()) {
-      state.setText(QStringLiteral("file"), *chosen);
-      chosen->clear();
-    }
   };
   def.build = [](const CommandState& state, const CommandContext&) -> Built {
     const Selection& plane = state.items(QStringLiteral("plane"));

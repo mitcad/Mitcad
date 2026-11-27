@@ -865,12 +865,24 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 let base = base.map(PathBuf::from);
                 let switched =
                     self.set_link_envelope(uid, envelope, detail, base.as_deref(), all)?;
-                let bodies: Vec<BodyUid> = self
-                    .bodies()
-                    .iter()
-                    .filter(|b| self.body_component(b.uid) == Some(switched.component))
-                    .map(|b| b.uid)
-                    .collect();
+                let assembly = self.assembly();
+                let tree = assembly
+                    .component(switched.component)
+                    .and_then(|c| c.link.as_ref())
+                    .and_then(|link| link.tree.as_ref());
+                let bodies: Vec<BodyUid> = if let Some(tree) = tree {
+                    if let Some(envelope) = tree.envelope(uid) {
+                        vec![envelope.body()]
+                    } else {
+                        self.instances()
+                            .into_iter()
+                            .filter(|instance| instance.path.contains(&uid))
+                            .map(|instance| instance.body)
+                            .collect()
+                    }
+                } else {
+                    self.component_bodies(switched.component)
+                };
                 json!({"component": switched.component, "envelope": switched.detail.is_some(),
                        "detail": switched.detail, "changed": switched.changed,
                        "bodies": bodies})
@@ -936,10 +948,29 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 let uid = self.component_ref(&component)?;
                 let base = base.map(PathBuf::from);
                 let set = self.set_link_parts(uid, parts.as_ref(), base.as_deref())?;
+                let assembly = self.assembly();
+                let tree = assembly
+                    .component(uid)
+                    .and_then(|c| c.link.as_ref())
+                    .and_then(|link| link.tree.as_ref());
+                let bodies = if let Some(tree) = tree {
+                    std::iter::once(uid)
+                        .chain(
+                            tree.components
+                                .iter()
+                                .filter(|part| !part.gone)
+                                .map(|part| part.component),
+                        )
+                        .flat_map(|component| self.component_bodies(component))
+                        .filter(|body| !tree.is_envelope_body(*body))
+                        .collect()
+                } else {
+                    self.component_bodies(uid)
+                };
                 json!({"component": uid, "changed": set.changed,
                        "parts": link_parts_value(set.parts.as_deref()),
                        "messages": set.messages,
-                       "bodies": self.component_bodies(uid)})
+                       "bodies": bodies})
             }
         })
     }
@@ -1105,7 +1136,14 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 .filter(|f| f.component == uid)
                 .map(|f| f.uid)
                 .collect();
-            let bodies = self.component_bodies(uid);
+            let tree = def
+                .and_then(|d| d.link.as_ref())
+                .and_then(|l| l.tree.as_ref());
+            let bodies: Vec<BodyUid> = self
+                .component_bodies(uid)
+                .into_iter()
+                .filter(|body| tree.is_none_or(|tree| !tree.is_envelope_body(*body)))
+                .collect();
             let mut value = json!({
                 "uid": uid,
                 "name": a.name(uid),
@@ -1133,10 +1171,7 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             // A whole design linked with its components (mitcad#2209):
             // the linked component says so, and each of its components
             // names it.
-            if def
-                .and_then(|d| d.link.as_ref())
-                .is_some_and(|l| l.tree.is_some())
-            {
+            if tree.is_some() {
                 value["link_tree"] = json!(true);
             }
             if let Some(linked) = a.linked_in(uid) {
@@ -1291,6 +1326,16 @@ impl<K: Kernel> ComponentsLocal<K> for Document<K> {
                     "visible": o.visible,
                     "children": self.occurrence_tree(o.component, &path, world),
                 });
+                if let Some(envelope) = a
+                    .component(o.component)
+                    .and_then(|c| c.link.as_ref())
+                    .and_then(|link| link.tree.as_ref())
+                    .and_then(|tree| tree.envelope(o.uid))
+                    .filter(|envelope| self.body_shape(envelope.body()).is_some())
+                {
+                    value["envelope"] = json!(envelope.detail);
+                    value["envelope_body"] = json!(envelope.body());
+                }
                 // Drawn see-through with its contents (mitcad#1093).
                 if o.transparent {
                     value["transparent"] = json!(true);

@@ -12,7 +12,8 @@
 # in XY), a 40 x 30 block 20 to each side of XY at x 100 (F4.b0), and on XY
 # a square far from both (Sketch3, F5), a square inside the second block
 # (Sketch4, F6) and a square on the first block's top face (Sketch5, F7;
-# Extrude takes the newest unused sketch first).
+# Extrude takes the newest unused sketch first). A new Extrude starts at
+# 0 mm (mitcad#2481): each gets 10 mm typed first.
 #   1. The square on the face: automatic Join; Cut chosen by hand misses
 #      upward and cuts downward: Flip turns on by itself, the cut
 #      previews, no other operation is tried (mitcad#2216's retry stays
@@ -71,7 +72,8 @@ echo "--- 1. Cut by hand on the face: Flip turns on, the cut previews"
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F7]" "the square on the block's face taken"
-ui_expect_new "Extrude: automatic Operation = Join" "Join at once (10 mm up from the face)"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
+ui_expect_new "Extrude: automatic Operation = Join" "Join at once (10 mm typed, up from the face)"
 ui_expect_new "Preview Extrude: ok" "the join previewed"
 ui_wait_idle
 ui_mark
@@ -96,7 +98,8 @@ echo "--- 2. A square inside a block: Cut by hand works, Flip stays off"
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F6]" "the square inside the second block taken"
-ui_expect_new "Extrude: automatic Operation = Cut" "Cut at once (inside the block)"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
+ui_expect_new "Extrude: automatic Operation = Cut" "Cut at once (10 mm typed, inside the block)"
 ui_expect_new "Preview Extrude: ok" "the cut previewed"
 ui_wait_idle
 ui_mark
@@ -130,6 +133,7 @@ echo "--- 3. Cut by hand away from the bodies: it misses both ways, nothing chan
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F5]" "the far square taken"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
 ui_expect_new "Preview Extrude: ok" "the new body previewed"
 ui_wait_idle
 ui_mark

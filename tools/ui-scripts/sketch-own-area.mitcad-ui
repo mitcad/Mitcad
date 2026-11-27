@@ -15,8 +15,8 @@
 #   3. Extrude again: one click takes the plate without its holes; 8 mm,
 #      OK: the Join adds (3000 - 32 pi) 8, in all 72000 + 64 pi =
 #      72201.06 mm3.
-# The distances differ from Extrude's default (10 mm) and from each other,
-# so that typing them makes a new preview.
+# A new Extrude starts at 0 mm and waits for a distance (mitcad#2481), so
+# that typing each one makes the first preview.
 # Run by tools/ui-sketch-own-area-test.sh (Linux) and
 # tools/ui-windows-sketch-own-area-test.ps1 (Windows).
 expect-ever 'View area'

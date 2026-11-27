@@ -47,13 +47,10 @@ wait-log '^Extrude Profiles: nothing$'
 wait-log '^Pick profile F1/r\{c2\[' 20
 click-pick 'profile F1/r\{c2\['
 wait-log '^Extrude Profiles: 1 profile \[profile r\{c2\['
-# The command starts with this profile preselected at the panel's default
-# 10 mm and refines that preview around the mark above, a race for the
-# refinement's line; the re-picked profile at 10 mm is that preview again,
-# from the preview cache and already refined, so it logs no refinement.
-# Hence a new mark once it is shown, and another distance: a new preview,
-# the only one refined after this mark.
-wait-log '^Preview Extrude: ok' 30
+# A new Extrude starts at 0 mm (mitcad#2481) and builds nothing until a
+# distance is given; once the re-picked profile waits for one, a new mark
+# and 12 mm: the first preview, the only one refined after this mark.
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
 mark
 type-in '^Panel Extrude input distance at ' '12 mm'
 wait-log '^Preview Extrude: ok' 30

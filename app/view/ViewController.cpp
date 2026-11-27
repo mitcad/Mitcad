@@ -474,6 +474,8 @@ ViewSettings ViewSettings::load(const QSettings& store) {
   s.style = static_cast<VisualStyle>(
       std::clamp(number("style", int(s.style)), 0, int(VisualStyle::WireframeVisibleEdges)));
   s.perspective = flag("perspective", s.perspective);
+  // Perspective with Orthographic Faces (mitcad#2473): only with perspective.
+  s.orthographicFaces = s.perspective && flag("orthographicFaces", s.orthographicFaces);
   s.componentColors = flag("componentColors", s.componentColors);
   // Follow System (Automatic) unless the settings name another background.
   s.background = static_cast<Background>(
@@ -534,6 +536,7 @@ void ViewSettings::save() const {
   QSettings store;
   store.setValue(kGroup + QStringLiteral("style"), int(style));
   store.setValue(kGroup + QStringLiteral("perspective"), perspective);
+  store.setValue(kGroup + QStringLiteral("orthographicFaces"), orthographicFaces); // mitcad#2473
   store.setValue(kGroup + QStringLiteral("componentColors"), componentColors);
   store.setValue(kGroup + QStringLiteral("background"), int(background));
   store.setValue(kGroup + QStringLiteral("top"), top.name());
@@ -733,6 +736,12 @@ void ViewController::registerCommands() {
       {QStringLiteral("camera"), QStringLiteral("parallel")});
   add("view.perspective", tr("Perspective"), "perspective", [this] { setPerspective(true); },
       {QStringLiteral("camera")});
+  // Perspective, orthographic while the camera looks along one of the six
+  // face directions (mitcad#2473).
+  add("view.perspective_orthographic_faces", tr("Perspective with Orthographic Faces"), "perspective",
+      [this] { setProjection(CameraProjection::PerspectiveOrthographicFaces); },
+      {QStringLiteral("camera"), QStringLiteral("orthographic"), QStringLiteral("face"), QStringLiteral("standard view")},
+      tr("Shows the view in perspective, orthographic while it looks straight at a face"));
   for (const StyleEntry& entry : kStyles) {
     const VisualStyle style = entry.style;
     add(entry.id, QCoreApplication::translate("View", entry.name), "visual-style",
@@ -819,6 +828,13 @@ void ViewController::registerCommands() {
       {QStringLiteral("snapshot"), QStringLiteral("screenshot"), QStringLiteral("image"), QStringLiteral("picture"),
        QStringLiteral("png"), QStringLiteral("measurement"), QStringLiteral("dimension")},
       tr("Saves a large picture of the view with the shown annotations"));
+  // A video or PNG frames of the camera turning about the model
+  // (mitcad#2523, view/TurntableExport.cpp).
+  add("view.export_turntable", tr("Export Turntable…"), "render-image", [this] { exportTurntable(); },
+      {QStringLiteral("turntable"), QStringLiteral("animation"), QStringLiteral("video"), QStringLiteral("movie"),
+       QStringLiteral("mp4"), QStringLiteral("webm"), QStringLiteral("frames"), QStringLiteral("spin"),
+       QStringLiteral("rotate"), QStringLiteral("orbit"), QStringLiteral("360")},
+      tr("Saves a video or PNG frames of the camera turning about the model"));
   // The Annotations window (mitcad#702, MainWindowAnnotations.cpp).
   add("view.annotations", tr("Annotations…"), "measure", [this] { m_host.openAnnotations(); },
       {QStringLiteral("annotation"), QStringLiteral("dimension"), QStringLiteral("measurement"),
@@ -914,6 +930,7 @@ void ViewController::prepareMenuActions() {
   auto* projection = new QActionGroup(this);
   checkable(QStringLiteral("view.orthographic"), projection);
   checkable(QStringLiteral("view.perspective"), projection);
+  checkable(QStringLiteral("view.perspective_orthographic_faces"), projection); // mitcad#2473
   checkable(QStringLiteral("view.anaglyph")); // mitcad#1449
   auto* styleGroup = new QActionGroup(this);
   for (const StyleEntry& entry : kStyles) {
@@ -978,7 +995,7 @@ void ViewController::apply() {
   m_viewer.setVisualStyle(m_settings.style);
   m_viewer.setComponentColors(m_settings.componentColors);
   m_viewer.setNavigation(m_settings.navigation);
-  m_viewer.setPerspective(m_settings.perspective);
+  m_viewer.setCameraProjection(m_settings.projection()); // mitcad#2473
   // Anaglyph 3D (mitcad#1449) after the projection it goes back to.
   m_viewer.setStereoParameters(m_settings.stereoDepth / 100.0, m_settings.stereoConvergence / 100.0);
   // The focal lengths (mitcad#1717): the camera takes the one in force.
@@ -1015,8 +1032,14 @@ void ViewController::syncChecks() {
     check(QString::fromLatin1(entry.id), entry.background == m_settings.background);
   }
   // Anaglyph 3D's camera is a perspective one (mitcad#1449).
-  check(QStringLiteral("view.orthographic"), !m_settings.perspective && !m_settings.anaglyph);
-  check(QStringLiteral("view.perspective"), m_settings.perspective || m_settings.anaglyph);
+  // Perspective with Orthographic Faces (mitcad#2473) stays checked in it:
+  // the projection it goes back to.
+  const CameraProjection projection = m_settings.projection();
+  check(QStringLiteral("view.orthographic"), projection == CameraProjection::Orthographic && !m_settings.anaglyph);
+  check(QStringLiteral("view.perspective"), projection == CameraProjection::Perspective ||
+                                                (projection == CameraProjection::Orthographic && m_settings.anaglyph));
+  check(QStringLiteral("view.perspective_orthographic_faces"),
+        projection == CameraProjection::PerspectiveOrthographicFaces);
   check(QStringLiteral("view.anaglyph"), m_settings.anaglyph);
   check(QStringLiteral("view.component_colors"), m_settings.componentColors);
   check(QStringLiteral("view.sketches_through"), m_settings.sketchesThroughBodies);
@@ -1057,18 +1080,23 @@ void ViewController::setStyle(VisualStyle style) {
 }
 
 void ViewController::setPerspective(bool perspective) {
-  if (!perspective && m_settings.anaglyph) {
+  setProjection(perspective ? CameraProjection::Perspective : CameraProjection::Orthographic);
+}
+
+void ViewController::setProjection(CameraProjection projection) {
+  if (projection == CameraProjection::Orthographic && m_settings.anaglyph) {
     // Anaglyph 3D's camera is a perspective one (mitcad#1449): Orthographic
-    // ends it.
+    // ends it. Perspective with Orthographic Faces (mitcad#2473) keeps it,
+    // as Perspective does: the camera stays a stereo one and goes back to
+    // the mode when Anaglyph 3D ends.
     setAnaglyph(false);
   }
-  m_settings.perspective = perspective;
+  m_settings.setProjection(projection);
   m_settings.save();
-  m_viewer.setPerspective(perspective);
+  m_viewer.setCameraProjection(projection);
   syncChecks();
   emit displaySettingsChanged();
-  qDebug().noquote() << (perspective ? QStringLiteral("Camera perspective")
-                                     : QStringLiteral("Camera orthographic"));
+  qDebug().noquote() << QStringLiteral("Camera %1").arg(cameraProjectionText(projection));
 }
 
 void ViewController::setBackground(ViewSettings::Background background) {
@@ -1247,6 +1275,7 @@ CameraState ViewController::cameraOf(const QJsonObject& view) {
     camera.up = gp_Dir(up);
   }
   camera.perspective = view.value(QStringLiteral("perspective")).toBool();
+  camera.orthographicFaces = view.value(QStringLiteral("orthographic_faces")).toBool(); // mitcad#2473
   camera.height = view.value(QStringLiteral("height")).toDouble(250.0);
   return camera;
 }
@@ -1261,6 +1290,11 @@ bool ViewController::saveNamedView(const QString& name, bool replace) {
                       {QStringLiteral("replace"), replace}};
   if (camera.perspective) {
     command.insert(QStringLiteral("perspective"), true);
+  }
+  // Perspective with Orthographic Faces (mitcad#2473): the mode, beside the
+  // projection it gave the view as it was saved.
+  if (camera.orthographicFaces) {
+    command.insert(QStringLiteral("orthographic_faces"), true);
   }
   if (!name.isEmpty()) {
     command.insert(QStringLiteral("name"), name);
@@ -1293,7 +1327,7 @@ void ViewController::showOrientationCubeMenu(const QPoint& globalPosition) {
   QMenu* camera = menu.addMenu(themeIcon(QStringLiteral("perspective")), tr("Camera"));
   entries << camera->title();
   QStringList cameraEntries;
-  for (const char* id : {"view.orthographic", "view.perspective"}) {
+  for (const char* id : {"view.orthographic", "view.perspective", "view.perspective_orthographic_faces"}) {
     if (QAction* a = m_registry.action(QString::fromLatin1(id))) {
       camera->addAction(a);
       cameraEntries << a->text().remove(QLatin1Char('&'));
@@ -2100,7 +2134,9 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
 
   QWidget* navigationBox = section(tr("Navigation"));
   auto* navigationLayout = new QVBoxLayout(navigationBox);
-  navigationLayout->setContentsMargins(0, 0, 0, 0);
+  // The style's inset around the tabs, as every other group has it
+  // (mitcad#2561); none above under the dialog group's title.
+  insetPreferencesGroup(navigationLayout, window == nullptr);
   QVector<QPair<NavigationScheme, QString>> navigationSchemes;
   for (const SchemeEntry& entry : kSchemes) {
     navigationSchemes.append({entry.scheme, schemeName(entry.scheme)});
@@ -2120,6 +2156,7 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   offer(QStringLiteral("view.look_at"));
   offer(QStringLiteral("view.orthographic"));
   offer(QStringLiteral("view.perspective"));
+  offer(QStringLiteral("view.perspective_orthographic_faces")); // mitcad#2473
   offer(spaceMouseLockRotationCommand()); // mitcad#1910
   // The 3D Mouse tab's driver hint (mitcad#1981): whether the vendor's
   // driver runs now.
@@ -2158,8 +2195,10 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   auto* display = new QFormLayout(displayBox);
   auto* camera = new QComboBox;
   camera->setObjectName(QStringLiteral("preferencesCamera"));
-  camera->addItems({tr("Orthographic"), tr("Perspective")});
-  camera->setCurrentIndex(m_settings.perspective ? 1 : 0);
+  // In CameraProjection's order (Perspective with Orthographic Faces,
+  // mitcad#2473, last).
+  camera->addItems({tr("Orthographic"), tr("Perspective"), tr("Perspective with Orthographic Faces")});
+  camera->setCurrentIndex(int(m_settings.projection()));
   // The orientation cube's projection (mitcad#774), in CubeProjection's
   // order, beside the camera's in one row (Preferences fits a 1366 x 768
   // screen with Text size, Icon size and Font, mitcad#1556); Alt+O still
@@ -2460,7 +2499,7 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
             [this, camera, background, top, bottom, topButton, bottomButton] {
       const QSignalBlocker cameraSignals(camera);
       const QSignalBlocker backgroundSignals(background);
-      camera->setCurrentIndex(m_settings.perspective ? 1 : 0);
+      camera->setCurrentIndex(int(m_settings.projection()));
       background->setCurrentIndex(int(m_settings.background));
       *top = m_settings.top;
       *bottom = m_settings.bottom;
@@ -2752,6 +2791,22 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   timelineChoice->setToolTip(tr("Strip: icons at the bottom; History list: named rows under the Browser"));
   auto* timelineLabel = new QLabel(tr("Timeline:"));
   timelineLabel->setBuddy(timelineChoice);
+  // The Browser rows' spacing (mitcad#2513, GitHub mitcad/Mitcad#675), on
+  // the same row (the page fits a 768 px high screen): Compact, Standard
+  // (the default, the rows as they always were) or Comfortable, in both
+  // layouts; applied to every window's Browser when the dialog is accepted,
+  // at once in the Settings window. No mnemonic: every letter of its label
+  // is taken on this page.
+  auto* rowSpacingChoice = new QComboBox;
+  rowSpacingChoice->setObjectName(QStringLiteral("browserRowSpacing"));
+  rowSpacingChoice->addItem(tr("Compact"), browserRowSpacingId(BrowserRowSpacing::Compact));
+  rowSpacingChoice->addItem(tr("Standard"), browserRowSpacingId(BrowserRowSpacing::Standard));
+  rowSpacingChoice->addItem(tr("Comfortable"), browserRowSpacingId(BrowserRowSpacing::Comfortable));
+  rowSpacingChoice->setCurrentIndex(
+      std::max(0, rowSpacingChoice->findData(browserRowSpacingId(browserRowSpacing()))));
+  rowSpacingChoice->setToolTip(tr("Compact: more Browser rows in sight; Comfortable: roomier rows"));
+  auto* rowSpacingLabel = new QLabel(tr("Browser row spacing:"));
+  rowSpacingLabel->setBuddy(rowSpacingChoice);
   if (layoutChoosable()) {
     layoutChoice = new QComboBox;
     layoutChoice->setObjectName(QStringLiteral("layout"));
@@ -2764,12 +2819,33 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
     layoutRow->addSpacing(12);
     layoutRow->addWidget(timelineLabel);
     layoutRow->addWidget(timelineChoice);
+    layoutRow->addSpacing(12);
+    layoutRow->addWidget(rowSpacingLabel);
+    layoutRow->addWidget(rowSpacingChoice);
     layoutRow->addStretch(1);
     auto* layoutLabel = new QLabel(tr("&Layout:"));
     layoutLabel->setBuddy(layoutChoice);
     display->addRow(layoutLabel, layoutRow);
   } else {
-    display->addRow(timelineLabel, timelineChoice);
+    auto* timelineRow = new QHBoxLayout;
+    timelineRow->addWidget(timelineChoice);
+    timelineRow->addSpacing(12);
+    timelineRow->addWidget(rowSpacingLabel);
+    timelineRow->addWidget(rowSpacingChoice);
+    timelineRow->addStretch(1);
+    display->addRow(timelineLabel, timelineRow);
+  }
+  const auto applyRowSpacing = [rowSpacingChoice] {
+    const BrowserRowSpacing chosen = browserRowSpacingFromId(rowSpacingChoice->currentData().toString());
+    if (chosen != browserRowSpacing()) {
+      qDebug().noquote() << QStringLiteral("Preferences: browser row spacing %1").arg(browserRowSpacingId(chosen));
+    }
+    setBrowserRowSpacing(chosen);
+  };
+  if (window != nullptr) {
+    connect(rowSpacingChoice, &QComboBox::currentIndexChanged, host, saving(applyRowSpacing));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, rowSpacingChoice, applyRowSpacing);
   }
   const auto applyTimelinePresentation = [timelineChoice] {
     const TimelinePresentation chosen = timelinePresentationFromId(timelineChoice->currentData().toString());
@@ -3394,13 +3470,14 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
       }
     }
     m_settings.navigation = navigation->chosen();
-    const bool perspective = camera->currentIndex() == 1;
-    if (m_settings.anaglyph && m_settings.perspective && !perspective) {
+    const auto projection = static_cast<CameraProjection>(
+        std::clamp(camera->currentIndex(), 0, int(CameraProjection::PerspectiveOrthographicFaces)));
+    if (m_settings.anaglyph && m_settings.perspective && projection == CameraProjection::Orthographic) {
       // Orthographic ends Anaglyph 3D, as View › Camera does (mitcad#1449);
       // apply() below switches it off.
       m_settings.anaglyph = false;
     }
-    m_settings.perspective = perspective;
+    m_settings.setProjection(projection); // mitcad#2473
     // The orientation cube's projection (mitcad#774): applied below.
     const auto cube = static_cast<CubeProjection>(cubeProjection->currentIndex());
     if (cube != m_settings.cubeProjection) {
@@ -3508,8 +3585,7 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
                                    onOff(m_settings.navigation.zoomToCursor),
                                    onOff(m_settings.navigation.reverseZoom),
                                    onOff(m_settings.navigation.constrainedOrbit),
-                                   m_settings.perspective ? QStringLiteral("perspective")
-                                                          : QStringLiteral("orthographic"),
+                                   cameraProjectionText(m_settings.projection()),
                                    chosen.autosave ? QStringLiteral("autosave every %1 min").arg(chosen.autosaveMinutes)
                                                    : QStringLiteral("autosave off"));
     // The theme (mitcad#1330): saved and applied at once.

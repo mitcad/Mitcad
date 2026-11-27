@@ -12,9 +12,11 @@
 # is posted), on a design mitcad-cli makes, as tools/ui-auto-operation-test.sh
 # does on Linux: a 40 x 30 block 20 deep under the XY plane (Body1, F2.b0;
 # its top face lies in XY), a square on XY over the block (Sketch2, F3) and
-# a square on XY far from it (Sketch3, F4).
+# a square on XY far from it (Sketch3, F4). A new Extrude starts at 0 mm
+# and builds nothing (mitcad#2481): each new one below gets 10 mm typed
+# first.
 #   1. Extrude of the far square: New Body, nothing chosen automatically.
-#   2. Extrude of the square on the block's face: Join at once; a negative
+#   2. Extrude of the square on the block's face: Join once 10 mm is typed; a negative
 #      distance makes it Cut, a positive one Join again; OK joins. A typed
 #      "-5 mm" has no "= -5 mm" line under the field, an expression has
 #      one (mitcad#994).
@@ -80,6 +82,7 @@ Write-Host '--- 1. A profile away from the bodies: New Body'
 Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $region of F4]" 'the far square taken'
+Ui-Step 'distance 10 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
 Ui-ExpectNew 'Preview Extrude: ok' 'previewed' 30
 Ui-Step 'distance 15'                    { Ui-TypeIn 'Panel Extrude input distance' '15' }
 Ui-ExpectNew 'Extrude Distance: 15 = 15 mm' '15 mm up'
@@ -94,6 +97,7 @@ Write-Host '--- 2. A profile on the block''s face: Join, Cut going in, Join comi
 Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $region of F3]" 'the square on the face taken'
+Ui-Step 'distance 10 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
 Ui-ExpectNew 'Extrude: automatic Operation = Join' 'Join at once (10 mm up from the face)' 30
 Ui-ExpectNew 'Extrude Local bodies: 1 body [body F2.b0]' 'the block is the object'
 Ui-ExpectNew 'Preview Extrude: ok' 'the join previewed' 30
@@ -159,6 +163,7 @@ Write-Host '--- 3. New Body chosen by hand stays when the distance goes in'
 Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $region of F3]" 'the square on the face again'
+Ui-Step 'distance 10 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
 Ui-ExpectNew 'Extrude: automatic Operation = Join' 'Join at once' 30
 Ui-ExpectNew 'Preview Extrude: ok' 'previewed' 30
 Ui-Mark
@@ -228,6 +233,7 @@ Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $region of F3]" 'the square on the block''s face taken'
 Ui-ExpectNew 'Extrude: automatic operation off by preference' 'the preference keeps the model''s choice off' 30
+Ui-Step 'distance 10 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
 Ui-ExpectNew 'Preview Extrude: ok' 'the outward New Body previewed (10 mm up from the face)' 30
 Ui-WaitIdle
 Start-Sleep -Milliseconds 500
@@ -253,6 +259,7 @@ Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $region of F3]" 'the square on the face again'
 Ui-ExpectNew 'Extrude: automatic operation off by preference' 'off by preference again' 30
+Ui-Step 'distance 10 mm'                 { Ui-TypeIn 'Panel Extrude input distance' '10 mm' }
 Ui-ExpectNew 'Preview Extrude: ok' 'previewed' 30
 Ui-Mark
 Ui-Step 'distance 5'                     { Ui-TypeIn 'Panel Extrude input distance' '5' }

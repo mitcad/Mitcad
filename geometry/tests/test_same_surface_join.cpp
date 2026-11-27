@@ -33,6 +33,7 @@
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/profile.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -363,7 +364,7 @@ void test_a_rounding_of_the_joined_wall_finds_its_edge() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(same_surface_join) {
   test::guarded("test_cut_walls_of_eight_arcs_are_one_face", test_cut_walls_of_eight_arcs_are_one_face);
   test::guarded("test_rim_continued_by_the_cut_is_one_face", test_rim_continued_by_the_cut_is_one_face);
   test::guarded("test_pieces_farther_apart_stay_apart", test_pieces_farther_apart_stay_apart);

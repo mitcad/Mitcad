@@ -10,6 +10,7 @@
 # check-all sources: app/framework/QuickAccess.cpp app/framework/QuickAccessGroup.cpp
 # check-all sources: app/drawings/DrawingsPanel.cpp app/browser/BrowserController.cpp
 # check-all sources: app/MainWindowRender.cpp app/render/RenderWorkspace.cpp app/framework/GlassCard.cpp
+# check-all sources: app/framework/PaintWatch.cpp app/framework/GraphicsEnvironment.cpp app/main.cpp
 # The toolbar panel's workspace selector (mitcad#1990) through the real UI,
 # the shared input script tools/ui-scripts/workspaces.mitcad-ui (also run
 # by tools/ui-windows-workspaces-test.ps1) in the Floating layout, on a box
@@ -116,6 +117,7 @@ ui_expect_log 'TestDriver: done' "the workspace selector"
 grep -qE '^Toolbar panel after the Start page: shown at [0-9]+,[0-9]+ [0-9]+x[0-9]+ [(]Floating; the window exposed, ' "$UI_LOG" ||
   ui_fail "the toolbar panel not shown in an exposed window after the Start page: $(grep '^Toolbar panel after the Start page: ' "$UI_LOG" | tail -1)"
 echo "ok   the toolbar panel shown in the exposed window after the Start page"
+ui_expect_toolbar_panel_painted
 # The project and assistant indicators in the title row: compact icon
 # buttons with a caret, their text in the tooltip (mitcad#1990).
 cards=$(grep '^Floating cards: ' "$UI_LOG" | tail -1)

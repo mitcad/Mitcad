@@ -14,6 +14,7 @@
 #include <QTemporaryDir>
 
 #include "mitcad_bridge/lib.h"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -28,7 +29,7 @@ QJsonObject configuration() {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+MITCAD_BUNDLED_TEST_ARGS(library_paths) {
   QCoreApplication app(argc, argv);
   // The names the application sets (app/main.cpp).
   QCoreApplication::setOrganizationName(mitcad::storedApplicationName());

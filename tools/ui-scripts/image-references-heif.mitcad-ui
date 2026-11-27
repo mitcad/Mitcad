@@ -13,8 +13,22 @@ expect-log '^Image Reference Plane: 1 face'
 # The empty panel reports its required fields before a file is chosen.
 # From the chosen plane and file onward, no panel error is allowed.
 wait-log '^Panel Image Reference error: Choose an image file\.$'
+wait-idle
+# The file chosen with Choose Image... in Qt's own file dialog (the runner's
+# --no-native-dialogs; mitcad#2474): the panel takes it at once, its
+# message goes.
 mark
-type-in '^Panel Image Reference input file at ' '${MITCAD_TEST_WORK}/photo.heic'
+click-logged '^Panel Image Reference action choose[.]0 at '
+focus-dialog '^Insert Image Reference$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/photo.heic"
+sleep 300
+key Return
+focus-main
+wait-log '^Image Reference file chosen: photo[.]heic$'
+wait-log '^Image Reference Image: .*photo[.]heic$'
+wait-log '^Panel Image Reference message: error gone: Choose an image file[.]$'
+expect-input-text file '.*photo[.]heic$'
 wait-log '^Image Reference HEIF file photo.heic decoded: 32 x 64 pixels'
 type-in '^Panel Image Reference input width at ' '32'
 key Return

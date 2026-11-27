@@ -1255,6 +1255,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         let options = FlatDxfOptions {
             unit,
             tangents: command.tangents,
+            folds: command.folds,
             ..FlatDxfOptions::default()
         };
         let (def, drawing) = self.export_flat_pattern_dxf(
@@ -1434,6 +1435,10 @@ pub(super) struct ExportFlatPatternCommand {
     /// Also the bends' tangent lines, on `BEND_TANGENT`.
     #[serde(default)]
     tangents: bool,
+    /// Also the fold lines of a pattern laid flat by triangulation, on the
+    /// bend layers (mitcad#2442).
+    #[serde(default)]
+    folds: bool,
     /// The side the drawing looks at; the Flat Pattern's when left out.
     #[serde(default)]
     reference_side: Option<mitcad_model::sheet::SheetReferenceSide>,

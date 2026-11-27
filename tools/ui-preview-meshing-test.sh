@@ -90,7 +90,9 @@ echo "=== A typed distance"
 ui_mark
 ui_step "extrude (E)"                      ui_key e
 ui_expect_new "Command Extrude started" "Extrude started"
-ui_expect_new "Extrude: automatic Operation = Join" "Join onto the block"
+# A new Extrude starts at 0 mm and builds nothing (mitcad#2481).
+ui_step "distance 10 mm"                   ui_type_in "Panel Extrude input distance" "10 mm"
+ui_expect_new "Extrude: automatic Operation = Join" "Join onto the block (10 mm typed)"
 ui_mark
 ui_step "distance 5"                       ui_type_in "Panel Extrude input distance" "5"
 ui_expect_new "Preview Extrude: ok" "previewed"

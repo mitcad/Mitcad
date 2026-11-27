@@ -1043,9 +1043,13 @@ CommandDef patchCommand(const CommandContext& context) {
                                               : edges)
           .append(item);
     }
+    // Sketch curves alone (mitcad#2526, GitHub #711): a patch fills a
+    // profile, or a loop of edges the curves join; a loop of curves alone
+    // is Boundary Surface's Fill a Loop.
     if (!curves.isEmpty() && edges.isEmpty() && openings.isEmpty()) {
-      return Built::failure(QObject::tr("Select the edges the sketch curves close a loop with: sketch curves "
-                                        "only join a patch's loop of edges."),
+      return Built::failure(QObject::tr("Sketch curves alone do not make a patch. Select the enclosed profile for a "
+                                        "flat patch, or use Boundary Surface with Type Fill a Loop for a loop "
+                                        "picked as curves."),
                             QStringLiteral("boundary"));
     }
     QJsonObject definition{{QStringLiteral("type"), QStringLiteral("patch")}};
@@ -1913,6 +1917,11 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
           .withVisible([loop, &context](const CommandState& state) {
             return loop(state) && hasPlanarCurves(state.items(QStringLiteral("curves")), context);
           }),
+      // Curves inside the loop the face runs through (mitcad#2526).
+      selectionInput(QStringLiteral("guides"), QObject::tr("Guide Curves"), SelectKind::SketchCurve, 0, 0)
+          .withTooltip(QObject::tr("Sketch curves inside the loop that the surface runs through, without "
+                                   "bounding or splitting it"))
+          .withVisible(loop),
       selectionInput(QStringLiteral("edges"), QObject::tr("Boundary Edges"), SelectKind::Edge, 0, 0)
           .withTooltip(QObject::tr("Edges of one body round the loop, open edges of a surface body too"))
           .withoutMeshes()
@@ -1990,6 +1999,23 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
       return Built::failure(QObject::tr("Select the curves or open edges round the loop."), QStringLiteral("curves"));
     }
     definition.insert(QStringLiteral("boundary"), boundary);
+    // The guide curves, one entry for each sketch's (mitcad#2526): each
+    // curve a guide of its own, never chained.
+    const Selection& guides = state.items(QStringLiteral("guides"));
+    for (const SelectionItem& item : guides) {
+      if (curves.contains(item)) {
+        return Built::failure(QObject::tr("Select each curve as a boundary curve or as a guide curve, not both."),
+                              QStringLiteral("guides"));
+      }
+    }
+    QJsonArray guideEntries;
+    for (const QString& sketch : curveSketches(guides)) {
+      const QJsonArray picked = names(curvesOf(guides, sketch), SelectKind::SketchCurve);
+      guideEntries.append(QJsonObject{{QStringLiteral("sketch"), sketch}, {QStringLiteral("curves"), picked}});
+    }
+    if (!guideEntries.isEmpty()) {
+      definition.insert(QStringLiteral("guides"), guideEntries);
+    }
     return Built::of(definition);
   };
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
@@ -2027,6 +2053,16 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
       state.setItems(QStringLiteral("curves"), curves);
     }
     state.setChecked(QStringLiteral("tangent"), tangent);
+    // The guide curves of every sketch into Guide Curves (mitcad#2526).
+    Selection guides;
+    for (const QJsonValue& value : feature.value(QStringLiteral("guides")).toArray()) {
+      if (const auto items = pathItems(value, context)) {
+        guides += *items;
+      }
+    }
+    if (!guides.isEmpty()) {
+      state.setItems(QStringLiteral("guides"), guides);
+    }
   };
   // The panel shows the curves of one sketch or several (each sketch's in
   // one entry, all chained or none, the planar ones all tangent to their
@@ -2068,6 +2104,18 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
         return false;
       }
     }
+    // Guide curves: one entry of each sketch's curves, unchained, no
+    // continuity (mitcad#2526).
+    QStringList guideSketches;
+    for (const QJsonValue& value : feature.value(QStringLiteral("guides")).toArray()) {
+      const QJsonObject entry = value.toObject();
+      const QString sketch = str(entry, "sketch");
+      if (sketch.isEmpty() || guideSketches.contains(sketch) || entry.value(QStringLiteral("chain")).toBool() ||
+          entry.contains(QStringLiteral("continuity")) || !pathItems(entry, context).has_value()) {
+        return false;
+      }
+      guideSketches << sketch;
+    }
     return true;
   };
   def.describe = [](const CommandState& state, const CommandContext&) {
@@ -2076,9 +2124,11 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
           .arg(state.items(QStringLiteral("u")).size())
           .arg(state.items(QStringLiteral("v")).size());
     }
-    return QStringLiteral("Added boundary surface filling %1 curves and the open edges of %2 faces")
-        .arg(state.items(QStringLiteral("curves")).size())
-        .arg(state.items(QStringLiteral("open_faces")).size());
+    const QString filling = QStringLiteral("Added boundary surface filling %1 curves and the open edges of %2 faces")
+                                .arg(state.items(QStringLiteral("curves")).size())
+                                .arg(state.items(QStringLiteral("open_faces")).size());
+    const auto guides = state.items(QStringLiteral("guides")).size();
+    return guides == 0 ? filling : filling + QStringLiteral(" through %1 guide curves").arg(guides);
   };
   return def;
 }

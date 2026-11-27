@@ -363,6 +363,7 @@ fn drawings(name: &str) -> Option<Value> {
                 "at": p2("Where the view's middle goes (a detail's centre); beside its parent or in the sheet's middle when left out"),
                 "line": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}, "description": "A section's line on its parent: two sheet points [[x, y], [x, y]]"},
                 "flip": flag(false, "A section seen the other way"),
+                "bounded": flag(false, "A section limited to its line: only that stretch is cut and hatched, and its mark runs along it; the whole plane, marked across the whole parent, when false"),
                 "letter": text("A section's or a detail's letter; the next free one when left out"),
                 "hatch": json!({"type": "boolean", "description": "A section's cut faces hatched (on when left out)"}),
                 "center": p2("A detail's circle on its parent: its centre"),
@@ -400,6 +401,7 @@ fn drawings(name: &str) -> Option<Value> {
                 "letter": text("A section's or a detail's letter"),
                 "hatch": json!({"type": "boolean", "description": "A section's cut faces hatched"}),
                 "flip": flag(false, "A section seen the other way"),
+                "bounded": json!({"type": "boolean", "description": "A section limited to its line, or of the whole plane (one with its line on a parent)"}),
                 "center": p2("A detail's circle: its centre"),
                 "radius": number("A detail's circle: its radius on the sheet, mm"),
                 "breaks": {"type": "array", "items": break_input(), "description": "The breaks, all of them (an empty list removes them)"},
@@ -636,7 +638,9 @@ fn cut_sheets(name: &str) -> Option<Value> {
                 "count": count(),
                 "flat": flat(),
                 "kerf": number("The cutting beam's width, mm (0 to 10): the export moves outer outlines out and holes in by half of it"),
-                "nest": flag(false, "The parts placed by simple automatic nesting")
+                "nest": flag(false, "The parts placed by simple automatic nesting"),
+                "gap": number("The room between nested parts and from the edges, mm; 5 when left out"),
+                "cutting": cutting()
             },
             "required": [],
             "examples": [
@@ -651,7 +655,8 @@ fn cut_sheets(name: &str) -> Option<Value> {
                 "name": text("Its new name"),
                 "width": number("The material's width, mm"),
                 "height": number("The material's height, mm"),
-                "kerf": number("The cutting beam's width, mm (0 to 10; 0: none)")
+                "kerf": number("The cutting beam's width, mm (0 to 10; 0: none)"),
+                "cutting": cutting()
             },
             "required": ["drawing"],
             "examples": [{"cmd": "edit_cut_sheet", "drawing": "D1", "width": 1220}]
@@ -722,6 +727,25 @@ fn marks() -> Value {
             "additionalProperties": false
         },
         "description": "Sketches whose curves and texts are engraved or scored on the part, laid along the face it is seen along"
+    })
+}
+
+/// A cut sheet's plasma torch settings (mitcad#2553).
+fn cutting() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "feed": number("The cut feed, mm/min (2000)"),
+            "pierce_height": number("The torch's height while it pierces, mm (3.8)"),
+            "pierce_delay": number("How long it waits after it fires, s (0.5)"),
+            "cut_height": number("The torch's height while it cuts, mm (1.5)"),
+            "travel_height": number("The height it moves across at, mm (10)"),
+            "lead_in": number("The longest lead-in, mm (4)"),
+            "units": choice(&["millimetres", "inches"], "The program's units"),
+            "line_numbers": flag(false, "N words on every line")
+        },
+        "additionalProperties": false,
+        "description": "The plasma torch's settings of the cut sheet's grbl program; add_cut_sheet: each left out takes its default, edit_cut_sheet: each left out stays as it is"
     })
 }
 

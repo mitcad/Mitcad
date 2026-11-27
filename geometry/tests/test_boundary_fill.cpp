@@ -24,6 +24,7 @@
 #include "mitcad/geometry/input_check.hpp"
 #include "mitcad/geometry/primitive.hpp"
 #include "mitcad/geometry/query.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -325,7 +326,7 @@ void test_planes_alone() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(boundary_fill) {
   // The tools are read, never changed (T0e).
   mitcad::geometry::enable_input_checks(true);
   test::guarded("test_cells_of_two_overlapping_boxes", test::test_cells_of_two_overlapping_boxes);

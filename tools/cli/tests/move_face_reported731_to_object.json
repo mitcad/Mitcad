@@ -1,0 +1,29 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub mitcad/Mitcad#731 (mitcad#2568), the reporter's design as in move_face_reported731_move.json: the raised block's end at x = -17.8, the plate's side at x = -26.475684. Move Face To Object (MoveFace1 F9), no distance typed: up to the plate's side as a face, then up to the plate's body (its first flat face in front of the end). Each previewed, then committed: one body, flush, the end and the plate's side one face with both names, the volume the plate's and the block's section (189.050917) times its new length."},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 74588.887721127, "tolerance": 1e-8}},
+
+  {"preview": {"cmd": "add_feature", "def": {"type": "move_face", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"],
+    "to_object": {"type": "face", "body": "F2.b0", "face": "F2:side(c4[c3,c1])"}}}},
+  {"cmd": "add_feature", "def": {"type": "move_face", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"],
+    "to_object": {"type": "face", "body": "F2.b0", "face": "F2:side(c4[c3,c1])"}}},
+  {"expect": {"feature": "MoveFace1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 76229.033712339, "tolerance": 1e-8}},
+  {"expect": {"body": "Body1", "bbox": {"min": [-26.475683887659404, -31.370348135798103, 0], "max": [60.51584888607866, 50.50403565124944, 30.16561020382312]}, "tolerance": 1e-6}},
+  {"expect": {"body": "Body1", "has_face": "F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+  {"expect": {"body": "Body1", "has_face": "F2:side(c4[c3,c1])"}},
+  {"expect": {"body": "Body1", "no_face": "F9:step(F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}))"}},
+
+  {"preview": {"cmd": "edit_feature", "uid": "F9", "def": {"type": "move_face", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"],
+    "to_object": {"type": "body", "body": "F2.b0"}}}},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "move_face", "body": "F2.b0",
+    "faces": ["F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"],
+    "to_object": {"type": "body", "body": "F2.b0"}}},
+  {"expect": {"feature": "MoveFace1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "Body1", "volume": 76229.033712339, "tolerance": 1e-8}},
+  {"expect": {"body": "Body1", "bbox": {"min": [-26.475683887659404, -31.370348135798103, 0], "max": [60.51584888607866, 50.50403565124944, 30.16561020382312]}, "tolerance": 1e-6}},
+  {"expect": {"body": "Body1", "has_face": "F8:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}},
+  {"expect": {"body": "Body1", "has_face": "F2:side(c4[c3,c1])"}}
+]

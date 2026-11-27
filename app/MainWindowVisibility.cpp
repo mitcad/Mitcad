@@ -327,6 +327,50 @@ void MainWindow::registerViewShowCommands() {
     }
   };
   m_registry->add(toggle);
+  // Isolate and Unisolate by keys of the user's own (mitcad#2482, GitHub
+  // mitcad/Mitcad#613): the Browser row menu's entries as commands, with no
+  // default key; Keyboard Shortcuts binds them (BrowserController::
+  // isolateItems, unisolate). Isolate acts on the bodies and components
+  // selected in the view or the Browser.
+  CommandDef isolate;
+  isolate.id = QStringLiteral("view.isolate");
+  isolate.name = tr("Isolate");
+  isolate.icon = QStringLiteral("isolate");
+  isolate.tooltip = tr("Shows only the selected bodies and components until Unisolate");
+  isolate.kind = CommandDef::Kind::Action;
+  isolate.mode = CommandDef::Mode::Model;
+  isolate.keywords = {QStringLiteral("isolate"), QStringLiteral("only"), QStringLiteral("focus"),
+                      QStringLiteral("hide"),    QStringLiteral("others"), QStringLiteral("body"),
+                      QStringLiteral("component"), QStringLiteral("assembly")};
+  isolate.run = [this] {
+    if (m_controller == nullptr) {
+      return;
+    }
+    if (!m_controller->isolateItems(m_selection)) {
+      showStatus(tr("Select a body or a component to isolate it."), NoticeLevel::Information);
+      qDebug().noquote() << QStringLiteral("Isolate: nothing to isolate in %1 item(s)").arg(m_selection.size());
+    }
+  };
+  m_registry->add(isolate);
+  CommandDef unisolate;
+  unisolate.id = QStringLiteral("view.unisolate");
+  unisolate.name = tr("Unisolate");
+  unisolate.icon = QStringLiteral("eye");
+  unisolate.tooltip = tr("Shows everything again as its own visibility says");
+  unisolate.kind = CommandDef::Kind::Action;
+  unisolate.mode = CommandDef::Mode::Model;
+  unisolate.keywords = {QStringLiteral("unisolate"), QStringLiteral("isolate"), QStringLiteral("show"),
+                        QStringLiteral("all"), QStringLiteral("restore")};
+  unisolate.run = [this] {
+    if (m_controller == nullptr) {
+      return;
+    }
+    if (!m_controller->unisolate()) {
+      showStatus(tr("Nothing is isolated."), NoticeLevel::Information);
+      qDebug().noquote() << "Unisolate: nothing is isolated";
+    }
+  };
+  m_registry->add(unisolate);
 }
 
 void MainWindow::toggleViewShow(const QString& kind) {

@@ -3,10 +3,10 @@
 //! axis, revolved. At each node of a row along Z the stock is the ring
 //! between an inner and an outer radius; each tool takes away what its
 //! insert covers there as it moves (the nose's circle of a turning tool
-//! or a boring bar and its edge behind it, the width of a grooving or
-//! parting insert). A thread's
-//! helix leaves the crest standing in any section, so threading takes
-//! nothing away here.
+//! or a boring bar and its edge behind it, rising at the tool's back
+//! angle when it has one, the width of a grooving or parting insert). A
+//! thread's helix leaves the crest standing in any section, so threading
+//! takes nothing away here.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,10 @@ use super::profile::{PV, piece_at, pieces};
 use super::tool::{TurningTool, TurningToolKind};
 use super::{PXZ, TurnMove, TurnPart, TurningProgram, move_points};
 use crate::machine::Finding;
+
+/// The longest a trailing edge reaches back along Z from the nose (mm):
+/// an insert's edge is shorter.
+const TRAILING_RUN: f64 = 25.0;
 
 /// The stock as cut: per node `z[i]`, the ring from `inner[i]` to
 /// `outer[i]` (radii); none left there when they meet.
@@ -91,13 +95,43 @@ impl TurnStock {
             tool.kind,
             TurningToolKind::Turning | TurningToolKind::Boring { .. }
         );
+        // With its back angle known (mitcad#2503) the trailing edge rises
+        // behind the nose at that angle, tangent to the nose, until it is
+        // as high above the tip as the insert cuts deep.
+        let trailing = tool.back_angle.filter(|_| nosed).map(|b| {
+            let b = b.clamp(0.0, 89.0).to_radians();
+            let (cx, cz) = (tip[0] + s * r, tip[1] + r);
+            // Where the edge leaves the nose: square to it from the centre.
+            let t = [cx - s * r * b.cos(), cz + r * b.sin()];
+            (cx, cz, t, b.tan())
+        });
+        let hi_z = match trailing {
+            Some((_, _, t, slope)) => {
+                let run = if slope > 1e-6 {
+                    (edge / slope).min(TRAILING_RUN)
+                } else {
+                    TRAILING_RUN
+                };
+                hi_z.max(t[1] + run)
+            }
+            None => hi_z,
+        };
         for i in self.nodes(tip[1], hi_z) {
             if self.outer[i] <= self.inner[i] {
                 continue;
             }
             let z = self.z[i];
             // How far the insert reaches towards the material at z.
-            let reach = if nosed && round {
+            let reach = if let Some((cx, cz, t, slope)) = trailing {
+                if z > t[1] {
+                    t[0] + s * (z - t[1]) * slope
+                } else if round {
+                    let h = (r * r - (z - cz).powi(2)).max(0.0).sqrt();
+                    cx - s * h
+                } else {
+                    tip[0]
+                }
+            } else if nosed && round {
                 let cz = tip[1] + r;
                 if z <= cz {
                     let h = (r * r - (z - cz).powi(2)).max(0.0).sqrt();

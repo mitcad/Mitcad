@@ -20,6 +20,7 @@
 
 #include "check.hpp"
 #include "mitcad/geometry/intersection_curve.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -211,7 +212,7 @@ void test_parallel_normals_refused() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(intersection_curve) {
   test::guarded("arc and line", test_arc_and_line);
   test::guarded("two cylinders branch", test_two_cylinders_branch);
   test::guarded("parallel normals refused", test_parallel_normals_refused);

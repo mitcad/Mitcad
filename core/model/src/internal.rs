@@ -47,6 +47,8 @@ pub mod document {
     };
     // Remarks (mitcad#1914).
     pub use crate::document::remark_notices;
+    // Minimum Radius (mitcad#2518).
+    pub use crate::document::check_min_radius_limit;
 }
 
 /// The drawing definitions' sizes and checks, and a date from days.

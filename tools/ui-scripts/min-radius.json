@@ -1,0 +1,15 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Minimum Radius' rounded block (mitcad#2518, tools/ui-scripts/min-radius.mitcad-ui): a 40 x 30 x 20 mm block (F2.b0, Body1) with its vertical edges rounded 2 mm at (40, 0), 5 mm at (40, 30) and 10 mm at (0, 30); the edge at the origin stays sharp."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"], "radius": 2}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:side(c2[c1,c3])|F2:side(c3[c2,c4])}"], "radius": 5}},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+    "edges": ["E{F2:side(c3[c2,c4])|F2:side(c4[c3,c1])}"], "radius": 10}}
+]

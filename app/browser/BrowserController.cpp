@@ -22,6 +22,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QLineEdit>
+#include <QMap>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPair>
@@ -41,7 +42,9 @@
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "../framework/UserText.hpp"
+#include "../commands/SurfaceAnalysis.hpp"
 #include "../files/Libraries.hpp"
+#include "../cam/CamManualCode.hpp"
 #include "../library/EditOptionsDialog.hpp"
 #include "../library/PartOptions.hpp"
 #include "DocumentHost.hpp"
@@ -297,6 +300,11 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
   m_browser->setControlPlaces(browserActivatePlace(), browserEyePlace());
   connect(&BrowserPreferencesNotifier::instance(), &BrowserPreferencesNotifier::controlPlacesChanged, this,
           [this] { m_browser->setControlPlaces(browserActivatePlace(), browserEyePlace()); });
+  // The rows' spacing (mitcad#2513): as Preferences has it, and every
+  // window's rows laid out again at once when it changes.
+  m_browser->setRowSpacing(browserRowSpacing());
+  connect(&BrowserPreferencesNotifier::instance(), &BrowserPreferencesNotifier::rowSpacingChanged, this,
+          [this] { m_browser->setRowSpacing(browserRowSpacing()); });
   m_timeline = new TimelineWidget(host.model(), window);
   m_failures = new QToolButton(window);
   m_failures->setObjectName(QStringLiteral("failuresBadge"));
@@ -1256,6 +1264,53 @@ bool BrowserController::toggleIsolated(const BrowserNode& node) {
   return true;
 }
 
+Selection BrowserController::isolationTargets(const Selection& items) const {
+  Selection targets;
+  for (const SelectionItem& item : items) {
+    SelectionItem target;
+    target.owner = item.owner;
+    target.occurrence = item.occurrence;
+    if ((item.kind == SelectKind::Face || item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex ||
+         item.kind == SelectKind::Body) &&
+        !item.owner.isEmpty()) {
+      // The body, in the occurrence picked, as its row's Isolate.
+      target.kind = SelectKind::Body;
+    } else if (item.kind == SelectKind::Component && !item.occurrence.isEmpty()) {
+      // An occurrence; the root (no path) is everything already.
+      target.kind = SelectKind::Component;
+    } else {
+      continue;
+    }
+    if (!targets.contains(target)) {
+      targets << target;
+    }
+  }
+  return targets;
+}
+
+bool BrowserController::isolateItems(const Selection& items) {
+  const Selection targets = isolationTargets(items);
+  if (targets.isEmpty()) {
+    return false;
+  }
+  m_host.setIsolation(targets);
+  QStringList described;
+  for (const SelectionItem& target : targets) {
+    described << target.logDescription();
+  }
+  qDebug().noquote() << QStringLiteral("Isolated %1").arg(described.join(QStringLiteral(", ")));
+  return true;
+}
+
+bool BrowserController::unisolate() {
+  if (m_host.isolation().isEmpty()) {
+    return false;
+  }
+  m_host.setIsolation({});
+  qDebug().noquote() << "Unisolated";
+  return true;
+}
+
 Selection BrowserController::isolationWith(const BrowserNode& node) const {
   Selection items = m_snapshot.isolation;
   SelectionItem added;
@@ -1388,6 +1443,9 @@ void BrowserController::rename(const BrowserNode& node, const QString& name) {
   case BrowserNode::Type::SelectionSet: // mitcad#2192: a taken name is refused
     command = cmd("rename_selection_set", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
     break;
+  case BrowserNode::Type::ConstructionSet: // mitcad#2514: a taken name is refused
+    command = cmd("rename_construction_set", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
+    break;
   case BrowserNode::Type::CamSetup: // mitcad#1013
     command = cmd("cam_setup_edit", {{QStringLiteral("setup"), node.uid.toInt()},
                                      {QStringLiteral("changes"), QJsonObject{{QStringLiteral("name"), name}}}});
@@ -1499,6 +1557,9 @@ void BrowserController::browserDoubleClicked(const BrowserNode& node) {
   case BrowserNode::Type::CamOperation:
     m_host.editCamOperation(node.uid.toInt());
     break;
+  case BrowserNode::Type::CamManualCode: // mitcad#2506: its setup's panel, which lists the blocks
+    m_host.editCamSetup(node.camSetup.toInt());
+    break;
   default:
     break;
   }
@@ -1598,6 +1659,10 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& allNodes) {
   QJsonArray commands;
   // CAM setups deleted take their operations with them (mitcad#1013).
   QStringList camSetups;
+  // A lathe setup's blocks of manual G-code (mitcad#2532), by setup id:
+  // their places in its `manual_code`, taken out by one edit of the setup.
+  QMap<int, QVector<int>> manualBlocks;
+  QStringList manualNames;
   for (const BrowserNode& node : nodes) {
     if (node.type == BrowserNode::Type::CamSetup) {
       camSetups << node.uid;
@@ -1678,6 +1743,10 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& allNodes) {
       command = cmd("delete_selection_set", {{QStringLiteral("name"), node.uid}});
       name = tr("selection set %1").arg(node.name);
       break;
+    case BrowserNode::Type::ConstructionSet: // mitcad#2514: the set alone; its items go back to their folders
+      command = cmd("delete_construction_set", {{QStringLiteral("name"), node.uid}});
+      name = tr("construction set %1").arg(node.name);
+      break;
     case BrowserNode::Type::CenterOfMass: // mitcad#1094: display state, as its light bulb
       command = cmd("delete_center_of_mass");
       name = tr("the Center of Mass marker");
@@ -1693,11 +1762,39 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& allNodes) {
       command = cmd("cam_operation_delete", {{QStringLiteral("operation"), node.uid.toInt()}});
       name = tr("operation %1").arg(node.name);
       break;
+    case BrowserNode::Type::CamManualCode: { // mitcad#2532: one edit of its setup, below
+      const int block = cam::manualBlockOf(node.uid);
+      if (camSetups.contains(node.camSetup) || block < 0) {
+        continue;
+      }
+      QVector<int>& blocks = manualBlocks[node.camSetup.toInt()];
+      if (!blocks.contains(block)) {
+        blocks.append(block);
+        manualNames.append(tr("manual G-code %1").arg(node.name));
+      }
+      continue;
+    }
     default:
       break;
     }
     if (command.isEmpty()) skipped.append(node.name);
     else if (!commands.contains(command)) { commands.append(command); names.append(name); }
+  }
+  if (!manualBlocks.isEmpty()) {
+    // Each setup's blocks out by one cam_setup_edit, before any operation
+    // goes: the blocks that stay may follow it until the model moves them.
+    QJsonArray first;
+    for (auto it = manualBlocks.cbegin(); it != manualBlocks.cend(); ++it) {
+      const QJsonObject lathe = cam::manualCodeWithout(
+          m_snapshot.camSetup(it.key()).value(QStringLiteral("lathe")).toObject(), it.value());
+      first.append(cmd("cam_setup_edit", {{QStringLiteral("setup"), it.key()},
+                                          {QStringLiteral("changes"), QJsonObject{{QStringLiteral("lathe"), lathe}}}}));
+    }
+    for (const QJsonValue& command : std::as_const(commands)) {
+      first.append(command);
+    }
+    commands = first;
+    names = manualNames + names;
   }
   if (!bodies.isEmpty() && features.isEmpty() && commands.isEmpty() && skipped.isEmpty()) {
     deleteBodies(bodyItems); // Delete Body's undo step and log
@@ -1746,6 +1843,57 @@ void BrowserController::moveCamOperation(const BrowserNode& node, int setup, int
                               .arg(index + 1)
                               .arg(m_snapshot.camSetup(setup).value(QStringLiteral("name")).toString());
   }
+}
+
+void BrowserController::moveCamManualCode(const BrowserNode& node, const BrowserNode& target, BrowserDrop place) {
+  if (!canChange()) {
+    return;
+  }
+  const int setupId = node.camSetup.toInt();
+  const QJsonObject setup = m_snapshot.camSetup(setupId);
+  const bool after = place == BrowserDrop::After;
+  cam::ManualDrop drop = cam::ManualDrop::ProgramStart;
+  int index = -1;
+  switch (target.type) {
+  case BrowserNode::Type::CamSetup:
+    break;
+  case BrowserNode::Type::CamOperation:
+    drop = after ? cam::ManualDrop::AfterOperation : cam::ManualDrop::BeforeOperation;
+    index = camIndex(target);
+    break;
+  case BrowserNode::Type::CamManualCode:
+    drop = after ? cam::ManualDrop::AfterBlock : cam::ManualDrop::BeforeBlock;
+    index = cam::manualBlockOf(target.uid);
+    break;
+  default:
+    return;
+  }
+  const QString setupName = setup.value(QStringLiteral("name")).toString();
+  const QJsonObject lathe = cam::manualCodeMoved(setup, cam::manualBlockOf(node.uid), drop, index);
+  if (lathe.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("CAM manual G-code %1 stays in its place in %2").arg(node.name, setupName);
+    return;
+  }
+  const QJsonArray commands{cmd("cam_setup_edit", {{QStringLiteral("setup"), setupId},
+                                                   {QStringLiteral("changes"),
+                                                    QJsonObject{{QStringLiteral("lathe"), lathe}}}})};
+  if (!m_host.runNamedModelCommands(commands, tr("Move %1").arg(node.name))) {
+    return;
+  }
+  // Where it went: after as many of the setup's operations (0: the start).
+  int operationsBefore = 0;
+  if (drop == cam::ManualDrop::BeforeOperation || drop == cam::ManualDrop::AfterOperation) {
+    operationsBefore = drop == cam::ManualDrop::AfterOperation ? index + 1 : index;
+  } else if (drop != cam::ManualDrop::ProgramStart) {
+    operationsBefore = cam::manualPlacesInOrder(setup).value(index);
+  }
+  const QJsonArray operations = setup.value(QStringLiteral("operations")).toArray();
+  const QString where =
+      operationsBefore > 0 && operationsBefore <= operations.size()
+          ? QStringLiteral("after %1")
+                .arg(operations.at(operationsBefore - 1).toObject().value(QStringLiteral("name")).toString())
+          : QStringLiteral("to the program start");
+  qDebug().noquote() << QStringLiteral("CAM manual G-code %1 moved %2 of %3").arg(node.name, where, setupName);
 }
 
 void BrowserController::camDropped(const BrowserNode& source, const BrowserNode& target) {
@@ -1922,6 +2070,145 @@ void BrowserController::createSelectionSet(const QJsonArray& members) {
   m_browser->startRename(row);
 }
 
+namespace {
+
+// The path of the first occurrence of `component` among `occurrences` and
+// those in them; empty when none places it (the root's rows have none).
+QString firstPathOf(const QVector<DocumentSnapshot::Occurrence>& occurrences, const QString& component) {
+  for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+    if (occurrence.component == component) {
+      return occurrence.path;
+    }
+    const QString inside = firstPathOf(occurrence.children, component);
+    if (!inside.isEmpty()) {
+      return inside;
+    }
+  }
+  return QString();
+}
+
+} // namespace
+
+void BrowserController::createConstructionSet(const QString& component, const QString& occurrence) {
+  if (!canChange()) {
+    return;
+  }
+  const QString target = component.isEmpty() ? m_snapshot.activeComponent : component;
+  QJsonObject result;
+  if (!m_host.runModelCommand(cmd("add_construction_set", {{QStringLiteral("component"), target}}), &result)) {
+    return;
+  }
+  const QString name = result.value(QStringLiteral("name")).toString();
+  const DocumentSnapshot::Component* def = m_snapshot.component(target);
+  qDebug().noquote() << QStringLiteral("Created construction set %1 in %2")
+                            .arg(name, def != nullptr && !def->name.isEmpty() ? def->name : target);
+  // Its row, its name selected for typing in place.
+  BrowserNode row;
+  row.type = BrowserNode::Type::ConstructionSet;
+  row.uid = name;
+  row.name = name;
+  row.component = target;
+  row.occurrence = !occurrence.isEmpty() || target == QStringLiteral("C0")
+                       ? occurrence
+                       : firstPathOf(m_snapshot.occurrences, target);
+  m_browser->startRename(row);
+}
+
+void BrowserController::activateConstructionSet(const QString& name) {
+  if (canChange() && m_host.runModelCommand(cmd("activate_construction_set", {{QStringLiteral("name"), name}}))) {
+    qDebug().noquote() << QStringLiteral("Activated construction set %1").arg(name);
+  }
+}
+
+void BrowserController::deactivateConstructionSet() {
+  const QString active = m_snapshot.activeConstructionSet();
+  if (active.isEmpty() || !canChange()) {
+    return;
+  }
+  if (m_host.runModelCommand(cmd("deactivate_construction_set"))) {
+    qDebug().noquote() << QStringLiteral("Deactivated construction set %1").arg(active);
+  }
+}
+
+namespace {
+
+// A construction set's member for a row: a body's, a sketch's or a
+// construction feature's; empty for any other row (a joint origin is no
+// construction geometry).
+QJsonObject constructionMemberOf(const BrowserNode& node) {
+  if (node.isSetMember()) {
+    return QJsonObject();
+  }
+  if (node.type == BrowserNode::Type::Body) {
+    return QJsonObject{{QStringLiteral("body"), node.uid}};
+  }
+  if (node.type == BrowserNode::Type::Sketch ||
+      (node.type == BrowserNode::Type::Datum && node.featureType != QStringLiteral("joint_origin"))) {
+    return QJsonObject{{QStringLiteral("feature"), node.uid}};
+  }
+  return QJsonObject();
+}
+
+} // namespace
+
+void BrowserController::moveToConstructionSet(const QString& set, const BrowserNode& node) {
+  if (!canChange()) {
+    return;
+  }
+  // The row and the rows of the same component selected with it.
+  QJsonArray members{constructionMemberOf(node)};
+  for (const BrowserNode& selected : m_browser->selectedNodes()) {
+    const QJsonObject member = constructionMemberOf(selected);
+    if (selected.component == node.component && !member.isEmpty() && !members.contains(member)) {
+      members.append(member);
+    }
+  }
+  QJsonObject result;
+  if (m_host.runModelCommand(cmd("set_construction_set_members",
+                                 {{QStringLiteral("name"), set}, {QStringLiteral("add"), members}}),
+                             &result)) {
+    qDebug().noquote() << QStringLiteral("Construction set %1: %2 members")
+                              .arg(set)
+                              .arg(result.value(QStringLiteral("members")).toInt());
+  }
+}
+
+void BrowserController::removeFromConstructionSets(const BrowserNode& node) {
+  if (!canChange()) {
+    return;
+  }
+  // The row and the rows of the same component selected with it, each
+  // out of its own set.
+  QHash<QString, QJsonArray> bySet;
+  QStringList order;
+  QVector<BrowserNode> rows{node};
+  for (const BrowserNode& selected : m_browser->selectedNodes()) {
+    if (selected.component == node.component) {
+      rows.append(selected);
+    }
+  }
+  for (const BrowserNode& row : std::as_const(rows)) {
+    const QJsonObject member = constructionMemberOf(row);
+    if (row.constructionSet.isEmpty() || member.isEmpty() || bySet.value(row.constructionSet).contains(member)) {
+      continue;
+    }
+    if (!bySet.contains(row.constructionSet)) {
+      order << row.constructionSet;
+    }
+    bySet[row.constructionSet].append(member);
+  }
+  for (const QString& set : std::as_const(order)) {
+    QJsonObject result;
+    if (m_host.runModelCommand(cmd("set_construction_set_members",
+                                   {{QStringLiteral("name"), set}, {QStringLiteral("remove"), bySet.value(set)}}),
+                               &result)) {
+      qDebug().noquote() << QStringLiteral("Construction set %1: %2 members")
+                                .arg(set)
+                                .arg(result.value(QStringLiteral("members")).toInt());
+    }
+  }
+}
+
 void BrowserController::selectSet(const QString& name) {
   Selection items;
   QStringList features;
@@ -2045,6 +2332,11 @@ void BrowserController::reorderOccurrences(const QStringList& paths, const QStri
 void BrowserController::rowsDropped(const QVector<BrowserNode>& sources, const BrowserNode& target,
                                     BrowserDrop place) {
   if (sources.isEmpty()) {
+    return;
+  }
+  if (sources.first().type == BrowserNode::Type::CamManualCode) {
+    // A block of manual G-code within its setup (mitcad#2532).
+    moveCamManualCode(sources.first(), target, place);
     return;
   }
   if (place != BrowserDrop::Onto) {
@@ -2421,16 +2713,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   };
   const auto isolate = [&] {
     if (item.isValid()) {
-      menu.add(QStringLiteral("isolate"), tr("Isolate"), [this, item] {
-        m_host.setIsolation({item});
-        qDebug().noquote() << QStringLiteral("Isolated %1").arg(item.logDescription());
-      });
+      // The row alone; the command Isolate (view.isolate, mitcad#2482)
+      // runs the same on the selection.
+      menu.add(QStringLiteral("isolate"), tr("Isolate"), [this, item] { isolateItems({item}); });
     }
     if (isolated) {
-      menu.add(QString(), tr("Unisolate"), [this] {
-        m_host.setIsolation({});
-        qDebug().noquote() << "Unisolated";
-      });
+      menu.add(QString(), tr("Unisolate"), [this] { unisolate(); });
     }
   };
   const auto renameEntry = [&] {
@@ -2509,6 +2797,30 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       menu.add(QStringLiteral("selection-set"), tr("Create Selection Set"),
                [this, members] { createSelectionSet(members); });
     }
+    // Construction sets (mitcad#2514): the row of a body, a sketch or
+    // construction geometry (with the rows of its component selected with
+    // it) into another set of its component, or out of the one it is in.
+    if (!constructionMemberOf(node).isEmpty()) {
+      QStringList targets;
+      for (const QJsonValue& value : m_snapshot.constructionSetsOf(node.component)) {
+        const QString name = value.toObject().value(QStringLiteral("name")).toString();
+        if (name != node.constructionSet) {
+          targets << name;
+        }
+      }
+      if (!targets.isEmpty()) {
+        auto* submenu = new QMenu(tr("Move to Construction Set"), menu.widget());
+        for (const QString& name : std::as_const(targets)) {
+          QObject::connect(submenu->addAction(themeIcon(QStringLiteral("construction-set")), name),
+                           &QAction::triggered, submenu, [this, name, node] { moveToConstructionSet(name, node); });
+        }
+        menu.addSubmenu(submenu, tr("Move to Construction Set"));
+      }
+      if (!node.constructionSet.isEmpty()) {
+        menu.add(QStringLiteral("construction-set"), tr("Remove from Construction Set"),
+                 [this, node] { removeFromConstructionSets(node); });
+      }
+    }
   };
   // Save As Mesh (mitcad#734): the row's bodies, or those of the body and
   // component rows selected with it, to mesh files; disabled with the
@@ -2555,6 +2867,11 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       menu.add(QStringLiteral("radio-on"), tr("Activate Component"), [this, node] { activate(node); });
     }
     menu.add(QStringLiteral("component"), tr("New Component"), [this, node] { newComponent(node); });
+    // A construction set of the component, made the active one: the new
+    // sketches, construction geometry and surface bodies of the component
+    // go into it (mitcad#2514).
+    menu.add(QStringLiteral("construction-set"), tr("New Construction Set"),
+             [this, node] { createConstructionSet(node.uid, node.occurrence); });
     // A drawing of the component, kept in its Drawings folder (mitcad#707).
     menu.add(QStringLiteral("drawing"), tr("Create Drawing…"), [this, node] { m_host.createDrawing(node.uid); });
     // The component as a design file of its own (mitcad#1057): not the
@@ -2743,17 +3060,15 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       if (!root && c.uid == node.uid && c.linked && !c.library) {
         const QString path = node.occurrence;
         const QString name = node.name;
-        const double detail = c.envelope;
-        // A design linked with its components is shown in full
-        // (mitcad#2209).
-        const QString inFull = c.linkTree ? tr("It is linked with its components") : QString();
+        const DocumentSnapshot::Occurrence* placed = occurrence(path);
+        const double detail = c.linkTree && placed != nullptr ? placed->envelope : c.envelope;
         menu.add(
             QStringLiteral("component"), tr("Show as Envelope…"),
-            [this, path, name, detail] { showAsEnvelope(path, name, detail, false); }, inFull);
+            [this, path, name, detail] { showAsEnvelope(path, name, detail, false); });
         if (occurrencesOf(m_snapshot.occurrences, c.uid) > 1) {
           menu.add(
               QStringLiteral("component"), tr("Show All as Envelope…"),
-              [this, path, name, detail] { showAsEnvelope(path, name, detail, true); }, inFull);
+              [this, path, name, detail] { showAsEnvelope(path, name, detail, true); });
         }
         if (detail > 0) {
           menu.add(QStringLiteral("component"), tr("Show in Full"),
@@ -2785,16 +3100,14 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
             m_host.updateLink(QString());
           }
         });
-        // Linked parts of the design only (mitcad#2130); not of one
-        // linked with its components (mitcad#2209).
+        // The parts of the linked design (mitcad#2130, mitcad#2252).
         menu.add(
             QStringLiteral("component"), tr("Choose Linked Parts…"),
             [this, component] {
               if (canChange()) {
                 m_host.chooseLinkedParts(component);
               }
-            },
-            c.linkTree ? tr("It is linked with its components") : QString());
+            });
       }
     }
     // A design edited in place (mitcad#2321): the root row finishes it.
@@ -3110,6 +3423,30 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         m_host.startCommand(QStringLiteral("inspect.point_cloud_deviation"), {}, nullptr);
       }
     });
+    // mitcad#2518
+    menu.add(QStringLiteral("min-radius"), tr("New Minimum Radius"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("inspect.min_radius"), {}, nullptr);
+      }
+    });
+    // mitcad#2519
+    menu.add(QStringLiteral("minimum-distance"), tr("New Minimum Distance"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("inspect.minimum_distance"), {}, nullptr);
+      }
+    });
+    // The surface quality analyses (mitcad#2517).
+    for (const QString& type : surfaceAnalysisTypes()) {
+      const QString text = type == QStringLiteral("zebra")       ? tr("New Zebra")
+                           : type == QStringLiteral("curvature") ? tr("New Curvature Map")
+                           : type == QStringLiteral("isocurve")  ? tr("New Isocurve Analysis")
+                                                                 : tr("New Environment Map");
+      menu.add(surfaceAnalysisIcon(type), text, [this, type] {
+        if (canChange()) {
+          m_host.startCommand(surfaceAnalysisCommand(type), {}, nullptr);
+        }
+      });
+    }
     break;
   case BrowserNode::Type::Joints:
     // Joints (mitcad#55): in the component the folder is in, when active.
@@ -3156,9 +3493,15 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   }
   case BrowserNode::Type::Analysis:
     menu.add(QStringLiteral("edit"),
-             node.featureType == QStringLiteral("print")   ? tr("Edit Print Analysis")
+             node.featureType == QStringLiteral("zebra")       ? tr("Edit Zebra")
+             : node.featureType == QStringLiteral("curvature") ? tr("Edit Curvature Map")
+             : node.featureType == QStringLiteral("isocurve")  ? tr("Edit Isocurve Analysis")
+             : node.featureType == QStringLiteral("environment") ? tr("Edit Environment Map") // mitcad#2517
+             : node.featureType == QStringLiteral("print") ? tr("Edit Print Analysis")
              : node.featureType == QStringLiteral("draft") ? tr("Edit Draft Analysis")
              : node.featureType == QStringLiteral("point_cloud_deviation") ? tr("Edit Point Cloud Deviation")
+             : node.featureType == QStringLiteral("min_radius")            ? tr("Edit Minimum Radius") // mitcad#2518
+             : node.featureType == QStringLiteral("minimum_distance")      ? tr("Edit Minimum Distance") // mitcad#2519
                                                                            : tr("Edit Section Analysis"),
              [this, node] { m_host.editAnalysis(node.uid); });
     // A section's other side (mitcad#1975: here, no longer in the
@@ -3301,6 +3644,22 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         m_host.startCommand(QStringLiteral("inspect.point_cloud_deviation"), {}, nullptr);
       }
     });
+    // The point cloud tools on this cloud (mitcad#2516).
+    menu.add(QStringLiteral("point-cloud-align"), tr("Align Point Cloud"), [this, node] {
+      if (canChange()) {
+        m_host.startPointCloudTool(QStringLiteral("insert.align_point_cloud"), node.uid);
+      }
+    });
+    menu.add(QStringLiteral("point-cloud-filter"), tr("Filter Point Cloud"), [this, node] {
+      if (canChange()) {
+        m_host.startPointCloudTool(QStringLiteral("insert.filter_point_cloud"), node.uid);
+      }
+    });
+    menu.add(QStringLiteral("point-cloud-mesh"), tr("Reconstruct Mesh"), [this, node] {
+      if (canChange()) {
+        m_host.startPointCloudTool(QStringLiteral("insert.reconstruct_point_cloud"), node.uid);
+      }
+    });
     menu.separator();
     visibility();
     renameEntry();
@@ -3411,6 +3770,16 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
   }
+  // A lathe setup's block of manual G-code (mitcad#2506): Edit opens the
+  // setup's panel with its blocks; Delete takes the block out of the setup
+  // (with the other selected rows, as the Delete key: mitcad#2532).
+  case BrowserNode::Type::CamManualCode: {
+    const int setup = node.camSetup.toInt();
+    menu.add(QStringLiteral("edit"), tr("Edit"), [this, setup] { m_host.editCamSetup(setup); });
+    menu.separator();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    break;
+  }
   // A folder of bodies or of components (mitcad#2103): its eye's Show or
   // Hide, Rename and Ungroup (everything out of it, nothing deleted).
   case BrowserNode::Type::BodyFolder:
@@ -3465,6 +3834,24 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.separator();
     renameEntry();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    break;
+  }
+  // A construction set (mitcad#2514): Activate or Deactivate, Rename and
+  // Ungroup (the set alone: its items go back to their usual folders).
+  case BrowserNode::Type::ConstructionSet: {
+    const QString name = node.uid;
+    if (node.active) {
+      menu.add(QStringLiteral("radio-off"), tr("Deactivate"), [this] { deactivateConstructionSet(); });
+    } else {
+      menu.add(QStringLiteral("radio-on"), tr("Activate"), [this, name] { activateConstructionSet(name); });
+    }
+    menu.separator();
+    renameEntry();
+    menu.add(QStringLiteral("folder"), tr("Ungroup"), [this, name] {
+      if (canChange() && m_host.runModelCommand(cmd("delete_construction_set", {{QStringLiteral("name"), name}}))) {
+        qDebug().noquote() << QStringLiteral("Ungrouped construction set %1").arg(name);
+      }
+    });
     break;
   }
   default:

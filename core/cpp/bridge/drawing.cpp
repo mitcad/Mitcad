@@ -35,6 +35,14 @@ DrawingProjection project_view(const ShapeList& shapes, const DrawingView& view)
   spec.quick = view.quick;
   if (view.has_section) {
     spec.section = geometry::DrawingSection{point(view.section_origin), direction(view.section_normal)};
+    // A section limited to its line (mitcad#2479).
+    if (view.has_section_bound) {
+      geometry::DrawingSectionBound bound;
+      bound.along = direction(view.section_along);
+      bound.from = view.section_from;
+      bound.to = view.section_to;
+      spec.section_bound = bound;
+    }
   }
   spec.deflection = view.deflection;
   spec.quick_deviation = view.quick_deviation;

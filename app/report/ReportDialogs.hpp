@@ -67,7 +67,7 @@ private:
 
 // What Help > Send Feedback's form gathered.
 struct Feedback {
-  QString kind; // "bug", "wish", "other"
+  QString kind; // "bug", "tweak", "feature" (mitcad#2563)
   QString summary;
   QString description;
   QString contact;

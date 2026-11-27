@@ -7,38 +7,58 @@
 // left x = 0, right x = 60, front y = 0, back y = 40), shelled with its top
 // open and its bottom at a thickness of its own: Inside, Outside, Both,
 // closed (no face removed) and Rounded inside; each one valid solid with the
-// exact volume and the walls where they should be. A cylinder's side at its
-// own thickness, inside and outside. A box with a rounded vertical edge:
-// with the tangent chain the rounding and the face beyond it take the front
-// face's thickness; without it the shell is refused (the kernel offsets
-// tangent faces as one), and so are two tangent faces of different own
-// thicknesses. Refused too: a rounding between walls of different
-// thicknesses (Rounded outside), a removed face with its own thickness, and
-// a bottom wall thicker than the box is high, whose error paints the
-// bottom.
+// exact volume and the walls where they should be. Rounded outside, closed
+// and Both (mitcad#2488): the rounding along the bottom's edges runs from
+// the bottom's thickness to the sides' (OCCT port patch 2488), tangent to
+// both outer faces (measured), the bottom's corners eighths of an
+// ellipsoid. A cylinder's side at its own thickness, inside, outside and
+// Rounded outside. A box with a rounded vertical edge: with the tangent
+// chain the rounding and the face beyond it take the front face's
+// thickness; without it the shell is refused (the kernel offsets tangent
+// faces as one), and so are two tangent faces of different own
+// thicknesses. Refused too: a rounded corner of walls of different
+// thicknesses that are not square to each other (a wedge, Rounded
+// outside), a removed face with its own thickness, and a bottom wall
+// thicker than the box is high, whose error paints the bottom.
 
 #include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
 
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
+#include <Geom2d_Curve.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_List.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
+#include <TopoDS_Face.hxx>
 #include <gp.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
+#include <gp_Vec.hxx>
 
 #include "check.hpp"
 #include "mitcad/geometry/faceops.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -130,6 +150,78 @@ void check_plane(const Shape& shape, const std::string& name, int axis, double v
   CHECK_NEAR_TOL(high[axis] + 1.0, value + 1.0, 1e-7);
 }
 
+bool valid(const TopoDS_Shape& shape) { return BRepCheck_Analyzer(shape).IsValid(); }
+
+// The normal of `face` out of the solid at the point of its edge `edge` at
+// the edge's parameter `t`.
+gp_Dir normal_at(const TopoDS_Face& face, const TopoDS_Edge& edge, double t) {
+  double first = 0, last = 0;
+  const Handle(Geom2d_Curve) pcurve = BRep_Tool::CurveOnSurface(edge, face, first, last);
+  const gp_Pnt2d uv = pcurve->Value(t);
+  gp_Pnt point;
+  gp_Vec du, dv;
+  BRepAdaptor_Surface(face).D1(uv.X(), uv.Y(), point, du, dv);
+  gp_Dir normal(du.Crossed(dv));
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+  return normal;
+}
+
+// The roundings next to the flat face named `name` (its neighbours that are
+// not flat; `count` of them), each tangent to it along their common edge
+// (the normals of both measured at three points of the edge, within a
+// microradian), together from z = `low` to `high`.
+void check_roundings(const Shape& shape, const std::string& name, int count, double low, double high) {
+  TopoDS_Face flat;
+  for (int i = 0; i < shape.face_count(); ++i) {
+    for (const std::string& face : shape.face_names(i)) {
+      if (face == name) {
+        flat = shape.face(i);
+      }
+    }
+  }
+  CHECK(!flat.IsNull());
+  if (flat.IsNull()) {
+    std::fprintf(stderr, "no face %s\n", name.c_str());
+    return;
+  }
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of;
+  TopExp::MapShapesAndAncestors(shape.occt(), TopAbs_EDGE, TopAbs_FACE, faces_of);
+  int found = 0;
+  double kink = 0.0;
+  Bnd_Box rounds;
+  for (TopExp_Explorer e(flat, TopAbs_EDGE); e.More(); e.Next()) {
+    const TopoDS_Edge edge = TopoDS::Edge(e.Current());
+    for (const TopoDS_Shape& other : faces_of.FindFromKey(edge)) {
+      const TopoDS_Face round = TopoDS::Face(other);
+      if (round.IsSame(flat) || BRepAdaptor_Surface(round).GetType() == GeomAbs_Plane) {
+        continue;
+      }
+      ++found;
+      double first = 0, last = 0;
+      BRep_Tool::Range(edge, first, last);
+      for (const double at : {0.25, 0.5, 0.75}) {
+        const double t = first + at * (last - first);
+        kink = std::max(kink, normal_at(flat, edge, t).Angle(normal_at(round, edge, t)));
+      }
+      rounds.Add(bounds_of(round));
+    }
+  }
+  if (!rounds.IsVoid()) {
+    double x1 = 0, y1 = 0, z1 = 0, x2 = 0, y2 = 0, z2 = 0;
+    rounds.Get(x1, y1, z1, x2, y2, z2);
+    CHECK_NEAR_TOL(z1 + 100.0, low + 100.0, 1e-7);
+    CHECK_NEAR_TOL(z2 + 100.0, high + 100.0, 1e-7);
+  }
+  if (found != count || kink > 1e-6) {
+    std::fprintf(stderr, "%s: %d roundings (expected %d), the largest kink %g rad\n", name.c_str(), found, count,
+                 kink);
+  }
+  CHECK(found == count);
+  CHECK(kink <= 1e-6);
+}
+
 // The shell, or null with its error printed.
 ShapePtr shelled(const Shape& body, const ShellSpec& spec, const char* what) {
   try {
@@ -206,11 +298,54 @@ void test_box_bottom() {
     check_plane(*wall, "F9:offset(bottom)", 2, 5.0);
   }
 
-  // Rounded outside: the rounding along the bottom's edges would join the
-  // 5 mm bottom to the 2 mm sides; refused, both painted.
+  // Rounded outside (mitcad#2488): the rounding along the bottom's edges
+  // runs from the 5 mm bottom to the 2 mm sides, a quarter ellipse 2 mm
+  // across and 5 mm down, and the bottom's corners are eighths of an
+  // ellipsoid 2, 2 and 5 mm; the vertical edges round 2 mm as before. The
+  // walls 2 and 5 mm, the roundings tangent to the outer faces.
   ShellSpec rounded_out = outside;
   rounded_out.rounded = true;
-  CHECK(throws_with([&] { shell("F9", *body, rounded_out); }, "rounds only walls of one thickness"));
+  if (const ShapePtr wall = shelled(*body, rounded_out, "rounded outside")) {
+    CHECK(valid(wall->occt()));
+    CHECK_NEAR(volume_of(wall->occt()), 20000.0 + 1780.0 * kPi / 3.0);
+    check_plane(*wall, "bottom", 2, -5.0);
+    check_plane(*wall, "F9:offset(bottom)", 2, 0.0);
+    check_plane(*wall, "front", 1, -2.0);
+    check_plane(*wall, "F9:offset(front)", 1, 0.0);
+    check_plane(*wall, "right", 0, 62.0);
+    check_plane(*wall, "F9:offset(right)", 0, kW);
+    check_roundings(*wall, "bottom", 4, -5.0, 0.0);
+    check_roundings(*wall, "front", 3, -5.0, kH);
+  }
+
+  // Rounded outside with no face removed: the whole box wrapped in its
+  // offset, 2 mm round its sides and top, 5 mm under it.
+  ShellSpec rounded_closed;
+  rounded_closed.outside = 2;
+  rounded_closed.rounded = true;
+  rounded_closed.own = {{"bottom", 0, 5}};
+  if (const ShapePtr wall = shelled(*body, rounded_closed, "rounded closed")) {
+    CHECK(valid(wall->occt()));
+    CHECK_NEAR(volume_of(wall->occt()), 24800.0 + 2396.0 * kPi / 3.0);
+    check_plane(*wall, "bottom", 2, -5.0);
+    check_plane(*wall, "top", 2, 22.0);
+    check_roundings(*wall, "bottom", 4, -5.0, 0.0);
+  }
+
+  // Rounded both, 1 and 1, the bottom 3 inside and 2 outside: inside as
+  // Sharp (the box's edges are convex), outside rounded from the 2 mm bottom
+  // to the 1 mm sides.
+  ShellSpec rounded_both = both;
+  rounded_both.rounded = true;
+  if (const ShapePtr wall = shelled(*body, rounded_both, "rounded both")) {
+    CHECK(valid(wall->occt()));
+    CHECK_NEAR(volume_of(wall->occt()), 19332.0 + 364.0 * kPi / 3.0);
+    check_plane(*wall, "bottom", 2, -2.0);
+    check_plane(*wall, "F9:offset(bottom)", 2, 3.0);
+    check_plane(*wall, "front", 1, -1.0);
+    check_plane(*wall, "F9:offset(front)", 1, 1.0);
+    check_roundings(*wall, "bottom", 4, -2.0, 0.0);
+  }
 
   // Refused: a removed face with its own thickness; a thickness on a side
   // the shell's wall has not.
@@ -249,6 +384,40 @@ void test_cylinder_side() {
     CHECK_NEAR(volume_of(wall->occt()), kPi * (24.0 * 24.0 * 32.0 - 20.0 * 20.0 * 30.0));
     check_plane(*wall, "bottom", 2, -2.0);
   }
+  // Rounded outside (mitcad#2488): the rounding along the bottom's circle
+  // runs from the 2 mm bottom to the 4 mm side, a quarter ellipse 4 mm out
+  // and 2 mm down revolved about the axis: by Pappus, its area 2 pi at
+  // 20 + 16 / (3 pi) from the axis.
+  ShellSpec rounded = outside;
+  rounded.rounded = true;
+  if (const ShapePtr wall = shelled(cylinder, rounded, "cylinder rounded outside")) {
+    CHECK(valid(wall->occt()));
+    CHECK_NEAR(volume_of(wall->occt()), 18304.0 * kPi / 3.0 + 80.0 * kPi * kPi);
+    check_plane(*wall, "bottom", 2, -2.0);
+    check_roundings(*wall, "bottom", 1, -2.0, 0.0);
+  }
+}
+
+// A wedge: the box with its side x = 60 leaning in to x = 50 at the top,
+// its top open, shelled Rounded outside 2 mm with its bottom at 5 mm. The
+// corners at the foot of the leaning side are not square (the side leans
+// on the bottom), and the kernel rounds a corner between walls of different
+// thicknesses only where three walls meet square to each other: refused,
+// the bottom and a face round such a corner painted.
+void test_corner_not_square() {
+  BRepBuilderAPI_MakePolygon outline(gp_Pnt(0, 0, 0), gp_Pnt(kW, 0, 0), gp_Pnt(kW - 10, 0, kH), gp_Pnt(0, 0, kH),
+                                     true);
+  const TopoDS_Shape wedge =
+      BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(outline.Wire(), true).Face(), gp_Vec(0, kD, 0)).Shape();
+  const ShapePtr body = named(wedge);
+  ShellSpec spec = open_top(0, 2);
+  spec.rounded = true;
+  spec.own = {{"bottom", 0, 5}};
+  CHECK(throws_with([&] { shell("F9", *body, spec); }, "only where three walls meet square to each other"));
+  CHECK(throws_with([&] { shell("F9", *body, spec); }, "\"name\":\"bottom\""));
+  // Sharp, it builds.
+  spec.rounded = false;
+  shelled(*body, spec, "wedge sharp");
 }
 
 // The box with its vertical edge at x = 60, y = 0 rounded 10: front,
@@ -294,10 +463,11 @@ void test_tangent_chain() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(shell_own_thickness) {
   test::guarded("test_box_bottom", test::test_box_bottom);
   test::guarded("test_cylinder_side", test::test_cylinder_side);
   test::guarded("test_tangent_chain", test::test_tangent_chain);
+  test::guarded("test_corner_not_square", test::test_corner_not_square);
   if (test::failures == 0) {
     std::puts("test_shell_own_thickness: all checks passed");
   }

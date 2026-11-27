@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/browser/BrowserController.cpp app/MainWindowJoints.cpp tools/cli
 # check-all sources: core/model/src/document/link_tree.rs core/model/src/document/flexible.rs
+# check-all sources: core/model/src/document/envelope.rs core/model/src/document/link_parts.rs app/browser/BrowserPanel.cpp
 # check-all sources: tools/ui-scripts/linked-flexible.mitcad-ui tools/ui-scripts/linked-flexible-source.json
 # check-all sources: tools/ui-scripts/linked-flexible-holder.json
 # A design linked with its components made Flexible (mitcad#2209) on
@@ -32,7 +33,7 @@ sed "s|@SOURCE@|$UI_OUT/files/linked-flexible-source.mitcad|" "$here/ui-scripts/
   cat "$UI_OUT/setup.log" >&2
   exit 1
 }
-MITCAD_TEST_STEP_MS=100 MITCAD_TEST_INPUT=$here/ui-scripts/linked-flexible.mitcad-ui \
+MITCAD_TEST_WORK=$UI_OUT/files MITCAD_TEST_STEP_MS=100 MITCAD_TEST_INPUT=$here/ui-scripts/linked-flexible.mitcad-ui \
   ui_run_app linked-flexible --ui=qt --no-recovery --no-mcp --open "$UI_OUT/files/holder.mitcad"
 ui_expect_log 'TestDriver: done' 'Slider:1 made flexible, its Key dragged along the design'"'"'s slider alone'
 ui_expect_no_log '^TestDriver: FAIL' 'no failed driver assertion'

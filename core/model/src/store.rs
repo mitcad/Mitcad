@@ -471,6 +471,10 @@ struct VariantHead {
     /// The occurrences an assembly cut machined (mitcad#2131).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     machined: Vec<crate::assembly_cut::MachinedChange>,
+    /// A Split Body's pieces before it kept some (mitcad#2504), so that
+    /// its panel shows their dots after a warm open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    piece_choices: Vec<crate::features::split_body::PieceChoice>,
 }
 
 /// A stored result: its head and its shapes, zlib-compressed.
@@ -533,6 +537,8 @@ pub(crate) fn storable(def: &FeatureDef) -> bool {
         FeatureDef::IntersectionCurve(_) => false,
         // Helix curves (mitcad#1777): likewise.
         FeatureDef::HelixCurve(_) => false,
+        // Isoparametric curves (mitcad#2522): likewise.
+        FeatureDef::IsoparametricCurve(_) => false,
         // 3D sketches (mitcad#1521): solved again from their definitions.
         FeatureDef::SpatialSketch(_) => false,
         // Flex items (mitcad#1713): routed again, with their nodes and route.
@@ -978,6 +984,7 @@ impl ResultStore {
                 thread_fits: output.thread_fits.clone(),
                 inputs: output.inputs.clone(),
                 machined: output.machined.clone(),
+                piece_choices: output.piece_choices.clone(),
             },
             shapes,
         };
@@ -1327,6 +1334,7 @@ fn restore<K: Kernel>(
         thread_fits: head.thread_fits.clone(),
         inputs: head.inputs.clone(),
         machined: head.machined.clone(),
+        piece_choices: head.piece_choices.clone(),
         // Not stored: an Intersection Curve is not storable.
         curve: None,
         // Not stored: a 3D sketch is not storable (mitcad#1521).

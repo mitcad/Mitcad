@@ -827,6 +827,59 @@ fn a_comment_follows_its_occurrence_to_another_parent() {
     assert_eq!(back["orphaned"], false, "{back}");
 }
 
+/// mitcad#2555: a comment on a body whose features go into an existing
+/// component (Move into Component with an explicit destination) takes the
+/// destination's path and still finds its body; Undo gives it its path
+/// back.
+#[test]
+fn a_comment_follows_its_body_into_an_existing_component() {
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures_selections.set(true);
+    let created = command(&mut doc, json!({"cmd": "create_component", "name": "Arm"}));
+    let arm = created["occurrence"].as_str().unwrap().to_owned();
+    let arm_component = created["component"].as_str().unwrap().to_owned();
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": "20 mm"}, "operation": "new_body"}},
+            {"cmd": "activate_component", "component": "C0"},
+        ]),
+    );
+    // Bin, an existing empty component.
+    let created = command(&mut doc, json!({"cmd": "create_component", "name": "Bin"}));
+    let bin = created["occurrence"].as_str().unwrap().to_owned();
+    let bin_component = created["component"].as_str().unwrap().to_owned();
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    let id = add(
+        &mut doc,
+        "round these edges",
+        json!({"body": "F2.b0", "occurrence": arm}),
+    );
+    assert_eq!(comment(&doc, &id)["orphaned"], false);
+
+    let result = command(
+        &mut doc,
+        json!({"cmd": "move_to_component", "component": arm_component,
+               "features": ["F1", "F2"], "source_occurrence": arm,
+               "destination": {"kind": "existing", "component": bin_component, "occurrence": bin}}),
+    );
+    assert_eq!(result["components"][0]["created"], false, "{result}");
+    let moved = comment(&doc, &id);
+    assert_eq!(moved["target"]["occurrence"], bin, "{moved}");
+    assert_eq!(moved["orphaned"], false, "{moved}");
+
+    command(&mut doc, json!({"cmd": "undo"}));
+    let back = comment(&doc, &id);
+    assert_eq!(back["target"]["occurrence"], arm, "{back}");
+    assert_eq!(back["orphaned"], false, "{back}");
+}
+
 /// mitcad#2010, Done when: a `{"design": true}` comment in an empty design
 /// is added, replied to, addressed, resolved, reopened and deleted, saved
 /// and read back, never orphaned by a model change (a feature added and

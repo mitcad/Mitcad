@@ -18,6 +18,22 @@ namespace mitcad::geometry {
 
 struct SheetFaceDevelopment {
   bool cone = false;
+  // An oblique (eccentric) cone (mitcad#2491): the lines from `origin`
+  // (the faces' own apex) through the circle about `centre` of
+  // `circle_radius` in the plane of `radial_start` and
+  // `angular_direction` (`axis` its normal); the angle runs round that
+  // circle. Its chart is the development of the neutral surface (no cone:
+  // the faces' cone moved along its normals) by its generators
+  // (detail::ObliqueDevelopment, `sheet_oblique_cone.hpp`), the distance
+  // along each from the apex kept.
+  bool oblique = false;
+  gp_Pnt centre;
+  double circle_radius = 0;
+  // An oblique cone's body is a plate behind the faces: every other face
+  // lies on the surface `thickness` behind them (within 1e-4 mm, at a
+  // grid of its points) or is a wall meeting both the faces and such a
+  // face. (Cylinders and cones are checked by the model.)
+  bool plate = false;
   // A cylinder: a point of its axis; a cone: the apex of the neutral cone
   // (the faces' cone moved along its normals to the neutral surface).
   gp_Pnt origin;
@@ -41,16 +57,23 @@ struct SheetFaceDevelopment {
   // the neutral cone. A generator is a line, a circle about the axis a line
   // (a cylinder's) or an arc about the apex (a cone's), both from their
   // exact ends; other edges cubic B-splines through their exact
-  // development within 1e-8 mm. Edges shared by two faces come once with
-  // each face.
+  // development within 1e-8 mm. An oblique cone's generators are lines,
+  // its other edges B-splines. An edge that is no generator and no circle
+  // about the axis (an oblique cut, an eccentric cone's end) whose face
+  // across it is a plane meeting the generators is developed where that
+  // plane meets the neutral surface (mitcad#2491: a mitre's cut is kept at
+  // the neutral surface), each point moved along its generator; a
+  // generator ending at such an edge ends there too. Edges shared by two
+  // faces come once with each face.
   std::vector<std::vector<BoundedCurve2>> faces;
 };
 
 // The faces named in `faces` (every piece of each name), all on one
 // cylinder or cone (stored so, or as another surface within 1e-6 mm of it,
 // such as a spline or an extrusion of a circle; every piece within 1e-5 mm
-// of the first one's surface) and joined at shared edges,
-// developed at the neutral surface: `neutral_depth` (K t) from the inner
+// of the first one's surface), or on one oblique cone (a ruled surface
+// whose generators meet at one apex over a circle, mitcad#2491), and
+// joined at shared edges, developed at the neutral surface: `neutral_depth` (K t) from the inner
 // surface of a sheet `thickness` thick whose front is the faces and whose
 // material lies behind them. Faces of other surfaces or of several
 // surfaces, faces not joined, faces running to a cone's apex or more than

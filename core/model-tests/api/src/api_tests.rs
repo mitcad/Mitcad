@@ -656,6 +656,24 @@ fn scripts_check_expectations() {
     );
     assert!(failing(json!({"expect": {"bodys": 1}})).contains("unknown field `bodys`"));
     assert!(failing(json!({"cmd": "jump"})).starts_with("steps[0]: invalid command"));
+    // A volume kept for later steps (mitcad#2568): compared only with one
+    // an earlier step of the same script kept, and of a body.
+    assert_eq!(
+        failing(json!({"expect": {"body": "Body1", "volume_kept": "plain"}})),
+        "steps[0]: expected a volume kept as plain by an earlier step"
+    );
+    assert_eq!(
+        failing(json!({"expect": {"keep": "plain"}})),
+        "steps[0]: expected a body to keep or compare the volume of"
+    );
+    assert_eq!(
+        failing(json!({"expect": {"body": "Body2", "keep": "plain"}})),
+        "steps[0]: expected a body Body2"
+    );
+    assert_eq!(
+        failing(json!({"expect": {"body": "Body1", "keep": "plain"}})),
+        "steps[0]: Body1: the geometry kernel does not support mass properties"
+    );
 }
 
 // Sketch mode (U2): the commands of one interactive operation undo at once.

@@ -23,7 +23,8 @@ mark
 key e
 wait-log '^Command Extrude started'
 wait-log '^Panel Extrude: first value field \(distance\) focused; ' 30
-wait-log '^Preview Extrude: ok' 30
+# A new Extrude starts at 0 mm and waits for a distance (mitcad#2481).
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
 # The floated panel's window is activated a moment later (the system's
 # activation arrives as an event); the field's selection comes with it.
 sleep 500
@@ -34,6 +35,7 @@ capture-view-orientation opened
 mark
 type 25
 wait-log '^Panel field distance: ' 30
+wait-log '^Preview Extrude: ok' 30
 wait-idle
 expect-input-text distance '^25$'
 expect-view-orientation ${opened} unchanged

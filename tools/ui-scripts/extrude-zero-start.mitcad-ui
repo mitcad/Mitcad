@@ -1,0 +1,244 @@
+# SPDX-License-Identifier: MIT
+# A new Extrude starts at zero distance (mitcad#2481, GitHub #698) on
+# extrude-zero-start.json (a 20 x 20 x 10 block F2.b0 behind the origin,
+# 4000 mm3; a 1 x 1 mm square centred on the origin in the unused Sketch2):
+#   0. Editing Extrude1 loads its stored 10 mm and previews it.
+#   1. E on the 1 x 1 mm square: Distance 0 mm, the distance's arrow there,
+#      no preview and no error: the panel's hint "Type a distance or drag
+#      the arrow." (logged "Preview Extrude: not built: ..."), OK disabled,
+#      no operation chosen yet.
+#   2. 0.2 mm typed: previewed, OK enabled; OK adds a 0.2 mm New Body.
+#   3. Enter in the view repeats Extrude with the last OK's 0.2 mm; Esc;
+#      the 0.2 mm body undone.
+#   4. From the front: E again, the arrow dragged up from zero writes a
+#      positive distance and previews; dragged down through the start a
+#      negative one, previewed too. Distance 0 again waits; Symmetric at
+#      zero waits; Two Sides with both distances zero waits with both
+#      arrows shown, and Distance 2's arrow dragged from zero previews.
+#   4b. Start: Offset (mitcad#2508): the Start Offset's knob off the
+#      profile, the distance's knob past the Start Offset's head; each
+#      hovered on its own; each grabbed at zero and dragged 12 px up, the
+#      first move taking the value about as far as the pointer (logged
+#      "Handle first move"), not by the lift; Start back to Profile Plane.
+#   5. The block's top face as the profile: zero waits the same way, no
+#      operation chosen; -2 mm typed chooses Cut at once, OK cuts the block
+#      to 3200 mm3.
+# Run by tools/ui-extrude-zero-start-test.sh (Linux).
+expect-ever 'View area'
+wait-idle 30
+window-resize 1400 990
+command view.fit
+wait-idle 30
+
+# 0. An edit loads the stored depth.
+mark
+dblclick-logged '^Timeline Extrude1 at '
+wait-log '^Editing F2 with Extrude' 20
+wait-log '^Preview Extrude: ok' 30
+expect-input-text distance '^10( mm)?$'
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle 30
+
+# 1. A new Extrude on the 1 x 1 mm square: zero, the arrow, a hint, OK off.
+focus-widget modelView
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile '
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
+wait-idle 30
+expect-input-text distance '^0 mm$'
+wait-log '^Manipulator Extrude distance at ' 20
+expect-widget-property commandOk enabled false
+expect-no-log '^Preview Extrude: (ok|failed)|^Panel Extrude error|^Extrude: automatic Operation'
+
+# 2. 0.2 mm typed: the preview at that depth; OK adds it.
+mark
+type-in '^Panel Extrude input distance at ' '0.2 mm'
+wait-log '^Extrude Distance: 0[.]2 mm = 0[.]2 mm' 20
+wait-log '^Preview Extrude: ok' 30
+wait-idle 30
+expect-widget-property commandOk enabled true
+focus-main
+mark
+button '^OK$'
+wait-log '^Added extrude \(New Body\), distance 0[.]2' 30
+wait-idle 30
+expect-model-bodies 2 4000.2
+
+# 3. Repeat keeps its usual settings: the last OK's distance.
+focus-widget modelView
+mark
+key Return
+wait-log '^Repeat Extrude \(Enter\)$' 20
+wait-log '^Command Extrude started'
+wait-idle 30
+expect-input-text distance '^0[.]2( mm)?$'
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle 30
+focus-widget modelView
+mark
+key ctrl+z
+wait-log '^Undo: ' 20
+wait-idle 30
+expect-model-bodies 1 4000
+
+# 4. Seen from the front, the arrow dragged from zero both ways.
+command view.front
+command view.fit
+wait-idle 30
+focus-widget modelView
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile '
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
+wait-log '^Manipulator Extrude distance at ' 20
+wait-idle 30
+focus-main
+mark
+drag-from '^Manipulator Extrude distance at ' 0 -80
+wait-log '^Manipulator Extrude distance dragged to [0-9]' 30
+wait-idle 30
+wait-log '^Preview Extrude: ok' 30
+expect-input-text distance '^[0-9.]*[1-9][0-9.]* mm$'
+expect-no-log '^Preview Extrude: failed|^Panel Extrude error'
+mark
+drag-from '^Manipulator Extrude distance at ' 0 200
+wait-log '^Manipulator Extrude distance dragged to -' 30
+wait-idle 30
+wait-log '^Preview Extrude: ok' 30
+expect-input-text distance '^-[0-9.]*[1-9][0-9.]* mm$'
+expect-no-log '^Preview Extrude: failed|^Panel Extrude error'
+# Zero again waits; Symmetric and Two Sides at zero wait too.
+mark
+type-in '^Panel Extrude input distance at ' '0'
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
+wait-idle 30
+expect-widget-property commandOk enabled false
+mark
+qt-choice input_direction 'Symmetric'
+wait-log '^Extrude: Direction = Symmetric' 20
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
+wait-idle 30
+mark
+qt-choice input_direction 'Two Sides'
+wait-log '^Extrude: Direction = Two Sides' 20
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
+wait-log '^Manipulator Extrude distance2 at ' 20
+wait-idle 30
+expect-input-text distance2 '^0 mm$'
+expect-no-log '^Panel Extrude error|The two sides overlap'
+focus-main
+mark
+drag-from '^Manipulator Extrude distance2 at ' 0 80
+wait-log '^Manipulator Extrude distance2 dragged to [0-9]' 30
+wait-idle 30
+wait-log '^Preview Extrude: ok' 30
+expect-no-log '^Preview Extrude: failed|^Panel Extrude error'
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle 30
+
+# 4b. Start Offset at zero (mitcad#2508): its arrow off the profile, the
+#     distance's past its head, each hovered on its own; each grabbed at
+#     zero, the first move takes the value about as far as the pointer
+#     (no jump by the lift).
+focus-widget modelView
+mark
+key e
+wait-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile '
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
+wait-idle 30
+mark
+qt-choice input_start 'Offset'
+wait-log '^Extrude: Start = Offset' 20
+wait-log '^Manipulator Extrude start_offset at ' 20
+wait-log '^Manipulator Extrude distance at ' 20
+wait-idle 30
+expect-input-text start_offset '^0 mm$'
+expect-input-text distance '^0 mm$'
+capture originY '^Arrow start Extrude start_offset at -?[0-9]+,(-?[0-9]+)$'
+capture offsetKnobY '^Arrow knob Extrude start_offset at -?[0-9]+,(-?[0-9]+)$'
+capture offsetHeadY '^Arrow head Extrude start_offset at -?[0-9]+,(-?[0-9]+)$'
+capture distanceKnobY '^Arrow knob Extrude distance at -?[0-9]+,(-?[0-9]+)$'
+expect-less ${offsetKnobY} ${originY}
+expect-less ${distanceKnobY} ${offsetHeadY}
+focus-main
+mark
+hover-logged '^Manipulator Extrude start_offset at '
+wait-log '^Handle hover Extrude start_offset: ' 20
+mark
+hover-logged '^Manipulator Extrude distance at '
+wait-log '^Handle hover Extrude distance: ' 20
+# The distance's arrow grabbed at zero: a small drag up.
+mark
+drag-from '^Manipulator Extrude distance at ' 0 -12
+wait-log '^Manipulator Extrude distance dragged to [0-9]' 30
+capture pointer '^Handle first move Extrude distance: (-?[0-9.]+) px along the arrow'
+capture moved '^Handle first move Extrude distance: -?[0-9.]+ px along the arrow, the value (-?[0-9.]+) px$'
+expect-less 0 ${pointer}
+expect-near ${moved} ${pointer} 0.5 2
+wait-idle 30
+wait-log '^Preview Extrude: ok' 30
+expect-input-text distance '^[0-9.]*[1-9][0-9.]* mm$'
+# The Start Offset's arrow, still at zero, grabbed the same way.
+mark
+drag-from '^Manipulator Extrude start_offset at ' 0 -12
+wait-log '^Manipulator Extrude start_offset dragged to [0-9]' 30
+capture pointer '^Handle first move Extrude start_offset: (-?[0-9.]+) px along the arrow'
+capture moved '^Handle first move Extrude start_offset: -?[0-9.]+ px along the arrow, the value (-?[0-9.]+) px$'
+expect-less 0 ${pointer}
+expect-near ${moved} ${pointer} 0.5 2
+wait-idle 30
+expect-input-text start_offset '^[0-9.]*[1-9][0-9.]* mm$'
+expect-no-log '^Preview Extrude: failed|^Panel Extrude error'
+mark
+qt-choice input_start 'Profile Plane'
+wait-log '^Extrude: Start = Profile Plane' 20
+wait-idle 30
+focus-main
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle 30
+
+# 5. A planar face: zero waits; the first distance chooses the operation.
+command view.iso
+command view.fit
+wait-idle 30
+mark
+command solid.extrude
+wait-log '^Command Extrude started'
+wait-idle 30
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick face F2[.]b0/F2:end[(]' 20
+click-pick 'face F2[.]b0/F2:end[(]'
+wait-log '^Extrude Profiles: 1 face [[]face F2:end[(]' 20
+wait-log '^Preview Extrude: not built: Type a distance or drag the arrow[.]$' 30
+wait-log '^Manipulator Extrude distance at ' 20
+wait-idle 30
+expect-input-text distance '^0 mm$'
+expect-widget-property commandOk enabled false
+expect-no-log '^Preview Extrude: (ok|failed)|^Panel Extrude error|^Extrude: automatic Operation'
+mark
+type-in '^Panel Extrude input distance at ' '-2 mm'
+wait-log '^Extrude Distance: -2 mm = -2 mm' 20
+wait-log '^Extrude: automatic Operation = Cut' 30
+wait-log '^Preview Extrude: ok' 30
+wait-idle 30
+focus-main
+mark
+button '^OK$'
+wait-log '^Added extrude \(Cut\), distance -2, of a face' 30
+wait-idle 30
+expect-model-bodies 1 3200
+expect-never 'Preview Extrude: failed|Recompute failed|TestDriver: FAIL'

@@ -111,12 +111,16 @@ bool ToolbarPanelReveal::eventFilter(QObject* watched, QEvent* event) {
     }
     return QObject::eventFilter(watched, event);
   }
-  // The places the band follows.
+  // The places the band follows, and a revealed panel with them (a window
+  // made narrower would cut it off, mitcad#2527).
   if (type == QEvent::Move || type == QEvent::Resize || type == QEvent::Show || type == QEvent::Hide) {
     if (m_watched.contains(watched) && !m_bandQueued) {
       m_bandQueued = true;
       TestSync::singleShot(0, this, [this] {
         m_bandQueued = false;
+        if (m_revealed && m_hooks.place) {
+          m_hooks.place();
+        }
         updateBand();
       });
     }

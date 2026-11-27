@@ -25,10 +25,11 @@ wait-log '^Extrude Profiles: nothing$'
 wait-log '^Pick profile F3/r\{c1\}' 20
 click-pick 'profile F3/r\{c1\}'
 wait-log '^Extrude Profiles: 1 profile \[profile r\{c1\}'
+# A new Extrude starts at 0 mm (mitcad#2481): 10 mm typed.
+type-in '^Panel Extrude input distance at ' '10 mm'
 wait-log '^View highlight places: .*profile F3/r\{c1\} in O1 at 117\.[3-5],-90\.[5-7],(59\.9|60\.0)' 30
-# Since the start: the first preview of the profile Extrude starts with
-# may already have chosen Join with the cylinder, which the picked one
-# then chooses again without a new line.
+# Since the start: the first preview, once 10 mm is typed, chooses Join
+# with the cylinder (a repeated choice logs no new line).
 expect-ever '^Extrude: automatic Operation = Join' 30
 expect-ever '^Extrude Local bodies: 1 body \[body F2\.b0 in O1\]' 30
 wait-idle

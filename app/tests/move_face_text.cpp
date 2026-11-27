@@ -88,12 +88,46 @@ void otherMotionTests() {
         QStringLiteral("turn 90 deg, translate (1, 2, 3) mm"));
 }
 
+// Up to an object (mitcad#2548): a definition's `to_object` read as its
+// motion, said by the object's kind.
+void toObjectTests() {
+  const QJsonObject face{{QStringLiteral("type"), QStringLiteral("face")},
+                         {QStringLiteral("body"), QStringLiteral("F2.b0")},
+                         {QStringLiteral("face"), QStringLiteral("F2:side(c4[c3,c1])")}};
+  const QJsonObject def{{QStringLiteral("type"), QStringLiteral("move_face")},
+                        {QStringLiteral("body"), QStringLiteral("F2.b0")},
+                        {QStringLiteral("faces"), QJsonArray{QStringLiteral("F8:start(r{c1})")}},
+                        {QStringLiteral("to_object"), face}};
+  CHECK(motionText(moveFaceMotion(def)) == QStringLiteral("up to a face"));
+  CHECK(moveFaceSummary(QStringLiteral("MoveFace1"), 1, QStringLiteral("Body1"), moveFaceMotion(def)) ==
+        QStringLiteral("MoveFace1: 1 face of Body1, up to a face"));
+  const auto upTo = [](const QJsonObject& object) {
+    return motionText({{QStringLiteral("type"), QStringLiteral("to_object")}, {QStringLiteral("object"), object}});
+  };
+  CHECK(upTo({{QStringLiteral("type"), QStringLiteral("body")}, {QStringLiteral("body"), QStringLiteral("F2.b0")}}) ==
+        QStringLiteral("up to a body"));
+  CHECK(upTo({{QStringLiteral("type"), QStringLiteral("plane")}, {QStringLiteral("plane"), QStringLiteral("xy")}}) ==
+        QStringLiteral("up to xy"));
+  CHECK(upTo({{QStringLiteral("type"), QStringLiteral("point")},
+              {QStringLiteral("point"), QJsonObject{{QStringLiteral("body"), QStringLiteral("F2.b0")},
+                                                    {QStringLiteral("vertex"), QStringLiteral("V{a|b|c}")}}}}) ==
+        QStringLiteral("up to a point"));
+  // A definition with a motion of its own reads its `transform`.
+  const QJsonObject moved{{QStringLiteral("type"), QStringLiteral("move_face")},
+                          {QStringLiteral("transform"), QJsonObject{{QStringLiteral("type"), QStringLiteral("translate_xyz")},
+                                                                    {QStringLiteral("x"), 1.0},
+                                                                    {QStringLiteral("y"), 0.0},
+                                                                    {QStringLiteral("z"), 0.0}}}};
+  CHECK(motionText(moveFaceMotion(moved)) == QStringLiteral("translate (1, 0, 0) mm"));
+}
+
 } // namespace
 
 int moveFaceTextTests() {
   failures = 0;
   translateTests();
   otherMotionTests();
+  toObjectTests();
   return failures;
 }
 MITCAD_UNIT_TEST(moveFaceTextTests);

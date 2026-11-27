@@ -20,6 +20,15 @@ pub struct Hit {
 /// The intersections of two curves, within `tol` (millimetres), including
 /// where an end of one lies on the other.
 pub fn intersections(a: &Curve2, b: &Curve2, tol: f64) -> Vec<Hit> {
+    intersections_with_contact(a, b, tol, tol)
+}
+
+/// [`intersections`], with an end of one curve taken to lie on the other
+/// within `contact` (millimetres) instead of `tol`: the profile regions
+/// let a curve's end meet another curve within the imported designs'
+/// resolution while their other tolerances stay finer (mitcad#2557,
+/// mitcad#2567).
+pub fn intersections_with_contact(a: &Curve2, b: &Curve2, tol: f64, contact: f64) -> Vec<Hit> {
     let mut hits = match (a, b) {
         (Curve2::Line { .. }, Curve2::Line { .. }) => line_line(a, b, tol),
         (Curve2::Line { .. }, Curve2::Circle { .. } | Curve2::Arc { .. }) => line_round(a, b, tol),
@@ -32,8 +41,8 @@ pub fn intersections(a: &Curve2, b: &Curve2, tol: f64) -> Vec<Hit> {
         ) => round_round(a, b, tol),
         _ => numeric(a, b, tol),
     };
-    hits.extend(end_contacts(a, b, tol));
-    hits.extend(end_contacts(b, a, tol).into_iter().map(swap));
+    hits.extend(end_contacts(a, b, contact));
+    hits.extend(end_contacts(b, a, contact).into_iter().map(swap));
     collapse_overlaps(a, b, dedupe(hits, tol), tol)
 }
 

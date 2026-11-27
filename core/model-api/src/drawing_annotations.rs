@@ -538,9 +538,11 @@ impl ViewAt<'_> {
         self.placed.spec.section
     }
 
-    /// Whether a model point is not taken away by the section's plane.
+    /// Whether a model point is not taken away by the section's plane
+    /// (within its bound, mitcad#2479).
     pub(super) fn kept(&self, p: Vec3) -> bool {
-        self.cut().is_none_or(|c| side(&c, p) <= CUT_TOLERANCE)
+        self.cut()
+            .is_none_or(|c| side(&c, p) <= CUT_TOLERANCE || !within_bound(&c, p))
     }
 
     /// Whether a view point lies on a line the view draws as visible (its
@@ -839,6 +841,71 @@ fn side(cut: &CutPlane, p: Vec3) -> f64 {
     mitcad_vec3::dot(sub3(p, cut.origin), cut.normal)
 }
 
+/// Whether a model point lies inside the strip a section is limited to
+/// (mitcad#2479), its edges left out; anywhere for a section of the whole
+/// plane.
+fn within_bound(cut: &CutPlane, p: Vec3) -> bool {
+    cut.bound.is_none_or(|b| {
+        let u = mitcad_vec3::dot(sub3(p, cut.origin), b.along);
+        u > b.from + CUT_TOLERANCE && u < b.to - CUT_TOLERANCE
+    })
+}
+
+/// The part `span` (parameters from 0 to 1) of a segment where a value
+/// running linearly from `v0` to `v1` is at least `least`; None when it
+/// is nowhere.
+fn at_least(span: (f64, f64), v0: f64, v1: f64, least: f64) -> Option<(f64, f64)> {
+    let d = v1 - v0;
+    if d.abs() < 1e-15 {
+        return (v0 >= least).then_some(span);
+    }
+    let t = (least - v0) / d;
+    let (lo, hi) = if d > 0.0 {
+        (span.0.max(t), span.1)
+    } else {
+        (span.0, span.1.min(t))
+    };
+    (lo < hi).then_some((lo, hi))
+}
+
+/// The stretch of the segment from `a` to `b` (parameters from 0 to 1) a
+/// section limited to a strip takes away (mitcad#2479): on the normal side
+/// of its plane, inside the strip; None when it takes none of it.
+fn removed_span(cut: &CutPlane, a: Vec3, b: Vec3) -> Option<(f64, f64)> {
+    let mut span = at_least((0.0, 1.0), side(cut, a), side(cut, b), CUT_TOLERANCE)?;
+    if let Some(bound) = cut.bound {
+        let along = |p: Vec3| mitcad_vec3::dot(sub3(p, cut.origin), bound.along);
+        let (u0, u1) = (along(a), along(b));
+        span = at_least(span, u0, u1, bound.from + CUT_TOLERANCE)?;
+        span = at_least(span, -u0, -u1, CUT_TOLERANCE - bound.to)?;
+    }
+    Some(span)
+}
+
+/// What is left of the stretch from `lo` to `hi` along a line (`point` its
+/// model point at a parameter) by a section limited to a strip: the
+/// stretch cut back to where the section takes it away from one end, kept
+/// whole when the section takes away a part in its middle (as a curve
+/// whole while some of it is seen); None when it takes it all.
+fn bounded_stretch(
+    cut: &CutPlane,
+    lo: f64,
+    hi: f64,
+    point: impl Fn(f64) -> Vec3,
+) -> Option<(f64, f64)> {
+    let Some((t0, t1)) = removed_span(cut, point(lo), point(hi)) else {
+        return Some((lo, hi));
+    };
+    let at = |t: f64| lo + (hi - lo) * t;
+    let (from_start, to_end) = (t0 <= 1e-12, t1 >= 1.0 - 1e-12);
+    match (from_start, to_end) {
+        (true, true) => None,
+        (true, false) => Some((at(t1), hi)),
+        (false, true) => Some((lo, at(t0))),
+        (false, false) => Some((lo, hi)),
+    }
+}
+
 /// A curve of a body moved by its placement into the drawing's
 /// coordinates.
 pub(super) fn placed_curve(curve: &CurveGeometry, t: &Transform) -> CurveGeometry {
@@ -982,6 +1049,33 @@ fn ends(curve: &CurveGeometry) -> (Vec3, Vec3) {
 /// crosses the plane, a circle or another curve whole while some of it
 /// lies behind the plane; none when all of it lies in front.
 fn kept_curve(curve: &CurveGeometry, cut: &CutPlane) -> Option<CurveGeometry> {
+    if cut.bound.is_some() {
+        // A section limited to a strip (mitcad#2479).
+        let kept = |p: Vec3| side(cut, p) <= CUT_TOLERANCE || !within_bound(cut, p);
+        return match curve {
+            CurveGeometry::Line { start, end } => {
+                let (start, end) = (*start, *end);
+                let point = |t: f64| mitcad_vec3::add_scaled(start, sub3(end, start), t);
+                bounded_stretch(cut, 0.0, 1.0, point).map(|(a, b)| CurveGeometry::Line {
+                    start: point(a),
+                    end: point(b),
+                })
+            }
+            CurveGeometry::Circle {
+                center,
+                normal,
+                radius,
+                start,
+                end,
+            } => annotate::arc_points3(*center, *normal, *radius, *start, *end)
+                .into_iter()
+                .any(kept)
+                .then(|| curve.clone()),
+            CurveGeometry::Other { start, end, .. } => {
+                (kept(*start) || kept(*end)).then(|| curve.clone())
+            }
+        };
+    }
     let kept = |p: Vec3| side(cut, p) <= CUT_TOLERANCE;
     match curve {
         CurveGeometry::Line { start, end } => {
@@ -1130,7 +1224,12 @@ fn seen_round(
     let (mut lo, mut hi, sweep, widest) = round_extent(geometry, face)?;
     let placed_axis = mitcad_vec3::unit(transform.apply_vector(face.axis))?;
     let point3 = |t: f64| transform.apply_point(mitcad_vec3::add_scaled(face.origin, face.axis, t));
-    if let Some(cut) = view.cut() {
+    if let Some(cut) = view.cut()
+        && cut.bound.is_some()
+    {
+        // A section limited to a strip (mitcad#2479).
+        (lo, hi) = bounded_stretch(&cut, lo, hi, point3)?;
+    } else if let Some(cut) = view.cut() {
         let (s0, s1) = (side(&cut, point3(lo)), side(&cut, point3(hi)));
         if s0 > CUT_TOLERANCE && s1 > CUT_TOLERANCE {
             return None;
@@ -3181,8 +3280,22 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 }
             }
             for annotation in &view.annotations {
+                // The entry keeps the note's text as written, its
+                // references (mitcad#2483) for its editor.
                 let mut entry = serde_json::to_value(annotation).unwrap_or(Value::Null);
                 entry["view"] = json!(view.id);
+                // A leader note is drawn with its parameters' values.
+                let mut missing: Vec<String> = Vec::new();
+                let filled;
+                let annotation = match (annotation.kind, annotation.text.as_deref()) {
+                    (AnnotationType::Note, Some(text)) if text.contains('{') => {
+                        let mut own = annotation.clone();
+                        own.text = Some(self.with_parameters(text, &mut missing));
+                        filled = own;
+                        &filled
+                    }
+                    _ => annotation,
+                };
                 let laid = match &drawn {
                     Err(e) => Err(e.clone()),
                     Ok(v) => match annotation.kind {
@@ -3336,32 +3449,71 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                         ));
                     }
                 }
+                note_missing_parameters(
+                    &mut entry,
+                    annotation.id,
+                    &missing,
+                    &mut out.warnings,
+                    &format!("annotation {} on view {}", annotation.id, view.id),
+                );
                 out.entries.push(entry);
             }
             // Lines, arcs and texts drawn in it (mitcad#729): placed by its
             // definition alone, so drawn whatever the model does.
             let map = super::drawings::view_map(sheet, view);
             for item in &view.sketch {
-                let laid = annotate::lay_out_sketch(item, &map, defaults.text(None));
-                out.entries.push(sketch_entry(item, Some(view.id), &laid));
+                let (shown, missing) = sketch_shown(self, item);
+                let laid = annotate::lay_out_sketch(&shown, &map, defaults.text(None));
+                let mut entry = sketch_entry(item, Some(view.id), &laid);
+                entry["label"] = json!(shown.label());
+                note_missing_parameters(
+                    &mut entry,
+                    item.id(),
+                    &missing,
+                    &mut out.warnings,
+                    &format!("text {} on view {}", item.id(), view.id),
+                );
+                out.entries.push(entry);
                 out.groups.push(laid.group);
             }
         }
         for note in &sheet.notes {
-            let laid = annotate::lay_out_note(note, defaults.text(None));
+            // Drawn with its parameters' values (mitcad#2483); its entry
+            // keeps its text as written.
+            let mut missing: Vec<String> = Vec::new();
+            let mut shown = note.clone();
+            shown.text = self.with_parameters(&note.text, &mut missing);
+            let laid = annotate::lay_out_note(&shown, defaults.text(None));
             let mut entry = serde_json::to_value(note).unwrap_or(Value::Null);
             entry["type"] = json!("text");
             entry["view"] = Value::Null;
             entry["broken"] = json!(false);
-            entry["label"] = json!(note.text.replace('\n', " / "));
+            entry["label"] = json!(shown.text.replace('\n', " / "));
             entry["box"] = bounds_json(&laid.bounds);
+            note_missing_parameters(
+                &mut entry,
+                note.id,
+                &missing,
+                &mut out.warnings,
+                &format!("text {}", note.id),
+            );
             out.groups.push(laid.group);
             out.entries.push(entry);
         }
         let on_sheet = ViewMap::new(1.0, [0.0, 0.0], [0.0, 0.0]);
         for item in &sheet.sketch {
-            let laid = annotate::lay_out_sketch(item, &on_sheet, defaults.text(None));
-            out.entries.push(sketch_entry(item, None, &laid));
+            let (shown, missing) = sketch_shown(self, item);
+            let laid = annotate::lay_out_sketch(&shown, &on_sheet, defaults.text(None));
+            let mut entry = sketch_entry(item, None, &laid);
+            entry["label"] = json!(shown.label());
+            note_missing_parameters(
+                &mut entry,
+                item.id(),
+                &missing,
+                &mut out.warnings,
+                &format!("text {}", item.id()),
+            );
+            out.entries.push(entry);
             out.groups.push(laid.group);
         }
         out
@@ -6185,6 +6337,53 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         }
         out
     }
+}
+
+/// A line, an arc or a text as the sheet shows it (mitcad#2483): a text's
+/// parameter references filled in; with the parameters it refers to that
+/// the design lacks.
+fn sketch_shown<K: Kernel>(doc: &Document<K>, item: &SketchItem) -> (SketchItem, Vec<String>) {
+    let mut missing: Vec<String> = Vec::new();
+    let mut shown = item.clone();
+    if let SketchItem::Text { text, .. } = &mut shown
+        && text.contains('{')
+    {
+        *text = doc.with_parameters(text, &mut missing);
+    }
+    (shown, missing)
+}
+
+/// The message of a text whose parameters the design lacks (mitcad#2483).
+pub(crate) fn missing_parameters_message(missing: &[String]) -> String {
+    match missing {
+        [one] => format!("the design has no parameter {one}: its reference is shown as written"),
+        _ => format!(
+            "the design has no parameters {}: their references are shown as written",
+            missing.join(", ")
+        ),
+    }
+}
+
+/// A note's or a text's entry and the sheet's warnings when it refers to
+/// parameters the design lacks (mitcad#2483): a warning about it, `what`
+/// naming it in the sheet's list.
+fn note_missing_parameters(
+    entry: &mut Value,
+    id: u32,
+    missing: &[String],
+    warnings: &mut Vec<String>,
+    what: &str,
+) {
+    if missing.is_empty() {
+        return;
+    }
+    let message = missing_parameters_message(missing);
+    if entry.get("warning").is_none() {
+        entry["warning"] = json!(message);
+    }
+    entry["missing_parameters"] = json!(missing);
+    add_annotation_notice(entry, &id, &message);
+    warnings.push(format!("{what}: {message}"));
 }
 
 /// Gives an annotation's entry in the `drawing` query its notice

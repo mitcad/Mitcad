@@ -1116,6 +1116,20 @@ fn symptoms_and_kernel_failures_of_definitions() {
     assert!(kernel_failure(
         "the taper failed; the angle may close the profile"
     ));
+    // The offset of a face that leaves the body open and a delete whose
+    // neighbours do not close the gap (mitcad#2557), plain or with the
+    // agents' detail.
+    assert!(kernel_failure(
+        "the kernel's offset of the body with F2:side(c21[c20,c22]) moved gave no shape: its \
+         rebuilt faces leave free edges and the shell that does not close up was dropped"
+    ));
+    assert!(kernel_failure(
+        "the faces cannot be moved: the body rebuilt around them does not close up (the \
+         geometry kernel's offset leaves gaps between the body's faces)"
+    ));
+    assert!(kernel_failure(
+        "the faces cannot be deleted: the neighbouring faces do not close the gap"
+    ));
     assert!(!kernel_failure(NOT_IN_HISTORY));
     assert!(!kernel_failure(
         "the extrusion does not cut into any participant body"

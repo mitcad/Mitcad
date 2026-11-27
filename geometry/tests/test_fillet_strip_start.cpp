@@ -40,6 +40,7 @@
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -222,7 +223,7 @@ void test_rounding_along_a_strip_the_ball_cannot_touch() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_strip_start) {
   test::guarded("test_rounding_along_a_strip_the_ball_cannot_touch",
                 test::test_rounding_along_a_strip_the_ball_cannot_touch);
   if (test::failures == 0) {

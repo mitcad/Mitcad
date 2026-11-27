@@ -166,3 +166,6 @@ mod sketch_spline_point_remove_2326_tests;
 mod sketch_memory_refusal_2437_tests;
 // Tangent dimensions to a circle's or arc's far side (mitcad#2451).
 mod sketch_tangent_far_2451_tests;
+// Placed dimension values move with geometry a selection drag or
+// Move/Copy translates together (mitcad#2580).
+mod sketch_dimension_text_move_2580_tests;

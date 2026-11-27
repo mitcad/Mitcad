@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <array>
 #include <optional>
 
 #include <QJsonArray>
@@ -8,6 +9,7 @@
 #include <QString>
 
 #include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 
 namespace mitcad::cmd {
@@ -31,5 +33,14 @@ std::optional<gp_Trsf> occurrenceWorldIn(const QJsonArray& occurrences, const QS
 // leads nowhere.
 std::optional<gp_Dir> sketchNormalInDesign(const QJsonObject& frame, const QJsonArray& occurrences,
                                            const QString& path);
+
+// A click's point in the design (mitcad#2566): `at` is where the click hit
+// an item, in the coordinates of the item's component (SelectionItem::at),
+// moved by the `world` placement of the occurrence at `path` the item was
+// clicked in (SelectionItem::occurrence); none when the path leads
+// nowhere. Align Point Cloud's point pairs are in the design, so a pair's
+// point on a body of a placed component is taken through it.
+std::optional<gp_Pnt> clickInDesign(const std::array<double, 3>& at, const QJsonArray& occurrences,
+                                    const QString& path);
 
 } // namespace mitcad::cmd

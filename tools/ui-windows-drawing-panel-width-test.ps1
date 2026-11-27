@@ -6,7 +6,7 @@
 # Linux, on Plate (a 40 x 30 x 5 body) placed twice, with a drawing whose
 # base view draws both, that mitcad-cli makes:
 #   1. Floating, the test's own settings: the panel is 230 px wide; the base
-#      view's Shows spans it under its label, and Update from Model's whole
+#      view's Shows spans it under its heading, and Update from Model's whole
 #      text fits its button.
 #   2. The panel's edge dragged toward the sheet: the panel and Shows are
 #      wider by the same amount, and the width is remembered.
@@ -111,10 +111,22 @@ function Drag-Edge([int]$Dx) {
   Ui-Sync
 }
 
+# Select-View: the base view selected, its panel laid out (Shows and Update
+# from Model in it). Its Shows list is folded under its heading at the
+# app's start (mitcad#2498): opened then; it stays open after that.
 function Select-View {
   Ui-Mark
   Ui-Step 'select the front view'         { Ui-ClickLogged 'Drawing view 1' }
   Ui-ExpectNew 'Drawing view 1 selected' 'the front view selected'
+  Ui-ExpectNew 'Drawing panel drawingViewShowsToggle at' 'its Shows heading in the panel'
+  Settled 'Drawing panel drawingViewShowsToggle'
+  $state = @(Ui-LogLines) | Where-Object { $_ -match '^Drawing panel drawingViewShows (at |out of sight$)' } |
+    Select-Object -Last 1
+  if ($state -and $state.EndsWith('out of sight')) {
+    Ui-Mark
+    Ui-Step 'open its Shows'              { Ui-ClickLogged 'Drawing panel drawingViewShowsToggle' }
+    Ui-ExpectNew 'Drawing view 1 Shows opened' 'the list opened under its heading'
+  }
   Ui-ExpectNew 'Drawing panel drawingViewShows at' 'its Shows in the panel'
   Ui-ExpectNew 'Drawing panel drawingViewUpdate at' 'Update from Model in the panel'
   Settled 'Drawing panel drawingViewUpdate'
@@ -171,7 +183,19 @@ Select-View
 Wait-Width 'Drawing panel' 230 'the panel at its narrowest at first'
 $shows = Last-Width 'Drawing panel drawingViewShows'
 if ($null -eq $shows) { Ui-Fail 'the Shows list''s width was not logged' }
-if ($shows -lt 200) { Ui-Fail "Shows is $shows px wide in a 230 px panel: not across the panel" }
+# In session 0's 1024x768 desktop the panel's page is a few pixels higher
+# than its part in sight, so it scrolls (mitcad#2498) and Windows' scroll
+# bar (17 px, not an overlay) takes its width from the page: Shows then
+# spans what is left, as wide as Update from Model, which spans it too.
+$across = 200
+if (@(Ui-NewLines | Where-Object { $_.StartsWith('Drawing panel page bar at ') }).Count -gt 0) {
+  $across = 180
+  $update = Last-Width 'Drawing panel drawingViewUpdate'
+  if ($null -ne $update -and $shows -ne $update) {
+    Ui-Fail "Shows is $shows px wide, Update from Model $update px: not across the scrolled page"
+  }
+}
+if ($shows -lt $across) { Ui-Fail "Shows is $shows px wide in a 230 px panel: not across the panel" }
 Write-Host "ok   Shows spans the panel ($shows px)"
 Button-Fits 'at the narrowest panel'
 

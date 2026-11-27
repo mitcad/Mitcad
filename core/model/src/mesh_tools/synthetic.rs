@@ -117,6 +117,76 @@ pub(crate) fn noisy_cylinder(
     mesh
 }
 
+/// A closed sphere about `centre` (mitcad#2515): `rings` rows from pole to
+/// pole, `segments` around, the poles single vertices; every vertex but
+/// the poles moved by up to `noise`.
+pub(crate) fn noisy_sphere(
+    centre: Point,
+    radius: f64,
+    segments: usize,
+    rings: usize,
+    noise: f64,
+) -> TriangleMesh {
+    let mut mesh = TriangleMesh::default();
+    mesh.vertices
+        .push([centre[0], centre[1], centre[2] + radius]);
+    let mut grid = vec![vec![0u32; segments]; rings - 1];
+    for (j, row) in grid.iter_mut().enumerate() {
+        let polar = std::f64::consts::PI * (j + 1) as f64 / rings as f64;
+        for (i, slot) in row.iter_mut().enumerate() {
+            let a = std::f64::consts::TAU * i as f64 / segments as f64;
+            let p = [
+                centre[0] + radius * polar.sin() * a.cos(),
+                centre[1] + radius * polar.sin() * a.sin(),
+                centre[2] + radius * polar.cos(),
+            ];
+            let seed = 31 + (j * segments + i) as u64;
+            mesh.vertices.push(jitter(p, seed, noise));
+            *slot = (mesh.vertices.len() - 1) as u32;
+        }
+    }
+    mesh.vertices
+        .push([centre[0], centre[1], centre[2] - radius]);
+    let south = (mesh.vertices.len() - 1) as u32;
+    for i in 0..segments {
+        let next = (i + 1) % segments;
+        mesh.triangles.push([0, grid[0][i], grid[0][next]]);
+        for j in 0..rings - 2 {
+            let (a, b, c, d) = (grid[j][i], grid[j + 1][i], grid[j + 1][next], grid[j][next]);
+            mesh.triangles.push([a, b, c]);
+            mesh.triangles.push([a, c, d]);
+        }
+        mesh.triangles
+            .push([south, grid[rings - 2][next], grid[rings - 2][i]]);
+    }
+    mesh
+}
+
+/// A closed torus about the Z axis (mitcad#2515): the tube of radius
+/// `minor` round a circle of radius `major` in XY, `segments` around the
+/// axis, `sides` around the tube.
+pub(crate) fn torus(major: f64, minor: f64, segments: usize, sides: usize) -> TriangleMesh {
+    let mut mesh = TriangleMesh::default();
+    for i in 0..segments {
+        let phi = std::f64::consts::TAU * i as f64 / segments as f64;
+        for j in 0..sides {
+            let theta = std::f64::consts::TAU * j as f64 / sides as f64;
+            let ring = major + minor * theta.cos();
+            mesh.vertices
+                .push([ring * phi.cos(), ring * phi.sin(), minor * theta.sin()]);
+        }
+    }
+    let at = |i: usize, j: usize| ((i % segments) * sides + j % sides) as u32;
+    for i in 0..segments {
+        for j in 0..sides {
+            let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
+            mesh.triangles.push([a, b, c]);
+            mesh.triangles.push([a, c, d]);
+        }
+    }
+    mesh
+}
+
 /// The triangles of the mesh each with its own three vertices, as an STL
 /// file gives them.
 pub(crate) fn unshared(mesh: &TriangleMesh) -> TriangleMesh {

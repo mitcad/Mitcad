@@ -17,6 +17,7 @@
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/sheet.hpp"
 #include "mitcad/geometry/sheet_develop.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 using namespace mitcad::geometry;
@@ -218,7 +219,7 @@ void face_bendings() {
 }
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(sheet_curved) {
   enable_input_checks(true);
   test::guarded("conical panel volumes", conical_panel_volumes);
   test::guarded("cylindrical panel volume", cylindrical_panel_volume);

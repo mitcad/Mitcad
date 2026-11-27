@@ -114,7 +114,8 @@ round() {
   ui_expect_new "Selection card create chose Extrude" "the card's button clicked"
   ui_expect_new "Command Extrude started" "Extrude started"
   ui_expect_new "Extrude Profiles: 1 profile [profile $RECT of F3]" "with the selected profile"
-  ui_expect_new "Preview Extrude: ok" "previewed"
+  # A new Extrude starts at 0 mm and waits for a distance (mitcad#2481).
+  ui_expect_new "Preview Extrude: not built: Type a distance or drag the arrow." "waiting for a distance"
   ui_mark
   ui_step "cancel (Esc)"                   ui_key Escape
   ui_expect_new "Command Extrude cancelled" "cancelled"

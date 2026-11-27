@@ -298,6 +298,7 @@ fn every_process_writes_a_file_strict_readers_take() {
                 let options = FlatDxfOptions {
                     unit,
                     tangents: true,
+                    folds: false,
                     process,
                 };
                 let flat = drawing(&regions, &bends, &options).unwrap();

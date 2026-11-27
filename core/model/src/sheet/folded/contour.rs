@@ -212,6 +212,7 @@ pub(crate) fn contour<K: Kernel>(
         gaps: Vec::new(),
         invalidated: None,
         blockers: Vec::new(),
+        approximation: None,
     };
     for (i, m) in metrics.iter().enumerate() {
         let slot = i as u32;

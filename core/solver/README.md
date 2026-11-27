@@ -240,7 +240,7 @@ and the dependent sets are the same, but their Gram matrix shares only
 neighbours' unknowns: a chain or a tree factors with linear fill, where
 every copy bound to the original's unknowns makes `G` dense (a clique per
 coordinate) and its factorization cubic in the copies. In
-`tests/pattern.rs` a drag step of a 20 x 20 grid of circles (as the model
+`tests/planar/pattern.rs` a drag step of a 20 x 20 grid of circles (as the model
 runs it: a new system, solves, the drag, the analysis) took 0.7 s with
 the copies bound to the original before the plans were shared and the
 analysis used the selected inverse, 0.13 s with them, and 0.7 ms chained
@@ -305,7 +305,7 @@ let a = s.analyze();                           // a.dof, a.body_dof, a.redundant
   the inverse of that rigid pose (mitcad#1668). Frames a little off a
   rotation (`RᵀR = S`) then no longer double their error with each
   placing (`S²`): poses stay within about 1e-15 of a rotation however
-  often they are placed (`tests/rigid.rs`).
+  often they are placed (`tests/rigid/rigid.rs`).
 - **Half turns.** The skew part of a rotation also vanishes at half a
   turn; a run that ends more than a quarter turn off turns the joint's
   body over about the error's axis and iterates again (up to four runs).
@@ -330,7 +330,7 @@ let a = s.analyze();                           // a.dof, a.body_dof, a.redundant
 `add_constraint(RigidConstraint)` (mitcad#148) adds some of a joint's
 equations only, between a frame on `a` and one on `b`, numbered with the
 joints (`JointId`) and solved, dragged and analysed with them
-(`tests/rigid_constraints.rs`). Each `ConstraintPart` is written in frame
+(`tests/rigid/rigid_constraints.rs`). Each `ConstraintPart` is written in frame
 `b`'s coordinates (`d` frame a's origin, `z` and `x` its axes):
 
 | Part | Rows | Holds |
@@ -370,7 +370,7 @@ joint's motion; its target is a target row, named in dependencies.
 
 `add_coupling(RigidCoupling)` (mitcad#466) ties one joint's motion (the
 follower) to another's (the driver), numbered with the joints and in
-the same solves, drags and analyses (`tests/rigid_couplings.rs`): one
+the same solves, drags and analyses (`tests/rigid/rigid_couplings.rs`): one
 row `follower − relation(driver)` (scaled by the system's size for a
 turning follower). `Relation::Linear { ratio, offset }` is a gear pair,
 a rack and pinion or a screw; `Relation::Table { values, offset }` is a
@@ -522,7 +522,7 @@ tangents (`SpatialTangentGoal`) as soft goals.
 ## Performance
 
 Benchmark (release build):
-`cargo test --release -p mitcad-solver --test bench -- --ignored --nocapture`.
+`cargo test --release -p mitcad-solver --test planar -- bench:: --ignored --nocapture`.
 Sketches of a few hundred constraints solve and analyse in well under a
 millisecond; 2000 lines with 3999 constraints take a few milliseconds.
 Re-solving after a dimension change is cheaper than the first solve,

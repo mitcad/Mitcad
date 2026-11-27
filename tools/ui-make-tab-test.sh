@@ -260,7 +260,7 @@ done
 ui_mark
 ui_step "the Laser tab"                    ui_click_tab "MAKE_LASER"
 ui_expect_new "Ribbon tab shown: MAKE_LASER" "the Laser tab shown"
-for group in EXPORT MATERIALS ANNOTATE INSPECT; do
+for group in NEST EXPORT MATERIALS ANNOTATE INSPECT; do
   ui_expect_new "Ribbon MAKE_LASER/$group at" "its $group group"
 done
 group_menu "MAKE_LASER/EXPORT" "Export Flat Pattern… | Export Bend Table… | Export Face as DXF…"

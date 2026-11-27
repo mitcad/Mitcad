@@ -324,7 +324,9 @@ pub(super) struct PathPatternData {
 /// path input | f64 | ref distance holder | ref key point | 8 bytes | u32 n
 /// | n body records | 8 bytes`, then the tail and what follows it as a
 /// rectangular pattern's: the compute option, the object kind, a byte (0
-/// spacing, 1 extent) and the suppressed element numbers. Only an empty
+/// spacing, 1 extent) and the suppressed element numbers. (The oldest tail,
+/// [`tail`]'s legacy one, has neither the 8 bytes after the records nor
+/// the `-1`, mitcad#2493.) Only an empty
 /// suppressed list is read, as for a rectangular pattern.
 ///
 /// *(From two path patterns: the reference model's, four copies of a body
@@ -367,14 +369,13 @@ pub(super) fn path(seg: &Segment, item: &[u8]) -> Option<PathPatternData> {
         return None;
     }
     // 8 bytes before the body records' count, 8 after the records, then
-    // the tail's compute option, object kind and -1.
+    // the tail's compute option, object kind and -1; or the oldest tail,
+    // the compute option and the object kind right after the records
+    // (mitcad#2493: a design saved by build 2.0.12670, whose path pattern
+    // then reads to the end of its data object as the others do).
     let (j, p) = body_records(d, &refs, i + 3, key.end + 8)?;
-    let m = p + 16;
-    if d.get(m..m + 4) != Some(&[0xff; 4][..]) {
-        return None;
-    }
-    let compute = u32_at(d, m - 8).and_then(compute_name)?;
-    u32_at(d, m - 4).filter(|&k| k <= 2)?;
+    let (m, compute, _) = tail(d, p)?;
+    let compute = compute_name(compute)?;
     let (distance_type, numbers) = after_tail(d, &refs, j, m)?;
     if distance_type > 1 {
         return None;
@@ -762,6 +763,28 @@ mod tests {
         // The flip and the symmetry bytes.
         let p = read_path(&path_body([1, 1, 0, 1], 0, 2, 0, &[])).expect("the layout");
         assert!(p.flip && !p.along_path && p.symmetric);
+    }
+
+    #[test]
+    fn path_pattern_with_the_oldest_tail() {
+        // mitcad#2493: a design saved by an older build keeps the oldest
+        // tail after the body records, without the 8 bytes and the -1 (as
+        // a circular pattern's oldest layout); the rest reads as before.
+        let body = path_body([1, 0, 0, 0], 1, 2, 1, &[]);
+        // The key point's end, the gap, the count and one record.
+        let records_end = 107 + 8 + 4 + 11;
+        let mut oldest = body.clone();
+        oldest.drain(records_end + 16..records_end + 20);
+        oldest.drain(records_end..records_end + 8);
+        let p = read_path(&oldest).expect("the oldest tail");
+        assert_eq!(p.path, 11);
+        assert_eq!(p.settings.compute, Some("AdjustPatternCompute"));
+        assert_eq!(p.settings.extent, Some(true));
+        assert_eq!(p.settings.suppressed, Some(vec![]));
+        // The gap without the -1: nothing.
+        let mut no_marker = body;
+        no_marker.drain(records_end + 16..records_end + 20);
+        assert_eq!(read_path(&no_marker), None);
     }
 
     #[test]

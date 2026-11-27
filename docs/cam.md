@@ -18,7 +18,7 @@ Contents: [Open-source CAM](#open-source-cam) ·
 [Spindle assembly](#spindle-assembly) ·
 [Operations](#operations) · [Post-processors](#post-processors) ·
 [Simulation and checks](#simulation-and-checks) · [Turning](#turning) ·
-[API](#api) ·
+[Sheet cutting](#sheet-cutting) · [API](#api) ·
 [UI](#ui) · [Crates](#crates) · [Implemented](#implemented) ·
 [Open questions](#open-questions) · [Next steps](#next-steps)
 
@@ -183,8 +183,8 @@ design
   system (origin and axes picked on the stock: a corner and its top, the
   middle of the top, a vertex), the work offset (G54 to G59), the safe
   height, the machine and the post settings. A part machined from two
-  sides is two setups. Its eye in the Browser (its toolpaths drawn) is
-  kept with it (`visible`).
+  sides is two setups. Its eye in the Browser (its toolpaths and its
+  uncut stock drawn) is kept with it (`visible`).
 - **Operation:** its kind and inputs (faces, edges, sketch profiles,
   points; by topological names and sketch references, each with the
   occurrence it was picked in: the outline is placed where that
@@ -697,7 +697,7 @@ shared two-operation program in `post/tests.rs`.
 - **Now:** the machine check above, and the toolpath's bounds, cut
   length and time (`Toolpath::bounds`, `cut_length`, `duration`).
 - **The output through the controllers' own code** (verified before it
-  ships, no outside dry run): `core/cam/tests/controller_sim.rs`
+  ships, no outside dry run): `core/cam/tests/sim/controller_sim.rs`
   posts the post tests' program and a plate (facing, outline, pocket
   with an island, pecked holes, three tools) in millimetres and inches,
   with arcs and without, with line numbers, the length offset, a
@@ -848,6 +848,13 @@ lathe".
   tip, where the operator touches off; the nose radius is compensated in
   our code (G40), as Decision 3 has it for milling. A grooving or
   parting insert is controlled at its corner towards the chuck.
+  A turning tool or boring bar may keep its insert and holder
+  (`turning::insert`, mitcad#2502): ISO insert, holder and boring bar
+  codes, the tip and approach angles and the hand worked out from them,
+  what was typed over them, the **back angle** (180° − approach − tip, the
+  steepest wall falling towards the chuck the tool can follow down) and
+  an outline for the tool editor's picture. Undercut toolpaths and the
+  collision check of the holder are later work.
 - **The profile** (`TurnPart`): the setup's bodies cut by the plane
   through the axis, its half on the work X side: the outside from the
   face to the back and the bore from its mouth, chains of lines and arcs.
@@ -859,7 +866,41 @@ lathe".
   back towards the face becomes a shoulder. The tool's path is the
   envelope offset by the nose radius (cavalier_contours, arcs kept), moved
   to the imaginary tip; a contour that ends along Z goes on by the nose
-  radius so that the nose clears the part's end.
+  radius so that the nose clears the part's end. Turn Finishing may go
+  into undercuts (`turning::plunge`, mitcad#2503): with *Tool geometry*
+  down walls falling towards the chuck as steep as the tool's back angle
+  less 2 degrees (where a wall is steeper, along a line at that angle
+  until it meets the part again, the rest left), with *Free* down every
+  wall; one walk from the face keeps only the last point's line, so the
+  contour is found in one pass. The finish takes the undercut in one
+  go: the depth under the bridged contour, measured along X at every
+  point (between an arc's vertices too), must not pass the insert's
+  depth of cut. Turn Roughing may plunge too (mitcad#2549): the contour
+  at its angle offset all round by the larger stock to leave (a true
+  offset, `finish_contour`'s offset: a bigger nose moved back to the real
+  nose's tip), levels a depth of cut apart down to its deepest point,
+  each cutting along Z where the contour is below it (`spans_below`),
+  visited depth first (`Pockets::visit`: a pocket's passes nest in the
+  pass above, entered by a feed in X where the contour falls through the
+  level, left at 45 degrees no further than half the pass), then once
+  along the contour; written as moves, no G71. A plunging finish after
+  roughings of its side and spindle may then go deeper than its insert
+  cuts when what they leave fits it (`too_deep_after`: the depth under
+  the roughing's own contour, plus its larger stock to leave, plus how
+  much bigger its nose is; the least of the roughings), and its
+  fingerprint holds theirs.
+- **The stock** (mitcad#2550): around the bodies, a bar of the part's
+  radius plus the side margin, from the top margin in front of the
+  part's face to the bottom margin behind its back; or a bar of a given
+  size (`LatheSetup::stock_diameter`, `stock_length`): the diameter in
+  place of the side margin, the length from the stock's face towards the
+  chuck in place of the bottom margin, each margin where its size is left
+  out. The turning frame (`turn_frame`) works them out once, so the
+  stock the view draws, the toolpaths and the simulation use the same
+  bar, and a part edit keeps a given size. A bar thinner than the part,
+  or shorter than the part and the stock in front of its face, is
+  refused in words; the bore is checked against the bar by the stock's
+  own check (`TurnPart::validate`). A stock body keeps its own size.
 - **Operations:** facing (passes along X from outside the stock to the
   centre), roughing (passes along Z at most the depth of cut deep,
   backing off at 45 degrees, then once along the contour leaving the
@@ -914,7 +955,9 @@ its start.
   (else the control reads it in its smallest steps), G99 before a feed,
   a G50 spindle limit before G96, no threading at a constant surface
   speed, the cycles' blocks there and (for G71) running one way in X with
-  the first in X alone, no word it does not know; the moves read back (X
+  the first in X alone, its side taken from the contour against where
+  the cycle starts (so `U0.` inside reads back, mitcad#2527) and U not on
+  the other side, no word it does not know; the moves read back (X
   halved) and the cycles with their lines. `cam_post` refuses a program
   it does not pass. A LinuxCNC program is read as LinuxCNC reads it
   (`check_program_as` with `Control::LinuxCnc`, mitcad#2425): X a
@@ -931,8 +974,11 @@ its start.
 - **The simulation** (`simulate_turning`): the stock's section through
   the axis on a row of nodes along Z, each the ring between an inner and
   an outer radius; each tool takes away what its insert covers (the
-  nose's circle and its edge behind it, a grooving or parting insert's
-  width), threads take nothing (the crest stays in any section). It
+  nose's circle and its edge behind it, flat or, with the tool's back
+  angle, rising at it tangent to the nose so that a wall steeper than
+  the tool follows shows as a gouge, mitcad#2503; a grooving or parting
+  insert's width), threads take nothing (the crest stays in any
+  section). It
   gives the material left over the part, the places a tool cut into it
   and the rapids that cut. *Simulate* draws the section as the program
   leaves it revolved about the spindle axis (a band between the nodes
@@ -951,7 +997,7 @@ its start.
   and a remapped M6, canned cycles asked for and written as moves, a
   tapered thread's K, the refusals, and the reading refusing a Fanuc
   control's codes.
-- **LinuxCNC's own interpreter** (`core/cam/tests/linuxcnc_lathe_sim.rs`,
+- **LinuxCNC's own interpreter** (`core/cam/tests/sim/linuxcnc_lathe_sim.rs`,
   ctest `core.cam_linuxcnc_sim`, `MITCAD_LINUXCNC_SIM`, mitcad#2425):
   LinuxCNC's stand-alone interpreter `rs274` (its rs274ngc interpreter
   with the canon layer of `src/emc/sai`: `bin/rs274` of a `uspace` build
@@ -1200,7 +1246,9 @@ lathe check. The API in [commands.md](../core/model-api/src/commands.md),
 - **The lathe check:** the hand-over's jaws' face where it grips and
   where it pulls the part back to within the sub-spindle's travel, the
   synchronized speed within both spindles'; the sub-spindle's turning at
-  its speeds; its operations' tools, turning and live, where the
+  its speeds, and the main spindle's part-off it grips before at both
+  spindles' (it turns with the main spindle through it, mitcad#2527);
+  its operations' tools, turning and live, where the
   sub-spindle holds the part (pulled back by the hand-over's withdrawal:
   a point at `z` of its work coordinates is at `back + withdraw - z` of
   the main spindle's work Z, Y turned round) within the turret's travel,
@@ -1404,6 +1452,182 @@ zones".
   view, which keeps the part still, does not turn them round the spindle
   axis (the turret's body round the tool is turned).
 
+### Manual G-code
+
+Stock handling that no operation computes (mitcad#2506, GitHub
+mitcad/Mitcad#713): on a single-spindle lathe, the bar pulled forward
+after parting off (the spindle stopped, the parting blade gripping the
+bar, the chuck opened, the bar pulled, the chuck closed), a bar feeder's
+codes, a pause. The programmer writes it once into the setup, and the
+program is posted again without editing the file. The API in
+[commands.md](../core/model-api/src/commands.md), "CAM: manual G-code in
+a lathe setup".
+
+- **Kept with the setup:** `lathe.manual_code`, blocks of `name`, `after`
+  (the operation's id; the program's start when left out) and `text`. A
+  block goes with its operation when the operation is moved within the
+  setup; deleted or moved into another setup, the operation leaves its
+  blocks after the operation before it (or at the start). A suppressed
+  operation's blocks stay where it would be.
+- **The boundary** (`turning::post::manual_block`): before the block the
+  coolant off, the live tool and the C axis off, the tool at the tool
+  change position with the last tool and offset still indexed, the
+  spindle holding the part stopped (the sub-spindle's stop code after the
+  hand-over). The lines follow as they are (blank ones left out,
+  numbered with the others when the program numbers its lines), between
+  the comments `(MANUAL CODE BEGIN: <name>, NOT SIMULATED OR READ BACK)`
+  and `(MANUAL CODE END)`, written even with comments off. After it
+  nothing the block did is assumed: the dialect's modes (`modes`: Fanuc
+  `G21 G18 G40 G99`; LinuxCNC `G21 G18 G7 G90 G91.1 G40 G80 G95` and
+  `G64 P`) and the work offset (the sub-spindle's after the hand-over),
+  `M9` and the spindle's stop; the next operation writes its tool change
+  (the change position's rapid with both axes, the turret indexed even
+  when its tool was the last one), its spindle with its limit, its
+  coolant, its first move with both axes. After the last operation the
+  block comes before the shutdown's rapid to the change position and the
+  program's end. A setup without blocks writes the program as before.
+- **Refused in words** (`turning::manual_refusal`, by the dialect's
+  control, when the program is written): characters other than printable
+  ASCII, a comment that is not closed, a tape mark, an N word, the
+  program's end (M2, M30), the fencing comments' text; on a Fanuc control
+  an O word, M99 and lower case letters outside comments; on LinuxCNC an
+  O word other than a subroutine call (`o<name> call`). Runs of letters
+  are a macro's words (`GOTO`, `SIN`), not addresses. A block between the
+  hand-over's grip and its release (the parting off before the first
+  operation on the sub-spindle, while both spindles hold the part) is
+  refused, as is one after an operation the setup does not have.
+- **Outside the checks:** the read-back (`check_program_as`) passes over
+  the fenced lines and lists them (`ProgramCheck::manual`, `cam_post`'s
+  `manual`); after the closing comment it knows nothing but what the
+  program says again: the units, the modes, diameter mode on LinuxCNC,
+  the spindle stopped, no limit, where the tool is. A move after a block
+  before the units are stated again is refused. The simulation and the
+  lathe check do not see the block's moves.
+- **Tests:** `core/cam/src/turning/manual_tests.rs` (the exact Fanuc
+  program with Parting Off last and with an operation after it, line
+  numbers and comments off, LinuxCNC, the sub-spindle, the refusals, the
+  read-back across a block), `core/model-tests/cam/src/manual_tests.rs`
+  (posted, saved and read back, moved along when its operation is
+  deleted, the simulation unchanged, a setup without it as before).
+- **In the app:** the setup panel lists every block of the setup in its
+  order (*Manual G-code*: *Name*, *After*, *G-code* per row, *Add Manual
+  G-code*, each row moved up and down and removed:
+  `cam/CamManualCode.cpp`, the framework's `InputDef::orderedRows` and
+  `CommandState::moveRow`); the Browser lists each block under its setup
+  after the operation it follows (`BrowserNode::Type::CamManualCode`,
+  the program's icon, its tooltip saying it is manual code, neither
+  simulated nor read back), its menu's *Edit* opening the setup's panel,
+  its *Delete* and the Delete key taking it out of the setup (one undo
+  step with the rest of the selection, mitcad#2532), and a drag within
+  its setup moving it before or after an operation's or another block's
+  row, or to the program's start on the setup's row
+  (`cam::manualCodeMoved`, mitcad#2532). Tests:
+  `app/tests/cam_manual_code.cpp`, `app/tests/browser_order.cpp`,
+  `tools/ui-cam-manual-code-test.sh`.
+- **Not yet:** what the block's own lines do is not checked; a block is
+  not dragged into another setup (its operations are not the block's).
+
+## Sheet cutting
+
+mitcad#2553 (GitHub mitcad/Mitcad#732): sheet-metal Flat Patterns nested
+on a cut sheet and cut out of the sheet, from the Make workspace's Laser
+tab and the cut sheet's own tab (app/COMMANDS.md, *Nest Flat Patterns and
+the cutting program*; the model's side in commands.md, *Cutting a cut
+sheet with a plasma torch*). A cut sheet is not a milling setup: it has
+no stock body, no tool library and no machine, so it has a post of its
+own, `core/cam/src/sheet_cut.rs`, beside the milling posts and sharing
+their writer (`Output`), number format and notice.
+
+**The cutter and controller of the first release** (decided here, as the
+ticket asked for one): a **plasma torch on a grbl 1.1 controller**.
+Plasma is what cuts sheet metal on the hobby and small-shop tables the
+request comes from, and grbl is the controller the CAM posts already run
+through its own code (the ctest `core.cam_grbl_sim`), so the program is
+checked by the controller's parser and planner before it ships. The
+process's choices:
+
+- **The torch** is switched by grbl's spindle output: `M3 S1000` fires it
+  (the enable pin drives the torch's relay; S1000, grbl's default top
+  speed `$30`, sets the PWM output full on too), `M5` puts it out. grbl's
+  laser mode (`$32`) must be off, so that the torch stays on through the
+  moves of a cut.
+- **The heights** are on Z, measured from the sheet's top: across at the
+  travel height, down to the pierce height, the torch on, the pierce
+  delay (`G4 P`, seconds), down to the cut height at the feed, the cut,
+  the torch off, up to the travel height. A torch height controller of
+  the table's own keeps the cut height while it cuts; the program does not
+  drive one.
+- **The work zero** (`G54`) is the sheet's lower left corner on its top
+  surface, the cut sheet's own origin.
+- **Kerf compensation is in the path**, once: the model moves each loop
+  half the kerf away from the material (`cut_sheet::kerf_compensated`,
+  the same as the DXF and SVG exports) and the post writes the path as it
+  is. grbl has no cutter compensation (`G41`, `G42`), and none is written,
+  so it cannot be applied twice. The offset keeps lines as lines and arcs
+  as arcs (mitcad#2570): an arc keeps its centre and its radius grows or
+  shrinks by half the kerf; at a corner where an arc meets another piece
+  the path turns about the corner on an arc of half the kerf outside it,
+  or both pieces end where they cross inside it; two lines meet mitred as
+  before. Every point of the path lies exactly half the kerf from the
+  part, which the check for holes and notches narrower than the kerf
+  measures against the part's own lines and arcs.
+- **Order**: a loop only after every loop that lies inside it, so a
+  part's holes are cut before its outer boundary and a part nested in
+  another's hole before that hole (once a loop is cut, what it holds may
+  drop or tilt); then the nearest loop, the part being cut first.
+- **Direction**: the part on the torch's right (outer boundaries
+  clockwise, holes counter-clockwise), the square side of the usual
+  clockwise swirl.
+- **Lead-ins**: straight, from a pierce point in the scrap off the middle
+  of the loop's edge nearest the torch (an arc's middle, a whole circle's
+  point opposite its start), along the edge's normal; at most
+  `lead_in`, and at most half the way to the next path or the sheet's
+  edge, so a small hole is pierced in its middle and a pierce never lands
+  in a neighbour or off the sheet. No lead-out, no overcut.
+- **Bend lines and marks** (engrave, score) are never cut; a Flat
+  Pattern with a kerf bend's slits is refused (a laser cuts those, from
+  the DXF).
+- **Arcs as arcs** (mitcad#2570): the arcs and circles of a Flat Pattern
+  (round holes, rounded corners, reliefs) are written as `G2` (clockwise:
+  an outer boundary's) and `G3` (counter-clockwise: a hole's) with their
+  centre as `I` and `J` from the arc's start, a whole circle as two
+  halves from the point where the lead-in meets it. Other curves
+  (B-splines, polylines, an arc curving into the part tighter than half
+  the kerf) come as the lines of their points and are written as `G1`, as
+  is an arc whose chord is under 0.01 mm (its end could round to its
+  start, which grbl would cut as a whole turn).
+- The program starts with the experimental notice, the cut sheet's name
+  and notes (the sheet, the work zero, the kerf, the counts), `G90 G94
+  G17`, `G21` or `G20`, `G54`, `M5`, the travel height, a comment per
+  loop (`Part 3, hole`), and ends with `M5`, the work zero at the travel
+  height and `M30`. Comments lose grbl's realtime characters.
+
+**Checks**: the layout (overlaps, parts closer than the kerf, off the
+sheet, holes or notches narrower than the kerf, parts not worked out) is
+checked before the program is written, and the program is refused while
+one fails. Tests: `core/cam/src/sheet_cut.rs` (holes and parts in holes
+before what holds them; the part on the right and the pierce point in the
+scrap; lead-ins kept on the sheet and off a neighbour 2 mm away; the
+program read back by the G-code reader, every point on the plan, cuts at
+the cut height and the feed, moves across at the travel height, the torch
+on and off per loop, in inches too; settings refused in words; a plate
+with rounded corners and a round hole cut as four G2 and two G3 arcs
+about their centres, read back on their circles; an arc too short to
+tell from a point cut as a line),
+`core/model-drawing/src/cut_sheet.rs` (`kerf_tests`: arcs moved as arcs
+about their centres, the corners where an arc meets a line turned round
+outside and cut back inside, every point of the path exactly half the
+kerf from the part) and `core/cam/tests/sim/sheet_cut_sim.rs` (four
+parts, round holes as circles, a hole given as lines, a part in a hole
+and a plate with rounded corners, posted in millimetres and in inches
+with line numbers and run through grbl 1.1's own parser, arcs and
+planner: every line taken, no alarm, no hold, eight G3 and four G2
+lines, every point reached in order, every point of grbl's path on the
+program's, the extents with the arcs' extremes and the end within the
+rounding; ctest `core.cam_grbl_sim`). The dialogs:
+`tools/ui-nest-flat-patterns-test.sh` (app/COMMANDS.md, *Nest Flat
+Patterns and the cutting program*).
+
 ## API
 
 Commands and queries of `core/model-api` (`api/cam.rs`), documented in
@@ -1447,7 +1671,11 @@ api's rules: a message in words.
   toolpath previews while editing.
 - The **3D view** draws toolpaths: cuts in one color, plunges in
   another, rapids dashed, the tool at a chosen move; the machine's zones
-  when the check finds something.
+  when the check finds something. Each shown setup's stock before any
+  cut is drawn see-through round the part with its outline (mitcad#2552:
+  a mill's box in the work frame, a lathe's bar or tube on the spindle
+  axis, from the setup's `work`), also before Generate, and set aside
+  while Simulate shows the stock as cut.
 - *Simulate* plays the toolpaths back with the tool and the stock as cut
   at the slider's place (`cam_simulate` read once with snapshots); at the
   end the stock is shaded by the material it leaves over the part (grey
@@ -1501,13 +1729,21 @@ these crates.
 ### Phase 2: the model, the file and the API
 
 - `core/model/src/cam/`: `CamState` (the design file's `cam` section:
-  machines and setups, read tolerantly), `CamSetup`, `CamOperation`
+  machines and setups, read tolerantly: a machine's controller or a
+  setup's dialect MitCad does not write for, from another build, is kept
+  and only the post refuses it, mitcad#2531; a section that still cannot
+  be read, a value this build does not take or two operations with one
+  id, leaves the design opening without its CAM with a warning, and the
+  application asks before a save over the file drops it, mitcad#2581),
+  `CamSetup`, `CamOperation`
   (kinds, inputs, values as `CamValue`: numbers or expressions with
   units), `CamMachine` (a machine with its `CamToolLibrary`; `CamTool`
   with its kind: flat, ball, bull, drill, chamfer, engraver; shank
   diameter, stick-out, holder), `outline` (the kernel's curves and the
   sketch's segments as outlines of lines and arcs in the work plane,
-  chained and nested into regions), `library` (machine files in the
+  chained, each end to the nearest other end within 0.001 mm so that a
+  curve sampled in pieces shorter than that is followed piece by piece,
+  and nested into regions), `library` (machine files in the
   user's and the project's folder).
 - `core/model/src/document/cam.rs`: the commands (one undo step each,
   no recompute), the work frame and stock, the operations' outlines and

@@ -21,8 +21,11 @@
 //! `Summary/Author`), `date` (the sheet's,
 //! else today's), `scale`, `sheet` (`1/2`), `sheet_number`, `sheets`,
 //! `size`, `units`, `projection`, `revision` (the latest one's letter, `-`
-//! before the first); any other name is a property of the drawing's
-//! component (`Key` or `Set/Key`), empty when it has none.
+//! before the first); `param:Name` the value of the design's parameter
+//! `Name` (mitcad#2483, as the sheet's notes show it:
+//! [`DrawingTemplatesOps::parameter_text`]; the reference itself when the
+//! design has no such parameter); any other name is a property of the
+//! drawing's component (`Key` or `Set/Key`), empty when it has none.
 
 use std::path::Path;
 
@@ -31,6 +34,8 @@ use serde_json::{Value, json};
 
 use super::ApiError;
 use super::prelude::*;
+use mitcad_model::drawing::parameter_text;
+use mitcad_model::expr::DEFAULT_DECIMALS;
 use mitcad_model::ids::ComponentUid;
 use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::Kernel;
@@ -254,6 +259,22 @@ pub(super) trait DrawingTemplatesOps<K: Kernel> {
     /// sheet without a title block is refused unless the command puts it
     /// back.
     fn edit_drawing_title_block(&mut self, c: TitleBlockCommand) -> Result<Value, ApiError>;
+
+    /// What a drawing's text shows for the design's parameter `name`
+    /// (mitcad#2483): a number in its unit as Edit Parameters shows it
+    /// (`120 mm`, an angle's degrees as `°`), a text parameter's text; none
+    /// when the design has no such parameter.
+    fn parameter_text(&self, name: &str) -> Option<String>;
+
+    /// A note's or a text's words with their parameter references
+    /// (`{param:Name}`) filled in, its other braces as they are; the
+    /// parameters it refers to that the design lacks, each once, go to
+    /// `missing` (their references stay as written).
+    fn with_parameters(&self, text: &str, missing: &mut Vec<String>) -> String;
+
+    /// The parameters a sheet's title block refers to that the design
+    /// lacks, each once; none when the sheet draws no title block.
+    fn missing_title_parameters(&self, sheet: &DrawingSheet) -> Vec<String>;
 }
 
 impl<K: Kernel> DrawingTemplatesOps<K> for Document<K> {
@@ -486,6 +507,49 @@ impl<K: Kernel> DrawingTemplatesOps<K> for Document<K> {
         self.set_drawing(old.uid, label, changed)?;
         Ok(json!({"drawing": old.uid, "sheet": c.sheet}))
     }
+
+    fn parameter_text(&self, name: &str) -> Option<String> {
+        let parameters = self.parameters();
+        let parameter = parameters.get(parameters.find(name)?)?;
+        if parameter.is_text() {
+            return Some(parameter.text().unwrap_or_default().to_owned());
+        }
+        let text = parameter.formatted_value(DEFAULT_DECIMALS);
+        // An angle shown to a reader in degrees: `°`, not the expressions'
+        // `deg`.
+        Some(match text.strip_suffix(" deg") {
+            Some(number) => format!("{number}°"),
+            None => text,
+        })
+    }
+
+    fn with_parameters(&self, text: &str, missing: &mut Vec<String>) -> String {
+        parameter_text::fill_references(text, &mut |name| {
+            let value = self.parameter_text(name);
+            if value.is_none() && !missing.iter().any(|m| m == name) {
+                missing.push(name.to_owned());
+            }
+            value
+        })
+    }
+
+    fn missing_title_parameters(&self, sheet: &DrawingSheet) -> Vec<String> {
+        let Some(t) = sheet.template.as_ref().filter(|t| t.show_title_block) else {
+            return Vec::new();
+        };
+        let mut missing: Vec<String> = Vec::new();
+        for field in &t.title_block.fields {
+            for key in template::keys(&field.text) {
+                if let Some(name) = parameter_text::referenced(&key)
+                    && self.parameters().find(name).is_none()
+                    && !missing.iter().any(|m| m == name)
+                {
+                    missing.push(name.to_owned());
+                }
+            }
+        }
+        missing
+    }
 }
 
 /// The document's methods used only in this module, as an
@@ -568,6 +632,13 @@ impl<K: Kernel> DrawingTemplatesLocal<K> for Document<K> {
                 .component_stored_property(component, "Mass")
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| self.shown_mass(c.drawing)),
+            // A parameter's value (mitcad#2483), its reference as written
+            // when the design has no such parameter.
+            other if parameter_text::referenced(other).is_some() => {
+                let name = parameter_text::referenced(other).unwrap_or_default();
+                self.parameter_text(name)
+                    .unwrap_or_else(|| parameter_text::reference(name))
+            }
             other => property(other).unwrap_or_default(),
         }
     }

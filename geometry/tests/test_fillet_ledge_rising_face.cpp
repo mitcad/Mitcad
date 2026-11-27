@@ -50,6 +50,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/profile.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -240,7 +241,7 @@ void rounded_at_4() { rounded_at(4.0); }
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_ledge_rising_face) {
   test::guarded("ledge rounded at 1.5", test::rounded_at_1_5);
   test::guarded("ledge rounded at 2", test::rounded_at_2);
   test::guarded("ledge rounded at 4", test::rounded_at_4);

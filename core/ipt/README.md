@@ -1820,7 +1820,7 @@ to 2023, sub-assemblies nested up to seven deep):
   labels, placements, range boxes, display transforms, the occurrence
   table, a part's own version id); the translation report of the
   converted assembly and its OLE package (mitcad#1913).
-- `tests/corpus.rs`: every file under `MITCAD_IPT_CORPUS` opens, its B-rep
+- `tests/read/corpus.rs`: every file under `MITCAD_IPT_CORPUS` opens, its B-rep
   records split out of their segments and every body converts cleanly;
   every segment splits; every parameter reads and its expression
   evaluates to its stored value; features name their history states;

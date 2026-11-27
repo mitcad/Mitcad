@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+# Sketch edits asked for while a job computes the model (mitcad#2500,
+# GitHub mitcad/Mitcad#706: Make Driven and Delete on a dimension read the
+# document's undo depth during a job, and the ModelBusy out of the menu's
+# handler ended the application on macOS), on sketch-busy-edits.json
+# (Sketch1: a line c3 with its length dimensioned 40 mm, the value at
+# (0, 8); a line c6 with its length dimensioned 30 mm, the value at
+# (-5, -23)). A job of the test's own holds the model (hold-model-job),
+# with nothing to give way, as a job the user started:
+#   1. The 40 mm dimension's context menu is open as the job begins; its
+#      Make Driven waits for the job instead of reading the document,
+#      nothing changes meanwhile, and once the job has ended the dimension
+#      is made driven in one undo step, which one Undo takes back.
+#   2. The 30 mm dimension selected, Delete while the job holds the model
+#      waits for it; once the job has ended the dimension is deleted in one
+#      undo step ("Delete in Sketch1"), which one Undo takes back.
+# Neither reads the document during the job: no "The document was read
+# while a job computes it", no input dropped.
+# Run by tools/ui-sketch-busy-edits-test.sh (Linux),
+# tools/ui-windows-sketch-busy-edits-test.ps1 (Windows) and
+# tools/ui-macos-sketch-busy-edits-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. Make Driven chosen while the job holds the model.
+mark
+capture-undo-depth before_driven
+sketch-click 0 8 right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Make Driven'
+hold-model-job true
+wait-log '^Computing test hold started$'
+expect-model-busy true
+popup-now 'Make Driven'
+wait-log '^Sketch Make Driven waits until the model is idle$'
+expect-model-busy true
+# Nothing done meanwhile: the lines below come after this mark, once the
+# job is released (expect-no-log would wait for the model to be idle).
+mark
+hold-model-job false
+wait-log '^Computing test hold done in ' 30
+wait-log '^Sketch Make Driven goes on: the model is idle$' 30
+wait-log '^Dimension k[0-9]+ made driven: .*40[.]00' 30
+wait-idle
+expect-undo-depth ${before_driven} 1
+mark
+command edit.undo
+wait-log '^Undo: Make Driven in Sketch1$' 30
+wait-idle
+expect-undo-depth ${before_driven} 0
+
+# 2. Delete pressed while the job holds the model.
+mark
+sketch-click -5 -23
+wait-log '^Selected: 1 dimension' 30
+wait-idle
+capture-undo-depth before_delete
+mark
+hold-model-job true
+wait-log '^Computing test hold started$'
+expect-model-busy true
+key-now Delete
+wait-log '^(Command sketch[.]delete|Sketch Delete) waits until the model is idle$'
+expect-model-busy true
+mark
+hold-model-job false
+wait-log '^Computing test hold done in ' 30
+wait-log '^Deleted k[0-9]+$' 30
+wait-idle
+expect-undo-depth ${before_delete} 1
+mark
+command edit.undo
+wait-log '^Undo: Delete in Sketch1$' 30
+wait-idle
+expect-undo-depth ${before_delete} 0
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'The document was read while a job computes it|Input dropped while the model computes|Sketch action refused|TestDriver: FAIL'

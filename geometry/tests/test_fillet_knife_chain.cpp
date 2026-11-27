@@ -50,6 +50,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -200,7 +201,7 @@ void test_fillet_of_the_chain() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_knife_chain) {
   test::guarded("knife_edge_alone", test::test_knife_edge_alone);
   test::guarded("knife_into_square_edge", test::test_knife_into_square_edge);
   test::guarded("fillet_of_the_chain", test::test_fillet_of_the_chain);

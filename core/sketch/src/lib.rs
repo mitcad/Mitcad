@@ -232,6 +232,11 @@ mod offset_hold_2278_tests;
 // are (mitcad#2408).
 #[cfg(test)]
 mod followed_ellipse_2408_tests;
+// Curves of the automatic face outline chosen to bound profiles
+// (mitcad#2551).
+pub mod boundary;
+#[cfg(test)]
+mod boundary_2551_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -1839,6 +1844,29 @@ pub struct Projection {
     /// empty sketch looks the same in the file).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub automatic: bool,
+    /// The curves of an automatic outline that the user chose to bound
+    /// profiles (Profile Boundary, mitcad#2551): they count as the user's
+    /// own curves, so that a circle of the outline inside an area the
+    /// user's curves close (an inset of the outline) makes a hole in it.
+    /// They stay curves of this projection and follow its source. Only
+    /// with `automatic`; curves the projection no longer lists are left
+    /// out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "curves_serde")]
+    pub boundaries: Vec<EntityUid>,
+}
+
+impl Projection {
+    /// Leaves out of [`Projection::boundaries`] the curves it no longer
+    /// lists (removed, converted or replaced by Project Again).
+    pub fn keep_listed_boundaries(&mut self) {
+        let listed: std::collections::BTreeSet<EntityUid> = self
+            .entities
+            .iter()
+            .filter(|r| !r.is_point())
+            .map(|r| r.uid())
+            .collect();
+        self.boundaries.retain(|c| listed.contains(c));
+    }
 }
 
 /// A sketch text whose text is a text parameter's value (mitcad#664):

@@ -239,6 +239,14 @@ QJsonObject turningFields(const CommandState& state, const QString& type, QStrin
   if (hasSide(type)) {
     kind.insert(QStringLiteral("side"), state.choice(QStringLiteral("side")));
   }
+  // How a finish (mitcad#2503) or a roughing (mitcad#2549) goes into
+  // undercuts; left out: not at all.
+  if (type == QStringLiteral("turn_finish") || type == QStringLiteral("turn_rough")) {
+    const QString plunge = state.choice(QStringLiteral("plunge"));
+    if (!plunge.isEmpty() && plunge != QStringLiteral("none")) {
+      kind.insert(QStringLiteral("plunge"), plunge);
+    }
+  }
   const auto kindValue = [&](const char* id, const QString& label) {
     const QJsonValue v = value(id, ValueKind::Length, label);
     if (!v.isNull()) {
@@ -416,6 +424,21 @@ CommandDef MainWindow::camTurningCommand(const QString& type) {
                           .withOnChange(sideChanged)
                           .withTooltip(tr("The outside diameters or the bore")));
   }
+  if (type == QStringLiteral("turn_finish") || type == QStringLiteral("turn_rough")) {
+    // Into undercuts (mitcad#2503, roughing mitcad#2549): Tool geometry
+    // down walls as steep as the tool's back angle less 2 degrees (its
+    // insert and holder), Free down every wall. A finish never deeper
+    // than the insert's depth of cut, unless a roughing before it leaves
+    // less; a roughing pocket by pocket, written as moves.
+    const bool rough = type == QStringLiteral("turn_rough");
+    def.inputs.append(choiceInput(QStringLiteral("plunge"), tr("Plunge"),
+                                  {{QStringLiteral("none"), tr("Don't plunge")},
+                                   {QStringLiteral("tool"), tr("Tool geometry")},
+                                   {QStringLiteral("free"), tr("Free")}},
+                                  QStringLiteral("none"))
+                          .withTooltip(rough ? tr("How the passes go into undercuts: walls falling towards the chuck")
+                                             : tr("How the finish goes into undercuts: walls falling towards the chuck")));
+  }
   if (picksFace(type)) {
     def.inputs.append(selectionInput(QStringLiteral("face"), tr("Face"), SelectKind::Face, 0, 1)
                           .withAccepts([](const SelectionItem& item) { return item.geometry == QStringLiteral("cylinder"); })
@@ -559,6 +582,8 @@ CommandDef MainWindow::camTurningCommand(const QString& type) {
     if (kind.contains(QStringLiteral("side"))) {
       state.setChoice(QStringLiteral("side"), str(kind, "side"));
     }
+    state.setChoice(QStringLiteral("plunge"),
+                    kind.contains(QStringLiteral("plunge")) ? str(kind, "plunge") : QStringLiteral("none"));
     for (const char* key : {"z_from", "z_to", "z", "pitch", "diameter", "z_start", "z_end", "depth"}) {
       loadTurningValue(state, QString::fromLatin1(key), kind.value(QLatin1String(key)), ValueKind::Length, context);
     }

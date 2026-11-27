@@ -105,11 +105,13 @@ expect_none() {
 last_line() { grep -F -- "$1" "$UI_LOG" | tail -1; }
 
 # extrude_square: Extrude, which takes the newest free profile (the
-# square), its preview computed with both blocks drawn.
+# square), 10 mm typed (a new Extrude starts at 0 mm and builds nothing,
+# mitcad#2481), its preview computed with both blocks drawn.
 extrude_square() {
   ui_mark
   ui_step "extrude (E)"                  ui_key e
   ui_expect_new "Command Extrude started" "Extrude started"
+  ui_step "distance 10 mm"               ui_type_in "Panel Extrude input distance" "10 mm"
   ui_expect_new "Preview Extrude: ok" "the square's preview computed"
   ui_expect_new "Preview bodies: " "the preview drawn"
   last_line "Preview bodies: " | grep -qF "F2.b0 at" || ui_fail "the preview does not draw Body1"
@@ -357,6 +359,7 @@ echo "--- During Extrude: a component's light bulb works, other browser actions 
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Command Extrude started" "Extrude started"
+ui_step "distance 10 mm"                 ui_type_in "Panel Extrude input distance" "10 mm"
 ui_expect_new "Preview Extrude: ok" "the square's preview computed"
 ui_mark
 ui_step "hide Part:1"                    ui_click_logged "Browser eye Root/Part:1"

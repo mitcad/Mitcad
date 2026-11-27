@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: MIT
+# A lathe setup's manual G-code in the setup panel and the Browser
+# (mitcad#2506, mitcad#2532, app/COMMANDS.md "Turning in the CNC group"),
+# the input script of tools/ui-cam-manual-code-test.sh (Linux), on
+# tools/ui-scripts/cam-turning.json (a 40 x 30 block 10 high turned about
+# the design's Z, a lathe on the Fanuc turning dialect):
+#
+#   1. New Setup: Add Manual G-code three times (Alpha, Beta, Gamma, each
+#      a dwell of its own); ▲ on Gamma and ▼ on Alpha (Gamma, Alpha,
+#      Beta), each row's values going with it; ✕ on Beta; OK: the setup
+#      keeps Gamma and Alpha at the program's start, in that order;
+#   2. Turn Facing and Turn Roughing;
+#   3. Alpha dragged onto Turn Roughing 1's row (its middle: before it): it
+#      follows Turn Facing 1, one undo step;
+#   4. Gamma selected and the Delete key: out of the setup, one undo step;
+#      Undo brings it back;
+#   5. Generate and Post Process… (the wrapper reads the program: Gamma,
+#      Turn Facing 1, Alpha, Turn Roughing 1 in that order, no Beta).
+wait-idle
+command view.fit
+wait-idle
+
+mark
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+
+# 1. New Setup with three blocks, two moved and one removed.
+mark
+command make.cam_setup
+wait-log '^Command New Setup started'
+wait-log '^CAM setup panel: machine lathe$'
+type-in '^Panel New Setup input side at ' '2 mm'
+type-in '^Panel New Setup input top at ' '1 mm'
+type-in '^Panel New Setup input bottom at ' '5 mm'
+
+button '.*' add_manual_code
+wait-log '^Panel New Setup input manual_code[.]0[.]code at '
+type-in '^Panel New Setup input manual_code[.]0[.]name at ' 'Alpha'
+type-in '^Panel New Setup input manual_code[.]0[.]code at ' 'G4 X0.1'
+button '.*' add_manual_code
+wait-log '^Panel New Setup input manual_code[.]1[.]code at '
+type-in '^Panel New Setup input manual_code[.]1[.]name at ' 'Beta'
+type-in '^Panel New Setup input manual_code[.]1[.]code at ' 'G4 X0.2'
+button '.*' add_manual_code
+wait-log '^Panel New Setup input manual_code[.]2[.]code at '
+type-in '^Panel New Setup input manual_code[.]2[.]name at ' 'Gamma'
+type-in '^Panel New Setup input manual_code[.]2[.]code at ' 'G4 X0.3'
+expect-input-text manual_code.0.name '^Alpha$'
+expect-input-text manual_code.1.name '^Beta$'
+expect-input-text manual_code.2.name '^Gamma$'
+
+# ▲ on the third row: Alpha, Gamma, Beta.
+mark
+button '.*' row_up_manual_code.2
+wait-log '^New Setup: moved manual_code row 3 to 2$'
+expect-input-text manual_code.1.name '^Gamma$'
+expect-input-text manual_code.1.code '^G4 X0[.]3$'
+expect-input-text manual_code.2.name '^Beta$'
+
+# ▼ on the first row: Gamma, Alpha, Beta.
+mark
+button '.*' row_down_manual_code.0
+wait-log '^New Setup: moved manual_code row 1 to 2$'
+expect-input-text manual_code.0.name '^Gamma$'
+expect-input-text manual_code.0.code '^G4 X0[.]3$'
+expect-input-text manual_code.1.name '^Alpha$'
+expect-input-text manual_code.1.code '^G4 X0[.]1$'
+
+# ✕ on Beta, the last row: Gamma, Alpha.
+mark
+button '.*' remove_manual_code.2
+wait-log '^New Setup: removed manual_code row 3$'
+expect-input-text manual_code.0.name '^Gamma$'
+expect-input-text manual_code.1.name '^Alpha$'
+
+mark
+button '.*' commandOk
+wait-log '^CAM setup added: Setup 1$'
+wait-log '^Browser CAM: Setup 1 \[Gamma manual, Alpha manual\]$'
+
+# 2. Two operations, the blocks before them at the program's start.
+mark
+command make.cam_turn_face
+wait-log '^Command Turn Facing started'
+wait-log '^CAM turning panel turn_face: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Turn Facing 1 to Setup 1$'
+
+mark
+command make.cam_turn_rough
+wait-log '^Command Turn Roughing started'
+wait-log '^CAM turning panel turn_rough: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Turn Roughing 1 to Setup 1$'
+wait-log '^Browser CAM: Setup 1 \[Gamma manual, Alpha manual, Turn Facing 1 [a-z_]+, Turn Roughing 1 [a-z_]+\]$'
+wait-idle
+capture-undo-depth start
+
+# 3. Alpha dragged before Turn Roughing 1: after Turn Facing 1.
+mark
+drag-logged '^Browser Root/CAM/Setup 1/Alpha at ' '^Browser Root/CAM/Setup 1/Turn Roughing 1 at '
+wait-log '^Browser drop aim before Root/CAM/Setup 1/Turn Roughing 1: allowed$'
+wait-log '^Browser drop: Alpha before Root/CAM/Setup 1/Turn Roughing 1$'
+wait-log '^CAM manual G-code Alpha moved after Turn Facing 1 of Setup 1$'
+wait-log '^Browser CAM: Setup 1 \[Gamma manual, Turn Facing 1 [a-z_]+, Alpha manual, Turn Roughing 1 [a-z_]+\]$'
+wait-idle
+expect-undo-depth ${start} 1
+
+# 4. Gamma selected and the Delete key: one undo step; Undo brings it back.
+mark
+click-logged '^Browser Root/CAM/Setup 1/Gamma at '
+focus-main
+focus-widget modelBrowserTree
+key Delete
+wait-log '^Deleted manual G-code Gamma$'
+wait-log '^Browser CAM: Setup 1 \[Turn Facing 1 [a-z_]+, Alpha manual, Turn Roughing 1 [a-z_]+\]$'
+wait-idle
+expect-undo-depth ${start} 2
+
+mark
+command edit.undo
+wait-log '^Browser CAM: Setup 1 \[Gamma manual, Turn Facing 1 [a-z_]+, Alpha manual, Turn Roughing 1 [a-z_]+\]$'
+wait-idle
+expect-undo-depth ${start} 1
+
+# 5. Generate and Post Process… to the lathe's Fanuc dialect.
+mark
+command make.cam_generate
+wait-log '^CAM states: Setup 1: Turn Facing 1 up_to_date, Turn Roughing 1 up_to_date$' 60
+expect-never 'CAM generate .* failed'
+
+mark
+command make.cam_post
+focus-dialog '^Post Process$'
+wait-log '^CAM post dialog: setup Setup 1, fanuc_turning, millimetres$'
+button '^Post'
+focus-dialog '^Save G-code$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/manual.nc"
+key Return
+wait-log '^CAM post: 2 manual G-code block\(s\), not simulated or read back$' 30
+wait-log '^CAM post written: .*manual[.]nc: fanuc_turning, millimetres, [1-9][0-9]* lines$' 30
+expect-file "${MITCAD_TEST_WORK}/manual.nc"
+expect-never 'TestDriver: FAIL|CAM operation refused|CAM setup refused|CAM post refused|Cannot delete'

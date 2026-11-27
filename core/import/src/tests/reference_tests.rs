@@ -103,6 +103,7 @@ fn components_of_other_documents_are_filled_from_their_imports() {
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let outcome = link_references(&mut doc, &mut report, &sources);
@@ -237,6 +238,7 @@ fn components_filled_before_the_replay_take_the_joints_in_place() {
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let mut doc = Document::new(MockKernel::default());
@@ -358,6 +360,7 @@ fn a_combine_takes_a_tool_in_a_component_of_another_document() {
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let dump = cut_by_a_referenced_body_dump(guid);
@@ -481,6 +484,7 @@ fn a_component_placed_twice_inside_a_copy_gets_a_copy_for_each_arrangement() {
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let mut sub = Document::new(MockKernel::default());
@@ -505,6 +509,7 @@ fn a_component_placed_twice_inside_a_copy_gets_a_copy_for_each_arrangement() {
             name: "Sub".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let mut doc = Document::new(MockKernel::default());
@@ -576,6 +581,7 @@ fn a_tool_of_the_part_placed_twice_is_linked_through_the_occurrence_its_context_
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let mut v = serde_json::to_value(cut_by_a_referenced_body_dump(guid)).unwrap();
@@ -648,6 +654,7 @@ fn two_occurrences_of_one_part_named_by_one_item_get_a_copy_each() {
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let mut v = serde_json::to_value(cut_by_a_referenced_body_dump(guid)).unwrap();
@@ -775,6 +782,7 @@ fn an_occurrence_placed_along_paths_inside_it_takes_their_placement() {
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let placed = |sources: Option<&HashMap<String, Referenced<'_, MockKernel>>>| {
@@ -833,6 +841,7 @@ fn a_grounded_occurrence_placed_along_paths_inside_it_takes_their_placement() {
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let placed = |sources: Option<&HashMap<String, Referenced<'_, MockKernel>>>| {
@@ -880,6 +889,105 @@ fn a_grounded_occurrence_placed_along_paths_inside_it_takes_their_placement() {
     );
 }
 
+/// A design that places a level inside a copy otherwise than the other
+/// document does (mitcad#2492: an assembly of an older layout whose wheel
+/// the other document leaves where it was inserted; a lift arm the shell
+/// placing it leaves elsewhere): the part has two pins (3 and 6 cm up),
+/// the paths the design stores through its occurrence put the first where
+/// the part has it and the second 9 cm up. The second pin's occurrence in
+/// the copy is placed there (a position inside the copy at the end of the
+/// timeline); the first keeps its place and makes none. Before, the paths
+/// gave only the occurrence's own placement, and the second pin stayed at
+/// 6 cm.
+#[test]
+fn the_paths_through_an_occurrence_place_the_levels_inside_its_copy() {
+    let mut v = serde_json::to_value(part_dump()).unwrap();
+    let pin = |id: u64, z: f64, guid: &str| {
+        json!({
+            "component": "Pin",
+            "transform": [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, z],
+                          [0.0, 0.0, 0.0, 1.0]],
+            "children": [],
+            "_f3d": {"object_id": id, "component_object": 5, "guids": [guid]}
+        })
+    };
+    v["occurrences"] = json!([
+        pin(80, 3.0, "c0ffee00-0000-4000-8000-0000000000b1"),
+        pin(81, 6.0, "c0ffee00-0000-4000-8000-0000000000b2")
+    ]);
+    let mut part = Document::new(MockKernel::default());
+    let part_report = import(&mut part, &dump(v));
+    assert_eq!(part_report.components.occurrence_objects.len(), 2);
+    let up = |z: f64| {
+        json!([{"index": 0, "object_id": 50, "transform": [
+            [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, z], [0.0, 0.0, 0.0, 1.0]]}])
+    };
+    let mut a = serde_json::to_value(placed_inside_dump()).unwrap();
+    a["occurrences"][0]["_f3d"]["inside_placements"] = json!([
+        {"inner": [80], "placements": up(3.0)},
+        {"inner": [81], "placements": up(9.0)}
+    ]);
+    let assembly = dump(a);
+    let stored = HashMap::new();
+    let sources = HashMap::from([(
+        PART_URN.to_owned(),
+        Referenced {
+            document: &part,
+            occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
+            name: "Part".to_owned(),
+            stored_bodies: &stored,
+            entity_bodies: &NO_ENTITIES,
+            object_guids: None,
+        },
+    )]);
+    let positions = crate::references::inside_positions(
+        &assembly,
+        &crate::components::Components::default(),
+        &sources,
+        &HashMap::new(),
+    );
+    // (Without the design's occurrences no path starts.)
+    assert!(positions.is_empty(), "{positions:?}");
+    let mut doc = Document::new(MockKernel::default());
+    let report = crate::import_design_with(
+        &mut doc,
+        &assembly,
+        &mut NoGeometry,
+        &Options::default(),
+        Some(&sources),
+    );
+    let text = report.text();
+    // One position, for the second pin.
+    let inside: Vec<_> = report
+        .components
+        .positions_inside
+        .iter()
+        .filter(|p| p.index == crate::references::INSIDE_PLACEMENTS_INDEX)
+        .collect();
+    assert_eq!(inside.len(), 1, "{inside:?}\n{text}");
+    assert_eq!(
+        inside[0].inner,
+        vec!["c0ffee00-0000-4000-8000-0000000000b2".to_owned()]
+    );
+    let z = |guid: &str| {
+        let o = report.components.occurrence_guids[guid]
+            .iter()
+            .filter_map(|o| doc.assembly().occurrence(*o))
+            .find(|o| !o.parent.is_root())
+            .unwrap_or_else(|| panic!("the copy's occurrence of {guid}\n{text}"));
+        o.transform.translation[2]
+    };
+    assert!(
+        (z("c0ffee00-0000-4000-8000-0000000000b1") - 30.0).abs() < 1e-6,
+        "{text}"
+    );
+    assert!(
+        (z("c0ffee00-0000-4000-8000-0000000000b2") - 90.0).abs() < 1e-6,
+        "{text}"
+    );
+}
+
 #[test]
 fn the_copies_of_a_document_show_its_sketches_as_its_import_does() {
     // mitcad#2449: the copies of another document's design showed the
@@ -909,6 +1017,7 @@ fn the_copies_of_a_document_show_its_sketches_as_its_import_does() {
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
+            object_guids: None,
         },
     )]);
     let outcome = link_references(&mut doc, &mut report, &sources);
@@ -937,5 +1046,193 @@ fn the_copies_of_a_document_show_its_sketches_as_its_import_does() {
             .contains("shown or hidden otherwise than in their documents"),
         "{}",
         report.text()
+    );
+}
+
+const MID_URN: &str = "urn:mitcad.test:fs.file:vf.mid?version=1";
+
+/// Paths that go on more than one document deep (mitcad#2528: the board
+/// inside the electronics stack, the bearings inside the lift system inside
+/// the shell). Three documents: the part (a pin 3 cm up), a middle
+/// assembly placing the part 1 cm along x and two plates of its own, and a
+/// design placing the middle assembly. The design's paths through it keep
+/// the plates where the middle assembly has them (its own placement), move
+/// the part to 2 cm along x, and leave the pin where the middle assembly
+/// has it (1 cm along x, 3 cm up). The path to the pin names the part by
+/// the middle assembly's object id and the pin by the part's: it is
+/// resolved through the middle assembly's import (`object_guids`, which
+/// knows the part's), and kept though the pin is where the middle assembly
+/// has it, because the part above it moves. Before, the path was not
+/// resolved and the pin moved with the part, 1 cm away from the file's
+/// place.
+#[test]
+fn the_paths_more_than_one_document_deep_place_the_levels_there() {
+    let mut part = Document::new(MockKernel::default());
+    let part_report = import(&mut part, &part_dump());
+    let pin_guid = "c0ffee00-0000-4000-8000-0000000000b1";
+    assert_eq!(
+        part_report.components.object_guids.occurrences[&80].guid,
+        pin_guid
+    );
+    let stored = HashMap::new();
+    let part_sources = HashMap::from([(
+        PART_URN.to_owned(),
+        Referenced {
+            document: &part,
+            occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
+            name: "Part".to_owned(),
+            stored_bodies: &stored,
+            entity_bodies: &NO_ENTITIES,
+            object_guids: Some(part_report.components.object_guids.clone()),
+        },
+    )]);
+    let moved = |x: f64, y: f64, z: f64| {
+        json!([
+            [1.0, 0.0, 0.0, x],
+            [0.0, 1.0, 0.0, y],
+            [0.0, 0.0, 1.0, z],
+            [0.0, 0.0, 0.0, 1.0]
+        ])
+    };
+    let step = |t: Value| json!([{"index": 0, "object_id": 50, "transform": t}]);
+    let plate = |id: u64, y: f64, guid: &str| {
+        json!({
+            "component": "Plate",
+            "transform": moved(0.0, y, 0.0),
+            "children": [],
+            "_f3d": {"object_id": id, "component_object": 6, "guids": [guid]}
+        })
+    };
+    let part_guid = "c0ffee00-0000-4000-8000-0000000000c1";
+    let middle = dump(json!({
+        "schema": "mitcad-f3d-dump", "schema_version": 2,
+        "source": {"mode": "f3d_stream", "file": "middle.f3d"},
+        "document": {"name": "Middle", "root_component": "Middle"},
+        "components": [{"name": "Middle", "is_root": true, "_f3d": {"object_id": 1}},
+                       {"name": "Plate", "_f3d": {"object_id": 6}}],
+        "occurrences": [
+            {
+                "transform": moved(1.0, 0.0, 0.0),
+                "isReferencedComponent": true,
+                "children": [],
+                "_f3d": {"object_id": 20, "component_object": 1,
+                         "external_key": "00000000000000aa", "external_document": PART_URN,
+                         "guids": [part_guid], "placements": step(moved(1.0, 0.0, 0.0))}
+            },
+            plate(21, 5.0, "c0ffee00-0000-4000-8000-0000000000c2"),
+            plate(22, 9.0, "c0ffee00-0000-4000-8000-0000000000c3")
+        ],
+        "timeline": {"items": [{
+            "index": 0, "name": "Component Insert1", "objectType": "ComponentInsert",
+            "_f3d": {"component": 1, "object_id": 50}
+        }]},
+        "_f3d": {"external_documents": [{"key": "00000000000000aa", "urn": PART_URN, "version": 1}]}
+    }));
+    let mut mid = Document::new(MockKernel::default());
+    let mid_report = crate::import_design_with(
+        &mut mid,
+        &middle,
+        &mut NoGeometry,
+        &Options::default(),
+        Some(&part_sources),
+    );
+    // The middle assembly knows its part's occurrence by its object id, and
+    // the pin inside it by the part's.
+    let level = &mid_report.components.object_guids.occurrences[&20];
+    assert_eq!(level.guid, part_guid, "{}", mid_report.text());
+    let inside = level.inside.as_ref().expect("the part's object ids");
+    assert_eq!(inside.occurrences[&80].guid, pin_guid);
+    assert!(
+        mid_report.components.object_guids.occurrences[&21]
+            .inside
+            .is_none()
+    );
+
+    let sources = HashMap::from([(
+        MID_URN.to_owned(),
+        Referenced {
+            document: &mid,
+            occurrence_guids: &mid_report.components.occurrence_guids,
+            occurrence_objects: &mid_report.components.occurrence_objects,
+            name: "Middle".to_owned(),
+            stored_bodies: &stored,
+            entity_bodies: &NO_ENTITIES,
+            object_guids: Some(mid_report.components.object_guids.clone()),
+        },
+    )]);
+    let design = dump(json!({
+        "schema": "mitcad-f3d-dump", "schema_version": 2,
+        "source": {"mode": "f3d_stream", "file": "design.f3d"},
+        "document": {"name": "Design", "root_component": "Design"},
+        "components": [{"name": "Design", "is_root": true, "_f3d": {"object_id": 1}}],
+        "occurrences": [{
+            "transform": moved(0.0, 0.0, 0.0),
+            "isReferencedComponent": true,
+            "children": [],
+            "_f3d": {"object_id": 10, "component_object": 1, "external_key": "00000000000000bb",
+                     "external_document": MID_URN,
+                     "guids": ["c0ffee00-0000-4000-8000-0000000000a1"],
+                     "placements": step(moved(0.0, 0.0, 0.0)),
+                     "inside_placements": [
+                         {"inner": [21], "placements": step(moved(0.0, 5.0, 0.0))},
+                         {"inner": [22], "placements": step(moved(0.0, 9.0, 0.0))},
+                         {"inner": [20], "placements": step(moved(2.0, 0.0, 0.0))},
+                         {"inner": [20, 80], "placements": step(moved(1.0, 0.0, 3.0))}
+                     ]}
+        }],
+        "timeline": {"items": [{
+            "index": 0, "name": "Component Insert1", "objectType": "ComponentInsert",
+            "_f3d": {"component": 1, "object_id": 50}
+        }]},
+        "_f3d": {"external_documents": [{"key": "00000000000000bb", "urn": MID_URN, "version": 1}]}
+    }));
+    let mut doc = Document::new(MockKernel::default());
+    let report = crate::import_design_with(
+        &mut doc,
+        &design,
+        &mut NoGeometry,
+        &Options::default(),
+        Some(&sources),
+    );
+    let text = report.text();
+    // Two positions: the part, and the pin below it (where the middle
+    // assembly has it, but its part moves); none for the plates.
+    let mut inside: Vec<Vec<String>> = report
+        .components
+        .positions_inside
+        .iter()
+        .filter(|p| p.index == crate::references::INSIDE_PLACEMENTS_INDEX)
+        .map(|p| p.inner.clone())
+        .collect();
+    inside.sort();
+    assert_eq!(
+        inside,
+        vec![
+            vec![part_guid.to_owned()],
+            vec![part_guid.to_owned(), pin_guid.to_owned()]
+        ],
+        "{text}"
+    );
+    let local = |guid: &str| {
+        let o = report.components.occurrence_guids[guid]
+            .iter()
+            .filter_map(|o| doc.assembly().occurrence(*o))
+            .find(|o| !o.parent.is_root())
+            .unwrap_or_else(|| panic!("the copy's occurrence of {guid}\n{text}"));
+        o.transform.translation
+    };
+    // The part 2 cm along x in the middle assembly's copy, the pin 1 cm
+    // back from it and 3 cm up: 1 cm along x in the design, as the file
+    // has it (2 cm before).
+    let at = local(part_guid);
+    assert!(
+        (at[0] - 20.0).abs() < 1e-6 && at[1].abs() < 1e-6 && at[2].abs() < 1e-6,
+        "{at:?}\n{text}"
+    );
+    let at = local(pin_guid);
+    assert!(
+        (at[0] + 10.0).abs() < 1e-6 && at[1].abs() < 1e-6 && (at[2] - 30.0).abs() < 1e-6,
+        "{at:?}\n{text}"
     );
 }

@@ -12,6 +12,9 @@
 //! faces that meet (`Kernel::face_separations`) are named for an agent.
 //! See `commands.md`, "Assembly paths".
 
+use std::cell::OnceCell;
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -19,7 +22,9 @@ use super::ApiError;
 use super::analysis::{PlacedBody, SelectionArg};
 use super::prelude::*;
 use mitcad_model::analysis::Selection;
-use mitcad_model::assembly_path::{self, Motion, PathResult, PathSettings, Probe, TOUCHING};
+use mitcad_model::assembly_path::{
+    self, Limit, Motion, PathResult, PathSettings, Probe, Stopped, TOUCHING,
+};
 use mitcad_model::datum::Vec3;
 use mitcad_model::features::geom_ref::GeomRef;
 use mitcad_model::kernel::{FaceInfo, Kernel, KernelError};
@@ -37,6 +42,13 @@ const TOLERANCE_RANGE: (f64, f64) = (1e-6, 1.0);
 /// The smallest overlap that counts when the query gives none, mm³: the
 /// `interference` query's.
 const DEFAULT_MIN_VOLUME: f64 = 1e-6;
+/// How long the search measures when the query gives no `time_limit`, s
+/// (mitcad#2577: a path of a body flush against detailed neighbours ran
+/// for 25 minutes); the longest it may be given.
+const DEFAULT_TIME_LIMIT: f64 = 300.0;
+const LONGEST_TIME_LIMIT: f64 = 86_400.0;
+/// The most `max_probes` may be.
+const MOST_PROBES: usize = 1_000_000;
 
 /// The `assembly_path` query.
 #[derive(Debug, Deserialize)]
@@ -57,6 +69,16 @@ pub(super) struct AssemblyPathQuery {
     tolerance: f64,
     #[serde(default = "default_min_volume")]
     min_volume: f64,
+    /// The most positions measured (mitcad#2577); none: no limit.
+    #[serde(default)]
+    max_probes: Option<usize>,
+    /// How long the search may measure, s (mitcad#2577).
+    #[serde(default = "default_time_limit")]
+    time_limit: f64,
+}
+
+fn default_time_limit() -> f64 {
+    DEFAULT_TIME_LIMIT
 }
 
 fn default_steps() -> usize {
@@ -104,6 +126,8 @@ struct Checked {
     steps: usize,
     tolerance: f64,
     min_volume: f64,
+    max_probes: Option<usize>,
+    time_limit: Duration,
 }
 
 /// Answers the query.
@@ -148,6 +172,8 @@ pub(super) fn query<K: Kernel>(
         steps: checked.steps,
         tolerance: checked.tolerance,
         speed,
+        most_probes: checked.max_probes,
+        time_limit: Some(checked.time_limit),
     };
     settings.check().map_err(ApiError)?;
     let placed_others = others
@@ -161,8 +187,21 @@ pub(super) fn query<K: Kernel>(
         placed_others: &placed_others,
         motion: checked.motion,
         min_volume: checked.min_volume,
+        contacts: OnceCell::new(),
     };
-    let found = assembly_path::search(&settings, |t| path.probe(t))?;
+    // In a model job (a live MCP query, mitcad#2540) the job's Cancel also
+    // stops the kernel's operations inside a probe (the overlap's boolean),
+    // and the query answers that it was cancelled.
+    let found = match doc.monitor() {
+        Some(monitor) => {
+            let found = kernel.interruptible(monitor, || {
+                assembly_path::search(&settings, |t| path.probe(t))
+            });
+            path.stop()?;
+            found
+        }
+        None => assembly_path::search(&settings, |t| path.probe(t)),
+    }?;
     path.answer(&settings, &found)
 }
 
@@ -209,11 +248,31 @@ fn check<K: Kernel>(doc: &Document<K>, query: &AssemblyPathQuery) -> Result<Chec
             query.min_volume
         )));
     }
+    if query
+        .max_probes
+        .is_some_and(|most| !(1..=MOST_PROBES).contains(&most))
+    {
+        return Err(ApiError(format!(
+            "max_probes must be 1 to {MOST_PROBES}, got {}",
+            query.max_probes.unwrap_or_default()
+        )));
+    }
+    if !(query.time_limit.is_finite()
+        && query.time_limit > 0.0
+        && query.time_limit <= LONGEST_TIME_LIMIT)
+    {
+        return Err(ApiError(format!(
+            "time_limit must be more than 0 and at most {LONGEST_TIME_LIMIT} s, got {}",
+            query.time_limit
+        )));
+    }
     Ok(Checked {
         motion,
         steps: query.steps,
         tolerance: query.tolerance,
         min_volume: query.min_volume,
+        max_probes: query.max_probes,
+        time_limit: Duration::from_secs_f64(query.time_limit),
     })
 }
 
@@ -245,6 +304,10 @@ struct Path<'a, K: Kernel> {
     placed_others: &'a [K::Shape],
     motion: Motion,
     min_volume: f64,
+    /// Which of the others are the moving body's contacts (mitcad#2577):
+    /// it touched them without overlapping them before it moved. Found at
+    /// the first probe, the start.
+    contacts: OnceCell<Vec<bool>>,
 }
 
 impl<K: Kernel> Path<'_, K> {
@@ -293,21 +356,50 @@ impl<K: Kernel> Path<'_, K> {
         }
     }
 
-    /// The clearance to the nearest other body at `t`, and whether the
-    /// moving body overlaps one there.
+    /// The clearance to the nearest other body at `t`, the contacts apart
+    /// from the rest, and whether the moving body overlaps one there.
     fn probe(&self, t: f64) -> Result<Probe, ApiError> {
         self.stop()?;
-        let shape = self.moved(t)?;
-        let mut clearance = f64::INFINITY;
-        let mut overlap = false;
-        for (other, against) in self.placed_others.iter().zip(self.others) {
-            let distance = self.clearance(&shape, other, &against.name)?;
-            if distance < TOUCHING && !overlap {
-                overlap = self.overlap(&shape, other, &against.name)? > 0.0;
-            }
-            clearance = clearance.min(distance);
+        // For tests: the job's delay (RecomputeMonitor::set_test_delay)
+        // makes each probe that much longer, ending early on a cancel
+        // (mitcad#2540).
+        if let Some(monitor) = self.doc.monitor() {
+            monitor.test_pause();
+            self.stop()?;
         }
-        Ok(Probe { clearance, overlap })
+        let shape = self.moved(t)?;
+        let known = self.contacts.get();
+        let mut found = Vec::new();
+        let mut probe = Probe::new(f64::INFINITY, false);
+        for (index, (other, against)) in self.placed_others.iter().zip(self.others).enumerate() {
+            let distance = self.clearance(&shape, other, &against.name)?;
+            let mut overlaps = false;
+            if distance < TOUCHING && !probe.overlap {
+                overlaps = self.overlap(&shape, other, &against.name)? > 0.0;
+                probe.overlap = overlaps;
+            }
+            // The first probe is the start (assembly_path::search): a body
+            // touched there without overlap is a contact. (One met after
+            // another overlaps is not tested; the search ends at once then.)
+            let contact = match known {
+                Some(contacts) => contacts[index],
+                None => {
+                    let contact = distance < TOUCHING && !overlaps;
+                    found.push(contact);
+                    contact
+                }
+            };
+            if contact {
+                probe.contact = probe.contact.min(distance);
+            } else {
+                probe.clearance = probe.clearance.min(distance);
+            }
+        }
+        if known.is_none() {
+            // Set once: a probe never runs inside another.
+            let _ = self.contacts.set(found);
+        }
+        Ok(probe)
     }
 
     /// The path turns: its positions are radians, not mm.
@@ -342,7 +434,11 @@ impl<K: Kernel> Path<'_, K> {
             "probes": found.probes,
             "hit": Value::Null,
             "min_clearance": Value::Null,
+            "stopped": Value::Null,
         });
+        if let Some(stopped) = found.stopped {
+            value["stopped"] = stopped_json(settings, found, &stopped);
+        }
         if let Some(min) = found.min_clearance {
             let mut entry = json!({"clearance": min.clearance, "at": min.at});
             if let Some(closest) = self.closest(min.at)? {
@@ -491,6 +587,36 @@ impl<K: Kernel> Path<'_, K> {
         }
         Ok((found, nearest.map(|(_, point)| point)))
     }
+}
+
+/// The answer's `stopped` (mitcad#2577): which limit ended the search,
+/// how far the path is checked, and what that means, for an agent.
+fn stopped_json(settings: &PathSettings, found: &PathResult, stopped: &Stopped) -> Value {
+    let (limit, why) = match stopped.limit {
+        Limit::Probes => (
+            "probes",
+            format!(
+                "The search stopped at its limit of {} measured positions (max_probes).",
+                found.probes
+            ),
+        ),
+        Limit::Time => (
+            "time",
+            format!(
+                "The search stopped at its time limit of {} s (time_limit).",
+                settings.time_limit.map_or(0.0, |limit| limit.as_secs_f64())
+            ),
+        ),
+    };
+    json!({
+        "limit": limit,
+        "checked_to": stopped.checked_to,
+        "message": format!(
+            "{why} The path is checked only from the start to checked_to: hit, min_clearance and \
+             path cover that part, and the result is not certified. Give fewer steps, a larger \
+             limit, or fewer bodies in against."
+        ),
+    })
 }
 
 /// A face's topological name by its index in `Kernel::faces`' order (its

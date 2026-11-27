@@ -5,7 +5,7 @@
 # A panel's new error scrolled into view by the panel itself (mitcad#1884)
 # on macOS, through the test driver (tools/ui-scripts/panel-message-reveal.mitcad-ui,
 # the same script as the Linux and Windows tests'): a cube's Extrude edited
-# in a 1280 x 600 window, Docked and then Floating, its Distance typed 0
+# in a 1280 x 600 window, Docked and then Floating, its Distance typed -5 (Symmetric)
 # fails the preview, and the panel's error box and the Distance field typed
 # in lie within the page's view ("Panel Extrude view y A to B") without the
 # test scrolling to the box; Docked, the page scrolled to it by itself.

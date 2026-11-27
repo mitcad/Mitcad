@@ -43,6 +43,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -178,7 +179,7 @@ void test_rim_rolled_over_a_strip_cut_by_the_notch_walls() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_rolled_end_cut) {
   test::guarded("test_rim_rolled_over_a_strip_cut_by_the_notch_walls",
                 test::test_rim_rolled_over_a_strip_cut_by_the_notch_walls);
   if (test::failures == 0) {

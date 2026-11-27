@@ -1,0 +1,395 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Offset: each edge of a face pair gets its own branch of the pair's
+intersection, and the images of a crease split at a sphere's pole are cut
+there (mitcad#2542).
+
+A groove that ends inside a flat face (GitHub #720: grooves revolved from
+half a slot on a disk's flat sides, ending in a quarter sphere whose pole
+lies on the side's edge), shelled inside with the intersection join:
+
+- Both sides of the groove are edges between the flat face and the
+  groove's wall. ConnexIntByInt intersected the pair once, with the first
+  edge, and Inter3D keeps the branches along it: the second edge got the
+  first's line, the groove's offset closed no loop and was left out (with a
+  flat end a valid solid without the groove's walls, the side's offset
+  running through the groove). The pair is now intersected again for each
+  further edge, and branches not yet there (AlongAPiece: the points across
+  from the edge's ends and middle not on the pieces it has) are added as
+  that edge's own; in the redistribution of 2140 and 2418 they compete as
+  the edge's nearest piece, so it takes no copy of another edge's piece.
+- The edge where the side meets the sphere is split at the pole; both
+  halves got the whole circle of the pair's intersection (2418's copy), and
+  nothing cut the copies at the pole: their 2D intersection is the whole
+  curve. The side's offset was a disc (BRepCheck_BadOrientationOfSubshape).
+  Inter2d's ConnexIntByInt now puts on two images of one crease split at a
+  vertex (CreaseRunsOn) that lie on one curve the vertex where the curve
+  passes nearest to it (MeetOnOneCurve); TrimEdges cuts each to its arc.
+
+Not covered: a translated sphere whose pole is a vertex of a face is still
+refused by CheckInputData (the surface's points without the location
+compared with the vertex's with it).
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2542.
+
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+index 6e61f348..8f098ac3 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter2d.cxx
+@@ -2076,6 +2076,149 @@ static bool LeaveInOneDirection(const TopoDS_Edge&   theE1,
+   return aD[0].Angle(aD[1]) < 1.e-3;
+ }
+ 
++//=======================================================================
++// function : CreaseRunsOn
++// purpose  : Whether theE1 and theE2 (consecutive edges of theF at theV)
++//            are one crease split at theV: both between theF and one
++//            other face, and no other edge but degenerated ones at theV,
++//            as the edge where a flat face meets a sphere whose pole lies
++//            on it, split at the pole (mitcad#2542).
++//=======================================================================
++static bool CreaseRunsOn(const TopoDS_Face&        theF,
++                         const TopoDS_Edge&        theE1,
++                         const TopoDS_Edge&        theE2,
++                         const TopoDS_Vertex&      theV,
++                         const BRepOffset_Analyse& theAnalyse)
++{
++  if (theE1.IsSame(theE2) || !theAnalyse.HasAncestor(theV) || !theAnalyse.HasAncestor(theE1)
++      || !theAnalyse.HasAncestor(theE2))
++  {
++    return false;
++  }
++  for (NCollection_List<TopoDS_Shape>::Iterator it(theAnalyse.Ancestors(theV)); it.More(); it.Next())
++  {
++    const TopoDS_Edge& aE = TopoDS::Edge(it.Value());
++    if (!aE.IsSame(theE1) && !aE.IsSame(theE2) && !BRep_Tool::Degenerated(aE))
++    {
++      return false;
++    }
++  }
++  // The other face of each.
++  TopoDS_Shape aOther[2];
++  for (int k = 0; k < 2; ++k)
++  {
++    const NCollection_List<TopoDS_Shape>& aLF = theAnalyse.Ancestors(k == 0 ? theE1 : theE2);
++    if (aLF.Extent() != 2)
++    {
++      return false;
++    }
++    for (NCollection_List<TopoDS_Shape>::Iterator it(aLF); it.More(); it.Next())
++    {
++      if (!it.Value().IsSame(theF))
++      {
++        aOther[k] = it.Value();
++      }
++    }
++  }
++  return !aOther[0].IsNull() && aOther[0].IsSame(aOther[1]);
++}
++
++//=======================================================================
++// function : MeetOnOneCurve
++// purpose  : Where the images theNE1 and theNE2 of one crease split at
++//            theV (CreaseRunsOn) are two edges on one curve (copies of
++//            the faces' intersection, BRepOffset_Inter3d::ConnexIntByInt
++//            gives each edge a piece of its own), puts on both the vertex
++//            where the one runs on into the other: the point of the curve
++//            nearest to theV, with the orientations theOr1 and theOr2. Their
++//            intersection there is no point but the whole curve, so before
++//            nothing cut them at theV, and each kept the other's arc too
++//            (the full circle where a flat face's offset meets a sphere's,
++//            its pole on the edge: the face's offset a disc, mitcad#2542).
++//            False, and nothing done, where they are not on one curve.
++//=======================================================================
++static bool MeetOnOneCurve(
++  const TopoDS_Edge&                 theNE1,
++  const TopoDS_Edge&                 theNE2,
++  const TopAbs_Orientation           theOr1,
++  const TopAbs_Orientation           theOr2,
++  const TopoDS_Vertex&               theV,
++  const occ::handle<BRepAlgo_AsDes>& theAsDes2d,
++  const double                       theTol,
++  BRepAlgo_Image&                    theImageVV,
++  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>&
++    theDMVV)
++{
++  if (theNE1.IsSame(theNE2) || BRep_Tool::Degenerated(theNE1) || BRep_Tool::Degenerated(theNE2))
++  {
++    return false;
++  }
++  double                        aF[2], aL[2];
++  const occ::handle<Geom_Curve> aC1 = BRep_Tool::Curve(theNE1, aF[0], aL[0]);
++  const occ::handle<Geom_Curve> aC2 = BRep_Tool::Curve(theNE2, aF[1], aL[1]);
++  if (aC1.IsNull() || aC2.IsNull())
++  {
++    return false;
++  }
++  const double aTolE = std::max(theTol, BRep_Tool::Tolerance(theNE1) + BRep_Tool::Tolerance(theNE2));
++  // On one curve: the second's points (its ends and three inside) on the
++  // first's curve, and the other way round.
++  if (aC1 != aC2)
++  {
++    for (int k = 0; k < 2; ++k)
++    {
++      const occ::handle<Geom_Curve>& aFrom = k == 0 ? aC2 : aC1;
++      GeomAPI_ProjectPointOnCurve    aProj;
++      aProj.Init(k == 0 ? aC1 : aC2, k == 0 ? aF[0] : aF[1], k == 0 ? aL[0] : aL[1]);
++      for (int i = 0; i <= 4; ++i)
++      {
++        const double aT = (k == 0 ? aF[1] : aF[0]) + ((k == 0 ? aL[1] : aL[0]) - (k == 0 ? aF[1] : aF[0])) * i / 4.0;
++        aProj.Perform(aFrom->Value(aT));
++        if (aProj.NbPoints() == 0 || aProj.LowerDistance() > aTolE)
++        {
++          return false;
++        }
++      }
++    }
++  }
++  // The point of the curve nearest to the vertex, and its parameter on each.
++  const gp_Pnt aPV = BRep_Tool::Pnt(theV);
++  double       aT[2];
++  gp_Pnt       aP;
++  for (int k = 0; k < 2; ++k)
++  {
++    GeomAPI_ProjectPointOnCurve aProj(aPV, k == 0 ? aC1 : aC2, aF[k], aL[k]);
++    if (aProj.NbPoints() == 0)
++    {
++      return false;
++    }
++    aT[k] = aProj.LowerDistanceParameter();
++    if (k == 0)
++    {
++      aP = aProj.NearestPoint();
++    }
++  }
++  BRep_Builder  aB;
++  TopoDS_Vertex aNewV = BRepLib_MakeVertex(aP);
++  aNewV.Orientation(TopAbs_INTERNAL);
++  aB.UpdateVertex(aNewV, aT[0], theNE1, aTolE);
++  aB.UpdateVertex(aNewV, aT[1], theNE2, aTolE);
++  aB.UpdateVertex(aNewV, std::max(aTolE, aP.Distance(aC2->Value(aT[1]))));
++  NCollection_List<TopoDS_Shape> aLV1, aLV2;
++  aLV1.Append(aNewV.Oriented(theOr1));
++  aLV2.Append(aNewV.Oriented(theOr2));
++  if (theImageVV.HasImage(theV))
++  {
++    theImageVV.Add(theV.Oriented(TopAbs_FORWARD), aNewV.Oriented(TopAbs_FORWARD));
++  }
++  else
++  {
++    theImageVV.Bind(theV.Oriented(TopAbs_FORWARD), aNewV.Oriented(TopAbs_FORWARD));
++  }
++  Store(theNE1, theNE2, aLV1, aLV2, aTolE, theAsDes2d, theDMVV);
++  return true;
++}
++
+ //=======================================================================
+ // function : SeamRunsOnFromTangentEdge
+ // purpose  : Whether, of theE1 and theE2 (consecutive edges of theF at
+@@ -2602,19 +2745,29 @@ bool BRepOffset_Inter2d::ConnexIntByInt(
+           CurE = anIdx <= aSeq.Length() ? aSeq(anIdx) : TopoDS_Edge();
+           continue;
+         }
+-        RefEdgeInter(aFIOInter,
+-                     BAsurf,
+-                     aE1,
+-                     aE2,
+-                     anOr1,
+-                     anOr2,
+-                     AsDes2d,
+-                     Tol,
+-                     true,
+-                     Vref,
+-                     theImageVV,
+-                     theDMVV,
+-                     bCoincide);
++        // (mitcad#2542) The images of one crease split at Vref, copies on
++        // one curve: they meet where the curve passes Vref.
++        if (aChoice == 1 && CreaseRunsOn(FI, CurE, NextE, Vref, Analyse)
++            && MeetOnOneCurve(aE1, aE2, anOr1, anOr2, Vref, AsDes2d, Tol, theImageVV, theDMVV))
++        {
++          bCoincide = false;
++        }
++        else
++        {
++          RefEdgeInter(aFIOInter,
++                       BAsurf,
++                       aE1,
++                       aE2,
++                       anOr1,
++                       anOr2,
++                       AsDes2d,
++                       Tol,
++                       true,
++                       Vref,
++                       theImageVV,
++                       theDMVV,
++                       bCoincide);
++        }
+         if (aTraceSeam)
+         {
+           const int aNbAfter = AsDes2d->HasDescendant(aE1) ? AsDes2d->Descendant(aE1).Extent() : 0;
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+index 768725a7..bca9c3ad 100644
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffset/BRepOffset_Inter3d.cxx
+@@ -640,6 +640,64 @@ static TopAbs_Orientation OrientationIn(const occ::handle<BRepAlgo_AsDes>& theAs
+   return theDefault;
+ }
+ 
++//=======================================================================
++// function : AlongAPiece
++// purpose  : Whether the piece theNE (of an intersection of two offset
++//            faces) runs where the edges of theC do, beside the original
++//            edge theE: each of its points across from theE's ends and
++//            middle lies on one of those edges (the same branch, also
++//            where it came in several pieces before) (mitcad#2542).
++//=======================================================================
++static bool AlongAPiece(const TopoDS_Edge& theNE, const TopoDS_Shape& theC, const TopoDS_Edge& theE)
++{
++  double                         aF = 0., aL = 0.;
++  const occ::handle<Geom_Curve>& aC = BRep_Tool::Curve(theNE, aF, aL);
++  BRepAdaptor_Curve              aOC(theE);
++  if (aC.IsNull())
++  {
++    return false;
++  }
++  // The piece's points across from the edge's.
++  gp_Pnt aP[3];
++  for (int k = 0; k < 3; ++k)
++  {
++    const double                aT = aOC.FirstParameter() + (aOC.LastParameter() - aOC.FirstParameter()) * k / 2.;
++    GeomAPI_ProjectPointOnCurve aProj(aOC.Value(aT), aC, aF, aL);
++    if (aProj.NbPoints() == 0)
++    {
++      return false;
++    }
++    aP[k] = aProj.NearestPoint();
++  }
++  for (int k = 0; k < 3; ++k)
++  {
++    bool bOn = false;
++    for (TopExp_Explorer aExp(theC, TopAbs_EDGE); aExp.More() && !bOn; aExp.Next())
++    {
++      const TopoDS_Edge&             aE  = TopoDS::Edge(aExp.Current());
++      double                         aF2 = 0., aL2 = 0.;
++      const occ::handle<Geom_Curve>& aC2 = BRep_Tool::Curve(aE, aF2, aL2);
++      if (aC2.IsNull())
++      {
++        continue;
++      }
++      const double aTol  = 1.e-4 + BRep_Tool::Tolerance(aE) + BRep_Tool::Tolerance(theNE);
++      double       aDist = std::min(aP[k].Distance(aC2->Value(aF2)), aP[k].Distance(aC2->Value(aL2)));
++      GeomAPI_ProjectPointOnCurve aProj(aP[k], aC2, aF2, aL2);
++      if (aProj.NbPoints() > 0)
++      {
++        aDist = std::min(aDist, aProj.LowerDistance());
++      }
++      bOn = aDist <= aTol;
++    }
++    if (!bOn)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
+ //=================================================================================================
+ 
+ void BRepOffset_Inter3d::ConnexIntByInt(
+@@ -691,6 +749,8 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+     aDMVLF1, aDMVLF2, aDMIntFF;
+   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+     aDMIntE;
++  // (mitcad#2542) The branches added for an edge of a pair intersected again.
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aOwnBranches;
+   //
+   if (bIsPlanar)
+   {
+@@ -1074,6 +1134,60 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+               }
+             }
+           }
++          // (mitcad#2542) The pair was intersected with another of its
++          // edges, and the intersection keeps the branches along that
++          // edge: where the faces meet along several edges apart (the
++          // two sides of a groove that ends inside a flat face, both
++          // between that face and the groove's wall), this edge's branch
++          // was missing, the edge got the other one's, and the groove's
++          // offset closed no loop and was left out (the wall without the
++          // groove's walls). The pair is intersected again with this edge,
++          // and the branches not yet there are added.
++          if (bEdge)
++          {
++            NCollection_List<TopoDS_Shape> aLIntE1, aLIntE2;
++            try
++            {
++              BRepOffset_Tool::Inter3D(NF1, NF2, aLIntE1, aLIntE2, CurSide, E, F1, F2, &Analyse);
++            }
++            catch (const Standard_Failure&)
++            {
++              aLIntE1.Clear();
++              aLIntE2.Clear();
++            }
++            NCollection_List<TopoDS_Shape> aNew1, aNew2;
++            for (it.Initialize(aLIntE1); it.More(); it.Next())
++            {
++              const TopoDS_Edge& aNE = TopoDS::Edge(it.Value());
++              if (AlongAPiece(aNE, C, E))
++              {
++                continue;
++              }
++              for (it1.Initialize(aLIntE2); it1.More(); it1.Next())
++              {
++                if (it1.Value().IsSame(aNE))
++                {
++                  aNew1.Append(aNE);
++                  aNew2.Append(it1.Value());
++                  break;
++                }
++              }
++            }
++            if (!aNew1.IsEmpty())
++            {
++              Store(NF1, NF2, aNew1, aNew2);
++              for (it.Initialize(aNew1); it.More(); it.Next())
++              {
++                const TopoDS_Shape& aNE = it.Value();
++                B.Add(C, aNE);
++                aDMIntE(aDMIntE.Add(aNE, NCollection_List<TopoDS_Shape>())).Append(aS);
++                aOwnBranches.Add(aNE);
++                NCollection_List<TopoDS_Shape>* pLFF = aDMIntFF.Bound(aNE, NCollection_List<TopoDS_Shape>());
++                pLFF->Append(F1);
++                pLFF->Append(F2);
++              }
++            }
++          }
+           Build.Bind(aS, C);
+         }
+         else
+@@ -1160,9 +1274,12 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+         const TopoDS_Vertex aV = BRepLib_MakeVertex(aOC.Value(aT)).Vertex();
+         double              aBestDist = RealLast();
+         TopoDS_Shape        aBest;
++        // (mitcad#2542) A branch of the edge's own (added where the pair
++        // was intersected again with it) competes too: where it is nearer,
++        // the edge needs no copy of the other edges' pieces.
+         for (TopoDS_Iterator itE(Build(aS)); itE.More(); itE.Next())
+         {
+-          if (!aNearest.IsBound(itE.Value()))
++          if (!aNearest.IsBound(itE.Value()) && !aOwnBranches.Contains(itE.Value()))
+           {
+             continue;
+           }
+@@ -1173,7 +1290,7 @@ void BRepOffset_Inter3d::ConnexIntByInt(
+             aBest     = itE.Value();
+           }
+         }
+-        if (!aBest.IsNull())
++        if (!aBest.IsNull() && aNearest.IsBound(aBest))
+         {
+           aNearOwn.Add(aBest);
+         }

@@ -6,7 +6,7 @@
 # Lengths in the design's unit (mitcad#1165) through the real UI, on a
 # design in inches that mitcad-cli makes (tools/cli/tests/units_inch.json):
 # the Browser's sheet-rules row shows 0.05 in and R 0.1 in, Extrude opens
-# with its default 10 mm as 0.5 in, Measure shows a top's area as 2 in² and
+# with its Distance at 0 in (mitcad#2481), Measure shows a top's area as 2 in² and
 # two parallel tops 1 in apart; the layout grid in inches (mitcad#1210):
 # Grid Settings shows the fixed spacing in inches, the automatic grid steps
 # through the inch series when zooming, and after the design set to mm the

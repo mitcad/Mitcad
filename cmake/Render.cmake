@@ -204,7 +204,8 @@ set_target_properties(mitcad_cycles_renderer PROPERTIES CXX_STANDARD 20 CXX_STAN
                       CXX_EXTENSIONS OFF)
 # The definitions Cycles was compiled with: its headers depend on them.
 target_compile_definitions(mitcad_cycles_renderer PRIVATE ${MITCAD_CYCLES_DEFINITIONS})
-# And its host options: SSE4.2 on x86, NEON on Apple Silicon.
+# And its host options: SSE4.2 on x86, NEON on ARM (Apple Silicon, aarch64
+# Linux; sse2neon's header below).
 target_compile_options(mitcad_cycles_renderer PRIVATE ${MITCAD_CYCLES_OPTIONS})
 target_include_directories(mitcad_cycles_renderer PRIVATE "${PROJECT_SOURCE_DIR}/app")
 target_include_directories(mitcad_cycles_renderer SYSTEM PRIVATE "${MITCAD_CYCLES_ROOT}/include"

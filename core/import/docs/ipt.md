@@ -100,7 +100,7 @@ a limit of its own (`<name>.ipt`, a tab, the limit, a tab, why). Such a
 limit is for a reference that was not exported from the file and models
 the part a little differently: it is the difference measured, rounded up
 by a few per cent, so that a change in what the import reads still fails.
-`core/ipt/tests/corpus.rs` checks the same files without OCCT: the B-rep
+`core/ipt/tests/read/corpus.rs` checks the same files without OCCT: the B-rep
 records split out of their segments and every body converts cleanly, the
 parameters and their expressions, the features' history states.
 

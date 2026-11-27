@@ -60,7 +60,9 @@
 #include "../framework/NoticeLevel.hpp"
 #include "../framework/UserText.hpp"
 #include "CamMachinesDialog.hpp"
+#include "CamManualCode.hpp"
 #include "CamSimulateDialog.hpp"
+#include "CamStock.hpp"
 #include "CamToolpaths.hpp"
 
 namespace mitcad {
@@ -244,6 +246,12 @@ bool onLatheMachine(const CommandState& state) {
       .contains(QStringLiteral("lathe"));
 }
 
+// Whether a lathe setup panel gives its bar's diameter or length (`id`,
+// mitcad#2550): the margin it replaces is then hidden.
+bool hasBarSize(const CommandState& state, const char* id) {
+  return onLatheMachine(state) && !state.expression(QString::fromLatin1(id)).isEmpty();
+}
+
 // Whether an operation panel's setup is on a lathe with a C axis and live
 // tools (mitcad#2067): its milling operations cut with live tools, on the
 // part's face or its diameter.
@@ -296,6 +304,21 @@ bool machineHasSub(const CommandState& state) {
       .toObject()
       .value(QStringLiteral("sub_spindle"))
       .toBool();
+}
+
+// Manual G-code in a lathe setup (mitcad#2506, cam/CamManualCode.hpp):
+// whether the setup panel shows its blocks' note, and the places a block
+// may follow, from the whole panel's state (a row's choice is asked in its
+// row's): the program's start, then the edited setup's operations in their
+// order (none for a new setup).
+bool hasManual(const CommandState& state) {
+  return onLatheMachine(state) && state.rows(cam::manualList()) > 0;
+}
+
+Choices manualPlacesOf(const CommandState& row) {
+  const CommandState state = row.whole();
+  const QJsonObject edited = state.object(QStringLiteral("edited"));
+  return cam::manualPlaces(edited.isEmpty() ? QJsonObject() : setupOf(camData(state), idOf(edited)));
 }
 
 // The operations a live tool cuts on a lathe: facing (on the face), and
@@ -597,6 +620,19 @@ QJsonObject setupFields(const CommandState& state, QString* why, QString* input)
     if (!bore.isNull()) {
       lathe.insert(QStringLiteral("stock_bore"), bore);
     }
+    // The bar's size (mitcad#2550), with the stock around the bodies only:
+    // a stock body keeps its own size.
+    const std::pair<const char*, QString> bar[] = {{"stock_diameter", MainWindow::tr("Bar Diameter")},
+                                                   {"stock_length", MainWindow::tr("Bar Length")}};
+    for (const auto& [key, label] : bar) {
+      lathe.remove(QLatin1String(key));
+      if (state.choice(QStringLiteral("stock")) != QStringLiteral("body")) {
+        const QJsonValue size = value(key, ValueKind::Length, label);
+        if (!size.isNull()) {
+          lathe.insert(QLatin1String(key), size);
+        }
+      }
+    }
     const QJsonValue number = value("program_number", ValueKind::Unitless, MainWindow::tr("Program Number"));
     if (!number.isNull()) {
       lathe.insert(QStringLiteral("program_number"), static_cast<int>(std::lround(number.toDouble())));
@@ -606,6 +642,14 @@ QJsonObject setupFields(const CommandState& state, QString* why, QString* input)
       lathe.insert(QStringLiteral("hand_over"), lathe.value(QStringLiteral("hand_over")).toObject());
     } else {
       lathe.remove(QStringLiteral("hand_over"));
+    }
+    // Manual G-code (mitcad#2506): every block of the panel's list in its
+    // order, each with its name, its place and its lines.
+    const QJsonArray manual = cam::manualCodeOf(state, why, input);
+    if (manual.isEmpty()) {
+      lathe.remove(QStringLiteral("manual_code"));
+    } else {
+      lathe.insert(QStringLiteral("manual_code"), manual);
     }
     setup.insert(QStringLiteral("lathe"), lathe);
   } else if (edit) {
@@ -871,7 +915,9 @@ QJsonObject MainWindow::camPanelData() const {
     QJsonArray operations;
     for (const QJsonValue& entry : setup.value(QStringLiteral("operations")).toArray()) {
       const QJsonObject op = entry.toObject();
+      // Its name for the setup panel's manual G-code place (mitcad#2506).
       operations.append(QJsonObject{{QStringLiteral("id"), idOf(op)},
+                                    {QStringLiteral("name"), str(op, "name")},
                                     {QStringLiteral("sub_spindle"), op.value(QStringLiteral("sub_spindle")).toBool()},
                                     {QStringLiteral("suppressed"), op.value(QStringLiteral("suppressed")).toBool()}});
     }
@@ -958,17 +1004,34 @@ CommandDef MainWindow::camSetupCommand() {
                   QStringLiteral("around"))
           .withHeading(tr("Stock")),
       valueInput(QStringLiteral("side"), tr("Side Margin"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withTooltip(tr("Stock added on the four sides of the bodies"))
-          .withVisible(around),
+          .withTooltip(tr("Stock added on the four sides of the bodies; on a lathe, on the radius"))
+          .withVisible([around](const CommandState& state) { return around(state) && !hasBarSize(state, "stock_diameter"); }),
       valueInput(QStringLiteral("top"), tr("Top Margin"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withTooltip(tr("Stock added above the bodies"))
+          .withTooltip(tr("Stock added above the bodies; on a lathe, in front of the part's face"))
           .withVisible(around),
       valueInput(QStringLiteral("bottom"), tr("Bottom Margin"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withTooltip(tr("Stock added below the bodies"))
-          .withVisible(around),
+          .withTooltip(tr("Stock added below the bodies; on a lathe, behind the part towards the chuck"))
+          .withVisible([around](const CommandState& state) { return around(state) && !hasBarSize(state, "stock_length"); }),
+      // A lathe's bar of a given size (mitcad#2550), with the stock around
+      // the bodies: its diameter and length in place of the side and
+      // bottom margins.
+      valueInput(QStringLiteral("stock_diameter"), tr("Bar Diameter"), ValueKind::Length, QString())
+          .withAuto([](const CommandState&, const CommandContext&) { return MainWindow::tr("Part + side margin"); })
+          .withTooltip(tr("The stock bar's diameter, in place of the side margin"))
+          .withVisible([around](const CommandState& state) { return around(state) && onLatheMachine(state); }),
+      valueInput(QStringLiteral("stock_length"), tr("Bar Length"), ValueKind::Length, QString())
+          .withAuto([](const CommandState&, const CommandContext&) { return MainWindow::tr("Part + margins"); })
+          .withTooltip(tr("The stock bar's length from its face towards the chuck, in place of the bottom margin"))
+          .withVisible([around](const CommandState& state) { return around(state) && onLatheMachine(state); }),
       selectionInput(QStringLiteral("stock_body"), tr("Stock Body"), SelectKind::Body, 0, 1)
           .withTooltip(tr("A body of the design that is the stock"))
           .withVisible(onBody),
+      // A lathe's stock bore (mitcad#1869), a tube or a drilled hole in
+      // either kind of stock.
+      valueInput(QStringLiteral("stock_bore"), tr("Stock Bore"), ValueKind::Length, QString())
+          .withAuto([](const CommandState&, const CommandContext&) { return MainWindow::tr("Solid bar"); })
+          .withTooltip(tr("The diameter of the stock's hole: a tube or a drilled hole"))
+          .withVisible(onLathe),
       choiceInput(QStringLiteral("origin"), tr("Work Zero"), origins, QStringLiteral("top_front_left"))
           .withHeading(tr("Work Zero"))
           .withTooltip(tr("Where X, Y and Z are zero for the machine")),
@@ -1004,12 +1067,8 @@ CommandDef MainWindow::camSetupCommand() {
           .withTooltip(tr("The program starts by probing the work zero on the stock"))
           .withVisible([](const CommandState& state) { return effectiveDialect(state) == QStringLiteral("millenniumos"); }),
       // A lathe's own values (mitcad#1869).
-      valueInput(QStringLiteral("stock_bore"), tr("Stock Bore"), ValueKind::Length, QString())
-          .withHeading(tr("Lathe"))
-          .withAuto([](const CommandState&, const CommandContext&) { return MainWindow::tr("Solid bar"); })
-          .withTooltip(tr("The diameter of the stock's hole: a tube or a drilled hole"))
-          .withVisible(onLathe),
       valueInput(QStringLiteral("program_number"), tr("Program Number"), ValueKind::Unitless, QString())
+          .withHeading(tr("Lathe"))
           .withAuto([](const CommandState&, const CommandContext&) { return QStringLiteral("1000"); })
           .withTooltip(tr("The number the lathe's control keeps the program under"))
           .withVisible(onLathe),
@@ -1017,6 +1076,33 @@ CommandDef MainWindow::camSetupCommand() {
       checkInput(QStringLiteral("hand_over"), tr("Hand over to the sub-spindle"))
           .withTooltip(tr("The sub-spindle grips the part before it is parted off and turns its back"))
           .withVisible([](const CommandState& state) { return machineHasSub(state); }),
+      // Manual G-code between the operations (mitcad#2506): blocks in their
+      // order, each with its name, the operation it follows and its lines.
+      listInput(cam::manualList(), tr("Manual G-code"),
+                {textInput(cam::manualName(), tr("Name"))
+                     .withTooltip(tr("Written in the comment before the block; empty: Manual G-code")),
+                 choiceInput(cam::manualAfter(), tr("After"), {}, cam::programStart())
+                     .withChoices([](const CommandState& row) { return manualPlacesOf(row); })
+                     .withTooltip(tr("The operation the block follows in the program")),
+                 textInput(cam::manualText(), tr("G-code"))
+                     .withMultiLine()
+                     .withTooltip(tr("Written line by line as it is, neither simulated nor read back"))},
+                tr("Add Manual G-code"), tr("Block %1"), 0)
+          .withOrderedRows()
+          .withTooltip(tr("G-code of your own between the operations, such as pulling the bar after parting off"))
+          .withVisible(onLathe),
+      noteInput(
+          QStringLiteral("manual_note"),
+          [](const CommandState&) {
+            InputNote note;
+            note.text = MainWindow::tr(
+                "Manual code: not simulated, not read back. Before it the program stops the coolant and the "
+                "spindle and takes the tool to its change position; after it the program sets the modes, the "
+                "work offset, the next tool and its spindle again.");
+            return note;
+          },
+          [](int, const CommandState&, const CommandContext&) {})
+          .withVisible([](const CommandState& state) { return hasManual(state); }),
   };
   def.init = [this](CommandState& state, const CommandContext&) {
     state.setObject(QStringLiteral("cam"), camPanelData());
@@ -1088,9 +1174,15 @@ CommandDef MainWindow::camSetupCommand() {
     state.setChecked(QStringLiteral("probe"), setup.value(QStringLiteral("probe_work_zero")).toBool());
     const QJsonObject lathe = setup.value(QStringLiteral("lathe")).toObject();
     loadCamValue(state, QStringLiteral("stock_bore"), lathe.value(QStringLiteral("stock_bore")), ValueKind::Length, context);
+    // The bar's size (mitcad#2550); empty where the margin is used.
+    for (const char* key : {"stock_diameter", "stock_length"}) {
+      loadCamValue(state, QString::fromLatin1(key), lathe.value(QLatin1String(key)), ValueKind::Length, context);
+    }
     loadCamValue(state, QStringLiteral("program_number"), lathe.value(QStringLiteral("program_number")),
                  ValueKind::Unitless, context);
     state.setChecked(QStringLiteral("hand_over"), lathe.contains(QStringLiteral("hand_over")));
+    // Every block of manual G-code as a row, in order (mitcad#2506).
+    cam::loadManualCode(state, lathe.value(QStringLiteral("manual_code")).toArray());
   };
   def.build = [](const CommandState& state, const CommandContext&) -> Built {
     QString why;
@@ -1849,6 +1941,10 @@ void MainWindow::updateCamToolpaths() {
     }
   }
   qInfo().noquote() << QStringLiteral("CAM toolpaths drawn: %1 operation(s), %2 moves").arg(operations).arg(moves);
+  // The shown setups' stock before any cut, with or without toolpaths,
+  // from the stock CAM computes with (mitcad#2552): it follows the
+  // margins, the stock, the work frame and the eyes as the setups change.
+  m_viewer->setCamUncutStock(cam::uncutStockOfSetups(m_snapshot.camSetups));
   drawCamScene();
 }
 
@@ -2096,6 +2192,15 @@ void MainWindow::postProcessCam(int setup) {
   qInfo().noquote() << QStringLiteral("CAM post written: %1: %2, %3, %4 lines")
                            .arg(path, str(posted, "dialect"), str(posted, "units"))
                            .arg(lines);
+  // Manual G-code in it (mitcad#2506): the status says it was not checked.
+  const int manual = static_cast<int>(posted.value(QStringLiteral("manual")).toArray().size());
+  if (manual > 0) {
+    qInfo().noquote() << QStringLiteral("CAM post: %1 manual G-code block(s), not simulated or read back").arg(manual);
+    showStatus(tr("Wrote the program of %1 to %2. Its manual G-code is neither simulated nor read back.")
+                   .arg(setupName, QDir::toNativeSeparators(path)),
+               NoticeLevel::Information);
+    return;
+  }
   showStatus(tr("Wrote the program of %1 to %2.").arg(setupName, QDir::toNativeSeparators(path)), NoticeLevel::Information);
 }
 

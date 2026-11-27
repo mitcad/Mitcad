@@ -111,4 +111,32 @@ PlaneReach plane_reach(const Bounds& box, const Plane& plane);
 enum class ClipSide { Kept, Removed, Cut };
 ClipSide clip_side(const Bounds& box, const Plane& plane);
 
+// --- A section limited to a strip of its plane (mitcad#2479) -----------------
+
+// The points of a plane whose distance from the plane's origin along
+// `along` (a direction in the plane; any length but zero, its part along
+// the normal is left out) lies between `from` and `to` (mm, from < to). A
+// drawing's section limited to the line drawn on its parent view: the
+// strip runs along the line, across the whole shape the other way.
+struct Strip {
+  Vec3 along{1.0, 0.0, 0.0};
+  double from = 0.0;
+  double to = 0.0;
+};
+
+// Section within the strip only: the curves and faces where the strip cuts
+// the shape. Throws Error for a mesh body (its triangle-by-triangle cut
+// knows a whole plane only), a strip without width or a direction along
+// the normal.
+Section section_within(const TopoDS_Shape& shape, const Plane& plane, const Strip& strip);
+
+// clip limited to the strip: only what lies on the normal side of the
+// plane and within the strip goes, the prism of the strip along the
+// normal; the rest of the shape stays whole, its faces at the strip's
+// edges included. The same attempts in turn as clip; a shape whose box
+// lies behind the plane or outside the strip is the shape itself. Throws
+// Error for a mesh body, as section_within.
+TopoDS_Shape clip_within(const TopoDS_Shape& shape, const Plane& plane, const Strip& strip,
+                         ClipReport* report = nullptr);
+
 } // namespace mitcad::analysis

@@ -18,6 +18,11 @@
 #     Unstitch: one of their faces a surface body of its own; Reverse
 #     Normal: a face of the revolved surface; Untrim: the offset face with
 #     its outer boundary back, a new surface.
+#   - A surface of one loose face (mitcad#2544), on a second design: a
+#     ruled strip off one free edge of a patch. Offset Surface takes its
+#     face from the view; Thicken takes it as a body clicked in the view
+#     and from the browser, the same solid both ways; the patch (a shell)
+#     clicked in the view is a body as before.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-surface-test.sh
@@ -193,6 +198,68 @@ ui_expect_log "Preview Untrim: ok" "previewed"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_log "Added untrim (holes closed, outer restored)" "untrim added"
 ui_expect_log "(F21.b0): volume 0.000 mm3" "the untrimmed face, a surface"
+
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- A surface of one loose face picked as a body in the view (mitcad#2544)"
+# Started again on a 40 x 40 patch (F2, Body1, a shell) and one ruled
+# strip 5 mm wide off its free edge along y = 0 (F3, Body2): the strip is
+# sewn alone, a body whose shape is that one face.
+ui_stop_app
+SQUARE="r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"
+cat > "$WORK/strip.json" << EOF
+[
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "patch", "profiles": [{"sketch": "F1", "region": "$SQUARE"}]}},
+  {"cmd": "add_feature", "def": {"type": "ruled_surface", "body": "F2.b0", "distance": 5,
+    "openings": [{"opening": {"faces": ["F2:patch($SQUARE)"]}, "at": [[20, 0, 0]]}]}}
+]
+EOF
+"$CLI" run "$WORK/strip.json" --save "$WORK/strip.mitcad" > "$WORK/cli-strip.log" 2>&1 ||
+  { cat "$WORK/cli-strip.log"; ui_fail "mitcad-cli (patch and strip)"; }
+ui_start_app --open "$WORK/strip.mitcad"
+ui_step "fit (F6)"                         ui_key F6
+ui_expect_log "Bodies shown: F2.b0" "the patch and the strip shown"
+# A face input still takes the strip's face from the view.
+ui_mark
+ui_step "offset surface (search)"          ui_command "Offset Surface"
+ui_expect_new "Pick face F3.b0/F3:ruled(" "the strip's face can be picked as a face"
+ui_step "the strip's face"                 ui_click_pick "face F3.b0/F3:ruled("
+ui_expect_log "Preview Offset Surface: ok" "the face previewed"
+ui_mark
+ui_step "cancel (Escape)"                  ui_key Escape
+ui_expect_new "Command Offset Surface cancelled" "offset surface cancelled"
+# Thicken's Surfaces input takes the strip as a body where it is clicked.
+ui_mark
+ui_step "thicken (search)"                 ui_command "Thicken"
+ui_expect_new "Pick body F3.b0/ at" "a click on the strip picks its body"
+ui_expect_new "Pick body F2.b0/ at" "a click on the patch picks its body"
+ui_step "the strip in the view"            ui_click_pick "body F3.b0/ at"
+ui_step "thickness 2"                      ui_type_in "Panel Thicken input thickness" "2"
+ui_expect_new "Preview Thicken: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Added thicken (New Body) of 1 bodies" "thicken of the strip clicked in the view added"
+ui_expect_volume "New body .* (F4.b0): volume \([0-9.]*\) mm3" 400 "the strip clicked in the view 2 mm thick"
+# The same strip from the browser: the same body, the same solid.
+ui_mark
+ui_step "thicken (search)"                 ui_command "Thicken"
+ui_step "the strip in the browser"         ui_click_logged "Browser Root/Bodies/Body2"
+ui_step "thickness 2"                      ui_type_in "Panel Thicken input thickness" "2"
+ui_expect_new "Preview Thicken: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Added thicken (New Body) of 1 bodies" "thicken of the strip chosen in the browser added"
+ui_expect_volume "New body .* (F5.b0): volume \([0-9.]*\) mm3" 400 "the strip chosen in the browser 2 mm thick"
+# The patch, a shell, still picks as a body in the view.
+ui_mark
+ui_step "thicken (search)"                 ui_command "Thicken"
+ui_expect_new "Pick body F2.b0/ at" "a click on the patch picks its body"
+ui_step "the patch in the view"            ui_click_pick "body F2.b0/ at"
+ui_step "thickness 2"                      ui_type_in "Panel Thicken input thickness" "2"
+ui_expect_new "Preview Thicken: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Added thicken (New Body) of 1 bodies" "thicken of the patch clicked in the view added"
+ui_expect_volume "New body .* (F6.b0): volume \([0-9.]*\) mm3" 3200 "the patch clicked in the view 2 mm thick"
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app

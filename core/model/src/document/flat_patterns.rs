@@ -389,8 +389,19 @@ impl<K: Kernel> Document<K> {
             process: self.sheet_process_of_rules(pattern.developed.rules),
             ..*options
         };
-        let drawing = crate::sheet::flat_dxf::drawing(&pattern.regions, &pattern.bends, &options)
-            .map_err(|e| {
+        // A triangulated pattern's fold lines as bend lines, when asked for
+        // (mitcad#2442).
+        let mut bends = pattern.bends.clone();
+        if options.folds {
+            bends.extend(crate::sheet::folded::triangulated::fold_bends(pattern));
+        }
+        let drawing = crate::sheet::flat_dxf::drawing_with_facets(
+            &pattern.regions,
+            &bends,
+            &pattern.facet_lines,
+            &options,
+        )
+        .map_err(|e| {
             // The walls it names by their features, the rest in words
             // (mitcad#1639); the ids for agents.
             let named = |feature: FeatureUid| self.flat_feature_name(feature);
@@ -725,8 +736,19 @@ impl<K: Kernel> Document<K> {
                     .count();
                 let flat = self.state.flat_patterns.get(body).map(|def| {
                     let mut value = match &*self.flat_pattern(*body) {
-                        Ok(pattern) => json!({"status": "valid", "area": pattern.area,
-                                              "bends": pattern.bends.len()}),
+                        Ok(pattern) => {
+                            let mut value = json!({"status": "valid", "area": pattern.area,
+                                                   "bends": pattern.bends.len()});
+                            // How approximate a triangulated pattern is
+                            // (mitcad#2442), without its fold lines.
+                            if let Some(mut a) = pattern.approximation() {
+                                if let Some(a) = a.as_object_mut() {
+                                    a.remove("folds");
+                                }
+                                value["approximation"] = a;
+                            }
+                            value
+                        }
                         Err(failure) => json!({"status": failure.status,
                                                "diagnostics": failure.diagnostics}),
                     };

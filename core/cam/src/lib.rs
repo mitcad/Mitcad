@@ -48,6 +48,8 @@ pub use post::ChangeLines;
 // Turning on a 2-axis lathe (mitcad#1869).
 pub mod turning;
 pub use turning::{Lathe, TurnPath, TurningProgram, TurningTool, turning_dialect, turning_post};
+// Cutting a nested cut sheet with a plasma torch on grbl 1.1 (mitcad#2553).
+pub mod sheet_cut;
 
 /// Why an operation or a post run could not be made: `message` says it
 /// in words for the person using the app.

@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# Curvature Comb (mitcad#2520), the shared input script of
+# tools/ui-curvature-comb-test.sh (Linux),
+# tools/ui-windows-curvature-comb-test.ps1 (Windows) and
+# tools/ui-macos-curvature-comb-test.sh (macOS), on curvature-comb.json saved
+# as curvature-comb.mitcad in the work folder: a cylinder of radius 10 (Body1)
+# and Sketch2 with an S-shaped spline through (40, 0), (50, 8), (60, -8) and
+# (70, 0), point-symmetric round (55, 0). ASCII only: the Windows runner
+# copies it as ASCII.
+#   1. Inspect > Curvature Comb on the cylinder's top edge, 50 teeth, then
+#      a Density of 24: one circle, no inflection, its radius 10 mm the
+#      smallest; the comb drawn over the view. Closed.
+#   2. Sketch2 edited, the palette's Curvature comb checked: the spline's
+#      comb with its one inflection at (55, 0); its end point dragged up, the
+#      comb read again at the drag's steps and after it, the inflection
+#      moved. Unchecked: no comb.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+
+# --- 1. Inspect > Curvature Comb on the top edge.
+mark
+command inspect.curvature_comb
+wait-log '^Command Curvature Comb started' 20
+click-pick 'edge F2[.]b0/E[{][^ ]*F2:end'
+wait-log '^Curvature Comb Curves: 1 edge' 20
+wait-log '^Inspect Curvature Comb: 1 curve[(]s[)], 50 teeth each, no inflection, minimum radius 10 mm, scale 7[0-9]([.][0-9])?$' 60
+wait-idle 60
+mark
+type-in '^Panel Curvature Comb input teeth at ' '24'
+wait-log '^Inspect Curvature Comb: 1 curve[(]s[)], 24 teeth each, no inflection, minimum radius 10 mm, scale 7[0-9]([.][0-9])?$' 60
+wait-idle 60
+screenshot-view '${MITCAD_TEST_WORK}/curvature-comb-edge.png'
+mark
+key Escape
+wait-log '^Command Curvature Comb cancelled' 30
+wait-idle
+
+# --- 2. The comb in sketch mode, following a drag.
+expect-ever '^Timeline Sketch2 at ' 30
+mark
+dblclick-logged '^Timeline Sketch2 at '
+wait-log '^Editing sketch F3 \(Sketch2\)' 30
+wait-idle
+mark
+button '^Curvature comb$' paletteCurvatureComb
+wait-log '^Curvature comb on' 20
+wait-log '^Sketch curvature comb: c[0-9]+: 1 curve[(]s[)], 24 teeth each, 1 inflection[(]s[)] at [(]55, 0, 0[)], minimum radius [0-9.]+ mm, scale [0-9.]+$' 30
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/curvature-comb-sketch.png'
+mark
+sketch-drag 70 0 70 12
+wait-log '^Sketch curvature comb: c[0-9]+: 1 curve[(]s[)], 24 teeth each, (no inflection|1 inflection[(]s[)] at [(](?!55, 0, 0[)]))' 30
+expect-log '^Sketch curvature comb [(]dragging[)]: c[0-9]+: 1 curve[(]s[)], 24 teeth each, '
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/curvature-comb-dragged.png'
+mark
+button '^Curvature comb$' paletteCurvatureComb
+wait-log '^Curvature comb off' 20
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL|Curvature comb: '

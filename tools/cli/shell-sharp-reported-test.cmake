@@ -14,7 +14,16 @@ cmake_minimum_required(VERSION 3.24)
 # 2 mm inside, which failed at any thickness (patch 2415), and the report's
 # shell with the top removed, 2 and 1 mm (mitcad#2462, patch 2462). GitHub
 # #642's second request (mitcad#2443): the first design shelled the same way
-# with the step's top at a wall of its own, 3 mm.
+# with the step's top at a wall of its own, 3 mm. GitHub #645 (mitcad#2494):
+# the shell with the top open at 3 mm, thicker than the rounding, Sharp, and
+# the design with its top rounding suppressed, the top open, 1, 2 and 3 mm,
+# Sharp and Rounded (Rounded failed at each; OCCT port patch 2494); and the
+# shell with the top open at 3 mm, Rounded (mitcad#2535, patch 2535).
+# GitHub #720 (triage card 591, its folder github-591; mitcad#2542): a disk
+# cut flat on two sides with a channel at the bottom and on each flat side a
+# groove ending in a quarter sphere whose pole lies on the side's edge, both
+# round ends removed, 2 and 3 mm inside, Sharp; it failed with an invalid
+# shape (OCCT port patch 2542).
 # Each report's archive is found in its folder under MITCAD_MITCAD_REPORTED
 # by its content id (the first 8 hex digits of the SHA-256), the design in it
 # by its own, unpacked into WORK so that nothing is written beside the
@@ -35,8 +44,10 @@ endforeach()
 set(cases
   "github-642:40910cf1:980e559a:shell_sharp_reported642.json"   # 2 mm inside, Sharp, top and foot open
   "github-642:1bd3c43c:907e7160:shell_sharp_reported642b.json"  # 2, 1 and 5 mm inside, Sharp, boss top open
-  "github-645:4b355bd0:18e67ffd:shell_sharp_reported645.json"   # closed 2 mm; top open 2 and 1 mm, Sharp and Rounded
-  "github-642:40910cf1:980e559a:shell_own_thickness_reported642.json")  # the step's top at 3 mm (mitcad#2443)
+  "github-645:4b355bd0:18e67ffd:shell_sharp_reported645.json"   # closed 2 mm; top open 2 and 1 mm, Sharp and Rounded; 3 mm Sharp and Rounded
+  "github-642:40910cf1:980e559a:shell_own_thickness_reported642.json"  # the step's top at 3 mm (mitcad#2443)
+  "github-645:4b355bd0:18e67ffd:shell_sharp_reported645_unfilleted.json"  # top rounding suppressed, top open, 1 to 3 mm (mitcad#2494)
+  "github-591:f3dcbe88:3652c89c:shell_sharp_reported591.json")  # GitHub #720: ball-ended grooves, round ends open, 2 and 3 mm (mitcad#2542)
 
 set(reported "$ENV{MITCAD_MITCAD_REPORTED}")
 if(reported STREQUAL "" OR NOT IS_DIRECTORY "${reported}")

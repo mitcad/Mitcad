@@ -243,6 +243,7 @@ fn sample() -> Drawing {
             span: Some([-5.0, 25.0]),
             letter: "A".to_owned(),
             hatch: true,
+            bounded: false,
         },
         place: [40.0, 120.0],
         scale: None,
@@ -2203,4 +2204,67 @@ fn a_view_s_bodies_follow_save_component_as_design_with_replace() {
     assert_eq!(subject["bodies"][0]["occurrence"], arm, "{subject}");
     draws_its_body(&doc);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn isometric_views_and_sections_say_why_they_show_no_hidden_edges() {
+    // mitcad#2447: an isometric view's Hidden Edges looked as if it worked
+    // and drew nothing. The `drawing` query says why a view draws no hidden
+    // edges whatever its style, and the application shows it on the switch.
+    let mut doc = drawn();
+    let added =
+        |doc: &mut Document<MockKernel>, def: Value| command(doc, def)["view"].as_u64().unwrap();
+    let corner = added(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "projected", "parent": 1,
+               "side": "above_right", "style": {"hidden_lines": true}}),
+    );
+    let iso = added(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "iso",
+               "at": [320, 220], "style": {"hidden_lines": true}}),
+    );
+    let section = added(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "section", "parent": 1,
+               "line": [[85, 105], [85, 135]], "at": [300, 120]}),
+    );
+    let detail = added(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "detail",
+               "parent": section, "center": [300, 120], "radius": 6, "at": [300, 40],
+               "style": {"hidden_lines": true}}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1,
+               "style": {"hidden_lines": true}}),
+    );
+    // The front and the right view: their style decides.
+    for id in [1, 2] {
+        assert!(
+            view(&doc, "D1", id)["no_hidden_lines"].is_null(),
+            "view {id}"
+        );
+    }
+    assert_eq!(view(&doc, "D1", corner)["no_hidden_lines"], "isometric");
+    assert_eq!(view(&doc, "D1", iso)["no_hidden_lines"], "isometric");
+    assert_eq!(view(&doc, "D1", section)["no_hidden_lines"], "section");
+    assert_eq!(view(&doc, "D1", detail)["no_hidden_lines"], "section");
+    // Turned on the sheet, the isometric view is still one (mitcad#729).
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": iso, "rotation": 30}),
+    );
+    assert_eq!(view(&doc, "D1", iso)["no_hidden_lines"], "isometric");
+    // What the query says is what the views draw.
+    let d = doc.find_drawing("D1").unwrap();
+    let sheet = &d.sheets[0];
+    assert!(sheet.spec(1).unwrap().hidden);
+    for id in [corner, iso, section, detail] {
+        let id = id as u32;
+        assert!(sheet.no_hidden_lines(id).is_some(), "view {id}");
+        assert!(sheet.style(id).hidden_lines, "view {id}");
+        assert!(!sheet.spec(id).unwrap().hidden, "view {id}");
+    }
 }

@@ -23,6 +23,7 @@
 #include <Standard_Failure.hxx>
 
 #include "mitcad/geometry/guard.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -37,7 +38,7 @@ void earlier(int number, siginfo_t*, void*) {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+MITCAD_BUNDLED_TEST_ARGS(guard) {
   if (argc != 2) {
     std::fprintf(stderr, "usage: test_guard inside|outside|operation\n");
     return 2;

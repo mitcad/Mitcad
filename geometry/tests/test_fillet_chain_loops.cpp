@@ -32,6 +32,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -159,7 +160,7 @@ void test_mitcad_fillet_round_a_closed_chain_ends() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_chain_loops) {
   test::guarded("test_contour_round_a_closed_chain_stops_where_it_turns",
                 test::test_contour_round_a_closed_chain_stops_where_it_turns);
   test::guarded("test_mitcad_fillet_round_a_closed_chain_ends", test::test_mitcad_fillet_round_a_closed_chain_ends);

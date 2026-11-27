@@ -9,7 +9,7 @@
 # tools/ui-windows-panel-message-reveal-test.ps1) on a cube that mitcad-cli
 # makes (tools/ui-scripts/panel-message-top.json), in a 1280 x 600 window,
 # in the Docked layout and then in the Floating one: Extrude1 edited, its
-# Distance typed 0 fails the preview, and the panel's error box is in the
+# Distance typed -5 (Symmetric) fails the preview, and the panel's error box is in the
 # page's view without the test scrolling to it: its logged place, and the
 # Distance field's that keeps the keyboard, lie within "Panel Extrude view
 # y A to B". In the Docked layout the box was below the page's view: the
@@ -55,7 +55,7 @@ run_layout() {
   done
   kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail "$1: the panel message driver timed out"; exit 1; }
   wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; ui_fail "$1: the panel message driver failed"; exit 1; }
-  ui_expect_log 'Preview Extrude: failed' "$1: a distance of 0 fails the preview"
+  ui_expect_log 'Preview Extrude: failed' "$1: a symmetric distance of -5 fails the preview"
   ui_expect_log 'Panel Extrude message box: error: ' "$1: its error in the panel's box"
   ui_expect_log 'TestDriver: done' "$1: the error is brought into view"
   # From the error to the panel's end (Esc).

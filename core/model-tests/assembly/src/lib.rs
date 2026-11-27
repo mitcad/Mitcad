@@ -54,3 +54,6 @@ mod selection_set_tests;
 mod operation_follow_tests;
 // Copies keep the light bulbs of their sketches (mitcad#2449).
 mod copy_light_bulbs_tests;
+// Construction sets: named Browser groups that collect new sketches,
+// construction geometry and surface bodies while active (mitcad#2514).
+mod construction_set_tests;

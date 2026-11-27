@@ -130,6 +130,7 @@ class ViewController;
 class SpaceMouseController;
 class RepeatKeyFilter;
 class StartPage;
+class PaintWatch; // whether the widgets over the view reach the screen (mitcad#2031)
 class CamSimulateDialog;
 class FormCageOverlay; // a Form's cage over the view (mitcad#1757)
 class RenderWorkspace; // the Render tab's workspace (mitcad#2013)
@@ -259,7 +260,9 @@ public:
   // edit-lock workflows as this window. A replacement invalidates its ID.
   QString mcpDocumentId() const { return m_mcpDocumentId; }
   QJsonObject mcpDocumentInfo() const;
-  QJsonObject mcpQuery(const QJsonObject& request) const;
+  // The long analyses (mitcad#2540, mitcad_mcp::query_jobs) run as a model
+  // job with the progress and its Cancel; the others are read inline.
+  QJsonObject mcpQuery(const QJsonObject& request);
   // model_command's arguments: a command or an array of them, and how much
   // of the document the result holds (mitcad#689).
   QJsonObject mcpCommand(const QJsonObject& arguments);
@@ -662,6 +665,9 @@ private:
   // Live MCP (mitcad#265): busy refusals, a sketch's commands through its
   // session, the agent's undo labels, Save, and the ui_* tools.
   void mcpRefuseBusy() const;
+  // What the progress says while an agent's long query runs as a model job
+  // (mitcad#2540), by the query's name.
+  static QString mcpQueryStage(const QString& job);
   // One command of model_command: through the model, or the sketch being
   // edited; false with the reason when it is refused (mitcad#689).
   bool mcpModelStep(const QJsonObject& request, QJsonObject* answer, QString& reason);
@@ -1751,15 +1757,25 @@ private:
   // (unchanged since the document was opened, or Overwrite chosen), false
   // for Save As instead, nothing to cancel.
   std::optional<bool> askOverwriteChanged();
-  // A design a newer MitCad wrote (mitcad#1132, files/MainWindowFiles.cpp):
-  // the top-level fields this MitCad did not read (all, or with a path
-  // those saving there drops), the warning on opening it, and the question
-  // before Save writes over its file: true to write (nothing to drop, or
-  // Save and Drop Them chosen), false for Save As instead, nothing to
-  // cancel. An agent's save (MCP) is refused instead of asked.
-  QStringList unknownFields(const QString& path) const;
+  // A design a newer MitCad wrote (mitcad#1132, files/MainWindowFiles.cpp),
+  // or whose CAM this MitCad could not read (mitcad#2581): what was not
+  // read (all, or with a path what saving there drops), the warning on
+  // opening it, and the question before Save writes over its file: true to
+  // write (nothing to drop, or Save and Drop Them chosen), false for Save
+  // As instead, nothing to cancel. An agent's save (MCP) is refused instead
+  // of asked. Edit in Place asks the same of the design it writes, without
+  // Save As (offerSaveAs false).
+  struct FieldsNotRead {
+    QStringList newer; // the top-level fields a newer MitCad wrote
+    bool cam = false; // the CAM section, which could not be read
+    QString camReason; // what is wrong with it, in words
+    bool isEmpty() const { return newer.isEmpty() && !cam; }
+  };
+  static FieldsNotRead fieldsNotRead(const QJsonObject& answer);
+  FieldsNotRead unknownFields(const QString& path) const;
   void warnUnknownFields();
   std::optional<bool> askDropUnknownFields(const QString& path);
+  std::optional<bool> askDropFieldsNotRead(const FieldsNotRead& fields, const QString& path, bool offerSaveAs);
 
   // Component libraries (mitcad#64, mitcad#63, files/MainWindowLibraries.cpp).
   void registerLibraryCommands();
@@ -1818,6 +1834,17 @@ private:
   bool importPointFile(const QString& path, bool interactive, QString* error);
   void insertMesh();
   void insertDxf();
+  // A drop on the 3D view (mitcad#1894, mitcad#2428): its place in the
+  // view's logical pixels, and insert_component's `transform` there
+  // (dropTransform; null over empty space), worked out at the drop while
+  // the model is idle, else at the job's end (placeViewDrop), so that a
+  // drop that waits for a command goes where it was dropped even when the
+  // camera moved since (mitcad#2527). Empty until it is worked out.
+  struct ViewDrop {
+    QPointF pixel;
+    std::optional<QJsonValue> at;
+  };
+  void placeViewDrop(ViewDrop& drop);
   // Insert Component: `path` asked for when empty; `at` an
   // insert_component `transform` (a drop's place, mitcad#2428), else the
   // origin.
@@ -1829,12 +1856,14 @@ private:
   // A design of the Projects panel dragged onto the 3D view (mitcad#2428,
   // files/MainWindowFiles.cpp): whether the view is under the global point
   // (not a card or panel over it, not the Start page), and the drop there:
-  // refused at once when insertRefusal says so, else inserted through
-  // Insert Component at the face under the drop, as dropped files are
-  // (dropTransform), waiting while a command is open (Arrival::project).
+  // refused at once when insertRefusal says so (asked when the model is
+  // idle; while a job computes it, Insert Component asks when it comes
+  // in), else inserted through Insert Component at the face under the
+  // drop, as dropped files are (ViewDrop), waiting while a command is open
+  // (Arrival::project).
   bool viewTakesProjectDesign(const QPoint& global) const;
   void dropProjectDesign(const QString& path, const QPoint& global);
-  void insertDroppedDesign(const QString& path, std::optional<QPointF> onView);
+  void insertDroppedDesign(const QString& path, const std::optional<ViewDrop>& drop);
   // insert_component's `transform` for a drop at a place of the view
   // (mitcad#1894): at the point of the face there, its Z along the face's
   // normal, in the active component's coordinates; null over empty space.
@@ -1889,7 +1918,7 @@ private:
     QStringList paths;  // the download's kept copy, or the files dropped
     QString folder;     // the copy's folder (a download), removed once it came in
     bool web = false;   // a download (else a drop)
-    std::optional<QPointF> onView; // a drop's place on the view
+    std::optional<ViewDrop> drop; // a drop's place on the view, placed at the drop (mitcad#2527)
     QString waitedFor;  // what it waited for (empty: only for the model or those before it)
     bool project = false; // a design of the Projects panel, inserted with Insert Component (mitcad#2428)
   };
@@ -1918,12 +1947,12 @@ private:
   void dropArrivals(bool closing);
   // Files dropped on the window (openDropped) by the gate: as from Idle, at
   // once beside an inspection, or waiting.
-  void arriveDropped(const QStringList& paths, std::optional<QPointF> onView);
+  void arriveDropped(const QStringList& paths, const std::optional<ViewDrop>& drop);
   // A design dragged from the Projects panel onto the view (mitcad#2428):
   // inserted now from Idle, else kept until the open command, an
   // inspection too, closes.
   void arriveProjectDesign(const Arrival& arrival);
-  void openDroppedNow(const QStringList& paths, std::optional<QPointF> onView);
+  void openDroppedNow(const QStringList& paths, const std::optional<ViewDrop>& drop);
   // The web browser component (CEF and the module, BrowserComponent.hpp):
   // the installed one's window, the first download (asked once, with its
   // size), and the check for a newer one of this MitCad's interface.
@@ -2681,6 +2710,26 @@ private:
   // maybeSave's question about the linked design's unsaved in-place edits,
   // the mode ended; false when canceled.
   bool settleInPlaceEdits();
+  // The linked design's file as Edit in Place without a tab read it or
+  // last wrote it (fileDigest; empty for a design from a tab), and the kept
+  // edits' (mitcad#2527).
+  QString m_inPlaceDigest;
+  QString m_inPlaceKeptDigest;
+  // Before changes made in place are written over `file` without its tab
+  // (mitcad#2527): asked when a tab has the file open now (written: never;
+  // dropped when `canDrop`, else refused in words) or when the file changed
+  // on disk since `digest` (Overwrite, Don't Save when `canDrop`, Cancel).
+  enum class InPlaceWrite { Write, Drop, Cancel };
+  InPlaceWrite askInPlaceWrite(const QString& file, const QString& digest, bool canDrop);
+  // The kept edits dropped, said in the message band.
+  void dropKeptInPlaceEdits();
+  // Before `path` opens in a window (openFile, Open Project; mitcad#2527):
+  // refused while a window edits it in place without a tab (`error` says
+  // why), and a window's kept in-place edits of it asked about first (Save,
+  // Don't Save, Cancel), so that no older copy is written over the tab's
+  // saves later; false when it does not open (`error` empty: canceled).
+  bool settleInPlaceForOpen(const QString& path, QString& error);
+  bool settleKeptForOpen(QString& error);
   // A command's frozen picks of the assembly (`in_place_notices`) in the
   // message band, after the command.
   void showInPlaceNotices(const QJsonObject& answer);
@@ -2875,6 +2924,11 @@ private:
   // seen along it, to a DXF file the user names; false when cancelled or
   // refused (its panel then stays open, mitcad#1963).
   bool exportFaceDxf(const SelectionItem& face);
+  // Nest Flat Patterns… (Laser, mitcad#2553): the sheet-metal parts
+  // chosen with their copies onto a new or a design's cut sheet, nested,
+  // in one undo step; the cut sheet then opens. Logs "Nest Flat Patterns:
+  // <n> part(s) on <cut sheet>, <w> warning(s)".
+  void nestFlatPatterns();
   // The selected body's card on the Make tab: made with the idle page,
   // shown and filled by updateMakeCard (logged "Make card: <summary>" or
   // "Make card: none"); its edits set the design's printer, or the
@@ -3198,6 +3252,10 @@ private:
   void drawPointClouds();
   QHash<QString, PointCloudDrawn> m_pointCloudPoints; // by name
   QHash<QString, QByteArray> m_pointCloudKeys;        // the entry each was asked for
+  // A point cloud tool's panel on a cloud (mitcad#2516): the cloud its
+  // Browser row gave, taken by the panel when it starts.
+  void startPointCloudTool(const QString& command, const QString& name) override;
+  QString m_pointCloudForTool;
   // The cloud a shown Point Cloud Deviation colours and what it measured
   // of it (no cloud: none shown).
   DeviationSample m_deviationSample;
@@ -3316,6 +3374,15 @@ private:
   // (mitcad#1894).
   void openDropped(const QStringList& paths, std::optional<QPointF> onView = std::nullopt);
   StartPage* m_startPage = nullptr;
+  // Linux (mitcad#2031, framework/PaintWatch.hpp): the toolbar panel, the
+  // title row, the Start page and the Floating layout's rows and cards
+  // logged as painted and presented when the window first shows and when
+  // the Start page is left ("Painted: …", "Frame presented with: …",
+  // "Paint check …"), so that a session on a desktop that allows no
+  // screenshot tells whether they showed. Null elsewhere and in the AppKit
+  // frontend.
+  void watchOverlayPaints();
+  PaintWatch* m_paintWatch = nullptr;
   QStringList m_startHiddenDocks; // the Docked layout's docks it hid
   enum class StartToolbar { Whole, TabRow, Hidden };
   StartToolbar m_startToolbar = StartToolbar::Whole; // updateStartToolbar, as logged
@@ -3704,6 +3771,12 @@ private:
   int timelineCardContentHeight() const;
   QPointer<GlassCard> m_timelineCard; // Floating
   QString m_loggedTimelinePanel;
+
+  // Construction sets (mitcad#2514, GitHub mitcad/Mitcad#656;
+  // MainWindowConstructionSets.cpp): New Construction Set and Deactivate
+  // Construction Set in the Surface tab's Construct group, which the
+  // BrowserController carries out as its Browser rows do.
+  void registerConstructionSetCommands();
 };
 
 } // namespace mitcad

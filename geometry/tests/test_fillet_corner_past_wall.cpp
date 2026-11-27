@@ -43,6 +43,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -187,7 +188,7 @@ void test_roundings_run_past_the_corner_by_name() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_corner_past_wall) {
   test::guarded("test_roundings_run_past_the_corner_with_occt_alone",
                 test::test_roundings_run_past_the_corner_with_occt_alone);
   test::guarded("test_roundings_run_past_the_corner_by_name", test::test_roundings_run_past_the_corner_by_name);

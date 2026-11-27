@@ -34,3 +34,6 @@ mod hole_callout_tests;
 mod flat_pattern_view_tests;
 // Weld symbols by ISO 2553 and AWS A2.4 (mitcad#2350).
 mod weld_symbol_tests;
+// A section's extent: of the whole plane or limited to its line
+// (mitcad#2479).
+mod section_extent_tests;

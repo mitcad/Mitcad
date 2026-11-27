@@ -87,6 +87,49 @@ void setTimelinePresentation(TimelinePresentation presentation) {
   }
 }
 
+// The Browser rows' spacing (mitcad#2513).
+namespace {
+const char* const kRowSpacingSetting = "browser/rowSpacing";
+} // namespace
+
+QString browserRowSpacingId(BrowserRowSpacing spacing) {
+  switch (spacing) {
+  case BrowserRowSpacing::Compact:
+    return QStringLiteral("compact");
+  case BrowserRowSpacing::Comfortable:
+    return QStringLiteral("comfortable");
+  case BrowserRowSpacing::Standard:
+    break;
+  }
+  return QStringLiteral("standard");
+}
+
+BrowserRowSpacing browserRowSpacingFromId(const QString& id) {
+  if (id == QLatin1String("compact")) {
+    return BrowserRowSpacing::Compact;
+  }
+  if (id == QLatin1String("comfortable")) {
+    return BrowserRowSpacing::Comfortable;
+  }
+  return BrowserRowSpacing::Standard;
+}
+
+BrowserRowSpacing browserRowSpacing() {
+  return browserRowSpacingFromId(QSettings().value(QLatin1String(kRowSpacingSetting)).toString());
+}
+
+void setBrowserRowSpacing(BrowserRowSpacing spacing) {
+  const QString key = QLatin1String(kRowSpacingSetting);
+  if (QSettings().contains(key) && browserRowSpacing() == spacing) {
+    return;
+  }
+  const bool changed = browserRowSpacing() != spacing;
+  QSettings().setValue(key, browserRowSpacingId(spacing));
+  if (changed) {
+    emit BrowserPreferencesNotifier::instance().rowSpacingChanged();
+  }
+}
+
 BrowserPreferencesNotifier& BrowserPreferencesNotifier::instance() {
   static BrowserPreferencesNotifier notifier;
   return notifier;

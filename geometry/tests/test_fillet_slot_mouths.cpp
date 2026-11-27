@@ -37,6 +37,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -166,7 +167,7 @@ void test_rounding_over_slot_mouths() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_slot_mouths) {
   test::guarded("test_rounding_over_slot_mouths", test::test_rounding_over_slot_mouths);
   if (test::failures == 0) {
     std::puts("test_fillet_slot_mouths: all checks passed");

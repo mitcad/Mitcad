@@ -80,7 +80,8 @@ carried whole in both states, and one that builds on the patch's lines
 (it does not cherry-pick or OCCT does not build without the patch) is
 shown together with the patch. A suite part whose
 executable has other parts that do not build at that state is linked
-without them. The --jobs workers (trees <work>/c<i>, MitCad builds
+without them, as is a test of a C++ test bundle without the bundle's
+other tests (mitcad#2497). The --jobs workers (trees <work>/c<i>, MitCad builds
 <repo>/build/occt-chain-m<i>) each take a run of consecutive patches and
 walk it forwards, so that each step rebuilds only what the next patch
 changes. Results (chain-results.jsonl) and every state's build and test
@@ -1626,14 +1627,36 @@ def exe_dir(target: str) -> str:
     return ("" if parent == "." else parent + "/") + f"CMakeFiles/{Path(target).name}.dir/"
 
 
+# The folders of the C++ test bundles' targets, by their programs' prefixes
+# (cmake/TestBundles.cmake, mitcad#2497).
+BUNDLE_FOLDERS = {"test_geometry_": "geometry", "test_core_": "core", "test_app_": "app"}
+
+
+def bundled_source(folder: str, name: str) -> str | None:
+    """The source (relative to the folder) whose entry point is the bundled
+    test `name` (MITCAD_BUNDLED_TEST(name) or MITCAD_BUNDLED_TEST_ARGS(name))."""
+    entry = re.compile(rf"^MITCAD_BUNDLED_TEST(?:_ARGS)?\({re.escape(name)}\)", re.M)
+    for src in sorted((REPO / folder).rglob("*.cpp")):
+        if entry.search(src.read_text(encoding="utf-8", errors="replace")):
+            return src.relative_to(REPO / folder).as_posix()
+    return None
+
+
 def own_sources(test: dict) -> set[str] | None:
     """The sources (relative to the target's folder) a suite part's run needs
-    of its executable; None where the executable has no parts."""
+    of its executable; None where the executable has no parts. A test of a
+    bundle needs its own file and the bundle's main (outside the folder:
+    CMake's object path has __ for ..); the other tests' files register
+    themselves, so the bundle links without them."""
     cmd = test["command"]
+    exe = Path(cmd[0]).name
+    for prefix, folder in BUNDLE_FOLDERS.items():
+        if exe.startswith(prefix) and len(cmd) > 1:
+            src = bundled_source(folder, cmd[1])
+            return {src, "__/tools/test-bundle/bundle_main.cpp"} if src else None
     if "--part" not in cmd or cmd.index("--part") + 1 >= len(cmd):
         return None
     part = cmd[cmd.index("--part") + 1]
-    exe = Path(cmd[0]).name
     if exe == "test_geometry":
         table = (REPO / "geometry" / "tests" / "test_main.cpp").read_text(encoding="utf-8", errors="replace")
         m = re.search(rf'\{{"{re.escape(part)}",\s*test::(\w+)\}}', table)

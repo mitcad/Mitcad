@@ -1,0 +1,16 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Minimum Distance's two blocks (mitcad#2519, tools/ui-scripts/minimum-distance.mitcad-ui): Body1 (F2.b0), a 10 x 10 mm square at the origin extruded as high as the parameter height (10 mm), and Body2 (F4.b0), the same square extruded from 15 mm to 25 mm above XY: 5 mm apart along Z."},
+  {"cmd": "add_parameter", "name": "height", "value": "10 mm"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "height"}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "start": {"type": "offset", "offset": 15},
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}}
+]

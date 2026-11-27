@@ -7,21 +7,43 @@
 // end and a round rod's, straight and along a bend, outward and inward, by
 // their analytic volumes: the two the same cone on the rod, different on
 // the T-slot. Refusals in words: walls that neither turn nor run straight,
-// a turn into the body, a taper that closes the face.
+// a turn into the body, a taper that closes the face. Offset on the
+// sloping side of a tapered extrusion and of a loft between coaxial circles
+// (mitcad#2478): +-0.2 mm along the normal at the drag handle's point, the
+// caps kept and joined; that point (face_inner_point) beside a hole. The
+// same on the B-spline side of a loft through three and four circles
+// (mitcad#2509), by the volume of its profile so moved; a face with a true
+// crease refuses in words.
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <exception>
 #include <initializer_list>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
+#include <BRepTools.hxx>
+#include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAbs_Shape.hxx>
+#include <Geom_Surface.hxx>
+#include <ShapeUpgrade_ShapeDivideContinuity.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
@@ -29,12 +51,16 @@
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
+#include <gp_Vec2d.hxx>
 
 #include "check.hpp"
+#include "mitcad/geometry/datum.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/faceops.hpp"
+#include "mitcad/geometry/loft.hpp"
 #include "mitcad/geometry/naming.hpp"
 #include "mitcad/geometry/press_pull.hpp"
+#include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/revolve.hpp"
 #include "mitcad/geometry/user_error.hpp"
@@ -361,6 +387,366 @@ void test_refusals() {
   CHECK(throws_with([&] { press_pull(*rod, pull(end, PressPullRun::Straight, 0.0)); }, "must not be zero"));
 }
 
+// Offset on the sloping side of a taper (mitcad#2478): clearance for a
+// mating part on a slightly conical shape.
+
+double frustum(double r1, double r2, double height) { return kPi * height * (r1 * r1 + r1 * r2 + r2 * r2) / 3.0; }
+
+double distance_to(const Shape& shape, int f, const gp_Pnt& point) {
+  BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(point).Vertex(), shape.face(f));
+  if (!distance.IsDone() || distance.NbSolution() == 0) {
+    return std::numeric_limits<double>::infinity();
+  }
+  return distance.Value();
+}
+
+int solids_in(const Shape& shape) {
+  int count = 0;
+  for (TopExp_Explorer solids(shape.occt(), TopAbs_SOLID); solids.More(); solids.Next()) {
+    ++count;
+  }
+  return count;
+}
+
+// Offsets the body's `side` by `d` as Press Pull's Offset and Offset Face
+// do: one valid solid whose caps `start` and `end` stay where they were,
+// joined to the moved side, and the side's handle point (face_inner_point)
+// moved `d` along its normal lies on the moved side within `tolerance`.
+ShapePtr offset_side(const Shape& body, const std::string& side, const std::string& start, const std::string& end,
+                     double d, bool tangent_chain, double tolerance) {
+  const int f = face_of(body, side);
+  CHECK(f >= 0);
+  if (f < 0) {
+    return nullptr;
+  }
+  const std::optional<SurfacePoint> handle = face_inner_point(body.face(f));
+  CHECK(handle.has_value());
+  const ShapePtr moved = offset_faces("F9", body, {side}, d, tangent_chain);
+  CHECK(valid(*moved));
+  CHECK(solids_in(*moved) == 1);
+  CHECK(face_of(*moved, start) >= 0);
+  CHECK(face_of(*moved, end) >= 0);
+  const BoundingBox before = bounding_box(body);
+  const BoundingBox after = bounding_box(*moved);
+  CHECK(std::abs(after.min.Z() - before.min.Z()) < std::max(1e-6, tolerance));
+  CHECK(std::abs(after.max.Z() - before.max.Z()) < std::max(1e-6, tolerance));
+  const int g = face_of(*moved, side);
+  CHECK(g >= 0);
+  if (handle && g >= 0) {
+    const gp_Pnt cleared = handle->point.Translated(gp_Vec(handle->normal) * d);
+    const double off = distance_to(*moved, g, cleared);
+    if (!(off < tolerance)) {
+      std::fprintf(stderr, "  offset by %g: the moved point is %g mm off the moved side\n", d, off);
+    }
+    CHECK(off < tolerance);
+  }
+  return moved;
+}
+
+// A circle of radius 10 extruded 10 with a taper of -3 degrees: a cone
+// narrowing upwards. Its side's handle point lies on it with the normal out
+// of the material (out from the axis, up by the taper); offsets of +-0.2 mm
+// move it by that along the normal, the radius at every height by
+// 0.2 / cos 3 degrees, the caps stay.
+void test_offset_tapered_extrusion_side() {
+  constexpr double kRadius = 10.0;
+  constexpr double kHeight = 10.0;
+  const double taper = -3.0 * kDegree;
+  ExtrudeFeatureSpec spec;
+  spec.feature = "F2";
+  spec.regions = {circle(1, 0, 0, kRadius)};
+  spec.side1.distance = kHeight;
+  spec.side1.taper = taper;
+  const ShapePtr cone = extrude_feature(spec);
+  const double top = kRadius + kHeight * std::tan(taper);
+  CHECK_NEAR(volume_of(*cone), frustum(kRadius, top, kHeight));
+
+  const std::string side = face_name("F2", "side", "c1");
+  const std::string start = face_name("F2", "start", "r{c1}");
+  const std::string end = face_name("F2", "end", "r{c1}");
+  const int f = face_of(*cone, side);
+  CHECK(f >= 0);
+  if (f < 0) {
+    return;
+  }
+  const std::optional<SurfacePoint> handle = face_inner_point(cone->face(f));
+  CHECK(handle.has_value());
+  if (handle) {
+    CHECK(distance_to(*cone, f, handle->point) < 1e-7);
+    const gp_Vec radial(handle->point.X(), handle->point.Y(), 0.0);
+    CHECK(radial.Magnitude() > 1.0);
+    // Out from the axis by cos 3 degrees, up by sin 3 degrees.
+    CHECK(std::abs(gp_Vec(handle->normal).Dot(radial.Normalized()) - std::cos(taper)) < 1e-7);
+    CHECK(std::abs(handle->normal.Z() + std::sin(taper)) < 1e-7);
+  }
+
+  for (const double d : {0.2, -0.2}) {
+    for (const bool chain : {true, false}) {
+      const ShapePtr moved = offset_side(*cone, side, start, end, d, chain, 1e-6);
+      if (moved) {
+        const double grown = d / std::cos(taper);
+        CHECK_NEAR(volume_of(*moved), frustum(kRadius + grown, top + grown, kHeight));
+      }
+    }
+  }
+}
+
+// A smooth and a ruled loft between coaxial circles of radius 10 at z = 0
+// and 9 at z = 10: a cone whose seam the loft stores as a degree-1 Bezier
+// curve in 3D and on the cone. Offsets of +-0.2 mm of its side move it by
+// that along its normal and keep the caps: the radius at every height grows
+// by d / cos a (tan a = 0.1). Before mitcad#2478 the geometry kernel's
+// offset split that seam and gave no solid ("the offset produced no
+// solid").
+void test_offset_loft_side() {
+  const double slope = std::atan(0.1);
+  for (const bool ruled : {false, true}) {
+    LoftSpec spec;
+    spec.feature = "F2";
+    spec.ruled = ruled;
+    LoftSection low;
+    low.region = circle(1, 0, 0, 10.0);
+    LoftSection high;
+    high.frame.origin = gp_Pnt(0, 0, 10.0);
+    high.region = circle(1, 0, 0, 9.0);
+    spec.sections = {low, high};
+    const ShapePtr lofted = loft(spec);
+    CHECK(valid(*lofted));
+    CHECK_NEAR(volume_of(*lofted), frustum(10.0, 9.0, 10.0));
+
+    const std::string side = face_name("F2", "side", "c1");
+    const std::string start = face_name("F2", "start", "r{c1}");
+    const std::string end = face_name("F2", "end", "r{c1}");
+    const int f = face_of(*lofted, side);
+    CHECK(f >= 0);
+    if (f < 0) {
+      return;
+    }
+    const std::optional<SurfacePoint> handle = face_inner_point(lofted->face(f));
+    CHECK(handle.has_value());
+    if (handle) {
+      CHECK(distance_to(*lofted, f, handle->point) < 1e-7);
+      const gp_Vec radial(handle->point.X(), handle->point.Y(), 0.0);
+      CHECK(std::abs(gp_Vec(handle->normal).Dot(radial.Normalized()) - std::cos(slope)) < 1e-7);
+      CHECK(std::abs(handle->normal.Z() - std::sin(slope)) < 1e-7);
+    }
+    for (const double d : {0.2, -0.2}) {
+      for (const bool chain : {true, false}) {
+        const ShapePtr moved = offset_side(*lofted, side, start, end, d, chain, 1e-6);
+        if (moved) {
+          const double grown = d / std::cos(slope);
+          CHECK_NEAR(volume_of(*moved), frustum(10.0 + grown, 9.0 + grown, 10.0));
+        }
+      }
+    }
+  }
+}
+
+// Offset on the side of a loft through three or four sections
+// (mitcad#2509): coaxial circles of radius 10 at z = 0 to 9 at z = 10, a
+// true B-spline side. It failed with "the neighbouring faces cannot follow
+// the moved faces": the geometry kernel's offset refuses a surface that is
+// only C0 continuous by its knots (BRepOffset_C0Geometry). Through three
+// sections the side was a crease by its knots all round at the joins of
+// the circles' quadratic arcs (their default B-spline form); the loft now
+// takes a whole circle in the kernel's form continuous in its first
+// derivative (loft_skin.cpp, whole_conic), and the side is so. Through
+// four, the side's piecewise cubic Hermite rows also have their inner
+// knots three times over, a crease by its knots along each inner section
+// though the pieces meet with one tangent; the offset takes them once less
+// in its working copy (faceops.cpp, without_false_creases).
+
+// The volume, measured on a copy whose faces are split where their surfaces
+// are less than C2 continuous: over a whole face of pieces joined C1, and
+// above all on its offset, the kernel's integration is far off (as
+// test_loft_smooth_sections_shell.cpp measures, mitcad#2271).
+double split_volume_of(const Shape& shape) {
+  ShapeUpgrade_ShapeDivideContinuity divide(BRepBuilderAPI_Copy(shape.occt()).Shape());
+  divide.SetBoundaryCriterion(GeomAbs_C2);
+  divide.SetPCurveCriterion(GeomAbs_C0);
+  divide.SetSurfaceCriterion(GeomAbs_C2);
+  divide.Perform();
+  const TopoDS_Shape split = divide.Result();
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(split.IsNull() ? shape.occt() : split, props);
+  return props.Mass();
+}
+
+// The volume between the planes z = 0 and z = height of the solid of
+// revolution about the z axis whose side is the face `side` (a surface of
+// revolution about that axis) offset by `d` away from the axis: the side's
+// profile at its first u (each point at its distance from the axis and its
+// height) moved by d along its normal in the profile's plane, continued
+// along its end tangents past the planes, as the kernel's offset extends
+// the face to meet them, and summed as frustums between close points cut
+// at the planes. With d = 0 it is the loft's own volume.
+double revolved_offset_volume(const TopoDS_Face& side, double d, double height) {
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  BRepTools::UVBounds(side, u0, u1, v0, v1);
+  const BRepAdaptor_Surface surface(side, false);
+  // A point of the offset profile (r, z) and the profile's unit tangent
+  // there, the way v grows.
+  const auto at = [&](double v, gp_Vec2d& tangent) {
+    gp_Pnt p;
+    gp_Vec du;
+    gp_Vec dv;
+    surface.D1(u0, v, p, du, dv);
+    const double r = std::hypot(p.X(), p.Y());
+    tangent = gp_Vec2d((p.X() * dv.X() + p.Y() * dv.Y()) / r, dv.Z());
+    tangent.Normalize();
+    gp_Vec2d normal(tangent.Y(), -tangent.X());
+    if (normal.X() < 0.0) {
+      normal.Reverse();
+    }
+    return gp_Pnt2d(r + d * normal.X(), p.Z() + d * normal.Y());
+  };
+  constexpr int kSteps = 4000;
+  constexpr double kReach = 2.0; // mm past each end
+  std::vector<gp_Pnt2d> profile;
+  gp_Vec2d tangent;
+  const gp_Pnt2d first = at(v0, tangent);
+  profile.push_back(first.Translated(-kReach * tangent));
+  for (int i = 0; i <= kSteps; ++i) {
+    profile.push_back(at(v0 + (v1 - v0) * i / kSteps, tangent));
+  }
+  profile.push_back(profile.back().Translated(kReach * tangent));
+  // Each piece's frustum between the planes, signed by the way z goes.
+  double volume = 0.0;
+  for (std::size_t i = 0; i + 1 < profile.size(); ++i) {
+    const gp_Pnt2d a = profile[i];
+    const gp_Pnt2d b = profile[i + 1];
+    const double dz = b.Y() - a.Y();
+    if (std::abs(dz) < 1e-15) {
+      continue;
+    }
+    const auto r_at = [&](double z) { return a.X() + (b.X() - a.X()) * (z - a.Y()) / dz; };
+    const double low = std::max(std::min(a.Y(), b.Y()), 0.0);
+    const double high = std::min(std::max(a.Y(), b.Y()), height);
+    if (!(high > low)) {
+      continue;
+    }
+    const double piece = frustum(r_at(low), r_at(high), high - low);
+    volume += dz > 0.0 ? piece : -piece;
+  }
+  return std::abs(volume);
+}
+
+ShapePtr loft_of_circles(const std::vector<double>& radii, double height) {
+  LoftSpec spec;
+  spec.feature = "F2";
+  for (std::size_t i = 0; i < radii.size(); ++i) {
+    LoftSection section;
+    section.frame.origin = gp_Pnt(0, 0, height * static_cast<double>(i) / static_cast<double>(radii.size() - 1));
+    section.region = circle(1, 0, 0, radii[i]);
+    spec.sections.push_back(section);
+  }
+  return loft(spec);
+}
+
+void test_offset_loft_side_through_sections() {
+  constexpr double kHeight = 10.0;
+  const std::vector<std::vector<double>> lofts = {{10.0, 9.2, 9.0}, {10.0, 9.4, 9.1, 9.0}};
+  for (const std::vector<double>& radii : lofts) {
+    std::fprintf(stderr, "  a loft through %zu circles\n", radii.size());
+    const ShapePtr lofted = loft_of_circles(radii, kHeight);
+    CHECK(valid(*lofted));
+    const std::string side = face_name("F2", "side", "c1");
+    const std::string start = face_name("F2", "start", "r{c1}");
+    const std::string end = face_name("F2", "end", "r{c1}");
+    const int f = face_of(*lofted, side);
+    CHECK(f >= 0);
+    if (f < 0) {
+      continue;
+    }
+    // One side face, its surface a B-spline; through three sections no
+    // longer creased by its knots.
+    const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(lofted->face(f));
+    CHECK(BRepAdaptor_Surface(lofted->face(f)).GetType() == GeomAbs_BSplineSurface);
+    if (radii.size() == 3) {
+      CHECK(surface->Continuity() != GeomAbs_C0);
+    }
+    const double body = split_volume_of(*lofted);
+    CHECK_NEAR(revolved_offset_volume(lofted->face(f), 0.0, kHeight), body);
+    // The handle point on the side, its normal out of the material: away
+    // from the axis, up as the side narrows upwards.
+    const std::optional<SurfacePoint> handle = face_inner_point(lofted->face(f));
+    CHECK(handle.has_value());
+    if (handle) {
+      CHECK(distance_to(*lofted, f, handle->point) < 1e-7);
+      const gp_Vec radial(handle->point.X(), handle->point.Y(), 0.0);
+      CHECK(gp_Vec(handle->normal).Dot(radial.Normalized()) > 0.99);
+      CHECK(handle->normal.Z() > 0.0);
+    }
+    for (const double d : {0.2, -0.2}) {
+      for (const bool chain : {true, false}) {
+        const ShapePtr moved = offset_side(*lofted, side, start, end, d, chain, 1e-5);
+        if (!moved) {
+          continue;
+        }
+        const int g = face_of(*moved, side);
+        CHECK(g >= 0);
+        if (g < 0) {
+          continue;
+        }
+        // Moved d along the normal: the volume of the side's profile so
+        // moved, between the caps; the caps stay.
+        CHECK_NEAR_TOL(split_volume_of(*moved), revolved_offset_volume(lofted->face(f), d, kHeight), 1e-5);
+        CHECK(d > 0.0 ? split_volume_of(*moved) > body : split_volume_of(*moved) < body);
+      }
+    }
+  }
+}
+
+// A face with a true crease inside it refuses in words, with its place
+// (mitcad#2509): a rod whose side is the kernel's default B-spline form of
+// its circle (BRepBuilderAPI_NurbsConvert), quadratic arcs meeting at knots
+// twice over, continuous only in position in their homogeneous
+// coordinates, which no knot removal smooths. The body stays as it was.
+void test_offset_refuses_creased_face() {
+  const ShapePtr rod = extrude("F2", {circle(1, 0, 0, 10)}, 0, 20);
+  BRepBuilderAPI_NurbsConvert nurbs(rod->occt(), true);
+  std::vector<Shape::NamedFace> named;
+  for (int i = 0; i < rod->face_count(); ++i) {
+    named.push_back({nurbs.ModifiedShape(rod->face(i)), rod->face_names(i)});
+  }
+  const ShapePtr spline = std::make_shared<Shape>(nurbs.Shape(), named);
+  const int f = face_of(*spline, face_name("F2", "side", "c1"));
+  CHECK(f >= 0);
+  if (f < 0) {
+    return;
+  }
+  CHECK(BRep_Tool::Surface(spline->face(f))->Continuity() == GeomAbs_C0);
+  const double before = volume_of(*spline);
+  CHECK(throws_with([&] { offset_faces("F9", *spline, {face_name("F2", "end", "r{c1}")}, 2.0, false); },
+                    "a face of the body has a crease inside it"));
+  CHECK(throws_with([&] { offset_faces("F9", *spline, {face_name("F2", "end", "r{c1}")}, 2.0, false); },
+                    "F2:side(c1)"));
+  CHECK_NEAR(volume_of(*spline), before);
+}
+
+// The handle point of a planar face whose middle is in a hole: the T-slot
+// bar's end, its bore under the middle. A point of the face, the normal
+// the end's.
+void test_face_inner_point_beside_hole() {
+  const ShapePtr bar = extrude("F2", {tslot(0.0, 0.0)}, 0, 40);
+  const int f = face_of(*bar, kSlotEnd);
+  CHECK(f >= 0);
+  if (f < 0) {
+    return;
+  }
+  const std::optional<SurfacePoint> handle = face_inner_point(bar->face(f));
+  CHECK(handle.has_value());
+  if (handle) {
+    CHECK(distance_to(*bar, f, handle->point) < 1e-7);
+    CHECK(std::abs(handle->point.Z() - 40.0) < 1e-7);
+    CHECK(handle->point.Distance(gp_Pnt(0.0, -2.0, 40.0)) > 2.5);
+    CHECK(handle->normal.IsEqual(gp_Dir(0.0, 0.0, 1.0), 1e-9));
+  }
+}
+
 } // namespace
 
 void press_pull_tests() {
@@ -370,6 +756,11 @@ void press_pull_tests() {
   guarded("test_tslot_along", test_tslot_along);
   guarded("test_round_tapers_agree", test_round_tapers_agree);
   guarded("test_refusals", test_refusals);
+  guarded("test_offset_tapered_extrusion_side", test_offset_tapered_extrusion_side);
+  guarded("test_offset_loft_side", test_offset_loft_side);
+  guarded("test_face_inner_point_beside_hole", test_face_inner_point_beside_hole);
+  guarded("test_offset_loft_side_through_sections", test_offset_loft_side_through_sections);
+  guarded("test_offset_refuses_creased_face", test_offset_refuses_creased_face);
 }
 
 } // namespace test

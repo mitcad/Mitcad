@@ -6,6 +6,9 @@
 #   1. Pin:2 isolated, nothing selected: Bodies starts with the placement
 #      the view shows, Send the Design's Plates off; Send writes the bodies,
 #      not the plates.
+#   1b. Still isolated, nothing selected (mitcad#2490): Print Analysis and
+#      Draft Analysis start with Pin alone, the body Isolate leaves shown,
+#      not Cube (Esc closes each).
 #   2. Still isolated: the box ticked sends the design's plates.
 #   3. Isolate off, nothing selected: the plates start on again and Bodies
 #      holds every shown placement (Esc sends nothing).
@@ -33,6 +36,32 @@ mark
 key Return
 wait-log '^3D Print: 1 bodies as 3mf '
 expect-no-log '^3D Print plate '
+wait-idle
+
+# 1b. Still isolated, nothing selected (mitcad#2490): Print Analysis and
+#     Draft Analysis start from the bodies Isolate leaves shown, as Send to
+#     Slicer does: Pin alone, not Cube.
+mark
+command inspect.print_analysis
+wait-log '^Command Print Analysis started' 20
+wait-log '^Print Analysis Bodies: 1 body' 20
+wait-log '^Inspect Print Analysis: Pin overhang [^;]*, estimate ' 60
+expect-no-log '^Inspect Print Analysis: .*Cube'
+wait-idle 60
+mark
+key Escape
+wait-log '^Command Print Analysis cancelled'
+wait-idle
+mark
+command inspect.draft_analysis
+wait-log '^Command Draft Analysis started' 20
+wait-log '^Draft Analysis Bodies: 1 body' 20
+wait-log '^Inspect Draft Analysis: pull [(]0, 0, 1[)], angle 1: Pin along ' 60
+expect-no-log '^Inspect Draft Analysis: .*Cube'
+wait-idle 60
+mark
+key Escape
+wait-log '^Command Draft Analysis cancelled'
 wait-idle
 
 # 2. The box ticked: the design's plates.

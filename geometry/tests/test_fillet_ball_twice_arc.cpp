@@ -85,6 +85,7 @@
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/import.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -554,7 +555,7 @@ void test_case_body() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_ball_twice_arc) {
   test::guarded("test_pocket_floor_rounded", test::test_pocket_floor_rounded);
   test::guarded("test_case_body", test::test_case_body);
   if (test::failures != 0) {

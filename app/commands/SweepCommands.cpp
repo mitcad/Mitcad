@@ -1998,4 +1998,249 @@ CommandDef helixCurveCommand(const CommandContext& context) {
   return def;
 }
 
+// ---------------------------------------------------------------------------
+// Isoparametric Curve (mitcad#2522): a face's u or v curve as a 3D curve
+// that follows the face, a path for the features after it as a Helix
+// Curve's is. At Point: through the face's point nearest to where the face
+// was clicked; At Position: a fraction of the face's range; Evenly Spaced:
+// that many curves across the face.
+
+namespace {
+
+const QString kIsoFace = QStringLiteral("face");
+const QString kIsoFacePick = QStringLiteral("face_pick");
+const QString kIsoPlace = QStringLiteral("place");
+const QString kIsoAtPoint = QStringLiteral("point");
+const QString kIsoAtPosition = QStringLiteral("position");
+const QString kIsoEvenly = QStringLiteral("count");
+// An edited curve's component and its links' target, kept for isoHome().
+const QString kIsoHome = QStringLiteral("face_home");
+
+// The choices' labels, for the catalogues (their lists are made before the
+// language is installed).
+[[maybe_unused]] const char* const kIsoChoiceNames[] = {
+    QT_TRANSLATE_NOOP("Choice", "U Direction"), QT_TRANSLATE_NOOP("Choice", "V Direction"),
+    QT_TRANSLATE_NOOP("Choice", "At Point"), QT_TRANSLATE_NOOP("Choice", "At Position"),
+    QT_TRANSLATE_NOOP("Choice", "Evenly Spaced")};
+
+// Where the face input's item was clicked, kept with the item it was
+// clicked on: {item, point} (the point in the item's component).
+QJsonObject isoPick(const SelectionItem& item, const QJsonArray& point) {
+  return {{QStringLiteral("item"), item.logDescription()}, {QStringLiteral("point"), point}};
+}
+
+// The point kept for the face picked now; empty when it was not clicked.
+QJsonArray isoPickedPoint(const CommandState& state) {
+  const Selection& face = state.items(kIsoFace);
+  const QJsonObject pick = state.object(kIsoFacePick);
+  if (face.isEmpty() || pick.value(QStringLiteral("item")).toString() != face.first().logDescription()) {
+    return {};
+  }
+  const QJsonArray point = pick.value(QStringLiteral("point")).toArray();
+  return point.size() == 3 ? point : QJsonArray();
+}
+
+// Where the curve goes (mitcad#2554): its component (an edited curve's
+// own, else the active one) and the occurrence that component is seen at
+// (an edited curve's links' target while it still places the component,
+// else the component's first occurrence; empty in the root).
+struct IsoHome {
+  QString component = QStringLiteral("C0");
+  QString occurrence;
+};
+
+IsoHome isoHome(const CommandState& state, const CommandContext& context) {
+  IsoHome home;
+  const QJsonObject kept = state.object(kIsoHome);
+  if (kept.contains(QStringLiteral("component"))) {
+    home.component = str(kept, "component");
+  } else {
+    try {
+      home.component = componentsOf(context).value(QStringLiteral("active")).toString(QStringLiteral("C0"));
+    } catch (const std::exception&) {
+      // The root then.
+    }
+  }
+  if (home.component == QStringLiteral("C0")) {
+    return home;
+  }
+  const QString target = str(kept, "target");
+  if (!target.isEmpty() && occurrenceComponent(target, context) == home.component) {
+    home.occurrence = target;
+    return home;
+  }
+  bool found = false;
+  eachOccurrence(context, [&home, &found](const QJsonObject& node, const QString& at) {
+    if (!found && str(node, "component") == home.component) {
+      home.occurrence = at;
+      found = true;
+    }
+  });
+  return home;
+}
+
+// A face picked in an occurrence of another component than the curve's:
+// its body's link, {"source": <the occurrence it was picked at>,
+// "target": <where the curve's component is seen>}, the root's empty path
+// left out (the model's `links`, commands.md "Isoparametric Curve"); an
+// empty object for a face of the curve's own component. The model moves
+// the face and the clicked point, which the view gives in the face's own
+// component, into the curve's coordinates by it.
+QJsonObject isoFaceLinks(const SelectionItem& face, const IsoHome& home, const CommandContext& context) {
+  const QString component = occurrenceComponent(face.occurrence, context);
+  if (component.isEmpty() || component == home.component) {
+    return {};
+  }
+  QJsonObject link;
+  if (!face.occurrence.isEmpty()) {
+    link.insert(QStringLiteral("source"), face.occurrence);
+  }
+  if (!home.occurrence.isEmpty()) {
+    link.insert(QStringLiteral("target"), home.occurrence);
+  }
+  return {{face.owner, link}};
+}
+
+} // namespace
+
+CommandDef isoparametricCurveCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("solid.isoparametric_curve");
+  def.name = QObject::tr("Isoparametric Curve");
+  def.icon = QStringLiteral("isoparametric-curve");
+  def.tooltip = QObject::tr("A face's u or v curve as a 3D curve that follows the face");
+  def.keywords = {QStringLiteral("iso curve"), QStringLiteral("isocurve"), QStringLiteral("uv curve"),
+                  QStringLiteral("3d curve"), QStringLiteral("curve"), QStringLiteral("extract")};
+  def.featureType = QStringLiteral("isoparametric_curve");
+  const auto placeIs = [](const QString& place) {
+    return [place](const CommandState& state) { return state.choice(kIsoPlace) == place; };
+  };
+  def.inputs = {
+      selectionInput(kIsoFace, QObject::tr("Face"), SelectKind::Face, 1, 1)
+          .withTooltip(QObject::tr("The face whose curve it is; At Point, where you click it"))
+          .withOnPick(
+              [](const SelectionItem& item, CommandState& state, const CommandContext&) {
+                if (item.at) {
+                  state.setObject(kIsoFacePick,
+                                  isoPick(item, QJsonArray{(*item.at)[0], (*item.at)[1], (*item.at)[2]}));
+                }
+              },
+              false),
+      choiceInput(QStringLiteral("direction"), QObject::tr("Direction"),
+                  {{QStringLiteral("u"), QStringLiteral("U Direction")},
+                   {QStringLiteral("v"), QStringLiteral("V Direction")}},
+                  QStringLiteral("u"))
+          .withTooltip(QObject::tr("Which way the curve runs: U holds the face's u parameter, V its v parameter")),
+      choiceInput(kIsoPlace, QObject::tr("Place"),
+                  {{kIsoAtPoint, QStringLiteral("At Point")},
+                   {kIsoAtPosition, QStringLiteral("At Position")},
+                   {kIsoEvenly, QStringLiteral("Evenly Spaced")}},
+                  kIsoAtPoint)
+          .withTooltip(QObject::tr("Through the point clicked on the face, at a position across it, or several "
+                                   "curves evenly spaced")),
+      valueInput(QStringLiteral("position"), QObject::tr("Position"), ValueKind::Unitless, QStringLiteral("0.5"))
+          .withSlider(0.0, 1.0, 2)
+          .withTooltip(QObject::tr("Where the curve lies across the face, from 0 to 1"))
+          .withVisible(placeIs(kIsoAtPosition)),
+      valueInput(QStringLiteral("count"), QObject::tr("Count"), ValueKind::Unitless, QStringLiteral("3"))
+          .withStepMinimum(1)
+          .withTooltip(QObject::tr("How many curves, evenly spaced across the face"))
+          .withVisible(placeIs(kIsoEvenly)),
+  };
+  def.build = [](const CommandState& state, const CommandContext& context) {
+    Built result;
+    const Selection& face = state.items(kIsoFace);
+    if (face.isEmpty()) {
+      return Built::failure(QObject::tr("Select a face."), kIsoFace);
+    }
+    result.def = {{QStringLiteral("type"), QStringLiteral("isoparametric_curve")},
+                  {QStringLiteral("face"), face.first().reference()}};
+    // A face of another component, linked from where it was picked
+    // (mitcad#2554).
+    const QJsonObject links = isoFaceLinks(face.first(), isoHome(state, context), context);
+    if (!links.isEmpty()) {
+      result.def.insert(QStringLiteral("links"), links);
+    }
+    if (state.choice(QStringLiteral("direction")) == QStringLiteral("v")) {
+      result.def.insert(QStringLiteral("direction"), QStringLiteral("v"));
+    }
+    const QString place = state.choice(kIsoPlace);
+    if (place == kIsoEvenly) {
+      result.def.insert(QStringLiteral("count"), state.expression(QStringLiteral("count")));
+    } else if (place == kIsoAtPosition) {
+      result.def.insert(QStringLiteral("position"), state.expression(QStringLiteral("position")));
+    } else {
+      const QJsonArray point = isoPickedPoint(state);
+      if (point.isEmpty()) {
+        return Built::failure(QObject::tr("Click the face where the curve goes, or choose At Position."), kIsoFace);
+      }
+      result.def.insert(QStringLiteral("point"), point);
+    }
+    return result;
+  };
+
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+    // A linked face back in the occurrence it was picked at (mitcad#2554),
+    // before its click point is kept with it.
+    const QJsonObject links = feature.value(QStringLiteral("links")).toObject();
+    SelectionItem face = itemOf(feature.value(QStringLiteral("face")), context);
+    linkObject(face, links);
+    if (face.isValid()) {
+      state.setItems(kIsoFace, {face});
+    }
+    const QString uid = feature.value(QStringLiteral("uid")).toString();
+    // The curve's component and its links' target, for isoHome().
+    QJsonObject home;
+    try {
+      home.insert(QStringLiteral("component"),
+                  context.queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}})
+                      .value(QStringLiteral("component"))
+                      .toString(QStringLiteral("C0")));
+    } catch (const std::exception&) {
+      // Not known: the active component, as for a new curve.
+    }
+    if (!links.isEmpty()) {
+      home.insert(QStringLiteral("target"), str(links.constBegin().value().toObject(), "target"));
+    }
+    state.setObject(kIsoHome, home);
+    state.setChoice(QStringLiteral("direction"), feature.value(QStringLiteral("direction")).toString() ==
+                                                         QStringLiteral("v")
+                                                     ? QStringLiteral("v")
+                                                     : QStringLiteral("u"));
+    if (feature.contains(QStringLiteral("count"))) {
+      state.setChoice(kIsoPlace, kIsoEvenly);
+      state.setText(QStringLiteral("count"), context.valueText(feature.value(QStringLiteral("count")), uid));
+    } else if (feature.contains(QStringLiteral("position"))) {
+      state.setChoice(kIsoPlace, kIsoAtPosition);
+      state.setText(QStringLiteral("position"),
+                    context.valueText(feature.value(QStringLiteral("position")), uid));
+    } else {
+      state.setChoice(kIsoPlace, kIsoAtPoint);
+      const QJsonArray point = feature.value(QStringLiteral("point")).toArray();
+      if (face.isValid() && point.size() == 3) {
+        state.setObject(kIsoFacePick, isoPick(face, point));
+      }
+    }
+  };
+
+  // A fixed face (a script's) cannot be shown.
+  def.canEdit = [&context](const QJsonObject& feature) {
+    return isShowable(feature.value(QStringLiteral("face")), context);
+  };
+
+  def.describe = [](const CommandState& state, const CommandContext&) {
+    const QString direction =
+        state.choice(QStringLiteral("direction")) == QStringLiteral("v") ? QStringLiteral("V") : QStringLiteral("U");
+    const QString place = state.choice(kIsoPlace);
+    const QString where =
+        place == kIsoEvenly
+            ? QStringLiteral("%1 evenly spaced").arg(number(state.value(QStringLiteral("count"))))
+            : place == kIsoAtPosition
+                  ? QStringLiteral("at position %1").arg(number(state.value(QStringLiteral("position"))))
+                  : QStringLiteral("through the picked point");
+    return QStringLiteral("Added isoparametric curve, %1 direction, %2").arg(direction, where);
+  };
+  return def;
+}
+
 } // namespace mitcad::cmd

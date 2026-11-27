@@ -952,6 +952,16 @@ named_enum! {
             #[serde(default)]
             variable_unit: Option<mitcad_model::sketch::equation::VariableUnit>,
         },
+        // Profile Boundary (mitcad#2551, `boundary.rs` of the sketch
+        // crate): curves of the automatic face outline chosen to bound
+        // profiles as the user's own curves do, or no longer.
+        "sketch.set_profile_boundary" => SetProfileBoundary {
+            sketch: FeatureUid,
+            #[serde(with = "curves")]
+            curves: Vec<EntityUid>,
+            #[serde(default = "yes")]
+            boundary: bool,
+        },
     }
 }
 
@@ -3505,6 +3515,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             C::SetRho { sketch, .. } => (*sketch, "Change Rho in {sketch}"),
             C::EquationCurve { sketch, .. } => (*sketch, "Add Equation Curve to {sketch}"),
             C::EditEquationCurve { sketch, .. } => (*sketch, "Edit Equation Curve in {sketch}"),
+            C::SetProfileBoundary { sketch, .. } => (*sketch, "Profile Boundary in {sketch}"),
             C::Create { .. }
             | C::AddRectangle { .. }
             | C::AddCircle { .. }
@@ -4702,6 +4713,9 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let edited = edit.edit_equation_curve(curve, &input)?;
                     *joined_ref = Some(equation_made_json(&edited));
                 }
+                C::SetProfileBoundary {
+                    curves, boundary, ..
+                } => edit.set_profile_boundary(&curves, boundary)?,
                 C::Create { .. }
                 | C::AddRectangle { .. }
                 | C::AddCircle { .. }

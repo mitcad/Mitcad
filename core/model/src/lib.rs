@@ -265,6 +265,8 @@ pub mod print_analysis;
 pub use document::{EstimateCheck, MinGapCheck, OverhangCheck, PrintAnalysis, ThinWallCheck};
 // Draft Analysis (mitcad#2166).
 pub use document::DraftAnalysis;
+// Minimum Radius (mitcad#2518).
+pub use document::MinRadiusAnalysis;
 #[cfg(test)]
 mod print_analysis_tests;
 // Materials as objects and components' default materials (mitcad#640).
@@ -496,3 +498,30 @@ pub use document::{InPlaceContext, InPlaceMode};
 // The drawing book: drawings of the design and of its linked designs
 // printed as one job (mitcad#2448).
 pub use document::{BookDrawing, BookEntry, BookSource, DrawingBook, SourceDrawing};
+// Construction sets: named Browser groups of a component that collect new
+// sketches, construction geometry and surface bodies while active
+// (mitcad#2514).
+pub use document::{ConstructionMember, ConstructionSet, construction_kind};
+// Minimum Distance analyses (mitcad#2519).
+pub use document::{MinimumDistanceAnalysis, check_clearance, check_distance_pick};
+// Point cloud tools: align, filter and reconstruct (mitcad#2516).
+pub mod point_cloud_tools;
+pub use document::{
+    AlignSettings, AlignStart, AlignTarget, Alignment, CloudFilter, CloudFiltered,
+    CloudReconstructed, DEFAULT_ALIGN_SAMPLES,
+};
+// Surface quality analyses: Zebra, Curvature Map, Isocurve Analysis and
+// Environment Map (mitcad#2517): what the kernel gives of the faces, the
+// values worked out of it and the analyses kept in the document.
+pub use mitcad_model_base::surface_quality;
+pub mod surface_analysis;
+#[cfg(test)]
+mod surface_analysis_tests;
+pub use document::{
+    CurvatureAnalysis, DEFAULT_ISOCURVES, DEFAULT_ZEBRA_STRIPES, DEFAULT_ZEBRA_WIDTH,
+    EnvironmentAnalysis, IsocurveAnalysis, MAX_ISOCURVES, MAX_ZEBRA_STRIPES, SurfaceTarget,
+    ZebraAnalysis, check_isocurve_count, check_limit, check_zebra_settings,
+};
+// Curvature combs of sketch curves and edges, with their inflections
+// (mitcad#2520).
+pub mod curvature_comb;

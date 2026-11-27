@@ -288,26 +288,37 @@ impl<K: Kernel> Document<K> {
                 Ok(source) => {
                     // Linked as its one component (mitcad#2429): so again
                     // while the design keeps that shape, else with its root.
-                    let top = tree
-                        .top
-                        .and_then(|_| super::link_tree::single_component(&source));
+                    let top = super::link_tree::top_now(tree, &source);
                     self.design_tree(
                         &source,
                         &link.path,
                         &CopySource::Document(resolved.parent()),
+                        link.parts.as_deref(),
+                        Some((component, tree)),
                         top.as_ref(),
                     )
+                    .and_then(|read| {
+                        let envelopes = self.read_tree_envelopes(
+                            &source,
+                            &link.path,
+                            read.parts.as_deref(),
+                            tree,
+                            read.top.as_ref(),
+                        )?;
+                        Ok((read, envelopes))
+                    })
                 }
                 Err(e) => Err(e),
             };
             match read {
-                Ok(read) => {
+                Ok((read, envelopes)) => {
                     messages.push(format!("{name} is updated from {}", link.path));
                     trees.push(TreeUpdate {
                         component,
                         digest: new_digest,
                         file: super::components::file_label(&link.path),
                         read,
+                        envelopes,
                     });
                 }
                 Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),

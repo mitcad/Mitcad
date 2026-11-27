@@ -117,9 +117,10 @@ ui_expect_new "Pick places:" "its Profiles take faces"
 ui_mark
 ui_step "pick a face of the cube"          ui_click_pick "face F1.b0/F1:import("
 ui_expect_new "Extrude Profiles: 1 face [face F1:import(" "the face is the profile"
-ui_expect_new "Extrude: automatic Operation = Join" "Join: out of the cube"
-ui_mark
+# A new Extrude starts at 0 mm and chooses nothing until a distance is
+# typed (mitcad#2481).
 ui_step "distance 5"                       ui_type_in "Panel Extrude input distance" "5"
+ui_expect_new "Extrude: automatic Operation = Join" "Join: out of the cube (5 mm typed)"
 ui_expect_new "Preview Extrude: ok" "previewed"
 ui_focus_main
 ui_mark
@@ -179,7 +180,8 @@ ui_mark
 ui_step "extrude (E)"                      ui_key e
 ui_expect_new "Extrude Profiles: 1 face [face $RIGHT of F2.b0" "the side is the profile"
 no_new "Extrude Profiles: 1 profile" "the unused square does not stand in"
-ui_expect_new "Extrude: automatic Operation = Join" "Join at first"
+ui_step "distance 10 mm"                   ui_type_in "Panel Extrude input distance" "10 mm"
+ui_expect_new "Extrude: automatic Operation = Join" "Join at first (10 mm typed)"
 ui_mark
 ui_step "New Body (one up from Join)"      ui_choose "Panel Extrude input operation" -1
 ui_expect_new "Extrude: Operation = New Body" "New Body chosen"

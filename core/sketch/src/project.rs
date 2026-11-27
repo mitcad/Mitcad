@@ -2848,6 +2848,7 @@ mod tests {
             after: None,
             outline: false,
             automatic: false,
+            boundaries: Vec::new(),
         };
         let warning = |ids: &[u32]| {
             ProjectionFollow {

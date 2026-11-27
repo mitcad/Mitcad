@@ -2,11 +2,14 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 
 #include <QImage>
 #include <QObject>
+#include <QPointer>
 #include <QSize>
 #include <QString>
+#include <QWidget>
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_InteractiveObject.hxx>
@@ -15,10 +18,12 @@
 
 #include "ReplacedPictures.hpp"
 
+class QEvent;
 class QPainter;
-class QWidget;
 
 namespace mitcad {
+
+struct PaintLayerProbe;
 
 // A drawing over the whole 3D view painted with QPainter in view pixels
 // (sketch mode's overlay, the dimensions shown outside sketch mode;
@@ -38,12 +43,42 @@ namespace mitcad {
 // in: its owner answers what lies under a place (hit tests), and the view's
 // mouse stays the view's. Made by OcctViewer::addPaintLayer, hidden at
 // first.
+//
+// The driver-safe path (mitcad#2406: sketch mode froze the window on old
+// Intel graphics): a layer keeps one texture while it is shown and has OCCT
+// update its pixels in place for each picture (glTexSubImage2D; a new size
+// redefines the same texture), instead of a new texture per picture; the
+// picture goes up as BGRA, or as RGBA where the driver does not take BGRA
+// or a BGRA upload failed. Around the texture upload and the draw it checks
+// the GL errors and times them (PaintLayerProbe, in OCCT's frame), names
+// the step to the hang marker while it runs (HangWatchdog::
+// noteGraphicsStep), and logs the driver path once ("View paint layer
+// 'sketch overlay' drawn by the view: …"), a slow upload or draw, and every
+// GL error with the step it followed.
+//
+// Where the view cannot draw it (a GL error after its texture upload, also
+// as RGBA, or after its draw; the driver refusing its texture; a view
+// larger than the driver's largest texture; an upload and draw of more than
+// kTooLongMs after its first one), every paint layer of every view is drawn
+// as a widget over its view for the rest of the session, as before 0.72
+// (the same paint function, painted by Qt after the view's frames), and the
+// log says why: "View paint layers drawn as widgets over the view for the
+// rest of the session: <layer>: <why>". MITCAD_TEST_PAINT_LAYER_FAILURE
+// forces that path for the UI tests: "gl-error" reports GL_OUT_OF_MEMORY
+// after every texture upload, "slow-frame" counts every upload and draw as
+// taking 5 s.
 class ViewPaintLayer : public QObject {
 public:
   // Paints the layer: the painter's device is the picture, in view pixels
   // at the screen's ratio, cleared, with antialiasing and the view's font
   // and text colour.
   using Paint = std::function<void(QPainter&)>;
+
+  // An upload and draw that takes longer than this (after the layer's
+  // first, which may compile OCCT's texture program) falls back to widgets.
+  static constexpr double kTooLongMs = 1000.0;
+  // An upload and draw that takes longer than this is logged.
+  static constexpr double kSlowMs = 100.0;
 
   // `frame` asks the view for a frame.
   ViewPaintLayer(QWidget& view, occ::handle<AIS_InteractiveContext> context, QString name, Paint painter,
@@ -61,11 +96,20 @@ public:
   void update();
   // Its name in the view's logs ("sketch overlay").
   const QString& name() const { return m_name; }
+  // Whether the view draws it (false: a widget over the view, after a
+  // failure of the view's path in this session).
+  bool drawnByView() const { return m_widget.isNull(); }
+  // Why the paint layers are widgets over the view in this session ("" when
+  // the view draws them).
+  static QString widgetReason();
 
   // For OcctViewer::handleViewRedraw. Before OCCT draws a frame: paints the
   // picture again if update() asked for it or the camera, the size or the
   // ratio changed.
   void beforeFrame(const occ::handle<V3d_View>& view);
+  // After OCCT drew it: what its upload and draw found (GL errors, times),
+  // logged; a failure turns the layers into widgets for the session.
+  void afterFrame();
   // After OCCT drew it: whether a camera animation moved the camera as the
   // frame was drawn, after the picture was painted (the next frame paints
   // it again).
@@ -79,13 +123,18 @@ public:
   bool takeOutPicture();
   void putBackPicture();
   // For OcctViewer::handleViewRedraw (mitcad#2437): whether enough of its
-  // pictures were replaced since the view last drew a full frame that the
-  // next frame must be one (OCCT lets the replaced pictures' textures go
-  // only in full frames), and that the view drew one.
+  // textures were let go since the view last drew a full frame that the
+  // next frame must be one (OCCT lets them go only in full frames), and
+  // that the view drew one.
   bool wantsFullFrame() const { return m_replaced.wantsFullFrame(); }
   void fullFrameDrawn() { m_replaced.fullFrameDrawn(); }
 
+protected:
+  // The view's resizes, for the widget.
+  bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
+  class Widget;
   // What the picture depends on of the camera: where it looks from and
   // how, not its depth range (which OCCT fits again at every frame).
   struct Pose {
@@ -100,17 +149,39 @@ private:
   };
   static Pose poseOf(const occ::handle<V3d_View>& view);
   void paint(const QSize& pixels);
+  // The view's path failed: every layer becomes a widget (useWidget), the
+  // reason logged once.
+  void fallBack(const QString& why);
+  // Drawn as a widget over the view from now on: the picture out of OCCT.
+  void useWidget();
+  // The widget's paint event.
+  void paintWidget(QWidget& widget);
 
   QWidget& m_view;
   occ::handle<AIS_InteractiveContext> m_context;
   QString m_name;
   Paint m_paint;
   std::function<void()> m_frame;
+  // What OCCT's frame found about the picture (shared with its elements).
+  std::shared_ptr<PaintLayerProbe> m_probe;
   occ::handle<AIS_InteractiveObject> m_picture;
+  // The widget over the view after a failure of the view's path.
+  QPointer<QWidget> m_widget;
   bool m_shown = false;
   bool m_dirty = true;
   int m_paints = 0;
-  // The replaced pictures whose textures OCCT still holds.
+  // Pictures uploaded (the first may compile OCCT's texture program).
+  int m_uploads = 0;
+  // The picture goes up as RGBA (the driver took no BGRA).
+  bool m_rgba = false;
+  // The driver path logged; slow frames logged (at most a few).
+  bool m_pathLogged = false;
+  int m_slowLogged = 0;
+  // The widget's first paint since it was shown was logged; under the test
+  // switch, the pixels its last paint drew.
+  bool m_widgetLogged = false;
+  qint64 m_widgetPixels = -1;
+  // The textures it let go whose memory OCCT still holds.
   ReplacedPictures m_replaced;
   // What it was painted for.
   QSize m_pixels;

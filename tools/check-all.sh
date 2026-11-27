@@ -941,10 +941,14 @@ ctest_plan() {
   python3 tools/ctest-fingerprints.py plan "${args[@]}" > "$LOGS/ctest-plan.tsv" 2> "$LOGS/ctest-plan.log"
 }
 
-# ctest_regex: the tests of the plan that run, as a regular expression.
-ctest_regex() {
-  awk -F'\t' '$2 == "run" { print $1 }' "$LOGS/ctest-plan.tsv" | sed 's/[.[\*^$()+?{|]/\\&/g' |
-    paste -sd '|' | sed 's/^\(..*\)$/^(\1)$/'
+# ctest_names file: the tests of the plan that run, one name a line, into
+# the file (for mitcad-testrun --tests-from and ctest --tests-from-file):
+# one -R expression of every name grows past what ctest's regular
+# expressions take (about 1400 names; mitcad#2579). Fails when the plan
+# runs no test.
+ctest_names() {
+  awk -F'\t' '$2 == "run" { print $1 }' "$LOGS/ctest-plan.tsv" > "$1"
+  [ -s "$1" ]
 }
 
 # testrun_lines results.tsv: mitcad-testrun's results as ctest prints them,
@@ -1005,20 +1009,31 @@ changed_files() {
 }
 
 # test_step name fallback-jobs ctest-arguments...: the step's ctests
-# (ctest's -R/-E selection) through the test runner, mitcad-testrun
+# (ctest's -R/-E selection, and with TESTRUN_NAMES only the tests that
+# file names, one a line) through the test runner, mitcad-testrun
 # --schedule (tools/testrun: each test in a systemd scope of its own, by
 # a memory budget from the check's limit and a CPU gate, with the
 # machine's profiles in ~/.mitcad/test-profiles.json), its output in
 # check-logs/<name>.log and the runner's report, results and each test's log
 # in build/dev/testrun/<name>/; without the runner (not built, --testrun
 # off), or when it does not finish (it cannot list the tests, it stops),
-# ctest -j <fallback-jobs> in a test slot as before.
+# ctest -j <fallback-jobs> in a test slot as before. A runner that did not
+# finish fails in a row of its own ("<name>: mitcad-testrun") beside the
+# fallback's, so that a step never passes on a runner that failed; with
+# TESTRUN_EXPECT (the step has tests to run, mitcad#2579) a run of no test
+# fails too (the runner's results empty, ctest's --no-tests=error).
 test_step() {
   local name=$1 jobs=$2 out=$BUILD/testrun/$1 start status=0 result changed=() release=()
+  local names=() fallback=() rows
   shift 2
   # A release gate's ctest step (TESTRUN_RELEASE): the geometry tests by
   # their release fingerprints (RELEASE_ARGS, mitcad#1822).
   [ -z "${TESTRUN_RELEASE:-}" ] || release=(${RELEASE_ARGS[@]+"${RELEASE_ARGS[@]}"})
+  if [ -n "${TESTRUN_NAMES:-}" ]; then
+    names=(--tests-from "$TESTRUN_NAMES")
+    fallback=(--tests-from-file "$TESTRUN_NAMES")
+  fi
+  [ -z "${TESTRUN_EXPECT:-}" ] || fallback+=(--no-tests=error)
   if [ "$TESTRUN" != off ] && [ -x "$TESTRUN_BIN" ]; then
     start=$(now_us)
     echo "== $name (mitcad-testrun --schedule; build/dev/testrun/$name)"
@@ -1033,7 +1048,7 @@ test_step() {
     fi
     "$TESTRUN_BIN" --build "$BUILD" --schedule --out "$out" ${TESTRUN_JOBS:+-j "$TESTRUN_JOBS"} \
       ${TESTRUN_CORPUS:+--corpus-children} ${RUNNER_MEMORY[@]+"${RUNNER_MEMORY[@]}"} "${changed[@]}" \
-      ${release[@]+"${release[@]}"} "$@" > "$LOGS/$name.log" 2>&1 9>&- || status=$?
+      ${release[@]+"${release[@]}"} ${names[@]+"${names[@]}"} "$@" > "$LOGS/$name.log" 2>&1 9>&- || status=$?
     if grep -q '^finished' "$out/status.txt" && [ -f "$out/results.tsv" ]; then
       testrun_lines "$out/results.tsv" "$out/logs" >> "$LOGS/$name.log"
       result=ok
@@ -1046,6 +1061,16 @@ test_step() {
         sed -n 's/^Results: /   mitcad-testrun: /p' "$out/report.txt"
         sed -n '/The following tests FAILED:/,$p' "$LOGS/$name.log"
       fi
+      # Tests to run and none ran (those a release gate skipped by their
+      # fingerprints count as run).
+      rows=$(($(wc -l < "$out/results.tsv") - 1))
+      if [ -f "$out/release-skipped.tsv" ]; then
+        rows=$((rows + $(awk -F'\t' 'NR > 1 && $1 != ""' "$out/release-skipped.tsv" | wc -l)))
+      fi
+      if [ -n "${TESTRUN_EXPECT:-}" ] && [ "$rows" -le 0 ]; then
+        result="FAIL(no tests ran)"
+        echo "   mitcad-testrun ran no test, but the step has tests to run (check-logs/$name.log)"
+      fi
       record "$name" "$(seconds_since "$start")" "$result"
       [ "$result" = ok ]
       return
@@ -1053,9 +1078,13 @@ test_step() {
     cp "$LOGS/$name.log" "$LOGS/$name.testrun.log"
     echo "   mitcad-testrun did not finish (exit $status, check-logs/$name.testrun.log): ctest -j $jobs instead"
     tail -n 5 "$LOGS/$name.testrun.log"
+    # The fallback's results show beside it, but the runner's failure is
+    # one too: its own row fails the check.
+    record "$name: mitcad-testrun" "$(seconds_since "$start")" "FAIL(exit $status)"
+    result=FAIL
   fi
   take_lock
-  step "$name" ctest --preset dev -j "$jobs" "$@"
+  step "$name" ctest --preset dev -j "$jobs" ${fallback[@]+"${fallback[@]}"} "$@" && [ "${result:-ok}" = ok ]
 }
 
 # Groups of steps in the background beside the next ones (--overlap auto,
@@ -1202,18 +1231,22 @@ fi
 
 # --- Tests, under the test lock
 if wanted ctest || [ -n "$(ctest_named)" ]; then
+  # The tests to run: the plan's, by name through a file (never one -R
+  # expression, mitcad#2579); every test without a plan; none.
+  ctest_list=$LOGS/ctest-run.txt
   if ctest_plan; then
-    regex=$(ctest_regex)
+    ctest_tests=list
+    ctest_names "$ctest_list" || ctest_tests=""
     echo "== ctest: $(grep -c $'\trun\t' "$LOGS/ctest-plan.tsv") of $(wc -l < "$LOGS/ctest-plan.tsv") tests" \
       "run, the others are skipped (check-logs/ctest-plan.tsv)"
   else
     echo "== ctest: no plan (check-logs/ctest-plan.log); every test runs"
     : > "$LOGS/ctest-plan.tsv"
-    regex=.
+    ctest_tests=all
   fi
   if [ "$DRY" = 1 ]; then
     awk -F'\t' '$2 == "run" { print "   would run ctest:" $1 " (" $4 ")" }' "$LOGS/ctest-plan.tsv"
-  elif [ -z "$regex" ]; then
+  elif [ -z "$ctest_tests" ]; then
     record ctest 0 skipped
   else
     # The corpus tests outside the corpus group (rvt.corpus, dwg.corpus)
@@ -1221,8 +1254,10 @@ if wanted ctest || [ -n "$(ctest_named)" ]; then
     # from the files' history (mitcad#875), unless --corpus-jobs fixes them.
     ctest_children=1
     [ -z "$CORPUS_JOBS" ] || ctest_children=""
-    TESTRUN_RELEASE=$RELEASE_PASSED TESTRUN_CORPUS=$ctest_children \
-      test_step ctest "$CTEST_JOBS" -R "$regex" -E "$CORPUS_TESTS"
+    ctest_from=""
+    [ "$ctest_tests" = all ] || ctest_from=$ctest_list
+    TESTRUN_RELEASE=$RELEASE_PASSED TESTRUN_CORPUS=$ctest_children TESTRUN_NAMES=$ctest_from TESTRUN_EXPECT=1 \
+      test_step ctest "$CTEST_JOBS" -E "$CORPUS_TESTS"
     ctest_rows "$LOGS/ctest.log"
     # A release gate's geometry tests that passed with the same fingerprint
     # in an earlier release gate (mitcad#1822): skipped rows.
@@ -1239,7 +1274,7 @@ if wanted ctest || [ -n "$(ctest_named)" ]; then
   fi
   # The tests left out (not those a fixture brought in after all).
   awk -F'\t' '$2 == "skip" { print $1 }' "$LOGS/ctest-plan.tsv" | while read -r name; do
-    if [ -z "$regex" ] || ! grep -qE "Test +#[0-9]+: +${name//./\\.} " "$LOGS/ctest.log"; then
+    if [ -z "$ctest_tests" ] || ! grep -qE "Test +#[0-9]+: +${name//./\\.} " "$LOGS/ctest.log"; then
       printf '  ctest:%s\t0\tskipped\n' "$name" >> "$TIMINGS"
     fi
   done

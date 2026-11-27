@@ -102,6 +102,21 @@ QString motionText(const QJsonObject& transform, const SlotValue& value) {
                                                         transform.value(QStringLiteral("y")),
                                                         transform.value(QStringLiteral("z")), value));
   }
+  if (type == QStringLiteral("to_object")) {
+    // Up to an object (mitcad#2548): what kind of object.
+    const QJsonObject object = transform.value(QStringLiteral("object")).toObject();
+    const QString kind = object.value(QStringLiteral("type")).toString();
+    if (kind == QStringLiteral("plane")) {
+      const QJsonValue plane = object.value(QStringLiteral("plane"));
+      return plane.isString() ? QStringLiteral("up to %1").arg(plane.toString())
+                              : QStringLiteral("up to a plane");
+    }
+    if (kind == QStringLiteral("face") || kind == QStringLiteral("body") || kind == QStringLiteral("point") ||
+        kind == QStringLiteral("line")) {
+      return QStringLiteral("up to a %1").arg(kind);
+    }
+    return QStringLiteral("up to an object");
+  }
   if (type == QStringLiteral("free")) {
     // Rows of a rotation and a translation: the turn's angle from the
     // trace, and the translation.
@@ -115,6 +130,14 @@ QString motionText(const QJsonObject& transform, const SlotValue& value) {
     return turn == QStringLiteral("0") ? move : QStringLiteral("turn %1 deg, %2").arg(turn, move);
   }
   return type;
+}
+
+QJsonObject moveFaceMotion(const QJsonObject& def) {
+  if (def.contains(QStringLiteral("to_object"))) {
+    return {{QStringLiteral("type"), QStringLiteral("to_object")},
+            {QStringLiteral("object"), def.value(QStringLiteral("to_object"))}};
+  }
+  return def.value(QStringLiteral("transform")).toObject();
 }
 
 QString moveFaceSummary(const QString& name, int faces, const QString& body, const QJsonObject& transform,

@@ -35,6 +35,7 @@
 #include "webbrowser/BrowserComponent.hpp"
 #include "webbrowser/BrowserComponentInstall.hpp"
 #include "webbrowser/ComponentBrowserHost.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -187,7 +188,7 @@ QByteArray manifestFor(const QString& tool, const QString& key, const QString& z
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+MITCAD_BUNDLED_TEST_ARGS(browser_component_flow) {
   QCoreApplication app(argc, argv);
   if (argc != 2) {
     std::fprintf(stderr, "usage: test_browser_component_flow <mitcad-release>\n");

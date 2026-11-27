@@ -140,6 +140,11 @@ std::optional<PlaneFrame> placeFrame(const CommandState& state, const CommandCon
 // handles are drawn at the part, not where the component's coordinates
 // would put them.
 std::optional<gp_Trsf> placeSeenAt(const CommandState& state, const CommandContext& context);
+// The component the placed part goes into as the panel follows it (a pick
+// may activate the picked body's component, mitcad#1634) and the occurrence
+// path it is seen at (empty in the root); an empty component before
+// initPlace or loadPlace (mitcad#2160: a hole's cut scope).
+std::pair<QString, QString> placedComponent(const CommandState& state);
 // The plane and the centre in its coordinates for definitions that keep
 // them (a rack, a bevel pair), from a placement on a face or a plane;
 // none for another form.

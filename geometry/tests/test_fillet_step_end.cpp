@@ -40,6 +40,7 @@
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
+#include "bundled_test.hpp"
 
 namespace test {
 namespace {
@@ -258,7 +259,7 @@ void test_second_rounding_runs_on_across_the_step() {
 } // namespace
 } // namespace test
 
-int main() {
+MITCAD_BUNDLED_TEST(fillet_step_end) {
   test::guarded("test_rounding_ends_at_a_step_back_of_its_wall",
                 test::test_rounding_ends_at_a_step_back_of_its_wall);
   test::guarded("test_second_rounding_runs_on_across_the_step",

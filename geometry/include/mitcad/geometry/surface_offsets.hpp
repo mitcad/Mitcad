@@ -73,7 +73,14 @@ enum class ExtendMode { Natural, Tangent, Curvature };
 // `distance` past them along the surface. A planar face trimmed inside its
 // plane (mitcad#1955) is extended past straight edges of any direction:
 // the plane continued square to each edge, joined to the face as one face.
-// The faces keep their names; the body's faces are sewn again.
+// Natural also extends a face trimmed inside its surface's range, or past
+// an edge that runs across that range (mitcad#2525: the rounded corners of
+// an offset shell), and a plane past a curved edge (in every mode): the
+// surface continued as it runs (a B-spline's end polynomials carried on),
+// geodesics square to the edge `distance` long, the face's other edges
+// kept and the extension's sides continuing its neighbouring edges. The
+// faces keep their names; the body's faces are sewn again, far corners of
+// neighbouring faces' extensions within 0.01 mm of each other together.
 ShapePtr extend_surface(const Shape& body, const std::vector<std::string>& edges,
                         const std::vector<OpeningEdges>& openings, double distance, ExtendMode mode);
 

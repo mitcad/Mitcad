@@ -47,3 +47,7 @@ mod cone_tests;
 mod move_along_tests;
 // A mirror rebuilds an extrusion to the next face at the image (mitcad#2430).
 mod mirror_rebuild_tests;
+// Split Body keeping only some pieces (mitcad#2504).
+mod split_body_keep_tests;
+// Boundary Surface's Fill a Loop through guide curves (mitcad#2526).
+mod boundary_guides_tests;

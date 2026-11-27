@@ -89,6 +89,7 @@
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad/geometry/trimmed_box.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -497,7 +498,7 @@ void test_case(const char* file, const gp_Pnt& foot) {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(trimmed_box) {
   test_synthetic();
   test_ruled();
   test_many_edges();

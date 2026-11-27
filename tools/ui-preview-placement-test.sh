@@ -141,8 +141,10 @@ ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Command Extrude started" "Extrude started with Board's square"
 # The square lies on Board's body: Extrude chooses Join (mitcad#289); this
 # test wants the new body, so New Body is chosen by hand (one up from Join).
-ui_expect_new "Extrude: automatic Operation = Join" "Join suggested: the square lies on Board's body"
+# A new Extrude starts at 0 mm and chooses nothing until a distance is
+# typed (mitcad#2481).
 ui_step "type the distance"              xdotool type "5"
+ui_expect_new "Extrude: automatic Operation = Join" "Join suggested: the square lies on Board's body (5 typed)"
 ui_mark
 ui_step "New Body (one up from Join)"    ui_choose "Panel Extrude input operation" -1
 ui_expect_new "Extrude: Operation = New Body" "New Body chosen by hand"

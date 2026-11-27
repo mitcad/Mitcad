@@ -98,6 +98,10 @@ volume of -2.2e8 mm3; now 3822.8 mm3, valid.
 
 ## Not covered
 
+(Follow-up: [2494](offset-chained-rounding-and-seam-run-2494.md) builds
+#645's body at 3 mm Sharp, refuses the wall as thick as the rounding in
+MitCad's words, and opens the loft without its rounding Rounded.)
+
 - **The wall as thick as a circular rounding there** (the box at w = r =
   2): the rounding's offset is its axis, `FindVanishingFaces` takes it as
   vanishing, and the side's offset meets the top's plane on the top's edge

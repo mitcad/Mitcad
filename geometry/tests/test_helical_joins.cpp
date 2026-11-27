@@ -32,6 +32,7 @@
 
 #include "check.hpp"
 #include "mitcad/geometry/geometry.hpp"
+#include "bundled_test.hpp"
 
 namespace {
 
@@ -324,7 +325,7 @@ void test_stair_joined_with_its_stringers() {
 
 } // namespace
 
-int main() {
+MITCAD_BUNDLED_TEST(helical_joins) {
   test::guarded("merge of a ring cut through from end to end", test_merge_of_a_ring_cut_through_from_end_to_end);
   test::guarded("merge of a whole ring", test_merge_of_a_whole_ring);
   test::guarded("stair joined with its stringers", test_stair_joined_with_its_stringers);

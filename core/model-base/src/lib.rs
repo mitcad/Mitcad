@@ -95,3 +95,6 @@ pub mod developed;
 pub mod flex;
 // Flex drape: a Flex item let hang, the chain it hangs as (mitcad#1713).
 pub mod flex_drape;
+// Surface quality analyses: curvature at a face mesh's vertices and the
+// faces' iso curves (mitcad#2517).
+pub mod surface_quality;

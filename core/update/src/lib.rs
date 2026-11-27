@@ -35,7 +35,8 @@
 //! the version, the platform, and the size and SHA-256 of the file. Keys,
 //! signatures and digests are lowercase hex; a private key is the 32-byte
 //! Ed25519 seed. Platforms include `windows-x64` (the NSIS installer),
-//! `linux-x64` (the AppImage) and `macos-arm64` (the disk image); a manifest
+//! `linux-x64` (the AppImage), `linux-arm64` (the aarch64 AppImage) and
+//! `macos-arm64` (the disk image); a manifest
 //! may list any or none, and a version without a download for the platform
 //! is only announced.
 //!
